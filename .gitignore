@@ -1,0 +1,30 @@
+# Rust build output
+target
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# service data
+storage/data
+streaming/data
+
+# Python (worker)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+worker/venv/
+
+# CI checkout slot for SoundCloud-Internal (real call/decrypt crates)
+/_internal
+
+# IDE
+.idea/
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
+.claude
