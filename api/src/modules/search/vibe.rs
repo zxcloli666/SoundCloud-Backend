@@ -52,11 +52,12 @@ const TOP_GENRES: usize = 3;
 /// Защитный statement_timeout на FTS-выдачу — как в `search::repository`.
 const STATEMENT_TIMEOUT_MS: i32 = 2500;
 
-/// FTS-выражение для текстового поиска по лирике. ОБЯЗАНО совпадать байт-в-байт
-/// (по структуре) с expression-индексом `lyrics_cache_fts_gin` (migration 0029),
-/// иначе планировщик не подхватит индекс и FTS уйдёт в seq scan. `lc` — алиас
+/// Материализованный FTS-вектор лирики (`lyrics_cache.fts`, migration 0049, триггер +
+/// GIN `lyrics_cache_fts_col_gin`). Раньше тут было inline-`to_tsvector(coalesce||
+/// regexp_replace(...))` — ORDER BY ts_rank пере-вычислял его на каждую совпавшую строку
+/// (~20с на частых словах → upper в statement_timeout → пустая выдача). `lc` — алиас
 /// lyrics_cache.
-const LYRICS_FTS_EXPR: &str = "to_tsvector('simple', coalesce(lc.plain_text, '') || ' ' || regexp_replace(coalesce(lc.synced_lrc, ''), '\\[[0-9:.]+\\]', ' ', 'g'))";
+const LYRICS_FTS_EXPR: &str = "lc.fts";
 
 pub struct VibeSearchService {
     pg: PgPool,

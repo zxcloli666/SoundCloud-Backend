@@ -15,12 +15,16 @@ COPY src ./src
 COPY migrations ./migrations
 COPY queries ./queries
 COPY sc_methods ./sc_methods
+# Версию вшиваем ТОЛЬКО здесь, на финальном компиле, а не в Cargo.toml слоя
+# зависимостей выше — иначе бамп версии инвалидирует кэш всех зависимостей.
+ARG APP_VERSION
 # query_file! макросы сверяются на компиляции с РЕАЛЬНОЙ схемой: поднимаем эфемерный
 # postgres прямо в билд-стадии, катим миграции, собираемся online. Никакого .sqlx.
 RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
     && for f in migrations/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$f"; done \
+    && [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml \
     && touch src/main.rs \
     && DATABASE_URL="postgres://scd:dev@127.0.0.1:5432/scd" cargo build --release
 
