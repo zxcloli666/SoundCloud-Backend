@@ -4,12 +4,12 @@
 
 ## Сервисы
 
-| Папка       | Язык        | Образ (GHCR `ghcr.io/<owner>/soundcloud-backend/…`) |
-|-------------|-------------|------------------------------------------------------|
-| `api`       | Rust (axum) | `api`                                                |
-| `streaming` | Rust        | `streaming`                                          |
-| `storage`   | Rust        | `storage`                                            |
-| `worker`    | Python      | `worker:{cpu,gpu,gpu-cuda12}`                        |
+| Папка       | Язык        | Образ (GHCR `ghcr.io/zxcloli666/soundcloud-backend/…`) |
+|-------------|-------------|--------------------------------------------------------|
+| `api`       | Rust (axum) | `api`                                                  |
+| `streaming` | Rust        | `streaming`                                            |
+| `storage`   | Rust        | `storage`                                              |
+| `worker`    | Python      | `worker:{cpu,gpu,gpu-cuda12}`                          |
 
 ## Локальный запуск
 
