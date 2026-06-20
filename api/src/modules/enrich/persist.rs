@@ -143,6 +143,9 @@ pub async fn apply(
     } else {
         compute_upload_kind(&mut tx, primary_artist_id, uploader_sc_user_id, res.source).await?
     };
+    // is_cover = трек не оригинал артиста: кавер/реап-загрузка ИЛИ кавер на чужой оригинал.
+    // Предвычисляем здесь, чтобы вкладки артиста фильтровали булев, а не считали это в рантайме.
+    let is_cover = matches!(upload_kind, "cover" | "reupload") || cover_of_artist_id.is_some();
 
     let source = res.source.as_str();
     let confidence = calibrate_confidence(&mut tx, source, res.confidence).await?;
@@ -164,7 +167,8 @@ pub async fn apply(
         confidence,
         upload_kind,
         res.release_date,
-        res.release_year
+        res.release_year,
+        is_cover
     )
     .execute(&mut *tx)
     .await?;

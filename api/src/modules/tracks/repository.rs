@@ -156,10 +156,10 @@ impl TrackRepository {
                 metadata_artist, sharing, sc_created_at, sc_last_modified, release_year, release_date,
                 uploader_sc_user_id, uploader_urn, uploader_username, uploader_avatar_url,
                 play_count_sc, likes_count_sc, reposts_count_sc, comments_count_sc,
-                needs_duration_resolve, index_priority, storage_priority, sc_synced_at
+                needs_duration_resolve, index_priority, storage_priority, is_cover, sc_synced_at
              ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30, now()
+                $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31, now()
              )
              ON CONFLICT (sc_track_id) DO UPDATE SET
                 urn = EXCLUDED.urn,
@@ -208,6 +208,7 @@ impl TrackRepository {
                 needs_duration_resolve = EXCLUDED.needs_duration_resolve,
                 index_priority = LEAST(tracks.index_priority, EXCLUDED.index_priority),
                 storage_priority = LEAST(tracks.storage_priority, EXCLUDED.storage_priority),
+                is_cover = tracks.is_cover OR EXCLUDED.is_cover,
                 sc_synced_at = now(),
                 updated_at = now()
              RETURNING id, (xmax = 0) AS was_new",
@@ -242,6 +243,7 @@ impl TrackRepository {
         .bind(fields.needs_duration_resolve)
         .bind(new_index_priority.as_i16())
         .bind(new_storage_priority.as_i16())
+        .bind(fields.is_cover)
         .fetch_one(&self.pg)
         .await?;
 
