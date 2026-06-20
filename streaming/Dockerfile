@@ -16,10 +16,13 @@ WORKDIR /app/streaming
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
 
-# Build actual binary
+# Build actual binary. Версию вшиваем здесь, на финальном компиле, а не в
+# Cargo.toml слоя зависимостей выше — иначе бамп инвалидирует кэш зависимостей.
 COPY src ./src
 COPY sc_methods ./sc_methods
-RUN touch src/main.rs && cargo build --release
+ARG APP_VERSION
+RUN { [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml; } \
+    && touch src/main.rs && cargo build --release
 
 # Runtime
 FROM debian:bookworm-slim

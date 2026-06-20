@@ -62,19 +62,11 @@ jobs:
           esac
           NEW_VERSION="$MA.$MI.$PA"
 
-          # Bump the [package] version in each Rust service (line-anchored → не трогает deps).
-          for svc in api storage streaming; do
-            sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$svc/Cargo.toml"
-          done
-
+          # Версия идёт в образ build-arg'ом APP_VERSION (Dockerfile вшивает её в
+          # CARGO_PKG_VERSION на финальном компиле). Cargo.toml НЕ бампим — иначе
+          # правка манифеста инвалидирует кэш слоя зависимостей. Источник версии — git-тег.
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
-          if ! git diff --quiet; then
-            git add api/Cargo.toml storage/Cargo.toml streaming/Cargo.toml
-            git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-            git push origin HEAD:main
-          fi
 
           git tag "v$NEW_VERSION"
           git push origin "v$NEW_VERSION"
@@ -254,5 +246,7 @@ jobs:
           build-contexts: ${{ matrix.build_contexts || '' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ needs.version.outputs.version }}
           cache-from: ${{ steps.meta.outputs.cache_from }}
           cache-to: ${{ steps.meta.outputs.cache_to }}
