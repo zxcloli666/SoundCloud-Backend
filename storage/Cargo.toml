@@ -1,6 +1,6 @@
 [package]
 name = "storage"
-version = "8.2.6"
+version = "8.2.7"
 edition = "2021"
 
 [dependencies]
