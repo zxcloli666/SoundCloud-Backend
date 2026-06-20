@@ -44,6 +44,10 @@ pub struct ScTrackFields {
     /// true → duration выглядит как preview (30s sentinel). Cron перечитает
     /// через apiv2 и переустановит duration_ms + сбросит флаг.
     pub needs_duration_resolve: bool,
+
+    /// true → тег (cover)/[cover] в тайтле. Ингест-детект; enrich уточнит финально.
+    /// Sticky на upsert (once-true), чтобы не затирать вердикт resolver'а.
+    pub is_cover: bool,
 }
 
 impl ScTrackFields {
@@ -64,6 +68,7 @@ impl ScTrackFields {
         // ingest-стрип молча портил оригиналы ("Дико тусим (Speed Up)").
         let title = crate::modules::enrich::artist_names::unescape_json_unicode(raw_title);
         let title_normalized = normalize_title(&title);
+        let is_cover = crate::modules::enrich::normalize::title_marks_cover(&title);
 
         let description = string_field(payload, "description");
         let genre = string_field(payload, "genre");
@@ -149,6 +154,7 @@ impl ScTrackFields {
             reposts_count_sc: payload.get("reposts_count").and_then(|v| v.as_i64()),
             comments_count_sc: payload.get("comment_count").and_then(|v| v.as_i64()),
             needs_duration_resolve,
+            is_cover,
         })
     }
 }

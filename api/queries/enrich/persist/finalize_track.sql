@@ -18,5 +18,6 @@ SET primary_artist_id  = $2,
     enrich_locked_at   = NULL,
     enrich_error       = NULL,
     enriched_at        = now(),
-    upload_kind        = $9
+    upload_kind        = $9,
+    is_cover           = $12
 WHERE id = $1

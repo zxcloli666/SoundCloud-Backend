@@ -299,6 +299,16 @@ pub struct ParsedTitle {
 
 static RE_COVER: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*cover(\s+version)?\s*$").unwrap());
 
+/// Тег `(cover)` / `[cover]` где угодно в тайтле — быстрый ингест-детект до enrich.
+static RE_COVER_TAG: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)[\(\[]\s*cover(\s+version)?\s*[\)\]]").unwrap());
+
+/// true → в тайтле есть тег `(cover)`/`[cover]`. Дешёвая проверка для ингеста,
+/// чтобы выставить `tracks.is_cover` ещё до enrich (resolver уточнит финально).
+pub fn title_marks_cover(title: &str) -> bool {
+    RE_COVER_TAG.is_match(title)
+}
+
 /// Хвостовое расширение файла — рипы заливают как "трек.mp3".
 static RE_FILE_EXT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\s*\.(mp3|m4a|wav|flac|ogg|aac)\s*$").unwrap());
