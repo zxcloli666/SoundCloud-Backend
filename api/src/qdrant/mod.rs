@@ -89,13 +89,40 @@ impl QdrantService {
             .map(|c| c.name)
             .collect();
 
+        // MuQ-MuLan-large выдаёт 1024-dim (не 512 как у стандартного CLAP).
+        // tracks_clap хранит MuLan-аудио-векторы → 1024.
         for (name, size) in [
             (collections::TRACKS_MERT, 1024u64),
-            (collections::TRACKS_CLAP, 512),
+            (collections::TRACKS_CLAP, 1024),
             (collections::TRACKS_LYRICS, 1024),
         ] {
             if existing.contains(name) {
-                continue;
+                // Проверяем dim: если не совпадает (легаси 512) — пересоздаём.
+                let current = self
+                    .client
+                    .collection_info(GetCollectionInfoRequest {
+                        collection_name: name.into(),
+                    })
+                    .await
+                    .ok()
+                    .and_then(|r| r.result)
+                    .and_then(|c| c.config)
+                    .and_then(|c| c.params)
+                    .and_then(|p| p.vectors_config)
+                    .and_then(|vc| match vc.config {
+                        Some(qdrant_client::qdrant::vectors_config::Config::Params(p)) => {
+                            Some(p.size)
+                        }
+                        _ => None,
+                    });
+                match current {
+                    Some(d) if d == size => continue,
+                    Some(d) => {
+                        warn!(collection = name, got = d, want = size, "dim mismatch — recreating");
+                        let _ = self.client.delete_collection(name).await;
+                    }
+                    None => continue,
+                }
             }
             let req = qdrant_client::qdrant::CreateCollectionBuilder::new(name)
                 .vectors_config(VectorParamsBuilder::new(size, Distance::Cosine))
@@ -109,12 +136,37 @@ impl QdrantService {
 
         // Query-vec коллекции: KV по UUID(hash), только get-by-id → HNSW не нужен
         // (m=0, граф не строится, ноль оверхеда на upsert), вектора on_disk.
+        // MULAN зеркалит tracks_clap (1024), LYRICS — tracks_lyrics (1024).
         for (name, size) in [
-            (collections::QUERY_VEC_MULAN, 512u64),
+            (collections::QUERY_VEC_MULAN, 1024u64),
             (collections::QUERY_VEC_LYRICS, 1024),
         ] {
             if existing.contains(name) {
-                continue;
+                let current = self
+                    .client
+                    .collection_info(GetCollectionInfoRequest {
+                        collection_name: name.into(),
+                    })
+                    .await
+                    .ok()
+                    .and_then(|r| r.result)
+                    .and_then(|c| c.config)
+                    .and_then(|c| c.params)
+                    .and_then(|p| p.vectors_config)
+                    .and_then(|vc| match vc.config {
+                        Some(qdrant_client::qdrant::vectors_config::Config::Params(p)) => {
+                            Some(p.size)
+                        }
+                        _ => None,
+                    });
+                match current {
+                    Some(d) if d == size => continue,
+                    Some(d) => {
+                        warn!(collection = name, got = d, want = size, "query-vec dim mismatch — recreating");
+                        let _ = self.client.delete_collection(name).await;
+                    }
+                    None => continue,
+                }
             }
             let req = CreateCollectionBuilder::new(name)
                 .vectors_config(VectorParamsBuilder::new(size, Distance::Cosine).on_disk(true))
