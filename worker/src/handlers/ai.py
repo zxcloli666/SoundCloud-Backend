@@ -136,7 +136,7 @@ def _coerce_queries(raw_list) -> list[str]:
 
 
 async def encode_text_mulan(models: Models, payload: dict) -> dict:
-    """MuQ-MuLan text tower → 512-dim вектор для поиска аудио по описанию."""
+    """MuQ-MuLan text tower → 1024-dim вектор для поиска аудио по описанию."""
     text = (payload.get("text") or "").strip()
     if not text:
         raise ValueError("text is empty")
