@@ -163,6 +163,26 @@ jobs:
             cp -r _internal/decrypt-client ./utils/decrypt-client
           fi
 
+      # Fail closed: never ship a prod api/streaming image built against the MOCK
+      # call-relay. The mock's connect/call_method just return "call-relay disabled",
+      # so the relay is a permanent no-op — every SC read silently falls back to
+      # direct/proxy, the edge pool is unused and call_lua/control_sessions stay 0.
+      # The mock has no server/ workspace and carries that marker string; the real
+      # one (swapped above when INTERNAL_PAT is present) has neither.
+      - name: Verify real call-relay is present
+        if: ${{ matrix.name == 'api' || matrix.name == 'streaming' }}
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+          HAS_PAT: ${{ env.HAS_INTERNAL_PAT }}
+        run: |
+          if [ ! -d utils/call/server ] || grep -q "call-relay disabled" utils/call/relay/src/lib.rs; then
+            echo "::error::utils/call is still the MOCK relay — refusing to build a prod '$MATRIX_NAME' image."
+            echo "::error::Real-relay swap was skipped: INTERNAL_PAT missing/expired (HAS_INTERNAL_PAT=$HAS_PAT)."
+            echo "::error::Set a valid INTERNAL_PAT (read access to SoundCloud-Internal) and re-run this workflow."
+            exit 1
+          fi
+          echo "real call-relay confirmed — utils/call/server present, no mock marker"
+
       # GPU-образ воркера съедает ~20 GB (CUDA base + torch CUDA wheels + bitsandbytes).
       # Стандартный runner даёт ~14 GB free — без этого шага падает на ENOSPC.
       - name: Free disk space
