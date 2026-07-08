@@ -137,9 +137,13 @@ impl AnonClient {
         // Anonymous resolve goes through the relay first. Only when there's no explicit
         // client_id and the relay can't do it do we fall back to the proxy path below.
         if explicit_client_id.is_none() {
-            if let Some(url) =
-                crate::stream::proxy::transcoding_via_relay(transcoding_url, track_authorization)
-                    .await
+            let cid = self.get_client_id().await.unwrap_or_default();
+            if let Some(url) = crate::stream::proxy::transcoding_via_relay(
+                transcoding_url,
+                &cid,
+                track_authorization,
+            )
+            .await
             {
                 return Ok(url);
             }
