@@ -14,6 +14,15 @@ local function get(url, hdrs)
   return http({ url = url, method = "GET", headers = hdrs })
 end
 
+-- Non-200 from SC: 404 = gone (terminal, no client differs), 403 = region-forbidden
+-- (soft-negative, another region may serve), else transient → error() so the relay
+-- rotates to the next client instead of giving up.
+local function fail_status(stage, s)
+  if s == 404 then return { ok = false, reason = "gone", __verdict = "terminal" } end
+  if s == 403 then return { ok = false, reason = "geoblocked", __verdict = "soft_negative" } end
+  error(stage .. " status " .. tostring(s))
+end
+
 local function absolutize(u, base)
   if u:sub(1, 4) ~= "http" then return base .. u end
   return u
@@ -108,14 +117,14 @@ if track.track_authorization ~= nil and track.track_authorization ~= "" then
   rt = rt .. "&track_authorization=" .. urlencode(track.track_authorization)
 end
 local rr = get(rt)
-if rr.status ~= 200 then error("transcoding resolve status " .. tostring(rr.status)) end
+if rr.status ~= 200 then return fail_status("transcoding resolve", rr.status) end
 local resolved = json_decode(rr.body)
 if type(resolved) ~= "table" or resolved.url == nil then return { ok = false, reason = "no_cdn_url" } end
 
 -- 3. download by protocol
 if proto == "progressive" then
   local a = get(resolved.url)
-  if a.status ~= 200 then error("progressive status " .. tostring(a.status)) end
+  if a.status ~= 200 then return fail_status("progressive", a.status) end
   return { ok = true, audio_b64 = b64encode(a.body), content_type = content_type, bytes = #a.body, protocol = proto }
 elseif proto == "hls" then
   local audio = collect_hls(resolved.url)
@@ -127,7 +136,7 @@ elseif proto == "ctr-encrypted-hls" then
   local wvd = get(inputs.wvd_url, { ["x-wvd-token"] = inputs.wvd_token })
   if wvd.status ~= 200 then error("wvd status " .. tostring(wvd.status)) end
   local manifest = get(resolved.url)
-  if manifest.status ~= 200 then error("manifest status " .. tostring(manifest.status)) end
+  if manifest.status ~= 200 then return fail_status("manifest", manifest.status) end
   local audio = widevine_decrypt(wvd.body, manifest.body, resolved.licenseAuthToken or "")
   return { ok = true, audio_b64 = b64encode(audio), content_type = "audio/mp4", bytes = #audio, protocol = proto }
 else
