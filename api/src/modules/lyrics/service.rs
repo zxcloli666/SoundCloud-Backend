@@ -5,7 +5,7 @@ use std::time::Duration;
 use mini_moka::sync::Cache;
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -87,6 +87,9 @@ pub struct LyricsResponse {
     pub language: Option<String>,
     #[serde(rename = "languageConfidence")]
     pub language_confidence: Option<f32>,
+    /// `found` — лирика в кэше; `pending` — не нашли, индексируем в фоне;
+    /// `none` — искали и ничего нет (только `/lyrics/search`).
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,6 +97,10 @@ pub struct LyricsHints {
     pub title: String,
     pub artist: String,
     pub duration_sec: Option<i64>,
+    /// Трек связан с Genius (enrich/crawl) → лирику тянем прямо со связанной
+    /// страницы, минуя фаззи-поиск.
+    pub genius_song_id: Option<i64>,
+    pub genius_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -127,7 +134,7 @@ pub struct LyricsService {
     worker: Arc<WorkerClient>,
     trigger: Arc<TranscodeTriggerService>,
     verifier: Arc<S3VerifierService>,
-    inflight: Cache<String, Arc<Mutex<Option<LyricsResponse>>>>,
+    inflight: Cache<String, ()>,
     indexing_sem: Arc<Semaphore>,
     reserve: bool,
 }
@@ -159,7 +166,7 @@ impl LyricsService {
             verifier,
             inflight: Cache::builder()
                 .max_capacity(INFLIGHT_CAPACITY)
-                .time_to_idle(INFLIGHT_TTL)
+                .time_to_live(INFLIGHT_TTL)
                 .build(),
             indexing_sem: Arc::new(Semaphore::new(indexing_concurrency.max(1))),
             reserve,
@@ -235,67 +242,18 @@ impl LyricsService {
     ) -> AppResult<LyricsResponse> {
         let sc_track_id = normalize(sc_track_id_raw);
 
-        let cached: Option<LyricsCacheRow> = sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/lyrics_cache_by_id.sql",
-            &sc_track_id
-        )
-        .fetch_optional(&self.pg)
-        .await?;
-        if let Some(row) = cached {
-            if row.embedded_at.is_none() {
-                if let Some(text) =
-                    pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-                {
-                    if text.len() > 30 {
-                        let svc = self.clone();
-                        let row_clone = row.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = svc.after_found(&row_clone, &text).await {
-                                warn!(track = %row_clone.sc_track_id, error = %e, "re-embed retry failed");
-                            }
-                        });
-                    }
-                }
-            }
+        // Быстрый путь: PK-чтение кэша. Есть строка → сразу отдаём (`found`).
+        if let Some(row) = self.read_cache(&sc_track_id).await? {
+            self.maybe_reembed(&row);
             return Ok(to_response(&row));
         }
 
-        let lock = match self.inflight.get(&sc_track_id) {
-            Some(l) => l,
-            None => {
-                let l = Arc::new(Mutex::new(None));
-                self.inflight.insert(sc_track_id.clone(), l.clone());
-                l
-            }
-        };
-        let mut guard = lock.lock().await;
-        if let Some(resp) = guard.clone() {
-            return Ok(resp);
-        }
-
-        let hints = self.load_hints_from_db(&sc_track_id).await?;
-        let result = self
-            .run_pipeline(Some(sc_track_id.as_str()), &hints, true)
-            .await?;
-        *guard = Some(result.clone());
-        // fork B: в агрегаторах текста нет → фоном пробуем self-gen (whisper),
-        // если трек не disabled и не в процессе. Юзеру сразу отдаём «не нашли»;
-        // результат подъедет в lyrics_cache позже (транскрайб едет долго).
-        if result.synced_lrc.is_none() && result.plain_text.is_none() {
-            let svc = self.clone();
-            let id = sc_track_id.clone();
-            tokio::spawn(async move {
-                svc.enqueue_transcribe(&id, None).await;
-            });
-        }
-        let id = sc_track_id.clone();
-        let cache = self.inflight.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            cache.invalidate(&id);
-        });
-        Ok(result)
+        // Кэш-промах: НЕ блокируем запрос живым поиском (агрегаторы ~сек). Ставим
+        // фоновую индексацию и сразу отдаём `pending` — клиент показывает «лирика
+        // ещё не найдена, индексируем»; результат осядет в кэше и прилетит готовым
+        // на следующем запросе.
+        self.spawn_lookup(&sc_track_id);
+        Ok(pending_response(Some(&sc_track_id)))
     }
 
     pub async fn search_lyrics(self: &Arc<Self>, hints: &LyricsHints) -> AppResult<LyricsResponse> {
@@ -303,6 +261,73 @@ impl LyricsService {
             return Ok(empty_response(None));
         }
         self.run_pipeline(None, hints, false).await
+    }
+
+    /// Фоновая индексация лирики трека с дедупом. `inflight` держит трек, пока
+    /// идёт поиск, и ещё `INFLIGHT_TTL` после — не перезапускаем поиск на каждый
+    /// poll клиента (заодно негативный кэш на неудачу).
+    fn spawn_lookup(self: &Arc<Self>, sc_track_id: &str) {
+        let key = sc_track_id.to_string();
+        if self.inflight.get(&key).is_some() {
+            return;
+        }
+        self.inflight.insert(key.clone(), ());
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.lookup_and_cache(&key).await {
+                debug!(track = %key, error = %e, "background lyrics lookup failed");
+                svc.inflight.invalidate(&key); // ошибка — разрешаем ретрай раньше TTL
+            }
+        });
+    }
+
+    /// Блокирующий поиск+кэш: агрегаторы (при связке — прямая страница Genius),
+    /// пусто → self-gen whisper в фон. Зовётся из фонового `spawn_lookup` и из
+    /// ограниченного семафором indexing-пути.
+    async fn lookup_and_cache(self: &Arc<Self>, sc_track_id: &str) -> AppResult<()> {
+        // Мог записать другой путь, пока ждали слот.
+        if self.read_cache(sc_track_id).await?.is_some() {
+            return Ok(());
+        }
+        let hints = self.load_hints_from_db(sc_track_id).await?;
+        let result = self.run_pipeline(Some(sc_track_id), &hints, true).await?;
+        // fork B: агрегаторы пусты → фоном self-gen (whisper), если не disabled.
+        if result.synced_lrc.is_none() && result.plain_text.is_none() {
+            self.enqueue_transcribe(sc_track_id, None).await;
+        }
+        Ok(())
+    }
+
+    async fn read_cache(&self, sc_track_id: &str) -> AppResult<Option<LyricsCacheRow>> {
+        Ok(sqlx::query_file_as!(
+            LyricsCacheRow,
+            "queries/lyrics/service/lyrics_cache_by_id.sql",
+            sc_track_id
+        )
+        .fetch_optional(&self.pg)
+        .await?)
+    }
+
+    /// Кэш-строка без эмбеддинга → добираем вектор в фоне (self-heal записей,
+    /// сделанных до колонки-вектора / при упавшем upsert).
+    fn maybe_reembed(self: &Arc<Self>, row: &LyricsCacheRow) {
+        if row.embedded_at.is_some() {
+            return;
+        }
+        let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
+        else {
+            return;
+        };
+        if text.len() <= 30 {
+            return;
+        }
+        let svc = self.clone();
+        let row = row.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.after_found(&row, &text).await {
+                warn!(track = %row.sc_track_id, error = %e, "re-embed retry failed");
+            }
+        });
     }
 
     pub async fn ensure_lyrics_for_indexing(
@@ -313,14 +338,25 @@ impl LyricsService {
         if sc_track_id.is_empty() {
             return Ok(());
         }
+        // Дешёвый PK-чек до семафора: уже в кэше — работать не над чем.
+        if self.read_cache(&sc_track_id).await?.is_some() {
+            return Ok(());
+        }
+        // Дедуп с HTTP-путём: кто-то уже индексирует этот трек.
+        if self.inflight.get(&sc_track_id).is_some() {
+            return Ok(());
+        }
+        self.inflight.insert(sc_track_id.clone(), ());
         let permit = match self.indexing_sem.clone().acquire_owned().await {
             Ok(p) => p,
-            Err(_) => return Ok(()),
+            Err(_) => {
+                self.inflight.invalidate(&sc_track_id);
+                return Ok(());
+            }
         };
-        let svc = self.clone();
-        let id = sc_track_id.clone();
-        if let Err(e) = svc.ensure_lyrics(&id).await {
-            debug!(track = %id, error = %e, "ensureLyricsForIndexing failed");
+        if let Err(e) = self.lookup_and_cache(&sc_track_id).await {
+            debug!(track = %sc_track_id, error = %e, "ensureLyricsForIndexing failed");
+            self.inflight.invalidate(&sc_track_id);
         }
         drop(permit);
         Ok(())
@@ -345,7 +381,14 @@ impl LyricsService {
         }
 
         let picked = self
-            .find_lyrics(&log_id, artist, title, duration_sec)
+            .find_lyrics(
+                &log_id,
+                artist,
+                title,
+                duration_sec,
+                hints.genius_song_id,
+                hints.genius_url.as_deref(),
+            )
             .await?;
         if picked.plain_text.is_none() && picked.synced_lrc.is_none() {
             info!(log_id = %log_id, "no lyrics found — not caching");
@@ -360,6 +403,7 @@ impl LyricsService {
                 source: picked.source.clone(),
                 language: None,
                 language_confidence: None,
+                status: "found".into(),
             });
         }
         let sc_track_id = sc_track_id.unwrap();
@@ -400,24 +444,23 @@ impl LyricsService {
         let row = sqlx::query_file!("queries/lyrics/service/load_track_hints.sql", sc_track_id)
             .fetch_optional(&self.pg)
             .await?;
-        let (title, dur_ms, artist) = match row {
-            Some(r) => {
-                let artist = r
-                    .metadata_artist
-                    .or(r.uploader_username)
-                    .unwrap_or_default();
-                (r.title, r.duration_ms as i64, artist)
-            }
-            None => (String::new(), 0i64, String::new()),
+        let Some(r) = row else {
+            return Ok(LyricsHints::default());
         };
+        let artist = r
+            .metadata_artist
+            .or(r.uploader_username)
+            .unwrap_or_default();
         Ok(LyricsHints {
-            title,
+            title: r.title,
             artist,
-            duration_sec: if dur_ms > 0 {
-                Some((dur_ms as f64 / 1000.0).round() as i64)
+            duration_sec: if r.duration_ms > 0 {
+                Some((r.duration_ms as f64 / 1000.0).round() as i64)
             } else {
                 None
             },
+            genius_song_id: r.genius_song_id,
+            genius_url: r.genius_url,
         })
     }
 
@@ -427,8 +470,16 @@ impl LyricsService {
         artist: &str,
         title: &str,
         duration_sec: i64,
+        genius_song_id: Option<i64>,
+        genius_url: Option<&str>,
     ) -> AppResult<Candidate> {
         info!(log_id, artist, title, duration_sec, "findLyrics");
+
+        // stage0: трек связан с Genius (enrich/crawl) → лирику берём прямо со
+        // связанной страницы. Точное совпадение, без фаззи-поиска и фильтров.
+        if let Some(pick) = self.genius_direct(log_id, genius_song_id, genius_url).await {
+            return Ok(pick);
+        }
 
         let heuristics = heuristic_queries(artist, title);
         info!(log_id, queries = ?heuristics, "[stage1] queries");
@@ -473,6 +524,29 @@ impl LyricsService {
             source: "none".into(),
             synced_lrc: None,
             plain_text: None,
+            artist_guess: None,
+            title_guess: None,
+            duration_sec: None,
+        })
+    }
+
+    /// Лирика со связанной страницы Genius: сперва по сохранённому URL, иначе по
+    /// genius_song_id (резолвим URL). `None` — связки нет либо страница пустая.
+    async fn genius_direct(
+        &self,
+        log_id: &str,
+        genius_song_id: Option<i64>,
+        genius_url: Option<&str>,
+    ) -> Option<Candidate> {
+        let text = match genius_url.filter(|u| !u.is_empty()) {
+            Some(u) => self.genius.lyrics_by_url(u).await,
+            None => self.genius.lyrics_by_song_id(genius_song_id?).await,
+        }?;
+        info!(log_id, "[stage0] genius linked page");
+        Some(Candidate {
+            source: "genius".into(),
+            synced_lrc: None,
+            plain_text: Some(text),
             artist_guess: None,
             title_guess: None,
             duration_sec: None,
@@ -1118,6 +1192,21 @@ fn empty_response(sc_track_id: Option<&str>) -> LyricsResponse {
         source: "none".into(),
         language: None,
         language_confidence: None,
+        status: "none".into(),
+    }
+}
+
+/// Лирики в кэше нет — поставили фоновую индексацию. Клиент показывает «лирика
+/// ещё не найдена, индексируем».
+fn pending_response(sc_track_id: Option<&str>) -> LyricsResponse {
+    LyricsResponse {
+        sc_track_id: sc_track_id.map(String::from),
+        synced_lrc: None,
+        plain_text: None,
+        source: "none".into(),
+        language: None,
+        language_confidence: None,
+        status: "pending".into(),
     }
 }
 
@@ -1129,6 +1218,7 @@ fn to_response(row: &LyricsCacheRow) -> LyricsResponse {
         source: row.source.clone(),
         language: row.language.clone(),
         language_confidence: row.language_confidence,
+        status: "found".into(),
     }
 }
 

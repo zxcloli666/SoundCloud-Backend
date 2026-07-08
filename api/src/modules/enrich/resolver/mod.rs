@@ -120,6 +120,10 @@ pub struct ResolveResult {
     /// результат — лучшее из доступного, но НЕ повод затирать более сильный
     /// прошлый. Сервис в этом случае не даунгрейдит, а ретраит по бэкоффу.
     pub degraded: bool,
+    /// Трек связан с песней на Genius (резолв через Genius). Сохраняем на трек,
+    /// чтобы лирику тянуть прямо со связанной страницы.
+    pub genius_song_id: Option<i64>,
+    pub genius_url: Option<String>,
 }
 
 pub struct TrackContext {

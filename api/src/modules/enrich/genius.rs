@@ -61,21 +61,27 @@ pub async fn search(
     let Some((score, meta)) = scored else {
         return Ok(None);
     };
-    let details = match meta.genius_song_id {
+    let genius_song_id = meta.genius_song_id;
+    let details = match genius_song_id {
         Some(id) => genius.lookup_song(id).await,
         None => None,
     };
+    let genius_url = details.as_ref().and_then(|d| d.url.clone());
     let song_year = details.as_ref().and_then(|d| d.year);
     let song_date = details.as_ref().and_then(|d| d.release_date);
     let album_pair = details.and_then(|d| d.album.map(|a| (a, song_year)));
-    Ok(Some(into_result(
+    let mut res = into_result(
         meta,
         score,
         ctx.isrc.clone(),
         album_pair,
         song_date,
         song_year,
-    )))
+    );
+    // Связка трек↔Genius: лирика потом тянется прямо с этой страницы.
+    res.genius_song_id = genius_song_id;
+    res.genius_url = genius_url;
+    Ok(Some(res))
 }
 
 fn into_result(

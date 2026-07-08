@@ -44,6 +44,7 @@ async fn search(
         artist: q.artist.unwrap_or_default(),
         title: q.title.unwrap_or_default(),
         duration_sec: parse_duration(q.duration.as_deref()),
+        ..Default::default()
     };
     Ok(Json(st.lyrics.search_lyrics(&hints).await?))
 }

@@ -197,6 +197,8 @@ struct SongRespBody {
 #[derive(Debug, Deserialize)]
 struct SongPayload {
     #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
     album: Option<AlbumPayload>,
     #[serde(default)]
     release_date_components: Option<ReleaseDate>,
@@ -267,6 +269,7 @@ pub struct GeniusAlbumRef {
 
 #[derive(Debug, Clone)]
 pub struct GeniusSongDetails {
+    pub url: Option<String>,
     pub album: Option<GeniusAlbumRef>,
     pub year: Option<i16>,
     pub release_date: Option<chrono::NaiveDate>,
@@ -540,10 +543,24 @@ impl GeniusService {
             })
         });
         Some(GeniusSongDetails {
+            url: song.url.filter(|s| !s.is_empty()),
             album,
             year: song_year,
             release_date: song_date,
         })
+    }
+
+    /// Лирика прямо со страницы Genius (скрейп HTML). Для связанных треков —
+    /// точное совпадение без фаззи-поиска.
+    pub async fn lyrics_by_url(&self, url: &str) -> Option<String> {
+        let html = self.fetch_html(url).await?;
+        parse_lyrics_html(&html)
+    }
+
+    /// Лирика по genius_song_id: резолвим URL страницы (`/songs/{id}`) → скрейп.
+    pub async fn lyrics_by_song_id(&self, genius_song_id: i64) -> Option<String> {
+        let url = self.lookup_song(genius_song_id).await?.url?;
+        self.lyrics_by_url(&url).await
     }
 
     pub async fn lookup_artist(&self, genius_id: i64) -> Option<GeniusArtistDetails> {

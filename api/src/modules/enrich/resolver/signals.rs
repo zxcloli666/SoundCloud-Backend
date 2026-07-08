@@ -213,6 +213,8 @@ impl LocalSignals {
             release_year: None,
             is_cover: parsed.is_cover,
             degraded: false,
+            genius_song_id: None,
+            genius_url: None,
         }
     }
 }
