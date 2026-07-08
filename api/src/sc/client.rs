@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use bytes::Bytes;
 use call_relay::{Client as RelayClient, Request as RelayRequest};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT,
+};
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 
 use crate::config::SoundcloudCfg;
 use crate::error::{AppError, AppResult};
@@ -17,6 +19,10 @@ use crate::sc::types::ScTokenResponse;
 
 const API_BASE: &str = "https://api.soundcloud.com";
 const AUTH_BASE: &str = "https://secure.soundcloud.com";
+const SC_HOME: &str = "https://soundcloud.com";
+const SC_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                         (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const ANON_CID_TTL: Duration = Duration::from_secs(1800);
 
 #[derive(Clone, Debug)]
 pub struct OAuthCredentials {
@@ -40,6 +46,7 @@ struct Inner {
     proxy_fallback: bool,
     observer: OnceCell<Arc<dyn TrackObserver>>,
     relay: Option<Arc<RelayClient>>,
+    anon_client_id: RwLock<Option<(String, Instant)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +74,7 @@ impl ScClient {
                 proxy_fallback: cfg.proxy_fallback,
                 observer: OnceCell::new(),
                 relay: None,
+                anon_client_id: RwLock::new(None),
             }),
         })
     }
@@ -78,11 +86,17 @@ impl ScClient {
             proxy_fallback: self.inner.proxy_fallback,
             observer: OnceCell::new(),
             relay: Some(relay),
+            anon_client_id: RwLock::new(None),
         });
         if let Some(obs) = self.inner.observer.get().cloned() {
             let _ = inner.observer.set(obs);
         }
-        Self { inner }
+        let client = Self { inner };
+        let warm = client.clone();
+        tokio::spawn(async move {
+            let _ = warm.refresh_anon_client_id().await;
+        });
+        client
     }
 
     pub fn auth_base_url(&self) -> &str {
@@ -275,88 +289,37 @@ impl ScClient {
     /// disabled / the relay couldn't resolve / the track was not found — the caller
     /// then falls back.
     pub async fn resolve_track_via_relay(&self, url: &str) -> Option<Value> {
-        let relay = self.inner.relay.as_ref()?;
         let inputs = serde_json::to_vec(&serde_json::json!({ "url": url })).ok()?;
-        let out = match relay
-            .call_method(
-                "sc.resolve_track",
-                crate::sc::lua_methods::RESOLVE_TRACK,
-                Bytes::from(inputs),
-            )
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                if !e.is_disabled() {
-                    tracing::debug!(error = %e, "[resolve] relay sc.resolve_track failed");
-                }
-                return None;
-            }
-        };
-        let parsed: Value = serde_json::from_slice(&out).ok()?;
-        if parsed.get("ok").and_then(Value::as_bool) == Some(true) {
-            parsed.get("track").cloned()
-        } else {
-            None
-        }
+        let v = self
+            .call_relay_method("sc.resolve_track", crate::sc::lua_methods::RESOLVE_TRACK, inputs)
+            .await?;
+        (v.get("ok").and_then(Value::as_bool) == Some(true))
+            .then(|| v.get("track").cloned())
+            .flatten()
     }
 
     /// apiv2 `/users/{id}` run via the relay (the `sc.user_by_id` Lua method).
     /// Returns the RAW apiv2 user JSON, or None to fall back.
     pub async fn user_by_id_via_relay(&self, user_id: &str) -> Option<Value> {
-        let relay = self.inner.relay.as_ref()?;
         let inputs = serde_json::to_vec(&serde_json::json!({ "id": user_id })).ok()?;
-        let out = match relay
-            .call_method(
-                "sc.user_by_id",
-                crate::sc::lua_methods::USER_BY_ID,
-                Bytes::from(inputs),
-            )
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                if !e.is_disabled() {
-                    tracing::debug!(error = %e, "[user_v2] relay sc.user_by_id failed");
-                }
-                return None;
-            }
-        };
-        let parsed: Value = serde_json::from_slice(&out).ok()?;
-        if parsed.get("ok").and_then(Value::as_bool) == Some(true) {
-            parsed.get("user").cloned()
-        } else {
-            None
-        }
+        let v = self
+            .call_relay_method("sc.user_by_id", crate::sc::lua_methods::USER_BY_ID, inputs)
+            .await?;
+        (v.get("ok").and_then(Value::as_bool) == Some(true))
+            .then(|| v.get("user").cloned())
+            .flatten()
     }
 
     /// apiv2 `/tracks/{id}` run via the relay (the `sc.track_by_id` Lua method).
     /// Returns the RAW apiv2 track JSON (not v1-normalized), or None to fall back.
     pub async fn track_by_id_via_relay(&self, sc_track_id: &str) -> Option<Value> {
-        let relay = self.inner.relay.as_ref()?;
         let inputs = serde_json::to_vec(&serde_json::json!({ "id": sc_track_id })).ok()?;
-        let out = match relay
-            .call_method(
-                "sc.track_by_id",
-                crate::sc::lua_methods::TRACK_BY_ID,
-                Bytes::from(inputs),
-            )
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                if !e.is_disabled() {
-                    tracing::debug!(error = %e, "[track_v2] relay sc.track_by_id failed");
-                }
-                return None;
-            }
-        };
-        let parsed: Value = serde_json::from_slice(&out).ok()?;
-        if parsed.get("ok").and_then(Value::as_bool) == Some(true) {
-            parsed.get("track").cloned()
-        } else {
-            None
-        }
+        let v = self
+            .call_relay_method("sc.track_by_id", crate::sc::lua_methods::TRACK_BY_ID, inputs)
+            .await?;
+        (v.get("ok").and_then(Value::as_bool) == Some(true))
+            .then(|| v.get("track").cloned())
+            .flatten()
     }
 
     /// apiv2 playlist (+ full ordered tracks when `hydrate`) via the relay (the signed
@@ -467,6 +430,7 @@ impl ScClient {
         region_rotation: i32,
     ) -> Option<Value> {
         let relay = self.inner.relay.as_ref()?;
+        let inputs = self.inject_client_id(inputs).await;
         let out = match relay
             .call_method_rotated(method_id, script, Bytes::from(inputs), region_rotation)
             .await
@@ -480,6 +444,41 @@ impl ScClient {
             }
         };
         serde_json::from_slice(&out).ok()
+    }
+
+    /// Merge our scraped anonymous `client_id` into a method's JSON inputs so the edge
+    /// script uses it instead of scraping its own (which it loses on every reconnect,
+    /// the dominant "no client_id" failure). The id is a globally-shared public web id,
+    /// so this adds no ban surface — the residential edge IP is what dodges bans.
+    async fn inject_client_id(&self, inputs: Vec<u8>) -> Vec<u8> {
+        let Some(cid) = self.anon_client_id().await else {
+            return inputs;
+        };
+        match serde_json::from_slice::<Value>(&inputs) {
+            Ok(mut v) if v.is_object() => {
+                v["client_id"] = Value::String(cid);
+                serde_json::to_vec(&v).unwrap_or(inputs)
+            }
+            _ => inputs,
+        }
+    }
+
+    async fn anon_client_id(&self) -> Option<String> {
+        if let Some((id, at)) = self.inner.anon_client_id.read().await.as_ref() {
+            if at.elapsed() < ANON_CID_TTL {
+                return Some(id.clone());
+            }
+        }
+        self.refresh_anon_client_id().await
+    }
+
+    async fn refresh_anon_client_id(&self) -> Option<String> {
+        let mut h = HeaderMap::new();
+        h.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
+        let bytes = self.anon_get_via_relay_proxy(SC_HOME, h).await.ok()?;
+        let id = extract_anon_client_id(&String::from_utf8_lossy(&bytes))?;
+        *self.inner.anon_client_id.write().await = Some((id.clone(), Instant::now()));
+        Some(id)
     }
 
     pub async fn api_post<B: serde::Serialize, T: DeserializeOwned>(
@@ -836,6 +835,13 @@ impl ScClient {
 
         Ok(bytes)
     }
+}
+
+fn extract_anon_client_id(html: &str) -> Option<String> {
+    let rest = &html[html.find("\"hydratable\":\"apiClient\"")?..];
+    let after = &rest[rest.find("\"id\":\"")? + 6..];
+    let id = &after[..after.find('"')?];
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 fn auth_headers(access_token: &str, with_content_type: bool) -> HeaderMap {
