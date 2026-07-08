@@ -420,14 +420,10 @@ impl ScClient {
     }
 
     /// Generic apiv2 GET via the relay (`sc.apiv2_get`). Returns the RAW apiv2 body
-    /// (`data`), or None to fall back.
-    pub async fn apiv2_get_via_relay(&self, url: &str) -> Option<Value> {
-        self.apiv2_get_via_relay_rotated(url, 0).await
-    }
-
-    /// As [`Self::apiv2_get_via_relay`] but biases the relay toward a client region
-    /// distinct from the first `region_rotation` countries — used to union a per-region
-    /// listing (e.g. `/users/{id}/tracks`) that omits geoblocked items across regions.
+    /// (`data`), or None to fall back. `region_rotation` biases the relay toward a
+    /// client region distinct from the first N countries in rank order — bump it per
+    /// retry to union a per-region listing (e.g. `/users/{id}/tracks`) that omits
+    /// geoblocked items across regions; `0` = no preference.
     pub async fn apiv2_get_via_relay_rotated(
         &self,
         url: &str,
