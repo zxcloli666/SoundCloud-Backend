@@ -8,7 +8,8 @@
 -- inputs:  { url = "https://api-v2.soundcloud.com/…" }
 -- output:  { ok = true, data = <parsed json> } | { ok = false, reason = "gone" | "bad_body" }
 
-local cid = client_id()
+local cid = inputs.client_id
+if cid == nil or cid == "" then cid = client_id() end
 if cid == nil or cid == "" then
   error("no client_id")
 end
