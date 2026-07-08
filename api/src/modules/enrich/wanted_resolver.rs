@@ -503,6 +503,25 @@ pub async fn link_wanted_to_sc(pg: &PgPool, wanted_id: Uuid, sc_track_id: &str) 
     let Some(Some(indexed_id)) = row else {
         return Ok(false);
     };
+    // crawl-происхождение: переносим genius_song_id на трек — лирику потом
+    // тянем прямо со связанной страницы Genius (stage0 в lyrics-пайплайне).
+    if let Some(gid) = sqlx::query_file_scalar!(
+        "queries/enrich/wanted_resolver/genius_song_id.sql",
+        wanted_id
+    )
+    .fetch_optional(pg)
+    .await?
+    .flatten()
+    .and_then(|s| s.parse::<i64>().ok())
+    {
+        sqlx::query_file!(
+            "queries/enrich/wanted_resolver/set_track_genius_song.sql",
+            indexed_id,
+            gid
+        )
+        .execute(pg)
+        .await?;
+    }
     let albums = sqlx::query_file!(
         "queries/enrich/wanted_resolver/wanted_albums.sql",
         wanted_id

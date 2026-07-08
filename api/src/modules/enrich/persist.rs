@@ -168,7 +168,9 @@ pub async fn apply(
         upload_kind,
         res.release_date,
         res.release_year,
-        is_cover
+        is_cover,
+        res.genius_song_id,
+        res.genius_url.as_deref()
     )
     .execute(&mut *tx)
     .await?;

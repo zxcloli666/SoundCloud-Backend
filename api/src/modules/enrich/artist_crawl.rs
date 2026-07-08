@@ -366,6 +366,14 @@ impl ArtistCrawlService {
                 .indexed_track_for_artist_title(pa_id, &track.title)
                 .await?
             {
+                // Связка трек↔Genius → лирику потом тянем прямо со страницы.
+                sqlx::query_file!(
+                    "queries/enrich/wanted_resolver/set_track_genius_song.sql",
+                    indexed_id,
+                    track.genius_song_id
+                )
+                .execute(&self.pg)
+                .await?;
                 self.link_indexed_album_with_position(indexed_id, album_id, position)
                     .await?;
                 return Ok(());
@@ -674,8 +682,16 @@ impl ArtistCrawlService {
             None
         };
         if let Some(indexed_id) = already_indexed_id {
-            if let Some(genius_song_id) = song.genius_song_id {
-                if let Some(details) = self.genius.lookup_song(genius_song_id).await {
+            if let Some(gid) = song.genius_song_id {
+                // Связка трек↔Genius → лирику потом тянем прямо со страницы.
+                sqlx::query_file!(
+                    "queries/enrich/wanted_resolver/set_track_genius_song.sql",
+                    indexed_id,
+                    gid
+                )
+                .execute(&self.pg)
+                .await?;
+                if let Some(details) = self.genius.lookup_song(gid).await {
                     if let Some(album_ref) = details.album {
                         let album_id = self
                             .ensure_genius_album(album_ref, primary_artist_id, details.year)
