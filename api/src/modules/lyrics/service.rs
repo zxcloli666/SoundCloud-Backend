@@ -362,6 +362,50 @@ impl LyricsService {
         Ok(())
     }
 
+    /// Немедленно тянет лирику со связанной страницы Genius — при кравле/линковке
+    /// трека с Genius (genius_song_id/url уже проставлен на трек). Идемпотентно,
+    /// best-effort: есть текст — не трогаем; связки/страницы нет — тихо выходим
+    /// (обычный путь/whisper добьют позже). Минует inflight и фаззи-поиск.
+    pub async fn pull_genius_direct(self: &Arc<Self>, sc_track_id_raw: &str) {
+        if self.reserve {
+            return;
+        }
+        let sc_track_id = normalize(sc_track_id_raw);
+        if sc_track_id.is_empty() {
+            return;
+        }
+        match self.read_cache(&sc_track_id).await {
+            Ok(Some(row))
+                if pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
+                    .is_some() =>
+            {
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                debug!(track = %sc_track_id, error = %e, "pull_genius_direct: cache read failed");
+                return;
+            }
+        }
+        let hints = match self.load_hints_from_db(&sc_track_id).await {
+            Ok(h) => h,
+            Err(e) => {
+                debug!(track = %sc_track_id, error = %e, "pull_genius_direct: hints failed");
+                return;
+            }
+        };
+        let Some(pick) = self
+            .genius_direct(&sc_track_id, hints.genius_song_id, hints.genius_url.as_deref())
+            .await
+        else {
+            return;
+        };
+        if let Err(e) = self.save_candidate(&sc_track_id, &pick).await {
+            // конфликт = параллельный путь уже закэшировал — норм.
+            debug!(track = %sc_track_id, error = %e, "pull_genius_direct: save failed");
+        }
+    }
+
     async fn run_pipeline(
         self: &Arc<Self>,
         sc_track_id: Option<&str>,
@@ -407,7 +451,16 @@ impl LyricsService {
             });
         }
         let sc_track_id = sc_track_id.unwrap();
+        let row = self.save_candidate(sc_track_id, &picked).await?;
+        Ok(to_response(&row))
+    }
 
+    /// INSERT кандидата в lyrics_cache + фоновый эмбеддинг. Возвращает строку.
+    async fn save_candidate(
+        self: &Arc<Self>,
+        sc_track_id: &str,
+        picked: &Candidate,
+    ) -> AppResult<LyricsCacheRow> {
         let row: LyricsCacheRow = sqlx::query_file_as!(
             LyricsCacheRow,
             "queries/lyrics/service/insert_lyrics_cache.sql",
@@ -418,10 +471,7 @@ impl LyricsService {
         )
         .fetch_one(&self.pg)
         .await?;
-
-        if let Some(text) =
-            pick_lyrics_text(picked.plain_text.as_deref(), picked.synced_lrc.as_deref())
-        {
+        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref()) {
             if text.len() > 30 {
                 let svc = self.clone();
                 let row_clone = row.clone();
@@ -432,8 +482,7 @@ impl LyricsService {
                 });
             }
         }
-
-        Ok(to_response(&row))
+        Ok(row)
     }
 
     async fn load_hints_from_db(&self, sc_track_id: &str) -> AppResult<LyricsHints> {

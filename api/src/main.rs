@@ -339,6 +339,7 @@ async fn main() {
         sc.clone(),
         tokens.clone(),
         resolve.clone(),
+        lyrics.clone(),
     );
 
     let ai_matcher = if config.enrich.ai_enabled {
@@ -365,6 +366,7 @@ async fn main() {
         indexing.clone(),
         sc_account_scanner.clone(),
         ai_matcher.clone(),
+        lyrics.clone(),
         &config.enrich_crawl,
     );
     if !reserve {

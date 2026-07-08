@@ -16,6 +16,7 @@ use crate::modules::enrich::sc_accounts::{
 use crate::modules::lyrics::genius::{
     GeniusAlbumTrack, GeniusArtistDetails, GeniusService, GeniusSongMeta,
 };
+use crate::modules::lyrics::LyricsService;
 use crate::sc::{ScClient, ScReadService};
 
 const MB_PAGE_SIZE: u32 = 100;
@@ -28,6 +29,7 @@ pub struct ArtistCrawlService {
     sc: ScClient,
     tokens: Arc<TokenProvider>,
     resolve: Arc<ScReadService>,
+    lyrics: Arc<LyricsService>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +46,7 @@ impl ArtistCrawlService {
         sc: ScClient,
         tokens: Arc<TokenProvider>,
         resolve: Arc<ScReadService>,
+        lyrics: Arc<LyricsService>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
@@ -52,6 +55,7 @@ impl ArtistCrawlService {
             sc,
             tokens,
             resolve,
+            lyrics,
         })
     }
 
@@ -366,14 +370,18 @@ impl ArtistCrawlService {
                 .indexed_track_for_artist_title(pa_id, &track.title)
                 .await?
             {
-                // Связка трек↔Genius → лирику потом тянем прямо со страницы.
-                sqlx::query_file!(
+                // Связка трек↔Genius + немедленный пул лирики с той страницы.
+                if let Some(scid) = sqlx::query_file_scalar!(
                     "queries/enrich/wanted_resolver/set_track_genius_song.sql",
                     indexed_id,
                     track.genius_song_id
                 )
-                .execute(&self.pg)
-                .await?;
+                .fetch_optional(&self.pg)
+                .await?
+                {
+                    let lyrics = self.lyrics.clone();
+                    tokio::spawn(async move { lyrics.pull_genius_direct(&scid).await });
+                }
                 self.link_indexed_album_with_position(indexed_id, album_id, position)
                     .await?;
                 return Ok(());
@@ -683,14 +691,18 @@ impl ArtistCrawlService {
         };
         if let Some(indexed_id) = already_indexed_id {
             if let Some(gid) = song.genius_song_id {
-                // Связка трек↔Genius → лирику потом тянем прямо со страницы.
-                sqlx::query_file!(
+                // Связка трек↔Genius + немедленный пул лирики с той страницы.
+                if let Some(scid) = sqlx::query_file_scalar!(
                     "queries/enrich/wanted_resolver/set_track_genius_song.sql",
                     indexed_id,
                     gid
                 )
-                .execute(&self.pg)
-                .await?;
+                .fetch_optional(&self.pg)
+                .await?
+                {
+                    let lyrics = self.lyrics.clone();
+                    tokio::spawn(async move { lyrics.pull_genius_direct(&scid).await });
+                }
                 if let Some(details) = self.genius.lookup_song(gid).await {
                     if let Some(album_ref) = details.album {
                         let album_id = self
