@@ -10,8 +10,8 @@
 --            limit = 200, cursor = "<next_href>"? }
 -- output:  { ok = true, collection = [ <bare apiv2 entity> ], next_href = "…"|nil }
 
-local cid = inputs.client_id
-if cid == nil or cid == "" then cid = client_id() end
+local cid = client_id()
+if cid == nil or cid == "" then cid = inputs.client_id end
 if cid == nil or cid == "" then
   error("no client_id")
 end
