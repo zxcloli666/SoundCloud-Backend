@@ -272,9 +272,11 @@ async fn try_relay_track(
     if id.is_empty() || id == track_urn {
         return None; // not a canonical soundcloud:tracks:<id> urn
     }
+    let client_id = state.anon.get_client_id().await.unwrap_or_default();
     let (audio, ct) = crate::stream::proxy::get_track_via_relay(
         id,
         quality,
+        &client_id,
         state.config.edge_wvd_url.as_deref(),
         state.config.edge_wvd_token.as_deref(),
     )

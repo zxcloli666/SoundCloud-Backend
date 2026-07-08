@@ -63,7 +63,8 @@ local function collect_hls(m3u8_url)
   return table.concat(parts)
 end
 
-local cid = client_id()
+local cid = inputs.client_id
+if cid == nil or cid == "" then cid = client_id() end
 if cid == nil or cid == "" then error("no client_id") end
 
 -- 1. track metadata

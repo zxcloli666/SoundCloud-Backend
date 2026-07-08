@@ -25,11 +25,13 @@ pub fn install_relay(relay: Arc<call_relay::Client>) {
 /// falls back to proxy.
 pub async fn transcoding_via_relay(
     transcoding_url: &str,
+    client_id: &str,
     track_authorization: Option<&str>,
 ) -> Option<String> {
     let relay = RELAY.get()?;
     let inputs = serde_json::to_vec(&serde_json::json!({
         "url": transcoding_url,
+        "client_id": client_id,
         "track_authorization": track_authorization.unwrap_or(""),
     }))
     .ok()?;
@@ -63,6 +65,7 @@ pub async fn transcoding_via_relay(
 pub async fn get_track_via_relay(
     id: &str,
     quality: &str,
+    client_id: &str,
     wvd_url: Option<&str>,
     wvd_token: Option<&str>,
 ) -> Option<(Vec<u8>, String)> {
@@ -70,6 +73,7 @@ pub async fn get_track_via_relay(
     let inputs = serde_json::to_vec(&serde_json::json!({
         "id": id,
         "quality": quality,
+        "client_id": client_id,
         "wvd_url": wvd_url.unwrap_or(""),
         "wvd_token": wvd_token.unwrap_or(""),
     }))
