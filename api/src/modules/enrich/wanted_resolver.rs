@@ -16,6 +16,7 @@ use crate::modules::enrich::ai_matcher::{AiMatcherClient, MatchCandidate, MatchT
 use crate::modules::enrich::matcher::{evaluate_sc_candidate, sc_track_id_from_urn};
 use crate::modules::enrich::sc_account_scan::{ScAccountScanner, WantedRow};
 use crate::modules::indexing::IndexingService;
+use crate::modules::lyrics::LyricsService;
 use crate::modules::tracks::TrackPriority;
 use crate::sc::{ScReadService, SearchType};
 
@@ -34,16 +35,19 @@ pub struct WantedResolverService {
     indexing: Arc<IndexingService>,
     scanner: Arc<ScAccountScanner>,
     ai_matcher: Option<Arc<AiMatcherClient>>,
+    lyrics: Arc<LyricsService>,
     interval: Duration,
 }
 
 impl WantedResolverService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pg: PgPool,
         read: Arc<ScReadService>,
         indexing: Arc<IndexingService>,
         scanner: Arc<ScAccountScanner>,
         ai_matcher: Option<Arc<AiMatcherClient>>,
+        lyrics: Arc<LyricsService>,
         cfg: &EnrichCrawlCfg,
     ) -> Arc<Self> {
         let interval = Duration::from_secs(cfg.interval_sec.max(60));
@@ -53,6 +57,7 @@ impl WantedResolverService {
             indexing,
             scanner,
             ai_matcher,
+            lyrics,
             interval,
         })
     }
@@ -248,6 +253,7 @@ impl WantedResolverService {
             .await?
         {
             link_wanted_to_sc(&self.pg, w.id, &sc_id).await?;
+            self.kick_genius_lyrics(&sc_id);
             info!(%w.id, sc_track_id = %sc_id, "wanted-resolver: linked via existing indexed");
             return Ok(true);
         }
@@ -360,8 +366,18 @@ impl WantedResolverService {
             .ingest_track_from_sc(candidate, TrackPriority::Discovery)
             .await?;
         link_wanted_to_sc(&self.pg, w.id, &sc_track_id).await?;
+        self.kick_genius_lyrics(&sc_track_id);
         info!(%w.id, score, sc_track_id, via, "wanted-resolver: linked");
         Ok(true)
+    }
+
+    /// Трек только что связан с Genius (`link_wanted_to_sc` проставил
+    /// genius_song_id) → сразу тянем лирику с той страницы, не дожидаясь
+    /// пользовательского запроса.
+    fn kick_genius_lyrics(&self, sc_track_id: &str) {
+        let lyrics = self.lyrics.clone();
+        let id = sc_track_id.to_string();
+        tokio::spawn(async move { lyrics.pull_genius_direct(&id).await });
     }
 
     async fn sc_search(&self, w: &WantedRecord) -> Vec<Value> {
@@ -519,7 +535,7 @@ pub async fn link_wanted_to_sc(pg: &PgPool, wanted_id: Uuid, sc_track_id: &str) 
             indexed_id,
             gid
         )
-        .execute(pg)
+        .fetch_optional(pg)
         .await?;
     }
     let albums = sqlx::query_file!(
