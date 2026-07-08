@@ -4,8 +4,8 @@
 -- inputs:  { id = "123456" }
 -- output:  { ok = true, track = <apiv2 track, RAW> } | { ok = false, reason = "no_track" | "gone" }
 
-local cid = inputs.client_id
-if cid == nil or cid == "" then cid = client_id() end
+local cid = client_id()
+if cid == nil or cid == "" then cid = inputs.client_id end
 if cid == nil or cid == "" then
   error("no client_id")
 end

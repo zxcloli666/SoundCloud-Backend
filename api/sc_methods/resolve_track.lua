@@ -6,8 +6,8 @@
 -- Failure convention: error() -> the relay retries on the next client; return {...} ->
 -- terminal (back to the backend).
 
-local cid = inputs.client_id
-if cid == nil or cid == "" then cid = client_id() end
+local cid = client_id()
+if cid == nil or cid == "" then cid = inputs.client_id end
 if cid == nil or cid == "" then
   error("no client_id")
 end
