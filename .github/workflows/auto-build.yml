@@ -109,6 +109,13 @@ jobs:
             cache_type: gha
             free_disk: false
             build_contexts: "tls-common=utils/tls-common"
+          - name: gateway
+            context: gateway
+            file: ""
+            extra_tags: ""
+            cache_type: gha
+            free_disk: false
+            build_contexts: "tls-common=utils/tls-common"
           - name: worker
             context: worker
             file: worker/Dockerfile

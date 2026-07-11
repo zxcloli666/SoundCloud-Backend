@@ -1,0 +1,21 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1.12.1"
+http-body-util = "0.1.3"
+hyper = { version = "1.10.1", features = ["http1", "http2", "server", "client"] }
+hyper-util = { version = "0.1.20", features = ["full"] }
+socket2 = { version = "0.6.4", features = ["all"] }
+tls-common = { path = "../utils/tls-common" }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
