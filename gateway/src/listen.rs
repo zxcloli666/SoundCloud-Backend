@@ -166,8 +166,8 @@ async fn serve_https(tcp: TcpStream, peer: SocketAddr, state: Arc<ProxyState>, a
     }
 }
 
-/// One SO_REUSEPORT socket per shard: the kernel spreads accepts across shards,
-/// removing the single-listener accept contention (haproxy `shards by-thread`).
+/// One SO_REUSEPORT socket per shard — the kernel spreads accepts, avoiding
+/// single-listener contention.
 fn reuseport_listener(addr: SocketAddr) -> io::Result<TcpListener> {
     let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;

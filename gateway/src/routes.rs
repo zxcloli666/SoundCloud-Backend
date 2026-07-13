@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use hyper::Uri;
 
-/// A resolved upstream target. Only plain `http` upstreams are supported — the
-/// gateway terminates TLS at the edge and talks cleartext to backends on the
-/// docker network (SeaweedFS, admin, api, …), same model as https-portal.
+/// A resolved upstream target. Only `http` upstreams — the gateway terminates TLS
+/// at the edge and talks cleartext to backends.
 pub struct Upstream {
     pub scheme: &'static str,
     pub authority: String, // host:port, e.g. "seaweed-s3:8333"
@@ -59,7 +58,6 @@ impl RouteTable {
 
     pub fn lookup(&self, host: &str) -> Option<&Arc<Upstream>> {
         let bare = host.split(':').next().unwrap_or(host);
-        // Host header is already lowercase in practice, but normalize to be safe.
         match self.exact.get(bare) {
             Some(u) => Some(u),
             None => {
