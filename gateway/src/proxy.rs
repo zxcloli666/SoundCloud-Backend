@@ -44,7 +44,7 @@ pub async fn handle(
     client_ip: IpAddr,
     tls: bool,
 ) -> Response<ProxyBody> {
-    // Host for routing + forwarding: the Host header (h1) or the URI authority (h2).
+    // Host: header (h1) or URI authority (h2).
     let forward_host = req
         .headers()
         .get(header::HOST)

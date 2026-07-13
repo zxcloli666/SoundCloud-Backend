@@ -1,7 +1,5 @@
-//! High-performance TLS-terminating reverse proxy. Auto-issues/renews Let's Encrypt
-//! certs (TLS-ALPN-01, via tls-common), reverse-proxies by Host to cleartext
-//! upstreams with connection pooling, and shards accept across SO_REUSEPORT
-//! sockets. Drop-in replacement for https-portal at the docker edge.
+//! TLS-terminating reverse proxy: ACME certs via tls-common, Host-routed proxy to
+//! cleartext upstreams, accept sharded across SO_REUSEPORT sockets.
 
 mod config;
 mod listen;
