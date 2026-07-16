@@ -517,10 +517,22 @@ impl ColdRefreshService {
 
         let mut ordered_ids: Vec<String> = Vec::with_capacity(items.len());
         for item in &items {
-            let Some(urn) = item.get("urn").and_then(|v| v.as_str()) else {
-                continue;
+            // SC embeds only the first N tracks of a large playlist as full
+            // objects (with `urn`); the tail comes back as stubs (`id` +
+            // `policy` only, no `urn`). Dropping stub items here truncated
+            // every playlist past SC's inline-hydration cutoff. Fall back to
+            // the bare numeric `id` so membership/order is still recorded —
+            // `ingest_track_from_sc` already no-ops on stub payloads
+            // (ScTrackFields::from_sc requires urn+title), so this can't
+            // clobber existing richer track data.
+            let sc_id = match item.get("urn").and_then(|v| v.as_str()) {
+                Some(urn) => extract_sc_id(urn).to_string(),
+                None => match item.get("id").and_then(|v| v.as_i64()) {
+                    Some(id) => id.to_string(),
+                    None => continue,
+                },
             };
-            ordered_ids.push(extract_sc_id(urn).to_string());
+            ordered_ids.push(sc_id);
             if let Some(indexing) = self.indexing.get() {
                 if let Err(e) = indexing
                     .ingest_track_from_sc(item, TrackPriority::Playlist)
