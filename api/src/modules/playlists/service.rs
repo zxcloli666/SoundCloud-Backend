@@ -153,7 +153,19 @@ impl PlaylistsService {
                 }
                 Ok(v)
             }
-            Err(e) if sc::is_ban_error(&e) => {
+            Err(e)
+                if sc::is_ban_error(&e)
+                    || sc::is_rate_limited(&e)
+                    || matches!(e, AppError::ScUnreachable(_))
+                    || matches!(e, AppError::ScApi { status, .. } if status >= 500) =>
+            {
+                // Local-first: SC ban/rate-limit/timeout/5xx are all transient
+                // route failures (see is_invalid_grant's doc comment) -- none
+                // of them mean the user's create request was invalid. Queue
+                // and ack instead of hard-failing; this was previously
+                // ban-only, so any other SC hiccup (the common case during
+                // the ongoing upstream-timeout degradation) broke create
+                // entirely even though we're supposed to be local-first.
                 let nonce = format!("new:{}", Uuid::new_v4());
                 self.sync_queue
                     .enqueue(sc_user_id, "playlist_create", &nonce, Some(body))
