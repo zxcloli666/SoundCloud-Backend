@@ -175,12 +175,7 @@ pub(crate) async fn check_is_premium(state: &AppState, session: &SessionInfo) ->
     let Some(user) = session.soundcloud_user_id.as_deref() else {
         return false;
     };
-    let user_urn = if user.contains(':') {
-        user.to_string()
-    } else {
-        format!("soundcloud:users:{user}")
-    };
-    state.pg.is_premium(&user_urn).await.unwrap_or(false)
+    state.pg.is_premium(user).await.unwrap_or(false)
 }
 
 // ── Fallback helpers ──────────────────────────────────────────
