@@ -265,18 +265,47 @@ impl PgPool {
         Ok(row.map(|r| r.get::<_, i32>(0) as i64))
     }
 
-    /// Check if user has an active subscription
-    pub async fn is_premium(&self, user_urn: &str) -> Result<bool, PgError> {
+    /// Check if user has an active subscription.
+    ///
+    /// Subscription writes are canonicalized to a bare SoundCloud user id, while
+    /// older rows and some session payloads still carry the full user URN. Match
+    /// both forms during the migration window, exactly like the API service does.
+    pub async fn is_premium(&self, user_id: &str) -> Result<bool, PgError> {
+        let variants = user_id_variants(user_id);
+        if variants.is_empty() {
+            return Ok(false);
+        }
         let client = self.pool.get().await?;
         let now = chrono::Utc::now().timestamp();
         let row = client
             .query_opt(
-                r#"SELECT 1 FROM subscriptions WHERE user_urn = $1 AND exp_date > $2"#,
-                &[&user_urn, &now],
+                r#"SELECT 1 FROM subscriptions WHERE user_urn = ANY($1) AND exp_date > $2"#,
+                &[&variants, &now],
             )
             .await?;
         Ok(row.is_some())
     }
+}
+
+fn user_id_variants(user_id: &str) -> Vec<String> {
+    let trimmed = user_id.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let bare = trimmed.rsplit(':').next().unwrap_or(trimmed);
+    let mut variants = vec![trimmed.to_string()];
+    if bare != trimmed {
+        variants.push(bare.to_string());
+    }
+    if !bare.is_empty() && bare.bytes().all(|b| b.is_ascii_digit()) {
+        let urn = format!("soundcloud:users:{bare}");
+        if urn != trimmed {
+            variants.push(urn);
+        }
+    }
+    variants.dedup();
+    variants
 }
 
 fn row_to_cdn_track(row: &tokio_postgres::Row) -> CdnTrackRecord {
@@ -284,5 +313,31 @@ fn row_to_cdn_track(row: &tokio_postgres::Row) -> CdnTrackRecord {
         id: row.get::<_, Uuid>(0).to_string(),
         track_urn: row.get(1),
         status: row.get(2),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::user_id_variants;
+
+    #[test]
+    fn premium_lookup_matches_bare_and_urn_user_ids() {
+        assert_eq!(
+            user_id_variants("12345"),
+            vec!["12345", "soundcloud:users:12345"]
+        );
+        assert_eq!(
+            user_id_variants("soundcloud:users:12345"),
+            vec!["soundcloud:users:12345", "12345"]
+        );
+    }
+
+    #[test]
+    fn premium_lookup_trims_and_rejects_empty_ids() {
+        assert_eq!(
+            user_id_variants(" 12345 "),
+            vec!["12345", "soundcloud:users:12345"]
+        );
+        assert!(user_id_variants("   ").is_empty());
     }
 }
