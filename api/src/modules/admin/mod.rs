@@ -1,5 +1,6 @@
 pub mod auth_overview;
 pub mod catalog;
+pub mod hydrate;
 pub mod infra;
 pub mod maintenance;
 pub mod stats;
@@ -39,6 +40,7 @@ pub fn router() -> Router<AppState> {
         )
         // catalog management
         .route("/admin/resolve", get(catalog::resolve))
+        .route("/admin/hydrate", post(hydrate::hydrate))
         .route(
             "/admin/artists",
             get(catalog::artists_search).post(catalog::artist_create),
