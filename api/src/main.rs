@@ -79,13 +79,22 @@ async fn main() {
         .await
         .expect("Failed to connect to PostgreSQL");
     info!("PostgreSQL connected");
+
+    // Ops-БД опциональна: не задана — телеметрия рекомендаций выключена, нода
+    // стартует как обычно. Заглушку не поднимаем и стартовать не мешаем.
+    let ops = db::connect_ops(&config)
+        .await
+        .expect("Failed to connect to ops PostgreSQL");
+    if ops.is_enabled() {
+        info!("ops PostgreSQL connected");
+    } else {
+        info!("OPS_DATABASE_URL not set: rec telemetry disabled");
+    }
+
     // Boot-time migrate is gated: set MIGRATE_ON_BOOT=false once the deploy runs the
     // standalone `migrate` bin as a discrete pre-start step — a failed migration then
     // fails the deploy instead of crashing app startup. Default on = current behaviour.
-    if std::env::var("MIGRATE_ON_BOOT")
-        .map(|v| v != "false")
-        .unwrap_or(true)
-    {
+    if env_flag("MIGRATE_ON_BOOT", true) {
         if let Err(e) = db::migrate(&pg).await {
             error!(error = %e, "Failed to run migrations");
             std::process::exit(1);
@@ -93,6 +102,21 @@ async fn main() {
         info!("Migrations applied");
     } else {
         info!("MIGRATE_ON_BOOT=false: migrations managed externally (run `migrate` bin)");
+    }
+
+    // Гейт у ops свой: core-схемой на кроновой ноде владеет main (там
+    // MIGRATE_ON_BOOT=false), а ops-схема — своя, локальная и одноразовая,
+    // её незачем катить руками.
+    if let Some(ops_pg) = ops.pool() {
+        if env_flag("OPS_MIGRATE_ON_BOOT", true) {
+            if let Err(e) = db::migrate_ops(ops_pg).await {
+                error!(error = %e, "Failed to run ops migrations");
+                std::process::exit(1);
+            }
+            info!("Ops migrations applied");
+        } else {
+            info!("OPS_MIGRATE_ON_BOOT=false: ops migrations managed externally");
+        }
     }
 
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
@@ -165,7 +189,7 @@ async fn main() {
 
     let cache = CacheService::new(redis_pool.clone());
     let list_cache = ListCacheService::new(redis_pool.clone());
-    let events = EventsService::new(pg.clone());
+    let events = EventsService::new(pg.clone(), ops.clone());
     let subscriptions = SubscriptionsService::new(
         pg.clone(),
         config.subscriptions.snapshot_dir.clone(),
@@ -396,6 +420,7 @@ async fn main() {
     let recommendations = RecommendationsService::new(
         qdrant.clone(),
         pg.clone(),
+        ops.clone(),
         redis_pool.clone(),
         worker.clone(),
         s3_verifier.clone(),
@@ -569,6 +594,10 @@ async fn main() {
     shutdown.cancel();
     while tasks.join_next().await.is_some() {}
     info!("backend stopped");
+}
+
+fn env_flag(key: &str, default: bool) -> bool {
+    std::env::var(key).map(|v| v != "false").unwrap_or(default)
 }
 
 async fn build_call_relay(role: &str) -> Option<std::sync::Arc<call_relay::Client>> {

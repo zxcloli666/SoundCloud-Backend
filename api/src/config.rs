@@ -5,7 +5,13 @@ pub struct AppConfig {
     pub port: u16,
 
     pub soundcloud: SoundcloudCfg,
+    /// Core-БД: каталог, юзеры, всё, что нужно отдаче. На main/star — локальная,
+    /// на load — main по mTLS. Обязательна.
     pub database: DatabaseCfg,
+    /// Ops-БД: телеметрия и прочая кроновская муть, которую отдача не читает.
+    /// `None` — фичи, завязанные на неё, выключены (main/star стартуют без неё
+    /// и без заглушки). См. `db::OpsDb`.
+    pub ops_database: Option<DatabaseCfg>,
     pub streaming: StreamingCfg,
     pub admin: AdminCfg,
     pub redis: RedisCfg,
@@ -70,11 +76,49 @@ pub struct SoundcloudCfg {
     pub proxy_fallback: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DatabaseCfg {
+    /// Полный libpq-URL. Может уже нести `sslmode/sslrootcert/sslcert/sslkey`.
     pub url: String,
+    /// TLS/mTLS из отдельных env — накладывается ПОВЕРХ того, что в URL
+    /// (`db::connect_opts`). Позволяет держать в URL только адрес, а серты
+    /// подсовывать файлами, как это делает streaming.
+    pub ssl: DbSslCfg,
     pub pool_max: u32,
     pub acquire_timeout: Duration,
+}
+
+/// URL несёт пароль — в `Debug` его не печатаем (AppConfig целиком `Debug`).
+impl std::fmt::Debug for DatabaseCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseCfg")
+            .field("url", &redact_url(&self.url))
+            .field("ssl", &self.ssl)
+            .field("pool_max", &self.pool_max)
+            .field("acquire_timeout", &self.acquire_timeout)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DbSslCfg {
+    /// `disable|allow|prefer|require|verify-ca|verify-full`.
+    pub mode: Option<String>,
+    pub root_cert: Option<String>,
+    pub client_cert: Option<String>,
+    pub client_key: Option<String>,
+}
+
+/// `postgres://user:pass@host/db` → `postgres://user:***@host/db`.
+fn redact_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some((userinfo, tail)) = rest.split_once('@') else {
+        return url.to_string();
+    };
+    let user = userinfo.split_once(':').map_or(userinfo, |(u, _)| u);
+    format!("{scheme}://{user}:***@{tail}")
 }
 
 #[derive(Clone, Debug)]
@@ -182,19 +226,58 @@ pub struct DiscoveryCfg {
     pub account_walk_days: i64,
 }
 
+/// Разложенная форма → URL. Юзер/пароль/имя базы percent-энкодим: без этого
+/// `@`, `/`, `?`, `#` в пароле рвут парсинг URL на стороне sqlx.
+fn compose_url(user: &str, pass: &str, host: &str, port: u16, name: &str) -> String {
+    format!(
+        "postgres://{}:{}@{host}:{port}/{}",
+        urlencoding::encode(user),
+        urlencoding::encode(pass),
+        urlencoding::encode(name),
+    )
+}
+
+/// Конфиг одной БД из env с префиксом (`""` — core, `"OPS_"` — ops).
+///
+/// Формы (в порядке приоритета): `{P}DATABASE_URL`, затем разложенная
+/// `{P}DATABASE_{HOST,PORT,USERNAME,PASSWORD,NAME}`. TLS-переменные
+/// `{P}DATABASE_SSL_{MODE,CA,CERT,KEY}` работают с обеими формами.
+///
+/// `default_host` = `Some(_)` делает БД обязательной (core), `None` — вернёт
+/// `None`, если про неё ничего не задано (ops: никаких заглушек).
+fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<DatabaseCfg> {
+    let key = |name: &str| format!("{prefix}{name}");
+
+    let url = match env_opt(&key("DATABASE_URL")) {
+        Some(url) => url,
+        None => {
+            let host =
+                env_opt(&key("DATABASE_HOST")).or_else(|| default_host.map(str::to_string))?;
+            let port = env_u16(&key("DATABASE_PORT"), 5432);
+            let user = env_str(&key("DATABASE_USERNAME"), "soundcloud");
+            let pass = env_str(&key("DATABASE_PASSWORD"), "soundcloud");
+            let name = env_str(&key("DATABASE_NAME"), "soundcloud_desktop");
+            compose_url(&user, &pass, &host, port, &name)
+        }
+    };
+
+    Some(DatabaseCfg {
+        url,
+        ssl: DbSslCfg {
+            mode: env_opt(&key("DATABASE_SSL_MODE")),
+            root_cert: env_opt(&key("DATABASE_SSL_CA")),
+            client_cert: env_opt(&key("DATABASE_SSL_CERT")),
+            client_key: env_opt(&key("DATABASE_SSL_KEY")),
+        },
+        pool_max: env_u32(&key("PG_POOL_MAX"), if prefix.is_empty() { 20 } else { 10 }),
+        acquire_timeout: Duration::from_secs(env_u64(&key("PG_ACQUIRE_TIMEOUT_SECS"), 10)),
+    })
+}
+
 impl AppConfig {
     pub fn from_env() -> Self {
-        let database_url = match std::env::var("DATABASE_URL") {
-            Ok(url) if !url.is_empty() => url,
-            _ => {
-                let host = env_str("DATABASE_HOST", "localhost");
-                let port = env_u16("DATABASE_PORT", 5432);
-                let user = env_str("DATABASE_USERNAME", "soundcloud");
-                let pass = env_str("DATABASE_PASSWORD", "soundcloud");
-                let name = env_str("DATABASE_NAME", "soundcloud_desktop");
-                format!("postgres://{user}:{pass}@{host}:{port}/{name}")
-            }
-        };
+        let database = database_from_env("", Some("localhost"))
+            .expect("core database config: default host is always present");
 
         Self {
             port: env_u16("PORT", 3000),
@@ -210,11 +293,8 @@ impl AppConfig {
                 proxy_fallback: env_str("SC_PROXY_FALLBACK", "") == "true",
             },
 
-            database: DatabaseCfg {
-                url: database_url,
-                pool_max: env_u32("PG_POOL_MAX", 20),
-                acquire_timeout: Duration::from_secs(env_u64("PG_ACQUIRE_TIMEOUT_SECS", 10)),
-            },
+            database,
+            ops_database: database_from_env("OPS_", None),
 
             streaming: StreamingCfg {
                 service_url: env_str("STREAMING_SERVICE_URL", "http://localhost:8080"),
@@ -331,10 +411,11 @@ impl AppConfig {
 }
 
 fn env_str(key: &str, default: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| default.to_string())
+    env_opt(key).unwrap_or_else(|| default.to_string())
+}
+
+fn env_opt(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|s| !s.is_empty())
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {
@@ -370,4 +451,41 @@ fn env_usize(key: &str, default: usize) -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgConnectOptions;
+    use std::str::FromStr;
+
+    /// Спецсимволы в пароле должны пережить сборку URL и разбор его sqlx'ом.
+    #[test]
+    fn composed_url_round_trips_special_chars() {
+        let pass = "p@ss/w?rd#1 &x";
+        let url = compose_url("us er", pass, "db.internal", 5433, "sc-ops");
+        let opts = PgConnectOptions::from_str(&url).expect("sqlx must parse");
+        assert_eq!(opts.get_host(), "db.internal");
+        assert_eq!(opts.get_port(), 5433);
+        assert_eq!(opts.get_username(), "us er");
+        assert_eq!(opts.get_database(), Some("sc-ops"));
+    }
+
+    #[test]
+    fn debug_does_not_leak_the_password() {
+        let cfg = DatabaseCfg {
+            url: compose_url("soundcloud", "s3cr3t", "h", 5432, "db"),
+            ssl: DbSslCfg::default(),
+            pool_max: 1,
+            acquire_timeout: Duration::from_secs(1),
+        };
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("s3cr3t"), "{rendered}");
+        assert!(rendered.contains("soundcloud:***@h:5432"), "{rendered}");
+    }
+
+    #[test]
+    fn redact_leaves_passwordless_urls_alone() {
+        assert_eq!(redact_url("postgres://h:5432/db"), "postgres://h:5432/db");
+    }
 }

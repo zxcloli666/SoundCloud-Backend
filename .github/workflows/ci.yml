@@ -48,7 +48,7 @@ jobs:
       - name: Apply migrations (sqlx online check)
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
-          for f in api/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
+          for f in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
 
       - name: Format check (warn only — does not fail CI)
         working-directory: api
@@ -214,7 +214,7 @@ jobs:
       - name: Apply migrations (sqlx online check)
         run: |
           sudo apt-get install -y --no-install-recommends postgresql-client
-          for f in api/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
+          for f in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
 
       - run: cargo build --release --manifest-path api/Cargo.toml
       - run: cargo build --release --manifest-path streaming/Cargo.toml

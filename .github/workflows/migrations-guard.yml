@@ -1,10 +1,10 @@
 name: migrations-guard
 on:
   pull_request:
-    paths: [ 'api/migrations/**' ]
+    paths: [ 'api/migrations/**', 'api/migrations-ops/**' ]
   push:
     branches: [ main ]
-    paths: [ 'api/migrations/**' ]
+    paths: [ 'api/migrations/**', 'api/migrations-ops/**' ]
 jobs:
   guard:
     runs-on: ubuntu-latest

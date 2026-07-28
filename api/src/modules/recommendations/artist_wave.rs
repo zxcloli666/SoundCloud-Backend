@@ -215,7 +215,7 @@ impl RecommendationsService {
         );
         let response = builder.finish();
         super::impressions::log_clusters_async(
-            self.pg.clone(),
+            self.ops.clone(),
             sc_user_id.to_string(),
             super::impressions::ImpressionSource::Artist,
             &response.clusters,

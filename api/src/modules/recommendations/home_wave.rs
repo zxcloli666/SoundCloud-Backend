@@ -99,7 +99,15 @@ impl RecommendationsService {
             req.hide_listened,
         );
 
-        let (taste_modes, clap_centroid, session_ctx, hour_ctx, anti_centroid, bandit_stats, wave_ids) = tokio::join!(
+        let (
+            taste_modes,
+            clap_centroid,
+            session_ctx,
+            hour_ctx,
+            anti_centroid,
+            bandit_stats,
+            wave_ids,
+        ) = tokio::join!(
             taste_modes_fut,
             clap_centroid_fut,
             session_fut,
@@ -203,7 +211,7 @@ impl RecommendationsService {
         }
 
         log_clusters_async(
-            self.pg.clone(),
+            self.ops.clone(),
             sc_user_id.clone(),
             ImpressionSource::Home,
             &response.clusters,
@@ -348,7 +356,7 @@ impl RecommendationsService {
         let features_map = builder.features_map().clone();
         let response = builder.finish();
         log_clusters_async(
-            self.pg.clone(),
+            self.ops.clone(),
             sc_user_id.to_string(),
             ImpressionSource::Home,
             &response.clusters,

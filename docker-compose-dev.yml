@@ -9,7 +9,7 @@
 #   api       -> 3000
 #   streaming -> 8080
 #   storage   -> 3002
-#   postgres  -> 5432
+#   postgres  -> 5432 (core) / 5433 (ops)
 #   redis     -> 6379
 #   qdrant    -> 6333 / 6334
 #   nats      -> 4222 (client) / 8222 (monitoring)
@@ -30,6 +30,26 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U soundcloud -d soundcloud_desktop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Ops-БД: телеметрия рекомендаций и прочее, что не нужно отдаче. В проде
+  # живёт отдельным постгресом на кроновой ноде; локально — отдельный контейнер,
+  # чтобы дев гонял ровно ту же топологию (две базы, а не одна).
+  ops-db:
+    image: docker.io/library/postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: soundcloud
+      POSTGRES_PASSWORD: soundcloud
+      POSTGRES_DB: soundcloud_ops
+    ports:
+      - "5433:5432"
+    volumes:
+      - ops_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soundcloud -d soundcloud_ops"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -201,6 +221,11 @@ services:
       DATABASE_USERNAME: soundcloud
       DATABASE_PASSWORD: soundcloud
       DATABASE_NAME: soundcloud_desktop
+      OPS_DATABASE_HOST: ops-db
+      OPS_DATABASE_PORT: 5432
+      OPS_DATABASE_USERNAME: soundcloud
+      OPS_DATABASE_PASSWORD: soundcloud
+      OPS_DATABASE_NAME: soundcloud_ops
       STREAMING_SERVICE_URL: http://streaming:8080
       SUBSCRIPTIONS_SNAPSHOT_DIR: /snapshots
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev}
@@ -218,6 +243,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      ops-db:
+        condition: service_healthy
       qdrant:
         condition: service_started
       nats:
@@ -231,6 +258,7 @@ services:
 
 volumes:
   pgdata:
+  ops_pgdata:
   qdrant_data:
   nats_data:
   storage_data:
