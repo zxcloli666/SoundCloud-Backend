@@ -89,15 +89,15 @@ impl QdrantService {
             .map(|c| c.name)
             .collect();
 
-        // MuQ-MuLan-large выдаёт 1024-dim (не 512 как у стандартного CLAP).
-        // tracks_clap хранит MuLan-аудио-векторы → 1024.
+        // MuQ-MuLan-large проецирует аудио в общее 512-dim MuLan-пространство.
+        // 1024 — внутренняя размерность аудио-энкодера, не размерность его выхода.
         for (name, size) in [
             (collections::TRACKS_MERT, 1024u64),
-            (collections::TRACKS_CLAP, 1024),
+            (collections::TRACKS_CLAP, 512),
             (collections::TRACKS_LYRICS, 1024),
         ] {
             if existing.contains(name) {
-                // Проверяем dim: если не совпадает (легаси 512) — пересоздаём.
+                // Проверяем dim и пересоздаём только несовместимую коллекцию.
                 let current = self
                     .client
                     .collection_info(GetCollectionInfoRequest {
@@ -136,9 +136,9 @@ impl QdrantService {
 
         // Query-vec коллекции: KV по UUID(hash), только get-by-id → HNSW не нужен
         // (m=0, граф не строится, ноль оверхеда на upsert), вектора on_disk.
-        // MULAN зеркалит tracks_clap (1024), LYRICS — tracks_lyrics (1024).
+        // MULAN зеркалит tracks_clap (512), LYRICS — tracks_lyrics (1024).
         for (name, size) in [
-            (collections::QUERY_VEC_MULAN, 1024u64),
+            (collections::QUERY_VEC_MULAN, 512u64),
             (collections::QUERY_VEC_LYRICS, 1024),
         ] {
             if existing.contains(name) {
