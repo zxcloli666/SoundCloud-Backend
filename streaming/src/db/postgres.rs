@@ -1,4 +1,8 @@
-use deadpool_postgres::{Config as PgConfig, Pool, Runtime};
+use std::fs;
+
+use deadpool_postgres::{Config as PgConfig, Pool, Runtime, SslMode};
+use native_tls::{Certificate, Identity, TlsConnector};
+use postgres_native_tls::MakeTlsConnector;
 use tokio_postgres::NoTls;
 use tracing::info;
 use uuid::Uuid;
@@ -40,7 +44,28 @@ impl PgPool {
         pg.password = Some(config.database_password.clone());
         pg.dbname = Some(config.database_name.clone());
 
-        let pool = pg.create_pool(Some(Runtime::Tokio1), NoTls)?;
+        let pool = match (
+            &config.database_ssl_ca,
+            &config.database_ssl_cert,
+            &config.database_ssl_key,
+        ) {
+            (None, None, None) => pg.create_pool(Some(Runtime::Tokio1), NoTls)?,
+            (Some(ca_path), Some(cert_path), Some(key_path)) => {
+                let ca = Certificate::from_pem(&fs::read(ca_path)?)?;
+                let identity = Identity::from_pkcs8(&fs::read(cert_path)?, &fs::read(key_path)?)?;
+                let mut tls = TlsConnector::builder();
+                tls.add_root_certificate(ca);
+                tls.identity(identity);
+                pg.ssl_mode = Some(SslMode::Require);
+                pg.create_pool(Some(Runtime::Tokio1), MakeTlsConnector::new(tls.build()?))?
+            }
+            _ => {
+                return Err(
+                    "DATABASE_SSL_CA, DATABASE_SSL_CERT and DATABASE_SSL_KEY must be set together"
+                        .into(),
+                );
+            }
+        };
 
         // Test connection
         let client = pool.get().await?;

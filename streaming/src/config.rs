@@ -8,6 +8,9 @@ pub struct Config {
     pub database_username: String,
     pub database_password: String,
     pub database_name: String,
+    pub database_ssl_ca: Option<String>,
+    pub database_ssl_cert: Option<String>,
+    pub database_ssl_key: Option<String>,
     pub sc_proxy_url: String,
     pub sc_proxy_fallback: bool,
     pub sc_oauth_fallback_sessions: usize,
@@ -64,6 +67,9 @@ impl Config {
                 .unwrap_or_else(|_| "soundcloud".into()),
             database_name: env::var("DATABASE_NAME")
                 .unwrap_or_else(|_| "soundcloud_desktop".into()),
+            database_ssl_ca: env::var("DATABASE_SSL_CA").ok().filter(|v| !v.is_empty()),
+            database_ssl_cert: env::var("DATABASE_SSL_CERT").ok().filter(|v| !v.is_empty()),
+            database_ssl_key: env::var("DATABASE_SSL_KEY").ok().filter(|v| !v.is_empty()),
             sc_proxy_url: env::var("SC_PROXY_URL").unwrap_or_default(),
             sc_proxy_fallback: env::var("SC_PROXY_FALLBACK")
                 .map(|v| v == "true")
