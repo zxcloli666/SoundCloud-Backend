@@ -9,7 +9,7 @@ enriches it (artists/albums/lyrics), embeds it for a vector-based recommendation
 - **Postgres** (sqlx, queries are compile-time-checked `query_file!` macros — see **Database queries** below) — source
   of truth (`tracks`, `artists`, `albums`, `users`, likes/history/events, `wanted_tracks`,
   `lyrics_cache`). Pool is small (`PG_POOL_MAX`, ~20–50); `max_connections=200` shared across services. **Connections
-  are precious — never hold one across network/RPC work.**
+  are precious — never hold one across network/RPC work.** There are **two** Postgres roles — see **Two databases**.
 - **Qdrant** — vector search. Collections: `tracks_mert` (1024d audio), `tracks_clap` (512d audio), `tracks_lyrics` (
   1024d), `tracks_collab` (128d, item2vec). Point id = `sc_track_id`.
 - **NATS JetStream** — work queues between backend ↔ worker (enrich, embed, transcribe, index, storage events). See
@@ -91,6 +91,34 @@ nats), `cache/`, `db/`, `qdrant/`, `redis/`, `sc/` (`ScClient` transport + `ScRe
 `apiv2`/`mapping`/`lua_methods` — see [docs/sc-networking.md](docs/sc-networking.md)), `common/` (`external_fetch`,
 `throttle`), `config.rs`, `main.rs`.
 
+## Two databases: core + ops (FOLLOW THESE)
+
+Prod runs three nodes: **main** и **star** отдают API без кронов (`RESERVE_BACKEND` / `PREMIUM_RESERVE`),
+**load** гоняет все фоновые пайплайны и ходит в main по mTLS. Отсюда разделение схемы:
+
+| | core | ops |
+|---|---|---|
+| env | `DATABASE_URL` (или `DATABASE_HOST/PORT/…`) | `OPS_DATABASE_URL` (или `OPS_DATABASE_*`) |
+| обязательна | да | **нет** — не задана ⇒ фичи выключены |
+| миграции | `migrations/` (`0000+`) | `migrations-ops/` (`9000+`) |
+| что лежит | всё, что нужно отдаче | только то, что отдача не читает |
+| где в проде | main (реплика на star) | локальный PG на load |
+
+- **Критерий переноса в ops: таблицу не читает ни один serving-путь.** Пишет её отдача или крон —
+  неважно. Сейчас там `rec_impressions` (вектор фич LTR на каждый показанный трек) и
+  `rec_hard_negatives` — чистые обучающие выборки, их никто не читает ради ответа юзеру.
+- **Доступ только через `db::OpsDb`.** `ops.pool()` даёт `Option<&PgPool>`; `None` — тихо выйти.
+  Никаких `unwrap`, никакой заглушечной БД: main/star стартуют вообще без ops.
+- **Компиляция видит ОБЕ схемы в одной базе.** `query_file!` проверяется против `DATABASE_URL`,
+  поэтому билд-БД получает `migrations/*.sql` **и** `migrations-ops/*.sql` (в этом порядке —
+  ops пересоздаёт то, что core у себя дропает). Рантайм разводит их по разным пулам.
+- **Диапазоны версий не пересекаются** (`0000+` vs `9000+`), поэтому оба набора могут ужиться в одной
+  базе на общем `_sqlx_migrations` — это дефолт локалки и валидный all-in-one деплой. Ради этого у
+  обоих мигратов `ignore_missing = true`; проверка контрольных сумм (`VersionMismatch`) при этом жива.
+- **mTLS работает для обеих БД** и с обеими формами конфига: `{,OPS_}DATABASE_SSL_{MODE,CA,CERT,KEY}`
+  накладываются поверх того, что уже есть в URL. Дали `SSL_CA` без `SSL_MODE` → `verify-full`
+  (иначе mTLS молча деградировал бы до sqlx-дефолта `prefer`).
+
 ## Database queries (sqlx — FOLLOW THESE)
 
 SQL is **checked against a real Postgres schema at compile time**: a query that selects a dropped/renamed column, or
@@ -98,6 +126,7 @@ binds a wrong-typed param, fails `cargo build` — not at 3am in prod. (This is 
 where `sync_queue` inserted a `payload` column that migration `0019` had dropped.)
 
 - SQL lives in **`api/queries/<module>/<name>.sql`** (one query per file), **not** inline strings in Rust.
+  Ops-запросы живут там же — разводит их не путь, а пул, в который их исполняют.
 - Call it with a `query_file*!` macro:
     - `sqlx::query_file_scalar!("queries/<m>/x.sql", arg1, …)` — SELECT of **one column** → `T` / `Option<T>` / `Vec<T>`.
     - `sqlx::query_file_as!(MyRow, "queries/<m>/x.sql", …)` — SELECT into a `#[derive(sqlx::FromRow)]` struct; the `.sql`
@@ -112,7 +141,8 @@ where `sync_queue` inserted a `payload` column that migration `0019` had dropped
 ```
 podman run -d --name scd-dev-pg -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=soundcloud_desktop \
   -p 127.0.0.1:55432:5432 docker.io/library/postgres:17-alpine
-for f in migrations/*.sql; do podman exec -i scd-dev-pg psql -U scd -d soundcloud_desktop < "$f"; done
+# ОБА набора, в этом порядке — билд-схема = core ∪ ops.
+for f in migrations/*.sql migrations-ops/*.sql; do podman exec -i scd-dev-pg psql -U scd -d soundcloud_desktop < "$f"; done
 export DATABASE_URL=postgres://scd:dev@127.0.0.1:55432/soundcloud_desktop
 cargo check --all-targets        # macros are validated against this schema
 ```
@@ -139,9 +169,12 @@ Nothing to commit, nothing to keep in sync.
 
 ## Migrations (FOLLOW THESE)
 
-`migrations/NNNN_*.sql`, sqlx, **embedded at compile time** (`sqlx::migrate!()` in `db/mod.rs`). Applied on boot under an
-advisory lock when `MIGRATE_ON_BOOT` ≠ `false`; otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them
-as a discrete pre-start deploy step (a failed migration then fails the deploy, not the running app).
+`migrations/NNNN_*.sql` (core) и `migrations-ops/9NNN_*.sql` (ops), sqlx, **embedded at compile time**
+(`sqlx::migrate!()` in `db/mod.rs`). Applied on boot under an advisory lock when `MIGRATE_ON_BOOT` ≠ `false`;
+otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them as a discrete pre-start deploy step
+(a failed migration then fails the deploy, not the running app). Ops-набор катится только если задана
+`OPS_DATABASE_URL`; на main/star он просто пропускается. Правила ниже действуют для обоих наборов —
+`scripts/check-migrations.sh` проверяет их по отдельности (нумерация append-only в пределах набора).
 
 - **A `.sql` edit needs a rebuild+redeploy** to take effect — patching the file and restarting the old binary changes
   nothing. **Never edit an already-applied migration:** the checksum (SHA-384 of the file) lives in `_sqlx_migrations`,

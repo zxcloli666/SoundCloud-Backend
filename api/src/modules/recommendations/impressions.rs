@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use sqlx::PgPool;
 use tracing::warn;
+
+use crate::db::OpsDb;
 
 use super::clusters::Cluster;
 
@@ -23,14 +24,15 @@ impl ImpressionSource {
     }
 }
 
+/// Лог показов в ops-БД. Без неё (main/star по умолчанию) — no-op.
 pub fn log_clusters_async(
-    pg: PgPool,
+    ops: OpsDb,
     sc_user_id: String,
     source: ImpressionSource,
     clusters: &[Cluster],
     features_map: &HashMap<String, Vec<f32>>,
 ) {
-    if sc_user_id.is_empty() || clusters.is_empty() {
+    if sc_user_id.is_empty() || clusters.is_empty() || !ops.is_enabled() {
         return;
     }
     struct Row {
@@ -58,6 +60,7 @@ pub fn log_clusters_async(
     }
     let source_str = source.as_str();
     tokio::spawn(async move {
+        let Some(pg) = ops.pool() else { return };
         let user_ids: Vec<String> = rows.iter().map(|r| r.user.clone()).collect();
         let track_ids: Vec<String> = rows.iter().map(|r| r.track.clone()).collect();
         let cluster_ids: Vec<String> = rows.iter().map(|r| r.cluster.clone()).collect();
@@ -77,7 +80,7 @@ pub fn log_clusters_async(
         .bind(&sources)
         .bind(&positions)
         .bind(&features_arr)
-        .execute(&pg)
+        .execute(pg)
         .await
         {
             warn!(error = %e, "impressions: insert failed");

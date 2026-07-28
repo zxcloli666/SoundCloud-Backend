@@ -4,12 +4,14 @@ on:
     paths:
       - 'api/queries/**'
       - 'api/migrations/**'
+      - 'api/migrations-ops/**'
       - 'scripts/check-query-plans.sh'
   push:
     branches: [ main ]
     paths:
       - 'api/queries/**'
       - 'api/migrations/**'
+      - 'api/migrations-ops/**'
       - 'scripts/check-query-plans.sh'
 
 jobs:
@@ -33,7 +35,7 @@ jobs:
       - name: deps
         run: sudo apt-get update && sudo apt-get install -y postgresql-client jq
       - name: apply schema
-        run: for f in api/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
+        run: for f in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
       - name: warm planner stats (prod-like sizes)
         run: psql "$DATABASE_URL" -f scripts/load-approx-stats.sql
       - name: EXPLAIN gate (advisory — Seq Scan on big tables)

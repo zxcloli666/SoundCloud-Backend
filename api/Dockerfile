@@ -13,6 +13,7 @@ RUN mkdir src && echo "fn main(){}" > src/main.rs && cargo build --release && rm
 
 COPY src ./src
 COPY migrations ./migrations
+COPY migrations-ops ./migrations-ops
 COPY queries ./queries
 COPY sc_methods ./sc_methods
 # Версию вшиваем ТОЛЬКО здесь, на финальном компиле, а не в Cargo.toml слоя
@@ -20,10 +21,13 @@ COPY sc_methods ./sc_methods
 ARG APP_VERSION
 # query_file! макросы сверяются на компиляции с РЕАЛЬНОЙ схемой: поднимаем эфемерный
 # postgres прямо в билд-стадии, катим миграции, собираемся online. Никакого .sqlx.
+# Оба набора (core + ops) — в ОДНУ билд-базу: рантайм их разводит по разным
+# пулам, но проверка типов у sqlx одна и должна видеть обе схемы. Порядок важен:
+# ops-набор пересоздаёт то, что core у себя дропает.
 RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
-    && for f in migrations/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$f"; done \
+    && for f in migrations/*.sql migrations-ops/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$f"; done \
     && [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml \
     && touch src/main.rs \
     && DATABASE_URL="postgres://scd:dev@127.0.0.1:5432/scd" cargo build --release
@@ -35,6 +39,8 @@ RUN apt-get update \
     && mkdir -p /var/cache/acme
 
 COPY --from=builder /build/api/target/release/api /usr/local/bin/api
+# Standalone-мигратор для деплоя отдельным шагом (MIGRATE_ON_BOOT=false).
+COPY --from=builder /build/api/target/release/migrate /usr/local/bin/migrate
 
 EXPOSE 80 443 3000
 

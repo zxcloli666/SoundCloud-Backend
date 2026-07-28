@@ -7,6 +7,7 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tracing::warn;
 
 use crate::common::sc_ids::normalize_sc_track_id;
+use crate::db::OpsDb;
 use crate::error::AppResult;
 use crate::modules::collab::CollabTrainerService;
 use crate::modules::dislikes::DislikesService;
@@ -35,6 +36,8 @@ fn event_weight(event_type: &str) -> Option<f64> {
     }
 }
 
+/// Hard negative — обучающий сигнал, живёт в ops-БД вместе с показами
+/// (предсказанный скор читается из `rec_impressions`). Без ops-БД — no-op.
 async fn log_hard_negative_inline(
     pg: &PgPool,
     sc_user_id: &str,
@@ -74,6 +77,7 @@ fn skip_weight_from_position(position_pct: Option<f32>) -> f64 {
 
 pub struct EventsService {
     pg: PgPool,
+    ops: OpsDb,
     user_locks: Cache<String, Arc<AsyncMutex<()>>>,
     indexing: OnceCell<Arc<IndexingService>>,
     dislikes: OnceCell<Arc<DislikesService>>,
@@ -81,9 +85,10 @@ pub struct EventsService {
 }
 
 impl EventsService {
-    pub fn new(pg: PgPool) -> Arc<Self> {
+    pub fn new(pg: PgPool, ops: OpsDb) -> Arc<Self> {
         Arc::new(Self {
             pg,
+            ops,
             user_locks: Cache::builder()
                 .max_capacity(USER_LOCK_CAPACITY)
                 .time_to_idle(USER_LOCK_TTL)
@@ -163,14 +168,15 @@ impl EventsService {
             weight = skip_weight_from_position(position_pct);
             if let Some(p) = position_pct {
                 if p < 0.20 {
-                    let pg = self.pg.clone();
-                    let user = sc_user_id.to_string();
-                    let id = normalized.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = log_hard_negative_inline(&pg, &user, &id, p).await {
-                            warn!(error = %e, "hard_negative insert failed");
-                        }
-                    });
+                    if let Some(pg) = self.ops.pool().cloned() {
+                        let user = sc_user_id.to_string();
+                        let id = normalized.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = log_hard_negative_inline(&pg, &user, &id, p).await {
+                                warn!(error = %e, "hard_negative insert failed");
+                            }
+                        });
+                    }
                 }
             }
         }
