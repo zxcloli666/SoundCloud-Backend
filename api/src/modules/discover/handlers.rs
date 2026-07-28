@@ -1038,6 +1038,22 @@ struct AdminPromotedRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// List row enriched with the promoted entity's human name + image so the admin UI
+/// never renders a bare artist/album UUID.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct AdminPromotedListRow {
+    id: Uuid,
+    entity_type: String,
+    entity_id: Uuid,
+    position: i32,
+    active: bool,
+    note: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    name: Option<String>,
+    image_url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AdminPromotedCreate {
     entity_type: String,
@@ -1063,9 +1079,9 @@ struct AdminPromotedUpdate {
 async fn admin_promoted_list(
     _: AdminAuth,
     State(st): State<AppState>,
-) -> AppResult<Json<Vec<AdminPromotedRow>>> {
+) -> AppResult<Json<Vec<AdminPromotedListRow>>> {
     let rows = sqlx::query_file_as!(
-        AdminPromotedRow,
+        AdminPromotedListRow,
         "queries/discover/handlers/admin_promoted_list.sql"
     )
     .fetch_all(&st.pg)
