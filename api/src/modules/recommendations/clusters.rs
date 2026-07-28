@@ -123,7 +123,7 @@ impl ClusterBuilder {
             kept.push(Cluster {
                 id: c.id,
                 track_ids,
-                neighbors: neighbors.and_then(|ns| if ns.is_empty() { None } else { Some(ns) }),
+                neighbors: neighbors.filter(|ns| !ns.is_empty()),
             });
         }
         self.clusters = kept;

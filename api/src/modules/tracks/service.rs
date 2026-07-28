@@ -170,9 +170,11 @@ impl TracksService {
                         }
                     });
                 }
-                let projected =
-                    crate::modules::tracks::project_many(&self.pg, &[sc_track_id.to_string()])
-                        .await?;
+                let projected = crate::modules::tracks::project_many(
+                    &self.pg,
+                    std::slice::from_ref(&sc_track_id),
+                )
+                .await?;
                 projected.into_iter().flatten().next().unwrap_or_else(|| {
                     crate::modules::tracks::project_to_sc_shape(&track_row, None)
                 })
