@@ -31,13 +31,13 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn get_profile(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
-    Ok(Json(st.me.get_profile(&ctx.access_token).await?))
+    Ok(Json(st.me.get_profile(&ctx.access_token().await?).await?))
 }
 
 async fn get_profile_cold(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
     Ok(Json(
         st.me
-            .get_profile_cold(&ctx.sc_user_id, &ctx.access_token)
+            .get_profile_cold(&ctx.sc_user_id, &ctx)
             .await?,
     ))
 }
@@ -119,7 +119,7 @@ async fn get_followings_tracks(
     let mut result = st
         .me
         .get_followings_tracks(
-            &ctx.access_token,
+            &ctx.access_token().await?,
             &ctx.session_id.to_string(),
             &ctx.sc_user_id,
             page,
@@ -171,7 +171,7 @@ async fn get_followers(
     let (page, limit) = q.resolved();
     Ok(Json(
         st.me
-            .get_followers(&ctx.access_token, &ctx.session_id.to_string(), page, limit)
+            .get_followers(&ctx.access_token().await?, &ctx.session_id.to_string(), page, limit)
             .await?,
     ))
 }

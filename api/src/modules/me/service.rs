@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::cache::cache_service::CacheScope;
 use crate::cache::{FetchChunkResult, GetPageOptions, ListCacheService, ListPageResult};
+use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::likes::cold as likes_cold;
 use crate::modules::sync_queue::mirror::{self, FOLLOWINGS as FOLLOWINGS_MIRROR};
@@ -52,10 +53,14 @@ impl MeService {
 
     /// DB-backed profile for Library: serve the mirror immediately, revalidate
     /// from SC in the background when stale; synchronous seed on first read.
+    /// «Холодный» профиль: источник истины — НАШЕ зеркало. Токен SoundCloud тут
+    /// не load-bearing и берётся лениво: он нужен лишь чтобы освежить протухшую
+    /// запись (фоном) или засеять пустое зеркало. Нет токена — отдаём то, что
+    /// есть в базе. Иначе протухшая сессия SC роняла бы старт приложения.
     pub async fn get_profile_cold(
         self: &Arc<Self>,
         sc_user_id: &str,
-        token: &str,
+        ctx: &SessionCtx,
     ) -> AppResult<Value> {
         // user_profiles ключ — URN (пишет login); ctx.sc_user_id теперь bare →
         // матчим оба варианта, LIMIT 1 по свежести (дубль URN+bare до бэкфилла).
@@ -67,10 +72,11 @@ impl MeService {
 
         if let Some(row) = row {
             let (profile, synced_at) = (row.profile_json, row.synced_at);
-            if Utc::now() - synced_at > Duration::seconds(PROFILE_TTL_SEC) {
+            if Utc::now() - synced_at > Duration::seconds(PROFILE_TTL_SEC)
+                && let Ok(tok) = ctx.access_token().await
+            {
                 let me = Arc::clone(self);
                 let uid = sc_user_id.to_string();
-                let tok = token.to_string();
                 tokio::spawn(async move {
                     if let Err(e) = me.refresh_profile(&uid, &tok).await {
                         debug!(error = %e, "me cold background refresh failed");
@@ -83,7 +89,12 @@ impl MeService {
         // Empty mirror: seed from SC under a short budget; if SC is slow or
         // unreachable, serve a session/users-derived stub now and finish seeding
         // in the background so Library/auth boot without blocking.
-        let seed = self.refresh_profile(sc_user_id, token);
+        // Засеять можем только с живым токеном; без него сразу отдаём заглушку
+        // из своей базы — это по-прежнему рабочий ответ, а не отказ.
+        let Ok(token) = ctx.access_token().await else {
+            return Ok(self.session_profile_stub(sc_user_id).await);
+        };
+        let seed = self.refresh_profile(sc_user_id, &token);
         match tokio::time::timeout(
             std::time::Duration::from_secs(PROFILE_SEED_TIMEOUT_SEC),
             seed,
@@ -97,9 +108,8 @@ impl MeService {
                 }
                 let me = Arc::clone(self);
                 let uid = sc_user_id.to_string();
-                let tok = token.to_string();
                 tokio::spawn(async move {
-                    let _ = me.refresh_profile(&uid, &tok).await;
+                    let _ = me.refresh_profile(&uid, &token).await;
                 });
                 Ok(self.session_profile_stub(sc_user_id).await)
             }

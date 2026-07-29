@@ -68,10 +68,11 @@ pub struct LoginStatusResult {
     pub extract: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct AuthService {
     pool: PgPool,
     sc: ScClient,
-    anon: Apiv2Proxy,
+    anon: Arc<Apiv2Proxy>,
     oauth_apps: Arc<OAuthAppsService>,
     config: Arc<AppConfig>,
     health: Arc<AuthHealthService>,
@@ -86,7 +87,7 @@ impl AuthService {
         config: Arc<AppConfig>,
         health: Arc<AuthHealthService>,
     ) -> Arc<Self> {
-        let anon = Apiv2Proxy::new(sc.clone());
+        let anon = Arc::new(Apiv2Proxy::new(sc.clone()));
         Arc::new(Self {
             pool,
             sc,
@@ -110,6 +111,14 @@ impl AuthService {
 
     /// Возвращает сессию со свежим access token. Объединяет lookup + auto-refresh
     /// в один SQL round-trip на happy path (без refresh).
+    ///
+    /// Ключевое: пока токен ещё НЕ истёк, запрос не ждёт похода в SoundCloud.
+    /// [`REFRESH_BUFFER`] в 5 минут для того и нужен — обновиться заранее, а не
+    /// заставлять пользователя стоять в очереди. Раньше здесь брался per-session
+    /// мьютекс и держался всю сетевую операцию: клиент шлёт десятки запросов
+    /// параллельно, все они упирались в один лок и получали секунды латентности
+    /// (в логах — пачки по 12 с, `/me/subscription` по 3–9 с при том, что сама
+    /// ручка это один SELECT).
     pub async fn get_valid_session(&self, session_id: Uuid) -> AppResult<Session> {
         let session = self
             .get_session(session_id)
@@ -120,6 +129,18 @@ impl AuthService {
             return Ok(session);
         }
 
+        if !is_expired(&session.expires_at) {
+            // Токен рабочий — отдаём его сразу, обновление уедет фоном.
+            self.spawn_refresh(session_id);
+            return Ok(session);
+        }
+
+        // Истёк по-настоящему: старый токен уже не примут, ждать придётся.
+        self.refresh_locked(session_id).await
+    }
+
+    /// Обновление под локом: единственный писатель, остальные ждут его результата.
+    async fn refresh_locked(&self, session_id: Uuid) -> AppResult<Session> {
         let lock = self.get_or_create_lock(session_id);
         let _g = lock.lock().await;
 
@@ -132,6 +153,29 @@ impl AuthService {
         }
 
         self.do_refresh(session).await
+    }
+
+    /// Фоновое обновление ещё живого токена. Single-flight по тому же локу:
+    /// не удалось взять — значит обновление уже идёт, второй раз не дёргаем
+    /// (иначе на каждый запрос улетал бы свой поход в SoundCloud).
+    fn spawn_refresh(&self, session_id: Uuid) {
+        let lock = self.get_or_create_lock(session_id);
+        let Ok(guard) = lock.clone().try_lock_owned() else {
+            return;
+        };
+        let auth = self.clone();
+        tokio::spawn(async move {
+            let _g = guard;
+            match auth.get_session(session_id).await {
+                Ok(Some(session)) if needs_refresh(&session.expires_at) => {
+                    if let Err(error) = auth.do_refresh(session).await {
+                        warn!(session = %session_id, %error, "background refresh failed");
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => warn!(session = %session_id, %error, "background refresh lookup failed"),
+            }
+        });
     }
 
     pub async fn get_valid_access_token(&self, session_id: Uuid) -> AppResult<String> {
@@ -942,6 +986,13 @@ fn needs_refresh(expires_at: &NaiveDateTime) -> bool {
     let now = Utc::now().naive_utc();
     let buffer = chrono::Duration::seconds(REFRESH_BUFFER.as_secs() as i64);
     *expires_at - now <= buffer
+}
+
+/// Токен уже недействителен — в отличие от «пора обновить» (см. [`REFRESH_BUFFER`]).
+/// Разница принципиальная: в первом случае запрос обязан дождаться обновления, во
+/// втором — нет, старый токен ещё примут.
+fn is_expired(expires_at: &NaiveDateTime) -> bool {
+    *expires_at <= Utc::now().naive_utc()
 }
 
 fn random_bytes(n: usize) -> Vec<u8> {
