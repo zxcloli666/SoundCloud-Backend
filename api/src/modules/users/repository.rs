@@ -41,13 +41,29 @@ pub struct UserRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Дефолт `sync_ttl_sec` — совпадает с `COLD_TTL_USER_SEC`.
+const DEFAULT_SYNC_TTL_SEC: i64 = 21_600;
+
 pub struct UserRepository {
     pg: PgPool,
+    /// Окно heartbeat'а `sc_synced_at` в UPSERT'е; должно быть ≤
+    /// `ColdCfg::user_ttl_sec`, по которому read-path решает, что юзер протух.
+    sync_ttl_sec: i64,
 }
 
 impl UserRepository {
     pub fn new(pg: PgPool) -> Self {
-        Self { pg }
+        Self {
+            pg,
+            sync_ttl_sec: DEFAULT_SYNC_TTL_SEC,
+        }
+    }
+
+    pub fn with_sync_ttl(pg: PgPool, sync_ttl_sec: u64) -> Self {
+        Self {
+            pg,
+            sync_ttl_sec: sync_ttl_sec as i64,
+        }
     }
 
     pub async fn find_by_urn(&self, urn: &str) -> AppResult<Option<UserRow>> {
@@ -65,11 +81,17 @@ impl UserRepository {
     }
 
     /// UPSERT из SC payload. Возвращает true если строка только что создана.
+    ///
+    /// `WHERE`-гард режет no-op перезаписи: юзер прилетает из каждого refresh'а
+    /// followings и с каждой карточки трека. Волатильные счётчики — через
+    /// [`sc_counter_drifted`]; `sc_synced_at` — heartbeat с окном `sync_ttl_sec`
+    /// (без него подавленный UPDATE держал бы строку вечно протухшей и
+    /// read-path спавнил бы refresh на каждое чтение).
     pub async fn upsert_from_sc(&self, payload: &Value) -> AppResult<bool> {
         let Some(fields) = ScUserFields::from_sc(payload) else {
             return Ok(false);
         };
-        let row: (bool,) = sqlx::query_as(
+        let row: Option<(bool,)> = sqlx::query_as(
             "INSERT INTO users (
                 sc_user_id, urn, username, username_normalized, full_name, first_name, last_name,
                 permalink, permalink_url, avatar_url, country, city, description, verified,
@@ -103,6 +125,28 @@ impl UserRepository {
                 sc_last_modified = COALESCE(EXCLUDED.sc_last_modified, users.sc_last_modified),
                 sc_synced_at = now(),
                 updated_at = now()
+             WHERE
+                users.username IS DISTINCT FROM EXCLUDED.username
+                OR users.username_normalized IS DISTINCT FROM EXCLUDED.username_normalized
+                OR users.full_name IS DISTINCT FROM EXCLUDED.full_name
+                OR users.first_name IS DISTINCT FROM EXCLUDED.first_name
+                OR users.last_name IS DISTINCT FROM EXCLUDED.last_name
+                OR users.permalink IS DISTINCT FROM EXCLUDED.permalink
+                OR users.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
+                OR users.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url
+                OR users.country IS DISTINCT FROM EXCLUDED.country
+                OR users.city IS DISTINCT FROM EXCLUDED.city
+                OR users.description IS DISTINCT FROM EXCLUDED.description
+                OR users.verified IS DISTINCT FROM EXCLUDED.verified
+                OR users.kind IS DISTINCT FROM EXCLUDED.kind
+                OR users.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, users.sc_last_modified)
+                OR users.tracks_count IS DISTINCT FROM COALESCE(EXCLUDED.tracks_count, users.tracks_count)
+                OR users.playlists_count IS DISTINCT FROM COALESCE(EXCLUDED.playlists_count, users.playlists_count)
+                OR sc_counter_drifted(users.followers_count, EXCLUDED.followers_count)
+                OR sc_counter_drifted(users.followings_count, EXCLUDED.followings_count)
+                OR sc_counter_drifted(users.reposts_count, EXCLUDED.reposts_count)
+                OR sc_counter_drifted(users.comments_count, EXCLUDED.comments_count)
+                OR users.sc_synced_at < now() - ($24::bigint * INTERVAL '1 second')
              RETURNING (xmax = 0) AS was_new",
         )
         .bind(&fields.sc_user_id)
@@ -128,9 +172,11 @@ impl UserRepository {
         .bind(&fields.kind)
         .bind(fields.sc_created_at)
         .bind(fields.sc_last_modified)
-        .fetch_one(&self.pg)
+        .bind(self.sync_ttl_sec)
+        .fetch_optional(&self.pg)
         .await?;
-        Ok(row.0)
+        // Гард подавил UPDATE (ничего не изменилось) — строка точно существует.
+        Ok(row.map(|r| r.0).unwrap_or(false))
     }
 }
 

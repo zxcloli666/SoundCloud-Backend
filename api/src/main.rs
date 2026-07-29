@@ -300,6 +300,7 @@ async fn main() {
         lyrics.clone(),
         transcode.clone(),
         config.max_track_duration_ms,
+        config.cold.track_ttl_sec,
     );
     if !reserve {
         indexing.spawn(shutdown.clone());

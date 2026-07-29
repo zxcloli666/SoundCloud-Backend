@@ -200,9 +200,9 @@ impl ColdRefreshService {
         tokens: Arc<TokenProvider>,
     ) -> Arc<Self> {
         let sem = Arc::new(Semaphore::new(cfg.refresh_concurrency));
-        let tracks = TrackRepository::new(pg.clone());
-        let users = UserRepository::new(pg.clone());
-        let playlists = PlaylistRepository::new(pg.clone());
+        let tracks = TrackRepository::with_sync_ttl(pg.clone(), cfg.track_ttl_sec);
+        let users = UserRepository::with_sync_ttl(pg.clone(), cfg.user_ttl_sec);
+        let playlists = PlaylistRepository::with_sync_ttl(pg.clone(), cfg.playlist_ttl_sec);
         Arc::new(Self {
             sc,
             pg,
@@ -253,6 +253,59 @@ impl ColdRefreshService {
         }
     }
 
+    /// Свежесть коллекции — одна строка `user_collection_sync` вместо
+    /// MAX(synced_at) по всему зеркалу юзера (тот сканировал все N строк на
+    /// каждый запрос и требовал штамповать synced_at на каждой из них).
+    /// Одноразовый fallback на зеркало — для коллекций, засинканных до
+    /// появления маркера: без него деплой отправил бы каждого юзера
+    /// в синхронный re-seed.
+    async fn collection_synced_at(
+        &self,
+        coll: &UserCollection,
+        sc_user_id: &str,
+    ) -> AppResult<Option<DateTime<Utc>>> {
+        let marker = sqlx::query_file_scalar!(
+            "queries/cold_refresh/service/collection_synced_at.sql",
+            extract_sc_id(sc_user_id),
+            coll.lock_kind,
+        )
+        .fetch_optional(&self.pg)
+        .await?;
+        if marker.is_some() {
+            return Ok(marker);
+        }
+
+        // Dynamic SQL: имя mirror-таблицы приходит из UserCollection.
+        let legacy: Option<DateTime<Utc>> = sqlx::query_scalar(&format!(
+            "SELECT MAX(synced_at) FROM {} WHERE user_id = ANY($1)",
+            coll.mirror_table
+        ))
+        .bind(crate::common::sc_ids::user_id_variants(sc_user_id))
+        .fetch_one(&self.pg)
+        .await?;
+        if let Some(ts) = legacy {
+            self.mark_collection_synced(coll, sc_user_id, ts).await?;
+        }
+        Ok(legacy)
+    }
+
+    async fn mark_collection_synced(
+        &self,
+        coll: &UserCollection,
+        sc_user_id: &str,
+        at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        sqlx::query_file!(
+            "queries/cold_refresh/service/mark_collection_synced.sql",
+            extract_sc_id(sc_user_id),
+            coll.lock_kind,
+            at,
+        )
+        .execute(&self.pg)
+        .await?;
+        Ok(())
+    }
+
     /// Гарантирует, что mirror юзера для коллекции достаточно свежий.
     /// Пустое зеркало — синхронный seed. Stale — фоновый refresh
     /// (первый клиент после TTL заплатит, остальные читают текущий снапшот).
@@ -269,13 +322,7 @@ impl ColdRefreshService {
         kind: TokenKind,
         extra_params: &[(String, String)],
     ) -> AppResult<()> {
-        let max_synced: Option<DateTime<Utc>> = sqlx::query_scalar(&format!(
-            "SELECT MAX(synced_at) FROM {} WHERE user_id = ANY($1)",
-            coll.mirror_table
-        ))
-        .bind(crate::common::sc_ids::user_id_variants(sc_user_id))
-        .fetch_one(&self.pg)
-        .await?;
+        let max_synced = self.collection_synced_at(&coll, sc_user_id).await?;
 
         if max_synced.is_none() {
             self.refresh_collection(coll, sc_user_id, viewer_is_owner, kind, extra_params)
@@ -403,6 +450,12 @@ impl ColdRefreshService {
             )
             .await?;
         }
+
+        // Штампуем момент СТАРТА фетча, а не конца: снапшот отражает состояние
+        // на этот момент, и следующий refresh не проспит правку, прилетевшую
+        // во время пагинации.
+        self.mark_collection_synced(&coll, sc_user_id, reconcile_started_at)
+            .await?;
         Ok(())
     }
 
@@ -696,10 +749,21 @@ async fn batch_upsert_mirror(
     // Используем clock_timestamp() (volatile per-row) для created_at, чтобы
     // refresh-батчи получали разные ts и ORDER BY (created_at DESC, key DESC)
     // сохранял SC-порядок. ON CONFLICT updates НЕ переписывают created_at.
-    let (select_cols, update_set) = if let Some(p) = coll.mirror_payload_col {
+    //
+    // `update_where` оставляет UPDATE только строкам, где реально есть что
+    // менять. Свежесть коллекции держит маркер `user_collection_sync`, а не
+    // MAX(synced_at) по зеркалу, поэтому штамповать synced_at на всех N строках
+    // (5k лайков = 5k UPDATE'ов на каждый refresh) больше не нужно.
+    // delete_orphans это не ломает: его `synced_at < cutoff` оценивается только
+    // на строках, которых НЕТ в снапшоте (`NOT (key = ANY(seen))`), т.е. ровно
+    // на тех, которых этот UPSERT и так не касался. Строки с progress=true
+    // по-прежнему получают synced_at = now() — на нём стоит 15-минутный backoff
+    // реэнкюива в heal_*.
+    let (select_cols, update_set, update_where) = if let Some(p) = coll.mirror_payload_col {
         (
             "$1, t.k, t.p, false, now(), clock_timestamp()".to_string(),
             format!("{p} = EXCLUDED.{p}, synced_at = now()"),
+            format!("{table}.{p} IS DISTINCT FROM EXCLUDED.{p} OR {table}.progress = true"),
         )
     } else if coll.has_wanted_state {
         (
@@ -714,6 +778,7 @@ async fn batch_upsert_mirror(
                  progress = CASE WHEN {table}.wanted_state = true \
                                  THEN false ELSE {table}.progress END"
             ),
+            format!("{table}.progress = true"),
         )
     } else {
         (
@@ -721,6 +786,7 @@ async fn batch_upsert_mirror(
             // Owned не имеет pending-unlike; SC показал строку — создание
             // подтверждено, чистим progress.
             "synced_at = now(), progress = false".to_string(),
+            format!("{table}.progress = true"),
         )
     };
 
@@ -752,7 +818,8 @@ async fn batch_upsert_mirror(
     let sql = format!(
         "INSERT INTO {table} ({insert_cols}) \
          SELECT {select_cols} {from_clause} {guard_clause} \
-         ON CONFLICT (user_id, {key_col}) DO UPDATE SET {update_set}"
+         ON CONFLICT (user_id, {key_col}) DO UPDATE SET {update_set} \
+         WHERE {update_where}"
     );
 
     let q = sqlx::query(&sql).bind(sc_user_id).bind(keys);
