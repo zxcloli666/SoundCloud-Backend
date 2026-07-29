@@ -80,8 +80,9 @@ impl IndexingService {
         lyrics: Arc<LyricsService>,
         trigger: Arc<TranscodeTriggerService>,
         max_track_duration_ms: i32,
+        track_sync_ttl_sec: u64,
     ) -> Arc<Self> {
-        let tracks = TrackRepository::new(pg.clone());
+        let tracks = TrackRepository::with_sync_ttl(pg.clone(), track_sync_ttl_sec);
         Arc::new(Self {
             pg,
             nats,

@@ -95,6 +95,10 @@ pub async fn sync(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()> {
         // Runtime query: nullable count arrays (Vec<Option<i64>>) into bigint[] —
         // query! infers array elements as non-null (&[i64]); a NULL count means
         // "keep existing" (COALESCE below), so the Option must survive. Kept runtime.
+        // WHERE-гард: один и тот же трек прилетает в десятках ответов подряд с
+        // теми же счётчиками — без гарда каждый ответ переписывал бы всю пачку.
+        // `fetched_at` двигается только на реальном изменении; STALE_SECS ниже
+        // от этого не страдает: пропущенная строка равна входящей по значению.
         sqlx::query(
             "INSERT INTO sc_track_counters (sc_track_id, play_count, likes_count, reposts_count, comment_count, fetched_at) \
              SELECT u.id, u.p, u.l, u.r, u.c, now() \
@@ -105,7 +109,11 @@ pub async fn sync(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()> {
                  likes_count   = COALESCE(EXCLUDED.likes_count, sc_track_counters.likes_count), \
                  reposts_count = COALESCE(EXCLUDED.reposts_count, sc_track_counters.reposts_count), \
                  comment_count = COALESCE(EXCLUDED.comment_count, sc_track_counters.comment_count), \
-                 fetched_at    = now()",
+                 fetched_at    = now() \
+             WHERE sc_track_counters.play_count    IS DISTINCT FROM COALESCE(EXCLUDED.play_count,    sc_track_counters.play_count) \
+                OR sc_track_counters.likes_count   IS DISTINCT FROM COALESCE(EXCLUDED.likes_count,   sc_track_counters.likes_count) \
+                OR sc_track_counters.reposts_count IS DISTINCT FROM COALESCE(EXCLUDED.reposts_count, sc_track_counters.reposts_count) \
+                OR sc_track_counters.comment_count IS DISTINCT FROM COALESCE(EXCLUDED.comment_count, sc_track_counters.comment_count)",
         )
         .bind(&ids)
         .bind(&play)

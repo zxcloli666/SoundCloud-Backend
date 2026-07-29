@@ -121,13 +121,32 @@ pub struct TrackRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Дефолт `sync_ttl_sec` — совпадает с `COLD_TTL_TRACK_SEC`. Используется
+/// конструкторами, которые не делают UPSERT'ов (duration-resolver, walker).
+const DEFAULT_SYNC_TTL_SEC: i64 = 21_600;
+
 pub struct TrackRepository {
     pg: PgPool,
+    /// Окно heartbeat'а `sc_synced_at` в UPSERT'е. Должно быть ≤ TTL, по
+    /// которому read-path считает трек протухшим (`ColdCfg::track_ttl_sec`),
+    /// иначе каждое чтение будет спавнить refresh, который ничего не пишет.
+    sync_ttl_sec: i64,
 }
 
 impl TrackRepository {
     pub fn new(pg: PgPool) -> Self {
-        Self { pg }
+        Self {
+            pg,
+            sync_ttl_sec: DEFAULT_SYNC_TTL_SEC,
+        }
+    }
+
+    /// Для ingest-путей: TTL берётся из `ColdCfg`, а не из дефолта.
+    pub fn with_sync_ttl(pg: PgPool, sync_ttl_sec: u64) -> Self {
+        Self {
+            pg,
+            sync_ttl_sec: sync_ttl_sec as i64,
+        }
     }
 
     /// UPSERT из SC payload. Сохраняет owned-поля (primary_artist_id, album_id,
@@ -139,6 +158,18 @@ impl TrackRepository {
     ///
     /// Возвращает [`IngestResult`] с флагом `was_new`. true — это значит
     /// строка только что создана и каллер должен kick-нуть пайплайны.
+    ///
+    /// `WHERE`-гард пропускает UPDATE только при реальном изменении. `tracks` —
+    /// 34 ГБ с ~20 индексами, и `sc_synced_at`/`play_count_sc` тоже
+    /// проиндексированы, поэтому любая перезапись строки — не-HOT update:
+    /// новый heap-tuple + запись во все индексы + full-page writes в WAL.
+    /// Отсюда два отличия от наивного «сравнить все поля»:
+    /// * волатильные счётчики сравниваются через [`sc_counter_drifted`] (>5%),
+    ///   а не точно — иначе тикающий play_count переписывал бы строку на каждый
+    ///   sighting;
+    /// * `sc_synced_at` служит heartbeat'ом с окном `sync_ttl_sec` — read-path
+    ///   гоняет refresh по нему, и без этого терма подавленный UPDATE оставлял
+    ///   бы `sc_synced_at` вечно протухшим (refresh на каждое чтение).
     pub async fn upsert_from_sc(
         &self,
         fields: &ScTrackFields,
@@ -149,7 +180,7 @@ impl TrackRepository {
         // bind-параметры как non-null (&str), а ScTrackFields несёт ~12 nullable-полей
         // как Option<String> → конфликт. Чинится не тут, а аудитом nullability
         // ScTrackFields↔схема — отдельной задачей; до тех пор не трогаем рабочий upsert.
-        let row: (Uuid, bool) = sqlx::query_as(
+        let row: Option<(Uuid, bool)> = sqlx::query_as(
             "INSERT INTO tracks (
                 sc_track_id, urn, title, title_normalized, description, genre, tags,
                 duration_ms, artwork_url, permalink_url, waveform_url, language, isrc,
@@ -211,6 +242,23 @@ impl TrackRepository {
                 is_cover = tracks.is_cover OR EXCLUDED.is_cover,
                 sc_synced_at = now(),
                 updated_at = now()
+             WHERE
+                tracks.title IS DISTINCT FROM EXCLUDED.title
+                OR tracks.description IS DISTINCT FROM EXCLUDED.description
+                OR tracks.artwork_url IS DISTINCT FROM EXCLUDED.artwork_url
+                OR tracks.sharing IS DISTINCT FROM EXCLUDED.sharing
+                OR tracks.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
+                OR tracks.genre IS DISTINCT FROM EXCLUDED.genre
+                OR tracks.tags IS DISTINCT FROM EXCLUDED.tags
+                OR tracks.duration_ms IS DISTINCT FROM (CASE WHEN EXCLUDED.duration_ms > 0 THEN EXCLUDED.duration_ms ELSE tracks.duration_ms END)
+                OR tracks.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified)
+                OR tracks.uploader_username IS DISTINCT FROM COALESCE(EXCLUDED.uploader_username, tracks.uploader_username)
+                OR tracks.uploader_avatar_url IS DISTINCT FROM COALESCE(EXCLUDED.uploader_avatar_url, tracks.uploader_avatar_url)
+                OR sc_counter_drifted(tracks.play_count_sc, EXCLUDED.play_count_sc)
+                OR sc_counter_drifted(tracks.likes_count_sc, EXCLUDED.likes_count_sc)
+                OR LEAST(tracks.index_priority, EXCLUDED.index_priority) IS DISTINCT FROM tracks.index_priority
+                OR LEAST(tracks.storage_priority, EXCLUDED.storage_priority) IS DISTINCT FROM tracks.storage_priority
+                OR tracks.sc_synced_at < now() - ($32::bigint * INTERVAL '1 second')
              RETURNING id, (xmax = 0) AS was_new",
         )
         .bind(&fields.sc_track_id)
@@ -244,13 +292,31 @@ impl TrackRepository {
         .bind(new_index_priority.as_i16())
         .bind(new_storage_priority.as_i16())
         .bind(fields.is_cover)
-        .fetch_one(&self.pg)
+        .bind(self.sync_ttl_sec)
+        .fetch_optional(&self.pg)
         .await?;
 
-        Ok(IngestResult {
-            id: row.0,
-            was_new: row.1,
-        })
+        // WHERE guard may suppress the UPDATE when nothing changed —
+        // RETURNING yields no row. The track already exists (was_new=false),
+        // look up its id.
+        match row {
+            Some(r) => Ok(IngestResult {
+                id: r.0,
+                was_new: r.1,
+            }),
+            None => {
+                let existing: (Uuid,) = sqlx::query_as(
+                    "SELECT id FROM tracks WHERE sc_track_id = $1",
+                )
+                .bind(&fields.sc_track_id)
+                .fetch_one(&self.pg)
+                .await?;
+                Ok(IngestResult {
+                    id: existing.0,
+                    was_new: false,
+                })
+            }
+        }
     }
 
     pub async fn find_by_sc_track_id(&self, sc_track_id: &str) -> AppResult<Option<TrackRow>> {

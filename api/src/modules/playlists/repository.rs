@@ -46,13 +46,30 @@ pub struct PlaylistRow {
     pub synced_rev: i64,
 }
 
+/// Дефолт `sync_ttl_sec` — совпадает с `COLD_TTL_PLAYLIST_SEC`.
+const DEFAULT_SYNC_TTL_SEC: i64 = 3_600;
+
 pub struct PlaylistRepository {
     pg: PgPool,
+    /// Окно heartbeat'а `sc_synced_at` в UPSERT'е; должно быть ≤
+    /// `ColdCfg::playlist_ttl_sec`, по которому read-path решает, что мета
+    /// плейлиста протухла.
+    sync_ttl_sec: i64,
 }
 
 impl PlaylistRepository {
     pub fn new(pg: PgPool) -> Self {
-        Self { pg }
+        Self {
+            pg,
+            sync_ttl_sec: DEFAULT_SYNC_TTL_SEC,
+        }
+    }
+
+    pub fn with_sync_ttl(pg: PgPool, sync_ttl_sec: u64) -> Self {
+        Self {
+            pg,
+            sync_ttl_sec: sync_ttl_sec as i64,
+        }
     }
 
     pub async fn find_by_urn(&self, urn: &str) -> AppResult<Option<PlaylistRow>> {
@@ -71,11 +88,16 @@ impl PlaylistRepository {
 
     /// UPSERT playlist-метаданных из SC payload. Возвращает true если строка
     /// только что создана.
+    ///
+    /// `WHERE`-гард режет no-op перезаписи (плейлист прилетает из каждого
+    /// refresh'а лайков/owned и с каждого открытия). `track_count` сравнивается
+    /// точно — он load-bearing для `get_tracks`; волатильные счётчики — через
+    /// [`sc_counter_drifted`]; `sc_synced_at` — heartbeat с окном `sync_ttl_sec`.
     pub async fn upsert_from_sc(&self, payload: &Value) -> AppResult<bool> {
         let Some(fields) = ScPlaylistFields::from_sc(payload) else {
             return Ok(false);
         };
-        let row: (bool,) = sqlx::query_as(
+        let row: Option<(bool,)> = sqlx::query_as(
             "INSERT INTO playlists (
                 urn, sc_playlist_id, title, title_normalized, description, genre, tags,
                 artwork_url, permalink_url, owner_sc_user_id, owner_urn, owner_username,
@@ -111,6 +133,26 @@ impl PlaylistRepository {
                 sc_last_modified = COALESCE(EXCLUDED.sc_last_modified, playlists.sc_last_modified),
                 sc_synced_at = now(),
                 updated_at = now()
+             WHERE
+                playlists.title IS DISTINCT FROM EXCLUDED.title
+                OR playlists.title_normalized IS DISTINCT FROM EXCLUDED.title_normalized
+                OR playlists.description IS DISTINCT FROM EXCLUDED.description
+                OR playlists.genre IS DISTINCT FROM EXCLUDED.genre
+                OR playlists.tags IS DISTINCT FROM EXCLUDED.tags
+                OR playlists.artwork_url IS DISTINCT FROM EXCLUDED.artwork_url
+                OR playlists.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
+                OR playlists.sharing IS DISTINCT FROM EXCLUDED.sharing
+                OR playlists.track_count IS DISTINCT FROM EXCLUDED.track_count
+                OR playlists.sc_playlist_id IS DISTINCT FROM EXCLUDED.sc_playlist_id
+                OR playlists.owner_username IS DISTINCT FROM COALESCE(EXCLUDED.owner_username, playlists.owner_username)
+                OR playlists.duration_ms IS DISTINCT FROM COALESCE(EXCLUDED.duration_ms, playlists.duration_ms)
+                OR playlists.playlist_type IS DISTINCT FROM COALESCE(EXCLUDED.playlist_type, playlists.playlist_type)
+                OR playlists.kind IS DISTINCT FROM COALESCE(EXCLUDED.kind, playlists.kind)
+                OR playlists.label_name IS DISTINCT FROM COALESCE(EXCLUDED.label_name, playlists.label_name)
+                OR playlists.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, playlists.sc_last_modified)
+                OR sc_counter_drifted(playlists.likes_count_sc, EXCLUDED.likes_count_sc)
+                OR sc_counter_drifted(playlists.reposts_count_sc, EXCLUDED.reposts_count_sc)
+                OR playlists.sc_synced_at < now() - ($25::bigint * INTERVAL '1 second')
              RETURNING (xmax = 0) AS was_new",
         )
         .bind(&fields.urn)
@@ -137,9 +179,11 @@ impl PlaylistRepository {
         .bind(fields.reposts_count_sc)
         .bind(fields.sc_created_at)
         .bind(fields.sc_last_modified)
-        .fetch_one(&self.pg)
+        .bind(self.sync_ttl_sec)
+        .fetch_optional(&self.pg)
         .await?;
-        Ok(row.0)
+        // Гард подавил UPDATE (ничего не изменилось) — строка точно существует.
+        Ok(row.map(|r| r.0).unwrap_or(false))
     }
 
     /// Атомарная замена track-list плейлиста: DELETE по playlist_urn + bulk
