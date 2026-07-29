@@ -1,10 +1,18 @@
 name: migrations-guard
 on:
   pull_request:
-    paths: [ 'api/migrations/**', 'api/migrations-ops/**' ]
+    paths:
+      - 'api/migrations/**'
+      - 'api/migrations-ops/**'
+      - 'scripts/check-migrations.sh'
+      - '.github/workflows/migrations-guard.yml'
   push:
     branches: [ main ]
-    paths: [ 'api/migrations/**', 'api/migrations-ops/**' ]
+    paths:
+      - 'api/migrations/**'
+      - 'api/migrations-ops/**'
+      - 'scripts/check-migrations.sh'
+      - '.github/workflows/migrations-guard.yml'
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -18,8 +26,16 @@ jobs:
           MIG_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           BASE="$MIG_BASE_REF"
-          # new ref / force-push reports all-zeros — fall back to the previous commit.
+          # A newly created ref has no previous commit.
           case "$BASE" in ''|0000000000000000000000000000000000000000)
             BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)" ;;
           esac
-          MIG_BASE_REF="$BASE" bash scripts/check-migrations.sh "$BASE...HEAD"
+          # PR: inspect branch-only changes from the merge base.
+          # Push: inspect the exact previous-tree → new-tree transition. This also
+          # handles amend/force-push, where BASE and HEAD are sibling commits.
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            DIFF_RANGE="$BASE...HEAD"
+          else
+            DIFF_RANGE="$BASE..HEAD"
+          fi
+          MIG_BASE_REF="$BASE" bash scripts/check-migrations.sh "$DIFF_RANGE"
