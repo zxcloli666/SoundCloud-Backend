@@ -13,6 +13,14 @@ use crate::modules::subscriptions::SubscriptionsService;
 
 const REFRESH_TICK: Duration = Duration::from_secs(60 * 30);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Серверный потолок на один агрегат. ОБЯЗАН существовать отдельно от
+/// [`REFRESH_TIMEOUT`]: `tokio::time::timeout` дропает future — освобождает
+/// single-flight и возвращает соединение, но Postgres продолжает выполнять
+/// statement. Следующий тик стартовал новую копию поверх живой старой; на проде
+/// так набралось 11 копий refresh_artist_counts, старшей 19 часов, и они держали
+/// локи на `artists`, за которыми встали десятки UPDATE'ов энричмента — пул
+/// выело, отдача встала. `statement_timeout` делает отмену настоящей.
+const AGGREGATE_STATEMENT_TIMEOUT_MS: u32 = 10 * 60 * 1000;
 const FRESH_WINDOW_DAYS: i32 = 14;
 const TAG_PRECOMPUTE_LIMIT: i64 = 32;
 const CACHE_TTL_FALLBACK_SECS: u64 = 3 * 60 * 60;
@@ -118,78 +126,106 @@ impl DiscoverService {
         Ok(())
     }
 
+    /// Транзакция под тяжёлый агрегат: `SET LOCAL` действует только на неё и
+    /// откатывается сам, так что отдающие запросы этот потолок не задевает.
+    async fn bounded_tx(&self) -> AppResult<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let mut tx = self.pg.begin().await?;
+        sqlx::query(&format!(
+            "SET LOCAL statement_timeout = {AGGREGATE_STATEMENT_TIMEOUT_MS}"
+        ))
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
+    }
+
     async fn refresh_artist_counts(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         // track_count_primary считаем только по indexed tracks. Wanted-only
         // артисты (без реальных треков) не должны показываться в discover —
         // у юзера на их странице "вообще всё пусто".
         sqlx::query_file!("queries/discover/service/refresh_artist_counts.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_artist_plays(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         sqlx::query_file!("queries/discover/service/refresh_artist_plays.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_artist_popularity(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         // Гибрид: SC play_count по primary-трекам (база) + наши full_play с
         // весом INTERNAL_PLAY_WEIGHT. LN-нормализация как у album popularity.
         sqlx::query_file!(
             "queries/discover/service/refresh_artist_popularity.sql",
             INTERNAL_PLAY_WEIGHT
         )
-        .execute(&self.pg)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_artist_tags(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         sqlx::query_file!("queries/discover/service/refresh_artist_tags.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_artist_star(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         let always_premium = self.subscriptions.always_premium();
         let now = chrono::Utc::now().timestamp();
         if always_premium {
             sqlx::query_file!("queries/discover/service/refresh_artist_star_premium.sql")
-                .execute(&self.pg)
+                .execute(&mut *tx)
                 .await?;
         } else {
             sqlx::query_file!(
                 "queries/discover/service/refresh_artist_star_active.sql",
                 now
             )
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_album_meta(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         sqlx::query_file!("queries/discover/service/refresh_album_meta.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_album_popularity(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         sqlx::query_file!("queries/discover/service/refresh_album_popularity.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn refresh_album_star(&self) -> AppResult<()> {
+        let mut tx = self.bounded_tx().await?;
         sqlx::query_file!("queries/discover/service/refresh_album_star.sql")
-            .execute(&self.pg)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
