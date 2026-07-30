@@ -30,10 +30,9 @@ impl Throttle {
             *g = Some(next);
             next
         };
-        if let Some(delay) = slot.checked_duration_since(Instant::now()) {
-            if !delay.is_zero() {
+        if let Some(delay) = slot.checked_duration_since(Instant::now())
+            && !delay.is_zero() {
                 tokio::time::sleep(delay).await;
             }
-        }
     }
 }

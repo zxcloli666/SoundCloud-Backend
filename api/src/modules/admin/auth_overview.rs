@@ -29,11 +29,10 @@ pub async fn overview(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<AuthOverview>> {
-    if let Ok(Some(raw)) = state.cache.get_raw(OVERVIEW_KEY).await {
-        if let Ok(cached) = serde_json::from_str::<AuthOverview>(&raw) {
+    if let Ok(Some(raw)) = state.cache.get_raw(OVERVIEW_KEY).await
+        && let Ok(cached) = serde_json::from_str::<AuthOverview>(&raw) {
             return Ok(Json(cached));
         }
-    }
 
     let row = sqlx::query_file!("queries/admin/auth_overview/overview.sql")
         .fetch_one(&state.pg)
@@ -82,11 +81,10 @@ pub async fn oauth_health(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<OAuthAppHealth>>> {
-    if let Ok(Some(raw)) = state.cache.get_raw(OAUTH_HEALTH_KEY).await {
-        if let Ok(cached) = serde_json::from_str::<Vec<OAuthAppHealth>>(&raw) {
+    if let Ok(Some(raw)) = state.cache.get_raw(OAUTH_HEALTH_KEY).await
+        && let Ok(cached) = serde_json::from_str::<Vec<OAuthAppHealth>>(&raw) {
             return Ok(Json(cached));
         }
-    }
 
     let rows = sqlx::query_file!("queries/admin/auth_overview/oauth_health.sql")
         .fetch_all(&state.pg)

@@ -438,11 +438,10 @@ async fn primary_names_for(
 
 fn to_list_item(row: TrackListRow, credit_names: Option<Vec<String>>) -> TrackListItem {
     let mut detected = credit_names.unwrap_or_default();
-    if detected.is_empty() {
-        if let Some(n) = row.primary_artist_name.clone() {
+    if detected.is_empty()
+        && let Some(n) = row.primary_artist_name.clone() {
             detected.push(n);
         }
-    }
     let raw_match = row.metadata_artist.as_deref().and_then(|meta| {
         artist_names::compare_with_meta(detected.iter().map(|s| s.as_str()), meta)
     });

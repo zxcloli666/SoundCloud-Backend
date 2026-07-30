@@ -118,18 +118,15 @@ fn extract_session_id(parts: &Parts) -> Option<String> {
         .headers
         .get("x-session-id")
         .and_then(|v| v.to_str().ok())
-    {
-        if !v.is_empty() {
+        && !v.is_empty() {
             return Some(v.to_string());
         }
-    }
     if let Some(q) = parts.uri.query() {
         for pair in q.split('&') {
-            if let Some((k, v)) = pair.split_once('=') {
-                if k == "session_id" && !v.is_empty() {
+            if let Some((k, v)) = pair.split_once('=')
+                && k == "session_id" && !v.is_empty() {
                     return Some(urlencoding::decode(v).ok()?.into_owned());
                 }
-            }
         }
     }
     None

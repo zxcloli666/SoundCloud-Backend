@@ -139,16 +139,14 @@ impl WorkSource for CatalogSource {
             .await
         {
             Ok(()) => {
-                if item.sc_user_id.is_some() {
-                    if let Some(resolver) = &self.wanted {
-                        if let Err(e) = resolver
+                if item.sc_user_id.is_some()
+                    && let Some(resolver) = &self.wanted
+                        && let Err(e) = resolver
                             .run_for_artist(item.id, POST_CRAWL_WANTED_MAX)
                             .await
                         {
                             tracing::debug!(artist = %item.id, error = %e, "post-crawl wanted resolve failed");
                         }
-                    }
-                }
                 WorkOutcome::Done
             }
             Err(e) => WorkOutcome::Failed {

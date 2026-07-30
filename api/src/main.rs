@@ -156,11 +156,10 @@ async fn main() {
     );
 
     let oauth_apps = OAuthAppsService::new(pg.clone(), config.clone());
-    if !reserve {
-        if let Err(e) = oauth_apps.migrate_env_app().await {
+    if !reserve
+        && let Err(e) = oauth_apps.migrate_env_app().await {
             warn!(error = %e, "OAuthApps env migration failed");
         }
-    }
     match oauth_apps.count_active().await {
         Ok(n) => info!(active = n, "Active OAuth apps"),
         Err(e) => warn!(error = %e, "Failed to count active OAuth apps"),
@@ -351,11 +350,10 @@ async fn main() {
         ai_resolver,
         config.enrich.clone(),
     );
-    if !reserve {
-        if let Some(kicker) = enrich.spawn(shutdown.clone()) {
+    if !reserve
+        && let Some(kicker) = enrich.spawn(shutdown.clone()) {
             indexing.install_enrich_kicker(kicker);
         }
-    }
 
     let artist_crawl = ArtistCrawlService::new(
         pg.clone(),

@@ -94,16 +94,14 @@ impl ArtistCrawlService {
         if let Some(mb_id) = mb_id {
             match self.mb.lookup_artist(mb_id).await {
                 Ok(Some(details)) => {
-                    if let Some(c) = details.country.as_deref() {
-                        if !c.is_empty() {
+                    if let Some(c) = details.country.as_deref()
+                        && !c.is_empty() {
                             country = Some(c.to_string());
                         }
-                    }
-                    if let Some(d) = details.disambiguation {
-                        if !d.is_empty() {
+                    if let Some(d) = details.disambiguation
+                        && !d.is_empty() {
                             bio = Some(d);
                         }
-                    }
                     for u in details.urls {
                         for entry in normalize_mb_url(&u) {
                             socials.push(entry);
@@ -115,16 +113,14 @@ impl ArtistCrawlService {
             }
         }
 
-        if let Some(genius_id) = genius_id.and_then(|s| s.parse::<i64>().ok()) {
-            if let Some(details) = self.genius.lookup_artist(genius_id).await {
-                if let Some(av) = details.avatar_url.clone() {
-                    if !av.is_empty() {
+        if let Some(genius_id) = genius_id.and_then(|s| s.parse::<i64>().ok())
+            && let Some(details) = self.genius.lookup_artist(genius_id).await {
+                if let Some(av) = details.avatar_url.clone()
+                    && !av.is_empty() {
                         avatar_url = Some(av);
                     }
-                }
                 socials.extend(genius_socials(&details, "genius"));
             }
-        }
 
         socials.sort_by(|a, b| a.1.cmp(&b.1));
         socials.dedup_by(|a, b| a.1 == b.1);
@@ -178,11 +174,10 @@ impl ArtistCrawlService {
                 }
             }
         }
-        if let Some(sc_user_id) = sc_user_id {
-            if let Err(e) = self.fetch_sc_web_profiles(artist_id, sc_user_id).await {
+        if let Some(sc_user_id) = sc_user_id
+            && let Err(e) = self.fetch_sc_web_profiles(artist_id, sc_user_id).await {
                 debug!(artist = %artist_id, error = %e, "SC web-profiles fetch failed");
             }
-        }
         Ok(())
     }
 
@@ -365,8 +360,8 @@ impl ArtistCrawlService {
             .and_then(|n| i16::try_from(n).ok())
             .unwrap_or(0);
 
-        if let Some(pa_id) = track_primary_id {
-            if let Some(indexed_id) = self
+        if let Some(pa_id) = track_primary_id
+            && let Some(indexed_id) = self
                 .indexed_track_for_artist_title(pa_id, &track.title)
                 .await?
             {
@@ -386,7 +381,6 @@ impl ArtistCrawlService {
                     .await?;
                 return Ok(());
             }
-        }
 
         let external_id = track.genius_song_id.to_string();
         let wanted_id: Option<(Uuid,)> = sqlx::query_as(
@@ -502,11 +496,10 @@ impl ArtistCrawlService {
             None => None,
         };
 
-        if let Some(isrc) = rec.isrc.as_deref() {
-            if self.indexed_track_has_isrc(isrc).await? {
+        if let Some(isrc) = rec.isrc.as_deref()
+            && self.indexed_track_has_isrc(isrc).await? {
                 return Ok(());
             }
-        }
 
         let normalized_title = normalize_title(&rec.title);
         if normalized_title.is_empty() {
@@ -703,8 +696,8 @@ impl ArtistCrawlService {
                     let lyrics = self.lyrics.clone();
                     tokio::spawn(async move { lyrics.pull_genius_direct(&scid).await });
                 }
-                if let Some(details) = self.genius.lookup_song(gid).await {
-                    if let Some(album_ref) = details.album {
+                if let Some(details) = self.genius.lookup_song(gid).await
+                    && let Some(album_ref) = details.album {
                         let album_id = self
                             .ensure_genius_album(album_ref, primary_artist_id, details.year)
                             .await?;
@@ -712,7 +705,6 @@ impl ArtistCrawlService {
                             self.link_indexed_album(indexed_id, album_id).await?;
                         }
                     }
-                }
             }
             return Ok(());
         }
@@ -756,9 +748,9 @@ impl ArtistCrawlService {
                     .await?;
             }
         }
-        if let Some(genius_song_id) = song.genius_song_id {
-            if let Some(details) = self.genius.lookup_song(genius_song_id).await {
-                if let Some(album_ref) = details.album {
+        if let Some(genius_song_id) = song.genius_song_id
+            && let Some(details) = self.genius.lookup_song(genius_song_id).await
+                && let Some(album_ref) = details.album {
                     let album_id = self
                         .ensure_genius_album(album_ref, primary_artist_id, details.year)
                         .await?;
@@ -766,8 +758,6 @@ impl ArtistCrawlService {
                         self.link_wanted_album(wanted_id, album_id, 0).await?;
                     }
                 }
-            }
-        }
         Ok(())
     }
 
@@ -1120,14 +1110,13 @@ fn genius_socials(d: &GeniusArtistDetails, source: &str) -> Vec<(String, String,
             source.to_string(),
         ));
     }
-    if let Some(genius_url) = d.url.as_deref() {
-        if !genius_url.is_empty() {
+    if let Some(genius_url) = d.url.as_deref()
+        && !genius_url.is_empty() {
             out.push((
                 "genius".to_string(),
                 genius_url.to_string(),
                 source.to_string(),
             ));
         }
-    }
     out
 }

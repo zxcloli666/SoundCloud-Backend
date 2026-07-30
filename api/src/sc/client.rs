@@ -464,11 +464,10 @@ impl ScClient {
     }
 
     async fn anon_client_id(&self) -> Option<String> {
-        if let Some((id, at)) = self.inner.anon_client_id.read().await.as_ref() {
-            if at.elapsed() < ANON_CID_TTL {
+        if let Some((id, at)) = self.inner.anon_client_id.read().await.as_ref()
+            && at.elapsed() < ANON_CID_TTL {
                 return Some(id.clone());
             }
-        }
         self.refresh_anon_client_id().await
     }
 

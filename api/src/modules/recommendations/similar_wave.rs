@@ -266,13 +266,10 @@ fn filter_vibe_pool(
                 return false;
             }
             if let (Some(same_id), Some(payload)) = (same_artist_str.as_deref(), r.payload.as_ref())
-            {
-                if let Some(pa) = payload.get("primary_artist_id").and_then(|v| v.as_str()) {
-                    if pa == same_id {
+                && let Some(pa) = payload.get("primary_artist_id").and_then(|v| v.as_str())
+                    && pa == same_id {
                         return false;
                     }
-                }
-            }
             true
         })
         .cloned()

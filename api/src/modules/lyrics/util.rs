@@ -49,15 +49,14 @@ pub fn canon_meta(s: &str) -> String {
 
 pub fn split_artist_title(raw: &str) -> Option<(String, String)> {
     for sep in [" - ", " – ", " — ", " // "] {
-        if let Some(idx) = raw.find(sep) {
-            if idx > 0 {
+        if let Some(idx) = raw.find(sep)
+            && idx > 0 {
                 let artist = raw[..idx].trim().to_string();
                 let title = raw[idx + sep.len()..].trim().to_string();
                 if !artist.is_empty() && !title.is_empty() {
                     return Some((artist, title));
                 }
             }
-        }
     }
     None
 }

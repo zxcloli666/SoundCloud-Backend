@@ -325,22 +325,20 @@ impl IndexingService {
                     if let (Some(mert), Some(clap)) = (
                         parse_f32_vec(data.get("mert")),
                         parse_f32_vec(data.get("clap")),
-                    ) {
-                        if let Ok(id) = sc_track_id.parse::<u64>() {
+                    )
+                        && let Ok(id) = sc_track_id.parse::<u64>() {
                             let language = data.get("language").and_then(|v| v.as_str());
                             svc.qdrant.upsert_audio(id, mert, clap, language).await?;
                         }
-                    }
                     svc.tracks.mark_indexed(sc_track_id).await?;
                     debug!(track = %sc_track_id, "indexed_at set");
-                    if let Some(fp) = data.get("fingerprint").and_then(|v| v.as_str()) {
-                        if !fp.is_empty() {
+                    if let Some(fp) = data.get("fingerprint").and_then(|v| v.as_str())
+                        && !fp.is_empty() {
                             let canonical = svc.tracks.apply_fingerprint(sc_track_id, fp).await?;
                             if let Some(c) = canonical {
                                 debug!(track = %sc_track_id, canonical = %c, "fingerprint canonicalized");
                             }
                         }
-                    }
                     Ok(())
                 }
             },

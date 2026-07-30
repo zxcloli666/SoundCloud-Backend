@@ -47,11 +47,10 @@ pub async fn apply_user_favorite_flag_to_playlists(
     }
     for p in playlists.iter_mut() {
         let urn = p.get("urn").and_then(|v| v.as_str()).unwrap_or("");
-        if liked.contains(urn) {
-            if let Some(obj) = p.as_object_mut() {
+        if liked.contains(urn)
+            && let Some(obj) = p.as_object_mut() {
                 obj.insert("user_favorite".into(), Value::Bool(true));
             }
-        }
     }
     Ok(())
 }
@@ -100,11 +99,10 @@ pub async fn apply_user_favorite_flag(
             .get("urn")
             .and_then(|v| v.as_str())
             .is_some_and(|u| liked_ids.contains(extract_sc_id(u)));
-        if liked {
-            if let Some(obj) = t.as_object_mut() {
+        if liked
+            && let Some(obj) = t.as_object_mut() {
                 obj.insert("user_favorite".into(), Value::Bool(true));
             }
-        }
     }
     Ok(())
 }

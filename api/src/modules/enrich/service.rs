@@ -183,11 +183,10 @@ impl EnrichService {
             track.uploader_username.as_deref(),
         )
         .await?;
-        if outcome.coplay_dirty {
-            if let Err(e) = coplay::recompute_for_track(&self.pg, track.id).await {
+        if outcome.coplay_dirty
+            && let Err(e) = coplay::recompute_for_track(&self.pg, track.id).await {
                 warn!(track = %sc_track_id, error = %e, "coplay recompute failed");
             }
-        }
         debug!(
             track = %sc_track_id,
             primary = ?outcome.primary_artist_id,

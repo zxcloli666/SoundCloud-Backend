@@ -176,15 +176,13 @@ impl RecommendationsService {
                 Some(PointIdOptions::Uuid(u)) => u,
                 None => continue,
             };
-            if let Some(vectors) = p.vectors {
-                if let Some(VectorsOptions::Vector(v)) = vectors.vectors_options {
-                    if let VectorVariant::Dense(dense) = v.into_vector() {
+            if let Some(vectors) = p.vectors
+                && let Some(VectorsOptions::Vector(v)) = vectors.vectors_options
+                    && let VectorVariant::Dense(dense) = v.into_vector() {
                         let data = dense.data;
                         to_cache.push((id_str.clone(), vec_to_bytes(&data)));
                         out.insert(id_str, data);
                     }
-                }
-            }
         }
 
         // 3) пишем промахи в кэш вне критического пути

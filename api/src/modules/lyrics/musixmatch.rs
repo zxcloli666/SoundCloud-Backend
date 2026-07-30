@@ -246,11 +246,10 @@ impl MusixmatchService {
     async fn get_token(&self) -> Option<String> {
         {
             let g = self.token_cache.lock().ok()?;
-            if let Some(c) = g.as_ref() {
-                if c.expires_at > Instant::now() {
+            if let Some(c) = g.as_ref()
+                && c.expires_at > Instant::now() {
                     return Some(c.token.clone());
                 }
-            }
         }
         let url = format!("{}/token.get?app_id={}", self.base, APP_ID);
         let parsed: TokenResp = self.send_json(&url, "token.get").await?;

@@ -120,7 +120,7 @@ fn push_capped<T>(buf: &mut VecDeque<T>, v: T, cap: usize) {
 
 fn random_handle() -> String {
     let mut rng = rand::thread_rng();
-    let n: u64 = rng.gen();
+    let n: u64 = rng.r#gen();
     format!("{:x}", n & 0xffff_ffff)
 }
 
@@ -131,13 +131,11 @@ pub async fn load_or_new(
     seed_kind: SeedKind,
     seed_key: &str,
 ) -> WaveCursor {
-    if let Some(t) = token {
-        if let Some(c) = read(redis, owner, t).await {
-            if c.seed_kind == seed_kind && c.seed_key == seed_key {
+    if let Some(t) = token
+        && let Some(c) = read(redis, owner, t).await
+            && c.seed_kind == seed_kind && c.seed_key == seed_key {
                 return c;
             }
-        }
-    }
     WaveCursor::new(seed_kind, seed_key.to_string())
 }
 

@@ -152,23 +152,21 @@ impl EventsService {
         };
 
         let is_positive = POSITIVE_EVENTS.contains(&event_type);
-        if is_positive {
-            if let Some(d) = self.dislikes.get() {
-                if d.is_disliked_by_user_id(sc_user_id, &normalized)
+        if is_positive
+            && let Some(d) = self.dislikes.get()
+                && d.is_disliked_by_user_id(sc_user_id, &normalized)
                     .await
                     .unwrap_or(false)
                 {
                     // Лайк на трек в дизах — игнор, не загрязняем сигналы.
                     return Ok(());
                 }
-            }
-        }
 
         if event_type == "skip" {
             weight = skip_weight_from_position(position_pct);
-            if let Some(p) = position_pct {
-                if p < 0.20 {
-                    if let Some(pg) = self.ops.pool().cloned() {
+            if let Some(p) = position_pct
+                && p < 0.20
+                    && let Some(pg) = self.ops.pool().cloned() {
                         let user = sc_user_id.to_string();
                         let id = normalized.clone();
                         tokio::spawn(async move {
@@ -177,8 +175,6 @@ impl EventsService {
                             }
                         });
                     }
-                }
-            }
         }
 
         let lock_key = format!("events:{sc_user_id}");
@@ -199,11 +195,10 @@ impl EventsService {
 
         self.enqueue_indexing(&normalized);
 
-        if COLLAB_TRIGGER_EVENTS.contains(&event_type) {
-            if let Some(t) = self.collab_trainer.get() {
+        if COLLAB_TRIGGER_EVENTS.contains(&event_type)
+            && let Some(t) = self.collab_trainer.get() {
                 t.note_event();
             }
-        }
         Ok(())
     }
 }

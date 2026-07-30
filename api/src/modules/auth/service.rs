@@ -952,15 +952,14 @@ impl AuthService {
         &self,
         oauth_app_id: Option<&str>,
     ) -> AppResult<OAuthCredentials> {
-        if let Some(id) = oauth_app_id {
-            if let Some(app) = self.oauth_apps.get_by_id(id).await? {
+        if let Some(id) = oauth_app_id
+            && let Some(app) = self.oauth_apps.get_by_id(id).await? {
                 return Ok(OAuthCredentials {
                     client_id: app.client_id,
                     client_secret: app.client_secret,
                     redirect_uri: app.redirect_uri,
                 });
             }
-        }
         Ok(self.env_credentials())
     }
 

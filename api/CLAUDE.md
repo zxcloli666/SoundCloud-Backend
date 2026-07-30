@@ -211,3 +211,50 @@ otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them as a dis
 - Prod: compose on dedic `ssh dedic-ru:/root/docker-compose.yml`; DB/qdrant/minio creds in
   `../Infra/main-host/docker-compose.yml`. Query prod DB from PC via
   `podman run ... postgres:17-alpine psql -h <dedic> ...`.
+
+## Session & SC token — читать до правок в auth/me
+
+**`SessionCtx` НЕ материализует SC-токен.** Он даёт `session_id` + `sc_user_id`, и
+резолвится через `get_session` (без обновления). Причина: токен реально нужен
+**4 ручкам** (`/me`, `/me/cold`, `/me/followings/tracks`, `/me/followers`) против
+~95 обращений к сессии по остальным модулям — те читают НАШУ базу. Пока экстрактор
+обновлял токен всем подряд, любой тупёж SoundCloud на рефреше клал всё приложение.
+Нужен токен — зови `ctx.access_token().await?`, и только там запрос ждёт SC.
+
+**Приложение обязано работать с протухшим SC-токеном.** `/me/cold` на то и
+холодный: источник истины — наше зеркало `user_profiles`, токен нужен лишь чтобы
+освежить протухшую запись (фоном) или засеять пустое зеркало; нет токена — отдаём
+`session_profile_stub` из базы, а не отказ. Не делай токен load-bearing там, где
+данные уже есть локально.
+
+**`get_valid_session` не блокирует, пока токен ещё жив.** `REFRESH_BUFFER` = 5 мин,
+то есть «пора обновить» наступает задолго до реального истечения. Обновление
+уходит в фон (single-flight по `try_lock_owned`); ждать заставляем только при
+`is_expired`. Раньше мьютекс держался всю сетевую операцию — десятки параллельных
+запросов вставали в очередь и получали секунды латентности.
+
+**Диагностический признак:** `/health` быстрый (~0.2 с — он сессию не трогает), а
+всё авторизованное медленное → смотри сюда, а не в SQL.
+
+**502 «Renewing your session, try again shortly»** — circuit breaker после
+неудачного рефреша, НЕ смерть сессии. Клиент не должен уводить юзера в ре-логин.
+
+## Сборка локально
+
+sqlx проверяет запросы ONLINE, офлайн-кеша `.sqlx` в репо нет. Нужна БД со схемой
+из **обеих** папок: `migrations/*` **и** `migrations-ops/*` (без второй падает на
+`relation "rec_impressions" does not exist` — миграция 0054 выносит их в ops-БД, а
+`events/service.rs` держит на них compile-time запросы). Так же делает CI.
+
+```bash
+podman run -d --name scd-pg --network host \
+  -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=x -e POSTGRES_DB=scd \
+  docker.io/library/postgres:17-alpine
+for f in migrations/*.sql migrations-ops/*.sql; do \
+  podman exec -i scd-pg psql -U scd -d scd -v ON_ERROR_STOP=1 -q < "$f"; done
+DATABASE_URL=postgres://scd:x@127.0.0.1:5432/scd cargo check
+```
+
+**Деплой api на main-host = ~8 минут даунтайма**: миграции накатываются на старте,
+`tracks` ~34 ГБ, контейнер висит `health: starting`, haproxy отдаёт 503. Это не
+поломка — прерывать нельзя. Катить star (резерв) первым как канарейку, потом main.

@@ -33,8 +33,8 @@ pub(super) async fn search(
 
     // Принимаем только результат, чей primary пересекается с локальными
     // сигналами: разметка / мета / uploader.
-    if let Some(rec) = found.as_ref() {
-        if let Some(mb_primary) = rec.primary_artist.as_ref() {
+    if let Some(rec) = found.as_ref()
+        && let Some(mb_primary) = rec.primary_artist.as_ref() {
             let local: Vec<&str> = signals
                 .parsed
                 .primary_artists
@@ -48,16 +48,15 @@ pub(super) async fn search(
                 found = None;
             }
         }
-    }
 
     let rec = found?;
     let mut conf = ((rec.score as f32) / 100.0).clamp(0.7, 0.9);
-    if let Some(mb_primary) = rec.primary_artist.as_ref() {
-        if !mb_primary.name.is_empty() && !title_q.is_empty() {
+    if let Some(mb_primary) = rec.primary_artist.as_ref()
+        && !mb_primary.name.is_empty() && !title_q.is_empty() {
             match genius_stage::search(&deps.genius, ctx, Some(&mb_primary.name), title_q).await {
                 Ok(Some(g_res)) => {
-                    if let Some(g_primary) = g_res.primary.first() {
-                        if normalize_name(&g_primary.name) != normalize_name(&mb_primary.name) {
+                    if let Some(g_primary) = g_res.primary.first()
+                        && normalize_name(&g_primary.name) != normalize_name(&mb_primary.name) {
                             debug!(
                                 mb = %mb_primary.name,
                                 genius = %g_primary.name,
@@ -65,13 +64,11 @@ pub(super) async fn search(
                             );
                             conf *= 0.7;
                         }
-                    }
                 }
                 Ok(None) => {}
                 Err(e) => debug!(error = %e, "Genius cross-check failed; keeping MB confidence"),
             }
         }
-    }
     Some(from_mb(rec, ResolveSource::Mb, conf, ctx.isrc.clone()))
 }
 
@@ -103,8 +100,8 @@ async fn search_attempts(
             Err(e) => debug!(error = %e, "MB search failed (flipped)"),
         }
     }
-    if let Some(meta_a) = signals.meta_names.first().map(|s| s.as_str()) {
-        if normalize_name(meta_a) != normalize_name(artist) {
+    if let Some(meta_a) = signals.meta_names.first().map(|s| s.as_str())
+        && normalize_name(meta_a) != normalize_name(artist) {
             match deps
                 .mb
                 .search_recording(meta_a, title_q, ctx.duration_ms)
@@ -115,7 +112,6 @@ async fn search_attempts(
                 Err(e) => debug!(error = %e, "MB search failed (metadata_artist)"),
             }
         }
-    }
     None
 }
 

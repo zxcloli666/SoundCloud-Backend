@@ -1195,13 +1195,12 @@ async fn admin_settings_update(
     State(st): State<AppState>,
     Json(body): Json<AdminSettingsUpdate>,
 ) -> AppResult<Json<AdminSettingsRow>> {
-    if let Some(s) = body.star_strategy.as_deref() {
-        if s != "popular" && s != "random" {
+    if let Some(s) = body.star_strategy.as_deref()
+        && s != "popular" && s != "random" {
             return Err(AppError::bad_request(
                 "star_strategy must be 'popular' or 'random'",
             ));
         }
-    }
     let row: AdminSettingsRow = sqlx::query_as(
         r#"UPDATE discover_settings SET
                show_star     = COALESCE($1, show_star),

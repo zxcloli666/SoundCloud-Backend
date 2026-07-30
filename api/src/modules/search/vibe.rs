@@ -158,20 +158,18 @@ impl VibeSearchService {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = AppResult<Cacheable<T>>>,
     {
-        if let Ok(Some(raw)) = self.cache.get_raw(key).await {
-            if let Ok(v) = serde_json::from_str::<T>(&raw) {
+        if let Ok(Some(raw)) = self.cache.get_raw(key).await
+            && let Ok(v) = serde_json::from_str::<T>(&raw) {
                 return Ok(v);
             }
-        }
         let Cacheable { value, cache } = compute().await?;
-        if cache {
-            if let Ok(json) = serde_json::to_string(&value) {
+        if cache
+            && let Ok(json) = serde_json::to_string(&value) {
                 let _ = self
                     .cache
                     .set_raw(key, &json, ttl, None, CacheScope::Shared, None)
                     .await;
             }
-        }
         Ok(value)
     }
 

@@ -368,18 +368,17 @@ pub fn parse_sc_title(raw: &str, uploader: Option<&str>) -> ParsedTitle {
     if artist_part.is_none() {
         // "Track by Artist" — принимаем только когда правая часть = uploader;
         // "… prod by X" / "… mixed by X" — кредит, не разметка.
-        if let Some((l, r)) = split_by_keyword(&stripped) {
-            if matches_uploader(&r, uploader) {
+        if let Some((l, r)) = split_by_keyword(&stripped)
+            && matches_uploader(&r, uploader) {
                 artist_part = Some(r);
                 title_part = l;
             }
-        }
     }
 
     // Перевёрнутая разметка "Track - Artist": правая часть — это uploader,
     // левая — нет. ("parasite - otuka" от аплоадера otuka.)
-    if let Some(a) = artist_part.as_deref() {
-        if !title_part.is_empty()
+    if let Some(a) = artist_part.as_deref()
+        && !title_part.is_empty()
             && !matches_uploader(a, uploader)
             && matches_uploader(&title_part, uploader)
         {
@@ -387,7 +386,6 @@ pub fn parse_sc_title(raw: &str, uploader: Option<&str>) -> ParsedTitle {
             artist_part = Some(std::mem::take(&mut title_part));
             title_part = new_title;
         }
-    }
 
     parsed.raw_artist_part = artist_part.clone();
     let artist_part = artist_part
@@ -624,11 +622,10 @@ fn looks_like_track_number(s: &str) -> bool {
 fn split_first_dash(s: &str) -> (Option<String>, String) {
     let mut best: Option<(usize, &str)> = None;
     for sep in [" - ", " — ", " – ", " -- ", " ‒ ", " − ", " ─ "] {
-        if let Some(idx) = s.find(sep) {
-            if best.map(|(b, _)| idx < b).unwrap_or(true) {
+        if let Some(idx) = s.find(sep)
+            && best.map(|(b, _)| idx < b).unwrap_or(true) {
                 best = Some((idx, sep));
             }
-        }
     }
     if let Some((idx, sep)) = best {
         let left = s[..idx].trim().to_string();

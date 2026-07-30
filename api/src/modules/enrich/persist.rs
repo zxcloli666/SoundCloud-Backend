@@ -320,8 +320,8 @@ async fn compute_upload_kind(
     let Some(artist_id) = primary_artist_id else {
         return Ok("unknown");
     };
-    if let Some(sc_id) = uploader_sc_user_id {
-        if !sc_id.is_empty() {
+    if let Some(sc_id) = uploader_sc_user_id
+        && !sc_id.is_empty() {
             let row = sqlx::query_file!(
                 "queries/enrich/persist/sc_account_role_verified.sql",
                 artist_id,
@@ -339,7 +339,6 @@ async fn compute_upload_kind(
                 });
             }
         }
-    }
     let verified_source = matches!(
         source,
         ResolveSource::Isrc | ResolveSource::Mb | ResolveSource::Genius | ResolveSource::ScVerified

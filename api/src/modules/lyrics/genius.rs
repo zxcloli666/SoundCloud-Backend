@@ -312,11 +312,10 @@ impl GeniusService {
         let mut h = HeaderMap::new();
         h.insert("User-Agent", UA.parse().unwrap());
         h.insert("Accept", "application/json".parse().unwrap());
-        if with_bearer && self.has_token() {
-            if let Ok(v) = format!("Bearer {}", self.cfg.access_token).parse() {
+        if with_bearer && self.has_token()
+            && let Ok(v) = format!("Bearer {}", self.cfg.access_token).parse() {
                 h.insert("Authorization", v);
             }
-        }
         h
     }
 

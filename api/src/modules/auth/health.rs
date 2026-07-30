@@ -95,11 +95,10 @@ impl AuthHealthService {
         let ttls: Vec<i64> = pipe.query_async(&mut conn).await?;
         let mut out = HashMap::new();
         for (i, id) in app_ids.iter().enumerate() {
-            if let Some(&ms) = ttls.get(i) {
-                if ms > 0 {
+            if let Some(&ms) = ttls.get(i)
+                && ms > 0 {
                     out.insert(id.clone(), (ms / 1000).max(1));
                 }
-            }
         }
         Ok(out)
     }

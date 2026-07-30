@@ -118,13 +118,12 @@ impl FeaturedService {
         weight: Option<i32>,
         active: Option<bool>,
     ) -> AppResult<FeaturedItem> {
-        if let Some(t) = type_ {
-            if FeaturedItemType::parse(t).is_none() {
+        if let Some(t) = type_
+            && FeaturedItemType::parse(t).is_none() {
                 return Err(AppError::bad_request(
                     "type must be one of: track, playlist, user",
                 ));
             }
-        }
         let uuid = Uuid::parse_str(id)
             .map_err(|_| AppError::not_found(format!("featured item {id} not found")))?;
         let row: Option<FeaturedItem> = sqlx::query_as(
@@ -220,11 +219,10 @@ impl FeaturedService {
                 let mut playlist = self.read.playlist_meta(kind, id).await?;
                 // Featured cards expect full tracks (apiv1 embedded them); hydrate via
                 // apiv2 best-effort so the card isn't left with id-stubs.
-                if let Ok(tracks) = self.read.playlist_tracks(id).await {
-                    if let Some(obj) = playlist.as_object_mut() {
+                if let Ok(tracks) = self.read.playlist_tracks(id).await
+                    && let Some(obj) = playlist.as_object_mut() {
                         obj.insert("tracks".into(), Value::Array(tracks));
                     }
-                }
                 Ok(FeaturedResult {
                     type_: "playlist".into(),
                     data: playlist,

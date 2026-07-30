@@ -194,11 +194,10 @@ impl ScReadService {
         cursor: Option<&str>,
         limit: i64,
     ) -> AppResult<ScSearchPage> {
-        if let Some(c) = cursor {
-            if c.contains("api.soundcloud.com") {
+        if let Some(c) = cursor
+            && c.contains("api.soundcloud.com") {
                 return self.apiv1_search(kind, Some(c), ty, q, limit).await;
             }
-        }
         match self
             .run(
                 self.search_lua(ty, q, cursor, limit),

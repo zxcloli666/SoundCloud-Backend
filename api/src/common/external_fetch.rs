@@ -130,14 +130,14 @@ impl ExternalFetcher {
             }
         }
         if self.inner.relay.is_some() {
-            if let Ok(_permit) = self.inner.relay_sem.clone().try_acquire_owned() {
+            match self.inner.relay_sem.clone().try_acquire_owned() { Ok(_permit) => {
                 match self.send_relay(method, url.to_string(), headers, body).await {
                     Ok(b) => return Ok(b),
                     Err(e) => last_err = last_err.or(Some(e)),
                 }
-            } else {
+            } _ => {
                 debug!(url, "relay last-resort skipped: concurrency cap reached");
-            }
+            }}
         }
         Err(last_err
             .unwrap_or_else(|| AppError::ScUnreachable("no proxy or relay configured".to_string())))

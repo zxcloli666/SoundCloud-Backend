@@ -271,11 +271,10 @@ pub async fn apply_to_tracks(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()>
                 filled.release_source = Some("sc_upload".to_string());
             }
         }
-        if let Some(obj) = t.as_object_mut() {
-            if let Ok(value) = serde_json::to_value(&filled) {
+        if let Some(obj) = t.as_object_mut()
+            && let Ok(value) = serde_json::to_value(&filled) {
                 obj.insert("enrichment".into(), value);
             }
-        }
     }
     Ok(())
 }

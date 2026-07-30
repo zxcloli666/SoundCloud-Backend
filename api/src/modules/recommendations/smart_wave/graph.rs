@@ -79,14 +79,13 @@ pub async fn build_affinity(
     let variants = user_id_variants(sc_user_id);
     let disliked = load_disliked_artists(&svc.pg, &variants).await;
 
-    if let GraphSeed::User = seed {
-        if let Some(cached) = read_cache(&svc.redis, sc_user_id).await {
+    if let GraphSeed::User = seed
+        && let Some(cached) = read_cache(&svc.redis, sc_user_id).await {
             return GraphResult {
                 affinity: cached,
                 disliked_artists: disliked,
             };
         }
-    }
 
     let mut seeds = match seed {
         GraphSeed::User => {

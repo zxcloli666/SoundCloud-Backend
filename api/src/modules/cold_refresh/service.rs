@@ -586,14 +586,13 @@ impl ColdRefreshService {
                 },
             };
             ordered_ids.push(sc_id);
-            if let Some(indexing) = self.indexing.get() {
-                if let Err(e) = indexing
+            if let Some(indexing) = self.indexing.get()
+                && let Err(e) = indexing
                     .ingest_track_from_sc(item, TrackPriority::Playlist)
                     .await
                 {
                     debug!(error = %e, "playlist track ingest failed");
                 }
-            }
         }
         // На обрезанном снапшоте не даём replace_tracks УКОРОТИТЬ уже собранный
         // плейлист (truncation затёрла бы треки). Рост/равенство — ок (заодно
@@ -633,8 +632,8 @@ impl ColdRefreshService {
         kind: TokenKind,
         extra_params: &[(String, String)],
     ) -> AppResult<(Vec<Value>, bool)> {
-        if !viewer_is_owner {
-            if let Some(pc) = public_collection(coll) {
+        if !viewer_is_owner
+            && let Some(pc) = public_collection(coll) {
                 match self
                     .read
                     .collection_all(pc, extract_sc_id(sc_user_id), REFRESH_PAGE_LIMIT as i64)
@@ -646,7 +645,6 @@ impl ColdRefreshService {
                     }
                 }
             }
-        }
         let chain = self.tokens.chain(kind).await?;
         let path = resolve_sc_path(coll, sc_user_id, viewer_is_owner);
         self.fetch_all_pages(&path, &chain, extra_params).await

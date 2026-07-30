@@ -195,12 +195,11 @@ impl WorkerClient {
             return Ok(o);
         }
         // 2. Durable Qdrant — переживает eviction Redis; на хите греем Redis.
-        if let Some(v) = self.qdrant.get_query_vector(m.collection, &hash).await {
-            if !v.is_empty() {
+        if let Some(v) = self.qdrant.get_query_vector(m.collection, &hash).await
+            && !v.is_empty() {
                 self.store_vector(&cache_key, &v).await;
                 return Ok(EncodeOutcome::Ready(v));
             }
-        }
         // Резерв не публикует encode-джоб: иначе воркер записал бы вектор в
         // Qdrant основного (done.encode), а резерв туда только читает.
         if self.reserve {
@@ -281,15 +280,14 @@ impl WorkerClient {
 
     /// Hot-кэш чтение: пустой массив = негатив-пустышка → `Empty`.
     async fn read_cache(&self, cache_key: &str) -> Option<EncodeOutcome> {
-        if let Ok(Some(raw)) = self.cache.get_raw(cache_key).await {
-            if let Ok(v) = serde_json::from_str::<Vec<f32>>(&raw) {
+        if let Ok(Some(raw)) = self.cache.get_raw(cache_key).await
+            && let Ok(v) = serde_json::from_str::<Vec<f32>>(&raw) {
                 return Some(if v.is_empty() {
                     EncodeOutcome::Empty
                 } else {
                     EncodeOutcome::Ready(v)
                 });
             }
-        }
         None
     }
 

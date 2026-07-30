@@ -96,8 +96,8 @@ pub fn unescape_json_unicode(s: &str) -> String {
             Some((cp, next)) => {
                 // Суррогатная пара: high + сразу за ним low.
                 if (0xD800..=0xDBFF).contains(&cp) {
-                    if let Some((low, next2)) = parse_escape(&chars, next) {
-                        if (0xDC00..=0xDFFF).contains(&low) {
+                    if let Some((low, next2)) = parse_escape(&chars, next)
+                        && (0xDC00..=0xDFFF).contains(&low) {
                             let combined = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
                             if let Some(c) = char::from_u32(combined) {
                                 out.push(c);
@@ -105,7 +105,6 @@ pub fn unescape_json_unicode(s: &str) -> String {
                                 continue;
                             }
                         }
-                    }
                     // Одинокий суррогат — оставляем literal.
                     out.push(chars[i]);
                     i += 1;

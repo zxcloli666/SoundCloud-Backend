@@ -78,11 +78,10 @@ impl SearchService {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = AppResult<Value>>,
     {
-        if let Ok(Some(raw)) = self.cache.get_raw(cache_key).await {
-            if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+        if let Ok(Some(raw)) = self.cache.get_raw(cache_key).await
+            && let Ok(v) = serde_json::from_str::<Value>(&raw) {
                 return Ok(v);
             }
-        }
         let value = compute().await?;
         if let Ok(json) = serde_json::to_string(&value) {
             let _ = self

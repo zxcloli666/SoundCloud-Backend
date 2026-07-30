@@ -166,16 +166,14 @@ pub fn normalize_v2_to_v1(value: &mut Value) {
 }
 
 fn normalize_object(obj: &mut Map<String, Value>) {
-    if !obj.contains_key("favoritings_count") {
-        if let Some(v) = obj.get("likes_count").cloned() {
+    if !obj.contains_key("favoritings_count")
+        && let Some(v) = obj.get("likes_count").cloned() {
             obj.insert("favoritings_count".to_string(), v);
         }
-    }
-    if !matches!(obj.get("urn"), Some(Value::String(_))) {
-        if let Some(urn) = synth_urn(obj) {
+    if !matches!(obj.get("urn"), Some(Value::String(_)))
+        && let Some(urn) = synth_urn(obj) {
             obj.insert("urn".to_string(), Value::String(urn));
         }
-    }
 }
 
 fn synth_urn(obj: &Map<String, Value>) -> Option<String> {

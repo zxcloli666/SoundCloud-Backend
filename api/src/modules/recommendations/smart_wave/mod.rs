@@ -158,11 +158,10 @@ pub async fn build(
         artist_of.entry(*tid).or_insert(Some(*aid));
     }
     for c in &mert {
-        if let Some(m) = meta.get(&c.sc_track_id) {
-            if m.storage_ok {
+        if let Some(m) = meta.get(&c.sc_track_id)
+            && m.storage_ok {
                 artist_of.entry(c.sc_track_id).or_insert(m.primary_artist);
             }
-        }
     }
 
     // КОНЪЮНКЦИЯ «И»: близость к вкусу ОДНОВРЕМЕННО по бит(MERT)×вайб(CLAP)×
@@ -366,11 +365,10 @@ fn pick_mert_seeds(seed: &SmartWaveSeed, signals: &UserSignals, cursor: &WaveCur
         SmartWaveSeed::Track(t) => {
             out.push(*t);
             for id in signals.fresh_likes.iter().take(5) {
-                if let Ok(n) = id.parse::<u64>() {
-                    if n != *t {
+                if let Ok(n) = id.parse::<u64>()
+                    && n != *t {
                         push(n, &mut out);
                     }
-                }
             }
         }
         SmartWaveSeed::Artist(_, tracks) => {
@@ -443,11 +441,10 @@ async fn taste_centroids(
     sc_user_id: &str,
     liked_ids: &[u64],
 ) -> TasteCentroids {
-    if !sc_user_id.is_empty() {
-        if let Some(c) = read_taste_cache(&svc.redis, sc_user_id).await {
+    if !sc_user_id.is_empty()
+        && let Some(c) = read_taste_cache(&svc.redis, sc_user_id).await {
             return c;
         }
-    }
     let (lm, lc, ll) = tokio::join!(
         svc.retrieve_vectors(collections::TRACKS_MERT, liked_ids),
         svc.retrieve_vectors(collections::TRACKS_CLAP, liked_ids),

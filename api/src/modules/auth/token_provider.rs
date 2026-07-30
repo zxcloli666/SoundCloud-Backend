@@ -50,11 +50,10 @@ impl TokenProvider {
             }
             TokenKind::UserFirst(session_id) => {
                 let mut out: Vec<String> = Vec::new();
-                if let Ok(t) = self.auth.get_valid_access_token(session_id).await {
-                    if !t.is_empty() {
+                if let Ok(t) = self.auth.get_valid_access_token(session_id).await
+                    && !t.is_empty() {
                         out.push(t);
                     }
-                }
                 for t in self.app_tokens.snapshot().await.unwrap_or_default() {
                     if !out.contains(&t) {
                         out.push(t);

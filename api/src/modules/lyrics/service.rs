@@ -197,12 +197,11 @@ impl LyricsService {
                     }
                     // Вектор в payload → пишем в Qdrant ДО embedded_at. Upsert
                     // упал → Err → NAK → передоставка (эмбеддинг не потеряем).
-                    if let Some(vec) = parse_f32_vec(data.get("vec")) {
-                        if let Ok(num_id) = id.parse::<u64>() {
+                    if let Some(vec) = parse_f32_vec(data.get("vec"))
+                        && let Ok(num_id) = id.parse::<u64>() {
                             let language = data.get("language").and_then(|v| v.as_str());
                             svc.qdrant.upsert_lyrics(num_id, vec, language).await?;
                         }
-                    }
                     sqlx::query_file!("queries/lyrics/service/mark_embedded.sql", &id)
                         .execute(&svc.pg)
                         .await?;
@@ -471,8 +470,8 @@ impl LyricsService {
         )
         .fetch_one(&self.pg)
         .await?;
-        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref()) {
-            if text.len() > 30 {
+        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
+            && text.len() > 30 {
                 let svc = self.clone();
                 let row_clone = row.clone();
                 tokio::spawn(async move {
@@ -481,7 +480,6 @@ impl LyricsService {
                     }
                 });
             }
-        }
         Ok(row)
     }
 
@@ -634,9 +632,9 @@ impl LyricsService {
             .collect();
         let ranked = self.worker.rank_lyrics(artist, title, &rank_cands).await?;
         info!(stage, sc_track_id, ranked = ?ranked, "rank result");
-        if let Some(r) = ranked {
-            if r.score >= MIN_RANK_SCORE {
-                if let Some(pick) = candidates.get(r.best_idx) {
+        if let Some(r) = ranked
+            && r.score >= MIN_RANK_SCORE
+                && let Some(pick) = candidates.get(r.best_idx) {
                     info!(
                         stage,
                         sc_track_id,
@@ -646,8 +644,6 @@ impl LyricsService {
                     );
                     return Ok(Some(pick.clone()));
                 }
-            }
-        }
         Ok(None)
     }
 
@@ -720,8 +716,8 @@ impl LyricsService {
                     continue;
                 }
             }
-            if duration_sec > 0 {
-                if let Some(d) = c.duration_sec {
+            if duration_sec > 0
+                && let Some(d) = c.duration_sec {
                     let max = duration_sec.max(d) as f32;
                     if max > 0.0 {
                         let diff = (duration_sec as f32 - d as f32).abs() / max;
@@ -736,7 +732,6 @@ impl LyricsService {
                         }
                     }
                 }
-            }
             out.push(c);
         }
         info!(
@@ -813,9 +808,9 @@ impl LyricsService {
             }));
 
             let q_clone = q.clone();
-            let gen = self.genius.clone();
+            let r#gen = self.genius.clone();
             tasks.push(tokio::spawn(async move {
-                gen.search_by_query(&q_clone, 10)
+                r#gen.search_by_query(&q_clone, 10)
                     .await
                     .into_iter()
                     .map(|r| Candidate {
@@ -947,12 +942,12 @@ impl LyricsService {
             "initial_prompt": initial_prompt,
             "mode": mode,
         });
-        if let Err(e) = self.nats.publish(subjects::TRANSCRIBE_AUDIO, &job).await {
+        match self.nats.publish(subjects::TRANSCRIBE_AUDIO, &job).await { Err(e) => {
             // Клейм останется pending → стейл-реап перевыставит через TRANSCRIBE_STALE.
             warn!(track = %sc_track_id, error = %e, "enqueue_transcribe: publish failed");
-        } else {
+        } _ => {
             info!(track = %sc_track_id, mode, "[transcribe] enqueued");
-        }
+        }}
     }
 
     /// true если трек можно ставить в транскрайб: `transcribe_state` IS NULL или
@@ -1070,8 +1065,8 @@ impl LyricsService {
             return Ok(());
         };
         info!(track = %sc_track_id, "self-generated LRC");
-        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref()) {
-            if text.len() > 30 {
+        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
+            && text.len() > 30 {
                 let svc = self.clone();
                 let row_clone = row.clone();
                 tokio::spawn(async move {
@@ -1080,7 +1075,6 @@ impl LyricsService {
                     }
                 });
             }
-        }
         Ok(())
     }
 

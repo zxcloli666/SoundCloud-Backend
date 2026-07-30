@@ -78,11 +78,10 @@ impl SyncQueueService {
 
         if let Ok(mut conn) = self.redis.get().await {
             let raw: Option<String> = conn.get(&key).await.ok().flatten();
-            if let Some(s) = raw {
-                if let Some((p, f)) = parse_counts(&s) {
+            if let Some(s) = raw
+                && let Some((p, f)) = parse_counts(&s) {
                     return Ok((p, f));
                 }
-            }
         }
 
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);

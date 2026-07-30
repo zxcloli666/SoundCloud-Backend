@@ -42,11 +42,11 @@ async fn run_cleanup(config: &Config, pg: &PgPool, storage: &StorageClient) {
                         );
                         continue;
                     }
-                    if let Err(e) = pg.delete_cdn_track(&track.id).await {
+                    match pg.delete_cdn_track(&track.id).await { Err(e) => {
                         warn!("[cleanup] failed to delete PG record {}: {e}", track.id);
-                    } else {
+                    } _ => {
                         deleted += 1;
-                    }
+                    }}
                 }
             }
             Err(e) => warn!("[cleanup] get stale tracks failed: {e}"),

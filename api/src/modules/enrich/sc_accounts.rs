@@ -71,18 +71,15 @@ pub async fn delete(pg: &PgPool, artist_id: Uuid, sc_user_id: &str) -> AppResult
 }
 
 pub fn extract_sc_user_id_from_resolve(value: &serde_json::Value) -> Option<String> {
-    if let Some(kind) = value.get("kind").and_then(|v| v.as_str()) {
-        if kind != "user" {
+    if let Some(kind) = value.get("kind").and_then(|v| v.as_str())
+        && kind != "user" {
             return None;
         }
-    }
-    if let Some(urn) = value.get("urn").and_then(|v| v.as_str()) {
-        if let Some(id) = urn.rsplit(':').next() {
-            if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
+    if let Some(urn) = value.get("urn").and_then(|v| v.as_str())
+        && let Some(id) = urn.rsplit(':').next()
+            && !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
                 return Some(id.to_string());
             }
-        }
-    }
     if let Some(id) = value.get("id").and_then(|v| v.as_i64()) {
         return Some(id.to_string());
     }
@@ -91,8 +88,8 @@ pub fn extract_sc_user_id_from_resolve(value: &serde_json::Value) -> Option<Stri
 
 pub fn is_soundcloud_url(url: &str) -> bool {
     let lower = url.to_lowercase();
-    if let Ok(parsed) = url::Url::parse(&lower) {
-        if let Some(host) = parsed.host_str() {
+    if let Ok(parsed) = url::Url::parse(&lower)
+        && let Some(host) = parsed.host_str() {
             let h = host.strip_prefix("www.").unwrap_or(host);
             if h == "soundcloud.com" || h == "m.soundcloud.com" {
                 let path = parsed.path().trim_start_matches('/');
@@ -113,6 +110,5 @@ pub fn is_soundcloud_url(url: &str) -> bool {
                     );
             }
         }
-    }
     false
 }

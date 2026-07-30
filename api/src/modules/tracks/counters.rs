@@ -165,35 +165,31 @@ pub async fn sync(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()> {
         };
         let stale = *age > STALE_SECS;
         let already_present = read_counters_obj(obj);
-        if let Some(v) = c.play_count {
-            if already_present.play_count.is_none()
-                || (!stale && already_present.play_count != Some(v))
+        if let Some(v) = c.play_count
+            && (already_present.play_count.is_none()
+                || (!stale && already_present.play_count != Some(v)))
             {
                 obj.insert("playback_count".into(), Value::from(v));
             }
-        }
-        if let Some(v) = c.likes_count {
-            if already_present.likes_count.is_none()
-                || (!stale && already_present.likes_count != Some(v))
+        if let Some(v) = c.likes_count
+            && (already_present.likes_count.is_none()
+                || (!stale && already_present.likes_count != Some(v)))
             {
                 obj.insert("likes_count".into(), Value::from(v));
                 obj.insert("favoritings_count".into(), Value::from(v));
             }
-        }
-        if let Some(v) = c.reposts_count {
-            if already_present.reposts_count.is_none()
-                || (!stale && already_present.reposts_count != Some(v))
+        if let Some(v) = c.reposts_count
+            && (already_present.reposts_count.is_none()
+                || (!stale && already_present.reposts_count != Some(v)))
             {
                 obj.insert("reposts_count".into(), Value::from(v));
             }
-        }
-        if let Some(v) = c.comment_count {
-            if already_present.comment_count.is_none()
-                || (!stale && already_present.comment_count != Some(v))
+        if let Some(v) = c.comment_count
+            && (already_present.comment_count.is_none()
+                || (!stale && already_present.comment_count != Some(v)))
             {
                 obj.insert("comment_count".into(), Value::from(v));
             }
-        }
     }
     Ok(())
 }

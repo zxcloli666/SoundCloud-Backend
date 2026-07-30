@@ -52,11 +52,10 @@ pub fn rank_and_pick(
         if c.content < content_floor {
             continue; // мисматч хотя бы по одной плоскости
         }
-        if let Some(a) = c.artist {
-            if disliked_artists.contains(&a) {
+        if let Some(a) = c.artist
+            && disliked_artists.contains(&a) {
                 continue;
             }
-        }
         let aff = c
             .artist
             .and_then(|a| affinity.get(&a).copied())

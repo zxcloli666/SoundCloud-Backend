@@ -32,11 +32,10 @@ impl CollabVectorService {
     pub async fn get_collab_dim(&self) -> Option<u32> {
         {
             let g = self.dim.read().ok()?;
-            if let Some(checked) = g.checked_at {
-                if checked.elapsed() < DIM_RECHECK {
+            if let Some(checked) = g.checked_at
+                && checked.elapsed() < DIM_RECHECK {
                     return g.dim;
                 }
-            }
         }
         self.detect_collab_dim().await
     }

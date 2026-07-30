@@ -72,8 +72,8 @@ impl ArtistAccountWalker {
         for sc_user_id in accounts {
             let tracks = self.fetch_user_tracks_complete(&sc_user_id).await?;
             for tr in tracks {
-                if avatar.is_none() {
-                    if let Some(a) = tr
+                if avatar.is_none()
+                    && let Some(a) = tr
                         .get("user")
                         .and_then(|u| u.get("avatar_url"))
                         .and_then(|v| v.as_str())
@@ -81,7 +81,6 @@ impl ArtistAccountWalker {
                     {
                         avatar = Some(a.replace("-large.", "-t500x500."));
                     }
-                }
                 if !track_matches_artist(&tr, &target_n) {
                     continue;
                 }
@@ -107,8 +106,8 @@ impl ArtistAccountWalker {
                 if !meta_allows_artist(&tr, artist_name) {
                     continue;
                 }
-                if let Some(track_row) = self.tracks.find_by_sc_track_id(&sc_track_id).await? {
-                    if track_row.primary_artist_id.is_none() {
+                if let Some(track_row) = self.tracks.find_by_sc_track_id(&sc_track_id).await?
+                    && track_row.primary_artist_id.is_none() {
                         let _ = sqlx::query_file!(
                             "queries/enrich/artist_account_walker/insert_track_artist.sql",
                             track_row.id,
@@ -125,7 +124,6 @@ impl ArtistAccountWalker {
                         .await;
                         new_count += 1;
                     }
-                }
             }
         }
         if let Some(a) = avatar {
@@ -309,11 +307,10 @@ fn track_matches_artist(track: &Value, target_n: &str) -> bool {
     if title.is_empty() {
         return false;
     }
-    if let Some((maybe_artist, _)) = title.split_once(" - ") {
-        if normalize_name(maybe_artist) == target_n {
+    if let Some((maybe_artist, _)) = title.split_once(" - ")
+        && normalize_name(maybe_artist) == target_n {
             return true;
         }
-    }
     // Fallback: title fuzzy-match с самим артистом. Чисто запасной критерий
     // для случаев типа `Artist Name — Track Name (Free DL)` где дефис
     // нестандартный. Порог 0.7 совпадает с ACCOUNT_LINK_THRESHOLD в
