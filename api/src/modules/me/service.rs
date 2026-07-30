@@ -72,16 +72,16 @@ impl MeService {
 
         if let Some(row) = row {
             let (profile, synced_at) = (row.profile_json, row.synced_at);
-            if Utc::now() - synced_at > Duration::seconds(PROFILE_TTL_SEC)
-                && let Ok(tok) = ctx.access_token().await
-            {
-                let me = Arc::clone(self);
-                let uid = sc_user_id.to_string();
-                tokio::spawn(async move {
-                    if let Err(e) = me.refresh_profile(&uid, &tok).await {
-                        debug!(error = %e, "me cold background refresh failed");
-                    }
-                });
+            if Utc::now() - synced_at > Duration::seconds(PROFILE_TTL_SEC) {
+                if let Ok(tok) = ctx.access_token().await {
+                    let me = Arc::clone(self);
+                    let uid = sc_user_id.to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = me.refresh_profile(&uid, &tok).await {
+                            debug!(error = %e, "me cold background refresh failed");
+                        }
+                    });
+                }
             }
             return Ok(profile);
         }
