@@ -121,14 +121,19 @@ impl RecommendationsService {
         // несёт, фильтрация по языку идёт после возврата кандидатов через
         // filter_tracks_by_language. Трек без выставленного language не
         // режется, шанс на показ остаётся.
-        if exclude.is_empty() {
+        //
+        // Исключаем по id точки: id == sc_track_id, а payload лежит on-disk и
+        // без индекса — match по нему читает диск на каждого кандидата обхода
+        // HNSW. has_id проверяется по идентификатору, payload не трогает.
+        let exclude_ids: Vec<u64> = exclude
+            .iter()
+            .filter_map(|id| id.parse::<u64>().ok())
+            .collect();
+        if exclude_ids.is_empty() {
             return None;
         }
         Some(Filter {
-            must_not: exclude
-                .iter()
-                .map(|id| Condition::matches("sc_track_id", id.clone()))
-                .collect(),
+            must_not: vec![Condition::has_id(exclude_ids)],
             ..Default::default()
         })
     }
