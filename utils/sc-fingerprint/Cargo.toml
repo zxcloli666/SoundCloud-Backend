@@ -3,7 +3,7 @@ name = "sc-fingerprint"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Browser TLS/HTTP2 fingerprints for outgoing SoundCloud traffic"
+description = "Browser TLS/HTTP2 fingerprints"
 
 [dependencies]
 dashmap = "6"
