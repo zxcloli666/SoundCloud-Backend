@@ -1,0 +1,31 @@
+[worker]
+trust = "trusted"
+
+[runtime]
+mode = "slot"
+device = "cuda"
+idle_unload_s = 0
+
+[lanes]
+enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
+capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true }
+
+[slots.muq]
+max_batch = 4
+
+[slots.text]
+max_batch = 16000
+
+[slots.sep]
+replicas = 2
+
+[slots.asr]
+replicas = 2
+max_batch = 4
+
+[slots.align]
+replicas = 2
+
+[slots.mms]
+replicas = 1

@@ -1,0 +1,13 @@
+[worker]
+trust = "trusted"
+
+[runtime]
+mode = "lane"
+device = "cpu"
+idle_unload_s = 0
+onednn = false
+
+[lanes]
+enabled = ["lyrics", "encode", "collab", "ai"]
+capacity = { audio = 1, lyrics = 1, transcribe = 1, encode = 1, collab = 1, ai = 16 }
+required = { audio = false, lyrics = true, transcribe = false, encode = true, collab = true, ai = true }

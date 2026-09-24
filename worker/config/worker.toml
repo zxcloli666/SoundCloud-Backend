@@ -1,0 +1,192 @@
+[worker]
+id = "env:WORKER_NODE_NAME"
+build = "dev"
+trust = "trusted"
+work_dir = "/work"
+contract = "/app/contract/worker-contract.json"
+
+[nats]
+url = "env:NATS_URL"
+user = "env:NATS_USER"
+password = "env:NATS_PASSWORD"
+ping = { interval_s = 5, max_outstanding = 2 }
+outbox = { max_results = 256, max_mib = 64 }
+
+[runtime]
+mode = "slot"
+device = "auto"
+release_after_call = true
+recycle_after_calls = 10000
+recycle_gap_mib = 1024
+idle_unload_s = 0
+oom_unload = true
+onednn = true
+shutdown_grace_s = 60
+allow_slow_lanes = false
+
+[lanes]
+enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
+capacity = { audio = 16, lyrics = 32, transcribe = 4, encode = 32, collab = 1, taste = 1, ai = 64 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true }
+required_grace_s = 300
+
+[slots.muq]
+model = "OpenMuQ/MuQ-large-msd-iter"
+revision = "0562a57814f6f8bbd9fdea0a25921a2fce1a841a"
+replicas = 1
+max_batch = 8
+max_wait_ms = 40
+
+[slots.mulan]
+model = "OpenMuQ/MuQ-MuLan-large"
+revision = "2e01c796b71dca71b45251384c04cd7b237c9020"
+replicas = 1
+max_batch = 8
+max_wait_ms = 40
+
+[slots.text]
+model = "Qwen/Qwen3-Embedding-0.6B"
+revision = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+replicas = 1
+max_batch = 32000
+max_wait_ms = 60
+
+[slots.sep]
+model = "melband-roformer-kim-vocals"
+revision = "87201f4d31afb5bc79993230fc49446918425574db48c01c405e44f365c7559e"
+replicas = 2
+max_batch = 2
+max_wait_ms = 0
+fallback = "mix"
+
+[slots.asr]
+model = "Qwen/Qwen3-ASR-0.6B-hf"
+revision = "7f1569a48a89f3e3f4dc3a5c9d28bddd903bc76c"
+replicas = 2
+max_batch = 8
+max_wait_ms = 30
+
+[slots.align]
+model = "Qwen/Qwen3-ForcedAligner-0.6B-hf"
+revision = "c07281df297b9905d24a508279258cccf987a064"
+replicas = 2
+max_batch = 4
+max_wait_ms = 30
+fallback = "mms"
+
+[slots.mms]
+model = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+revision = "49402e9577b1158620820667c218cd494cc44486"
+replicas = 1
+max_batch = 8
+max_wait_ms = 30
+
+[slots.cpu-tools]
+model = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
+revision = "7e69ec5451bc261cc7844e49e4792a85d7f09c06789ec800fc4a44aec362764e"
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[slots.train-collab]
+model = ""
+revision = ""
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[slots.train-taste]
+model = ""
+revision = ""
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[slots.llm-local]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+revision = "cdbee75f17c01a7cc42f958dc650907174af0554"
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[audio]
+download_timeout_s = 90
+max_download_mib = 96
+min_duration_s = 5.0
+max_duration_s = 450.0
+silence_dbfs = -60.0
+fingerprint_s = 120
+
+[sync]
+strategy = "anchored"
+rescue_strategy = "global_ctc"
+unsupported_romanization_share = 0.5
+window_pad_s = 2.0
+lrc_pause_s = 2.5
+vad = { threshold = 0.45, min_speech_ms = 250, min_silence_ms = 400, pad_ms = 200, region_min_s = 1.2, region_max_s = 28.0 }
+asr = { rate_cjk = 12, rate_other = 10, token_margin = 24, loop_ngram = 4, loop_share = 0.3, repetition_penalty = 1.1 }
+
+[sync.align]
+region_fallback = true
+region_min_score = 0.5
+gap_fill = true
+gap_fill_max_s = 60.0
+
+[sync.anchors]
+skip_region = 0.15
+skip_line = 0.25
+overflow = 1.0
+words_per_s = 4.5
+cjk_chars_per_s = 8.0
+
+[sync.quality]
+min_aligned_share = 0.80
+min_placed_share = 0.95
+max_interpolated_share = 0.10
+min_confidence = 0.60
+min_anchor_agreement = 0.30
+min_unconfirmed_anchor_agreement = 0.35
+max_out_of_order_share = 0.05
+min_inside_share = 0.75
+max_collapsed_share = 0.25
+max_rate_outliers = 0.10
+mix_penalty = 0.05
+max_interpolation_gap_s = 12.0
+max_words_collapsed_share = 0.15
+confidence_model = "v1"
+confidence_v1_weights = { placed_share = 0.35, inside_share = 0.3, collapsed = 0.25, order = 0.1 }
+confidence_weights = { aligned_share = 0.0, inside_share = 0.0, collapsed = 0.0, anchor = 0.0, aligner = 0.0, separated = 0.0, order = 0.0, bias = 0.0 }
+
+[collab]
+max_object_mib = 512
+
+[taste]
+max_object_mib = 1024
+min_users = 500
+train_budget_s = 4320
+
+[llm]
+primary = "anthropic"
+fallback = "openai_compatible"
+hedge_after_share = 0.35
+breaker = { failures = 5, window_s = 60, open_s = 120 }
+
+[llm.providers.anthropic]
+kind = "anthropic"
+endpoint = "https://api.anthropic.com/v1/messages"
+model = "claude-haiku-4-5-20251001"
+api_key = "env:ANTHROPIC_API_KEY"
+soft_timeout_s = 4
+hard_timeout_s = 6
+
+[llm.providers.openai_compatible]
+kind = "openai_compatible"
+endpoint = "env:LLM_FALLBACK_URL"
+model = "env:LLM_FALLBACK_MODEL"
+api_key = "env:LLM_FALLBACK_KEY"
+soft_timeout_s = 4
+hard_timeout_s = 8
+
+[llm.local]
+enabled = false
+quantize = "nf4"

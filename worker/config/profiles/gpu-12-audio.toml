@@ -1,0 +1,42 @@
+[worker]
+trust = "public"
+
+[runtime]
+mode = "lane"
+device = "cuda"
+idle_unload_s = 600
+
+[lanes]
+enabled = ["audio", "lyrics"]
+capacity = { audio = 8, lyrics = 8 }
+required = { audio = false, lyrics = false, transcribe = false, encode = false, collab = false, ai = false }
+
+[slots.muq]
+max_batch = 1
+max_wait_ms = 20
+
+[slots.mulan]
+max_batch = 1
+max_wait_ms = 20
+
+[slots.text]
+max_batch = 8000
+max_wait_ms = 60
+
+[slots.sep]
+replicas = 1
+max_batch = 1
+max_wait_ms = 0
+
+[slots.asr]
+replicas = 1
+max_batch = 4
+max_wait_ms = 30
+
+[slots.align]
+replicas = 1
+max_batch = 2
+
+[slots.mms]
+replicas = 1
+max_batch = 2
