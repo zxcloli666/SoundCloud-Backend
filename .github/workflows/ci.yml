@@ -354,3 +354,37 @@ jobs:
       - run: cargo build --release --manifest-path api/Cargo.toml
       - run: cargo build --release --manifest-path streaming/Cargo.toml
       - run: cargo build --release --manifest-path utils/call/server/Cargo.toml
+
+  prod-images:
+    name: Prod / Image ${{ matrix.name }} (real call)
+    needs: prod-guard
+    if: needs.prod-guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [api, jobs]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/SoundCloud-Internal
+          token: ${{ secrets.INTERNAL_PAT }}
+          path: _internal
+
+      - name: Replace mock utils/call with real
+        run: |
+          rm -rf utils/call
+          cp -r _internal/call ./utils/call
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.name }}/Dockerfile
+          push: false
+          load: true
+          tags: soundcloud-backend-${{ matrix.name }}:ci
+          cache-from: type=gha,scope=${{ matrix.name }}
