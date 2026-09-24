@@ -13,8 +13,6 @@ use tokio_stream::StreamExt;
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{error, info};
 
-/// Ready-to-serve TLS stream over an ACME-managed certificate. Implements tokio
-/// `AsyncRead`/`AsyncWrite`; wrap in `hyper_util::rt::TokioIo` to hand to hyper.
 pub type TlsStream = Compat<FuturesTlsStream<Compat<TcpStream>>>;
 
 pub struct AcmeParams {
@@ -22,14 +20,9 @@ pub struct AcmeParams {
     pub email: String,
     pub cache_dir: PathBuf,
     pub staging: bool,
-    /// ALPN advertised on real (non-challenge) handshakes, e.g. `[b"h2", b"http/1.1"]`.
     pub alpn: Vec<Vec<u8>>,
 }
 
-/// TLS terminator whose certs are issued and auto-renewed by Let's Encrypt over
-/// TLS-ALPN-01 (challenge served on :443, no HTTP needed). Cheap to clone — one
-/// instance backs every SO_REUSEPORT shard; the renewal task is spawned once.
-/// `init_crypto()` must run before this.
 #[derive(Clone)]
 pub struct AcmeAcceptor {
     serve: Arc<ServerConfig>,
@@ -66,13 +59,9 @@ pub fn acme_acceptor(p: AcmeParams) -> AcmeAcceptor {
 }
 
 impl AcmeAcceptor {
-    /// Terminates TLS on `tcp`. `Ok(None)` means the connection carried a TLS-ALPN-01
-    /// challenge (already answered — drop it); `Ok(Some(stream))` is real traffic.
     pub async fn accept(&self, tcp: TcpStream) -> io::Result<Option<TlsStream>> {
-        let handshake =
-            LazyConfigAcceptor::new(Acceptor::default(), tcp.compat()).await?;
+        let handshake = LazyConfigAcceptor::new(Acceptor::default(), tcp.compat()).await?;
         if is_tls_alpn_challenge(&handshake.client_hello()) {
-            // Completing the handshake with the challenge cert IS the validation.
             let _ = handshake.into_stream(self.challenge.clone()).await?;
             return Ok(None);
         }

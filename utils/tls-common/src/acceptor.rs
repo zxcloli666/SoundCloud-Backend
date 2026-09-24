@@ -4,6 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::extract::ConnectInfo;
 use axum::http::Request;
@@ -13,11 +14,9 @@ use tower::Service;
 
 use crate::proxy::read_proxy_v1;
 
-/// Wraps inner `Accept` (как `rustls_acme::axum::AxumAcceptor`):
-/// 1) при `proxy_protocol=true` читает PROXY v1 header → real client addr;
-///    иначе берёт `tcp.peer_addr()`.
-/// 2) оборачивает service в `ConnectInfoService` чтобы каждый Request получил
-///    `ConnectInfo<SocketAddr>` extension.
+const PROXY_SIGNATURE: &[u8; 6] = b"PROXY ";
+const ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 pub(crate) struct TrustedProxies {
     pub cidrs: Arc<Vec<crate::config::IpCidr>>,
@@ -60,44 +59,59 @@ where
         let proxy_protocol = self.proxy_protocol;
         let proxy_trusted = self.proxy_trusted.clone();
         Box::pin(async move {
-            let mut stream = stream;
-            let peer = stream.peer_addr()?;
-            // PROXY header is consumed when present (else its bytes corrupt TLS)
-            // but only trusted from allowlisted peers; otherwise use peer_addr so
-            // a direct connector can't spoof source-IP by forging it.
-            let real_addr = if proxy_protocol && peek_proxy_signature(&stream).await {
-                let advertised = read_proxy_v1(&mut stream).await?;
-                if proxy_trusted.contains(peer.ip()) {
-                    advertised
+            let accepted = async {
+                let mut stream = stream;
+                let peer = stream.peer_addr()?;
+                let real_addr = if proxy_protocol && peek_proxy_signature(&stream).await? {
+                    let advertised = read_proxy_v1(&mut stream).await?;
+                    if proxy_trusted.contains(peer.ip()) {
+                        advertised
+                    } else {
+                        peer
+                    }
                 } else {
                     peer
-                }
-            } else {
-                peer
+                };
+                let service = ConnectInfoService {
+                    inner: service,
+                    addr: real_addr,
+                };
+                inner.accept(stream, service).await
             };
-            let svc = ConnectInfoService {
-                inner: service,
-                addr: real_addr,
-            };
-            inner.accept(stream, svc).await
+            tokio::time::timeout(ACCEPT_TIMEOUT, accepted)
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "connection preface timed out")
+                })?
         })
     }
 }
 
-async fn peek_proxy_signature(stream: &TcpStream) -> bool {
+async fn peek_proxy_signature(stream: &TcpStream) -> io::Result<bool> {
     let mut sig = [0u8; 6];
-    match stream.peek(&mut sig).await {
-        Ok(n) if n >= 1 => {
-            let want = b"PROXY ";
-            sig[..n] == want[..n.min(want.len())]
+    let mut observed = 0;
+    loop {
+        let count = stream.peek(&mut sig).await?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed before request preface",
+            ));
         }
-        _ => false,
+        let compared = count.min(PROXY_SIGNATURE.len());
+        if sig[..compared] != PROXY_SIGNATURE[..compared] {
+            return Ok(false);
+        }
+        if count >= PROXY_SIGNATURE.len() {
+            return Ok(true);
+        }
+        if count == observed {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        observed = count;
     }
 }
 
-/// Per-connection wrapper, добавляющий `ConnectInfo<SocketAddr>` в request extensions.
-/// Аналог axum'овского `into_make_service_with_connect_info::<SocketAddr>()`, но с
-/// addr полученным сверху (PROXY или peer_addr) а не TCP socket'а.
 #[derive(Clone)]
 pub(crate) struct ConnectInfoService<S> {
     pub inner: S,
@@ -119,5 +133,48 @@ where
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
         req.extensions_mut().insert(ConnectInfo(self.addr));
         self.inner.call(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    async fn socket_pair() -> io::Result<(TcpStream, TcpStream)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let client = TcpStream::connect(address);
+        let server = listener.accept();
+        let (client, (server, _)) = tokio::try_join!(client, server)?;
+        Ok((client, server))
+    }
+
+    #[tokio::test]
+    async fn fragmented_post_is_not_a_proxy_header() -> io::Result<()> {
+        let (mut client, server) = socket_pair().await?;
+        let detection = tokio::spawn(async move { peek_proxy_signature(&server).await });
+
+        client.write_all(b"P").await?;
+        tokio::task::yield_now().await;
+        client.write_all(b"OST /").await?;
+
+        assert!(!detection.await??);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fragmented_proxy_signature_is_recognized() -> io::Result<()> {
+        let (mut client, server) = socket_pair().await?;
+        let detection = tokio::spawn(async move { peek_proxy_signature(&server).await });
+
+        client.write_all(b"PRO").await?;
+        tokio::task::yield_now().await;
+        client.write_all(b"XY ").await?;
+
+        assert!(detection.await??);
+        Ok(())
     }
 }

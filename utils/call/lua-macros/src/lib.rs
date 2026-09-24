@@ -1,23 +1,7 @@
-//! `lua_script!("methods/foo.lua")` — embed a Lua method script as a `&'static str`,
-//! validated at `cargo check` (sqlx-`query!`-style):
-//!
-//! - the file is read relative to the calling crate's `CARGO_MANIFEST_DIR`;
-//! - it is parsed with `full_moon` — a syntax error fails the build;
-//! - it is scanned for forbidden globals (`os`/`io`/`package`/`debug`/`require`/
-//!   `load*`/`raw*`/metatable escapes) — a hit fails the build;
-//! - the file is tracked via `include_bytes!`, so editing the `.lua` rebuilds.
-//!
-//! This is the realistic subset of `sqlx::query!`: there is no live oracle to type
-//! a Lua script's return value, so output typing is enforced at runtime (the
-//! `ScMethod::Output` deserialize on the client). Compile time gives parse + lint.
-
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, LitStr};
 
-/// Identifiers that must never appear in a sandboxed method script. The runtime VM
-/// already withholds these (only string/table/math libs are opened), so this is
-/// defense-in-depth plus an early author-error signal.
 const DENYLIST: &[&str] = &[
     "os",
     "io",
@@ -77,7 +61,6 @@ pub fn lua_script(input: TokenStream) -> TokenStream {
     let src_lit = src.as_str();
     quote! {
         {
-            // Track the .lua file so editing it triggers a rebuild.
             const _: &[u8] = include_bytes!(#abs_str);
             #src_lit
         }

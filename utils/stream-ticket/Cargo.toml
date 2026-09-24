@@ -1,0 +1,11 @@
+[package]
+name = "stream-ticket"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22"
+ring = "0.17.14"
+thiserror = "2"
+uuid = "1"
+

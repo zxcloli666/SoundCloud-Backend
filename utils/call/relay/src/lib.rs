@@ -30,7 +30,7 @@ pub mod tiers {
 
 pub use tiers::{Policy, Tier};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub control_endpoint: Option<String>,
     pub upstream_proxy: Option<String>,
@@ -95,6 +95,17 @@ impl Client {
         _script: &str,
         _inputs: Bytes,
         _region_rotation: i32,
+    ) -> Result<Bytes, Error> {
+        Err(Error::Disabled)
+    }
+
+    pub async fn call_method_in(
+        &self,
+        _method_id: &str,
+        _script: &str,
+        _inputs: Bytes,
+        _region_rotation: i32,
+        _countries: &[String],
     ) -> Result<Bytes, Error> {
         Err(Error::Disabled)
     }

@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::Redirect;
 use axum::Router;
 
-/// Router который 301 редиректит любой HTTP запрос на https://<host>:<https_port><path>.
 pub fn redirect_router(https_port: u16) -> Router {
     let redirect = move |headers: HeaderMap, uri: Uri| async move {
         let host = headers

@@ -1,0 +1,28 @@
+[package]
+name = "sc-transport"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "SoundCloud transport: relay/proxy/direct channels, apiv2 reads and apiv1 mapping"
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+call-lua-macros = { path = "../call/lua-macros" }
+call-relay = { path = "../call/relay" }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+futures = "0.3"
+once_cell = "1"
+regex = "1"
+sc-fingerprint = { path = "../sc-fingerprint" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+url = "2"
+wreq = { version = "5", features = ["json", "stream", "gzip", "brotli"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

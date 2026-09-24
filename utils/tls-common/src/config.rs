@@ -9,15 +9,17 @@ pub struct TlsConfig {
     pub https_port: u16,
     pub http_port: u16,
     pub http_redirect: bool,
-    pub proxy_protocol: bool,
-    /// Peers allowed to dictate the client addr via PROXY v1 (haproxy). Others' PROXY headers are ignored.
-    pub proxy_trusted_cidrs: Vec<IpCidr>,
-    /// Hostnames resolved (and periodically re-resolved) to trusted peer IPs —
-    /// e.g. `haproxy`, so the allowlist survives container recreation.
-    pub proxy_trusted_hosts: Vec<String>,
+    pub proxy: ProxyProtocolConfig,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+pub struct ProxyProtocolConfig {
+    pub(crate) enabled: bool,
+    pub(crate) trusted_cidrs: Vec<IpCidr>,
+    pub(crate) trusted_hosts: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IpCidr {
     net: IpAddr,
     prefix: u8,
@@ -61,8 +63,6 @@ fn prefix_match(a: &[u8], b: &[u8], prefix: u8) -> bool {
 }
 
 impl TlsConfig {
-    /// `Some` когда TLS_ENABLED=true; иначе `None`.
-    /// Паника если TLS_ENABLED=true, а DOMAINS пустой — fail fast at boot.
     pub fn from_env() -> Option<Self> {
         if !env_bool("TLS_ENABLED", false) {
             return None;
@@ -85,19 +85,40 @@ impl TlsConfig {
             staging: env_bool("ACME_STAGING", false),
             https_port: env_u16("TLS_HTTPS_PORT", 443),
             http_port: env_u16("TLS_HTTP_PORT", 80),
-            // HTTP→HTTPS 301 by default; off для смешанного режима.
             http_redirect: env_bool("TLS_HTTP_REDIRECT", true),
-            proxy_protocol: env_bool("TLS_PROXY_PROTOCOL", false),
-            proxy_trusted_cidrs: parse_csv(
-                &std::env::var("TLS_PROXY_TRUSTED_CIDRS").unwrap_or_default(),
-            )
-                .iter()
-                .filter_map(|s| IpCidr::parse(s))
-                .collect(),
-            proxy_trusted_hosts: parse_csv(
-                &std::env::var("TLS_PROXY_TRUSTED_HOSTS").unwrap_or_default(),
-            ),
+            proxy: ProxyProtocolConfig::from_env(),
         })
+    }
+}
+
+impl ProxyProtocolConfig {
+    pub fn from_env() -> Self {
+        let enabled = env_bool("TLS_PROXY_PROTOCOL", false);
+        let trusted_cidrs =
+            parse_csv(&std::env::var("TLS_PROXY_TRUSTED_CIDRS").unwrap_or_default())
+                .into_iter()
+                .map(|value| {
+                    IpCidr::parse(&value).unwrap_or_else(|| {
+                        panic!("TLS_PROXY_TRUSTED_CIDRS contains invalid CIDR: {value}")
+                    })
+                })
+                .collect::<Vec<_>>();
+        let trusted_hosts =
+            parse_csv(&std::env::var("TLS_PROXY_TRUSTED_HOSTS").unwrap_or_default());
+        if enabled && trusted_cidrs.is_empty() && trusted_hosts.is_empty() {
+            panic!(
+                "TLS_PROXY_PROTOCOL=true requires TLS_PROXY_TRUSTED_CIDRS or TLS_PROXY_TRUSTED_HOSTS"
+            );
+        }
+        Self {
+            enabled,
+            trusted_cidrs,
+            trusted_hosts,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self::default()
     }
 }
 
