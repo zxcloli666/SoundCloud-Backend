@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Миграции append-only: запрет правок/удалений применённых файлов, дублей и
-# не-монотонных номеров. base = $MIG_BASE_REF (def HEAD). Escape: ALLOW_MIGRATION_REWRITE=1.
 set -euo pipefail
 
-# Два независимых набора: core (`0000+`) и ops (`9000+`). Нумерация у каждого
-# своя, append-only проверяется в пределах набора.
 MIG_DIRS=("api/migrations" "api/migrations-ops")
 FILE_RE='^[0-9]{4,}_[a-z0-9_]+\.sql$'
 BASE="${MIG_BASE_REF:-HEAD}"
@@ -62,8 +58,6 @@ for MIG_DIR in "${MIG_DIRS[@]}"; do
   unset existing seen
 done
 
-# Advisory: eugene светит опасные локи в новых миграциях (НЕ блокирует — repo-паттерн
-# pre-apply CONCURRENTLY делает не-concurrent DDL no-op'ом на проде, см. 0030/0036).
 if command -v eugene >/dev/null 2>&1; then
   for f in "${all_added[@]:-}"; do
     [[ -z "$f" || ! -f "$f" ]] && continue

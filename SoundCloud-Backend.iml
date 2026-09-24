@@ -3,6 +3,8 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/api" />
+      <excludeFolder url="file://$MODULE_DIR$/backend-contracts" />
+      <excludeFolder url="file://$MODULE_DIR$/jobs" />
       <excludeFolder url="file://$MODULE_DIR$/storage" />
       <excludeFolder url="file://$MODULE_DIR$/streaming" />
       <excludeFolder url="file://$MODULE_DIR$/worker" />

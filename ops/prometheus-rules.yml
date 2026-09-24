@@ -1,0 +1,348 @@
+groups:
+  - name: scd-api
+    interval: 30s
+    rules:
+      - alert: ApiScrapeMissing
+        expr: absent(api_http_requests_total)
+        for: 10m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "API exporter is not reporting"
+          description: "No api_* series for 10 minutes. The exporter emits every lane at zero rather than omitting it, so an absent series means a dead process or a broken scrape, never an idle one."
+
+      - alert: ApiLatencyDegraded
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "p99 on {{ $labels.route }} is above 250ms"
+          description: "Measured release-build p99 on the stand is 15-22ms across read routes, auth burst and mixed load. 250ms is more than ten times that, so this is a regression rather than noise. Semantic search is excluded on purpose: a cold query waits for the encoder."
+
+      - alert: ApiLatencyCritical
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 1
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "p99 on {{ $labels.route }} is above one second"
+          description: "The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so a second of p99 means the local path itself is stalling."
+
+      - alert: ApiSemanticSearchStuck
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~"/search/(vibe|lyrics)"}[5m]))) > 11
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Semantic search on {{ $labels.route }} waits longer than its own poll loop"
+          description: "A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Above eleven seconds the wait is no longer the encoder but something behind it."
+
+      - alert: ApiSemanticSearchAlwaysCold
+        expr: histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~"/search/(vibe|lyrics)"}[15m]))) > 5
+        for: 30m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Half of semantic searches on {{ $labels.route }} wait for the encoder"
+          description: "The vector cache and the query-vector collection should make repeat queries instant. A median above five seconds means the encoder is not answering or the cache is not being written."
+
+      - alert: ApiServerErrors
+        expr: sum(rate(api_http_requests_total{status=~"5.."}[5m])) / sum(rate(api_http_requests_total[5m])) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "More than 2% of answers are 5xx"
+          description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new."
+
+      - alert: ApiServerErrorsCritical
+        expr: sum(rate(api_http_requests_total{status=~"5.."}[5m])) / sum(rate(api_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "More than 10% of answers are 5xx"
+
+      - alert: ApiPoolWaitGrowing
+        expr: api_pg_pool_wait_last_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Waiting for a PostgreSQL connection"
+          description: "The stand shows no measurable wait up to concurrency 16; above that the pool itself becomes the ceiling. A sustained 50ms wait means the pool is the bottleneck, not the queries."
+
+      - alert: ApiPoolProbeFailing
+        expr: sum(rate(api_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "The pool cannot hand out a connection"
+          description: "Outcome error or timeout on the probe taken at every scrape. The probe pays exactly what a request would pay."
+
+      - alert: ApiSoundCloudBreakerOpen
+        expr: api_sc_relay_breaker_open == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "The relay breaker is open for serving reads"
+          description: "Public reads are on the backup tier. The breaker holds for 60s at a time, so five minutes means the relay keeps failing. State is shared with jobs through sc_egress_health, so check whether jobs opened it."
+
+      - alert: ApiSoundCloudTierFailing
+        expr: sum(rate(api_sc_tier_calls_total{outcome=~"error|timeout"}[10m])) / sum(rate(api_sc_tier_calls_total[10m])) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Half of SoundCloud reads fail or time out"
+          description: "A miss is counted separately from an error, so this covers unreachability and bans, not absent entities."
+
+      - alert: ApiSoundCloudBanned
+        expr: increase(api_sc_failures_total{class="ban"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "SoundCloud answered with a ban page"
+          description: "A ban page is recognised by its body, not by the status alone, and it used to reach clients as our own 500. Any occurrence means an egress channel or an OAuth app is blocked; the breaker and the app cooldown react on their own, but somebody has to know."
+
+      - alert: ApiSoundCloudCredentialsRejected
+        expr: increase(api_sc_failures_total{class="credentials"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "SoundCloud rejected an OAuth app's credentials"
+          description: "invalid_client or unauthorized_client: the app is disabled or its secret is wrong. The app is put on a half-hour cooldown, so the pool silently shrinks."
+
+      - alert: ApiSoundCloudRetryAfterLong
+        expr: histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket[30m]))) > 300
+        for: 30m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "SoundCloud is asking us to wait minutes"
+          description: "The value SoundCloud sends is obeyed and clamped at an hour. A p90 above five minutes means the throttle is no longer incidental."
+
+      - alert: ApiDeadlocks
+        expr: increase(api_pg_deadlocks_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "PostgreSQL reported a deadlock"
+          description: "Deadlocks are expected to be zero. Two have happened in production before, both from unordered updates."
+
+      - alert: ApiUnroutedRequestStorm
+        expr: sum(rate(api_http_requests_total{route="unmatched"}[5m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Sustained traffic to paths nobody routes"
+          description: "Every unrouted request lands on the single unmatched label, so this cannot explode cardinality. Threshold is not derived from a production baseline yet, tune it on the first week of real traffic."
+
+  - name: scd-jobs
+    interval: 30s
+    rules:
+      - alert: JobsScrapeMissing
+        expr: absent(jobs_queue_depth)
+        for: 10m
+        labels:
+          severity: critical
+          service: jobs
+        annotations:
+          summary: "Jobs exporter is not reporting"
+          description: "Every lane is reported at zero when empty, so an absent series means the process is gone, not that the queue is idle."
+
+      - alert: JobsQueueStalling
+        expr: jobs_queue_oldest_due_seconds > 900
+        for: 15m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Lane {{ $labels.lane }} has work due for more than 15 minutes"
+          description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow."
+
+      - alert: JobsLeasesExpiring
+        expr: jobs_queue_depth{state="lease_expired"} > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Lane {{ $labels.lane }} has jobs whose lease ran out"
+          description: "The heartbeat renews a lease while the job runs, so an expired lease means the worker died mid-job or the database was unreachable."
+
+      - alert: JobsDeadLetters
+        expr: increase(jobs_queue_dead_letters[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Lane {{ $labels.lane }} produced a dead letter"
+          description: "A job exhausted its retries. The payload stays in the queue for inspection."
+
+      - alert: JobsFailingTerminally
+        expr: sum(rate(jobs_executions_total{outcome="terminal"}[15m])) / sum(rate(jobs_executions_total[15m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "More than 5% of jobs fail terminally"
+          description: "Terminal means the job will not be retried. Retryable and timeout outcomes are counted separately."
+
+      - alert: JobsPoolWaitGrowing
+        expr: jobs_pg_pool_wait_last_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Background work is waiting for a PostgreSQL connection"
+          description: "The soak run measures a wait below a millisecond under a full queue, so a sustained 50ms means the pool is the bottleneck. Background work holds no connection across network calls, so this points at pool size or at a query holding one too long."
+
+      - alert: JobsPoolProbeFailing
+        expr: sum(rate(jobs_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: jobs
+        annotations:
+          summary: "The background pool cannot hand out a connection"
+          description: "Outcome error or timeout on the probe taken at every scrape."
+
+      - alert: JobsStatementTimeouts
+        expr: sum(rate(jobs_executions_total{outcome="timeout"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Jobs are being cut off by statement_timeout"
+          description: "A separate outcome from an ordinary retry: the bulk statement was cancelled by PostgreSQL."
+
+  - name: scd-worker
+    interval: 30s
+    rules:
+      - alert: WorkerStatusMissing
+        expr: jobs_worker_lane_status_age_seconds > 60 and on (lane) jobs_worker_lane_required == 1
+        for: 1m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "No trusted worker has reported lane {{ $labels.lane }} as serving for a minute"
+          description: "Workers publish worker.status every 15s, so a minute is four missed reports. The age counts from the last status in which a trusted node served the lane, or from jobs start when none has yet. jobs /health fails on the same condition."
+
+      - alert: WorkerLaneDegraded
+        expr: jobs_worker_lane_serving_nodes == 0 and on (lane) jobs_worker_lane_required == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "Required lane {{ $labels.lane }} has no serving node"
+          description: "Counted over every node with a fresh status, public ones included. The per-node lane state series show which node dropped it; a worker marks a required lane degraded itself after lanes.required_grace_s."
+
+      - alert: WorkerQueueStalling
+        expr: delta(jobs_worker_consumer_pending[30m]) > 0 and jobs_worker_consumer_waiting == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "Tasks pile up on {{ $labels.durable }} and nobody is pulling"
+          description: "num_pending grows while num_waiting is zero: no worker has an open pull request on the durable. Sampled from consumer_info every 30s."
+
+      - alert: WorkerSlotFlapping
+        expr: jobs_worker_slot_restarts_last_hour_max > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "A worker slot restarted more than three times in the last hour"
+          description: "The worst slot across all nodes. The per-node slot restart counter names the node and the slot."
+
+      - alert: WorkerFailedRate
+        expr: sum by (lane) (increase(jobs_worker_lane_done_total{status="failed"}[1h])) / sum by (lane) (increase(jobs_worker_lane_done_total[1h])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "More than 5% of {{ $labels.lane }} results are failed"
+          description: "Rejected, empty and missing are verdicts about the input and are not counted here; failed means the worker could not produce an answer."
+
+      - alert: WorkerReservedGap
+        expr: jobs_worker_slot_reserved_gap_mib_max > 1024
+        for: 30m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "A slot holds more than 1 GiB of memory it does not use"
+          description: "This is the criterion for keeping the scheduled worker restart. The per-node reserved gap series names the node and the slot."
+
+      - alert: WorkerDoneStreamFull
+        expr: jobs_worker_stream_fill_ratio > 0.8
+        for: 10m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "Stream {{ $labels.stream }} is above 80% of max_bytes"
+          description: "PIPELINE_DONE discards its oldest results when full; every work stream refuses new tasks instead. jobs /health fails when PIPELINE_DONE crosses this line."
+
+      - alert: WorkerLostReceiverFailing
+        expr: increase(jobs_worker_lost_total{outcome="failed"}[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "jobs could not settle a task of lane {{ $labels.lane }} that ran out of deliveries"
+          description: "The advisory reaper left the task in its stream. Quarantine after quarantine_after_s is the remaining safety net."
+
+      - alert: WorkerInvalidTasks
+        expr: increase(jobs_worker_invalid_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "A worker set aside a task of lane {{ $labels.lane }} it could not read"
+          description: "The task is kept in WORKER_INVALID for seven days with its stream_seq, message id and the first 4 KiB of the body."
+
+      - alert: WorkerConsumerRecreated
+        expr: increase(jobs_worker_consumer_recreated_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: info
+          service: worker
+        annotations:
+          summary: "jobs recreated the worker consumer of lane {{ $labels.lane }}"
+          description: "NATS refused to update a field in place, so the durable was deleted and created again. Tasks in the work queue survive; somebody changed the consumer by hand or an old owner is still around."

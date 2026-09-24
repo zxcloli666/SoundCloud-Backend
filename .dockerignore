@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+**/target
+**/.env
+**/.env.*
+!**/.env.example
+**/__pycache__
+**/*.pyc
+_internal

@@ -1,0 +1,624 @@
+{
+  "title": "SCD backend",
+  "uid": "scd-backend",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Serving",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Requests per second by route",
+      "description": "The route label is the matched route pattern, never the requested path; everything unrouted lands on \"unmatched\".",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(api_http_requests_total[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "p99 latency by route",
+      "description": "Measured p99 on the stand is 15-22ms on a release build. Semantic search is plotted separately: a cold query waits for the encoder.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~\"/search/(vibe|lyrics)\"}[5m])))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Answers by status class",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(api_http_requests_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Semantic search: how long a query waits",
+      "description": "A cold query polls the encoder up to twenty times at 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~\"/search/(vibe|lyrics)\"}[5m])))",
+          "legendFormat": "p50 {{route}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~\"/search/(vibe|lyrics)\"}[5m])))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "SoundCloud egress",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "SoundCloud reads by tier and outcome",
+      "description": "A miss is counted apart from an error: an absent entity is an answer, not an outage.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tier, outcome) (rate(api_sc_tier_calls_total[5m]))",
+          "legendFormat": "{{tier}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "p99 of a SoundCloud read by tier",
+      "description": "The whole tier walk shares one 20s budget; exhaustion answers 504 soundcloud_read_timed_out.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, tier) (rate(api_sc_tier_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tier}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Relay breaker",
+      "description": "Shared with the background service through sc_egress_health: an outage either process saw closes the channel for both.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "closed",
+                  "color": "green",
+                  "index": 0
+                },
+                "1": {
+                  "text": "open",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(api_sc_relay_breaker_open)",
+          "legendFormat": "breaker"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Why a SoundCloud call failed",
+      "description": "A ban page is recognised by its body and not by the status alone; credentials, throttling and 5xx are separate classes because each has its own cooldown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (class) (rate(api_sc_failures_total[15m]))",
+          "legendFormat": "{{class}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "How long SoundCloud asks us to wait",
+      "description": "The value it sends, obeyed and clamped at an hour.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(api_sc_retry_after_seconds_bucket[30m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket[30m])))",
+          "legendFormat": "p90"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Dependencies by outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dependency, outcome) (rate(api_dependency_calls_total[5m]))",
+          "legendFormat": "{{dependency}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "p99 of a dependency call",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, dependency) (rate(api_dependency_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{dependency}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "PostgreSQL as serving sees it",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Waiting for a pooled connection",
+      "description": "Probed on every scrape: it pays exactly what a request would pay. No measurable wait up to concurrency 16 on the stand.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "api_pg_pool_wait_last_seconds",
+          "legendFormat": "serving last"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(api_pg_pool_wait_seconds_bucket[5m])))",
+          "legendFormat": "serving p99"
+        },
+        {
+          "refId": "C",
+          "expr": "jobs_pg_pool_wait_last_seconds",
+          "legendFormat": "background last"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(jobs_pg_pool_wait_seconds_bucket[5m])))",
+          "legendFormat": "background p99"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Pool occupancy",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (state) (api_pg_pool_connections)",
+          "legendFormat": "serving {{state}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (state) (jobs_pg_pool_connections)",
+          "legendFormat": "background {{state}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Backends, transactions, deadlocks",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "api_pg_backends",
+          "legendFormat": "backends"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (outcome) (rate(api_pg_transactions_total[5m]))",
+          "legendFormat": "{{outcome}}/s"
+        },
+        {
+          "refId": "C",
+          "expr": "increase(api_pg_deadlocks_total[15m])",
+          "legendFormat": "deadlocks per 15m"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Cache hits against disk reads, and what sessions wait on",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (source) (rate(api_pg_blocks_total[5m]))",
+          "legendFormat": "blocks {{source}}/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (wait) (api_pg_sessions)",
+          "legendFormat": "sessions {{wait}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Background work",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Queue depth by lane and state",
+      "description": "An empty lane reports zero rather than disappearing, so a missing series means a dead exporter and not an idle queue.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (lane, state) (jobs_queue_depth)",
+          "legendFormat": "{{lane}} {{state}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Oldest due item and dead letters",
+      "description": "A job may run up to JOBS_JOB_TIMEOUT_SECONDS with its lease renewed, so a due age above that means nobody is claiming.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (lane) (jobs_queue_oldest_due_seconds)",
+          "legendFormat": "oldest due {{lane}} (s)"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (lane) (jobs_queue_dead_letters)",
+          "legendFormat": "dead letters {{lane}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Job outcomes by kind",
+      "description": "A statement cancelled by statement_timeout is its own outcome, not an ordinary retry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 76
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind, outcome) (rate(jobs_executions_total[15m]))",
+          "legendFormat": "{{kind}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "p99 of a job by kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, kind) (rate(jobs_execution_duration_seconds_bucket[15m])))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    }
+  ]
+}

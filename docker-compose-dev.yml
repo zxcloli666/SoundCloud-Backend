@@ -64,6 +64,11 @@ services:
       - qdrant_data:/qdrant/storage
     environment:
       QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   nats:
     image: docker.io/library/nats:2-alpine
@@ -92,14 +97,104 @@ services:
       timeout: 3s
       retries: 5
 
+  jobs-migrate:
+    build:
+      context: .
+      dockerfile: jobs/Dockerfile
+    restart: "no"
+    entrypoint: ["/usr/local/bin/migrate", "all"]
+    environment:
+      JOBS_INSTANCE_ID: jobs-migrate
+      DATABASE_URL: postgres://soundcloud:soundcloud@db:5432/soundcloud_desktop
+      DATABASE_REQUIRE_MTLS: "false"
+      PG_POOL_MIN: 0
+      PG_POOL_MAX: 1
+      PG_BULK_POOL_MIN: 0
+      PG_BULK_POOL_MAX: 1
+      OPS_DATABASE_URL: postgres://soundcloud:soundcloud@ops-db:5432/soundcloud_ops
+      OPS_DATABASE_REQUIRE_MTLS: "false"
+      OPS_PG_POOL_MIN: 0
+      OPS_PG_POOL_MAX: 1
+      OPS_PG_BULK_POOL_MIN: 0
+      OPS_PG_BULK_POOL_MAX: 1
+      SOUNDCLOUD_CLIENT_ID: ${SOUNDCLOUD_CLIENT_ID}
+      SOUNDCLOUD_CLIENT_SECRET: ${SOUNDCLOUD_CLIENT_SECRET}
+      SOUNDCLOUD_REDIRECT_URI: ${SOUNDCLOUD_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      RUST_LOG: info,jobs=info,sqlx=warn
+    depends_on:
+      db:
+        condition: service_healthy
+      ops-db:
+        condition: service_healthy
+
+  jobs:
+    build:
+      context: .
+      dockerfile: jobs/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 35s
+    ports:
+      - "3001:3001"
+    environment:
+      JOBS_INSTANCE_ID: jobs-dev
+      JOBS_HEALTH_BIND: 0.0.0.0:3001
+      NATS_URL: nats://nats:4222
+      QDRANT_URL: http://qdrant:6334
+      DATABASE_URL: postgres://soundcloud:soundcloud@db:5432/soundcloud_desktop
+      DATABASE_REQUIRE_MTLS: "false"
+      OPS_DATABASE_URL: postgres://soundcloud:soundcloud@ops-db:5432/soundcloud_ops
+      OPS_DATABASE_REQUIRE_MTLS: "false"
+      SUBSCRIPTIONS_SNAPSHOT_DIR: /snapshots
+      SUBSCRIPTIONS_ALWAYS_PREMIUM: ${SUBSCRIPTIONS_ALWAYS_PREMIUM:-false}
+      COLLAB_AUTO_TRAIN: ${COLLAB_AUTO_TRAIN:-true}
+      COLLAB_DIM: ${COLLAB_DIM:-128}
+      COLLAB_MIN_COUNT: ${COLLAB_MIN_COUNT:-3}
+      COLLAB_MIN_SESSIONS: ${COLLAB_MIN_SESSIONS:-20}
+      COLLAB_OBJECT_MAX_BYTES: ${COLLAB_OBJECT_MAX_BYTES:-536870912}
+      COLLAB_TRAIN_INTERVAL_SECONDS: ${COLLAB_TRAIN_INTERVAL_SECONDS:-21600}
+      DURATION_RESOLVER_INTERVAL_SECONDS: ${DURATION_RESOLVER_INTERVAL_SECONDS:-60}
+      DURATION_RESOLVER_BATCH_SIZE: ${DURATION_RESOLVER_BATCH_SIZE:-500}
+      DURATION_RESOLVER_CONCURRENCY: ${DURATION_RESOLVER_CONCURRENCY:-4}
+      DURATION_RESOLVER_REQUEST_GAP_MS: ${DURATION_RESOLVER_REQUEST_GAP_MS:-150}
+      MAX_TRACK_DURATION_SEC: ${MAX_TRACK_DURATION_SEC:-420}
+      SOUNDCLOUD_API_V2_URL: ${SOUNDCLOUD_API_V2_URL:-https://api-v2.soundcloud.com}
+      SOUNDCLOUD_WEB_URL: ${SOUNDCLOUD_WEB_URL:-https://soundcloud.com}
+      SC_PROXY_URL: ${SC_PROXY_URL:-}
+      SC_PROXY_FALLBACK: ${SC_PROXY_FALLBACK:-false}
+      RECS_COLIKE_REBUILD_SECS: ${RECS_COLIKE_REBUILD_SECS:-21600}
+      RECS_QUALITY_BACKFILL_SECS: ${RECS_QUALITY_BACKFILL_SECS:-600}
+      RECS_TRAINER_CRON_SECS: ${RECS_TRAINER_CRON_SECS:-21600}
+      RECS_WAVE_BUMP_SECS: ${RECS_WAVE_BUMP_SECS:-3600}
+      DISCOVERY_ENABLED: ${DISCOVERY_ENABLED:-true}
+      DISCOVERY_INTEREST_INTERVAL_SEC: ${DISCOVERY_INTEREST_INTERVAL_SEC:-3600}
+      SOUNDCLOUD_CLIENT_ID: ${SOUNDCLOUD_CLIENT_ID}
+      SOUNDCLOUD_CLIENT_SECRET: ${SOUNDCLOUD_CLIENT_SECRET}
+      SOUNDCLOUD_REDIRECT_URI: ${SOUNDCLOUD_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      STORAGE_URL: http://storage:3000
+      STORAGE_TOKEN: ${ADMIN_TOKEN:-dev}
+      STREAMING_SERVICE_URL: http://streaming:8080
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal}
+      RUST_LOG: ${JOBS_RUST_LOG:-info,jobs=debug,sqlx=warn,tower_http=info}
+    volumes:
+      - subscription_snapshots:/snapshots
+    depends_on:
+      jobs-migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
   streaming:
     build:
       context: ./streaming
       additional_contexts:
         tls-common: ./utils/tls-common
+        sc-fingerprint: ./utils/sc-fingerprint
         call: ./utils/call
         decrypt: ./utils/decrypt
         decrypt-client: ./utils/decrypt-client
+        stream-ticket: ./utils/stream-ticket
     restart: unless-stopped
     stop_grace_period: 3s
     ports:
@@ -123,6 +218,8 @@ services:
       STORAGE_MAX_SIZE_BYTES: ${STORAGE_MAX_SIZE_BYTES:-0}
       STORAGE_CLEANUP_INTERVAL_SECS: ${STORAGE_CLEANUP_INTERVAL_SECS:-3600}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal}
+      STREAM_TICKET_KEY: ${STREAM_TICKET_KEY:-ZGV2LXN0cmVhbS10aWNrZXQta2V5LTAwMDAwMDAwMDA=}
+      STREAM_TICKET_PREVIOUS_KEYS: ${STREAM_TICKET_PREVIOUS_KEYS:-}
     depends_on:
       db:
         condition: service_healthy
@@ -132,6 +229,7 @@ services:
       context: ./storage
       additional_contexts:
         tls-common: ./utils/tls-common
+        sc-fingerprint: ./utils/sc-fingerprint
     restart: unless-stopped
     stop_grace_period: 3s
     ports:
@@ -166,54 +264,61 @@ services:
       nats:
         condition: service_healthy
 
-  # Рутовый dev-compose рассчитан на GPU-хост. Если GPU нет — поменяй на worker/Dockerfile,
-  # убери deploy.resources и выстави WORKER_DEVICE=cpu, WHISPER_COMPUTE=int8.
   worker:
     build:
       context: ./worker
-      dockerfile: Dockerfile.gpu
+      dockerfile: docker/Dockerfile
+      args:
+        FLAVOR: ${WORKER_FLAVOR:-cu126}
     restart: unless-stopped
-    stop_grace_period: 8s
+    stop_grace_period: 90s
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g
+      - /run/worker:mode=1777
+    shm_size: 4g
+    mem_limit: ${WORKER_MEM_LIMIT:-16g}
+    env_file:
+      - path: ./worker/.env
+        required: false
     environment:
+      WORKER_PROFILE: ${WORKER_PROFILE:-gpu-12}
+      WORKER_NODE_NAME: ${WORKER_NODE_NAME:-dev-worker}
       NATS_URL: nats://nats:4222
-      MINI_MODEL: ${MINI_MODEL:-Qwen/Qwen3-1.7B}
-      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
-      WHISPER_COMPUTE: ${WHISPER_COMPUTE:-float16}
-      WORKER_DEVICE: ${WORKER_DEVICE:-cuda}
-      DEMUCS_MODEL: ${DEMUCS_MODEL:-htdemucs}
-      TASK_HARD_TIMEOUT_SEC: ${TASK_HARD_TIMEOUT_SEC:-120}
-      TASK_HEARTBEAT_SEC: ${TASK_HEARTBEAT_SEC:-10}
     volumes:
       - models:/models
-    command: ["python", "-m", "src.main"]
+      - worker_work:/work
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "5"
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
     depends_on:
       nats:
         condition: service_healthy
-      qdrant:
-        condition: service_started
 
   api:
     build:
       context: ./api
       additional_contexts:
         tls-common: ./utils/tls-common
+        sc-fingerprint: ./utils/sc-fingerprint
         call: ./utils/call
+        backend-contracts: ./backend-contracts
+        stream-ticket: ./utils/stream-ticket
     restart: unless-stopped
     stop_grace_period: 5s
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
-      SOUNDCLOUD_CLIENT_ID: ${SOUNDCLOUD_CLIENT_ID}
-      SOUNDCLOUD_CLIENT_SECRET: ${SOUNDCLOUD_CLIENT_SECRET}
-      SOUNDCLOUD_REDIRECT_URI: ${SOUNDCLOUD_REDIRECT_URI:-http://localhost:3000/auth/callback}
       SC_PROXY_URL: ${SC_PROXY_URL:-}
       SC_PROXY_FALLBACK: ${SC_PROXY_FALLBACK:-false}
       DATABASE_HOST: db
@@ -221,32 +326,35 @@ services:
       DATABASE_USERNAME: soundcloud
       DATABASE_PASSWORD: soundcloud
       DATABASE_NAME: soundcloud_desktop
-      OPS_DATABASE_HOST: ops-db
-      OPS_DATABASE_PORT: 5432
-      OPS_DATABASE_USERNAME: soundcloud
-      OPS_DATABASE_PASSWORD: soundcloud
-      OPS_DATABASE_NAME: soundcloud_ops
       STREAMING_SERVICE_URL: http://streaming:8080
-      SUBSCRIPTIONS_SNAPSHOT_DIR: /snapshots
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev}
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_URL: http://qdrant:6334
       NATS_URL: nats://nats:4222
       STORAGE_URL: http://storage:3000
+      STORAGE_TOKEN: ${ADMIN_TOKEN:-dev}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal}
+      STREAM_TICKET_KEY: ${STREAM_TICKET_KEY:-ZGV2LXN0cmVhbS10aWNrZXQta2V5LTAwMDAwMDAwMDA=}
       REDIS_URL: redis://redis:6379
+      AUTH_ADMISSION_WINDOW_SECONDS: ${AUTH_ADMISSION_WINDOW_SECONDS:-60}
+      AUTH_ADMISSION_TIMEOUT_MS: ${AUTH_ADMISSION_TIMEOUT_MS:-100}
+      AUTH_ADMISSION_MAX_IN_FLIGHT: ${AUTH_ADMISSION_MAX_IN_FLIGHT:-16}
+      AUTH_LOGIN_PER_CLIENT: ${AUTH_LOGIN_PER_CLIENT:-15}
+      AUTH_LOGIN_GLOBAL: ${AUTH_LOGIN_GLOBAL:-300}
+      AUTH_LINK_CREATE_PER_CLIENT: ${AUTH_LINK_CREATE_PER_CLIENT:-30}
+      AUTH_LINK_CREATE_GLOBAL: ${AUTH_LINK_CREATE_GLOBAL:-600}
       SOUNDWAVE_AUDIO_WEIGHT: ${SOUNDWAVE_AUDIO_WEIGHT:-0.7}
       SOUNDWAVE_LYRICS_WEIGHT: ${SOUNDWAVE_LYRICS_WEIGHT:-0.3}
       GENIUS_ACCESS_TOKEN: ${GENIUS_ACCESS_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-info,api=debug,tower_http=info,sqlx=warn}
-    volumes:
-      - api_snapshots:/snapshots
     depends_on:
+      jobs:
+        condition: service_healthy
+      jobs-migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
-      ops-db:
-        condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       nats:
         condition: service_healthy
       streaming:
@@ -264,4 +372,5 @@ volumes:
   storage_data:
   storage_tmp:
   models:
-  api_snapshots:
+  worker_work:
+  subscription_snapshots:
