@@ -1,13 +1,13 @@
 use bytes::Bytes;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{debug, info, warn};
+use wreq::Client;
 
 use std::sync::Arc;
 
 use super::anon::AnonClient;
-use super::hls::{download_hls, download_progressive, fetch_m3u8_source, M3u8Refresher};
+use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::{fetch_get_json, fetch_get_text};
 use super::restricted::Transcoding;
 
@@ -16,7 +16,7 @@ const FAILURE_THRESHOLD: u32 = 3;
 pub struct CookieStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
-    pub quality: &'static str, // "hq" or "sq"
+    pub quality: &'static str,
 }
 
 pub struct CookiesClient {
@@ -28,7 +28,7 @@ pub struct CookiesClient {
     consecutive_failures: AtomicU32,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct CookieHydrationSound {
     media: Option<CookieHydrationMedia>,
     track_authorization: Option<String>,
@@ -67,9 +67,6 @@ impl CookiesClient {
         }
     }
 
-    /// Get stream via cookies.
-    /// `hq_only=true`  → only HQ transcodings
-    /// `hq_only=false` → all transcodings (HQ → SQ)
     pub async fn get_stream(
         &self,
         track_urn: &str,
@@ -77,7 +74,6 @@ impl CookiesClient {
     ) -> Result<Option<CookieStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
-        // Get track to find permalink
         let track = self.anon.get_track_by_id(track_id).await?;
         let permalink = match track.permalink_url {
             Some(ref p) => p.clone(),
@@ -87,7 +83,6 @@ impl CookiesClient {
             }
         };
 
-        // Fetch page with cookies → extract hydration
         let (sound, client_id) = match self.fetch_hydration(&permalink).await {
             Some((s, c)) => (s, c),
             None => return Ok(None),
@@ -104,7 +99,6 @@ impl CookiesClient {
 
         let track_auth = sound.track_authorization.unwrap_or_default();
 
-        // Filter non-snippet, non-preview
         let full: Vec<&Transcoding> = transcodings
             .iter()
             .filter(|t| !t.snipped.unwrap_or(false) && !t.url.contains("/preview"))
@@ -115,7 +109,6 @@ impl CookiesClient {
             return Ok(None);
         }
 
-        // Sort: progressive before HLS within each tier, plain before restricted
         let is_encrypted = |t: &&Transcoding| {
             t.format
                 .as_ref()
@@ -128,7 +121,6 @@ impl CookiesClient {
         };
         let is_hq = |t: &&Transcoding| t.quality.as_deref() == Some("hq");
 
-        // Tiers (safest first): HQ progressive → HQ hls → HQ enc → SQ progressive → SQ hls → SQ enc
         let mut ordered: Vec<&Transcoding> = Vec::with_capacity(full.len());
         ordered.extend(full.iter().filter(|t| is_hq(t) && is_progressive(t)));
         ordered.extend(
@@ -193,14 +185,10 @@ impl CookiesClient {
         h
     }
 
-    /// Authenticated resolve of the `ctr` transcoding (cookies session may
-    /// succeed where anon is region-blocked / 404s).
     pub(crate) fn cookie_auth_headers(&self) -> HashMap<String, String> {
         self.auth_headers()
     }
 
-    /// `(transcodings, track_authorization, client_id)` — из cookies-сессии
-    /// (через permalink + hydration на soundcloud.com).
     pub(crate) async fn fetch_track_meta(
         &self,
         track_urn: &str,
@@ -314,8 +302,6 @@ impl CookiesClient {
             )
             .await
         } else {
-            // Re-resolve the transcoding (fresh client_id-signed playlist)
-            // when segment tokens expire mid-stream.
             let refresher: M3u8Refresher = {
                 let client = self.client.clone();
                 let proxy_url = self.proxy_url.clone();
@@ -348,6 +334,8 @@ impl CookiesClient {
     }
 
     async fn fetch_hydration(&self, permalink_url: &str) -> Option<(CookieHydrationSound, String)> {
+        let page = super::target::soundcloud_page(permalink_url)?;
+
         let mut headers = HashMap::new();
         headers.insert(
             "User-Agent".into(),
@@ -356,7 +344,7 @@ impl CookiesClient {
         headers.insert("Cookie".into(), self.cookies.clone());
 
         let (html, _) =
-            fetch_get_text(&self.client, &self.proxy_url, permalink_url, headers, false)
+            fetch_get_text(&self.client, &self.proxy_url, page.as_str(), headers, false)
                 .await
                 .ok()?;
 
@@ -366,7 +354,6 @@ impl CookiesClient {
     fn record_failure(&self) {
         let prev = self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
         let n = prev + 1;
-        // Log at threshold, then every 25 failures to indicate sustained degradation.
         if n == FAILURE_THRESHOLD || (n > FAILURE_THRESHOLD && n.is_multiple_of(25)) {
             warn!("[cookies] consecutive failures: {n}");
         } else {
@@ -382,7 +369,6 @@ impl CookiesClient {
     }
 }
 
-/// Extract a balanced JSON object starting from '{', handling nested braces and strings.
 fn extract_balanced_json(s: &str) -> Option<&str> {
     if !s.starts_with('{') {
         return None;
@@ -414,7 +400,6 @@ fn extract_balanced_json(s: &str) -> Option<&str> {
     None
 }
 
-/// Extract sound + clientId from cookie hydration data
 fn extract_cookie_hydration_data(html: &str) -> Option<(CookieHydrationSound, String)> {
     let client_id_pattern =
         r#""hydratable"\s*:\s*"apiClient"\s*,\s*"data"\s*:\s*\{\s*"id"\s*:\s*"([^"]+)""#;
@@ -424,7 +409,6 @@ fn extract_cookie_hydration_data(html: &str) -> Option<(CookieHydrationSound, St
     let sound_pattern = r#""hydratable"\s*:\s*"sound"\s*,\s*"data"\s*:\s*\{"#;
     let sound_re = regex::Regex::new(sound_pattern).ok()?;
     let sound_match = sound_re.find(html)?;
-    // Start from the opening '{' (last char of the match)
     let sound_start = sound_match.end() - 1;
     let rest = &html[sound_start..];
 

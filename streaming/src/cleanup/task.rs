@@ -42,30 +42,33 @@ async fn run_cleanup(config: &Config, pg: &PgPool, storage: &StorageClient) {
                         );
                         continue;
                     }
-                    match pg.delete_cdn_track(&track.id).await { Err(e) => {
-                        warn!("[cleanup] failed to delete PG record {}: {e}", track.id);
-                    } _ => {
-                        deleted += 1;
-                    }}
+                    match pg.delete_cdn_track(&track.id).await {
+                        Err(e) => {
+                            warn!("[cleanup] failed to delete PG record {}: {e}", track.id);
+                        }
+                        _ => {
+                            deleted += 1;
+                        }
+                    }
                 }
             }
             Err(e) => warn!("[cleanup] get stale tracks failed: {e}"),
         }
     }
 
-    if config.storage_max_size_bytes > 0 {
-        if let Ok(tracks) = pg.get_cdn_tracks_oldest_first(100).await {
-            for track in tracks {
-                if let Err(e) = storage.delete_file(&track.track_urn).await {
-                    warn!(
-                        "[cleanup] size-cleanup failed to delete {}: {e}",
-                        track.track_urn
-                    );
-                    continue;
-                }
-                let _ = pg.delete_cdn_track(&track.id).await;
-                deleted += 1;
+    if config.storage_max_size_bytes > 0
+        && let Ok(tracks) = pg.get_cdn_tracks_oldest_first(100).await
+    {
+        for track in tracks {
+            if let Err(e) = storage.delete_file(&track.track_urn).await {
+                warn!(
+                    "[cleanup] size-cleanup failed to delete {}: {e}",
+                    track.track_urn
+                );
+                continue;
             }
+            let _ = pg.delete_cdn_track(&track.id).await;
+            deleted += 1;
         }
     }
 

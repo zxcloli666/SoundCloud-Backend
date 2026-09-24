@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use reqwest::{Client, StatusCode as HttpStatus};
+use wreq::{Client, StatusCode as HttpStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::info;
@@ -99,7 +99,7 @@ impl GdriveBackend {
             },
         };
 
-        let http = Client::builder()
+        let http = sc_fingerprint::builder(None)
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .map_err(|e| BackendError::Other(format!("http client: {e}")))?;
@@ -349,20 +349,20 @@ impl GdriveBackend {
 
         let session_url = init_resp
             .headers()
-            .get(reqwest::header::LOCATION)
+            .get(wreq::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .ok_or_else(|| BackendError::Other("init resumable: missing Location header".into()))?;
 
         let file = tokio::fs::File::open(src).await?;
         let stream = tokio_util::io::ReaderStream::new(file);
-        let body = reqwest::Body::wrap_stream(stream);
+        let body = wreq::Body::wrap_stream(stream);
 
         let put_resp = self
             .http
             .put(&session_url)
-            .header(reqwest::header::CONTENT_TYPE, mime)
-            .header(reqwest::header::CONTENT_LENGTH, total)
+            .header(wreq::header::CONTENT_TYPE, mime)
+            .header(wreq::header::CONTENT_LENGTH, total)
             .body(body)
             .send()
             .await
@@ -456,7 +456,7 @@ impl GdriveBackend {
 
     async fn parse_token_resp(
         &self,
-        resp: reqwest::Response,
+        resp: wreq::Response,
         kind: &str,
     ) -> Result<CachedToken, BackendError> {
         if !resp.status().is_success() {
@@ -479,6 +479,6 @@ fn parse_size(s: Option<&str>) -> u64 {
     s.and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 
-fn http_err(e: reqwest::Error) -> BackendError {
+fn http_err(e: wreq::Error) -> BackendError {
     BackendError::Other(format!("http: {e}"))
 }

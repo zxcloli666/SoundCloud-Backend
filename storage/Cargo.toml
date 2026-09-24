@@ -21,10 +21,11 @@ aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-ve
 aws-credential-types = "1"
 aws-smithy-types = { version = "1", features = ["rt-tokio"] }
 async-nats = "0.49"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
 jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 url = "2"
 subtle = "2"
+sc-fingerprint = { path = "../utils/sc-fingerprint" }
+wreq = { version = "5", features = ["json", "stream", "multipart"] }
 tls-common = { path = "../utils/tls-common" }
 
 [profile.release]

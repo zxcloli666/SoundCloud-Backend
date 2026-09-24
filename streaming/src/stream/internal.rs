@@ -1,34 +1,22 @@
-//! Internal pipeline endpoint — только для backend'а.
-//!
-//! `POST /internal/transcode-upload/:track_urn` — Bearer=INTERNAL_TOKEN.
-//! Возвращает `202 Accepted` сразу после auth+HEAD-проверки. Если файл уже
-//! в storage — сразу `200 {cached:true}`. Иначе download + storage-upload
-//! идут фоновой tokio-таской; завершение приходит к backend'у NATS-евентом
-//! `storage.track_uploaded`, который шлёт сам storage по результату S3 PUT.
-
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
 use bytes::Bytes;
-use reqwest::Client;
 use serde::Serialize;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
+use wreq::Client;
 
-use crate::stream::storage::{
-    is_canonical_track_urn, lookup_expected_duration_ms, upload_to_storage, StorageClient,
-    UploadError,
-};
 use crate::AppState;
+use crate::stream::storage::{
+    StorageClient, UploadError, is_canonical_track_urn, lookup_expected_duration_ms,
+    upload_to_storage,
+};
 
 static WVD_CURSOR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// `GET /internal/wvd` — serve a `.wvd` device to a relay client for relay-side
-/// Widevine decrypt. Gated by `x-wvd-token` == `SC_EDGE_WVD_TOKEN`; devices come
-/// from `SC_EDGE_WVD_DIR` (a folder separate from `SC_DECRYPT_DEVICE`). Disabled
-/// (404) unless both env are set.
 pub async fn serve_wvd(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -85,9 +73,6 @@ async fn pick_wvd(dir: &str) -> Result<Bytes, String> {
     Ok(Bytes::from(data))
 }
 
-/// Глобальный лимит одновременно качающихся треков. Backend дедупит триггеры
-/// 16-широким семафором, но streaming могут долбить и ручные ретраи /
-/// несколько backend'ов — оставляем свой потолок.
 static FETCH_SEM: once_cell::sync::Lazy<Arc<Semaphore>> =
     once_cell::sync::Lazy::new(|| Arc::new(Semaphore::new(8)));
 
@@ -155,7 +140,7 @@ pub async fn transcode_upload(
         let upload_base = task_state.config.storage_upload_url.trim_end_matches('/');
         let expected_ms = lookup_expected_duration_ms(&task_state.pg, &task_urn).await;
         match upload_to_storage(
-            &task_state.http_client,
+            &task_state.storage_http,
             upload_base,
             &task_state.config.storage_token,
             &task_filename,
@@ -183,7 +168,7 @@ pub async fn transcode_upload(
     }))
 }
 
-fn check_auth(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, String)> {
+pub(crate) fn check_auth(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, String)> {
     if expected.is_empty() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -213,10 +198,6 @@ async fn head_ok(client: &Client, url: &str) -> bool {
     }
 }
 
-/// Cascade: cookies(HQ) → cookies(SQ) → anon. Returns the bytes plus the quality
-/// (`hq`/`sq`) actually obtained, so storage records `storage_quality` correctly
-/// instead of defaulting everything to `sq`.
-/// OAuth здесь не используется (нет сессии) — только анонимные/cookies пути.
 async fn fetch_track(state: &AppState, track_urn: &str) -> Option<(Bytes, &'static str)> {
     let tag = "[internal/fetch]";
 
@@ -238,4 +219,63 @@ async fn fetch_track(state: &AppState, track_urn: &str) -> Option<(Bytes, &'stat
 
     warn!("{tag} {track_urn} → no stream available");
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bearing(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {token}").parse().expect("a header value"),
+        );
+        headers
+    }
+
+    #[test]
+    fn a_service_without_a_configured_token_refuses_everyone() {
+        assert_eq!(
+            check_auth(&bearing("anything"), "").map_err(|(status, _)| status),
+            Err(StatusCode::SERVICE_UNAVAILABLE),
+            "an unset token must close the door, not open it"
+        );
+        assert_eq!(
+            check_auth(&HeaderMap::new(), "").map_err(|(status, _)| status),
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn a_caller_without_a_token_is_refused() {
+        assert_eq!(
+            check_auth(&HeaderMap::new(), "secret").map_err(|(status, _)| status),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn a_wrong_token_is_refused_and_a_right_one_is_let_through() {
+        assert_eq!(
+            check_auth(&bearing("secre"), "secret").map_err(|(status, _)| status),
+            Err(StatusCode::FORBIDDEN),
+            "a prefix of the token is not the token"
+        );
+        assert_eq!(
+            check_auth(&bearing("secrets"), "secret").map_err(|(status, _)| status),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert!(check_auth(&bearing("secret"), "secret").is_ok());
+    }
+
+    #[test]
+    fn the_scheme_is_not_optional() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "secret".parse().expect("a header value"));
+        assert_eq!(
+            check_auth(&headers, "secret").map_err(|(status, _)| status),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
 }

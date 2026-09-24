@@ -1,9 +1,10 @@
 FROM rust:1-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
-# Shared tls-common crate is provided as a named build context.
-# `additional_contexts: tls-common: ../utils/tls-common` in compose,
-# or `docker build --build-context tls-common=../utils/tls-common ./storage`.
 COPY --from=tls-common . /build/utils/tls-common
+COPY --from=sc-fingerprint . /build/utils/sc-fingerprint
 
 WORKDIR /build/storage
 COPY Cargo.toml Cargo.lock ./

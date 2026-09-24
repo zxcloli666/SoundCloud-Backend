@@ -1,5 +1,5 @@
-use reqwest::Client;
 use std::collections::HashMap;
+use wreq::Client;
 
 use super::proxy::{fetch_get_json, fetch_get_text};
 
@@ -24,9 +24,6 @@ pub(crate) struct RestrictedSource {
     pub manifest: String,
     pub token: String,
     pub content_type: &'static str,
-    /// true → выбранный transcoding quality=="hq". HQ-upgrade cron этим
-    /// фильтрует, чтобы не залить sq → sq (тогда мы зря бы тратили апи и
-    /// флаг hq_upgrade_pending не двигался).
     pub is_hq: bool,
 }
 
@@ -41,7 +38,9 @@ pub fn build_transcoding_target(
     transcoding_url: &str,
     client_id: &str,
     track_authorization: Option<&str>,
-) -> String {
+) -> Option<String> {
+    let transcoding_url = super::target::soundcloud_api(transcoding_url)?;
+    let transcoding_url = transcoding_url.as_str();
     let sep = if transcoding_url.contains('?') {
         "&"
     } else {
@@ -52,7 +51,7 @@ pub fn build_transcoding_target(
         target.push_str("&track_authorization=");
         target.push_str(auth);
     }
-    target
+    Some(target)
 }
 
 fn content_type_from_mime(mime: Option<&str>) -> &'static str {
@@ -79,10 +78,6 @@ fn pick_encrypted<'a>(transcodings: &'a [Transcoding], hq_first: bool) -> Option
         .or_else(|| transcodings.iter().find(|t| is_encrypted(t)))
 }
 
-/// Pick the `ctr` transcoding, resolve it, return manifest + token.
-/// `headers` carries the caller's identity (empty = anon, OAuth = cookies);
-/// the same headers are reused for both the resolve and the manifest fetch.
-/// `hq_first=true` prefers the HQ encrypted variant when both qualities exist.
 pub(crate) async fn resolve(
     client: &Client,
     proxy_url: &str,
@@ -100,7 +95,9 @@ pub(crate) async fn resolve(
         content_type_from_mime(tc.format.as_ref().and_then(|f| f.mime_type.as_deref()));
     let is_hq = tc.quality.as_deref() == Some("hq");
 
-    let target = build_transcoding_target(&tc.url, client_id, track_auth);
+    let Some(target) = build_transcoding_target(&tc.url, client_id, track_auth) else {
+        return Ok(None);
+    };
     let r: ResolveResp = fetch_get_json(client, proxy_url, &target, headers.clone(), false).await?;
     let token = match r.auth_token {
         Some(t) => t,

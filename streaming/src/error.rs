@@ -34,8 +34,8 @@ impl From<crate::db::postgres::PgError> for AppError {
     }
 }
 
-impl From<reqwest::Error> for AppError {
-    fn from(e: reqwest::Error) -> Self {
+impl From<wreq::Error> for AppError {
+    fn from(e: wreq::Error) -> Self {
         AppError::Internal(format!("http: {e}"))
     }
 }

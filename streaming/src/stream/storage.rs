@@ -1,17 +1,23 @@
+use axum::body::Body;
+use axum::http::StatusCode;
+use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use axum::response::Response;
 use bytes::Bytes;
-use reqwest::Client;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tracing::{info, warn};
+use wreq::Client;
 
 use crate::config::Config;
 use crate::db::postgres::PgPool;
 
 const UNAVAILABLE_THRESHOLD: u32 = 3;
 const UNAVAILABLE_COOLDOWN_MS: u64 = 60_000;
+pub const PASSTHROUGH_IDLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub struct StorageClient {
     client: Client,
+    passthrough: Client,
     base_url: String,
     public_url: String,
     upload_url: String,
@@ -22,9 +28,10 @@ pub struct StorageClient {
 }
 
 impl StorageClient {
-    pub fn new(client: Client, config: &Config, pg: PgPool) -> Self {
+    pub fn new(client: Client, passthrough: Client, config: &Config, pg: PgPool) -> Self {
         Self {
             client,
+            passthrough,
             base_url: config.storage_url.trim_end_matches('/').to_string(),
             public_url: config.storage_public_url.trim_end_matches('/').to_string(),
             upload_url: config.storage_upload_url.trim_end_matches('/').to_string(),
@@ -81,14 +88,52 @@ impl StorageClient {
         }
     }
 
+    pub async fn try_proxy(&self, track_urn: &str) -> Option<Response> {
+        if !self.enabled() || self.is_temporarily_unavailable() {
+            return None;
+        }
+
+        let cached = self.pg.find_cached_track(track_urn).await.ok()??;
+        let response = match self
+            .passthrough
+            .get(self.internal_url(track_urn))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => response,
+            Ok(response)
+                if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
+            {
+                self.mark_available();
+                let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
+                return None;
+            }
+            Ok(_) | Err(_) => {
+                self.mark_unavailable();
+                return None;
+            }
+        };
+
+        self.mark_available();
+        let _ = self.pg.update_last_accessed(&cached.id).await;
+        let content_type = response.headers().get(CONTENT_TYPE).cloned();
+        let content_length = response.headers().get(CONTENT_LENGTH).cloned();
+        let mut builder = Response::builder().status(StatusCode::OK);
+        if let Some(content_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        if let Some(content_length) = content_length {
+            builder = builder.header(CONTENT_LENGTH, content_length);
+        }
+        builder
+            .body(Body::from_stream(response.bytes_stream()))
+            .ok()
+    }
+
     pub fn upload_in_background(&self, track_urn: String, data: Bytes) {
         self.upload_in_background_with_quality(track_urn, data, "sq");
     }
 
-    /// То же что `upload_in_background`, но с явным указанием quality —
-    /// прокидываем в `quality` форм-поле, storage-сервис должен пробросить
-    /// его в NATS event `storage.track_uploaded` чтобы backend обновил
-    /// `tracks.storage_quality` корректно (sq vs hq).
     pub fn upload_in_background_with_quality(
         &self,
         track_urn: String,
@@ -147,7 +192,6 @@ impl StorageClient {
                     );
                 }
                 Err(UploadError::Rejected { status, body }) => {
-                    // Storage жив и осознанно забраковал файл — breaker сбрасываем.
                     consec.store(0, Ordering::Relaxed);
                     until.store(0, Ordering::Relaxed);
                     info!("[storage] upload rejected for {filename} ({status}): {body}");
@@ -172,7 +216,7 @@ impl StorageClient {
         });
     }
 
-    pub async fn delete_file(&self, track_urn: &str) -> Result<(), reqwest::Error> {
+    pub async fn delete_file(&self, track_urn: &str) -> Result<(), wreq::Error> {
         let filename = Self::track_filename(track_urn);
         let url = format!("{}/files/{}", self.base_url, filename);
         self.client
@@ -239,9 +283,7 @@ enum VerifyResult {
 
 #[derive(Debug)]
 pub(crate) enum UploadError {
-    /// Storage осознанно забраковал файл (409) — сервис жив, мимо breaker'а.
     Rejected { status: u16, body: String },
-    /// Транспорт / не-409 — считается в breaker.
     Transport(Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -254,8 +296,6 @@ impl std::fmt::Display for UploadError {
     }
 }
 
-/// Статус cdn-строки после неудачного аплоада: безусловный 'error' выбивал бы
-/// из try_serve живой объект (hq-upgrade поверх sq). HEAD решает.
 async fn settle_failed_status(client: &Client, verify_url: &str) -> &'static str {
     let head = client
         .head(verify_url)
@@ -268,8 +308,6 @@ async fn settle_failed_status(client: &Client, verify_url: &str) -> &'static str
     }
 }
 
-/// Доверенная SC-длительность для duration-гейта storage'а. Ошибка/таймаут БД
-/// → None: аплоад важнее гейта, повисший пул не должен держать пайплайн.
 pub(crate) async fn lookup_expected_duration_ms(pg: &PgPool, track_urn: &str) -> Option<i64> {
     let lookup = pg.get_trusted_duration_ms(track_urn);
     match tokio::time::timeout(std::time::Duration::from_secs(3), lookup).await {
@@ -294,12 +332,12 @@ pub(crate) async fn upload_to_storage(
     quality: &str,
     expected_duration_ms: Option<i64>,
 ) -> Result<(), UploadError> {
-    let file_part = reqwest::multipart::Part::bytes(data.to_vec())
+    let file_part = wreq::multipart::Part::bytes(data.to_vec())
         .file_name("audio")
         .mime_str("audio/mpeg")
         .map_err(|e| UploadError::Transport(e.into()))?;
 
-    let mut form = reqwest::multipart::Form::new()
+    let mut form = wreq::multipart::Form::new()
         .text("filename", filename.to_string())
         .text("quality", quality.to_string())
         .part("file", file_part);
@@ -320,9 +358,7 @@ pub(crate) async fn upload_to_storage(
     if status.is_success() {
         return Ok(());
     }
-    // Rejected — только 409; прочие 4xx (битый токен, имя) — misconfig,
-    // пусть громко падают в breaker.
-    if status == reqwest::StatusCode::CONFLICT {
+    if status == wreq::StatusCode::CONFLICT {
         let body: String = resp
             .text()
             .await
@@ -340,9 +376,6 @@ pub(crate) async fn upload_to_storage(
     ))
 }
 
-/// A well-formed SC track URN: `soundcloud:tracks:<digits>`. The S3 object name
-/// is derived from this via `track_filename` (`:`→`_`); a bare id would yield a
-/// non-canonical `<id>.m4a`, so uploads gate on this.
 pub fn is_canonical_track_urn(track_urn: &str) -> bool {
     track_urn
         .strip_prefix("soundcloud:tracks:")
@@ -358,7 +391,7 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_canonical_track_urn, StorageClient};
+    use super::{StorageClient, is_canonical_track_urn};
 
     #[test]
     fn canonical_urn_maps_to_canonical_filename() {

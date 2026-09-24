@@ -1,24 +1,20 @@
-//! GET /download/:track_urn — собирает кандидатов SoundCloud для прямого
-//! скачивания клиентом. Сервер только резолвит URL'ы и (для encrypted)
-//! делает handshake через `decrypt::Engine` — сам трек не качает.
-
-use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
 use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use base64::Engine as _;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use reqwest::Client;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use wreq::Client;
 
-use super::handler::{check_is_premium, extract_session_id, StreamQuery, DOWNLOAD_DEADLINE};
+use super::handler::{DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id};
 use super::proxy::{fetch_get_bytes, fetch_get_json, fetch_get_text};
-use super::restricted::{build_transcoding_target, Transcoding};
-use crate::error::AppError;
+use super::restricted::{Transcoding, build_transcoding_target};
 use crate::AppState;
+use crate::error::AppError;
 
 #[derive(Serialize)]
 pub struct DownloadResponse {
@@ -52,8 +48,6 @@ pub enum Candidate {
     },
 }
 
-/// Транскодинг + контекст под который надо резолвить
-/// (откуда мы его взяли — anon-сессия или cookies-сессия).
 struct Entry {
     t: Transcoding,
     client_id: String,
@@ -72,15 +66,9 @@ pub async fn download(
     state: State<AppState>,
     track_urn: Path<String>,
     headers: HeaderMap,
-    query: Query<StreamQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
     let urn_for_log = track_urn.0.clone();
-    match tokio::time::timeout(
-        DOWNLOAD_DEADLINE,
-        download_inner(state, track_urn, headers, query),
-    )
-    .await
-    {
+    match tokio::time::timeout(DOWNLOAD_DEADLINE, download_inner(state, track_urn, headers)).await {
         Ok(r) => r,
         Err(_) => {
             warn!("[download] {urn_for_log} → deadline {DOWNLOAD_DEADLINE:?} exceeded");
@@ -93,9 +81,8 @@ async fn download_inner(
     State(state): State<AppState>,
     Path(track_urn): Path<String>,
     headers: HeaderMap,
-    Query(query): Query<StreamQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
-    let session_id = extract_session_id(&headers, &query)?;
+    let session_id = extract_download_session_id(&headers)?;
     let session = state
         .pg
         .get_session(&session_id)
@@ -219,7 +206,7 @@ async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
     }
 
     let target =
-        build_transcoding_target(&entry.t.url, &entry.client_id, entry.track_auth.as_deref());
+        build_transcoding_target(&entry.t.url, &entry.client_id, entry.track_auth.as_deref())?;
 
     let resp: ResolveResp = match fetch_get_json(
         &state.http_client,
@@ -313,8 +300,6 @@ async fn prepare_encrypted(
     })
 }
 
-/// `decrypt::Fetcher`, который тянет init/license через ту же прокси/релей
-/// инфраструктуру что и весь остальной SC-трафик, с указанным набором headers.
 struct SegmentFetcher {
     client: Client,
     proxy_url: String,
@@ -362,9 +347,6 @@ impl decrypt::Fetcher for SegmentFetcher {
     }
 }
 
-/// Парсит итоговый HTTP-статус из строки ошибки прокси-слоя.
-/// Формат строк фиксирован в `proxy.rs`: `"status NNN"` для direct/proxy,
-/// `"relay status NNN"` для relay. Транспорт-/parse-ошибки возвращают `None`.
 fn classify_status(msg: &str) -> Option<u16> {
     for pat in ["relay status ", "status "] {
         if let Some(i) = msg.find(pat) {
@@ -378,9 +360,6 @@ fn classify_status(msg: &str) -> Option<u16> {
     None
 }
 
-/// 404/410 — точно нет такой дорожки (ожидаемо для DRM-only треков с
-/// «фейковыми» plain-транскодингами). Всё остальное (rate-limit прокси,
-/// 5xx, transport) — warn'ом, потому что трек может быть и рабочим.
 fn log_resolve_failure(msg: &str, stage: &str, preset: &str, protocol: &str) {
     match classify_status(msg) {
         Some(404) | Some(410) => debug!("[download] {stage} {preset}/{protocol} gone: {msg}"),
@@ -398,7 +377,6 @@ mod tests {
         assert_eq!(classify_status("status 404"), Some(404));
         assert_eq!(classify_status("status 502"), Some(502));
         assert_eq!(classify_status("relay status 429"), Some(429));
-        // Через враппер, как реально приходит:
         assert_eq!(classify_status("fetch: status 410"), Some(410));
         assert_eq!(classify_status("send: connection reset"), None);
         assert_eq!(classify_status("timeout"), None);

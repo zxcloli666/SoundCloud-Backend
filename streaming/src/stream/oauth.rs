@@ -1,12 +1,13 @@
 use bytes::Bytes;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{info, warn};
+use wreq::Client;
 
 use std::sync::Arc;
+use url::Url;
 
-use super::hls::{download_hls, download_progressive, fetch_m3u8_source, M3u8Refresher};
+use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::fetch_get_json;
 use crate::db::postgres::PgPool;
 
@@ -20,14 +21,11 @@ pub struct ScStreams {
     pub hls_mp3_128_url: Option<String>,
 }
 
-/// Stream result: full audio data + content_type + quality tag
 pub struct OAuthStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
 }
 
-/// Shared per-call infrastructure ctx — HTTP client + DB pool + proxy config
-/// passed verbatim through the OAuth fallback chain.
 pub struct OauthCtx<'a> {
     pub client: &'a Client,
     pub pg: &'a PgPool,
@@ -36,9 +34,6 @@ pub struct OauthCtx<'a> {
     pub fallback_session_count: usize,
 }
 
-/// Try OAuth API stream: /tracks/{urn}/streams → pick best format → download.
-/// `hq_only=true`  → only hls_aac_160 (HQ AAC 160k HLS)
-/// `hq_only=false` → all formats: hls_aac_160 → http_mp3_128 → hls_mp3_128
 pub async fn try_oauth_stream(
     ctx: &OauthCtx<'_>,
     access_token: &str,
@@ -48,8 +43,6 @@ pub async fn try_oauth_stream(
 ) -> Option<OAuthStreamResult> {
     let streams = get_streams(ctx, access_token, track_urn, secret_token).await?;
 
-    // hq_only: only HLS AAC 160; otherwise hls_aac_160 first (API v1 path — stable),
-    // then progressive mp3, then HLS mp3 fallback
     let candidates: Vec<(&str, &str, &str)> = if hq_only {
         vec![(
             streams.hls_aac_160_url.as_deref(),
@@ -89,8 +82,8 @@ pub async fn try_oauth_stream(
         .await
         {
             Ok(result) => return Some(result),
-            Err(e) => {
-                warn!("[oauth] format {proto} failed: {e}");
+            Err(_) => {
+                warn!("[oauth] format {proto} failed");
             }
         }
     }
@@ -117,7 +110,9 @@ async fn fetch_streams_direct_once(
 
     let resp = match tokio::time::timeout(FALLBACK_ATTEMPT_TIMEOUT, req).await {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => return FetchOutcome::Retryable(format!("send: {e}")),
+        Ok(Err(error)) => {
+            return FetchOutcome::Retryable(format!("send: {}", error.without_url()));
+        }
         Err(_) => return FetchOutcome::Retryable("timeout".into()),
     };
 
@@ -128,7 +123,9 @@ async fn fetch_streams_direct_once(
                 Ok(s) => return FetchOutcome::Ok(s),
                 Err(e) => return FetchOutcome::Retryable(format!("parse: {e}")),
             },
-            Err(e) => return FetchOutcome::Retryable(format!("body: {e}")),
+            Err(error) => {
+                return FetchOutcome::Retryable(format!("body: {}", error.without_url()));
+            }
         }
     }
 
@@ -144,15 +141,15 @@ async fn get_streams(
     track_urn: &str,
     secret_token: Option<&str>,
 ) -> Option<ScStreams> {
-    let mut target = format!("{API_BASE}/tracks/{track_urn}/streams");
-    if let Some(st) = secret_token {
-        target.push_str(&format!("?secret_token={st}"));
+    let mut target = Url::parse(&format!("{API_BASE}/tracks/{track_urn}/streams")).ok()?;
+    if let Some(secret_token) = secret_token {
+        target
+            .query_pairs_mut()
+            .append_pair("secret_token", secret_token);
     }
 
-    // 1) direct с original токеном (только когда включён proxy_fallback и
-    //    задан proxy). На retryable error падаем на пул oauth_app_tokens.
     if ctx.proxy_fallback && !ctx.proxy_url.is_empty() {
-        match fetch_streams_direct_once(ctx.client, &target, access_token).await {
+        match fetch_streams_direct_once(ctx.client, target.as_str(), access_token).await {
             FetchOutcome::Ok(s) => return Some(s),
             FetchOutcome::NotFound => {
                 warn!("[oauth] streams 404 for {track_urn}");
@@ -168,7 +165,9 @@ async fn get_streams(
                         Ok(tokens) if !tokens.is_empty() => {
                             let limit = ctx.fallback_session_count.min(tokens.len());
                             for (i, token) in tokens.iter().take(limit).enumerate() {
-                                match fetch_streams_direct_once(ctx.client, &target, token).await {
+                                match fetch_streams_direct_once(ctx.client, target.as_str(), token)
+                                    .await
+                                {
                                     FetchOutcome::Ok(s) => {
                                         info!(
                                             "[oauth] {track_urn} → app-token direct ({}/{limit})",
@@ -199,15 +198,16 @@ async fn get_streams(
         }
     }
 
-    // 3) original logic: proxy with original token (or direct if no proxy configured)
     let mut headers = HashMap::new();
     headers.insert("Authorization".into(), format!("OAuth {access_token}"));
     headers.insert("Accept".into(), "application/json; charset=utf-8".into());
 
-    match fetch_get_json::<ScStreams>(ctx.client, ctx.proxy_url, &target, headers, false).await {
+    match fetch_get_json::<ScStreams>(ctx.client, ctx.proxy_url, target.as_str(), headers, false)
+        .await
+    {
         Ok(s) => Some(s),
-        Err(e) => {
-            warn!("[oauth] get streams failed: {e}");
+        Err(_) => {
+            warn!("[oauth] get streams failed for {track_urn}");
             None
         }
     }
@@ -222,12 +222,11 @@ async fn try_format(
     proto: &str,
     mime: &str,
 ) -> Result<OAuthStreamResult, Box<dyn std::error::Error + Send + Sync>> {
-    // pf=true: direct → proxy&relay
     if proxy_fallback {
         match try_format_inner(client, proxy_url, access_token, url, proto, mime, true).await {
             Ok(result) => return Ok(result),
-            Err(e) => {
-                warn!("[oauth] direct format {proto} failed, falling back to proxy&relay: {e}");
+            Err(_) => {
+                warn!("[oauth] direct format {proto} failed, falling back to proxy&relay");
             }
         }
     }
@@ -248,9 +247,6 @@ async fn try_format_inner(
     headers.insert("Authorization".into(), format!("OAuth {access_token}"));
 
     let (data, content_type) = if proto == "hls" {
-        // SC regenerates freshly-signed segment URLs every time this redirect
-        // URL is fetched with the OAuth header, so the refresher is just the
-        // same request again.
         let refresher: M3u8Refresher = {
             let client = client.clone();
             let proxy_url = proxy_url.to_string();

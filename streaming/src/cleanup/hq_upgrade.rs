@@ -14,6 +14,22 @@ const TICK: Duration = Duration::from_secs(2 * 60);
 const BATCH: i64 = 5;
 const RETRY_COOLDOWN_SEC: i64 = 6 * 60 * 60;
 const PER_TRACK_GAP: Duration = Duration::from_millis(500);
+const UPGRADE_DEADLINE: Duration = Duration::from_secs(180);
+
+type UpgradeOutcome = Result<bool, Box<dyn std::error::Error + Send + Sync>>;
+
+async fn within_deadline<F>(deadline: Duration, urn: &str, work: F) -> UpgradeOutcome
+where
+    F: std::future::Future<Output = UpgradeOutcome>,
+{
+    match tokio::time::timeout(deadline, work).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            warn!(urn = %urn, "[hq-upgrade] deadline {deadline:?} exceeded");
+            Ok(false)
+        }
+    }
+}
 
 pub fn spawn_hq_upgrade_task(
     pg: PgPool,
@@ -21,7 +37,7 @@ pub fn spawn_hq_upgrade_task(
     cookies: Option<Arc<CookiesPool>>,
     storage: Arc<StorageClient>,
     decryptor: Option<Arc<decrypt::Engine>>,
-    http_client: reqwest::Client,
+    http_client: wreq::Client,
     sc_proxy_url: String,
 ) {
     if !storage.enabled() {
@@ -56,14 +72,18 @@ pub fn spawn_hq_upgrade_task(
             }
             for urn in urns {
                 tokio::time::sleep(PER_TRACK_GAP).await;
-                let res = upgrade_one(
+                let res = within_deadline(
+                    UPGRADE_DEADLINE,
                     &urn,
-                    &anon,
-                    cookies.as_ref(),
-                    &engine,
-                    &http_client,
-                    &sc_proxy_url,
-                    &storage,
+                    upgrade_one(
+                        &urn,
+                        &anon,
+                        cookies.as_ref(),
+                        &engine,
+                        &http_client,
+                        &sc_proxy_url,
+                        &storage,
+                    ),
                 )
                 .await;
                 match res {
@@ -85,7 +105,7 @@ async fn upgrade_one(
     anon: &AnonClient,
     cookies: Option<&Arc<CookiesPool>>,
     engine: &decrypt::Engine,
-    http_client: &reqwest::Client,
+    http_client: &wreq::Client,
     sc_proxy_url: &str,
     storage: &StorageClient,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
@@ -112,8 +132,6 @@ async fn upgrade_one(
         },
     };
 
-    // Бракуем явный sq в манифесте — иначе перезапишем sq на sq и не подвинем
-    // hq_upgrade_pending.
     if !src.is_hq {
         debug!(urn = %track_urn, "[hq-upgrade] source not marked hq, skipping");
         return Ok(false);
@@ -140,4 +158,55 @@ async fn upgrade_one(
     }
     storage.upload_in_background_with_quality(track_urn.to_string(), Bytes::from(buf), "hq");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_upgrade_that_never_finishes_frees_the_worker_for_the_next_track() {
+        let stuck = async {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            Ok(true)
+        };
+
+        let started = tokio::time::Instant::now();
+        let outcome = within_deadline(UPGRADE_DEADLINE, "soundcloud:tracks:1", stuck).await;
+
+        assert!(
+            matches!(outcome, Ok(false)),
+            "a track that never finishes must be written off, not carried out of the loop \
+             as an error the caller treats differently"
+        );
+        assert_eq!(
+            started.elapsed(),
+            UPGRADE_DEADLINE,
+            "the worker waited longer than the budget, so one bad track still stalls the batch"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_upgrade_that_finishes_in_time_is_passed_through_untouched() {
+        let quick = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(true)
+        };
+
+        let outcome = within_deadline(UPGRADE_DEADLINE, "soundcloud:tracks:2", quick).await;
+
+        assert!(matches!(outcome, Ok(true)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failure_inside_the_budget_stays_a_failure() {
+        let failing = async { Err("upstream refused".into()) };
+
+        let outcome = within_deadline(UPGRADE_DEADLINE, "soundcloud:tracks:3", failing).await;
+
+        assert!(
+            outcome.is_err(),
+            "a real error must not be flattened into an ordinary skip"
+        );
+    }
 }

@@ -1,14 +1,14 @@
 use bytes::{Bytes, BytesMut};
 use futures::stream::StreamExt;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{debug, warn};
 use url::Url;
+use wreq::Client;
 
-use super::proxy::{fetch_direct_validated, fetch_get_validated, BodyValidator};
+use super::proxy::{BodyValidator, fetch_direct_validated, fetch_get_validated};
 use super::validate::{is_valid_audio, is_valid_m3u8};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
@@ -16,10 +16,8 @@ type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 const HLS_CONCURRENCY: usize = 3;
 const MAX_M3U8_REFRESH: usize = 2;
 
-// (optional fMP4 init, ordered media segments).
 pub type SegmentSource = (Option<String>, Vec<String>);
 
-// Re-resolves a fresh playlist when segment tokens expire mid-download.
 pub type M3u8Refresher = Arc<
     dyn Fn() -> Pin<Box<dyn Future<Output = Result<SegmentSource, BoxErr>> + Send>> + Send + Sync,
 >;
@@ -49,7 +47,9 @@ async fn fetch_validated(
 }
 
 pub fn parse_m3u8(content: &str, base_url: &str) -> SegmentSource {
-    let base = Url::parse(base_url).unwrap_or_else(|_| Url::parse("https://localhost").unwrap());
+    let Some(base) = super::target::public_media(base_url) else {
+        return (None, Vec::new());
+    };
     let mut init_url = None;
     let mut segment_urls = Vec::new();
 
@@ -58,26 +58,28 @@ pub fn parse_m3u8(content: &str, base_url: &str) -> SegmentSource {
         if let Some(start) = line.find("#EXT-X-MAP:URI=\"") {
             let rest = &line[start + 16..];
             if let Some(end) = rest.find('"') {
-                init_url = Some(resolve_url(&rest[..end], &base));
+                init_url = resolve_url(&rest[..end], &base);
             }
             continue;
         }
         if line.starts_with('#') || line.is_empty() {
             continue;
         }
-        segment_urls.push(resolve_url(line, &base));
+        let Some(segment) = resolve_url(line, &base) else {
+            return (None, Vec::new());
+        };
+        segment_urls.push(segment);
     }
 
     (init_url, segment_urls)
 }
 
-fn resolve_url(url: &str, base: &Url) -> String {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        return url.to_string();
-    }
-    base.join(url)
-        .map(|u| u.to_string())
-        .unwrap_or_else(|_| url.to_string())
+fn resolve_url(url: &str, base: &Url) -> Option<String> {
+    let absolute = match base.join(url) {
+        Ok(absolute) => absolute,
+        Err(_) => return None,
+    };
+    super::target::public_media(absolute.as_str()).map(|url| url.to_string())
 }
 
 pub fn mime_to_content_type(mime: &str) -> &'static str {
@@ -121,17 +123,13 @@ pub async fn download_progressive(
     extra_headers: HashMap<String, String>,
     direct_only: bool,
 ) -> Result<(Bytes, &'static str), BoxErr> {
-    // Let the relay download the (already-signed) progressive URL. Validate it looks
-    // like audio before trusting it.
-    if !direct_only {
-        if let Some(audio) = crate::stream::proxy::progressive_download_via_relay(url).await {
-            if audio
-                .first()
-                .is_some_and(|b| !matches!(b, b'{' | b'[' | b'<' | b' '))
-            {
-                return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
-            }
-        }
+    if !direct_only
+        && let Some(audio) = crate::stream::proxy::progressive_download_via_relay(url).await
+        && audio
+            .first()
+            .is_some_and(|b| !matches!(b, b'{' | b'[' | b'<' | b' '))
+    {
+        return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
     }
 
     let data = fetch_validated(
@@ -146,8 +144,6 @@ pub async fn download_progressive(
     Ok((data, mime_to_content_type(mime_type)))
 }
 
-// Per-segment proxy↔relay race; on terminal segment failure re-resolve via
-// refresher and resume from the failed index without dropping the buffer.
 pub async fn download_hls(
     client: &Client,
     proxy_url: &str,
@@ -157,18 +153,13 @@ pub async fn download_hls(
     direct_only: bool,
     refresher: Option<M3u8Refresher>,
 ) -> Result<(Bytes, &'static str), BoxErr> {
-    // Mode B: let the relay download + glue the segments. Validate the glued bytes
-    // look like audio (not an error/HTML page) before trusting it; otherwise fall back
-    // to the proxy segment loop below.
-    if !direct_only {
-        if let Some(audio) = crate::stream::proxy::hls_download_via_relay(m3u8_url).await {
-            if audio
-                .first()
-                .is_some_and(|b| !matches!(b, b'{' | b'[' | b'<' | b' '))
-            {
-                return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
-            }
-        }
+    if !direct_only
+        && let Some(audio) = crate::stream::proxy::hls_download_via_relay(m3u8_url).await
+        && audio
+            .first()
+            .is_some_and(|b| !matches!(b, b'{' | b'[' | b'<' | b' '))
+    {
+        return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
     }
 
     let (init_url, mut segment_urls) =
@@ -186,7 +177,6 @@ pub async fn download_hls(
             audio_validator(),
         )
         .await?;
-        // Unsupported init payload variant — bail so the caller can fall back.
         if data.windows(4).any(|w| w == b"enca") {
             return Err("unsupported stream".into());
         }
@@ -287,4 +277,68 @@ async fn fetch_segment_batch(
         }
     }
     failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: &str = "https://cf-hls-media.sndcdn.com/media/0/1/playlist.m3u8";
+
+    #[test]
+    fn a_playlist_soundcloud_served_yields_the_segments_it_names() {
+        let playlist = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MAP:URI=\"init.mp4\"\n",
+            "#EXTINF:6.0,\n",
+            "segment-0.m4s\n",
+            "#EXTINF:6.0,\n",
+            "https://cf-hls-media.sndcdn.com/media/0/1/segment-1.m4s\n",
+        );
+
+        let (init, segments) = parse_m3u8(playlist, BASE);
+
+        assert_eq!(
+            init.as_deref(),
+            Some("https://cf-hls-media.sndcdn.com/media/0/1/init.mp4")
+        );
+        assert_eq!(
+            segments,
+            vec![
+                "https://cf-hls-media.sndcdn.com/media/0/1/segment-0.m4s".to_owned(),
+                "https://cf-hls-media.sndcdn.com/media/0/1/segment-1.m4s".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_playlist_that_names_a_segment_inside_our_network_yields_nothing() {
+        for hostile in [
+            "http://127.0.0.1:8080/secret",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/admin",
+            "file:///etc/passwd",
+        ] {
+            let playlist = format!("#EXTM3U\n#EXTINF:6.0,\n{hostile}\n");
+
+            assert_eq!(
+                parse_m3u8(&playlist, BASE),
+                (None, Vec::new()),
+                "a playlist body is attacker-shaped content; {hostile} inside it must not \
+                 become a request made from inside our network"
+            );
+        }
+    }
+
+    #[test]
+    fn a_playlist_whose_own_address_we_do_not_trust_is_not_parsed_at_all() {
+        let playlist = "#EXTM3U\n#EXTINF:6.0,\nsegment-0.m4s\n";
+
+        assert_eq!(
+            parse_m3u8(playlist, "http://127.0.0.1:8080/playlist.m3u8"),
+            (None, Vec::new()),
+            "relative segments resolve against the base, so an untrusted base made every \
+             segment untrusted too, and a bad base used to fall back to https://localhost"
+        );
+    }
 }

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use reqwest::Client;
 use std::collections::HashMap;
+use wreq::Client;
 
 use super::proxy::{fetch_get_bytes, fetch_post_bytes};
 

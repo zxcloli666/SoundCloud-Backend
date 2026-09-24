@@ -1,14 +1,14 @@
 use bytes::Bytes;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
+use wreq::Client;
 
-use super::hls::{download_hls, download_progressive, fetch_m3u8_source, M3u8Refresher};
+use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::{fetch_get_json, fetch_get_text};
-pub(crate) use super::restricted::{build_transcoding_target, Transcoding};
+pub(crate) use super::restricted::{Transcoding, build_transcoding_target};
 
 const SC_BASE_URL: &str = "https://soundcloud.com";
 const SC_API_V2: &str = "https://api-v2.soundcloud.com";
@@ -19,7 +19,7 @@ pub struct TrackMedia {
     pub transcodings: Option<Vec<Transcoding>>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct ResolvedTrack {
     pub permalink_url: Option<String>,
     pub track_authorization: Option<String>,
@@ -36,7 +36,6 @@ pub struct AnonStreamResult {
     pub content_type: &'static str,
 }
 
-/// Shared client_id cache
 pub struct AnonClient {
     client: Client,
     proxy_url: String,
@@ -134,8 +133,6 @@ impl AnonClient {
         explicit_client_id: Option<&str>,
         track_authorization: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Anonymous resolve goes through the relay first. Only when there's no explicit
-        // client_id and the relay can't do it do we fall back to the proxy path below.
         if explicit_client_id.is_none() {
             let cid = self.get_client_id().await.unwrap_or_default();
             if let Some(url) = crate::stream::proxy::transcoding_via_relay(
@@ -153,7 +150,11 @@ impl AnonClient {
             Some(id) => id.to_string(),
             None => self.get_client_id().await?,
         };
-        let target = build_transcoding_target(transcoding_url, &client_id, track_authorization);
+        let Some(target) =
+            build_transcoding_target(transcoding_url, &client_id, track_authorization)
+        else {
+            return Err("transcoding url does not belong to soundcloud".into());
+        };
 
         match fetch_get_json::<TranscodingResolveResponse>(
             &self.client,
@@ -167,8 +168,11 @@ impl AnonClient {
             Ok(r) => Ok(r.url),
             Err(_) if explicit_client_id.is_none() => {
                 let new_id = self.invalidate_and_refresh().await?;
-                let retry_target =
-                    build_transcoding_target(transcoding_url, &new_id, track_authorization);
+                let Some(retry_target) =
+                    build_transcoding_target(transcoding_url, &new_id, track_authorization)
+                else {
+                    return Err("transcoding url does not belong to soundcloud".into());
+                };
                 let r: TranscodingResolveResponse = fetch_get_json(
                     &self.client,
                     &self.proxy_url,
@@ -183,7 +187,6 @@ impl AnonClient {
         }
     }
 
-    /// Get stream for track via anon API v2
     pub async fn get_stream(
         self: &Arc<Self>,
         track_urn: &str,
@@ -200,7 +203,6 @@ impl AnonClient {
 
         let transcodings = track.media.as_ref().and_then(|m| m.transcodings.as_ref());
 
-        // If no transcodings — refresh client_id and retry track fetch
         let transcodings = match transcodings {
             Some(t) if !t.is_empty() => t,
             _ => {
@@ -219,7 +221,6 @@ impl AnonClient {
                     .and_then(|m| m.transcodings.as_ref())
                 {
                     Some(t) if !t.is_empty() => {
-                        // Return immediately from the retry path
                         return self
                             .stream_from_transcodings(t, retry_track.track_authorization.as_deref())
                             .await;
@@ -240,7 +241,6 @@ impl AnonClient {
             Ok(Some(r)) => Ok(Some(r)),
             Ok(None) => Ok(None),
             Err(e) => {
-                // Stream failed — refresh client_id and retry
                 warn!("[anon] stream failed for {track_id}, refreshing client_id: {e}");
                 self.invalidate_and_refresh().await?;
                 let retry_track = match self.get_track_by_id(track_id).await {
@@ -276,8 +276,6 @@ impl AnonClient {
         }
 
         let mut last_err: Option<Box<dyn std::error::Error + Send + Sync>> = None;
-        // 404 on every transcoding = restricted track, not stale client_id:
-        // bail to oauth/cookies instead of refreshing+looping.
         let mut only_resource_gone = true;
         for t in ranked {
             let mime = t
@@ -355,7 +353,7 @@ impl AnonClient {
 
             match result {
                 Ok((data, content_type)) => {
-                    return Ok(Some(AnonStreamResult { data, content_type }))
+                    return Ok(Some(AnonStreamResult { data, content_type }));
                 }
                 Err(e) => {
                     warn!(
@@ -404,8 +402,6 @@ impl AnonClient {
         .await
     }
 
-    /// `(transcodings, track_authorization, client_id)` — собрано из anon API v2.
-    /// Пустые поля выкидываются ошибкой, чтобы вызывающий мог упасть на fallback.
     pub(crate) async fn fetch_track_meta(
         &self,
         track_urn: &str,
@@ -434,12 +430,11 @@ impl AnonClient {
     async fn coalesced_refresh(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut gate = self.refresh_gate.lock().await;
 
-        if let Some(last) = *gate {
-            if last.elapsed() < CLIENT_ID_MIN_REFRESH {
-                if let Some(id) = self.client_id.read().await.clone() {
-                    return Ok(id);
-                }
-            }
+        if let Some(last) = *gate
+            && last.elapsed() < CLIENT_ID_MIN_REFRESH
+            && let Some(id) = self.client_id.read().await.clone()
+        {
+            return Ok(id);
         }
 
         let client_id = self.fetch_client_id().await?;
@@ -464,8 +459,6 @@ impl AnonClient {
     }
 }
 
-/// Return all valid transcodings ranked: progressive first (safest — single
-/// GET, no chunk-level failures), then HLS by preset preference.
 fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
     let candidates: Vec<&Transcoding> = transcodings
         .iter()
@@ -492,7 +485,6 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
 
     let mut ordered: Vec<&Transcoding> = Vec::with_capacity(candidates.len());
 
-    // 1. Progressive first (ranked by same preset order)
     for preset in PRESET_ORDER {
         if let Some(t) = candidates
             .iter()
@@ -507,7 +499,6 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
         }
     }
 
-    // 2. HLS by preset preference
     for preset in PRESET_ORDER {
         if let Some(t) = candidates
             .iter()
@@ -516,7 +507,6 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
             ordered.push(t);
         }
     }
-    // 3. Any remainder
     for t in &candidates {
         if !ordered.iter().any(|o| std::ptr::eq(*o, *t)) {
             ordered.push(t);
@@ -525,7 +515,6 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
     ordered
 }
 
-/// Extract client_id from window.__sc_hydration on SC homepage
 fn extract_client_id_from_hydration(html: &str) -> Option<String> {
     let pattern = r#""hydratable"\s*:\s*"apiClient"\s*,\s*"data"\s*:\s*\{\s*"id"\s*:\s*"([^"]+)""#;
     let re = regex::Regex::new(pattern).ok()?;
@@ -576,8 +565,6 @@ mod tests {
 
         let ranked = ranked_transcodings(&transcodings);
 
-        // Restricted (cbc/ctr) variants are filtered out entirely: only the
-        // two legacy mp3_1_0 entries survive.
         assert_eq!(
             ranked.len(),
             2,
@@ -588,7 +575,6 @@ mod tests {
             "no encrypted transcoding may survive the filter"
         );
 
-        // First attempt: progressive mp3_1_0 (single GET, safest).
         let first = ranked[0];
         assert_eq!(protocol(first), "progressive");
         assert_eq!(first.preset.as_deref(), Some("mp3_1_0"));
@@ -597,7 +583,6 @@ mod tests {
             Some("audio/mpeg")
         );
 
-        // Fallback: the mp3_1_0 HLS variant.
         let second = ranked[1];
         assert_eq!(protocol(second), "hls");
         assert_eq!(second.preset.as_deref(), Some("mp3_1_0"));
@@ -612,16 +597,22 @@ mod tests {
 
         let with_auth = build_transcoding_target(&progressive.url, "CID", Some("TRACK_AUTH_JWT"));
         assert_eq!(
-            with_auth,
-            format!(
-                "{}?client_id=CID&track_authorization=TRACK_AUTH_JWT",
-                progressive.url
+            with_auth.as_deref(),
+            Some(
+                format!(
+                    "{}?client_id=CID&track_authorization=TRACK_AUTH_JWT",
+                    progressive.url
+                )
+                .as_str()
             ),
             "policy-gated track must send track_authorization"
         );
 
         let without_auth = build_transcoding_target(&progressive.url, "CID", None);
-        assert_eq!(without_auth, format!("{}?client_id=CID", progressive.url));
+        assert_eq!(
+            without_auth.as_deref(),
+            Some(format!("{}?client_id=CID", progressive.url).as_str())
+        );
 
         let empty_auth = build_transcoding_target(&progressive.url, "CID", Some(""));
         assert_eq!(empty_auth, without_auth);
@@ -632,9 +623,28 @@ mod tests {
             Some("AUTH"),
         );
         assert_eq!(
-            pre_query,
-            "https://api-v2.soundcloud.com/media/x/stream/progressive?foo=1&client_id=CID&track_authorization=AUTH"
+            pre_query.as_deref(),
+            Some(
+                "https://api-v2.soundcloud.com/media/x/stream/progressive?foo=1&client_id=CID&track_authorization=AUTH"
+            )
         );
+    }
+
+    #[test]
+    fn a_transcoding_that_points_anywhere_but_soundcloud_is_never_resolved() {
+        for hostile in [
+            "http://127.0.0.1:8080/media/x/stream/progressive",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://api-v2.soundcloud.com@evil.example/media/x",
+            "https://evil.example/media/x/stream/progressive",
+        ] {
+            assert_eq!(
+                build_transcoding_target(hostile, "CID", Some("AUTH")),
+                None,
+                "{hostile} arrived inside a soundcloud answer, and resolving it would send our \
+                 client_id and the listener's track_authorization to whoever put it there"
+            );
+        }
     }
 
     #[test]
@@ -686,7 +696,8 @@ mod tests {
         let ranked = ranked_transcodings(&transcodings);
         assert_eq!(ranked.len(), 2, "only the two mp3_1_0 entries survive");
         for t in &ranked {
-            let target = build_transcoding_target(&t.url, &client_id, Some(&track_auth));
+            let target = build_transcoding_target(&t.url, &client_id, Some(&track_auth))
+                .expect("soundcloud names its own media host");
             let status = http
                 .get(&target)
                 .header("User-Agent", ua)
@@ -710,11 +721,10 @@ mod tests {
             })
             .expect("restricted transcoding present");
         let enc_status = http
-            .get(build_transcoding_target(
-                &enc.url,
-                &client_id,
-                Some(&track_auth),
-            ))
+            .get(
+                build_transcoding_target(&enc.url, &client_id, Some(&track_auth))
+                    .expect("soundcloud names its own media host"),
+            )
             .header("User-Agent", ua)
             .send()
             .await

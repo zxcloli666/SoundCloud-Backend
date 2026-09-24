@@ -1,15 +1,14 @@
 use base64::Engine;
 use bytes::Bytes;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::debug;
+use wreq::Client;
 
 const MAX_RETRIES: usize = 3;
 const RETRY_DELAYS: [u64; 3] = [300, 800, 2000];
-// Loser of the race still awaited this long (don't drop slow relay early).
 const RACE_BOUNDED_GRACE: Duration = Duration::from_secs(15);
 const RELAY_MAX_RETRIES: usize = 1;
 
@@ -19,10 +18,6 @@ pub fn install_relay(relay: Arc<call_relay::Client>) {
     let _ = RELAY.set(relay);
 }
 
-/// Resolve an apiv2 transcoding URL to a signed CDN URL by running the
-/// streaming-owned `sc.transcoding_resolve` Lua method via the relay. None when
-/// there's no relay / it's disabled / the relay couldn't resolve — the caller then
-/// falls back to proxy.
 pub async fn transcoding_via_relay(
     transcoding_url: &str,
     client_id: &str,
@@ -59,9 +54,6 @@ pub async fn transcoding_via_relay(
     }
 }
 
-/// "Relay, give me the track" — the relay runs the whole flow (metadata →
-/// transcoding → resolve → download/decrypt) and returns `(audio_bytes, content_type)`.
-/// None to fall back to the per-source cascade. `wvd_*` are only used for encrypted.
 pub async fn get_track_via_relay(
     id: &str,
     quality: &str,
@@ -109,8 +101,6 @@ pub async fn get_track_via_relay(
     Some((audio, ct))
 }
 
-/// Download a progressive (single-file) track via the relay's
-/// `sc.progressive_download` Lua method. None to fall back to proxy.
 pub async fn progressive_download_via_relay(url: &str) -> Option<Vec<u8>> {
     audio_via_relay(
         "sc.progressive_download",
@@ -120,15 +110,10 @@ pub async fn progressive_download_via_relay(url: &str) -> Option<Vec<u8>> {
     .await
 }
 
-/// Download + glue an hls track (mode B) via the relay's `sc.hls_download` Lua
-/// method, returning the audio bytes. None when there's no relay / it's disabled /
-/// the relay couldn't get it — the caller falls back to the proxy segment loop.
 pub async fn hls_download_via_relay(m3u8_url: &str) -> Option<Vec<u8>> {
     audio_via_relay("sc.hls_download", crate::sc_methods::HLS_DOWNLOAD, m3u8_url).await
 }
 
-/// Shared `{ url }` → `{ ok, audio_b64 }` relay call for the single-input audio
-/// methods (progressive + hls download).
 async fn audio_via_relay(method_id: &str, script: &str, url: &str) -> Option<Vec<u8>> {
     let relay = RELAY.get()?;
     let inputs = serde_json::to_vec(&serde_json::json!({ "url": url })).ok()?;
@@ -152,10 +137,6 @@ async fn audio_via_relay(method_id: &str, script: &str, url: &str) -> Option<Vec
     base64::engine::general_purpose::STANDARD.decode(b64).ok()
 }
 
-/// Decrypt a ctr-encrypted-hls track (mode B) via the relay's `sc.hls_decrypt` Lua
-/// method: the relay fetches a served `.wvd` device and runs the Widevine decrypt
-/// itself. Returns the clean fMP4 bytes, or None to fall back to the server-side
-/// decryptor.
 pub async fn hls_decrypt_via_relay(
     manifest: &str,
     token: &str,
@@ -197,7 +178,6 @@ pub async fn hls_decrypt_via_relay(
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 type FetchResult = Result<(Bytes, HashMap<String, String>), BoxErr>;
 
-// false => treat like transport failure (retry/keep racing), not the winner.
 pub type BodyValidator = Arc<dyn Fn(&[u8], &HashMap<String, String>) -> bool + Send + Sync>;
 
 fn accept_non_empty() -> BodyValidator {
@@ -250,19 +230,25 @@ async fn http_get_bytes(
                             if validate(&body, &resp_headers) {
                                 return Ok((body, resp_headers));
                             }
-                            debug!("GET {url} → {status} but body rejected by validator, attempt {attempt}");
+                            debug!(
+                                "GET {} → {status} but body rejected by validator, attempt {attempt}",
+                                super::target::named_without_secrets(url)
+                            );
                             last_err = Some("invalid response body".into());
                         }
-                        Err(e) => last_err = Some(Box::new(e)),
+                        Err(e) => last_err = Some(Box::new(e.without_url())),
                     }
                 } else if is_retryable_status(status) {
-                    debug!("GET {url} → {status}, attempt {attempt}");
+                    debug!(
+                        "GET {} → {status}, attempt {attempt}",
+                        super::target::named_without_secrets(url)
+                    );
                     last_err = Some(format!("status {status}").into());
                 } else {
                     return Err(format!("status {status}").into());
                 }
             }
-            Err(e) => last_err = Some(Box::new(e)),
+            Err(e) => last_err = Some(Box::new(e.without_url())),
         }
         if attempt < MAX_RETRIES {
             tokio::time::sleep(Duration::from_millis(
@@ -314,7 +300,8 @@ async fn via_relay(
                     return Ok((resp.body, resp.headers));
                 }
                 debug!(
-                    "relay {target_url} → {} but body rejected, attempt {attempt}",
+                    "relay {} → {} but body rejected, attempt {attempt}",
+                    super::target::named_without_secrets(&target_url),
                     resp.status
                 );
                 last_err = "relay invalid response body".into();
@@ -354,7 +341,6 @@ async fn race_relay_proxy(
         proxy_res = proxy_fut.as_mut() => match proxy_res {
             Ok(v) => Ok(v),
             Err(proxy_err) => {
-                // 502 = proxy front-end down (not a ban): wait relay unbounded.
                 let unbounded = proxy_err.to_string() == "status 502";
                 if unbounded {
                     match relay_fut.await {
@@ -472,7 +458,7 @@ async fn http_post_bytes(
                     match resp.bytes().await {
                         Ok(b) if validate(&b, &resp_headers) => return Ok((b, resp_headers)),
                         Ok(_) => last_err = Some("invalid response body".into()),
-                        Err(e) => last_err = Some(Box::new(e)),
+                        Err(e) => last_err = Some(Box::new(e.without_url())),
                     }
                 } else if is_retryable_status(status) {
                     last_err = Some(format!("status {status}").into());
@@ -480,7 +466,7 @@ async fn http_post_bytes(
                     return Err(format!("status {status}").into());
                 }
             }
-            Err(e) => last_err = Some(Box::new(e)),
+            Err(e) => last_err = Some(Box::new(e.without_url())),
         }
         if attempt < MAX_RETRIES {
             tokio::time::sleep(Duration::from_millis(
