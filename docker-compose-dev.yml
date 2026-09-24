@@ -306,13 +306,8 @@ services:
 
   api:
     build:
-      context: ./api
-      additional_contexts:
-        tls-common: ./utils/tls-common
-        sc-fingerprint: ./utils/sc-fingerprint
-        call: ./utils/call
-        backend-contracts: ./backend-contracts
-        stream-ticket: ./utils/stream-ticket
+      context: .
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     stop_grace_period: 5s
     ports:

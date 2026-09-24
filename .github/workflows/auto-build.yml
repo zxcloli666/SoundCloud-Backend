@@ -77,17 +77,12 @@ jobs:
       matrix:
         include:
           - name: api
-            context: api
-            file: ""
+            context: .
+            file: api/Dockerfile
             extra_tags: ""
             cache_type: gha
             free_disk: false
-            build_contexts: |
-              tls-common=utils/tls-common
-              call=utils/call
-              backend-contracts=backend-contracts
-              stream-ticket=utils/stream-ticket
-              sc-fingerprint=utils/sc-fingerprint
+            build_contexts: ""
           - name: jobs
             context: .
             file: jobs/Dockerfile
@@ -163,8 +158,8 @@ jobs:
         with:
           ref: main
 
-      - name: Checkout internal repo (when PAT present, for api/streaming)
-        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'streaming') }}
+      - name: Checkout internal repo (when PAT present, for api/jobs/streaming)
+        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming') }}
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/SoundCloud-Internal
@@ -172,7 +167,7 @@ jobs:
           path: _internal
 
       - name: Replace mock crates with real
-        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'streaming') }}
+        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming') }}
         env:
           MATRIX_NAME: ${{ matrix.name }}
         run: |
@@ -185,7 +180,7 @@ jobs:
           fi
 
       - name: Verify real call-relay is present
-        if: ${{ matrix.name == 'api' || matrix.name == 'streaming' }}
+        if: ${{ matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming' }}
         env:
           MATRIX_NAME: ${{ matrix.name }}
           HAS_PAT: ${{ env.HAS_INTERNAL_PAT }}

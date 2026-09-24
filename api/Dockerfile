@@ -9,30 +9,19 @@ RUN apt-get update \
     && apt-get update \
     && apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
-WORKDIR /build
 
-COPY --from=tls-common . /build/utils/tls-common
-COPY --from=call . /build/utils/call
-COPY --from=stream-ticket . /build/utils/stream-ticket
-COPY --from=sc-fingerprint . /build/utils/sc-fingerprint
-COPY --from=backend-contracts . /build/backend-contracts
+WORKDIR /build
+COPY backend-contracts ./backend-contracts
+COPY utils ./utils
+COPY api ./api
 
 WORKDIR /build/api
-COPY Cargo.toml ./
-RUN mkdir src && echo "fn main(){}" > src/main.rs && cargo build --release && rm -rf src target/release/api target/release/deps/api*
-
-COPY src ./src
-COPY migrations ./migrations
-COPY migrations-ops ./migrations-ops
-COPY queries ./queries
-COPY sc_methods ./sc_methods
 ARG APP_VERSION
 RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
     && for f in migrations/*.sql migrations-ops/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$f"; done \
-    && [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml \
-    && touch src/main.rs \
+    && { [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml; } \
     && DATABASE_URL="postgres://scd:dev@127.0.0.1:5432/scd" cargo build --release
 
 FROM debian:bookworm-slim AS runtime
