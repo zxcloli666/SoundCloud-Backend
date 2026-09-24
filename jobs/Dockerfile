@@ -17,6 +17,7 @@ COPY utils ./utils
 COPY jobs ./jobs
 COPY api/migrations ./api/migrations
 COPY api/migrations-ops ./api/migrations-ops
+COPY api/queries ./api/queries
 
 ARG APP_VERSION
 
