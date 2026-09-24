@@ -14,6 +14,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  jobs:
+    name: Jobs
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: dev
+          POSTGRES_USER: scd
+          POSTGRES_DB: scd
+        ports: [ '5432:5432' ]
+        options: >-
+          --health-cmd "pg_isready -U scd"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      qdrant:
+        image: qdrant/qdrant:v1.19.0
+        ports: [ '6333:6333', '6334:6334' ]
+    env:
+      DATABASE_URL: postgres://scd:dev@localhost:5432/scd
+      QDRANT_URL: http://127.0.0.1:6334
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            backend-contracts -> target
+            jobs -> target
+          key: jobs
+
+      - name: Wait for Qdrant
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:6333/readyz > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "Qdrant did not become ready" >&2
+          exit 1
+
+      - name: Apply migrations
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client cmake clang libclang-dev pkg-config
+          for file in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$file"; done
+
+      - name: Contracts
+        working-directory: backend-contracts
+        run: cargo test --all-targets --locked && cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Jobs
+        working-directory: jobs
+        run: cargo fmt --check && cargo test --all-targets --locked && cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Jobs live vector store
+        working-directory: jobs
+        run: cargo test --lib --locked indexing::result::live_tests -- --ignored --test-threads=1
+
   api:
     name: API
     runs-on: ubuntu-latest
@@ -28,9 +90,19 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U scd"
           --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: [ '6379:6379' ]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      qdrant:
+        image: qdrant/qdrant:v1.19.0
+        ports: [ '6333:6333', '6334:6334' ]
     env:
-      # query_file! сверяются ONLINE с реальной схемой поднятой тест-БД. Без .sqlx.
       DATABASE_URL: postgres://scd:dev@localhost:5432/scd
+      REDIS_URL: redis://localhost:6379
+      QDRANT_URL: http://127.0.0.1:6334
     steps:
       - uses: actions/checkout@v4
 
@@ -47,12 +119,30 @@ jobs:
 
       - name: Apply migrations (sqlx online check)
         run: |
-          sudo apt-get update && sudo apt-get install -y postgresql-client
+          sudo apt-get update && sudo apt-get install -y postgresql-client cmake clang libclang-dev pkg-config
           for f in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
 
-      - name: Format check (warn only — does not fail CI)
+      - name: Format check
         working-directory: api
-        run: cargo fmt --check || echo "::warning title=rustfmt::api code differs from rustfmt — run 'cargo fmt'. Not blocking CI."
+        run: cargo fmt --check
+
+      - name: Wait for Qdrant
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:6333/readyz > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "Qdrant did not become ready" >&2
+          exit 1
+
+      - name: Tests
+        working-directory: api
+        run: |
+          cargo fmt --manifest-path ../utils/redact/Cargo.toml -- --check
+          cargo test --manifest-path ../utils/redact/Cargo.toml --all-targets --locked
+          cargo test --all-targets --locked
+          cargo test --locked common::admission::tests -- --ignored
+          cargo test --bin api --locked recommendations::service::qdrant_io::live_tests -- --ignored --test-threads=1
 
       - name: Clippy
         working-directory: api
@@ -62,8 +152,6 @@ jobs:
         working-directory: api
         run: cargo build --release
 
-  # CI читает кэш с main, но НЕ пишет — иначе PR-билды затирают рабочий кэш.
-  # cache-to остаётся только в auto-build.yml (release pipeline).
   storage:
     name: Storage
     runs-on: ubuntu-latest
@@ -89,6 +177,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            streaming -> target
+            utils/stream-ticket -> target
+          key: streaming
+
+      - name: Rust tests
+        run: |
+          cargo fmt --manifest-path utils/stream-ticket/Cargo.toml -- --check
+          cargo test --manifest-path utils/stream-ticket/Cargo.toml --all-targets --locked
+          cargo fmt --manifest-path streaming/Cargo.toml -- --check
+          cargo test --manifest-path streaming/Cargo.toml --all-targets --locked
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Build image
@@ -100,6 +208,7 @@ jobs:
             call=utils/call
             decrypt=utils/decrypt
             decrypt-client=utils/decrypt-client
+            stream-ticket=utils/stream-ticket
           push: false
           load: true
           tags: soundcloud-backend-streaming:ci
@@ -111,22 +220,39 @@ jobs:
     permissions:
       contents: read
       packages: read
+    defaults:
+      run:
+        working-directory: worker
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Syntax check
-        working-directory: worker
-        run: python -m compileall -q src
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.10"
+          enable-cache: true
+          cache-dependency-glob: worker/uv.lock
+
+      - name: Lock is current
+        run: uv lock --check
+
+      - name: Install
+        run: uv sync --frozen --no-default-groups --group cpu --group dev
+
+      - name: Format and lint
+        run: .venv/bin/ruff format --check . && .venv/bin/ruff check .
+
+      - name: Types
+        run: .venv/bin/mypy
+
+      - name: Tests
+        run: .venv/bin/python -m pytest tests/unit tests/bus tests/runtime tests/contract
 
       - uses: docker/setup-buildx-action@v3
 
-      # Кэш CPU-воркера лежит в GHCR registry (см. auto-build.yml).
-      # Логин нужен для pull cache-образа; для PR из форков шаг тихо упадёт —
-      # билд продолжится без кэша (allow-failure через continue-on-error).
       - name: Login to GHCR
         if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
         uses: docker/login-action@v3
@@ -145,8 +271,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: worker
+          file: worker/docker/Dockerfile
+          build-args: FLAVOR=cpu
           push: false
-          load: true
           tags: soundcloud-backend-worker:ci
           cache-from: type=registry,ref=ghcr.io/${{ steps.repo.outputs.owner }}/cache/scd-worker:cpu
 
@@ -201,7 +328,7 @@ jobs:
           cp -r _internal/decrypt-client ./utils/decrypt-client
 
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - run: sudo apt-get install -y --no-install-recommends protobuf-compiler cmake clang libclang-dev pkg-config
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -213,7 +340,7 @@ jobs:
 
       - name: Apply migrations (sqlx online check)
         run: |
-          sudo apt-get install -y --no-install-recommends postgresql-client
+          sudo apt-get install -y --no-install-recommends postgresql-client cmake clang libclang-dev pkg-config
           for f in api/migrations/*.sql api/migrations-ops/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
 
       - run: cargo build --release --manifest-path api/Cargo.toml

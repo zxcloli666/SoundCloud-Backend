@@ -1,8 +1,5 @@
 name: Release
 
-# Образы бэкенда в GHCR: ghcr.io/<owner>/soundcloud-backend/{api,streaming,storage,worker}
-# Версия — semver git-тег vX.Y.Z (источник версии этого репо, без package.json).
-
 on:
   push:
     branches: [main]
@@ -62,9 +59,6 @@ jobs:
           esac
           NEW_VERSION="$MA.$MI.$PA"
 
-          # Версия идёт в образ build-arg'ом APP_VERSION (Dockerfile вшивает её в
-          # CARGO_PKG_VERSION на финальном компиле). Cargo.toml НЕ бампим — иначе
-          # правка манифеста инвалидирует кэш слоя зависимостей. Источник версии — git-тег.
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
@@ -91,6 +85,16 @@ jobs:
             build_contexts: |
               tls-common=utils/tls-common
               call=utils/call
+              backend-contracts=backend-contracts
+              stream-ticket=utils/stream-ticket
+              sc-fingerprint=utils/sc-fingerprint
+          - name: jobs
+            context: .
+            file: jobs/Dockerfile
+            extra_tags: ""
+            cache_type: gha
+            free_disk: false
+            build_contexts: ""
           - name: streaming
             context: streaming
             file: ""
@@ -102,13 +106,17 @@ jobs:
               call=utils/call
               decrypt=utils/decrypt
               decrypt-client=utils/decrypt-client
+              stream-ticket=utils/stream-ticket
+              sc-fingerprint=utils/sc-fingerprint
           - name: storage
             context: storage
             file: ""
             extra_tags: ""
             cache_type: gha
             free_disk: false
-            build_contexts: "tls-common=utils/tls-common"
+            build_contexts: |
+              tls-common=utils/tls-common
+              sc-fingerprint=utils/sc-fingerprint
           - name: gateway
             context: gateway
             file: ""
@@ -116,32 +124,38 @@ jobs:
             cache_type: gha
             free_disk: false
             build_contexts: "tls-common=utils/tls-common"
-          - name: worker
+          - name: worker-cpu
+            image_name: worker
             context: worker
-            file: worker/Dockerfile
+            file: worker/docker/Dockerfile
+            flavor: cpu
+            tag_suffix: "-cpu"
             extra_tags: |
-              ghcr.io/__REPO__/worker:__VERSION__-cpu
               ghcr.io/__REPO__/worker:cpu
             cache_type: registry-cpu
             free_disk: false
+            no_default_tags: true
           - name: worker-gpu
             image_name: worker
             context: worker
-            file: worker/Dockerfile.gpu
+            file: worker/docker/Dockerfile
+            flavor: cu126
             tag_suffix: "-gpu"
             extra_tags: |
               ghcr.io/__REPO__/worker:gpu
+              ghcr.io/__REPO__/worker:gpu-cuda12
             cache_type: registry-gpu
             free_disk: true
             no_default_tags: true
-          - name: worker-gpu-cuda12
+          - name: worker-gpu-cuda13
             image_name: worker
             context: worker
-            file: worker/Dockerfile.gpu-cuda12
-            tag_suffix: "-gpu-cuda12"
+            file: worker/docker/Dockerfile
+            flavor: cu130
+            tag_suffix: "-gpu-cuda13"
             extra_tags: |
-              ghcr.io/__REPO__/worker:gpu-cuda12
-            cache_type: registry-gpu-cuda12
+              ghcr.io/__REPO__/worker:gpu-cuda13
+            cache_type: registry-gpu-cuda13
             free_disk: true
             no_default_tags: true
     steps:
@@ -170,12 +184,6 @@ jobs:
             cp -r _internal/decrypt-client ./utils/decrypt-client
           fi
 
-      # Fail closed: never ship a prod api/streaming image built against the MOCK
-      # call-relay. The mock's connect/call_method just return "call-relay disabled",
-      # so the relay is a permanent no-op — every SC read silently falls back to
-      # direct/proxy, the edge pool is unused and call_lua/control_sessions stay 0.
-      # The mock has no server/ workspace and carries that marker string; the real
-      # one (swapped above when INTERNAL_PAT is present) has neither.
       - name: Verify real call-relay is present
         if: ${{ matrix.name == 'api' || matrix.name == 'streaming' }}
         env:
@@ -190,8 +198,6 @@ jobs:
           fi
           echo "real call-relay confirmed — utils/call/server present, no mock marker"
 
-      # GPU-образ воркера съедает ~20 GB (CUDA base + torch CUDA wheels + bitsandbytes).
-      # Стандартный runner даёт ~14 GB free — без этого шага падает на ENOSPC.
       - name: Free disk space
         if: matrix.free_disk
         uses: jlumbroso/free-disk-space@main
@@ -259,9 +265,9 @@ jobs:
               echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu" >> "$GITHUB_OUTPUT"
               echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
               ;;
-            registry-gpu-cuda12)
-              echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda12" >> "$GITHUB_OUTPUT"
-              echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda12,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
+            registry-gpu-cuda13)
+              echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda13" >> "$GITHUB_OUTPUT"
+              echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda13,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
               ;;
           esac
 
@@ -275,5 +281,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             APP_VERSION=${{ needs.version.outputs.version }}
+            ${{ matrix.flavor && format('FLAVOR={0}', matrix.flavor) || '' }}
           cache-from: ${{ steps.meta.outputs.cache_from }}
           cache-to: ${{ steps.meta.outputs.cache_to }}

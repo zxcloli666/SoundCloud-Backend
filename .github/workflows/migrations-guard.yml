@@ -22,17 +22,12 @@ jobs:
           fetch-depth: 0
       - name: append-only + unique migrations
         env:
-          # PR → base of the PR; push → commit before the push.
           MIG_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           BASE="$MIG_BASE_REF"
-          # A newly created ref has no previous commit.
           case "$BASE" in ''|0000000000000000000000000000000000000000)
             BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)" ;;
           esac
-          # PR: inspect branch-only changes from the merge base.
-          # Push: inspect the exact previous-tree → new-tree transition. This also
-          # handles amend/force-push, where BASE and HEAD are sibling commits.
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             DIFF_RANGE="$BASE...HEAD"
           else
