@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::AppResult;
 use crate::modules::events::EventsService;
 use crate::modules::indexing::IndexingService;
-use crate::modules::sync_queue::mirror::{self, LIKES_PLAYLISTS, LIKES_TRACKS};
 use crate::modules::sync_queue::SyncQueueService;
+use crate::modules::sync_queue::mirror::{LIKES_PLAYLISTS, LIKES_TRACKS};
 use crate::modules::tracks::TrackPriority;
 
 pub struct LikesService {
@@ -33,11 +33,6 @@ impl LikesService {
         })
     }
 
-    /// Оптимистичный лайк трека. Если в body приехал track_data — ingest'им
-    /// его через индексинг с priority=Like: UPSERT в `tracks` + kick пайплайна
-    /// (transcode → S3 → qdrant). Это снимает SC-roundtrip на первом
-    /// холодном чтении `/me/likes/tracks` и одновременно ставит трек в
-    /// очередь приоритетного индексирования — обычно его юзер слушает первым.
     pub async fn like_track(
         &self,
         sc_user_id: &str,
@@ -47,47 +42,68 @@ impl LikesService {
         let sc_track_id = extract_sc_id(track_urn);
         if let Some(td) = track_data {
             self.indexing
-                .ingest_track_from_sc(td, TrackPriority::Like)
+                .ingest_track_from_sc(
+                    td,
+                    TrackPriority::Like,
+                    catalog_ingest::Observation::UNVERIFIED,
+                )
                 .await?;
         }
-        mirror::set_wanted(&self.pg, LIKES_TRACKS, sc_user_id, sc_track_id).await?;
+        self.sync_queue
+            .set_wanted(
+                LIKES_TRACKS,
+                sc_user_id,
+                sc_track_id,
+                "like_track",
+                track_urn,
+            )
+            .await?;
         self.events
             .record(sc_user_id, sc_track_id, "like", None)
-            .await?;
-        self.sync_queue
-            .enqueue(sc_user_id, "like_track", track_urn, None)
             .await?;
         Ok(json!({ "status": "queued", "actionType": "like_track" }))
     }
 
     pub async fn unlike_track(&self, sc_user_id: &str, track_urn: &str) -> AppResult<Value> {
         let sc_track_id = extract_sc_id(track_urn);
-        mirror::clear_wanted(&self.pg, LIKES_TRACKS, sc_user_id, sc_track_id).await?;
         self.sync_queue
-            .enqueue(sc_user_id, "unlike_track", track_urn, None)
+            .clear_wanted(
+                LIKES_TRACKS,
+                sc_user_id,
+                sc_track_id,
+                "unlike_track",
+                track_urn,
+            )
             .await?;
         Ok(json!({ "status": "queued", "actionType": "unlike_track" }))
     }
 
     pub async fn like_playlist(&self, sc_user_id: &str, playlist_urn: &str) -> AppResult<Value> {
-        mirror::set_wanted(&self.pg, LIKES_PLAYLISTS, sc_user_id, playlist_urn).await?;
         self.sync_queue
-            .enqueue(sc_user_id, "like_playlist", playlist_urn, None)
+            .set_wanted(
+                LIKES_PLAYLISTS,
+                sc_user_id,
+                playlist_urn,
+                "like_playlist",
+                playlist_urn,
+            )
             .await?;
         Ok(json!({ "status": "queued", "actionType": "like_playlist" }))
     }
 
     pub async fn unlike_playlist(&self, sc_user_id: &str, playlist_urn: &str) -> AppResult<Value> {
-        mirror::clear_wanted(&self.pg, LIKES_PLAYLISTS, sc_user_id, playlist_urn).await?;
         self.sync_queue
-            .enqueue(sc_user_id, "unlike_playlist", playlist_urn, None)
+            .clear_wanted(
+                LIKES_PLAYLISTS,
+                sc_user_id,
+                playlist_urn,
+                "unlike_playlist",
+                playlist_urn,
+            )
             .await?;
         Ok(json!({ "status": "queued", "actionType": "unlike_playlist" }))
     }
 
-    /// Холодная проверка лайка плейлиста: смотрим только в user_likes_playlists.
-    /// Лайки, поставленные на SC web и ещё не утянутые refresh'ем, сюда не
-    /// попадут — это ожидаемо (refresh их подтянет на следующем тике TTL).
     pub async fn is_playlist_liked(
         &self,
         sc_user_id: &str,

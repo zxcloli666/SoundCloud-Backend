@@ -1,12 +1,6 @@
-SELECT id,
-       access_token,
-       refresh_token,
-       expires_at,
-       scope,
-       soundcloud_user_id,
-       username,
-       oauth_app_id,
-       created_at,
-       updated_at
-FROM sessions
-WHERE id = $1
+SELECT session.soundcloud_connection_id,
+       connection.soundcloud_user_id AS "soundcloud_user_id?"
+FROM sessions AS session
+LEFT JOIN soundcloud_connections AS connection
+    ON connection.id = session.soundcloud_connection_id
+WHERE session.id = $1

@@ -47,7 +47,9 @@ ON ta.artist_id = tau.artist_id AND ta.role = 'primary'
     JOIN tracks it ON it.id = ta.track_id
     LEFT JOIN sc_track_counters c ON c.sc_track_id = it.sc_track_id
 WHERE it.sharing = 'public'
+  AND it.superseded_by IS NULL
   AND it.storage_state = 'ok'
+  AND it.needs_duration_resolve = false
     )
 SELECT a.id AS "artist_id!", a.name AS "artist_name!", a.avatar_url, r.sc_track_id AS "sc_track_id!"
 FROM ranked r

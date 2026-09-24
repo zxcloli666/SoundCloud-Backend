@@ -1,4 +1,3 @@
--- ArtistRow field order; COALESCE keeps Option params nullable for sqlx infer
 UPDATE artists
 SET name            = COALESCE($2, name),
     normalized_name = COALESCE($3, normalized_name),

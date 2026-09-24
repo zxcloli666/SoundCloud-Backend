@@ -1,12 +1,3 @@
-//! Ранжирование волны — КОНЪЮНКЦИЯ «И» по всем плоскостям, не «ИЛИ».
-//!
-//! Трек хорош, только если близок к вкусу ОДНОВРЕМЕННО по биту (MERT), вайбу
-//! (CLAP), лирике (LYRICS) И по сетке (коллаб-граф). Контент-близость считается
-//! как geomean этих плоскостей (`content`, см. mod.rs) — низкая близость по
-//! ЛЮБОЙ оси топит трек. Сетка — множитель сверху (тоже «И»):
-//!   `score = content · (graph_floor + (1-graph_floor)·affinity)`
-//! `content < floor` → выкидываем (мисматч хотя бы по одной плоскости).
-
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
@@ -17,7 +8,6 @@ use super::graph::Affinity;
 #[derive(Debug, Clone, Copy)]
 pub struct TrackMeta {
     pub primary_artist: Option<Uuid>,
-    /// Лежит ли трек на нашем S3 — не-`ok` не отдаём (иначе late-drop схлопывает выдачу).
     pub storage_ok: bool,
 }
 
@@ -25,7 +15,6 @@ pub struct TrackMeta {
 pub struct Candidate {
     pub sc_track_id: u64,
     pub artist: Option<Uuid>,
-    /// Конъюнкция близости к вкусу по контент-плоскостям (geomean бит×вайб×лирика), [0..1].
     pub content: f32,
 }
 
@@ -50,17 +39,17 @@ pub fn rank_and_pick(
     let mut scored: Vec<RankedTrack> = Vec::with_capacity(cands.len());
     for c in cands {
         if c.content < content_floor {
-            continue; // мисматч хотя бы по одной плоскости
+            continue;
         }
         if let Some(a) = c.artist
-            && disliked_artists.contains(&a) {
-                continue;
-            }
+            && disliked_artists.contains(&a)
+        {
+            continue;
+        }
         let aff = c
             .artist
             .and_then(|a| affinity.get(&a).copied())
             .unwrap_or(0.0);
-        // сетка тоже через «И» — множитель: non-graph → ×graph_floor.
         let graph_factor = graph_floor + (1.0 - graph_floor) * aff.clamp(0.0, 1.0);
         let score = c.content * graph_factor;
         scored.push(RankedTrack {
@@ -75,7 +64,6 @@ pub fn rank_and_pick(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // дедуп по курсору + artist-cap в скользящем окне (анти-моно).
     let mut out: Vec<RankedTrack> = Vec::with_capacity(limit);
     let mut local_artist: HashMap<Uuid, usize> = HashMap::new();
     let mut seen: HashSet<u64> = HashSet::new();
@@ -118,7 +106,6 @@ mod tests {
 
     #[test]
     fn graph_track_outranks_alien_with_better_content() {
-        // Сид-артист (aff 0.7, контент 0.7) против чужака вне сетки (контент 0.9).
         let mut aff: Affinity = HashMap::new();
         aff.insert(Uuid::from_u128(1), 0.7);
         let cands = vec![cand(10, 1, 0.7), cand(20, 2, 0.9)];

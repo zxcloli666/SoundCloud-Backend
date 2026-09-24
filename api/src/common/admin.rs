@@ -14,7 +14,7 @@ impl FromRequestParts<AppState> for AdminAuth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let expected = &state.config.admin.token;
+        let expected = state.config.admin.token.expose();
         if expected.is_empty() {
             return Err(AppError::unauthorized("Invalid admin token"));
         }

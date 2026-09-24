@@ -1,4 +1,3 @@
--- ArtistListRow field order
 SELECT a.id,
        a.name,
        a.country,

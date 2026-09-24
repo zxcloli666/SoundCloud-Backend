@@ -4,7 +4,7 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct CallbackPageParams<'a> {
     pub login_request_id: Option<&'a str>,
-    pub initial_status: &'a str, // pending | completed | failed
+    pub initial_status: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -302,8 +302,6 @@ const TEMPLATE: &str = r#"<!DOCTYPE html>
       });
     }
 
-    // Mark the extract step ok (done) or failed (warn) — profile extraction is
-    // best-effort, so a failure never blocks login.
     function markExtract(result) {
       var node = stepsBox.querySelector('.step[data-step="extract"]');
       if (!node) return;

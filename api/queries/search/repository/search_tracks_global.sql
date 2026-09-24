@@ -1,4 +1,3 @@
--- Global track search via trgm. Columns in TrackRow order.
 SELECT id,
        sc_track_id,
        urn,
@@ -10,14 +9,20 @@ SELECT id,
        duration_ms,
        artwork_url,
        permalink_url,
-       waveform_url, language, language_confidence, isrc, metadata_artist, sharing, sc_created_at, sc_last_modified, release_year, release_date, uploader_sc_user_id, uploader_urn, uploader_username, uploader_avatar_url, primary_artist_id, album_id, album_position, canonical_track_id, cover_of_artist_id, upload_kind, audio_fingerprint, quality_score, play_count_sc, likes_count_sc, reposts_count_sc, comments_count_sc, enrich_state, enrich_attempts, enrich_source, enrich_confidence, enriched_at, index_state, index_priority, index_attempts, indexed_at, storage_state, storage_priority, storage_quality, storage_attempts, s3_verified_at, s3_missing_at, hq_upgrade_pending, hq_upgrade_attempts, hq_upgrade_last_at, needs_duration_resolve, sc_synced_at, last_read_at, created_at, updated_at
+       waveform_url, language, language_confidence, isrc, metadata_artist, sharing, sc_metadata, deleted_at, sc_created_at, sc_last_modified, release_year, release_date, uploader_sc_user_id, uploader_urn, uploader_username, uploader_avatar_url, primary_artist_id, album_id, album_position, canonical_track_id, cover_of_artist_id, upload_kind, audio_fingerprint, quality_score, play_count_sc, likes_count_sc, reposts_count_sc, comments_count_sc, enrich_state, enrich_attempts, enrich_source, enrich_confidence, enriched_at, index_state, index_priority, index_attempts, indexed_at, storage_state, storage_priority, storage_quality, storage_attempts, s3_verified_at, s3_missing_at, hq_upgrade_pending, hq_upgrade_attempts, hq_upgrade_last_at, needs_duration_resolve, sc_synced_at, last_read_at, created_at, updated_at
 FROM tracks
 WHERE sharing = 'public'
-  AND (
+  AND superseded_by IS NULL
+  AND deleted_at IS NULL
+  AND ($1::text IS NULL OR
     title_normalized LIKE $4
-   OR LOWER (title) LIKE $1
-   OR LOWER (uploader_username) LIKE $1
+   OR (NOT $8::bool AND (LOWER (title) LIKE $1
+   OR LOWER (uploader_username) LIKE $1))
     )
+  AND ($5::text[] IS NULL
+   OR ($6::text IS NOT NULL AND LOWER(genre) = LOWER($6))
+   OR ($6::text IS NULL AND LOWER(genre) = ANY(ARRAY(SELECT LOWER(value) FROM unnest($5::text[]) value))))
+  AND ($7::text[] IS NULL OR tags && $7)
 ORDER BY play_count_sc DESC NULLS LAST, sc_synced_at DESC, id DESC
     LIMIT $2
 OFFSET $3

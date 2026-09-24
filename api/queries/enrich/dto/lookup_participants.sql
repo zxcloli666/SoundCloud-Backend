@@ -6,7 +6,11 @@ SELECT ta.track_id   AS "track_id!",
        a.avatar_url  AS "artist_avatar_url",
        a.sc_user_id  AS "artist_sc_user_id",
        a.source      AS "artist_source!",
-       a.confidence  AS "artist_confidence!"
+       a.confidence  AS "artist_confidence!",
+       EXISTS (SELECT 1
+               FROM artist_sc_accounts AS identity
+               WHERE identity.artist_id = a.id
+                 AND (identity.verified OR identity.source = 'mb_resolve')) AS "artist_identity!"
 FROM track_artists ta
          JOIN artists a ON a.id = ta.artist_id
 WHERE ta.track_id = ANY ($1)

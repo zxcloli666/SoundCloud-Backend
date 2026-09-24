@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::modules::oauth_apps::model::OAuthApp;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct CreateOAuthAppDto {
     pub name: String,
     #[serde(rename = "clientId")]
@@ -17,7 +17,7 @@ pub struct CreateOAuthAppDto {
     pub active: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateOAuthAppDto {
     #[serde(default)]
     pub name: Option<String>,

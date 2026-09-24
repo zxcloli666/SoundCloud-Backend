@@ -1,5 +1,5 @@
 SELECT sc_track_id
-FROM playlist_tracks
+FROM playlist_track_projection
 WHERE playlist_urn = $1
 ORDER BY position
 OFFSET $2 LIMIT $3

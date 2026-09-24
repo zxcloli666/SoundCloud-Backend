@@ -1,10 +1,8 @@
-//! Канонизация жанро-тегов под выдачу /discover. Хардкодный мап покрывает
-//! популярные SC-варианты написания (например, "hip hop" / "hip-hop" / "rap"
-//! → "Hip-Hop"). Остальные жанры проходят через title-case как fallback.
-
 pub fn canonicalize_tags(raw: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::with_capacity(raw.len());
     raw.into_iter()
         .filter_map(|t| canonicalize_tag(&t))
+        .filter(|tag| seen.insert(tag.clone()))
         .collect()
 }
 
@@ -78,4 +76,63 @@ fn title_case(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_spelling_of_a_genre_lands_on_one_label() {
+        for raw in ["rap", "RAP", " Hip Hop ", "hip-hop", "HIPHOP"] {
+            assert_eq!(
+                canonicalize_tag(raw).as_deref(),
+                Some("Hip-Hop"),
+                "{raw} must canonicalize"
+            );
+        }
+        for raw in ["dnb", "Drum And Bass", "drum & bass"] {
+            assert_eq!(canonicalize_tag(raw).as_deref(), Some("Drum & Bass"));
+        }
+    }
+
+    #[test]
+    fn an_unknown_tag_is_title_cased_and_keeps_its_separators() {
+        assert_eq!(
+            canonicalize_tag("dark  jazzy-beats").as_deref(),
+            Some("Dark  Jazzy-Beats")
+        );
+        assert_eq!(canonicalize_tag("ГОРОДСКОЙ").as_deref(), Some("Городской"));
+    }
+
+    #[test]
+    fn a_tag_of_nothing_is_dropped() {
+        assert_eq!(canonicalize_tag(""), None);
+        assert_eq!(canonicalize_tag("   "), None);
+        assert_eq!(
+            canonicalize_tags(vec!["".into(), " ".into(), "pop".into()]),
+            vec!["Pop".to_owned()]
+        );
+    }
+
+    #[test]
+    fn two_spellings_of_one_genre_do_not_become_two_tags() {
+        assert_eq!(
+            canonicalize_tags(vec!["rap".into(), "hip hop".into(), "Trap".into()]),
+            vec!["Hip-Hop".to_owned(), "Trap".to_owned()],
+            "a track tagged twice with the same genre must not show it twice"
+        );
+    }
+
+    #[test]
+    fn the_order_the_uploader_chose_is_kept() {
+        assert_eq!(
+            canonicalize_tags(vec!["techno".into(), "ambient".into(), "house".into()]),
+            vec![
+                "Techno".to_owned(),
+                "Ambient".to_owned(),
+                "House".to_owned()
+            ]
+        );
+    }
 }

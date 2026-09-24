@@ -1,4 +1,3 @@
--- Снять все кредиты артиста ($1) с треков, залитых аплоадером ($2).
 DELETE
 FROM track_artists ta
     USING tracks t

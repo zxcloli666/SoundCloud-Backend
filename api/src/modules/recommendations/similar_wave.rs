@@ -7,10 +7,10 @@ use crate::error::AppResult;
 use crate::modules::centroids::cosine;
 use crate::qdrant::collections;
 
-use super::clusters::{pick_unique_ids, ClusterBuilder, ClusterNeighbor, ClusterResponse};
+use super::clusters::{ClusterBuilder, ClusterNeighbor, ClusterResponse, pick_unique_ids};
 use super::home_wave::merge_audio_pools;
-use super::service::util::parse_id_or_null;
 use super::service::RecommendationsService;
+use super::service::util::parse_id_or_null;
 use super::smart_wave::{self, SmartWaveSeed};
 
 const SAME_ARTIST_POOL: i64 = 60;
@@ -44,7 +44,7 @@ impl RecommendationsService {
 
         let exclude: Vec<String> = vec![sc_track_id.to_string()];
 
-        let wave_fut = smart_wave::cluster_track_ids(
+        let wave_fut = smart_wave::cluster_tracks(
             self,
             sc_user_id,
             languages,
@@ -64,7 +64,7 @@ impl RecommendationsService {
                     )
                     .await
                 }
-                None => Vec::new(),
+                None => (Vec::new(), HashSet::new()),
             }
         };
 
@@ -131,7 +131,7 @@ impl RecommendationsService {
             }
         };
 
-        let (wave_ids, same_artist_ids, same_vibe_pool, featured_raw, fans_also_pool) = tokio::join!(
+        let (wave_results, same_artist, same_vibe_pool, featured_raw, fans_also_pool) = tokio::join!(
             wave_fut,
             same_artist_fut,
             same_vibe_fut,
@@ -139,16 +139,24 @@ impl RecommendationsService {
             fans_also_fut,
         );
 
+        let (same_artist_ids, everything_by_the_artist) = same_artist;
         let mut builder = ClusterBuilder::new();
         builder.reserve(std::iter::once(sc_track_id.to_string()));
+        builder.reserve(everything_by_the_artist.iter().cloned());
+        let wave_ids = wave_results
+            .iter()
+            .map(|result| super::clusters::recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        builder.push_observed("wave", wave_ids, &wave_results);
+        builder.push_reserved("same_artist", same_artist_ids);
 
-        builder.push("wave", wave_ids);
-        builder.push("same_artist", same_artist_ids);
-
-        let same_vibe_artist: Option<Uuid> = primary_artist;
-        let vibe_filtered = filter_vibe_pool(&same_vibe_pool, builder.taken(), same_vibe_artist);
+        let by_the_artist = self
+            .also_by_the_artist(primary_artist, &same_vibe_pool, everything_by_the_artist)
+            .await;
+        let vibe_filtered = filter_vibe_pool(&same_vibe_pool, builder.taken(), &by_the_artist);
         let vibe_ids = pick_unique_ids(&vibe_filtered, builder.taken(), per_cluster);
-        builder.push("same_vibe", vibe_ids);
+        builder.push_observed("same_vibe", vibe_ids, &same_vibe_pool);
 
         let featured_filtered: Vec<ClusterNeighbor> = featured_raw
             .into_iter()
@@ -158,7 +166,7 @@ impl RecommendationsService {
         builder.push_with_neighbors("featured_with", featured_filtered);
 
         let fans_ids = pick_unique_ids(&fans_also_pool, builder.taken(), per_cluster);
-        builder.push("fans_also", fans_ids);
+        builder.push_observed("fans_also", fans_ids, &fans_also_pool);
 
         let missing = self
             .s3
@@ -168,19 +176,47 @@ impl RecommendationsService {
         builder.drop_missing(&missing);
 
         let result = builder.finish();
-        super::impressions::log_clusters_async(
-            self.ops.clone(),
-            sc_user_id.to_string(),
+        self.record_impressions(
+            sc_user_id,
             super::impressions::ImpressionSource::Similar,
-            &result.clusters,
-            &std::collections::HashMap::new(),
-        );
+            &result,
+        )
+        .await;
         info!(
             track = sc_track_id,
             clusters = result.clusters.len(),
             "similar_wave built"
         );
         Ok(result)
+    }
+
+    async fn also_by_the_artist(
+        &self,
+        artist: Option<Uuid>,
+        pool: &[super::service::RecommendResult],
+        mut known: HashSet<String>,
+    ) -> HashSet<String> {
+        let Some(artist) = artist else {
+            return known;
+        };
+        let candidates: Vec<String> = pool
+            .iter()
+            .map(|result| super::clusters::recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty() && !known.contains(id))
+            .collect();
+        if candidates.is_empty() {
+            return known;
+        }
+        let theirs: Vec<String> = sqlx::query_file_scalar!(
+            "queries/recommendations/similar_wave/candidates_by_artist.sql",
+            &candidates,
+            artist
+        )
+        .fetch_all(&self.pg)
+        .await
+        .unwrap_or_default();
+        known.extend(theirs);
+        known
     }
 
     async fn load_primary_artist_id(&self, sc_track_id: &str) -> Option<Uuid> {
@@ -200,7 +236,7 @@ impl RecommendationsService {
         anchor_track_id: &str,
         mert_seed: Option<&[f32]>,
         limit: usize,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, HashSet<String>) {
         let pool: Vec<String> = sqlx::query_file_scalar!(
             "queries/recommendations/similar_wave/load_same_artist_tracks.sql",
             artist_id,
@@ -211,11 +247,15 @@ impl RecommendationsService {
         .await
         .unwrap_or_default();
         if pool.is_empty() {
-            return Vec::new();
+            return (Vec::new(), HashSet::new());
         }
+        let everything_by_the_artist: HashSet<String> = pool.iter().cloned().collect();
 
         let Some(seed) = mert_seed else {
-            return pool.into_iter().take(limit).collect();
+            return (
+                pool.into_iter().take(limit).collect(),
+                everything_by_the_artist,
+            );
         };
         let numeric_ids: Vec<u64> = pool.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
         let vec_map = self
@@ -229,7 +269,10 @@ impl RecommendationsService {
             })
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().take(limit).map(|(id, _)| id).collect()
+        (
+            scored.into_iter().take(limit).map(|(id, _)| id).collect(),
+            everything_by_the_artist,
+        )
     }
 
     async fn load_featured_with(&self, anchor_track_id: &str, limit: i64) -> Vec<ClusterNeighbor> {
@@ -256,21 +299,12 @@ impl RecommendationsService {
 fn filter_vibe_pool(
     pool: &[super::service::RecommendResult],
     taken: &HashSet<String>,
-    same_artist_id: Option<Uuid>,
+    same_artist: &HashSet<String>,
 ) -> Vec<super::service::RecommendResult> {
-    let same_artist_str = same_artist_id.map(|id| id.to_string());
     pool.iter()
         .filter(|r| {
             let id = super::clusters::recommend_id_str(&r.id);
-            if id.is_empty() || taken.contains(&id) {
-                return false;
-            }
-            if let (Some(same_id), Some(payload)) = (same_artist_str.as_deref(), r.payload.as_ref())
-                && let Some(pa) = payload.get("primary_artist_id").and_then(|v| v.as_str())
-                    && pa == same_id {
-                        return false;
-                    }
-            true
+            !id.is_empty() && !taken.contains(&id) && !same_artist.contains(&id)
         })
         .cloned()
         .collect()

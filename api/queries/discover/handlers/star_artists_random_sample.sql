@@ -1,4 +1,3 @@
--- Star spotlight, random strategy: BERNOULLI sample (primary path).
 SELECT id,
        name,
        normalized_name,

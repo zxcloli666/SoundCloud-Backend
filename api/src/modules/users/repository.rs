@@ -1,12 +1,9 @@
-//! Нормализованная сущность `users` (без raw payload). Read-path проецирует
-//! обратно в SC-shape.
-
 use chrono::{DateTime, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sqlx::FromRow;
 use sqlx::PgPool;
 
-use crate::common::sc_payload::{parse_dt, parse_id_or_string, string_field};
+use crate::common::sc_payload::parse_id_or_string;
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, FromRow)]
@@ -41,235 +38,52 @@ pub struct UserRow {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Дефолт `sync_ttl_sec` — совпадает с `COLD_TTL_USER_SEC`.
-const DEFAULT_SYNC_TTL_SEC: i64 = 21_600;
-
 pub struct UserRepository {
     pg: PgPool,
-    /// Окно heartbeat'а `sc_synced_at` в UPSERT'е; должно быть ≤
-    /// `ColdCfg::user_ttl_sec`, по которому read-path решает, что юзер протух.
-    sync_ttl_sec: i64,
 }
 
 impl UserRepository {
     pub fn new(pg: PgPool) -> Self {
-        Self {
-            pg,
-            sync_ttl_sec: DEFAULT_SYNC_TTL_SEC,
-        }
-    }
-
-    pub fn with_sync_ttl(pg: PgPool, sync_ttl_sec: u64) -> Self {
-        Self {
-            pg,
-            sync_ttl_sec: sync_ttl_sec as i64,
-        }
+        Self { pg }
     }
 
     pub async fn find_by_urn(&self, urn: &str) -> AppResult<Option<UserRow>> {
-        let row = sqlx::query_file_as!(UserRow, "queries/users/repository/find_by_urn.sql", urn)
-            .fetch_optional(&self.pg)
-            .await?;
+        let canonical = if urn.contains(':') {
+            urn.to_owned()
+        } else {
+            crate::common::sc_ids::user_urn(urn)
+        };
+        let row = sqlx::query_file_as!(
+            UserRow,
+            "queries/users/repository/find_by_urn.sql",
+            &canonical
+        )
+        .fetch_optional(&self.pg)
+        .await?;
         Ok(row)
     }
 
     pub async fn touch_last_read(&self, urn: &str) -> AppResult<()> {
-        sqlx::query_file!("queries/users/repository/touch_last_read.sql", urn)
+        let canonical = if urn.contains(':') {
+            urn.to_owned()
+        } else {
+            crate::common::sc_ids::user_urn(urn)
+        };
+        sqlx::query_file!("queries/users/repository/touch_last_read.sql", &canonical)
             .execute(&self.pg)
             .await?;
         Ok(())
     }
 
-    /// UPSERT из SC payload. Возвращает true если строка только что создана.
-    ///
-    /// `WHERE`-гард режет no-op перезаписи: юзер прилетает из каждого refresh'а
-    /// followings и с каждой карточки трека. Волатильные счётчики — через
-    /// [`sc_counter_drifted`]; `sc_synced_at` — heartbeat с окном `sync_ttl_sec`
-    /// (без него подавленный UPDATE держал бы строку вечно протухшей и
-    /// read-path спавнил бы refresh на каждое чтение).
-    pub async fn upsert_from_sc(&self, payload: &Value) -> AppResult<bool> {
-        let Some(fields) = ScUserFields::from_sc(payload) else {
-            return Ok(false);
-        };
-        let row: Option<(bool,)> = sqlx::query_as(
-            "INSERT INTO users (
-                sc_user_id, urn, username, username_normalized, full_name, first_name, last_name,
-                permalink, permalink_url, avatar_url, country, city, description, verified,
-                followers_count, followings_count, tracks_count, playlists_count,
-                reposts_count, comments_count, kind, sc_created_at, sc_last_modified, sc_synced_at
-             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,now()
-             )
-             ON CONFLICT (sc_user_id) DO UPDATE SET
-                urn = EXCLUDED.urn,
-                username = EXCLUDED.username,
-                username_normalized = EXCLUDED.username_normalized,
-                full_name = EXCLUDED.full_name,
-                first_name = EXCLUDED.first_name,
-                last_name = EXCLUDED.last_name,
-                permalink = EXCLUDED.permalink,
-                permalink_url = EXCLUDED.permalink_url,
-                avatar_url = EXCLUDED.avatar_url,
-                country = EXCLUDED.country,
-                city = EXCLUDED.city,
-                description = EXCLUDED.description,
-                verified = EXCLUDED.verified,
-                followers_count = COALESCE(EXCLUDED.followers_count, users.followers_count),
-                followings_count = COALESCE(EXCLUDED.followings_count, users.followings_count),
-                tracks_count = COALESCE(EXCLUDED.tracks_count, users.tracks_count),
-                playlists_count = COALESCE(EXCLUDED.playlists_count, users.playlists_count),
-                reposts_count = COALESCE(EXCLUDED.reposts_count, users.reposts_count),
-                comments_count = COALESCE(EXCLUDED.comments_count, users.comments_count),
-                kind = EXCLUDED.kind,
-                sc_created_at = COALESCE(EXCLUDED.sc_created_at, users.sc_created_at),
-                sc_last_modified = COALESCE(EXCLUDED.sc_last_modified, users.sc_last_modified),
-                sc_synced_at = now(),
-                updated_at = now()
-             WHERE
-                users.username IS DISTINCT FROM EXCLUDED.username
-                OR users.username_normalized IS DISTINCT FROM EXCLUDED.username_normalized
-                OR users.full_name IS DISTINCT FROM EXCLUDED.full_name
-                OR users.first_name IS DISTINCT FROM EXCLUDED.first_name
-                OR users.last_name IS DISTINCT FROM EXCLUDED.last_name
-                OR users.permalink IS DISTINCT FROM EXCLUDED.permalink
-                OR users.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
-                OR users.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url
-                OR users.country IS DISTINCT FROM EXCLUDED.country
-                OR users.city IS DISTINCT FROM EXCLUDED.city
-                OR users.description IS DISTINCT FROM EXCLUDED.description
-                OR users.verified IS DISTINCT FROM EXCLUDED.verified
-                OR users.kind IS DISTINCT FROM EXCLUDED.kind
-                OR users.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, users.sc_last_modified)
-                OR users.tracks_count IS DISTINCT FROM COALESCE(EXCLUDED.tracks_count, users.tracks_count)
-                OR users.playlists_count IS DISTINCT FROM COALESCE(EXCLUDED.playlists_count, users.playlists_count)
-                OR sc_counter_drifted(users.followers_count, EXCLUDED.followers_count)
-                OR sc_counter_drifted(users.followings_count, EXCLUDED.followings_count)
-                OR sc_counter_drifted(users.reposts_count, EXCLUDED.reposts_count)
-                OR sc_counter_drifted(users.comments_count, EXCLUDED.comments_count)
-                OR users.sc_synced_at < now() - ($24::bigint * INTERVAL '1 second')
-             RETURNING (xmax = 0) AS was_new",
-        )
-        .bind(&fields.sc_user_id)
-        .bind(&fields.urn)
-        .bind(&fields.username)
-        .bind(&fields.username_normalized)
-        .bind(&fields.full_name)
-        .bind(&fields.first_name)
-        .bind(&fields.last_name)
-        .bind(&fields.permalink)
-        .bind(&fields.permalink_url)
-        .bind(&fields.avatar_url)
-        .bind(&fields.country)
-        .bind(&fields.city)
-        .bind(&fields.description)
-        .bind(fields.verified)
-        .bind(fields.followers_count)
-        .bind(fields.followings_count)
-        .bind(fields.tracks_count)
-        .bind(fields.playlists_count)
-        .bind(fields.reposts_count)
-        .bind(fields.comments_count)
-        .bind(&fields.kind)
-        .bind(fields.sc_created_at)
-        .bind(fields.sc_last_modified)
-        .bind(self.sync_ttl_sec)
-        .fetch_optional(&self.pg)
-        .await?;
-        // Гард подавил UPDATE (ничего не изменилось) — строка точно существует.
-        Ok(row.map(|r| r.0).unwrap_or(false))
+    pub async fn upsert_from_sc(
+        &self,
+        payload: &Value,
+        observation: catalog_ingest::Observation,
+    ) -> AppResult<bool> {
+        Ok(catalog_ingest::upsert_user_from_sc(&self.pg, payload, observation).await?)
     }
 }
 
-struct ScUserFields {
-    sc_user_id: String,
-    urn: String,
-    username: String,
-    username_normalized: String,
-    full_name: Option<String>,
-    first_name: Option<String>,
-    last_name: Option<String>,
-    permalink: Option<String>,
-    permalink_url: Option<String>,
-    avatar_url: Option<String>,
-    country: Option<String>,
-    city: Option<String>,
-    description: Option<String>,
-    verified: bool,
-    followers_count: Option<i64>,
-    followings_count: Option<i64>,
-    tracks_count: Option<i64>,
-    playlists_count: Option<i64>,
-    reposts_count: Option<i64>,
-    comments_count: Option<i64>,
-    kind: Option<String>,
-    sc_created_at: Option<DateTime<Utc>>,
-    sc_last_modified: Option<DateTime<Utc>>,
-}
-
-impl ScUserFields {
-    fn from_sc(payload: &Value) -> Option<Self> {
-        let urn = payload.get("urn").and_then(|v| v.as_str())?.to_string();
-        if urn.is_empty() {
-            return None;
-        }
-        let sc_user_id = crate::common::sc_ids::extract_sc_id(&urn).to_string();
-        let username = payload
-            .get("username")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if username.is_empty() {
-            return None;
-        }
-        let username_normalized = crate::modules::enrich::normalize::normalize_name(&username);
-
-        let full_name = string_field(payload, "full_name");
-        let first_name = string_field(payload, "first_name");
-        let last_name = string_field(payload, "last_name");
-        let permalink = string_field(payload, "permalink");
-        let permalink_url = string_field(payload, "permalink_url");
-        let avatar_url = string_field(payload, "avatar_url");
-        let country =
-            string_field(payload, "country_code").or_else(|| string_field(payload, "country"));
-        let city = string_field(payload, "city");
-        let description = string_field(payload, "description");
-        let verified = payload
-            .get("verified")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let kind = string_field(payload, "kind");
-        let sc_created_at = parse_dt(payload.get("created_at"));
-        let sc_last_modified = parse_dt(payload.get("last_modified"));
-
-        Some(Self {
-            sc_user_id,
-            urn,
-            username,
-            username_normalized,
-            full_name,
-            first_name,
-            last_name,
-            permalink,
-            permalink_url,
-            avatar_url,
-            country,
-            city,
-            description,
-            verified,
-            followers_count: payload.get("followers_count").and_then(|v| v.as_i64()),
-            followings_count: payload.get("followings_count").and_then(|v| v.as_i64()),
-            tracks_count: payload.get("track_count").and_then(|v| v.as_i64()),
-            playlists_count: payload.get("playlist_count").and_then(|v| v.as_i64()),
-            reposts_count: payload.get("reposts_count").and_then(|v| v.as_i64()),
-            comments_count: payload.get("comments_count").and_then(|v| v.as_i64()),
-            kind,
-            sc_created_at,
-            sc_last_modified,
-        })
-    }
-}
-
-/// Проекция в SC-shape v1 user payload.
 pub fn project_to_sc_shape(row: &UserRow) -> Value {
     let mut obj = Map::new();
     obj.insert("kind".into(), Value::String("user".into()));

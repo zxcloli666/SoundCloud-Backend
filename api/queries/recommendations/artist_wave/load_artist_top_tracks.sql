@@ -5,4 +5,5 @@ FROM track_artists ta
 WHERE ta.artist_id = $1
   AND ta.role = 'primary'
   AND it.sharing = 'public'
+  AND it.superseded_by IS NULL
 ORDER BY COALESCE(c.play_count, 0) DESC, it.created_at DESC LIMIT $2

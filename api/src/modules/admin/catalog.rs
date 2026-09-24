@@ -1,5 +1,5 @@
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -7,11 +7,8 @@ use uuid::Uuid;
 use crate::common::admin::AdminAuth;
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::TokenKind;
-use crate::modules::enrich::artist_names::{self, RawMetaMatch};
-use crate::modules::enrich::normalize::normalize_name;
 use crate::state::AppState;
-
-// ───────────────────────── resolve by URL ─────────────────────────
+use catalog_normalize::{RawMetaMatch, compare_with_meta, meta_artist_names, normalize_name};
 
 #[derive(Deserialize)]
 pub struct ResolveQuery {
@@ -37,8 +34,6 @@ fn value_id(v: &Value) -> String {
     }
 }
 
-/// GET /admin/resolve?url= — resolve any SoundCloud URL to its kind + canonical
-/// URN so the UI can auto-fill track/playlist/user pickers from a pasted link.
 #[tracing::instrument(skip_all)]
 pub async fn resolve(
     _: AdminAuth,
@@ -87,8 +82,6 @@ pub async fn resolve(
             .map(str::to_string),
     }))
 }
-
-// ───────────────────────── artists ─────────────────────────
 
 #[derive(Deserialize)]
 pub struct ArtistsQuery {
@@ -160,21 +153,16 @@ pub struct ScAccountRow {
     pub sc_user_id: String,
     pub role: String,
     pub source: String,
-    /// Наш флаг ручной верификации привязки (admin подтвердил пару).
     pub verified: bool,
     pub notes: Option<String>,
-    // ── обогащение из кэша SC-профиля (`users`); null если ещё не скрейпили ──
     pub username: Option<String>,
     pub avatar_url: Option<String>,
     pub permalink_url: Option<String>,
-    /// Галочка верификации самого SoundCloud (не путать с `verified` выше).
     pub sc_verified: bool,
     pub followers_count: Option<i64>,
     pub sc_tracks_count: Option<i64>,
     pub country: Option<String>,
-    /// Сколько треков этого аплоадера всего в нашем каталоге.
     pub catalog_track_count: i64,
-    /// Сколько из них залинковано на ЭТОГО артиста.
     pub linked_track_count: i64,
 }
 
@@ -261,7 +249,6 @@ pub async fn artist_create(
         ));
     }
 
-    // ON CONFLICT: гонка exists→INSERT не должна отдавать 500.
     let row = sqlx::query_as::<_, ArtistRow>(&format!(
         "INSERT INTO artists (name, normalized_name, country, bio, avatar_url, sc_user_id, source, confidence) \
          VALUES ($1, $2, $3, $4, $5, $6, 'manual', 1.0) \
@@ -332,8 +319,6 @@ pub async fn artist_update(
     Ok(Json(row))
 }
 
-// ───────────────────────── albums ─────────────────────────
-
 #[derive(Deserialize)]
 pub struct AlbumsQuery {
     #[serde(default)]
@@ -377,14 +362,14 @@ pub async fn albums_search(
     Ok(Json(rows))
 }
 
-// ───────────────────────── tracks ─────────────────────────
-
 #[derive(Deserialize)]
 pub struct TracksQuery {
     #[serde(default)]
     pub q: Option<String>,
     #[serde(default)]
     pub limit: Option<i64>,
+    #[serde(default)]
+    pub enrich_state: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -402,23 +387,15 @@ pub struct TrackListRow {
     pub release_year: Option<i16>,
 }
 
-/// Строка триажа: трек + вердикт сравнения распознанных артистов с RAW-метой.
-/// Вердикт считается здесь, на бэке, тем же `artist_names`-алгоритмом, что и
-/// resolver — у админки нет своей логики сравнения.
 #[derive(Serialize)]
 pub struct TrackListItem {
     #[serde(flatten)]
     pub row: TrackListRow,
-    /// match / partial / mismatch; None — меты нет или она мусор.
     pub raw_match: Option<RawMetaMatch>,
-    /// Распознанные primary-кредиты (включая co-артистов).
     pub detected_names: Vec<String>,
-    /// RAW-мета, распарсенная на имена.
     pub raw_names: Vec<String>,
 }
 
-/// Имена primary-кредитов по трекам (для вердикта нужен полный состав,
-/// а не только денормализованный `primary_artist_name`).
 async fn primary_names_for(
     pg: &sqlx::PgPool,
     track_ids: &[Uuid],
@@ -439,16 +416,18 @@ async fn primary_names_for(
 fn to_list_item(row: TrackListRow, credit_names: Option<Vec<String>>) -> TrackListItem {
     let mut detected = credit_names.unwrap_or_default();
     if detected.is_empty()
-        && let Some(n) = row.primary_artist_name.clone() {
-            detected.push(n);
-        }
-    let raw_match = row.metadata_artist.as_deref().and_then(|meta| {
-        artist_names::compare_with_meta(detected.iter().map(|s| s.as_str()), meta)
-    });
+        && let Some(n) = row.primary_artist_name.clone()
+    {
+        detected.push(n);
+    }
+    let raw_match = row
+        .metadata_artist
+        .as_deref()
+        .and_then(|meta| compare_with_meta(detected.iter().map(|s| s.as_str()), meta));
     let raw_names = row
         .metadata_artist
         .as_deref()
-        .map(artist_names::meta_artist_names)
+        .map(meta_artist_names)
         .unwrap_or_default();
     TrackListItem {
         row,
@@ -467,13 +446,18 @@ pub async fn tracks_search(
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let term = q.q.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let like = term.as_ref().map(|s| format!("%{s}%"));
+    let enrich_state = q
+        .enrich_state
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let rows = sqlx::query_file_as!(
         TrackListRow,
         "queries/admin/catalog/tracks_search.sql",
         like,
         term,
-        limit
+        limit,
+        enrich_state
     )
     .fetch_all(&st.pg)
     .await?;
@@ -561,9 +545,6 @@ pub struct SetPrimaryArtist {
     pub artist_id: Uuid,
 }
 
-/// PATCH /admin/tracks/{id}/primary-artist — fix a mis-detected primary artist.
-/// Updates both the denormalized `tracks.primary_artist_id` and the
-/// `track_artists` primary credit, in one transaction.
 #[tracing::instrument(skip_all)]
 pub async fn track_set_primary_artist(
     _: AdminAuth,
@@ -580,7 +561,6 @@ pub async fn track_set_primary_artist(
     }
 
     let mut tx = st.pg.begin().await?;
-    // An explicit manual assignment lifts any detach-block for this pair.
     sqlx::query_file!(
         "queries/admin/catalog/block_delete_pair.sql",
         track_id,
@@ -617,13 +597,10 @@ pub async fn track_set_primary_artist(
 
 #[derive(Deserialize)]
 pub struct SetAlbum {
-    /// null detaches the track from any album.
     #[serde(default)]
     pub album_id: Option<Uuid>,
 }
 
-/// PATCH /admin/tracks/{id}/album — fix/clear a mis-detected album. Syncs both
-/// `tracks.album_id` and the `album_tracks` join.
 #[tracing::instrument(skip_all)]
 pub async fn track_set_album(
     _: AdminAuth,
@@ -673,17 +650,12 @@ pub async fn track_set_album(
     ))
 }
 
-// ───────────────────────── track credits (feat / co-artists) ─────────────────────────
-
-// Канон ролей = словарь persist'а ('featured', не 'feature') — иначе ручной
-// кредит из админки невидим для DTO/фронта, которые знают только 'featured'.
 const CREDIT_ROLES: [&str; 4] = ["primary", "featured", "remixer", "producer"];
 
 fn default_feature_role() -> String {
     "featured".to_string()
 }
 
-/// Старые клиенты админки шлют 'feature' — принимаем, храним канон.
 fn canonical_role(role: &str) -> String {
     let role = role.trim().to_lowercase();
     if role == "feature" {
@@ -702,9 +674,6 @@ pub struct AddCredit {
     pub position: Option<i16>,
 }
 
-/// POST /admin/tracks/{id}/credits — add/upsert a track credit (default role
-/// "feature" — featured artists). When role is "primary" it also syncs the
-/// denormalized `tracks.primary_artist_id` and drops any other primary credit.
 #[tracing::instrument(skip_all)]
 pub async fn track_add_credit(
     _: AdminAuth,
@@ -735,7 +704,6 @@ pub async fn track_add_credit(
         return Err(AppError::not_found("track not found"));
     }
 
-    // An explicit manual credit lifts any detach-block for this pair.
     sqlx::query_file!(
         "queries/admin/catalog/block_delete_pair.sql",
         track_id,
@@ -780,8 +748,6 @@ pub struct CreditQuery {
     pub role: String,
 }
 
-/// DELETE /admin/tracks/{id}/credits/{artist_id}?role=feature — remove a credit.
-/// Removing the primary also clears `tracks.primary_artist_id` if it matched.
 #[tracing::instrument(skip_all)]
 pub async fn track_remove_credit(
     _: AdminAuth,
@@ -815,8 +781,6 @@ pub async fn track_remove_credit(
     ))
 }
 
-// ───────────────────────── detach (sticky unlink) ─────────────────────────
-
 #[derive(Deserialize)]
 pub struct DetachArtist {
     pub artist_id: Uuid,
@@ -824,9 +788,6 @@ pub struct DetachArtist {
     pub note: Option<String>,
 }
 
-/// POST /admin/tracks/{id}/detach-artist — permanently unlink an artist from a
-/// track: drop all its credits, clear the denormalized primary if it matched,
-/// and record a block so the enrich/crawl pipeline never re-links it (triggers).
 #[tracing::instrument(skip_all)]
 pub async fn track_detach_artist(
     _: AdminAuth,
@@ -842,8 +803,6 @@ pub async fn track_detach_artist(
     if !track_ok {
         return Err(AppError::not_found("track not found"));
     }
-    // Runtime query: nullable `note` ($3) — sqlx query! infers INSERT params as
-    // non-null (&str), conflicting with Option<String>. Kept on runtime.
     sqlx::query(
         "INSERT INTO track_artist_blocks (track_id, artist_id, note) VALUES ($1, $2, $3) \
          ON CONFLICT (track_id, artist_id) DO UPDATE SET note = EXCLUDED.note",
@@ -871,7 +830,6 @@ pub async fn track_detach_artist(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// DELETE /admin/tracks/{id}/blocks/{artist_id} — lift a detach block (re-allow linking).
 #[tracing::instrument(skip_all)]
 pub async fn track_unblock_artist(
     _: AdminAuth,
@@ -890,16 +848,12 @@ pub async fn track_unblock_artist(
     ))
 }
 
-// ───────────────────────── artist / account track lists ─────────────────────────
-
 #[derive(Deserialize)]
 pub struct TrackListQuery {
     #[serde(default)]
     pub limit: Option<i64>,
 }
 
-/// Прогнать сырые строки треков через тот же вердикт-конвейер, что и поиск:
-/// дотянуть полный primary-состав и посчитать raw_match.
 async fn enrich_track_rows(
     pg: &sqlx::PgPool,
     rows: Vec<TrackListRow>,
@@ -915,7 +869,6 @@ async fn enrich_track_rows(
         .collect())
 }
 
-/// GET /admin/artists/{artist_id}/tracks — треки, в составе которых этот артист.
 #[tracing::instrument(skip_all)]
 pub async fn artist_tracks(
     _: AdminAuth,
@@ -935,8 +888,6 @@ pub async fn artist_tracks(
     Ok(Json(enrich_track_rows(&st.pg, rows).await?))
 }
 
-/// GET /admin/artists/{artist_id}/sc-accounts/{sc_user_id}/tracks — треки,
-/// залитые этим SC-аккаунтом (по uploader), вне зависимости от текущего линка.
 #[tracing::instrument(skip_all)]
 pub async fn sc_account_tracks(
     _: AdminAuth,
@@ -967,10 +918,6 @@ pub struct DetachAccountTracksResult {
     pub detached_tracks: i64,
 }
 
-/// POST /admin/artists/{artist_id}/sc-accounts/{sc_user_id}/detach-tracks —
-/// sticky-отцеп оптом: снять кредиты этого артиста со ВСЕХ треков, залитых
-/// аккаунтом, и проставить блок, чтобы enrich/crawl не залинковали обратно.
-/// Обратимо потреково через DELETE /admin/tracks/{id}/blocks/{artist_id}.
 #[tracing::instrument(skip_all)]
 pub async fn sc_account_detach_tracks(
     _: AdminAuth,
@@ -988,8 +935,6 @@ pub async fn sc_account_detach_tracks(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Блок на каждую (трек, артист)-пару аплоадера, чтобы триггеры не дали
-    // пайплайну релинковать. Runtime-query из-за nullable note (как в detach).
     sqlx::query(
         "INSERT INTO track_artist_blocks (track_id, artist_id, note) \
          SELECT t.id, $1, $2 FROM tracks t \

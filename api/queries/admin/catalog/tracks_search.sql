@@ -1,5 +1,3 @@
--- TrackListRow field order. lower() LIKE вместо ILIKE — попадает в
--- expression-индексы tracks_admin_{title,meta}_lower_trgm (0047).
 SELECT t.id,
        t.sc_track_id,
        t.title,
@@ -18,5 +16,6 @@ WHERE ($1::text IS NULL
     OR lower(t.title) LIKE lower($1)
     OR lower(t.metadata_artist) LIKE lower($1)
     OR t.sc_track_id = $2)
+  AND ($4::text IS NULL OR t.enrich_state = $4)
 ORDER BY t.sc_created_at DESC NULLS LAST
 LIMIT $3

@@ -33,10 +33,6 @@ async fn like_track(
         .likes
         .like_track(&ctx.sc_user_id, &track_urn, track_data.as_ref())
         .await?;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-liked-tracks"], Some(&ctx.session_id.to_string()))
-        .await;
     Ok((StatusCode::OK, Json(v)))
 }
 
@@ -46,10 +42,6 @@ async fn unlike_track(
     Path(track_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
     let v = st.likes.unlike_track(&ctx.sc_user_id, &track_urn).await?;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-liked-tracks"], Some(&ctx.session_id.to_string()))
-        .await;
     Ok(Json(v))
 }
 
@@ -63,10 +55,6 @@ async fn like_playlist(
         .like_playlist(&ctx.sc_user_id, &playlist_urn)
         .await?;
     let session_id = ctx.session_id.to_string();
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-liked-playlists"], Some(&session_id))
-        .await;
     let _ = st
         .cache
         .clear_by_cache_keys(
@@ -87,10 +75,6 @@ async fn unlike_playlist(
         .unlike_playlist(&ctx.sc_user_id, &playlist_urn)
         .await?;
     let session_id = ctx.session_id.to_string();
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-liked-playlists"], Some(&session_id))
-        .await;
     let _ = st
         .cache
         .clear_by_cache_keys(

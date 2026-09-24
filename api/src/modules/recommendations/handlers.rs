@@ -41,7 +41,6 @@ fn parse_limit(raw: Option<&str>, fallback: usize) -> usize {
         .unwrap_or(fallback)
 }
 
-/// Булев query-флаг. Дефолт ON; `?flag=0/false/no` → OFF.
 fn parse_flag(raw: Option<&str>, default: bool) -> bool {
     match raw {
         Some(s) => !matches!(s.trim(), "0" | "false" | "no"),
@@ -70,7 +69,7 @@ async fn home(
                 .into_response(),
         );
     }
-    let per_cluster = parse_limit(q.limit.as_deref(), 16);
+    let per_cluster = parse_limit(q.limit.as_deref(), 16).clamp(4, 28);
     let languages = parse_languages(q.languages.as_deref());
     let req = HomeRequest {
         sc_user_id: ctx.sc_user_id.clone(),
@@ -78,8 +77,7 @@ async fn home(
         per_cluster,
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };
-    // Кэшированный JSON (короткий TTL) — снимает повтор ANN-сборки кластеров.
-    let json = st.recommendations.home_wave_cached(req).await?;
+    let json = st.recommendations.home_wave_coalesced(req).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
@@ -99,11 +97,11 @@ async fn similar(
     Path(track_id): Path<String>,
     Query(q): Query<SimilarQuery>,
 ) -> AppResult<Response> {
-    let per_cluster = parse_limit(q.limit.as_deref(), 12);
+    let per_cluster = parse_limit(q.limit.as_deref(), 12).clamp(4, 24);
     let languages = parse_languages(q.languages.as_deref());
     let json = st
         .recommendations
-        .similar_wave_cached(
+        .similar_wave_coalesced(
             &track_id,
             &ctx.sc_user_id,
             languages.as_deref(),
@@ -128,10 +126,10 @@ async fn artist(
     Path(artist_id): Path<Uuid>,
     Query(q): Query<ArtistQuery>,
 ) -> AppResult<Response> {
-    let per_cluster = parse_limit(q.limit.as_deref(), 14);
+    let per_cluster = parse_limit(q.limit.as_deref(), 14).clamp(4, 24);
     let json = st
         .recommendations
-        .artist_wave_cached(
+        .artist_wave_coalesced(
             artist_id,
             &ctx.sc_user_id,
             per_cluster,
@@ -153,9 +151,10 @@ struct SearchQuery {
 
 async fn search(
     State(st): State<AppState>,
+    _ctx: SessionCtx,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<Vec<RecommendResult>>> {
-    let limit = parse_limit(q.limit.as_deref(), 20);
+    let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
     let out = st
         .recommendations

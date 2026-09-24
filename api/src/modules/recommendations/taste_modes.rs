@@ -195,3 +195,116 @@ pub fn build_anti_centroid(
     normalize(&mut acc);
     Some(acc)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(v: &[f32], w: f32) -> (Vec<f32>, f32) {
+        (v.to_vec(), w)
+    }
+
+    #[test]
+    fn the_number_of_modes_grows_in_steps_with_the_seed_count() {
+        assert_eq!([pick_k(0), pick_k(7)], [1, 1]);
+        assert_eq!([pick_k(8), pick_k(15)], [2, 2]);
+        assert_eq!([pick_k(16), pick_k(40)], [3, 3]);
+        assert_eq!([pick_k(41), pick_k(10_000)], [4, 4]);
+    }
+
+    #[test]
+    fn a_heavier_seed_pulls_the_mean_towards_itself() {
+        let mean = weighted_mean(&[point(&[1.0, 0.0], 3.0), point(&[0.0, 1.0], 1.0)]);
+
+        assert!(
+            mean[0] > mean[1],
+            "weight must decide the direction, saw {mean:?}"
+        );
+        assert!((mean[0] - 0.75).abs() < 1e-5);
+        assert!((mean[1] - 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn weightless_seeds_give_a_zero_mean_and_not_a_nan() {
+        let mean = weighted_mean(&[point(&[1.0, 2.0], 0.0), point(&[3.0, 4.0], 0.0)]);
+
+        assert!(mean.iter().all(|x| !x.is_nan()), "saw {mean:?}");
+        assert_eq!(mean, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_short_vector_contributes_what_it_has_instead_of_panicking() {
+        let mean = weighted_mean(&[point(&[1.0, 1.0, 1.0], 1.0), point(&[1.0], 1.0)]);
+
+        assert_eq!(mean.len(), 3);
+        assert!((mean[0] - 1.0).abs() < 1e-5);
+        assert!((mean[1] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn two_clear_clusters_come_back_as_two_modes() {
+        let mut points = Vec::new();
+        for _ in 0..6 {
+            points.push(point(&[1.0, 0.0, 0.0], 1.0));
+        }
+        for _ in 0..6 {
+            points.push(point(&[0.0, 1.0, 0.0], 1.0));
+        }
+
+        let modes = kmeans(&points, 2);
+
+        assert_eq!(modes.len(), 2);
+        let mut best = [0f32, 0f32];
+        for mode in &modes {
+            best[0] = best[0].max(cosine(&mode.centroid, &[1.0, 0.0, 0.0]));
+            best[1] = best[1].max(cosine(&mode.centroid, &[0.0, 1.0, 0.0]));
+        }
+        assert!(best[0] > 0.99 && best[1] > 0.99, "saw {best:?}");
+    }
+
+    #[test]
+    fn seeds_that_are_all_the_same_taste_produce_one_mode_not_two_copies() {
+        let points: Vec<(Vec<f32>, f32)> = (0..8).map(|_| point(&[1.0, 0.0, 0.0], 1.0)).collect();
+
+        let modes = kmeans(&points, 2);
+
+        assert_eq!(
+            modes.len(),
+            1,
+            "an empty cluster must be dropped, not returned as a duplicate centroid"
+        );
+    }
+
+    #[test]
+    fn the_starting_centres_are_taken_far_apart() {
+        let points = vec![
+            point(&[1.0, 0.0, 0.0], 5.0),
+            point(&[0.99, 0.14, 0.0], 4.0),
+            point(&[0.0, 0.0, 1.0], 1.0),
+        ];
+
+        let centers = seed_centers(&points, 2);
+
+        assert!((cosine(&centers[0], &[1.0, 0.0, 0.0]) - 1.0).abs() < 1e-5);
+        assert!(
+            cosine(&centers[1], &[0.0, 0.0, 1.0]) > 0.99,
+            "the second centre must be the far point, not the twin of the first"
+        );
+    }
+
+    #[test]
+    fn an_anti_centroid_needs_both_a_weight_and_a_vector() {
+        let mut map = HashMap::new();
+        map.insert("a".to_owned(), vec![1.0, 0.0]);
+
+        assert!(build_anti_centroid(&map, &[]).is_none());
+        assert!(build_anti_centroid(&map, &[("b".to_owned(), 1.0)]).is_none());
+
+        let built = build_anti_centroid(&map, &[("a".to_owned(), 1.0)]).expect("a is known");
+        assert!((cosine(&built, &[1.0, 0.0]) - 1.0).abs() < 1e-5);
+        assert!(
+            (built[0] - 1.0).abs() < 1e-5,
+            "the result must be unit length"
+        );
+    }
+}

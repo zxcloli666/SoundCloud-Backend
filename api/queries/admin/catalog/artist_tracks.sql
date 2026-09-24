@@ -1,5 +1,3 @@
--- TrackListRow field order. Треки, у которых ЭТОТ артист в составе (любая роль).
--- EXISTS, а не JOIN — иначе дубли строк при нескольких кредитах на одного артиста.
 SELECT t.id,
        t.sc_track_id,
        t.title,

@@ -1,4 +1,3 @@
--- Artist search (enrich entity) via trgm. Columns in ArtistSearchRow order.
 SELECT id,
        name,
        country,
@@ -16,6 +15,6 @@ SELECT id,
 FROM artists
 WHERE merged_into IS NULL
   AND (track_count_primary > 0 OR track_count_featured > 0)
-  AND (normalized_name LIKE $4 OR LOWER(name) LIKE $1)
+  AND (normalized_name LIKE $4 OR (NOT $5::bool AND LOWER(name) LIKE $1))
 ORDER BY monthly_listeners DESC, trending_score DESC, normalized_name ASC, id ASC LIMIT $2
 OFFSET $3

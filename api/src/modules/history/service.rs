@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, NaiveDateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
-use sqlx::types::Uuid;
 use sqlx::PgPool;
+use sqlx::types::Uuid;
 
 use crate::error::AppResult;
 

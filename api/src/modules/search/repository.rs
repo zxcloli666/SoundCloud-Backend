@@ -1,43 +1,45 @@
-//! Сырые SQL-запросы под `/search/db/*`. Каждая выдача — короткая транзакция
-//! с локальным `statement_timeout`, чтобы случайный матч на сотни тысяч строк
-//! не блокировал пул, а отвалился клиенту 504-м/пустым результатом.
-//!
-//! Все substring-фильтры рассчитаны на GIN/trgm-индексы из миграции
-//! 0022_search_indexes.sql. Поиски от 2 символов; короче — caller отбрасывает
-//! запрос до SQL-уровня.
-//!
-//! Пагинация — offset-based с жёстким max-page (см. handlers). Cursor-style
-//! отдельная боль для гибридных ORDER BY (popularity + tiebreaker), а для
-//! поискового UX 25 страниц × 20 элементов уже за глаза.
-
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppResult;
-use crate::modules::playlists::{project_to_sc_shape as project_playlist, PlaylistRow};
-use crate::modules::tracks::{project_to_sc_shape as project_track, TrackRow};
-use crate::modules::users::{project_to_sc_shape as project_user, UserRow};
+use crate::modules::playlists::{PlaylistRow, project_to_sc_shape as project_playlist};
+use crate::modules::tracks::{TrackRow, project_to_sc_shape as project_track};
+use crate::modules::users::{UserRow, project_to_sc_shape as project_user};
 
-/// Защитный таймаут на одну выдачу. SET LOCAL — действует только внутри
-/// транзакции, не загрязняет сессию пула.
 pub const STATEMENT_TIMEOUT_MS: i32 = 2500;
 
-/// Подстрочная заготовка. Лежит как отдельный шаг, чтобы caller-логика не
-/// дублировала `format!("%{}%", lower)` на каждом сайте использования.
-pub fn like_needle(q: &str) -> String {
-    let lower = q.trim().to_lowercase();
-    format!("%{lower}%")
+pub const TRIGRAM_MIN_LEN: usize = 3;
+
+fn escape_like(q: &str) -> String {
+    q.trim()
+        .to_lowercase()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
-/// Заготовка под `*_normalized`-колонки: тот же fold, которым колонки
-/// записаны (ё≡е, &≡and, стилизация) — сырой lowercase по ним не попадает.
+pub fn prefix_only(q: &str) -> bool {
+    catalog_normalize::normalize_title(q).chars().count() < TRIGRAM_MIN_LEN
+}
+
+pub fn like_needle(q: &str) -> String {
+    let lower = escape_like(q);
+    if prefix_only(q) {
+        format!("{lower}%")
+    } else {
+        format!("%{lower}%")
+    }
+}
+
 pub fn like_needle_normalized(q: &str) -> String {
-    format!(
-        "%{}%",
-        crate::modules::enrich::normalize::normalize_title(q)
-    )
+    let normalized = catalog_normalize::normalize_title(q);
+    if prefix_only(q) {
+        format!("{normalized}%")
+    } else {
+        format!("%{normalized}%")
+    }
 }
 
 async fn set_statement_timeout(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<()> {
@@ -49,55 +51,116 @@ async fn set_statement_timeout(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -
     Ok(())
 }
 
-/// Поиск треков. `user_urn_filter` ограничивает выдачу uploader'ом (для
-/// inline-поиска на UserPage). При пустом фильтре — глобальный скан по
-/// trgm-индексу `tracks_search_title_norm_trgm`.
+async fn configure_catalog_search(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<()> {
+    sqlx::query_file!(
+        "queries/search/repository/configure_catalog_search.sql",
+        &STATEMENT_TIMEOUT_MS.to_string()
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn sole_term(terms: &[String]) -> Option<&str> {
+    match terms {
+        [only] => Some(only.as_str()),
+        _ => None,
+    }
+}
+
+pub struct TrackSearch<'a> {
+    pub query: Option<&'a str>,
+    pub owner: Option<&'a str>,
+    pub ids: Option<&'a [String]>,
+    pub genres: Option<&'a [String]>,
+    pub tags: Option<&'a [String]>,
+}
+
 pub async fn search_tracks(
     pg: &PgPool,
-    q_lower: &str,
-    user_sc_id_filter: Option<&str>,
+    filters: &TrackSearch<'_>,
     page: i64,
     limit: i64,
 ) -> AppResult<(Vec<Value>, bool)> {
-    let needle = like_needle(q_lower);
-    let norm_needle = like_needle_normalized(q_lower);
+    let needle = filters.query.map(like_needle);
+    let norm_needle = filters.query.map(like_needle_normalized);
+    let prefix = filters.query.is_some_and(prefix_only);
     let offset = page * limit;
 
     let mut tx = pg.begin().await?;
-    set_statement_timeout(&mut tx).await?;
+    configure_catalog_search(&mut tx).await?;
 
-    // limit+1 → знаем has_more без COUNT(*).
     let fetch_limit = limit + 1;
 
-    let rows: Vec<TrackRow> = if let Some(uid) = user_sc_id_filter {
-        // Per-user scope: фильтр на uploader_sc_user_id первый, потом ILIKE.
-        // Индекс `tracks_uploader_popular_idx` даёт быстрый старт по uploader'у,
-        // фильтр trgm применяется по уже отрезанному набору.
-        sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_by_uploader.sql",
-            uid,
-            &needle,
-            fetch_limit,
-            offset,
-            &norm_needle
-        )
-        .fetch_all(&mut *tx)
-        .await?
-    } else {
-        // Глобальный поиск. trgm-индекс `tracks_search_title_norm_trgm`
-        // подхватывается планировщиком на `title_normalized LIKE`, аплоадер —
-        // вспомогательный матч (`tracks_search_uploader_username_trgm`).
-        sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_global.sql",
-            &needle,
-            fetch_limit,
-            offset,
-            &norm_needle
-        )
-        .fetch_all(&mut *tx)
-        .await?
+    let sole_genre = filters.genres.and_then(sole_term);
+
+    let rows: Vec<TrackRow> = match (filters.owner, filters.ids) {
+        (Some(uid), Some(ids)) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_uploader_ids.sql",
+                uid,
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                ids,
+                filters.genres,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (Some(uid), None) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_uploader.sql",
+                uid,
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                filters.genres,
+                sole_genre,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (None, Some(ids)) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_ids.sql",
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                ids,
+                filters.genres,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (None, None) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_global.sql",
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                filters.genres,
+                sole_genre,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
     };
 
     tx.commit().await?;
@@ -108,8 +171,6 @@ pub async fn search_tracks(
     Ok((projected, has_more))
 }
 
-/// Один JOIN на uploaders, чтобы каждая карточка трека выходила с
-/// полноценным `user` блоком (нужен фронту: avatar, username, country).
 async fn project_tracks_with_uploaders(pg: &PgPool, rows: Vec<TrackRow>) -> AppResult<Vec<Value>> {
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -149,20 +210,20 @@ async fn project_tracks_with_uploaders(pg: &PgPool, rows: Vec<TrackRow>) -> AppR
         .collect())
 }
 
-/// Поиск плейлистов. `user_urn_filter` ограничивает выдачу owner'ом.
 pub async fn search_playlists(
     pg: &PgPool,
-    q_lower: &str,
+    q_lower: Option<&str>,
     user_sc_id_filter: Option<&str>,
     page: i64,
     limit: i64,
 ) -> AppResult<(Vec<Value>, bool)> {
-    let needle = like_needle(q_lower);
-    let norm_needle = like_needle_normalized(q_lower);
+    let needle = q_lower.map(like_needle);
+    let norm_needle = q_lower.map(like_needle_normalized);
+    let prefix = q_lower.is_some_and(prefix_only);
     let offset = page * limit;
 
     let mut tx = pg.begin().await?;
-    set_statement_timeout(&mut tx).await?;
+    configure_catalog_search(&mut tx).await?;
 
     let fetch_limit = limit + 1;
 
@@ -171,10 +232,11 @@ pub async fn search_playlists(
             PlaylistRow,
             "queries/search/repository/search_playlists_by_owner.sql",
             uid,
-            &needle,
+            needle.as_deref(),
             fetch_limit,
             offset,
-            &norm_needle
+            norm_needle.as_deref(),
+            prefix
         )
         .fetch_all(&mut *tx)
         .await?
@@ -182,10 +244,11 @@ pub async fn search_playlists(
         sqlx::query_file_as!(
             PlaylistRow,
             "queries/search/repository/search_playlists_global.sql",
-            &needle,
+            needle.as_deref(),
             fetch_limit,
             offset,
-            &norm_needle
+            norm_needle.as_deref(),
+            prefix
         )
         .fetch_all(&mut *tx)
         .await?
@@ -241,27 +304,32 @@ async fn project_playlists_with_owners(
         .collect())
 }
 
-/// Поиск юзеров. Совместимая SC-shape проекция.
 pub async fn search_users(
     pg: &PgPool,
-    q_lower: &str,
+    q_lower: Option<&str>,
+    ids: Option<&[String]>,
     page: i64,
     limit: i64,
 ) -> AppResult<(Vec<Value>, bool)> {
-    let needle = like_needle(q_lower);
+    let needle = q_lower.map(like_needle);
+    let norm_needle = q_lower.map(like_needle_normalized);
+    let prefix = q_lower.is_some_and(prefix_only);
     let offset = page * limit;
 
     let mut tx = pg.begin().await?;
-    set_statement_timeout(&mut tx).await?;
+    configure_catalog_search(&mut tx).await?;
 
     let fetch_limit = limit + 1;
 
     let rows: Vec<UserRow> = sqlx::query_file_as!(
         UserRow,
         "queries/search/repository/search_users.sql",
-        &needle,
+        needle.as_deref(),
         fetch_limit,
-        offset
+        offset,
+        ids,
+        norm_needle.as_deref(),
+        prefix
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -277,8 +345,6 @@ pub async fn search_users(
     Ok((collection, has_more))
 }
 
-/// Поиск артистов (enrich-сущность). Используются те же поля, что и
-/// `/discover/artists` — фронту удобно переиспользовать карточку.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ArtistSearchRow {
     pub id: Uuid,
@@ -304,6 +370,7 @@ pub async fn search_artists(
     limit: i64,
 ) -> AppResult<(Vec<ArtistSearchRow>, bool)> {
     let needle = like_needle(q_lower);
+    let prefix = prefix_only(q_lower);
     let offset = page * limit;
 
     let mut tx = pg.begin().await?;
@@ -318,7 +385,8 @@ pub async fn search_artists(
         &needle,
         fetch_limit,
         offset,
-        &norm_needle
+        &norm_needle,
+        prefix
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -329,8 +397,6 @@ pub async fn search_artists(
     Ok((rows.into_iter().take(limit as usize).collect(), has_more))
 }
 
-/// Поиск альбомов. Возвращает поля совместимые с `/discover/albums` для
-/// переиспользования FE-карточки.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AlbumSearchRow {
     pub id: Uuid,
@@ -356,6 +422,7 @@ pub async fn search_albums(
     limit: i64,
 ) -> AppResult<(Vec<AlbumSearchRow>, bool)> {
     let needle = like_needle(q_lower);
+    let prefix = prefix_only(q_lower);
     let offset = page * limit;
 
     let mut tx = pg.begin().await?;
@@ -370,7 +437,8 @@ pub async fn search_albums(
         &needle,
         fetch_limit,
         offset,
-        &norm_needle
+        &norm_needle,
+        prefix
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -381,19 +449,6 @@ pub async fn search_albums(
     Ok((rows.into_iter().take(limit as usize).collect(), has_more))
 }
 
-/// Резолв `user_urn` → `sc_user_id`. Возвращает None если такого юзера у нас
-/// в зеркале нет (тогда фильтр по user_urn равнозначен пустой выдаче).
-pub async fn resolve_user_sc_id(pg: &PgPool, user_urn: &str) -> AppResult<Option<String>> {
-    let row =
-        sqlx::query_file_scalar!("queries/search/repository/resolve_user_sc_id.sql", user_urn)
-            .fetch_optional(pg)
-            .await?;
-    Ok(row)
-}
-
-/// Хелпер для frontend: вернуть `synced_at` репозиториев — фронт может
-/// показывать "база обновлена ⨯ часов назад" если очень захочет. На MVP не
-/// используем, но полезный seam.
 #[allow(dead_code)]
 pub async fn db_last_synced(pg: &PgPool) -> AppResult<Option<DateTime<Utc>>> {
     let row = sqlx::query_file_scalar!("queries/search/repository/db_last_synced.sql")
@@ -401,3 +456,253 @@ pub async fn db_last_synced(pg: &PgPool) -> AppResult<Option<DateTime<Utc>>> {
         .await?;
     Ok(row.flatten())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn seed(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, genre, sharing,
+                                 duration_ms, play_count_sc, uploader_sc_user_id)
+             VALUES ('1', 'soundcloud:tracks:1', 'One',   'one',   'Drum & Bass', 'public', 1000, 10, '7'),
+                    ('2', 'soundcloud:tracks:2', 'Two',   'two',   'DRUM & BASS', 'public', 1000, 30, '7'),
+                    ('3', 'soundcloud:tracks:3', 'Three', 'three', 'Techno',      'public', 1000, 20, '7')",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn ids_of(rows: &[Value]) -> Vec<i64> {
+        rows.iter()
+            .filter_map(|row| row.get("id").and_then(|v| v.as_i64()))
+            .collect()
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn requested_ids_keep_their_request_order(pool: PgPool) -> anyhow::Result<()> {
+        seed(&pool).await?;
+        let ids = vec!["3".to_owned(), "1".to_owned(), "2".to_owned()];
+        let filters = TrackSearch {
+            query: None,
+            owner: None,
+            ids: Some(&ids),
+            genres: None,
+            tags: None,
+        };
+        let (rows, _) = search_tracks(&pool, &filters, 0, 10).await?;
+        assert_eq!(ids_of(&rows), vec![3, 1, 2]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_sole_genre_matches_exactly_what_the_multi_genre_path_matches(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        seed(&pool).await?;
+        let sole = vec!["Drum & Bass".to_owned()];
+        let pair = vec!["Drum & Bass".to_owned(), "drum & bass".to_owned()];
+
+        let one = search_tracks(
+            &pool,
+            &TrackSearch {
+                query: None,
+                owner: None,
+                ids: None,
+                genres: Some(&sole),
+                tags: None,
+            },
+            0,
+            10,
+        )
+        .await?
+        .0;
+        let many = search_tracks(
+            &pool,
+            &TrackSearch {
+                query: None,
+                owner: None,
+                ids: None,
+                genres: Some(&pair),
+                tags: None,
+            },
+            0,
+            10,
+        )
+        .await?
+        .0;
+
+        assert_eq!(ids_of(&one), vec![2, 1]);
+        assert_eq!(ids_of(&one), ids_of(&many));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_sole_genre_stays_case_insensitive(pool: PgPool) -> anyhow::Result<()> {
+        seed(&pool).await?;
+        let shouted = vec!["DRUM & BASS".to_owned()];
+        let whispered = vec!["drum & bass".to_owned()];
+        let of = |genres: &Vec<String>| {
+            let genres = genres.clone();
+            let pool = pool.clone();
+            async move {
+                search_tracks(
+                    &pool,
+                    &TrackSearch {
+                        query: None,
+                        owner: None,
+                        ids: None,
+                        genres: Some(&genres),
+                        tags: None,
+                    },
+                    0,
+                    10,
+                )
+                .await
+                .map(|(rows, _)| ids_of(&rows))
+            }
+        };
+        assert_eq!(of(&shouted).await?, vec![2, 1]);
+        assert_eq!(of(&whispered).await?, vec![2, 1]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_sole_genre_page_is_served_in_index_order_without_a_sort(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, genre, sharing,
+                                 duration_ms, play_count_sc)
+             SELECT n::text,
+                    'soundcloud:tracks:' || n,
+                    'Track ' || n,
+                    'track ' || n,
+                    CASE
+                        WHEN n % 10 = 0 THEN 'Drum & Bass'
+                        ELSE (ARRAY['House', 'Techno', 'Hip-Hop', 'Trap'])[1 + n % 4]
+                    END,
+                    'public',
+                    1000,
+                    n
+             FROM generate_series(1, 60000) AS n",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("ANALYZE tracks").execute(&pool).await?;
+
+        let sql = include_str!("../../../queries/search/repository/search_tracks_global.sql");
+        for offset in [0_i64, 600_i64] {
+            let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+                .bind(None::<String>)
+                .bind(31_i64)
+                .bind(offset)
+                .bind(None::<String>)
+                .bind(vec!["Drum & Bass".to_owned()])
+                .bind("Drum & Bass")
+                .bind(None::<Vec<String>>)
+                .bind(false)
+                .fetch_one(&pool)
+                .await?;
+
+            let plan = plan.to_string();
+            assert!(
+                plan.contains("tracks_public_genre_popular_idx"),
+                "a sole-genre page at offset {offset} must be answered by the genre/popularity index: {plan}"
+            );
+            assert!(
+                !plan.contains("\"Sort\""),
+                "a sole-genre page at offset {offset} must not sort every matching track to return one page: {plan}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_short_query_searches_by_prefix_and_a_long_one_by_substring() {
+        assert!(prefix_only("ne"));
+        assert!(!prefix_only("nel"));
+        assert_eq!(like_needle("ne"), "ne%");
+        assert_eq!(like_needle("nel"), "%nel%");
+        assert_eq!(like_needle_normalized("ne"), "ne%");
+        assert_eq!(like_needle_normalized("nel"), "%nel%");
+    }
+
+    #[test]
+    fn a_short_query_still_escapes_like_metacharacters() {
+        assert_eq!(like_needle("_%"), "\\_\\%%");
+        assert_eq!(like_needle("a_b"), "%a\\_b%");
+    }
+
+    #[test]
+    fn the_normalized_needle_cannot_carry_a_wildcard_either() {
+        for raw in ["100%", "a_b", "back\\slash", "%%%", "a%b_c\\d"] {
+            let needle = like_needle_normalized(raw);
+            let inside = needle.trim_start_matches('%').trim_end_matches('%');
+            assert!(
+                !inside.contains('%') && !inside.contains('_') && !inside.contains('\\'),
+                "`{raw}` became `{needle}`; a metacharacter that survives normalization makes \
+                 the query match the whole catalogue, and this path does not escape anything — \
+                 it relies on normalization dropping them"
+            );
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_short_query_never_seq_scans_the_track_table(pool: PgPool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, sharing,
+                                 duration_ms, play_count_sc, uploader_username)
+             SELECT n::text,
+                    'soundcloud:tracks:' || n,
+                    CASE WHEN n % 1000 = 0 THEN 'Nelson ' || n ELSE 'Zulu ' || n END,
+                    CASE WHEN n % 1000 = 0 THEN 'nelson ' || n ELSE 'zulu ' || n END,
+                    'public', 1000, n, 'dj' || n
+             FROM generate_series(1, 20000) AS n",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("ANALYZE tracks").execute(&pool).await?;
+
+        let sql = include_str!("../../../queries/search/repository/search_tracks_global.sql");
+        let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+            .bind(like_needle("ne"))
+            .bind(31_i64)
+            .bind(0_i64)
+            .bind(like_needle_normalized("ne"))
+            .bind(None::<Vec<String>>)
+            .bind(None::<String>)
+            .bind(None::<Vec<String>>)
+            .bind(prefix_only("ne"))
+            .fetch_one(&pool)
+            .await?;
+
+        let plan = plan.to_string();
+        assert!(
+            !plan.contains("\"Seq Scan\""),
+            "a two-character query must stay on the trigram index instead of reading every track: {plan}"
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn an_uploader_page_keeps_the_requested_id_order(pool: PgPool) -> anyhow::Result<()> {
+        seed(&pool).await?;
+        let ids = vec!["2".to_owned(), "3".to_owned(), "1".to_owned()];
+        let filters = TrackSearch {
+            query: None,
+            owner: Some("7"),
+            ids: Some(&ids),
+            genres: None,
+            tags: None,
+        };
+        let (rows, _) = search_tracks(&pool, &filters, 0, 10).await?;
+        assert_eq!(ids_of(&rows), vec![2, 3, 1]);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "popular_plan_tests.rs"]
+mod popular_plan_tests;

@@ -1,4 +1,3 @@
--- ArtistRow field order
 SELECT id,
        name,
        normalized_name,

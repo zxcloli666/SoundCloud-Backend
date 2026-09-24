@@ -1,16 +1,21 @@
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::cache::ListPageResult;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
+use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
-use crate::modules::playlists::TrackEdit;
+use crate::modules::playlists::EditBody;
 use crate::state::AppState;
+
+const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,17 +40,7 @@ struct SharingBody {
     sharing: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct SearchQuery {
-    #[serde(default)]
-    q: Option<String>,
-    #[serde(default)]
-    access: Option<String>,
-    #[serde(default)]
-    show_tracks: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct DetailQuery {
     #[serde(default)]
     secret_token: Option<String>,
@@ -57,27 +52,12 @@ struct DetailQuery {
 
 async fn search(
     State(st): State<AppState>,
-    ctx: SessionCtx,
+    _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<SearchQuery>,
+    Query(q): Query<crate::modules::search::query::PlaylistSearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let mut extra: Vec<(String, String)> = vec![(
-        "access".into(),
-        q.access
-            .unwrap_or_else(|| "playable,preview,blocked".into()),
-    )];
-    if let Some(v) = q.q {
-        extra.push(("q".into(), v));
-    }
-    if let Some(v) = q.show_tracks {
-        extra.push(("show_tracks".into(), v));
-    }
-    Ok(Json(
-        st.playlists
-            .search(ctx.session_id, page, limit, extra)
-            .await?,
-    ))
+    Ok(Json(st.search.playlists(&q, page, limit).await?))
 }
 
 async fn create(
@@ -85,14 +65,7 @@ async fn create(
     ctx: SessionCtx,
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    let v = st
-        .playlists
-        .create(ctx.session_id, &ctx.sc_user_id, &body)
-        .await?;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-playlists"], Some(&ctx.session_id.to_string()))
-        .await;
+    let v = st.playlists.create(&ctx.sc_user_id, &body).await?;
     Ok(Json(v))
 }
 
@@ -130,94 +103,70 @@ async fn get_by_id(
     Ok(Json(single.into_iter().next().unwrap_or(Value::Null)))
 }
 
-async fn update_playlist(
-    State(st): State<AppState>,
-    ctx: SessionCtx,
-    Path(playlist_urn): Path<String>,
-    Query(q): Query<ReplaceQuery>,
-    Json(body): Json<Value>,
-) -> AppResult<Json<Value>> {
-    let replace = q.replace.as_deref() == Some("true");
-    let v = st
-        .playlists
-        .update(ctx.session_id, &ctx.sc_user_id, &playlist_urn, &body, replace)
-        .await?;
-    let session_id = ctx.session_id.to_string();
-    let tracks_key = format!("playlist-tracks:{playlist_urn}");
-    let _ = st
-        .list_cache
-        .invalidate_by_cache_keys(&[tracks_key], Some(&session_id))
-        .await;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-playlists"], Some(&session_id))
-        .await;
-    Ok(Json(v))
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct ReplaceQuery {
     #[serde(default)]
     replace: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct MoveBody {
-    track: String,
-    to: i64,
+async fn update_playlist(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Path(playlist_urn): Path<String>,
+    Query(q): Query<ReplaceQuery>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> AppResult<Json<Value>> {
+    let idempotency_key = idempotency_key(&headers)?;
+    let replace = q.replace.as_deref() == Some("true");
+    let value = st
+        .playlists
+        .update(
+            &ctx.sc_user_id,
+            &playlist_urn,
+            &body,
+            replace,
+            idempotency_key,
+        )
+        .await?;
+    Ok(Json(value))
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct EditBody {
-    #[serde(default)]
-    add: Option<String>,
-    #[serde(default)]
-    remove: Option<String>,
-    #[serde(default, rename = "move")]
-    move_op: Option<MoveBody>,
-    #[serde(default)]
-    order: Option<Vec<String>>,
-}
-
-/// POST /playlists/{urn}/tracks — одна дельта membership. Ровно одно из
-/// add|remove|move|order. Возвращает свежий авторитетный список.
 async fn edit_tracks(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Path(playlist_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
+    headers: HeaderMap,
     Json(body): Json<EditBody>,
-) -> AppResult<Json<ListPageResult<Value>>> {
-    let edit = match (body.add, body.remove, body.move_op, body.order) {
-        (Some(track_urn), None, None, None) => TrackEdit::Add { track_urn },
-        (None, Some(track_urn), None, None) => TrackEdit::Remove { track_urn },
-        (None, None, Some(m), None) => TrackEdit::Move {
-            track_urn: m.track,
-            to_index: m.to,
-        },
-        (None, None, None, Some(track_urns)) => TrackEdit::SetOrder { track_urns },
-        _ => {
-            return Err(AppError::bad_request(
-                "provide exactly one of add|remove|move|order",
-            ))
-        }
-    };
+) -> AppResult<Json<crate::modules::playlists::PlaylistTracksPage>> {
+    let idempotency_key = idempotency_key(&headers)?;
+    let request = body.into_request()?;
     let (page, limit) = p.resolved();
     let mut result = st
         .playlists
-        .edit_tracks(ctx.session_id, &ctx.sc_user_id, &playlist_urn, edit, page, limit)
+        .edit_tracks(
+            &ctx.sc_user_id,
+            &playlist_urn,
+            request,
+            idempotency_key,
+            page,
+            limit,
+        )
         .await?;
-    enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
-    let session_id = ctx.session_id.to_string();
-    let _ = st
-        .list_cache
-        .invalidate_by_cache_keys(&[format!("playlist-tracks:{playlist_urn}")], Some(&session_id))
-        .await;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-playlists"], Some(&session_id))
-        .await;
+    enrich_dto::apply_to_tracks(&st.pg, &mut result.page.collection).await?;
     Ok(Json(result))
+}
+
+fn idempotency_key(headers: &HeaderMap) -> AppResult<Uuid> {
+    let Some(value) = headers.get(IDEMPOTENCY_HEADER) else {
+        return Ok(Uuid::now_v7());
+    };
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| Uuid::parse_str(value.trim()).ok())
+        .ok_or_else(|| AppError::bad_request("Idempotency-Key must be a UUID"))
 }
 
 async fn set_playlist_sharing(
@@ -230,11 +179,6 @@ async fn set_playlist_sharing(
         .playlists
         .set_sharing(&ctx.sc_user_id, &playlist_urn, &body.sharing)
         .await?;
-    let session_id = ctx.session_id.to_string();
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-playlists"], Some(&session_id))
-        .await;
     Ok(Json(v))
 }
 
@@ -244,16 +188,6 @@ async fn delete_playlist(
     Path(playlist_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
     let v = st.playlists.delete(&ctx.sc_user_id, &playlist_urn).await?;
-    let session_id = ctx.session_id.to_string();
-    let tracks_key = format!("playlist-tracks:{playlist_urn}");
-    let _ = st
-        .list_cache
-        .invalidate_by_cache_keys(&[tracks_key], Some(&session_id))
-        .await;
-    let _ = st
-        .list_cache
-        .invalidate_by_prefixes(&["me-playlists", "me-liked-playlists"], Some(&session_id))
-        .await;
     Ok(Json(v))
 }
 
@@ -262,13 +196,13 @@ async fn get_tracks(
     ctx: SessionCtx,
     Path(playlist_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<crate::modules::playlists::PlaylistTracksPage>> {
     let (page, limit) = p.resolved();
     let mut result = st
         .playlists
-        .get_tracks(ctx.session_id, &ctx.sc_user_id, &playlist_urn, page, limit)
+        .get_tracks(&ctx.sc_user_id, &playlist_urn, page, limit)
         .await?;
-    enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
+    enrich_dto::apply_to_tracks(&st.pg, &mut result.page.collection).await?;
     Ok(Json(result))
 }
 
@@ -277,11 +211,11 @@ async fn get_reposters(
     ctx: SessionCtx,
     Path(playlist_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     Ok(Json(
         st.playlists
-            .get_reposters(ctx.session_id, &playlist_urn, page, limit)
+            .get_reposters(&ctx.sc_user_id, &playlist_urn, page, limit)
             .await?,
     ))
 }

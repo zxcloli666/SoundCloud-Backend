@@ -1,4 +1,3 @@
--- TrackListRow field order
 SELECT t.id,
        t.sc_track_id,
        t.title,

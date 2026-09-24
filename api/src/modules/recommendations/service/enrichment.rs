@@ -4,13 +4,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::AppResult;
 
+use super::RecommendationsService;
 use super::types::{RecommendResult, ScoredCandidate};
 use super::util::value_id_to_string;
-use super::RecommendationsService;
 
-/// Длина вектора фичей в impressions. Совпадает с тем, что писали при живом
-/// LTR-пайплайне; держим стабильным, чтобы аналитика по rec_impressions не
-/// сломалась. См. docs/ltr-future-graph-features.md перед изменением.
 const IMPRESSION_FEATURE_LEN: usize = 8;
 
 impl RecommendationsService {
@@ -23,10 +20,6 @@ impl RecommendationsService {
             return Ok(Vec::new());
         }
         let ids: Vec<String> = items.iter().map(|it| it.id.to_string()).collect();
-        // Берём normalised поля из `tracks` (artist берём из uploader_username,
-        // т.к. publisher_metadata/artist у нас уже нет: эту инфу теперь
-        // выводит enrich-pipeline через track_artists; для denorm-минимума
-        // достаточно uploader_username).
         type TrackMeta = (Option<String>, Option<String>, Option<String>, Option<i64>);
         let tracks = sqlx::query_file!(
             "queries/recommendations/service/enrichment/track_meta_by_ids.sql",
@@ -117,14 +110,6 @@ impl RecommendationsService {
         exclude: &[String],
         _languages: Option<&[String]>,
     ) -> Option<Filter> {
-        // language пока живёт только в pg.tracks — qdrant payload его не
-        // несёт, фильтрация по языку идёт после возврата кандидатов через
-        // filter_tracks_by_language. Трек без выставленного language не
-        // режется, шанс на показ остаётся.
-        //
-        // Исключаем по id точки: id == sc_track_id, а payload лежит on-disk и
-        // без индекса — match по нему читает диск на каждого кандидата обхода
-        // HNSW. has_id проверяется по идентификатору, payload не трогает.
         let exclude_ids: Vec<u64> = exclude
             .iter()
             .filter_map(|id| id.parse::<u64>().ok())
@@ -138,9 +123,6 @@ impl RecommendationsService {
         })
     }
 
-    /// Если выбраны языки, оставляем только треки с `language IN (langs)` или
-    /// `language IS NULL` (трек ещё не классифицирован — даём шанс на показ).
-    /// Принимает sc_track_id'ы, возвращает множество разрешённых.
     pub(crate) async fn filter_tracks_by_language(
         &self,
         sc_track_ids: &[String],

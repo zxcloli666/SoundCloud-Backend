@@ -1,8 +1,10 @@
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use backend_contracts::CollabTrainPayload;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::common::admin::AdminAuth;
 use crate::error::AppResult;
@@ -16,8 +18,6 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Deserialize, Default)]
 struct TrainBody {
-    #[serde(default)]
-    dim: Option<u32>,
     #[serde(default, rename = "minCount")]
     min_count: Option<u32>,
 }
@@ -34,15 +34,36 @@ async fn train(
     _: AdminAuth,
     State(st): State<AppState>,
     body: Option<Json<TrainBody>>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<(StatusCode, Json<Value>)> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
-    let result = st
-        .collab_trainer
-        .train_now(body.dim, body.min_count)
+    let job_id = st
+        .collab_jobs
+        .enqueue(CollabTrainPayload {
+            min_count: body.min_count,
+        })
         .await?;
-    Ok(Json(json!({
-        "enqueued": result.enqueued,
-        "sessions": result.sessions,
-        "reason": result.reason,
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "accepted": true, "jobId": job_id })),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dimension_from_an_old_client_is_ignored_and_the_min_count_survives() {
+        let body: TrainBody =
+            serde_json::from_value(json!({ "dim": 64, "minCount": 3 })).expect("train body");
+
+        assert_eq!(body.min_count, Some(3));
+        assert_eq!(
+            serde_json::to_value(CollabTrainPayload {
+                min_count: body.min_count,
+            })
+            .expect("payload"),
+            json!({ "min_count": 3 })
+        );
+    }
 }

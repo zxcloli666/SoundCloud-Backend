@@ -1,0 +1,35 @@
+UPDATE soundcloud_connections
+SET access_token = $4,
+    refresh_token = $5,
+    expires_at = $6,
+    scope = $7,
+    refresh_generation = refresh_generation + 1,
+    refresh_failure_count = 0,
+    refresh_rejection_count = 0,
+    first_refresh_rejection_at = NULL,
+    refresh_lease_id = NULL,
+    refresh_lease_expires_at = NULL,
+    last_refresh_success_at = now(),
+    last_refresh_error_kind = NULL,
+    last_refresh_error = NULL,
+    retry_at = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND refresh_lease_id = $2
+  AND refresh_generation = $3
+RETURNING id,
+          soundcloud_user_id,
+          oauth_app_id,
+          access_token,
+          refresh_token,
+          expires_at,
+          scope,
+          refresh_generation,
+          refresh_failure_count,
+          refresh_lease_id,
+          refresh_lease_expires_at,
+          last_refresh_attempt_at,
+          last_refresh_success_at,
+          last_refresh_error_kind,
+          last_refresh_error,
+          retry_at

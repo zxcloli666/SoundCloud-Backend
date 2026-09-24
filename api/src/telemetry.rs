@@ -1,4 +1,8 @@
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;
 
 pub fn init() {
     let filter = EnvFilter::try_from_default_env()

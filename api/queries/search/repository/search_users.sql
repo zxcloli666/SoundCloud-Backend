@@ -1,4 +1,3 @@
--- User search via trgm. Columns in UserRow order.
 SELECT sc_user_id,
        urn,
        username,
@@ -27,7 +26,8 @@ SELECT sc_user_id,
        created_at,
        updated_at
 FROM users
-WHERE username_normalized LIKE $1
-   OR LOWER(username) LIKE $1
-ORDER BY followers_count DESC NULLS LAST, sc_synced_at DESC, sc_user_id DESC LIMIT $2
+WHERE ($1::text IS NULL OR username_normalized LIKE $5
+   OR (NOT $6::bool AND LOWER(username) LIKE $1))
+  AND ($4::text[] IS NULL OR sc_user_id = ANY($4))
+ORDER BY array_position($4::text[], sc_user_id), followers_count DESC NULLS LAST, sc_synced_at DESC, sc_user_id DESC LIMIT $2
 OFFSET $3

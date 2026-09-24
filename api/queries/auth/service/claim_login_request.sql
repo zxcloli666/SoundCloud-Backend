@@ -3,7 +3,8 @@ SET status       = 'processing',
     step         = 'token',
     redirect_url = NULL
 WHERE state = $1
-  AND status = 'pending' RETURNING id,
+  AND status = 'pending'
+  AND expires_at > now() RETURNING id,
           code_verifier,
           oauth_app_id,
           target_session_id,

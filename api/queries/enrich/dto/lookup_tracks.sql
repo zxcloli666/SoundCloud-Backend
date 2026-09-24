@@ -12,6 +12,10 @@ SELECT it.sc_track_id       AS "sc_track_id!",
        a.sc_user_id         AS "pa_sc_user_id?",
        a.source             AS "pa_source?",
        a.confidence         AS "pa_confidence?",
+       EXISTS (SELECT 1
+               FROM artist_sc_accounts AS identity
+               WHERE identity.artist_id = a.id
+                 AND (identity.verified OR identity.source = 'mb_resolve')) AS "pa_identity!",
        al.id                AS "al_id?",
        al.title             AS "al_title?",
        al.release_year      AS "al_release_year?",
@@ -22,7 +26,11 @@ SELECT it.sc_track_id       AS "sc_track_id!",
        aa.avatar_url        AS "aa_avatar_url?",
        aa.sc_user_id        AS "aa_sc_user_id?",
        aa.source            AS "aa_source?",
-       aa.confidence        AS "aa_confidence?"
+       aa.confidence        AS "aa_confidence?",
+       EXISTS (SELECT 1
+               FROM artist_sc_accounts AS identity
+               WHERE identity.artist_id = aa.id
+                 AND (identity.verified OR identity.source = 'mb_resolve')) AS "aa_identity!"
 FROM tracks it
          LEFT JOIN artists a ON a.id = it.primary_artist_id
          LEFT JOIN albums al ON al.id = it.album_id

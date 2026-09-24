@@ -9,7 +9,8 @@ use crate::common::pagination::PaginationQuery;
 use crate::common::query::parse_languages;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
-use crate::modules::search::vibe::{LyricsMode, LyricsSearchResponse, VibeResponse};
+use crate::modules::search::lyrics::{LyricsMode, LyricsSearchResponse};
+use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -80,46 +81,24 @@ struct CommonSearchQuery {
     q: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ScopedSearchQuery {
-    #[serde(default)]
-    q: Option<String>,
-    /// Опциональный фильтр: ограничить выдачу контентом конкретного юзера
-    /// (его tracks / playlists). Полезно для inline-поиска на UserPage.
-    #[serde(default)]
-    user_urn: Option<String>,
-}
-
 async fn tracks(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<ScopedSearchQuery>,
+    Query(q): Query<super::query::TrackSearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let query = q.q.unwrap_or_default();
-    let user = q.user_urn.filter(|s| !s.is_empty());
-    Ok(Json(
-        st.search
-            .tracks(&query, user.as_deref(), page, limit)
-            .await?,
-    ))
+    Ok(Json(st.search.tracks(&q, page, limit).await?))
 }
 
 async fn playlists(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<ScopedSearchQuery>,
+    Query(q): Query<super::query::PlaylistSearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let query = q.q.unwrap_or_default();
-    let user = q.user_urn.filter(|s| !s.is_empty());
-    Ok(Json(
-        st.search
-            .playlists(&query, user.as_deref(), page, limit)
-            .await?,
-    ))
+    Ok(Json(st.search.playlists(&q, page, limit).await?))
 }
 
 async fn users(
@@ -130,7 +109,7 @@ async fn users(
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
     let query = q.q.unwrap_or_default();
-    Ok(Json(st.search.users(&query, page, limit).await?))
+    Ok(Json(st.search.users(&query, None, page, limit).await?))
 }
 
 async fn artists(

@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::cache_service::CacheScope;
@@ -21,18 +21,16 @@ pub struct AuthOverview {
     pub active_24h: i64,
 }
 
-/// GET /admin/auth/overview — session-token health derived from the `sessions`
-/// table. `expires_at` is stored as naive UTC, so it is compared against
-/// `now() at time zone 'utc'`.
 #[tracing::instrument(skip_all)]
 pub async fn overview(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<AuthOverview>> {
     if let Ok(Some(raw)) = state.cache.get_raw(OVERVIEW_KEY).await
-        && let Ok(cached) = serde_json::from_str::<AuthOverview>(&raw) {
-            return Ok(Json(cached));
-        }
+        && let Ok(cached) = serde_json::from_str::<AuthOverview>(&raw)
+    {
+        return Ok(Json(cached));
+    }
 
     let row = sqlx::query_file!("queries/admin/auth_overview/overview.sql")
         .fetch_one(&state.pg)
@@ -74,17 +72,16 @@ pub struct OAuthAppHealth {
     pub sessions_expired: i64,
 }
 
-/// GET /admin/oauth-apps/health — per-app session breakdown (sessions reference
-/// the app via `sessions.oauth_app_id`, a text mirror of `oauth_apps.id`).
 #[tracing::instrument(skip_all)]
 pub async fn oauth_health(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<OAuthAppHealth>>> {
     if let Ok(Some(raw)) = state.cache.get_raw(OAUTH_HEALTH_KEY).await
-        && let Ok(cached) = serde_json::from_str::<Vec<OAuthAppHealth>>(&raw) {
-            return Ok(Json(cached));
-        }
+        && let Ok(cached) = serde_json::from_str::<Vec<OAuthAppHealth>>(&raw)
+    {
+        return Ok(Json(cached));
+    }
 
     let rows = sqlx::query_file!("queries/admin/auth_overview/oauth_health.sql")
         .fetch_all(&state.pg)

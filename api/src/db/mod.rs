@@ -1,43 +1,15 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use anyhow::{Context, ensure};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{ConnectOptions, PgPool};
 use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-pub mod advisory_locks;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 109;
 
-/// Ops-БД: телеметрия/обучающие выборки и прочее, что не нужно отдаче.
-///
-/// Живёт на кроновой ноде (load) отдельным постгресом. На main/star не
-/// сконфигурирована — тогда это `None`, и все её потребители тихо становятся
-/// no-op'ами: ни заглушечной БД, ни падения на старте.
-#[derive(Clone, Default)]
-pub struct OpsDb(Option<PgPool>);
-
-impl OpsDb {
-    pub fn disabled() -> Self {
-        Self(None)
-    }
-
-    pub fn from_pool(pool: PgPool) -> Self {
-        Self(Some(pool))
-    }
-
-    /// `None` — ops-БД не подключена; вызывающий обязан тихо выйти.
-    pub fn pool(&self) -> Option<&PgPool> {
-        self.0.as_ref()
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.0.is_some()
-    }
-}
-
-/// Разбирает URL и накладывает сверху TLS/mTLS из отдельных env-переменных.
-/// Что задано отдельно — выигрывает у того, что зашито в query-строку URL.
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     let mut opts = PgConnectOptions::from_str(&cfg.url)?;
 
@@ -53,8 +25,6 @@ fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     if let Some(key) = &cfg.ssl.client_key {
         opts = opts.ssl_client_key(key);
     }
-    // Дали серты, но не сказали режим — по умолчанию проверяем цепочку и хост.
-    // Иначе mTLS-конфиг молча деградировал бы до `prefer` (дефолт sqlx).
     if cfg.ssl.mode.is_none() && cfg.ssl.root_cert.is_some() {
         opts = opts.ssl_mode(PgSslMode::VerifyFull);
     }
@@ -91,60 +61,42 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     pool(&cfg.database).await
 }
 
-/// `Ok(OpsDb::disabled())`, если ops-БД не сконфигурирована.
-pub async fn connect_ops(cfg: &AppConfig) -> Result<OpsDb, sqlx::Error> {
-    match &cfg.ops_database {
-        Some(ops) => Ok(OpsDb::from_pool(pool(ops).await?)),
-        None => Ok(OpsDb::disabled()),
-    }
+pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
+    let applied =
+        sqlx::query_scalar::<_, bool>("SELECT success FROM _sqlx_migrations WHERE version = $1")
+            .bind(REQUIRED_CORE_SCHEMA_VERSION)
+            .fetch_optional(pool)
+            .await
+            .context("core migration history is unavailable")?;
+    ensure!(
+        applied == Some(true),
+        "core schema is outdated: migration {REQUIRED_CORE_SCHEMA_VERSION} is required"
+    );
+    let playlist_shadow_ready = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('playlist_track_projection') IS NOT NULL
+             AND to_regclass('playlist_membership_state') IS NOT NULL
+             AND to_regclass('playlist_remote_observations') IS NOT NULL
+             AND to_regclass('playlist_membership_state_reconcile_due_idx') IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM information_schema.columns
+                 WHERE table_schema = current_schema()
+                   AND table_name = 'playlists'
+                   AND column_name IN ('desired_rev', 'synced_rev', 'tracks_synced_at')
+             )",
+    )
+    .fetch_one(pool)
+    .await
+    .context("playlist shadow schema validation failed")?;
+    ensure!(
+        playlist_shadow_ready,
+        "playlist shadow schema is incomplete; apply migrations through 0087"
+    );
+    Ok(())
 }
 
-pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
-    run_migrations(pool, advisory_locks::MIGRATIONS, &CORE_MIGRATOR).await
-}
-
-pub async fn migrate_ops(pool: &PgPool) -> Result<(), sqlx::Error> {
-    run_migrations(pool, advisory_locks::MIGRATIONS_OPS, &OPS_MIGRATOR).await
-}
-
-/// Наборы миграций пронумерованы в непересекающихся диапазонах (core `0000+`,
-/// ops `9000+`), поэтому обе цепочки могут ужиться в ОДНОЙ базе на общем
-/// `_sqlx_migrations` — это дефолт для локалки и валидный all-in-one деплой.
-/// Ради этого нужен `ignore_missing`: иначе core-мигратор увидит применённые
-/// `9000+` (и наоборот) и упадёт `VersionMissing`. Проверка контрольных сумм
-/// (`VersionMismatch` на правку применённой миграции) при этом остаётся.
-static CORE_MIGRATOR: sqlx::migrate::Migrator = {
-    let mut m = sqlx::migrate!("./migrations");
-    m.ignore_missing = true;
-    m
-};
-
-static OPS_MIGRATOR: sqlx::migrate::Migrator = {
-    let mut m = sqlx::migrate!("./migrations-ops");
-    m.ignore_missing = true;
-    m
-};
-
-async fn run_migrations(
-    pool: &PgPool,
-    lock: i64,
-    migrator: &sqlx::migrate::Migrator,
-) -> Result<(), sqlx::Error> {
-    let mut conn = pool.acquire().await?;
-    sqlx::query("SELECT pg_advisory_lock($1)")
-        .bind(lock)
-        .execute(&mut *conn)
-        .await?;
-
-    let result = migrator.run(&mut *conn).await;
-
-    sqlx::query("SELECT pg_advisory_unlock($1)")
-        .bind(lock)
-        .execute(&mut *conn)
-        .await?;
-
-    result.map_err(|e| sqlx::Error::Migrate(Box::new(e)))
-}
+#[cfg(test)]
+mod connection_discipline_tests;
 
 #[cfg(test)]
 mod tests {
@@ -209,5 +161,46 @@ mod tests {
         ))
         .expect_err("should reject");
         assert!(err.to_string().contains("verify-most"), "{err}");
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn schema_check_requires_latest_core_migration(pool: PgPool) -> anyhow::Result<()> {
+        sqlx::query(
+            "CREATE TABLE _sqlx_migrations (
+                version bigint PRIMARY KEY,
+                success boolean NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        let error = verify_schema(&pool).await.expect_err("outdated schema");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("migration {REQUIRED_CORE_SCHEMA_VERSION}"))
+        );
+
+        sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES ($1, true)")
+            .bind(REQUIRED_CORE_SCHEMA_VERSION)
+            .execute(&pool)
+            .await?;
+        sqlx::raw_sql(
+            "CREATE TABLE playlists (urn text PRIMARY KEY);
+             CREATE TABLE playlist_track_projection (playlist_urn text);
+             CREATE TABLE playlist_membership_state (
+                 playlist_urn text PRIMARY KEY,
+                 next_reconcile_at timestamptz,
+                 sync_status text NOT NULL
+             );
+             CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
+             CREATE INDEX playlist_membership_state_reconcile_due_idx
+                 ON playlist_membership_state (next_reconcile_at, playlist_urn)
+                 WHERE sync_status <> 'clean';",
+        )
+        .execute(&pool)
+        .await?;
+
+        verify_schema(&pool).await
     }
 }

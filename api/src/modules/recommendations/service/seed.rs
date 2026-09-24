@@ -1,7 +1,7 @@
 use crate::qdrant::collections;
 
-use super::types::SeedVectors;
 use super::RecommendationsService;
+use super::types::SeedVectors;
 
 impl RecommendationsService {
     pub(crate) async fn load_track_vectors(&self, track_id: u64) -> SeedVectors {

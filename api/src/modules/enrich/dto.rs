@@ -44,8 +44,8 @@ pub struct ArtistDto {
     pub verified: bool,
 }
 
-fn artist_verified(source: &str, sc_user_id: Option<&str>) -> bool {
-    matches!(source, "isrc" | "mb" | "genius" | "spotify" | "sc_verified") || sc_user_id.is_some()
+fn artist_verified(source: &str, has_identity_account: bool) -> bool {
+    has_identity_account || matches!(source, "isrc" | "mb" | "genius" | "spotify")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,7 +93,7 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
 
     let mut by_track: HashMap<Uuid, Vec<ParticipantDto>> = HashMap::new();
     for p in participants {
-        let verified = artist_verified(&p.artist_source, p.artist_sc_user_id.as_deref());
+        let verified = artist_verified(&p.artist_source, p.artist_identity);
         by_track
             .entry(p.track_id)
             .or_default()
@@ -117,7 +117,7 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
         let primary_artist = match (r.pa_id, r.pa_name) {
             (Some(id), Some(name)) => {
                 let source = r.pa_source.unwrap_or_else(|| "heuristic".to_string());
-                let verified = artist_verified(&source, r.pa_sc_user_id.as_deref());
+                let verified = artist_verified(&source, r.pa_identity);
                 Some(ArtistDto {
                     id,
                     name,
@@ -140,7 +140,7 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
                 primary_artist: match (r.aa_id, r.aa_name) {
                     (Some(aid), Some(aname)) => {
                         let source = r.aa_source.unwrap_or_else(|| "heuristic".to_string());
-                        let verified = artist_verified(&source, r.aa_sc_user_id.as_deref());
+                        let verified = artist_verified(&source, r.aa_identity);
                         Some(ArtistDto {
                             id: aid,
                             name: aname,
@@ -156,9 +156,6 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
             }),
             _ => None,
         };
-        // role='primary' в participants — это co-primary артисты ("ghasaii,
-        // psychosis"): фронт склеивает их в строку авторов. Самого
-        // primary_artist из списка убираем, он уже отдан отдельным полем.
         let mut participants = by_track.remove(&r.track_id).unwrap_or_default();
         if let Some(pa) = primary_artist.as_ref() {
             participants.retain(|p| !(p.role == "primary" && p.artist.id == pa.id));
@@ -198,8 +195,6 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
 }
 
 fn parse_year(s: &str) -> Option<i16> {
-    // .get(): вход — сырые SC-поля, мультибайт в первых байтах не должен
-    // паниковать на срезе.
     s.get(..4)?
         .parse::<i16>()
         .ok()
@@ -272,9 +267,10 @@ pub async fn apply_to_tracks(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()>
             }
         }
         if let Some(obj) = t.as_object_mut()
-            && let Ok(value) = serde_json::to_value(&filled) {
-                obj.insert("enrichment".into(), value);
-            }
+            && let Ok(value) = serde_json::to_value(&filled)
+        {
+            obj.insert("enrichment".into(), value);
+        }
     }
     Ok(())
 }

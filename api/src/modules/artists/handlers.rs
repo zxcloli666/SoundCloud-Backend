@@ -10,8 +10,8 @@ use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
 use crate::modules::enrich::dto as enrich_dto;
-use crate::modules::enrich::normalize::normalize_name;
 use crate::state::AppState;
+use catalog_normalize::normalize_name;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -208,8 +208,6 @@ async fn tracks(
     })))
 }
 
-/// Все треки где этот артист — `cover_of_artist_id`. То есть кавера
-/// сторонних uploader'ов на оригинал этого артиста.
 async fn covers(
     State(st): State<AppState>,
     _ctx: SessionCtx,
@@ -429,7 +427,6 @@ async fn fetch_artist_tracks(
     limit: i64,
 ) -> AppResult<Vec<Value>> {
     let offset = page.max(0) * limit;
-    // static arm per (role, sort) — keeps dropped columns failing at compile
     let recent = sort == "recent";
     let ids: Vec<String> = match (role, recent) {
         ("primary", false) => sqlx::query_file!(

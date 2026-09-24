@@ -4,13 +4,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
-use reqwest::Client;
 use sqlx::PgPool;
 use tracing::debug;
+use wreq::Client;
 
 use crate::error::AppResult;
 
-const MISS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const HEAD_CONCURRENCY: usize = 16;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -30,41 +29,13 @@ impl S3VerifierService {
         })
     }
 
-    /// True если файл `sc_track_id` подтверждён в S3 (через свежий
-    /// `s3_verified_at` или live HEAD). False если миссинг или storage_url
-    /// не сконфигурирован (последнее — fail-open: пусть стриминг
-    /// доделает работу).
-    pub async fn is_present(&self, sc_track_id: &str) -> bool {
-        if self.storage_url.is_empty() {
-            return false;
-        }
-        let ids = vec![sc_track_id.to_string()];
-        match self.find_missing(&ids).await {
-            Ok(missing) => !missing.contains(sc_track_id),
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "S3 verify failed; assuming missing");
-                false
-            }
-        }
-    }
-
-    /// URL вида `{storage}/redirect/soundcloud_tracks_{id}.m4a` — стабильный
-    /// download-link для воркеров; совпадает с тем, что storage публикует в
-    /// `storage.track_uploaded`.
-    pub fn redirect_url_for(&self, sc_track_id: &str) -> String {
-        format!(
-            "{}/redirect/soundcloud_tracks_{sc_track_id}.m4a",
-            self.storage_url
-        )
-    }
-
     pub async fn find_missing(&self, sc_track_ids: &[String]) -> AppResult<HashSet<String>> {
         let mut missing: HashSet<String> = HashSet::new();
         if sc_track_ids.is_empty() || self.storage_url.is_empty() {
             return Ok(missing);
         }
 
-        let ttl_cutoff = Utc::now() - chrono::Duration::from_std(MISS_TTL).unwrap();
+        let ttl_cutoff = Utc::now() - chrono::Duration::hours(24);
 
         type VerifyMap =
             std::collections::HashMap<String, (Option<DateTime<Utc>>, Option<DateTime<Utc>>)>;

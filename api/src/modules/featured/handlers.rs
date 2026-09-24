@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, patch};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::common::admin::AdminAuth;
 use crate::common::session::SessionCtx;
@@ -46,11 +46,7 @@ async fn pick(
     State(st): State<AppState>,
     ctx: SessionCtx,
 ) -> AppResult<Json<Option<FeaturedResult>>> {
-    Ok(Json(
-        st.featured
-            .pick(&ctx.session_id.to_string(), &ctx.sc_user_id)
-            .await?,
-    ))
+    Ok(Json(st.featured.pick(&ctx.sc_user_id).await?))
 }
 
 async fn find_all(_: AdminAuth, State(st): State<AppState>) -> AppResult<Json<Vec<FeaturedItem>>> {

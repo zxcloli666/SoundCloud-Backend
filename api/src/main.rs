@@ -1,68 +1,84 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod background_jobs;
+#[cfg(test)]
+#[path = "background_surface_tests.rs"]
+mod background_surface_tests;
 mod bus;
 mod cache;
+#[cfg(test)]
+#[path = "comment_surface_tests.rs"]
+mod comment_surface_tests;
 mod common;
 mod config;
+#[cfg(test)]
+mod contract_snapshots;
 mod db;
+#[cfg(test)]
+#[path = "env_surface_tests.rs"]
+mod env_surface_tests;
 mod error;
+mod metrics;
 mod modules;
+#[cfg(feature = "profiling")]
+mod profiling;
 mod qdrant;
+#[cfg(test)]
+#[path = "query_surface_tests.rs"]
+mod query_surface_tests;
 mod redis;
 mod router;
 mod sc;
+#[cfg(test)]
+#[path = "sc_surface_tests.rs"]
+mod sc_surface_tests;
+#[cfg(test)]
+#[path = "secret_surface_tests.rs"]
+mod secret_surface_tests;
 mod state;
 mod telemetry;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::bus::nats::NatsService;
-use crate::cache::{CacheService, ListCacheService};
+use crate::cache::CacheService;
+use crate::common::admission::PublicAdmission;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
 use crate::modules::auth::{AuthService, LinkService, TokenProvider};
 use crate::modules::cold_refresh::ColdRefreshService;
-use crate::modules::collab::{CollabTrainerService, CollabVectorService};
+use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
 use crate::modules::dislikes::DislikesService;
-use crate::modules::enrich::{AiResolverClient, ArtistCrawlService, EnrichService, MbClient};
 use crate::modules::events::EventsService;
 use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
-use crate::modules::lyrics::genius::GeniusService;
-use crate::modules::lyrics::lrclib::LrclibService;
-use crate::modules::lyrics::musixmatch::MusixmatchService;
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
-use crate::modules::playlists::PlaylistsService;
+use crate::modules::playlists::{PlaylistsDeps, PlaylistsService};
 use crate::modules::recommendations::{RecommendationsService, S3VerifierService};
 use crate::modules::search::SearchService;
 use crate::modules::subscriptions::SubscriptionsService;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::tracks::TracksService;
-use crate::modules::transcode::TranscodeTriggerService;
 use crate::modules::users::UsersService;
 use crate::qdrant::QdrantService;
 use crate::sc::{ScClient, ScReadService};
 use crate::state::AppState;
 
-const BG_TICK: Duration = Duration::from_secs(60);
-const HEAL_TICK: Duration = Duration::from_secs(300);
-const BG_WORK_TIMEOUT: Duration = Duration::from_secs(30);
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     tls_common::init_crypto();
     telemetry::init();
+    metrics::init();
 
     let config = Arc::new(AppConfig::from_env());
     info!(port = config.port, "backend starting");
@@ -78,48 +94,16 @@ async fn main() {
     let pg = db::connect(&config)
         .await
         .expect("Failed to connect to PostgreSQL");
+    db::verify_schema(&pg)
+        .await
+        .expect("PostgreSQL schema is incompatible; run jobs-migrate core before API");
     info!("PostgreSQL connected");
 
-    // Ops-БД опциональна: не задана — телеметрия рекомендаций выключена, нода
-    // стартует как обычно. Заглушку не поднимаем и стартовать не мешаем.
-    let ops = db::connect_ops(&config)
-        .await
-        .expect("Failed to connect to ops PostgreSQL");
-    if ops.is_enabled() {
-        info!("ops PostgreSQL connected");
-    } else {
-        info!("OPS_DATABASE_URL not set: rec telemetry disabled");
-    }
-
-    // Boot-time migrate is gated: set MIGRATE_ON_BOOT=false once the deploy runs the
-    // standalone `migrate` bin as a discrete pre-start step — a failed migration then
-    // fails the deploy instead of crashing app startup. Default on = current behaviour.
-    if env_flag("MIGRATE_ON_BOOT", true) {
-        if let Err(e) = db::migrate(&pg).await {
-            error!(error = %e, "Failed to run migrations");
-            std::process::exit(1);
-        }
-        info!("Migrations applied");
-    } else {
-        info!("MIGRATE_ON_BOOT=false: migrations managed externally (run `migrate` bin)");
-    }
-
-    // Гейт у ops свой: core-схемой на кроновой ноде владеет main (там
-    // MIGRATE_ON_BOOT=false), а ops-схема — своя, локальная и одноразовая,
-    // её незачем катить руками.
-    if let Some(ops_pg) = ops.pool() {
-        if env_flag("OPS_MIGRATE_ON_BOOT", true) {
-            if let Err(e) = db::migrate_ops(ops_pg).await {
-                error!(error = %e, "Failed to run ops migrations");
-                std::process::exit(1);
-            }
-            info!("Ops migrations applied");
-        } else {
-            info!("OPS_MIGRATE_ON_BOOT=false: ops migrations managed externally");
-        }
-    }
-
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
+    let admission = PublicAdmission::new(
+        redis::connect_admission(&config).expect("Failed to create admission Redis pool"),
+        config.admission.clone(),
+    );
     info!("Redis pool ready");
 
     let shutdown = CancellationToken::new();
@@ -129,197 +113,118 @@ async fn main() {
         .expect("Failed to connect to NATS");
     info!("NATS connected");
 
-    let qdrant = QdrantService::connect(&config.qdrant).expect("Failed to init Qdrant client");
-    qdrant.clone().spawn_bootstrap(shutdown.clone());
+    let qdrant = match QdrantService::connect(&config.qdrant) {
+        Ok(qdrant) => qdrant,
+        Err(error) => {
+            error!(%error, "Qdrant client initialization failed");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = qdrant.prepare_required_collections().await {
+        error!(%error, "Qdrant startup validation failed");
+        std::process::exit(1);
+    }
+    info!("Qdrant ready");
 
-    let http_client = reqwest::Client::builder()
+    let http_client = sc_fingerprint::builder(None)
         .tcp_keepalive(Duration::from_secs(60))
         .pool_max_idle_per_host(20)
         .pool_idle_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
-        .user_agent("scd-backend/0.1")
         .build()
         .expect("Failed to build shared HTTP client");
 
-    let sc = ScClient::new(&config.soundcloud).expect("Failed to build SC HTTP client");
+    let sc = ScClient::new(&sc_transport::ScConfig {
+        proxy_url: config.soundcloud.proxy_url.clone(),
+        proxy_fallback: config.soundcloud.proxy_fallback,
+        api_base: None,
+        home_base: None,
+    })
+    .expect("Failed to build SC HTTP client");
 
     let relay_client = build_call_relay("backend").await;
     let sc = match relay_client.clone() {
         Some(r) => sc.with_relay(r),
         None => sc,
     };
-    let external_fetcher = crate::common::external_fetch::ExternalFetcher::new(
-        http_client.clone(),
-        config.soundcloud.proxy_url.clone(),
-        relay_client.clone(),
-    );
-
-    let oauth_apps = OAuthAppsService::new(pg.clone(), config.clone());
-    if !reserve
-        && let Err(e) = oauth_apps.migrate_env_app().await {
-            warn!(error = %e, "OAuthApps env migration failed");
-        }
+    let oauth_apps = OAuthAppsService::new(pg.clone());
     match oauth_apps.count_active().await {
         Ok(n) => info!(active = n, "Active OAuth apps"),
         Err(e) => warn!(error = %e, "Failed to count active OAuth apps"),
     }
 
-    let auth_health = crate::modules::auth::AuthHealthService::new(redis_pool.clone());
-    let auth = AuthService::new(
-        pg.clone(),
-        sc.clone(),
-        oauth_apps.clone(),
-        config.clone(),
-        auth_health,
-    );
+    let auth_health =
+        crate::modules::auth::AuthHealthService::with_database(redis_pool.clone(), pg.clone());
+    let auth = AuthService::new(pg.clone(), sc.clone(), oauth_apps.clone(), auth_health);
     let link = LinkService::new(pg.clone(), auth.clone());
 
-    let oauth_app_tokens = OAuthAppTokenService::new(pg.clone(), sc.clone(), oauth_apps.clone());
-    if !reserve {
-        oauth_app_tokens
-            .clone()
-            .spawn_refresh_loop(shutdown.clone());
-    }
+    let oauth_app_tokens = OAuthAppTokenService::new(pg.clone());
     let tokens = TokenProvider::new(auth.clone(), oauth_app_tokens.clone());
-    // The public-read facade: apiv2 via relay (Lua) → apiv2 via proxy&relay → apiv1.
-    // Injected into every public read path.
-    let resolve = ScReadService::new(sc.clone(), tokens.clone());
+    let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 
     let cache = CacheService::new(redis_pool.clone());
-    let list_cache = ListCacheService::new(redis_pool.clone());
-    let events = EventsService::new(pg.clone(), ops.clone());
-    let subscriptions = SubscriptionsService::new(
-        pg.clone(),
-        config.subscriptions.snapshot_dir.clone(),
-        config.subscriptions.always_premium,
+    let background_jobs = crate::background_jobs::BackgroundJobs::new(nats.clone());
+    let indexing_jobs = crate::background_jobs::IndexingJobs::new(background_jobs.clone());
+    let collab_jobs = crate::background_jobs::CollabJobs::new(
+        background_jobs.clone(),
+        redis_pool.clone(),
+        &config.collab_trigger,
     );
-    if let Err(e) = subscriptions.restore_from_snapshot().await {
-        warn!(error = %e, "subscriptions restore failed");
-    }
-    if !reserve {
-        subscriptions.spawn_snapshot_loop(shutdown.clone());
-    }
+    let events = EventsService::new(
+        pg.clone(),
+        background_jobs.clone(),
+        indexing_jobs.clone(),
+        collab_jobs.clone(),
+    );
+    let subscriptions = SubscriptionsService::new(pg.clone(), config.subscriptions.always_premium);
     let auras = AurasService::new(pg.clone(), subscriptions.clone());
-    let sync_queue =
-        SyncQueueService::new(pg.clone(), sc.clone(), auth.clone(), redis_pool.clone());
-    let cold_refresh = ColdRefreshService::new(
-        sc.clone(),
+    let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
+    let cold_refresh = ColdRefreshService::new(pg.clone(), config.cold.clone());
+    let me = MeService::new(pg.clone(), sync_queue.clone(), cold_refresh.clone());
+    let s3_verifier =
+        S3VerifierService::new(http_client.clone(), config.storage.url.clone(), pg.clone());
+    let worker = WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());
+    let collab_vector = CollabVectorService::new(qdrant.clone());
+    let recommendations = RecommendationsService::new(
+        qdrant.clone(),
         pg.clone(),
-        cache.clone(),
-        config.cold.clone(),
-        resolve.clone(),
-        tokens.clone(),
+        nats.clone(),
+        redis_pool.clone(),
+        worker.clone(),
+        s3_verifier.clone(),
+        collab_vector.clone(),
+        config.soundwave.clone(),
     );
-    let me = MeService::new(
-        sc.clone(),
-        pg.clone(),
-        list_cache.clone(),
-        sync_queue.clone(),
-    );
-    let tracks = TracksService::new(
-        sc.clone(),
-        pg.clone(),
-        list_cache.clone(),
-        sync_queue.clone(),
-        cold_refresh.clone(),
-        tokens.clone(),
-        resolve.clone(),
-    );
-    let playlists = PlaylistsService::new(
-        sc.clone(),
-        pg.clone(),
-        list_cache.clone(),
-        sync_queue.clone(),
-        cold_refresh.clone(),
-        tokens.clone(),
-        resolve.clone(),
-    );
-    let users = UsersService::new(
-        sc.clone(),
-        pg.clone(),
-        list_cache.clone(),
-        cold_refresh.clone(),
-        tokens.clone(),
-        resolve.clone(),
-    );
+    let tracks = TracksService::new(crate::modules::tracks::TracksServiceDependencies {
+        sc: sc.clone(),
+        pg: pg.clone(),
+        sync_queue: sync_queue.clone(),
+        cold_refresh: cold_refresh.clone(),
+        tokens: tokens.clone(),
+    });
+    let playlists = PlaylistsService::new(PlaylistsDeps {
+        sc: sc.clone(),
+        pg: pg.clone(),
+        sync_queue: sync_queue.clone(),
+        cold_refresh: cold_refresh.clone(),
+        tokens: tokens.clone(),
+        background_jobs: background_jobs.clone(),
+    });
+    let users = UsersService::new(pg.clone(), cold_refresh.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
     let history = HistoryService::new(pg.clone());
-    let featured = FeaturedService::new(pg.clone(), resolve.clone());
-    let s3_verifier =
-        S3VerifierService::new(http_client.clone(), config.storage.url.clone(), pg.clone());
-    let transcode = TranscodeTriggerService::new(
-        http_client.clone(),
-        config.clone(),
-        nats.clone(),
-        s3_verifier.clone(),
-    );
-    let worker = WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone(), reserve);
-    if !reserve {
-        worker.spawn_done_consumer();
-    }
-    let lrclib = LrclibService::new(external_fetcher.clone());
-    let mxm = MusixmatchService::new(external_fetcher.clone(), config.mxm.api_base.clone());
-    let genius = GeniusService::new(external_fetcher.clone(), config.genius.clone());
-    let lyrics = LyricsService::new(
-        pg.clone(),
-        nats.clone(),
-        qdrant.clone(),
-        lrclib,
-        mxm,
-        genius.clone(),
-        worker.clone(),
-        transcode.clone(),
-        s3_verifier.clone(),
-        config.lyrics.indexing_concurrency,
-        reserve,
-    );
-    if !reserve {
-        lyrics.spawn_consumers();
-        lyrics.spawn_reap_loops(shutdown.clone());
-    }
-
-    let collab_vector = CollabVectorService::new(qdrant.clone());
-    let collab_trainer = CollabTrainerService::new(
-        pg.clone(),
-        nats.clone(),
-        qdrant.clone(),
-        collab_vector.clone(),
-        config.collab.clone(),
-    );
-    if !reserve {
-        collab_trainer.spawn_bootstrap_and_cron(shutdown.clone());
-    }
+    let featured = FeaturedService::new(pg.clone());
+    let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
 
     let indexing = IndexingService::new(
         pg.clone(),
-        nats.clone(),
-        qdrant.clone(),
-        lyrics.clone(),
-        transcode.clone(),
+        background_jobs.clone(),
+        indexing_jobs,
         config.max_track_duration_ms,
-        config.cold.track_ttl_sec,
     );
-    if !reserve {
-        indexing.spawn(shutdown.clone());
-    }
     cold_refresh.install_indexing(indexing.clone());
-
-    let duration_resolver = crate::modules::indexing::DurationResolver::new(
-        pg.clone(),
-        resolve.clone(),
-        config.max_track_duration_ms,
-    );
-    if !reserve {
-        duration_resolver.spawn(shutdown.clone());
-    }
-
-    let artist_account_walker = crate::modules::enrich::ArtistAccountWalker::new(
-        pg.clone(),
-        resolve.clone(),
-        indexing.clone(),
-    );
 
     let likes = LikesService::new(
         pg.clone(),
@@ -328,104 +233,7 @@ async fn main() {
         events.clone(),
     );
 
-    let mb = MbClient::new(
-        external_fetcher.clone(),
-        config.enrich.mb_user_agent.clone(),
-        config.enrich.mb_rate_limit_ms,
-    );
-    let ai_resolver = if config.enrich.ai_enabled {
-        Some(AiResolverClient::new(
-            nats.clone(),
-            redis_pool.clone(),
-            config.enrich.ai_timeout_ms,
-            config.enrich.ai_daily_budget,
-        ))
-    } else {
-        None
-    };
-    let enrich = EnrichService::new(
-        pg.clone(),
-        mb.clone(),
-        genius.clone(),
-        ai_resolver,
-        config.enrich.clone(),
-    );
-    if !reserve
-        && let Some(kicker) = enrich.spawn(shutdown.clone()) {
-            indexing.install_enrich_kicker(kicker);
-        }
-
-    let artist_crawl = ArtistCrawlService::new(
-        pg.clone(),
-        mb,
-        genius.clone(),
-        sc.clone(),
-        tokens.clone(),
-        resolve.clone(),
-        lyrics.clone(),
-    );
-
-    let ai_matcher = if config.enrich.ai_enabled {
-        Some(crate::modules::enrich::ai_matcher::AiMatcherClient::new(
-            nats.clone(),
-            redis_pool.clone(),
-            config.enrich.ai_timeout_ms,
-            config.enrich.ai_daily_budget,
-        ))
-    } else {
-        None
-    };
-
-    let sc_account_scanner = crate::modules::enrich::sc_account_scan::ScAccountScanner::new(
-        pg.clone(),
-        resolve.clone(),
-        indexing.clone(),
-        ai_matcher.clone(),
-    );
-
-    let wanted_resolver = crate::modules::enrich::WantedResolverService::new(
-        pg.clone(),
-        resolve.clone(),
-        indexing.clone(),
-        sc_account_scanner.clone(),
-        ai_matcher.clone(),
-        lyrics.clone(),
-        &config.enrich_crawl,
-    );
-    if !reserve {
-        wanted_resolver.spawn(shutdown.clone());
-    }
-    let wanted_resolver_state = wanted_resolver.clone();
-
-    let discover = DiscoverService::new(pg.clone(), cache.clone(), subscriptions.clone());
-    if !reserve {
-        discover.clone().spawn_refresh_loop(shutdown.clone());
-
-        // Catalog discovery (crawl every artist on Genius/MB) on the work pool.
-        crate::modules::discovery::spawn(
-            pg.clone(),
-            artist_crawl.clone(),
-            artist_account_walker.clone(),
-            wanted_resolver.clone(),
-            &config.discovery,
-            shutdown.clone(),
-        );
-
-        let track_discovery =
-            crate::modules::indexing::TrackDiscoveryService::new(resolve.clone(), indexing.clone());
-        sc.install_track_observer(track_discovery.clone());
-    }
-
-    let recommendations = RecommendationsService::new(
-        qdrant.clone(),
-        pg.clone(),
-        ops.clone(),
-        redis_pool.clone(),
-        worker.clone(),
-        s3_verifier.clone(),
-        collab_vector.clone(),
-        config.soundwave.clone(),
-    );
+    let discover = DiscoverService::new(pg.clone(), cache.clone());
 
     let vibe = crate::modules::search::VibeSearchService::new(
         pg.clone(),
@@ -435,116 +243,17 @@ async fn main() {
         qdrant.clone(),
     );
 
-    events.install_deps(indexing.clone(), dislikes.clone(), collab_trainer.clone());
-
-    if !reserve {
-        crate::modules::recommendations::cron::spawn_cron_loops(
-            recommendations.clone(),
-            nats.clone(),
-            shutdown.clone(),
-        );
-    }
-
-    let mut tasks = JoinSet::new();
-
-    if !reserve {
-        let token = shutdown.clone();
-        let sq = sync_queue.clone();
-        tasks.spawn(async move {
-            run_periodic(
-                "sync_queue.flush",
-                token,
-                BG_TICK,
-                BG_WORK_TIMEOUT,
-                move || {
-                    let sq = sq.clone();
-                    async move { sq.flush().await.map(|_| ()) }
-                },
-            )
-            .await;
-        });
-    }
-
-    if !reserve {
-        let token = shutdown.clone();
-        let sq = sync_queue.clone();
-        tasks.spawn(async move {
-            run_periodic(
-                "sync_queue.heal",
-                token,
-                HEAL_TICK,
-                BG_WORK_TIMEOUT,
-                move || {
-                    let sq = sq.clone();
-                    async move { sq.heal().await }
-                },
-            )
-            .await;
-        });
-    }
-
-    if !reserve {
-        let token = shutdown.clone();
-        let auth = auth.clone();
-        tasks.spawn(async move {
-            run_periodic(
-                "auth.cleanup_login_requests",
-                token,
-                BG_TICK,
-                BG_WORK_TIMEOUT,
-                move || {
-                    let auth = auth.clone();
-                    async move { auth.cleanup_expired_login_requests().await }
-                },
-            )
-            .await;
-        });
-    }
-
-    if !reserve {
-        let token = shutdown.clone();
-        let auth = auth.clone();
-        tasks.spawn(async move {
-            run_periodic(
-                "auth.cleanup_link_requests",
-                token,
-                BG_TICK,
-                BG_WORK_TIMEOUT,
-                move || {
-                    let auth = auth.clone();
-                    async move { auth.cleanup_expired_link_requests().await }
-                },
-            )
-            .await;
-        });
-    }
-
-    if !reserve {
-        let token = shutdown.clone();
-        let auth = auth.clone();
-        tasks.spawn(async move {
-            run_periodic(
-                "auth.reap_sessions",
-                token,
-                BG_TICK,
-                BG_WORK_TIMEOUT,
-                move || {
-                    let auth = auth.clone();
-                    async move { auth.reap_dead_sessions().await }
-                },
-            )
-            .await;
-        });
-    }
+    events.install_dislikes(dislikes.clone());
 
     let port = config.port;
     let state = AppState {
         config: config.clone(),
         pg,
+        background_jobs,
         http_metrics: std::sync::Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         cache,
-        list_cache,
         auth,
+        admission,
         link,
         oauth_apps,
         events,
@@ -563,12 +272,9 @@ async fn main() {
         featured,
         lyrics,
         collab_vector,
-        collab_trainer,
+        collab_jobs,
         indexing,
         recommendations,
-        enrich,
-        artist_crawl: artist_crawl.clone(),
-        wanted_resolver: wanted_resolver_state,
         discover,
         sync_queue: sync_queue.clone(),
     };
@@ -579,24 +285,15 @@ async fn main() {
         info!("starting with TLS (ACME)");
         tls_common::serve(tls_cfg, app).await;
     } else {
-        let addr = format!("0.0.0.0:{port}");
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .expect("Failed to bind");
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
         info!(%addr, "starting plain HTTP");
-        axum::serve(listener, app)
-            .with_graceful_shutdown(tls_common::shutdown_signal())
+        tls_common::serve_http(addr, tls_common::ProxyProtocolConfig::from_env(), app)
             .await
             .expect("Server error");
     }
 
     shutdown.cancel();
-    while tasks.join_next().await.is_some() {}
     info!("backend stopped");
-}
-
-fn env_flag(key: &str, default: bool) -> bool {
-    std::env::var(key).map(|v| v != "false").unwrap_or(default)
 }
 
 async fn build_call_relay(role: &str) -> Option<std::sync::Arc<call_relay::Client>> {
@@ -618,7 +315,6 @@ async fn build_call_relay(role: &str) -> Option<std::sync::Arc<call_relay::Clien
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         relay_secret,
         policy: call_relay::tiers::Policy {
-            // Только client-тир — direct/proxy выполняет вызывающая сторона.
             order: vec![call_relay::Tier::Client],
             timeout_ms: 15_000,
             fallback_on_status_5xx: true,
@@ -632,32 +328,6 @@ async fn build_call_relay(role: &str) -> Option<std::sync::Arc<call_relay::Clien
         Err(e) => {
             tracing::warn!(role, error = %e, "call-relay connect failed; running without it");
             None
-        }
-    }
-}
-
-async fn run_periodic<F, Fut>(
-    name: &'static str,
-    token: CancellationToken,
-    tick: Duration,
-    work_timeout: Duration,
-    make_fut: F,
-) where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = error::AppResult<()>>,
-{
-    let mut ticker = tokio::time::interval(tick);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            _ = token.cancelled() => break,
-            _ = ticker.tick() => {
-                match tokio::time::timeout(work_timeout, make_fut()).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => warn!(task = name, error = %e, "Background task failed"),
-                    Err(_) => warn!(task = name, timeout_secs = work_timeout.as_secs(), "Background task timed out"),
-                }
-            }
         }
     }
 }

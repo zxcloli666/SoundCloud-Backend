@@ -6,7 +6,6 @@ pub mod centroids;
 pub mod cold_refresh;
 pub mod collab;
 pub mod discover;
-pub mod discovery;
 pub mod dislikes;
 pub mod enrich;
 pub mod events;
@@ -24,9 +23,11 @@ pub mod search;
 pub mod subscriptions;
 pub mod sync_queue;
 pub mod tracks;
-pub mod transcode;
 pub mod users;
-pub mod work;
 
 pub mod admin;
 pub mod health;
+
+#[cfg(test)]
+#[path = "sc_surface_tests.rs"]
+mod sc_surface_tests;

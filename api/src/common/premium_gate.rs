@@ -8,8 +8,6 @@ use crate::common::session::SessionCtx;
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// premium_reserve-гейт: всё кроме вайтлиста, OPTIONS и админ-токена требует
-/// премиум-сессию (нет сессии → 401, не-премиум → 403). Режим выключен — passthrough.
 pub async fn premium_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     if !state.config.premium_reserve {
         return next.run(req).await;
@@ -38,9 +36,6 @@ pub async fn premium_gate(State(state): State<AppState>, req: Request, next: Nex
     next.run(Request::from_parts(parts, body)).await
 }
 
-/// Открыто без премиум-сессии: health, весь OAuth/login-флоу (только по нему
-/// юзер и получает сессию), /me/subscription (bootstrap-сигнал премиума —
-/// хэндлер сам требует сессию, не-премиуму отдаёт {"premium":false}), ACME HTTP-01.
 fn is_open_path(path: &str) -> bool {
     path == "/health"
         || path == "/me/subscription"

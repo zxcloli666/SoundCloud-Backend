@@ -2,11 +2,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use qdrant_client::qdrant::{
-    point_id::PointIdOptions, vector_output::Vector as VectorVariant,
-    vectors_output::VectorsOptions, GetCollectionInfoRequest, GetPointsBuilder, PointId,
+    GetCollectionInfoRequest, GetPointsBuilder, PointId, point_id::PointIdOptions,
+    vector_output::Vector as VectorVariant, vectors_output::VectorsOptions,
 };
 
-use crate::qdrant::{collections, QdrantService};
+use crate::qdrant::{QdrantService, collections};
 
 const DIM_RECHECK: Duration = Duration::from_secs(60);
 
@@ -33,9 +33,10 @@ impl CollabVectorService {
         {
             let g = self.dim.read().ok()?;
             if let Some(checked) = g.checked_at
-                && checked.elapsed() < DIM_RECHECK {
-                    return g.dim;
-                }
+                && checked.elapsed() < DIM_RECHECK
+            {
+                return g.dim;
+            }
         }
         self.detect_collab_dim().await
     }
@@ -85,13 +86,6 @@ impl CollabVectorService {
                 _ => None,
             },
             _ => None,
-        }
-    }
-
-    /// Сбросить кэш размерности коллаб-коллекции (после переобучения/реиндекса).
-    pub fn invalidate_all(&self) {
-        if let Ok(mut g) = self.dim.write() {
-            *g = DimCache::default();
         }
     }
 }

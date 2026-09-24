@@ -1,24 +1,12 @@
-//! Channel health + combinators for high-load SC fetching across two channels.
-//!
-//! A request can be served by the relay (primary) or the proxy/token chain (backup).
-//! Firing both on every request doubles upstream load for no extra throughput, so the
-//! default is a HEDGE: primary alone, backup only if it is slow or fails — ~1x
-//! upstream load when the primary is healthy, race-like reliability when it isn't.
-
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::error::{AppError, AppResult};
 
-/// How a primary and a backup channel are combined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FetchStrategy {
-    /// Primary only; backup on failure. Fewest SC hits, highest tail latency.
     Fallback,
-    /// Both fired together, first success wins. Lowest latency, ~2x SC hits.
     Race,
-    /// Primary alone unless slow/failed past the hedge delay, then add the backup.
     Hedge,
 }
 
@@ -32,89 +20,59 @@ impl FetchStrategy {
     }
 }
 
-/// Consecutive failures before a channel's breaker opens.
-const BAN_THRESHOLD: u32 = 4;
-/// How long a tripped channel is skipped before being probed again.
-const COOLDOWN_MS: i64 = 60_000;
-
-/// Per-channel circuit breaker. A channel that keeps failing is skipped for a
-/// cooldown so we stop feeding it, then retried. Transient failures do not trip it.
-#[derive(Default)]
-pub struct ChannelHealth {
-    consecutive_bans: AtomicU32,
-    open_until_ms: AtomicI64,
-}
-
-impl ChannelHealth {
-    pub fn is_open(&self) -> bool {
-        now_ms() < self.open_until_ms.load(Ordering::Acquire)
-    }
-
-    pub fn record_ok(&self) {
-        self.consecutive_bans.store(0, Ordering::Release);
-        self.open_until_ms.store(0, Ordering::Release);
-    }
-
-    /// Failure signal for the relay channel, where a sustained outage (no client
-    /// could fulfil the request) collapses to a single coarse error.
-    pub fn record_ban(&self) {
-        self.trip();
-    }
-
-    fn trip(&self) {
-        let n = self.consecutive_bans.fetch_add(1, Ordering::AcqRel) + 1;
-        if n >= BAN_THRESHOLD {
-            self.open_until_ms
-                .store(now_ms() + COOLDOWN_MS, Ordering::Release);
-        }
+pub async fn within_budget<T>(
+    budget: Duration,
+    call: impl Future<Output = AppResult<T>>,
+) -> AppResult<T> {
+    match tokio::time::timeout(budget, call).await {
+        Ok(result) => result,
+        Err(_) => Err(AppError::sc_deadline_exceeded()),
     }
 }
 
-/// Hedge: run `primary`; if it hasn't succeeded within `delay`, also run `backup`
-/// and take the first success. Both fail → the last error.
-pub async fn hedge<T, P, B>(primary: P, delay: Duration, backup: B) -> AppResult<T>
+pub async fn hedge<T, E, P, B>(primary: P, delay: Duration, backup: B) -> AppResult<T>
 where
-    P: Future<Output = AppResult<T>>,
-    B: Future<Output = AppResult<T>>,
+    E: Into<AppError>,
+    P: Future<Output = Result<T, E>>,
+    B: Future<Output = Result<T, E>>,
 {
     tokio::pin!(primary);
     match tokio::time::timeout(delay, &mut primary).await {
         Ok(Ok(v)) => return Ok(v),
-        Ok(Err(_)) => return backup.await,
+        Ok(Err(_)) => return backup.await.map_err(Into::into),
         Err(_) => {}
     }
     first_success(primary, backup).await
 }
 
-/// Race: both fired together, first success wins; both fail → the last error.
-pub async fn race<T, P, B>(primary: P, backup: B) -> AppResult<T>
+pub async fn race<T, E, P, B>(primary: P, backup: B) -> AppResult<T>
 where
-    P: Future<Output = AppResult<T>>,
-    B: Future<Output = AppResult<T>>,
+    E: Into<AppError>,
+    P: Future<Output = Result<T, E>>,
+    B: Future<Output = Result<T, E>>,
 {
     tokio::pin!(primary);
     first_success(primary, backup).await
 }
 
-async fn first_success<T, P, B>(mut primary: std::pin::Pin<&mut P>, backup: B) -> AppResult<T>
+async fn first_success<T, E, P, B>(mut primary: std::pin::Pin<&mut P>, backup: B) -> AppResult<T>
 where
-    P: Future<Output = AppResult<T>>,
-    B: Future<Output = AppResult<T>>,
+    E: Into<AppError>,
+    P: Future<Output = Result<T, E>>,
+    B: Future<Output = Result<T, E>>,
 {
     tokio::pin!(backup);
-    // Each arm is disabled once its channel has resolved, so the select never sees
-    // both arms disabled; when both have errored we return.
     let mut perr: Option<AppError> = None;
     let mut berr: Option<AppError> = None;
     loop {
         tokio::select! {
             r = &mut primary, if perr.is_none() => match r {
                 Ok(v) => return Ok(v),
-                Err(e) => perr = Some(e),
+                Err(e) => perr = Some(e.into()),
             },
             r = &mut backup, if berr.is_none() => match r {
                 Ok(v) => return Ok(v),
-                Err(e) => berr = Some(e),
+                Err(e) => berr = Some(e.into()),
             },
         }
         if perr.is_some() && berr.is_some() {
@@ -126,35 +84,22 @@ where
     }
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
 
-    #[test]
-    fn breaker_trips_after_threshold_and_resets_on_ok() {
-        let h = ChannelHealth::default();
-        for _ in 0..BAN_THRESHOLD - 1 {
-            h.record_ban();
-            assert!(!h.is_open());
-        }
-        h.record_ban();
-        assert!(h.is_open(), "breaker must open at the threshold");
-        h.record_ok();
-        assert!(!h.is_open(), "a success must reset the breaker");
+    const BUDGET: Duration = Duration::from_secs(20);
+
+    async fn slow(answer: &'static str, takes: Duration) -> AppResult<Value> {
+        tokio::time::sleep(takes).await;
+        Ok(Value::from(answer))
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn hedge_returns_primary_when_fast() {
         let r = hedge(
-            async { Ok(Value::from("p")) },
+            async { Ok::<_, AppError>(Value::from("p")) },
             Duration::from_millis(50),
             async { Ok(Value::from("b")) },
         )
@@ -162,10 +107,10 @@ mod tests {
         assert_eq!(r.unwrap(), Value::from("p"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn hedge_falls_back_when_primary_fails_fast() {
         let r = hedge(
-            async { Err(AppError::internal("x")) },
+            async { Err::<Value, _>(AppError::internal("x")) },
             Duration::from_millis(50),
             async { Ok(Value::from("b")) },
         )
@@ -173,39 +118,98 @@ mod tests {
         assert_eq!(r.unwrap(), Value::from("b"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn hedge_backup_wins_when_primary_slow() {
+        let started = tokio::time::Instant::now();
         let r = hedge(
-            async {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                Ok(Value::from("p"))
-            },
+            slow("p", Duration::from_millis(500)),
             Duration::from_millis(20),
             async { Ok(Value::from("b")) },
         )
         .await;
         assert_eq!(r.unwrap(), Value::from("b"));
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn race_first_success_wins() {
-        let r = race(
-            async {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                Ok(Value::from("p"))
-            },
-            async { Ok(Value::from("b")) },
-        )
+        let r = race(slow("p", Duration::from_millis(100)), async {
+            Ok(Value::from("b"))
+        })
         .await;
         assert_eq!(r.unwrap(), Value::from("b"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn race_both_fail_returns_err() {
         let r: AppResult<Value> = race(async { Err(AppError::internal("p")) }, async {
             Err(AppError::internal("b"))
         })
         .await;
         assert!(r.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_relay_and_a_slow_backup_share_one_budget_instead_of_each_paying_its_own() {
+        let started = tokio::time::Instant::now();
+        let result = within_budget(
+            BUDGET,
+            hedge(
+                slow("relay", Duration::from_secs(120)),
+                Duration::from_millis(700),
+                slow("backup", Duration::from_secs(120)),
+            ),
+        )
+        .await;
+
+        assert!(matches!(
+            result.expect_err("a call that nobody answers must end"),
+            AppError::ScDeadlineExceeded
+        ));
+        assert_eq!(started.elapsed(), BUDGET);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_chain_of_slow_tokens_cannot_outlive_the_budget_by_retrying() {
+        let started = tokio::time::Instant::now();
+        let result = within_budget(BUDGET, async {
+            for _ in 0..8 {
+                slow("token", Duration::from_secs(30)).await?;
+            }
+            Ok(Value::from("never"))
+        })
+        .await;
+
+        assert!(matches!(
+            result.expect_err("retries must share the budget"),
+            AppError::ScDeadlineExceeded
+        ));
+        assert_eq!(started.elapsed(), BUDGET);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_call_that_answers_inside_the_budget_is_not_cut_short() {
+        let answer = within_budget(BUDGET, slow("relay", Duration::from_secs(19)))
+            .await
+            .expect("answers in time");
+        assert_eq!(answer, Value::from("relay"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_exhausted_budget_is_a_gateway_timeout_with_its_own_code() {
+        let error = within_budget(
+            Duration::from_secs(1),
+            slow("relay", Duration::from_secs(5)),
+        )
+        .await
+        .expect_err("times out");
+        assert_eq!(error.status(), axum::http::StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(error.public_code(), "soundcloud_read_timed_out");
+        let response = axum::response::IntoResponse::into_response(error);
+        assert_eq!(
+            response.headers().get(axum::http::header::RETRY_AFTER),
+            Some(&axum::http::HeaderValue::from_static("15")),
+            "a timeout must tell the client when to come back"
+        );
     }
 }

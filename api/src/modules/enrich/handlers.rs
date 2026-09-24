@@ -1,15 +1,17 @@
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use backend_contracts::{CrawlArtistPayload, JobKind};
+use catalog_match::AccountRole;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::background_jobs::BackgroundJob;
 use crate::common::admin::AdminAuth;
 use crate::common::sc_ids::normalize_sc_track_id;
 use crate::error::{AppError, AppResult};
-use crate::modules::enrich::sc_accounts::{self, AccountRole};
-use crate::modules::enrich::service::EnrichStats;
+use crate::modules::enrich::stats::{self, EnrichStats};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -48,22 +50,18 @@ async fn run_crawl_now(
     State(st): State<AppState>,
     Path(artist_id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
-    let crawl = st.artist_crawl.clone();
-    let resolver = st.wanted_resolver.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crawl.run_for_artist(artist_id).await {
-            tracing::warn!(%artist_id, error = %e, "run_for_artist failed");
-            return;
-        }
-        if let Err(e) = resolver.run_for_artist(artist_id, 500).await {
-            tracing::warn!(%artist_id, error = %e, "wanted-resolver run_for_artist failed");
-        }
-    });
-    Ok(Json(json!({ "ok": true, "spawned": true })))
+    let job = BackgroundJob::coalescing(
+        JobKind::CrawlArtist,
+        artist_id.to_string(),
+        CrawlArtistPayload { artist_id },
+    )?
+    .with_priority(-5);
+    let job_id = st.background_jobs.enqueue(&job).await?;
+    Ok(Json(json!({ "ok": true, "job_id": job_id })))
 }
 
 async fn get_stats(_: AdminAuth, State(st): State<AppState>) -> AppResult<Json<EnrichStats>> {
-    Ok(Json(st.enrich.stats().await?))
+    Ok(Json(stats::stats(&st.pg).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,7 +125,9 @@ async fn upsert_account(
     if sc.is_empty() {
         return Err(AppError::bad_request("sc_user_id required"));
     }
-    sc_accounts::upsert(&st.pg, artist_id, sc, role, "manual", true).await?;
+    catalog_match::upsert_account(&st.pg, artist_id, sc, role, "manual", true)
+        .await
+        .map_err(claimed_or_database)?;
     if let Some(notes) = req.notes.as_deref() {
         sqlx::query_file!(
             "queries/enrich/handlers/update_account_notes.sql",
@@ -146,8 +146,17 @@ async fn delete_account(
     State(st): State<AppState>,
     Path((artist_id, sc_user_id)): Path<(Uuid, String)>,
 ) -> AppResult<Json<Value>> {
-    let removed = sc_accounts::delete(&st.pg, artist_id, &sc_user_id).await?;
+    let removed = catalog_match::delete_account(&st.pg, artist_id, &sc_user_id).await?;
     Ok(Json(json!({ "ok": removed })))
+}
+
+fn claimed_or_database(error: sqlx::Error) -> AppError {
+    if catalog_match::claims_another_artist(&error) {
+        return AppError::conflict(
+            "this SoundCloud account is already verified for another artist",
+        );
+    }
+    error.into()
 }
 
 #[derive(Debug, Serialize)]

@@ -1,4 +1,3 @@
--- columns in PlaylistRow field order
 SELECT urn,
        sc_playlist_id,
        title,
@@ -16,6 +15,8 @@ SELECT urn,
        playlist_type,
        kind,
        sharing,
+       sc_metadata,
+       deleted_at,
        release_year,
        release_date,
        label_name,
@@ -23,12 +24,9 @@ SELECT urn,
        reposts_count_sc,
        sc_created_at,
        sc_last_modified,
-       tracks_synced_at,
        sc_synced_at,
        last_read_at,
        created_at,
-       updated_at,
-       desired_rev,
-       synced_rev
+       updated_at
 FROM playlists
 WHERE urn = $1

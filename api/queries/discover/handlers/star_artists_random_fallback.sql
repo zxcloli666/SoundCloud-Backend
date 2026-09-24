@@ -1,4 +1,3 @@
--- Star spotlight, random strategy: ORDER BY random() (fallback if sample empty).
 SELECT id,
        name,
        normalized_name,

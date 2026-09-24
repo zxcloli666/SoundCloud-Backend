@@ -8,5 +8,6 @@ ON it.id = ta.track_id
 WHERE ta.artist_id = ANY ($1)
   AND ta.role = 'primary'
   AND it.sharing = 'public'
+  AND it.superseded_by IS NULL
 ORDER BY ta.artist_id, it.sc_track_id, COALESCE (c.play_count, 0) DESC
     LIMIT $2

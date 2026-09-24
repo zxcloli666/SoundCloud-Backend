@@ -1,12 +1,12 @@
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::common::admin::AdminAuth;
 use crate::error::{AppError, AppResult};
-use crate::modules::enrich::wanted_resolver::link_wanted_to_sc;
 use crate::state::AppState;
+use catalog_match::link_wanted_to_sc;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -51,8 +51,6 @@ pub struct WantedTracksPage {
     pub by_status: Vec<StatusCount>,
 }
 
-/// GET /admin/wanted-tracks?status=&page=&limit= — orphan tracks the pipeline
-/// wants but hasn't linked to a real `tracks` row yet.
 #[tracing::instrument(skip_all)]
 pub async fn list(
     _: AdminAuth,
@@ -120,9 +118,6 @@ pub struct LinkBody {
     pub sc_track_id: String,
 }
 
-/// POST /admin/wanted-tracks/{id}/link — resolve a wanted track to a real
-/// `tracks` row by its SoundCloud track id (delegates to the resolver's
-/// `link_wanted_to_sc`, which also re-points albums and flips status to linked).
 #[tracing::instrument(skip_all)]
 pub async fn link(
     _: AdminAuth,
@@ -160,7 +155,6 @@ pub struct StatusBody {
 
 const ALLOWED_STATUS: [&str; 4] = ["wanted", "linked", "unresolvable", "skipped"];
 
-/// PATCH /admin/wanted-tracks/{id}/status — manual status override.
 #[tracing::instrument(skip_all)]
 pub async fn set_status(
     _: AdminAuth,

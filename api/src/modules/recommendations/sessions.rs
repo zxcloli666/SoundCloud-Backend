@@ -179,3 +179,73 @@ pub fn mix_centroids(
     normalize(&mut acc);
     Some(acc)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::centroids::cosine;
+
+    const BASE: [f32; 3] = [1.0, 0.0, 0.0];
+    const SESSION: [f32; 3] = [0.0, 1.0, 0.0];
+    const HOUR: [f32; 3] = [0.0, 0.0, 1.0];
+
+    #[test]
+    fn with_nothing_to_mix_there_is_no_centroid() {
+        assert!(mix_centroids(None, None, None).is_none());
+    }
+
+    #[test]
+    fn a_single_source_comes_back_as_itself() {
+        for source in [BASE, SESSION, HOUR] {
+            let only_base = mix_centroids(Some(&source), None, None).expect("one source is enough");
+            let only_session =
+                mix_centroids(None, Some(&source), None).expect("one source is enough");
+            let only_hour = mix_centroids(None, None, Some(&source)).expect("one source is enough");
+
+            for mixed in [only_base, only_session, only_hour] {
+                assert!((cosine(&mixed, &source) - 1.0).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn the_long_taste_outweighs_the_session_and_the_session_outweighs_the_hour() {
+        let mixed = mix_centroids(Some(&BASE), Some(&SESSION), Some(&HOUR)).expect("three sources");
+
+        assert!(
+            mixed[0] > mixed[1] && mixed[1] > mixed[2],
+            "the weights must keep their order, saw {mixed:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_source_does_not_shrink_what_is_left() {
+        let mixed = mix_centroids(Some(&BASE), None, Some(&HOUR)).expect("two sources");
+
+        assert!(
+            (mixed[0] / mixed[2] - 4.0).abs() < 1e-4,
+            "the surviving sources must keep their ratio 0.6 to 0.15, saw {mixed:?}"
+        );
+        assert!(
+            (mixed.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-5,
+            "the mix is always a unit vector"
+        );
+    }
+
+    #[test]
+    fn a_shorter_source_contributes_what_it_has_instead_of_panicking() {
+        let short = [1.0f32];
+        let mixed = mix_centroids(Some(&BASE), Some(&short), None).expect("two sources");
+
+        assert_eq!(mixed.len(), 3);
+        assert!(mixed.iter().all(|x| !x.is_nan()));
+    }
+
+    #[test]
+    fn centroids_of_zeros_do_not_turn_into_nans() {
+        let zeros = [0.0f32, 0.0, 0.0];
+        let mixed = mix_centroids(Some(&zeros), Some(&zeros), None).expect("two sources");
+
+        assert_eq!(mixed, vec![0.0, 0.0, 0.0]);
+    }
+}

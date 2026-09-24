@@ -1,13 +1,8 @@
-//! `POST /admin/hydrate` — batch-resolve raw SC URNs to human cards (nick/title +
-//! avatar/artwork) so the admin UI never has to render a bare `soundcloud:users:7000`.
-//! DB-first (our catalog is the cheap source of truth); users missing from the catalog
-//! get a bounded, best-effort live SC lookup so premium-only listeners still resolve.
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,7 +13,6 @@ use crate::error::AppResult;
 use crate::modules::auth::TokenKind;
 use crate::state::AppState;
 
-/// Hard caps: keep one hydrate call cheap regardless of how many rows are on screen.
 const MAX_REFS: usize = 300;
 const MAX_LIVE_USER_LOOKUPS: usize = 40;
 const LIVE_LOOKUP_CONCURRENCY: usize = 8;
@@ -28,7 +22,6 @@ pub struct HydrateReq {
     pub refs: Vec<String>,
 }
 
-/// One resolved entity, kind-agnostic so the UI renders every card the same way.
 #[derive(Serialize, Clone)]
 pub struct EntityCard {
     pub kind: &'static str,
@@ -76,7 +69,6 @@ struct PlaylistCardRow {
     permalink_url: Option<String>,
 }
 
-/// `soundcloud:users:7000` → `("users", "7000")`. Bare/other strings return `None`.
 fn parse_urn(s: &str) -> Option<(&str, &str)> {
     let rest = s.strip_prefix("soundcloud:")?;
     let (coll, id) = rest.split_once(':')?;
@@ -86,7 +78,6 @@ fn parse_urn(s: &str) -> Option<(&str, &str)> {
     Some((coll, id))
 }
 
-/// `@handle · city, Country` — the human line under a nickname.
 fn user_subtitle(
     permalink: Option<&str>,
     city: Option<&str>,
@@ -118,7 +109,6 @@ fn str_field(v: &Value, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Card from a live SC `/users/{id}` payload (apiv1-normalized).
 fn card_from_sc_user(id: &str, v: &Value) -> Option<EntityCard> {
     let username = str_field(v, "username").or_else(|| str_field(v, "full_name"))?;
     let permalink = str_field(v, "permalink");
@@ -142,11 +132,9 @@ pub async fn hydrate(
     State(st): State<AppState>,
     Json(body): Json<HydrateReq>,
 ) -> AppResult<Json<HashMap<String, EntityCard>>> {
-    // Bucket distinct ids per kind, remembering which raw refs map to each id.
     let mut user_ids: HashSet<String> = HashSet::new();
     let mut track_ids: HashSet<String> = HashSet::new();
     let mut playlist_ids: HashSet<String> = HashSet::new();
-    // ref string → (kind, id) for reassembling the keyed response.
     let mut ref_targets: Vec<(String, &'static str, String)> = Vec::new();
 
     for raw in body.refs.into_iter().take(MAX_REFS) {
@@ -171,7 +159,6 @@ pub async fn hydrate(
         }
     }
 
-    // id → card, per kind.
     let mut users: HashMap<String, EntityCard> = HashMap::new();
     let mut tracks: HashMap<String, EntityCard> = HashMap::new();
     let mut playlists: HashMap<String, EntityCard> = HashMap::new();
@@ -256,7 +243,6 @@ pub async fn hydrate(
         }
     }
 
-    // Users the catalog has never seen (e.g. premium-only listeners): bounded live SC lookup.
     let missing: Vec<String> = user_ids
         .into_iter()
         .filter(|id| !users.contains_key(id))
@@ -269,11 +255,18 @@ pub async fn hydrate(
             let sem = sem.clone();
             async move {
                 let _permit = sem.acquire().await.ok()?;
+                let observation = catalog_ingest::Observation::begin(&st.pg).await.ok()?;
                 let v = st
                     .resolve
                     .user_by_id(TokenKind::PublicPool, &id)
                     .await
                     .ok()?;
+                if let Err(error) = crate::modules::users::UserRepository::new(st.pg.clone())
+                    .upsert_from_sc(&v, observation)
+                    .await
+                {
+                    tracing::warn!(user = %id, %error, "hydrated user could not be persisted");
+                }
                 card_from_sc_user(&id, &v)
             }
         }))
@@ -283,7 +276,6 @@ pub async fn hydrate(
         }
     }
 
-    // Assemble the response keyed by each original ref string.
     let mut out: HashMap<String, EntityCard> = HashMap::new();
     for (raw, kind, id) in ref_targets {
         let card = match kind {

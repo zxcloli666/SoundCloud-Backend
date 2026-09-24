@@ -8,9 +8,11 @@ pub struct PaginationQuery {
     pub limit: Option<i64>,
 }
 
+const MAX_PAGE: i64 = 100;
+
 impl PaginationQuery {
     pub fn page(&self) -> i64 {
-        self.page.unwrap_or(0).max(0)
+        self.page.unwrap_or(0).clamp(0, MAX_PAGE)
     }
 
     pub fn limit(&self) -> i64 {

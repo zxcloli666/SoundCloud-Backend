@@ -1,4 +1,3 @@
--- Fetch uploader/owner user rows by sc_user_id set. Columns in UserRow order.
 SELECT sc_user_id,
        urn,
        username,

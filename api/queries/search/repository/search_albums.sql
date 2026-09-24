@@ -1,5 +1,3 @@
--- Album search via trgm. Columns in AlbumSearchRow order.
--- primary_artist_name/avatar come from LEFT JOIN -> force nullable (?).
 SELECT al.id,
        al.title,
        al.type      AS kind,
@@ -19,8 +17,8 @@ FROM albums al
 WHERE al.track_count > 0
   AND (
     al.normalized_title LIKE $4
-        OR LOWER(al.title) LIKE $1
-        OR LOWER(COALESCE(a.name, '')) LIKE $1
+        OR (NOT $5::bool AND (LOWER(al.title) LIKE $1
+        OR LOWER(COALESCE(a.name, '')) LIKE $1))
     )
 ORDER BY al.popularity_score DESC, al.normalized_title ASC, al.id ASC LIMIT $2
 OFFSET $3

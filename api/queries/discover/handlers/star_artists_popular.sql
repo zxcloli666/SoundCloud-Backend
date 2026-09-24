@@ -1,4 +1,3 @@
--- Star spotlight, popular strategy: top by popularity/listeners.
 SELECT id,
        name,
        normalized_name,

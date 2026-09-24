@@ -1,16 +1,26 @@
-//! `/search/db/*` — поиск внутри нашей базы (tracks/playlists/users/artists/
-//! albums). Альтернатива дорогому fan-out'у в SC API: значительно быстрее, но
-//! ограничен тем, что мы уже зеркалили.
-//!
-//! Под high-load прод: каждая выдача — короткая, ограниченная транзакция с
-//! `statement_timeout`, результат кладётся в Redis на TTL_SEARCH, чтобы не
-//! долбить trgm-индекс одинаковыми запросами с десятка клиентов.
-
 pub mod handlers;
+pub mod lyrics;
+pub mod query;
 pub mod repository;
+pub mod semantic;
 pub mod service;
 pub mod vibe;
 
+#[cfg(test)]
+mod user_tests;
+
+#[cfg(test)]
+mod catalog_tests;
+
+#[cfg(test)]
+mod stampede_tests;
+
+#[cfg(test)]
+mod vibe_live_tests;
+
+#[cfg(test)]
+mod vibe_lyrics_live_tests;
+
 pub use handlers::router;
+pub use semantic::VibeSearchService;
 pub use service::SearchService;
-pub use vibe::VibeSearchService;

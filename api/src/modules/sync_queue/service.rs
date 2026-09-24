@@ -1,109 +1,57 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool as RedisPool;
-use futures::future::join_all;
-use serde::Serialize;
+use deadpool_redis::redis::AsyncCommands;
 use serde_json::Value;
-use sqlx::types::Uuid;
-use sqlx::PgPool;
-use tokio::sync::Semaphore;
-use tracing::warn;
+use sqlx::{PgConnection, PgPool};
 
 use crate::error::AppResult;
-use crate::modules::auth::AuthService;
-use crate::sc::{self, ScClient};
 
-use super::actions::{self, ActionCtx};
+use super::mirror::{self, WantedMirror};
 
-const BATCH_SIZE: i64 = 50;
-const FLUSH_CONCURRENCY: usize = 16;
-const LOCK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-pub const MAX_RETRIES: i32 = 5;
-const BACKOFF_BAN_SEC: i64 = 30 * 60;
-const BACKOFF_RATE_LIMIT_SEC: i64 = 5 * 60;
-const BACKOFF_CAP_SEC: i64 = 60 * 60;
-const COUNTS_CACHE_TTL_SEC: usize = 5;
+const COUNTS_CACHE_TTL_SECONDS: u64 = 5;
+const REDIS_TIMEOUT: Duration = Duration::from_millis(150);
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct SyncQueueRow {
-    pub id: Uuid,
-    pub user_id: String,
-    pub action_type: String,
-    pub target_urn: String,
-    pub payload: Option<Value>,
-    pub locked_at: Option<DateTime<Utc>>,
-    pub retry_count: i32,
-    pub last_error: Option<String>,
-    pub next_run_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub dead: bool,
-    pub failed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FlushStats {
-    pub synced: usize,
-    pub failed: usize,
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncCounts {
+    pub pending_count: i64,
+    pub failed_count: i64,
 }
 
 pub struct SyncQueueService {
     pg: PgPool,
-    sc: ScClient,
-    auth: Arc<AuthService>,
     redis: RedisPool,
 }
 
 impl SyncQueueService {
-    pub fn new(pg: PgPool, sc: ScClient, auth: Arc<AuthService>, redis: RedisPool) -> Arc<Self> {
-        Arc::new(Self {
-            pg,
-            sc,
-            auth,
-            redis,
-        })
+    pub fn new(pg: PgPool, redis: RedisPool) -> Arc<Self> {
+        Arc::new(Self { pg, redis })
     }
 
-    /// `(pending, failed)` для UI-индикатора в /auth/status. Кешируем в Redis
-    /// на 5 секунд: при поллинге фронта раз в 30 сек и сотнях тысяч активных
-    /// сессий иначе получаем тысячи SELECT/sec по `sync_queue`. Лаг до 5 сек
-    /// для бейджа синка некритичен.
-    pub async fn pending_counts_for_user(&self, sc_user_id: &str) -> AppResult<(i64, i64)> {
-        if sc_user_id.is_empty() {
-            return Ok((0, 0));
-        }
+    pub async fn status_for_user(&self, sc_user_id: &str) -> AppResult<SyncCounts> {
+        let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
         let key = format!("sync_queue:counts:{sc_user_id}");
-
-        if let Ok(mut conn) = self.redis.get().await {
-            let raw: Option<String> = conn.get(&key).await.ok().flatten();
-            if let Some(s) = raw
-                && let Some((p, f)) = parse_counts(&s) {
-                    return Ok((p, f));
-                }
+        if let Some(counts) = self.cached_counts(&key).await {
+            return Ok(SyncCounts {
+                pending_count: counts.0,
+                failed_count: counts.1,
+            });
         }
 
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
         let row = sqlx::query_file!("queries/sync_queue/service/pending_counts.sql", &variants)
             .fetch_one(&self.pg)
             .await?;
-        let (pending, failed) = (row.pending, row.failed);
-
-        if let Ok(mut conn) = self.redis.get().await {
-            let payload = format!("{pending}:{failed}");
-            let _: Result<(), _> = conn
-                .set_ex(&key, payload, COUNTS_CACHE_TTL_SEC as u64)
-                .await;
-        }
-        Ok((pending, failed))
+        let counts = (row.pending, row.failed);
+        self.cache_counts(&key, counts).await;
+        Ok(SyncCounts {
+            pending_count: counts.0,
+            failed_count: counts.1,
+        })
     }
 
-    /// Поставить мутацию в очередь.
-    /// - Если есть обратное действие (like → unlike) на тот же target — удаляем
-    ///   его, новую запись не пишем: пользователь успел отменить намерение.
-    /// - Иначе INSERT с дедупом через UNIQUE(user_id, action_type, target_urn).
-    ///   Повторный enqueue того же действия — no-op (DO NOTHING).
     pub async fn enqueue(
         &self,
         user_id: &str,
@@ -111,258 +59,215 @@ impl SyncQueueService {
         target_urn: &str,
         payload: Option<&Value>,
     ) -> AppResult<()> {
-        if let Some(inv) = actions::inverse(action_type) {
+        let mut transaction = self.pg.begin().await?;
+        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, payload)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn set_wanted(
+        &self,
+        mirror: WantedMirror,
+        user_id: &str,
+        mirror_key: &str,
+        action_type: &str,
+        target_urn: &str,
+    ) -> AppResult<()> {
+        let mut transaction = self.pg.begin().await?;
+        mirror::set_wanted(&mut transaction, mirror, user_id, mirror_key).await?;
+        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, None)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn clear_wanted(
+        &self,
+        mirror: WantedMirror,
+        user_id: &str,
+        mirror_key: &str,
+        action_type: &str,
+        target_urn: &str,
+    ) -> AppResult<()> {
+        let mut transaction = self.pg.begin().await?;
+        mirror::clear_wanted(&mut transaction, mirror, user_id, mirror_key).await?;
+        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, None)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn enqueue_on(
+        &self,
+        connection: &mut PgConnection,
+        user_id: &str,
+        action_type: &str,
+        target_urn: &str,
+        payload: Option<&Value>,
+    ) -> AppResult<()> {
+        let user_id = crate::common::sc_ids::extract_sc_id(user_id);
+        let target_urn = canonical_target(action_type, target_urn);
+        if let Some(inverse) = inverse(action_type) {
             let cancelled = sqlx::query_file!(
                 "queries/sync_queue/service/cancel_inverse.sql",
                 user_id,
-                inv,
-                target_urn
+                inverse,
+                &target_urn
             )
-            .execute(&self.pg)
+            .execute(&mut *connection)
             .await?;
             if cancelled.rows_affected() > 0 {
                 return Ok(());
             }
         }
 
-        sqlx::query(
-            "INSERT INTO sync_queue (user_id, action_type, target_urn, payload) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (user_id, action_type, target_urn) DO UPDATE SET \
-                 payload = COALESCE(EXCLUDED.payload, sync_queue.payload), \
-                 locked_at = NULL, \
-                 retry_count = 0, \
-                 last_error = NULL, \
-                 next_run_at = now()",
-        )
-        .bind(user_id)
-        .bind(action_type)
-        .bind(target_urn)
-        .bind(payload)
-        .execute(&self.pg)
-        .await?;
-        Ok(())
-    }
-
-    /// Cron-таска. Атомарно захватывает батч через FOR UPDATE SKIP LOCKED и
-    /// проводит SC-вызовы. На успехе — DELETE. На ошибке — backoff:
-    /// - ban/rate-limit: ждём фикс. интервал, retry_count НЕ растёт
-    /// - прочее: retry_count++, exp backoff; на MAX_RETRIES — DELETE + warn
-    pub async fn flush(&self) -> AppResult<FlushStats> {
-        let claimed = self.claim_batch(BATCH_SIZE).await?;
-        // Конкурентно (bounded): один забаненный/медленный юзер в голове батча
-        // не должен блокировать write-back остальным. Backoff-строки сюда не
-        // попадают (claim фильтрует next_run_at <= now()).
-        let sem = Arc::new(Semaphore::new(FLUSH_CONCURRENCY));
-        let results = join_all(claimed.into_iter().map(|row| {
-            let sem = sem.clone();
-            async move {
-                let _permit = sem.acquire().await;
-                match self.execute_one(&row).await {
-                    Ok(()) => {
-                        // Optimistic delete: только если строку не «тронул» enqueue
-                        // конкурентной правки (locked_at не изменился с момента
-                        // claim). Иначе строка переживает и переотправит свежий
-                        // стейт следующим тиком — фикс lost-write под гонкой
-                        // (в т.ч. playlist_sync при правке во время in-flight PUT).
-                        if let Err(e) = sqlx::query_file!(
-                            "queries/sync_queue/service/delete_if_unchanged.sql",
-                            row.id,
-                            row.locked_at
-                        )
-                        .execute(&self.pg)
-                        .await
-                        {
-                            warn!(error = %e, "sync_queue delete failed");
-                        }
-                        true
-                    }
-                    Err(err) => {
-                        if let Err(e) = self.record_failure(&row, &err).await {
-                            warn!(error = %e, "sync_queue record_failure failed");
-                        }
-                        false
-                    }
-                }
-            }
-        }))
-        .await;
-        let synced = results.iter().filter(|&&ok| ok).count();
-        let failed = results.len() - synced;
-        Ok(FlushStats { synced, failed })
-    }
-
-    /// Heal-свип (отдельный тик, не из flush): делает permanent loss
-    /// невозможным. Реэнкюивает намерение из mirror/desired-state, которое могло
-    /// не доехать (потерянный когда-то action или зависший progress=true), и
-    /// оживляет dead-строки, пока их намерение ещё актуально (ON CONFLICT).
-    /// NOT EXISTS гейтит только по ЖИВЫМ (dead=false) queue-row, поэтому
-    /// конфликт всегда попадает на dead-строку → полное оживление. Каждый
-    /// стейтмент с LIMIT — тик дёшев.
-    pub async fn heal(&self) -> AppResult<()> {
-        // Лайки треков (bare sc_track_id → urn для совпадения с enqueue call-site).
-        sqlx::query_file!("queries/sync_queue/service/heal_likes_tracks.sql")
-            .execute(&self.pg)
-            .await?;
-
-        // Лайки плейлистов (key = playlist_urn).
-        sqlx::query_file!("queries/sync_queue/service/heal_likes_playlists.sql")
-            .execute(&self.pg)
-            .await?;
-
-        // Фолловинги (key = target_user_urn).
-        sqlx::query_file!("queries/sync_queue/service/heal_followings.sql")
-            .execute(&self.pg)
-            .await?;
-
-        // Owned-плейлисты с pending desired_rev > synced_rev без живого sync.
-        sqlx::query_file!("queries/sync_queue/service/heal_playlists.sql")
-            .execute(&self.pg)
-            .await?;
-
-        // Гигиена: очень старые dead-строки (>30 дней) — аудит-след исчерпан.
-        let _ = sqlx::query_file!("queries/sync_queue/service/delete_old_dead.sql")
-            .execute(&self.pg)
-            .await;
-
-        Ok(())
-    }
-
-    async fn claim_batch(&self, limit: i64) -> AppResult<Vec<SyncQueueRow>> {
-        let lock_timeout = Utc::now() - chrono::Duration::from_std(LOCK_TIMEOUT).unwrap();
-        // Не берём dead-строки; не берём таргет, у которого уже есть живой lease
-        // другого воркера (per-(user,target) сериализация: like→unlike и
-        // последовательные правки одного таргета не выполняются параллельно).
-        let rows: Vec<SyncQueueRow> = sqlx::query_file_as!(
-            SyncQueueRow,
-            "queries/sync_queue/service/claim_batch.sql",
-            lock_timeout,
-            limit
-        )
-        .fetch_all(&self.pg)
-        .await?;
-
-        // В пределах одного батча anti-join не спасает (ни одна строка ещё не
-        // была locked в снапшоте). Оставляем на исполнение только самую раннюю
-        // строку на (user_id, target_urn), остальным сразу снимаем lock —
-        // выполнятся следующим тиком после первой.
-        let mut seen: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
-        let mut keep: Vec<SyncQueueRow> = Vec::with_capacity(rows.len());
-        let mut release: Vec<Uuid> = Vec::new();
-        for row in rows {
-            if seen.insert((row.user_id.clone(), row.target_urn.clone())) {
-                keep.push(row);
-            } else {
-                release.push(row.id);
-            }
-        }
-        if !release.is_empty() {
-            let _ = sqlx::query_file!("queries/sync_queue/service/release_locks.sql", &release)
-                .execute(&self.pg)
-                .await;
-        }
-        Ok(keep)
-    }
-
-    async fn execute_one(&self, row: &SyncQueueRow) -> AppResult<()> {
-        let token = self
-            .auth
-            .get_valid_access_token_for_user(&row.user_id)
-            .await?;
-        // Канон user_id для mirror-апдейтов экшенов — bare (совпадает с тем, что
-        // пишут set_wanted/refresh). Token lookup выше берёт raw (variant-tolerant).
-        let action_user_id = crate::common::sc_ids::extract_sc_id(&row.user_id);
-        let ctx = ActionCtx {
-            sc: &self.sc,
-            pg: &self.pg,
-            token: &token,
-            user_id: action_user_id,
-            target_urn: &row.target_urn,
-            payload: row.payload.as_ref(),
-        };
-        actions::dispatch(&ctx, &row.action_type).await
-    }
-
-    async fn record_failure(
-        &self,
-        row: &SyncQueueRow,
-        err: &crate::error::AppError,
-    ) -> AppResult<()> {
-        let mut msg = err.to_string();
-        msg.truncate(500);
-
-        // Внешние блокировки SC (ban/rate-limit) — не наш баг, ретраить чаще
-        // нет смысла, и инкремент retry_count в таких случаях быстро убьёт
-        // легитимные действия. Отложить и оставить retry_count.
-        let backoff_sec = if sc::is_ban_error(err) {
-            BACKOFF_BAN_SEC
-        } else if sc::is_rate_limited(err) {
-            BACKOFF_RATE_LIMIT_SEC
-        } else {
-            // 2,4,8,16,32 мин (cap 60). retry_count берём из строки до
-            // инкремента, чтобы первая ошибка дала 2 мин, не 1.
-            let next = row.retry_count + 1;
-            if next >= MAX_RETRIES {
-                // НЕ удаляем — паркуем (dead). Намерение durable, видно в admin/
-                // badge, heal-свип оживит его пока desired-state его хочет.
-                sqlx::query_file!(
-                    "queries/sync_queue/service/park_dead.sql",
-                    &msg,
-                    next,
-                    row.id
-                )
-                .execute(&self.pg)
-                .await?;
-                warn!(
-                    action = %row.action_type,
-                    target = %row.target_urn,
-                    user = %row.user_id,
-                    retries = next,
-                    error = %msg,
-                    "sync_queue action parked as dead after MAX_RETRIES"
-                );
-                return Ok(());
-            }
-            let secs = (60i64.saturating_mul(1 << next)).min(BACKOFF_CAP_SEC);
-            sqlx::query_file!(
-                "queries/sync_queue/service/retry_backoff.sql",
-                &msg,
-                secs,
-                row.id
+        if action_type == "comment" {
+            sqlx::query(
+                "INSERT INTO sync_queue (user_id, action_type, target_urn, payload)
+                 VALUES ($1, $2, $3, $4)",
             )
-            .execute(&self.pg)
+            .bind(user_id)
+            .bind(action_type)
+            .bind(&target_urn)
+            .bind(payload)
+            .execute(&mut *connection)
             .await?;
-            warn!(
-                action = %row.action_type,
-                target = %row.target_urn,
-                retry = next,
-                error = %msg,
-                "sync_queue action failed, will retry"
-            );
-            return Ok(());
-        };
-
-        sqlx::query_file!(
-            "queries/sync_queue/service/external_backoff.sql",
-            &msg,
-            backoff_sec,
-            row.id
-        )
-        .execute(&self.pg)
-        .await?;
-        warn!(
-            action = %row.action_type,
-            target = %row.target_urn,
-            backoff_sec,
-            error = %msg,
-            "sync_queue action blocked by SC (ban/rate-limit), backoff"
-        );
+        } else {
+            sqlx::query(include_str!(
+                "../../../queries/sync_queue/service/enqueue.sql"
+            ))
+            .bind(user_id)
+            .bind(action_type)
+            .bind(&target_urn)
+            .bind(payload)
+            .execute(&mut *connection)
+            .await?;
+        }
         Ok(())
+    }
+
+    async fn cached_counts(&self, key: &str) -> Option<(i64, i64)> {
+        tokio::time::timeout(REDIS_TIMEOUT, async {
+            let mut connection = self.redis.get().await.ok()?;
+            let value: String = connection.get(key).await.ok()?;
+            parse_counts(&value)
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    async fn cache_counts(&self, key: &str, counts: (i64, i64)) {
+        let payload = format!("{}:{}", counts.0, counts.1);
+        let _ = tokio::time::timeout(REDIS_TIMEOUT, async {
+            let mut connection = self.redis.get().await?;
+            connection
+                .set_ex::<_, _, ()>(key, payload, COUNTS_CACHE_TTL_SECONDS)
+                .await
+                .map_err(deadpool_redis::PoolError::Backend)
+        })
+        .await;
     }
 }
 
-fn parse_counts(s: &str) -> Option<(i64, i64)> {
-    let (a, b) = s.split_once(':')?;
-    Some((a.parse().ok()?, b.parse().ok()?))
+fn inverse(action_type: &str) -> Option<&'static str> {
+    match action_type {
+        "like_track" => Some("unlike_track"),
+        "unlike_track" => Some("like_track"),
+        "like_playlist" => Some("unlike_playlist"),
+        "unlike_playlist" => Some("like_playlist"),
+        "follow_user" => Some("unfollow_user"),
+        "unfollow_user" => Some("follow_user"),
+        _ => None,
+    }
+}
+
+fn canonical_target(action_type: &str, target: &str) -> String {
+    let entity = crate::common::sc_ids::extract_sc_id(target);
+    match action_type {
+        "like_track" | "unlike_track" | "track_update" | "track_delete" | "comment" => {
+            format!("soundcloud:tracks:{entity}")
+        }
+        "like_playlist" | "unlike_playlist" | "playlist_delete" | "playlist_update" => {
+            format!("soundcloud:playlists:{entity}")
+        }
+        "follow_user" | "unfollow_user" => format!("soundcloud:users:{entity}"),
+        _ => target.to_owned(),
+    }
+}
+
+fn parse_counts(value: &str) -> Option<(i64, i64)> {
+    let (pending, failed) = value.split_once(':')?;
+    Some((pending.parse().ok()?, failed.parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn sync_status_is_local_and_scoped_to_the_session_account(
+        pg: PgPool,
+    ) -> anyhow::Result<()> {
+        let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+        let service = SyncQueueService::new(pg.clone(), redis);
+        service
+            .enqueue(
+                "42",
+                "track_update",
+                "1",
+                Some(&serde_json::json!({"track": {"title": "name"}})),
+            )
+            .await?;
+        service
+            .enqueue("soundcloud:users:42", "track_delete", "2", None)
+            .await?;
+        service.enqueue("99", "track_delete", "3", None).await?;
+        sqlx::query("UPDATE sync_queue SET retry_count = 2 WHERE user_id = '42' AND action_type = 'track_delete'")
+            .execute(&pg).await?;
+        let status = service.status_for_user("soundcloud:users:42").await?;
+        assert_eq!(
+            serde_json::to_value(&status)?,
+            serde_json::json!({"pendingCount": 1, "failedCount": 1})
+        );
+        assert_eq!(service.status_for_user("42").await?, status);
+        assert_eq!(
+            service.status_for_user("99").await?,
+            SyncCounts {
+                pending_count: 1,
+                failed_count: 0
+            }
+        );
+        assert_eq!(
+            service.status_for_user("100").await?,
+            SyncCounts {
+                pending_count: 0,
+                failed_count: 0
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cached_counts_require_both_numbers() {
+        assert_eq!(parse_counts("12:3"), Some((12, 3)));
+        assert_eq!(parse_counts("12"), None);
+    }
+
+    #[test]
+    fn only_reversible_state_actions_have_an_inverse() {
+        assert_eq!(inverse("like_track"), Some("unlike_track"));
+        assert_eq!(inverse("comment"), None);
+    }
+
+    #[test]
+    fn queue_targets_have_one_canonical_identity() {
+        assert_eq!(
+            canonical_target("like_track", "42"),
+            canonical_target("like_track", "soundcloud:tracks:42")
+        );
+        assert_eq!(canonical_target("playlist_create", "new:42"), "new:42");
+    }
 }

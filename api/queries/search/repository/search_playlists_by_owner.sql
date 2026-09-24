@@ -1,4 +1,3 @@
--- Per-user playlist search. Columns in PlaylistRow order.
 SELECT urn,
        sc_playlist_id,
        title,
@@ -16,6 +15,8 @@ SELECT urn,
        playlist_type,
        kind,
        sharing,
+       sc_metadata,
+       deleted_at,
        release_year,
        release_date,
        label_name,
@@ -23,16 +24,15 @@ SELECT urn,
        reposts_count_sc,
        sc_created_at,
        sc_last_modified,
-       tracks_synced_at,
        sc_synced_at,
        last_read_at,
        created_at,
-       updated_at,
-       desired_rev,
-       synced_rev
+       updated_at
 FROM playlists
 WHERE owner_sc_user_id = $1
   AND sharing = 'public'
-  AND (title_normalized LIKE $5 OR LOWER(title) LIKE $2)
+  AND deleted_at IS NULL
+  AND ($2::text IS NULL OR title_normalized LIKE $5
+   OR (NOT $6::bool AND LOWER(title) LIKE $2))
 ORDER BY likes_count_sc DESC NULLS LAST, sc_synced_at DESC, urn DESC LIMIT $3
 OFFSET $4

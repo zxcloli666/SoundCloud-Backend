@@ -1,5 +1,3 @@
--- TrackListRow field order. Треки, ЗАЛИТЫЕ этим SC-аккаунтом (по uploader),
--- независимо от того, на какого артиста они сейчас залинкованы.
 SELECT t.id,
        t.sc_track_id,
        t.title,

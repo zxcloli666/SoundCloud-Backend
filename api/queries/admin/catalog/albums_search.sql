@@ -1,4 +1,3 @@
--- AlbumListRow field order
 SELECT al.id,
        al.title,
        al.type                                                               AS "type_!",

@@ -3,6 +3,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::lyrics::service::{LyricsHints, LyricsResponse};
 use crate::state::AppState;
@@ -38,19 +39,20 @@ fn parse_duration(d: Option<&str>) -> Option<i64> {
 
 async fn search(
     State(st): State<AppState>,
+    _ctx: SessionCtx,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<LyricsResponse>> {
     let hints = LyricsHints {
         artist: q.artist.unwrap_or_default(),
         title: q.title.unwrap_or_default(),
         duration_sec: parse_duration(q.duration.as_deref()),
-        ..Default::default()
     };
     Ok(Json(st.lyrics.search_lyrics(&hints).await?))
 }
 
 async fn get_one(
     State(st): State<AppState>,
+    _ctx: SessionCtx,
     Path(sc_track_id): Path<String>,
 ) -> AppResult<Json<LyricsResponse>> {
     Ok(Json(st.lyrics.ensure_lyrics(&sc_track_id).await?))

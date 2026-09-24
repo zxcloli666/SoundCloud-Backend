@@ -1,17 +1,35 @@
 use std::sync::Arc;
 
+use backend_contracts::CatalogEntity;
 use chrono::NaiveDateTime;
-use rand::Rng;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::FromRow;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::modules::auth::TokenKind;
 use crate::modules::likes::cold as likes_cold;
-use crate::sc::ScReadService;
+use crate::modules::playlists::{PlaylistRepository, project_to_sc_shape as project_playlist};
+use crate::modules::tracks::repository::project_many_public;
+use crate::modules::users::{UserRepository, project_to_sc_shape as project_user};
+
+const MAX_PLAYLIST_TRACKS: i64 = 20_000;
+
+async fn enqueue_featured(
+    connection: &mut sqlx::PgConnection,
+    type_: &str,
+    urn: &str,
+) -> AppResult<()> {
+    let entity = FeaturedItemType::parse(type_)
+        .ok_or_else(|| AppError::bad_request("Unknown featured entity type"))?
+        .catalog_entity();
+    if urn != entity.urn(crate::common::sc_ids::extract_sc_id(urn)) {
+        return Err(AppError::bad_request(
+            "scUrn must be a canonical SoundCloud URN matching type",
+        ));
+    }
+    crate::modules::cold_refresh::entity::enqueue_entity_in(connection, entity, urn, None).await
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeaturedItemType {
@@ -21,6 +39,13 @@ pub enum FeaturedItemType {
 }
 
 impl FeaturedItemType {
+    fn catalog_entity(self) -> CatalogEntity {
+        match self {
+            Self::Track => CatalogEntity::Track,
+            Self::Playlist => CatalogEntity::Playlist,
+            Self::User => CatalogEntity::User,
+        }
+    }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "track" => Some(Self::Track),
@@ -54,12 +79,11 @@ pub struct FeaturedResult {
 
 pub struct FeaturedService {
     pg: sqlx::PgPool,
-    read: Arc<ScReadService>,
 }
 
 impl FeaturedService {
-    pub fn new(pg: sqlx::PgPool, read: Arc<ScReadService>) -> Arc<Self> {
-        Arc::new(Self { pg, read })
+    pub fn new(pg: sqlx::PgPool) -> Arc<Self> {
+        Arc::new(Self { pg })
     }
 
     pub async fn find_all(&self) -> AppResult<Vec<FeaturedItem>> {
@@ -91,6 +115,7 @@ impl FeaturedService {
                 "type must be one of: track, playlist, user",
             ));
         }
+        let mut transaction = self.pg.begin().await?;
         let row = sqlx::query_file!(
             "queries/featured/service/create.sql",
             type_,
@@ -98,8 +123,10 @@ impl FeaturedService {
             weight.unwrap_or(1),
             active.unwrap_or(true)
         )
-        .fetch_one(&self.pg)
+        .fetch_one(&mut *transaction)
         .await?;
+        enqueue_featured(&mut transaction, &row.item_type, &row.sc_urn).await?;
+        transaction.commit().await?;
         Ok(FeaturedItem {
             id: row.id,
             type_: row.item_type,
@@ -119,30 +146,37 @@ impl FeaturedService {
         active: Option<bool>,
     ) -> AppResult<FeaturedItem> {
         if let Some(t) = type_
-            && FeaturedItemType::parse(t).is_none() {
-                return Err(AppError::bad_request(
-                    "type must be one of: track, playlist, user",
-                ));
-            }
+            && FeaturedItemType::parse(t).is_none()
+        {
+            return Err(AppError::bad_request(
+                "type must be one of: track, playlist, user",
+            ));
+        }
         let uuid = Uuid::parse_str(id)
             .map_err(|_| AppError::not_found(format!("featured item {id} not found")))?;
-        let row: Option<FeaturedItem> = sqlx::query_as(
-            r#"UPDATE featured_items SET
-                "type" = COALESCE($2, "type"),
-                sc_urn = COALESCE($3, sc_urn),
-                weight = COALESCE($4, weight),
-                active = COALESCE($5, active)
-             WHERE id = $1
-             RETURNING id, "type", sc_urn, weight, active, created_at"#,
+        let mut transaction = self.pg.begin().await?;
+        let row = sqlx::query_file!(
+            "queries/featured/service/update.sql",
+            uuid,
+            type_,
+            sc_urn,
+            weight,
+            active
         )
-        .bind(uuid)
-        .bind(type_)
-        .bind(sc_urn)
-        .bind(weight)
-        .bind(active)
-        .fetch_optional(&self.pg)
+        .fetch_optional(&mut *transaction)
         .await?;
-        row.ok_or_else(|| AppError::not_found(format!("featured item {id} not found")))
+        let row =
+            row.ok_or_else(|| AppError::not_found(format!("featured item {id} not found")))?;
+        enqueue_featured(&mut transaction, &row.item_type, &row.sc_urn).await?;
+        transaction.commit().await?;
+        Ok(FeaturedItem {
+            id: row.id,
+            type_: row.item_type,
+            sc_urn: row.sc_urn,
+            weight: row.weight,
+            active: row.active,
+            created_at: row.created_at,
+        })
     }
 
     pub async fn remove(&self, id: &str) -> AppResult<()> {
@@ -156,104 +190,80 @@ impl FeaturedService {
         Ok(())
     }
 
-    pub async fn pick(
-        &self,
-        session_id: &str,
-        sc_user_id: &str,
-    ) -> AppResult<Option<FeaturedResult>> {
-        let items: Vec<FeaturedItem> =
-            sqlx::query_file!("queries/featured/service/pick_active.sql")
-                .fetch_all(&self.pg)
-                .await?
-                .into_iter()
-                .map(|r| FeaturedItem {
-                    id: r.id,
-                    type_: r.item_type,
-                    sc_urn: r.sc_urn,
-                    weight: r.weight,
-                    active: r.active,
-                    created_at: r.created_at,
-                })
-                .collect();
-        if items.is_empty() {
+    pub async fn pick(&self, sc_user_id: &str) -> AppResult<Option<FeaturedResult>> {
+        let Some(item) = sqlx::query_file!("queries/featured/service/pick_active.sql")
+            .fetch_optional(&self.pg)
+            .await?
+        else {
             return Ok(None);
-        }
-
-        let picked = weighted_random(&items);
-        let session_uuid = Uuid::parse_str(session_id)
-            .map_err(|_| AppError::unauthorized("Malformed session id"))?;
-        let kind = TokenKind::UserFirst(session_uuid);
-
-        match self.resolve(picked, kind, sc_user_id).await {
-            Ok(r) => Ok(Some(r)),
-            Err(e) => {
-                warn!(
-                    type_ = %picked.type_,
-                    sc_urn = %picked.sc_urn,
-                    error = %e,
-                    "Failed to resolve featured"
-                );
-                Ok(None)
-            }
-        }
+        };
+        let Some(data) = self
+            .resolve(&item.item_type, &item.sc_urn, sc_user_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(FeaturedResult {
+            type_: item.item_type,
+            data,
+        }))
     }
 
     async fn resolve(
         &self,
-        item: &FeaturedItem,
-        kind: TokenKind,
+        item_type: &str,
+        urn: &str,
         sc_user_id: &str,
-    ) -> AppResult<FeaturedResult> {
-        let id = crate::common::sc_ids::extract_sc_id(&item.sc_urn);
-        match item.type_.as_str() {
+    ) -> AppResult<Option<Value>> {
+        let id = crate::common::sc_ids::extract_sc_id(urn);
+        match item_type {
             "track" => {
-                let track = self.read.track_by_id(kind, id).await?;
-                let mut single = vec![track];
+                let mut single: Vec<Value> = project_many_public(&self.pg, &[id.to_owned()])
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
                 likes_cold::apply_user_favorite_flag(&self.pg, sc_user_id, &mut single).await?;
-                Ok(FeaturedResult {
-                    type_: "track".into(),
-                    data: single.into_iter().next().unwrap_or(Value::Null),
-                })
+                Ok(single.into_iter().next())
             }
             "playlist" => {
-                let mut playlist = self.read.playlist_meta(kind, id).await?;
-                // Featured cards expect full tracks (apiv1 embedded them); hydrate via
-                // apiv2 best-effort so the card isn't left with id-stubs.
-                if let Ok(tracks) = self.read.playlist_tracks(id).await
-                    && let Some(obj) = playlist.as_object_mut() {
-                        obj.insert("tracks".into(), Value::Array(tracks));
-                    }
-                Ok(FeaturedResult {
-                    type_: "playlist".into(),
-                    data: playlist,
-                })
+                let repository = PlaylistRepository::new(self.pg.clone());
+                let Some(row) = repository
+                    .find_by_urn(urn)
+                    .await?
+                    .filter(|row| row.sharing == "public")
+                else {
+                    return Ok(None);
+                };
+                let owner = match row.owner_urn.as_deref() {
+                    Some(urn) => UserRepository::new(self.pg.clone())
+                        .find_by_urn(urn)
+                        .await?
+                        .map(|row| project_user(&row)),
+                    None => None,
+                };
+                let ids = repository
+                    .page_track_ids(urn, 0, MAX_PLAYLIST_TRACKS)
+                    .await?;
+                let mut tracks: Vec<Value> = project_many_public(&self.pg, &ids)
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                likes_cold::apply_user_favorite_flag(&self.pg, sc_user_id, &mut tracks).await?;
+                let mut playlist = project_playlist(&row, owner.as_ref());
+                if let Some(obj) = playlist.as_object_mut() {
+                    obj.insert("tracks".into(), Value::Array(tracks));
+                }
+                Ok(Some(playlist))
             }
-            "user" => {
-                let user = self.read.user_by_id(kind, id).await?;
-                Ok(FeaturedResult {
-                    type_: "user".into(),
-                    data: user,
-                })
-            }
+            "user" => Ok(UserRepository::new(self.pg.clone())
+                .find_by_urn(urn)
+                .await?
+                .map(|row| project_user(&row))),
             other => Err(AppError::internal(format!(
                 "unknown featured type: {other}"
             ))),
         }
     }
-}
-
-fn weighted_random(items: &[FeaturedItem]) -> &FeaturedItem {
-    let total: i64 = items.iter().map(|i| i.weight.max(1) as i64).sum();
-    if total <= 0 {
-        return items.last().expect("featured list non-empty");
-    }
-    let mut rng = rand::thread_rng();
-    let mut rand: i64 = rng.gen_range(0..total);
-    for item in items {
-        rand -= item.weight.max(1) as i64;
-        if rand < 0 {
-            return item;
-        }
-    }
-    items.last().expect("featured list non-empty")
 }

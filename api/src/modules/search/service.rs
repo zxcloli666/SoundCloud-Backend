@@ -1,63 +1,41 @@
-//! Слой кеширования и оркестрации над `repository::search_*`.
-//!
-//! Каждая выдача оборачивается в Redis-кеш на короткий TTL — одинаковые
-//! поисковые запросы от множества клиентов (toggle SCD ⇄ SC, ребиндинг на
-//! debounce) идут в pg только при cache miss. Кеш-ключ выводится из всех
-//! query-параметров через build_list_cache_key, чтобы пара (q, user_urn, page,
-//! limit) разводилась.
-
 use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use crate::cache::cache_service::CacheScope;
-use crate::cache::{build_list_cache_key, CacheService, ListPageResult};
+use crate::cache::{CacheService, ListPageResult, build_list_cache_key};
 use crate::error::AppResult;
 use crate::modules::enrich::dto as enrich_dto;
-use crate::modules::enrich::normalize::normalize_name;
 use crate::modules::search::repository;
-
-/// 60s — баланс между "помогает дешёвыми обновлениями FE" и "не запоминает
-/// слишком долго свежеоткрытый трек, который только что попал в базу".
+use catalog_normalize::normalize_name;
 const TTL_SECONDS: u64 = 60;
-
-/// Минимальная длина запроса. Под лимитом — поиск отказан (400) или возвращает
-/// пустую выдачу, в зависимости от вкуса caller'а.
 pub const MIN_QUERY_LEN: usize = 2;
-
-/// Сколько символов из q вообще пропускаем дальше. Защита от копи-паста
-/// мегатекста в инпут.
 pub const MAX_QUERY_LEN: usize = 128;
-
-/// Максимальная страница (включительно). 25 * limit_max = 1250 элементов —
-/// дальше пагинировать DB-поиск бессмысленно, пусть юзер уточнит запрос.
 pub const MAX_PAGE: i64 = 24;
-
-/// Лимит элементов на страницу.
 pub const MAX_LIMIT: i64 = 50;
 
 pub struct SearchService {
     pg: PgPool,
     cache: Arc<CacheService>,
+    flights: crate::cache::KeyedCoalesce<String>,
 }
 
 impl SearchService {
     pub fn new(pg: PgPool, cache: Arc<CacheService>) -> Arc<Self> {
-        Arc::new(Self { pg, cache })
+        Arc::new(Self {
+            pg,
+            cache,
+            flights: crate::cache::KeyedCoalesce::new(),
+        })
     }
-
-    /// Нормализуем запрос к виду, под который заточены индексы. q_lower —
-    /// единственное представление, что мы используем для substring match'а.
     fn normalize_query(raw: &str) -> Option<String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None;
         }
         let truncated: String = trimmed.chars().take(MAX_QUERY_LEN).collect();
-        // Используем тот же `normalize_name`, что и при записи: иначе кириллица
-        // с диакритиками / кавычки разойдутся между писателем и читателем.
         let normalized = normalize_name(&truncated);
         if normalized.chars().count() < MIN_QUERY_LEN {
             return None;
@@ -70,174 +48,160 @@ impl SearchService {
         let limit = limit.clamp(1, MAX_LIMIT);
         (page, limit)
     }
-
-    /// Универсальный wrapper: cache hit отдаст готовый JSON, иначе compute(),
-    /// сериализуем, складываем в Redis.
     async fn cached<F, Fut>(&self, cache_key: &str, compute: F) -> AppResult<Value>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = AppResult<Value>>,
     {
         if let Ok(Some(raw)) = self.cache.get_raw(cache_key).await
-            && let Ok(v) = serde_json::from_str::<Value>(&raw) {
-                return Ok(v);
-            }
-        let value = compute().await?;
-        if let Ok(json) = serde_json::to_string(&value) {
-            let _ = self
-                .cache
-                .set_raw(
-                    cache_key,
-                    &json,
-                    TTL_SECONDS,
-                    None,
-                    CacheScope::Shared,
-                    None,
-                )
-                .await;
+            && let Ok(v) = serde_json::from_str::<Value>(&raw)
+        {
+            return Ok(v);
         }
-        Ok(value)
+        let json = self
+            .flights
+            .run(cache_key, || async {
+                let value = compute().await?;
+                let json = serde_json::to_string(&value).unwrap_or_default();
+                if !json.is_empty() {
+                    let _ = self
+                        .cache
+                        .set_raw(
+                            cache_key,
+                            &json,
+                            TTL_SECONDS,
+                            None,
+                            CacheScope::Shared,
+                            None,
+                        )
+                        .await;
+                }
+                Ok::<String, crate::error::AppError>(json)
+            })
+            .await?;
+        serde_json::from_str::<Value>(&json)
+            .map_err(|error| crate::error::AppError::internal(error.to_string()))
     }
 
     pub async fn tracks(
         &self,
-        q: &str,
-        user_urn: Option<&str>,
+        query: &super::query::TrackSearchQuery,
         page: i64,
         limit: i64,
     ) -> AppResult<ListPageResult<Value>> {
-        let Some(q_norm) = Self::normalize_query(q) else {
-            return Ok(empty_page(page, limit));
-        };
         let (page, limit) = Self::clamp_page_limit(page, limit);
-
-        // Разруливаем user_urn → sc_user_id один раз, кешируем в ключе уже
-        // нормализованный id, чтобы запросы по разным формам того же URN не
-        // плодили cache misses.
-        let user_sc_id = match user_urn {
-            Some(urn) if !urn.is_empty() => {
-                match repository::resolve_user_sc_id(&self.pg, urn).await? {
-                    Some(id) => Some(id),
-                    None => return Ok(empty_page(page, limit)),
-                }
-            }
-            _ => None,
-        };
-
-        let mut params: Vec<(&str, String)> = vec![
-            ("q", q_norm.clone()),
-            ("page", page.to_string()),
-            ("limit", limit.to_string()),
-        ];
-        if let Some(uid) = &user_sc_id {
-            params.push(("u", uid.clone()));
+        super::query::validate_access(query.access.as_deref())?;
+        let ids = super::query::parse_ids(query.ids.as_deref(), "tracks")?;
+        let genres = super::query::parse_terms(query.genres.as_deref(), "genres")?;
+        let tags = super::query::parse_terms(query.tags.as_deref(), "tags")?;
+        let owner = super::query::parse_owner(query.user_urn.as_deref())?;
+        let raw_query: String = query
+            .q
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(MAX_QUERY_LEN)
+            .collect();
+        let normalized = Self::normalize_query(&raw_query);
+        if normalized.is_none()
+            && (!raw_query.trim().is_empty()
+                || (ids.is_none() && genres.is_none() && tags.is_none() && owner.is_none()))
+        {
+            return Ok(empty_page(page, limit));
         }
-        let key = build_list_cache_key("search-db-tracks", &params);
-
-        let value = self
-            .cached(&key, || async {
-                let (mut items, has_more) = repository::search_tracks(
-                    &self.pg,
-                    &q_norm,
-                    user_sc_id.as_deref(),
-                    page,
-                    limit,
-                )
-                .await?;
-                enrich_dto::apply_to_tracks(&self.pg, &mut items).await?;
-                Ok(serde_json::to_value(PageEnvelope {
-                    collection: items,
-                    page,
-                    page_size: limit,
-                    has_more,
-                })
-                .unwrap_or(Value::Null))
-            })
-            .await?;
-        Ok(decode_page(value, page, limit))
+        let filters = repository::TrackSearch {
+            query: normalized.as_ref().map(|_| raw_query.as_str()),
+            owner: owner.as_deref(),
+            ids: ids.as_deref(),
+            genres: genres.as_deref(),
+            tags: tags.as_deref(),
+        };
+        let (mut collection, has_more) =
+            repository::search_tracks(&self.pg, &filters, page, limit).await?;
+        enrich_dto::apply_to_tracks(&self.pg, &mut collection).await?;
+        Ok(ListPageResult {
+            collection,
+            page,
+            page_size: limit,
+            has_more: has_more && page < MAX_PAGE,
+        })
     }
 
     pub async fn playlists(
         &self,
-        q: &str,
-        user_urn: Option<&str>,
+        query: &super::query::PlaylistSearchQuery,
         page: i64,
         limit: i64,
     ) -> AppResult<ListPageResult<Value>> {
-        let Some(q_norm) = Self::normalize_query(q) else {
-            return Ok(empty_page(page, limit));
-        };
         let (page, limit) = Self::clamp_page_limit(page, limit);
-
-        let user_sc_id = match user_urn {
-            Some(urn) if !urn.is_empty() => {
-                match repository::resolve_user_sc_id(&self.pg, urn).await? {
-                    Some(id) => Some(id),
-                    None => return Ok(empty_page(page, limit)),
-                }
-            }
-            _ => None,
-        };
-
-        let mut params: Vec<(&str, String)> = vec![
-            ("q", q_norm.clone()),
-            ("page", page.to_string()),
-            ("limit", limit.to_string()),
-        ];
-        if let Some(uid) = &user_sc_id {
-            params.push(("u", uid.clone()));
+        super::query::validate_access(query.access.as_deref())?;
+        if query
+            .show_tracks
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "false" | "0"))
+        {
+            return Err(crate::error::AppError::bad_request(
+                "Search returns playlist metadata; use GET /playlists/{urn}/tracks for membership",
+            ));
         }
-        let key = build_list_cache_key("search-db-playlists", &params);
-
-        let value = self
-            .cached(&key, || async {
-                let (items, has_more) = repository::search_playlists(
-                    &self.pg,
-                    &q_norm,
-                    user_sc_id.as_deref(),
-                    page,
-                    limit,
-                )
-                .await?;
-                Ok(serde_json::to_value(PageEnvelope {
-                    collection: items,
-                    page,
-                    page_size: limit,
-                    has_more,
-                })
-                .unwrap_or(Value::Null))
-            })
-            .await?;
-        Ok(decode_page(value, page, limit))
+        let owner = super::query::parse_owner(query.user_urn.as_deref())?;
+        let raw_query: String = query
+            .q
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(MAX_QUERY_LEN)
+            .collect();
+        let normalized = Self::normalize_query(&raw_query);
+        if normalized.is_none() && (!raw_query.trim().is_empty() || owner.is_none()) {
+            return Ok(empty_page(page, limit));
+        }
+        let (collection, has_more) = repository::search_playlists(
+            &self.pg,
+            normalized.as_ref().map(|_| raw_query.as_str()),
+            owner.as_deref(),
+            page,
+            limit,
+        )
+        .await?;
+        Ok(ListPageResult {
+            collection,
+            page,
+            page_size: limit,
+            has_more: has_more && page < MAX_PAGE,
+        })
     }
 
-    pub async fn users(&self, q: &str, page: i64, limit: i64) -> AppResult<ListPageResult<Value>> {
-        let Some(q_norm) = Self::normalize_query(q) else {
-            return Ok(empty_page(page, limit));
-        };
+    pub async fn users(
+        &self,
+        q: &str,
+        ids: Option<&str>,
+        page: i64,
+        limit: i64,
+    ) -> AppResult<ListPageResult<Value>> {
         let (page, limit) = Self::clamp_page_limit(page, limit);
-
-        let params: Vec<(&str, String)> = vec![
-            ("q", q_norm.clone()),
-            ("page", page.to_string()),
-            ("limit", limit.to_string()),
-        ];
-        let key = build_list_cache_key("search-db-users", &params);
-
-        let value = self
-            .cached(&key, || async {
-                let (items, has_more) =
-                    repository::search_users(&self.pg, &q_norm, page, limit).await?;
-                Ok(serde_json::to_value(PageEnvelope {
-                    collection: items,
-                    page,
-                    page_size: limit,
-                    has_more,
-                })
-                .unwrap_or(Value::Null))
-            })
-            .await?;
-        Ok(decode_page(value, page, limit))
+        let ids = super::query::parse_ids(ids, "users")?;
+        let raw_query: String = q.trim().chars().take(MAX_QUERY_LEN).collect();
+        let query = Self::normalize_query(&raw_query);
+        if (query.is_none() && !q.trim().is_empty()) || (query.is_none() && ids.is_none()) {
+            return Ok(empty_page(page, limit));
+        }
+        let (collection, has_more) = repository::search_users(
+            &self.pg,
+            query.as_ref().map(|_| raw_query.as_str()),
+            ids.as_deref(),
+            page,
+            limit,
+        )
+        .await?;
+        Ok(ListPageResult {
+            collection,
+            page,
+            page_size: limit,
+            has_more: has_more && page < MAX_PAGE,
+        })
     }
 
     pub async fn artists(
@@ -267,7 +231,7 @@ impl SearchService {
                     collection: items,
                     page,
                     page_size: limit,
-                    has_more,
+                    has_more: has_more && page < MAX_PAGE,
                 })
                 .unwrap_or(Value::Null))
             })
@@ -297,7 +261,7 @@ impl SearchService {
                     collection: items,
                     page,
                     page_size: limit,
-                    has_more,
+                    has_more: has_more && page < MAX_PAGE,
                 })
                 .unwrap_or(Value::Null))
             })
@@ -315,11 +279,14 @@ struct PageEnvelope {
 }
 
 fn decode_page(v: Value, fallback_page: i64, fallback_limit: i64) -> ListPageResult<Value> {
-    serde_json::from_value::<ListPageResult<Value>>(v)
-        .unwrap_or_else(|_| empty_page(fallback_page, fallback_limit))
+    let mut result = serde_json::from_value::<ListPageResult<Value>>(v)
+        .unwrap_or_else(|_| empty_page(fallback_page, fallback_limit));
+    result.has_more &= result.page < MAX_PAGE;
+    result
 }
 
 fn empty_page(page: i64, limit: i64) -> ListPageResult<Value> {
+    let (page, limit) = SearchService::clamp_page_limit(page, limit);
     ListPageResult {
         collection: Vec::new(),
         page,
@@ -369,4 +336,50 @@ fn album_to_value(r: repository::AlbumSearchRow) -> Value {
         "popularity": r.popularity_score,
         "star": r.is_star_artist,
     })
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::SearchService;
+    use crate::error::AppResult;
+
+    pub(crate) async fn expensive_once<Load, LoadFuture>(
+        service: &SearchService,
+        key: &str,
+        compute: Load,
+    ) -> AppResult<u32>
+    where
+        Load: FnOnce() -> LoadFuture,
+        LoadFuture: std::future::Future<Output = AppResult<u32>>,
+    {
+        let value = service
+            .cached(key, || async { Ok(serde_json::json!(compute().await?)) })
+            .await?;
+        Ok(value.as_u64().unwrap_or_default() as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cached_page_cannot_reopen_pagination_past_the_limit() {
+        for page in [23, 24] {
+            let result = super::decode_page(
+                serde_json::json!({
+                    "collection": [{"id": "cached-artist"}], "page": page,
+                    "page_size": 1, "has_more": true
+                }),
+                page,
+                1,
+            );
+            assert_eq!(
+                result.collection,
+                vec![serde_json::json!({"id": "cached-artist"})]
+            );
+            assert_eq!(
+                (result.page, result.page_size, result.has_more),
+                (page, 1, page < 24)
+            );
+        }
+    }
 }

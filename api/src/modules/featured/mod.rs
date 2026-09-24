@@ -3,3 +3,6 @@ pub mod service;
 
 pub use handlers::router;
 pub use service::FeaturedService;
+
+#[cfg(test)]
+mod tests;

@@ -1,13 +1,3 @@
-//! Свежие сигналы юзера для волны.
-//!
-//! Источник лайков — `user_likes_tracks` (зеркало `/me/likes/tracks`), читаем
-//! `ORDER BY created_at DESC, ctid DESC`: ctid резолвит ties когда несколько
-//! лайков пришли одним батчем рефреша с одинаковым `created_at`. Свежесть
-//! приоритетна — старые лайки отрезает 365-дневное окно.
-//!
-//! Дизы, скипы, full_play идём в `user_events`. ВСЕ запросы матчим по обоим
-//! формам `user_id` (URN + голый) — на проде сигналы расщеплены.
-
 use sqlx::PgPool;
 
 use crate::error::AppResult;
@@ -22,20 +12,13 @@ const RECENT_PLAYED_LIMIT: i64 = 200;
 
 #[derive(Debug, Default)]
 pub struct UserSignals {
-    /// Свежие лайки (DESC по дате; первый — самый свежий).
     pub fresh_likes: Vec<String>,
-    /// Жёсткие дизы — для qdrant negative + фильтра волны.
     pub disliked_ids: Vec<String>,
-    /// Свежие скипы — мягкий негатив.
     pub recent_skips: Vec<String>,
-    /// Сыгранное в последнее окно — контекст «что сейчас слушает».
     pub recent_played: Vec<String>,
 }
 
 impl UserSignals {
-    /// Жёсткое исключение ВСЕГДА — только дизы. «Прослушанное» добавляется
-    /// отдельно в build по тогглу `hide_listened` (тиерно 7/14/30д); скипы
-    /// остаются мягким негативом для qdrant, но из выдачи не режутся.
     pub fn always_exclude(&self) -> Vec<String> {
         let mut v = self.disliked_ids.clone();
         v.sort();
@@ -62,8 +45,6 @@ pub async fn load_recent_signals(pg: &PgPool, sc_user_id: &str) -> AppResult<Use
     })
 }
 
-/// «Скрыть прослушанное» — тиерный сет id (лайк 7д · full_play 14д · skip 30д
-/// от последнего прослуша). Пусто = тоггл выключен или нечего скрывать.
 pub(crate) async fn load_hidden_by_listen(pg: &PgPool, ids: &[String]) -> Vec<String> {
     sqlx::query_file_scalar!(
         "queries/recommendations/smart_wave/signals/hidden_by_listen.sql",

@@ -1,3 +1,4 @@
+use backend_contracts::reasons::WorkerStatus;
 use qdrant_client::qdrant::SearchPointsBuilder;
 use tracing::debug;
 
@@ -8,20 +9,41 @@ use crate::qdrant::collections;
 use super::service::util::{payload_to_map, point_id_to_value, value_to_u64};
 use super::service::{RecommendResult, RecommendationsService};
 
-/// Длина LTR-features schema (исторически 8). Сейчас LTR-инференса нет, но
-/// схема рассинхрона с rec_impressions ломает аналитику — держим как было.
 const FEATURE_LEN: usize = 8;
+const CANDIDATES_PER_RESULT: usize = 3;
+const MIN_CANDIDATES: usize = 40;
+const MAX_CANDIDATES: usize = 500;
 
-/// Результат текстового поиска. `preparing` = вектор запроса ещё считается
-/// воркером (см. [`EncodeOutcome::Preparing`]) — выдачи пока нет, фронт
-/// показывает «готовим вайб» и переспрашивает. `failed` = транзиентный сбой
-/// Qdrant (пустой результат не финальный). Ни тот, ни другой ответ кэшировать
-/// нельзя — иначе пустышка залипнет на TTL.
+fn fetch_size(limit: usize) -> usize {
+    limit
+        .saturating_mul(CANDIDATES_PER_RESULT)
+        .clamp(MIN_CANDIDATES, MAX_CANDIDATES)
+}
+
 #[derive(Debug, Default)]
 pub struct SearchTextResult {
     pub preparing: bool,
     pub failed: bool,
     pub results: Vec<RecommendResult>,
+}
+
+fn query_vector(outcome: EncodeOutcome) -> Result<Vec<f32>, SearchTextResult> {
+    match outcome {
+        EncodeOutcome::Ready(vector) if !vector.is_empty() => Ok(vector),
+        EncodeOutcome::Preparing => Err(SearchTextResult {
+            preparing: true,
+            ..SearchTextResult::default()
+        }),
+        EncodeOutcome::Ready(_)
+        | EncodeOutcome::Declined {
+            status: WorkerStatus::Empty,
+            ..
+        } => Err(SearchTextResult::default()),
+        EncodeOutcome::Declined { .. } => Err(SearchTextResult {
+            failed: true,
+            ..SearchTextResult::default()
+        }),
+    }
 }
 
 impl RecommendationsService {
@@ -35,19 +57,12 @@ impl RecommendationsService {
         if q.is_empty() {
             return Ok(SearchTextResult::default());
         }
-        let vec = match self.worker.encode_text_mulan(q).await? {
-            EncodeOutcome::Ready(v) if !v.is_empty() => v,
-            EncodeOutcome::Preparing => {
-                return Ok(SearchTextResult {
-                    preparing: true,
-                    failed: false,
-                    results: Vec::new(),
-                })
-            }
-            _ => return Ok(SearchTextResult::default()),
+        let vec = match query_vector(self.worker.encode_text_mulan(q).await?) {
+            Ok(vector) => vector,
+            Err(answer) => return Ok(answer),
         };
         let filter = self.build_filter(&[], languages);
-        let fetch_limit = (limit * 3).max(40);
+        let fetch_limit = fetch_size(limit);
 
         let mut builder =
             SearchPointsBuilder::new(collections::TRACKS_CLAP, vec, fetch_limit as u64)
@@ -81,8 +96,6 @@ impl RecommendationsService {
             })
             .collect();
 
-        // Privacy-guard: CLAP-индекс не несёт `sharing`, режем приватные треки
-        // по source-of-truth до enrichment'а.
         let public = self
             .public_track_ids(&scored.iter().map(|c| c.id.to_string()).collect::<Vec<_>>())
             .await;
@@ -99,5 +112,92 @@ impl RecommendationsService {
             failed: false,
             results,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use backend_contracts::reasons::WorkerReason;
+
+    fn answer_to(outcome: EncodeOutcome) -> (bool, bool) {
+        let answer = query_vector(outcome).expect_err("no vector to search with");
+        assert!(answer.results.is_empty());
+        (answer.preparing, answer.failed)
+    }
+
+    #[test]
+    fn a_worker_failure_is_reported_as_a_failure_and_not_as_no_results() {
+        assert_eq!(
+            answer_to(EncodeOutcome::Declined {
+                status: WorkerStatus::Failed,
+                reason: Some(WorkerReason::DeadlineExceeded),
+            }),
+            (false, true),
+            "an empty ready answer here is cached as the truth for every listener"
+        );
+        assert_eq!(
+            answer_to(EncodeOutcome::Declined {
+                status: WorkerStatus::Failed,
+                reason: Some(WorkerReason::ModelOutputInvalid),
+            }),
+            (false, true)
+        );
+        assert_eq!(
+            answer_to(EncodeOutcome::Declined {
+                status: WorkerStatus::Empty,
+                reason: Some(WorkerReason::EmptyText),
+            }),
+            (false, false)
+        );
+        assert_eq!(answer_to(EncodeOutcome::Preparing), (true, false));
+        assert_eq!(
+            query_vector(EncodeOutcome::Ready(vec![0.5; 512])).expect("a vector"),
+            vec![0.5; 512]
+        );
+    }
+
+    #[test]
+    fn a_page_asks_qdrant_for_a_few_candidates_per_result() {
+        assert_eq!(fetch_size(20), 60);
+        assert_eq!(fetch_size(4), MIN_CANDIDATES);
+    }
+
+    #[test]
+    fn no_page_size_can_turn_into_a_scan_of_the_whole_collection() {
+        assert_eq!(fetch_size(1_000_000), MAX_CANDIDATES);
+        assert_eq!(
+            fetch_size(usize::MAX),
+            MAX_CANDIDATES,
+            "a page size nobody clamped must not overflow into a wrapped fetch size either"
+        );
+    }
+
+    #[test]
+    fn every_recommendations_handler_bounds_the_page_it_was_asked_for() {
+        let handlers = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src/modules/recommendations/handlers.rs"),
+        )
+        .expect("the handlers are readable");
+        let mut bounded = 0;
+        for (number, line) in handlers.lines().enumerate() {
+            if !line.contains("parse_limit(") || line.trim_start().starts_with("fn parse_limit") {
+                continue;
+            }
+            bounded += 1;
+            assert!(
+                line.contains(".clamp("),
+                "handlers.rs:{} asks for a page size without bounding it; that size is \
+                 multiplied and handed to Qdrant as a fetch size, so one request can ask for \
+                 the whole collection: {}",
+                number + 1,
+                line.trim()
+            );
+        }
+        assert!(
+            bounded >= 4,
+            "only {bounded} handlers parse a page size; this guard is reading the wrong file"
+        );
     }
 }

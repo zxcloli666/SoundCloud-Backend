@@ -1,7 +1,3 @@
--- «Скрыть прослушанное»: id треков, которые скрыть по тирам от ПОСЛЕДНЕГО
--- прослуша (full_play/skip): лайкнутые — 7 дней, полностью прослушанные
--- (full_play) — 14 дней, остальные (skip) — 30 дней. Окна фиксированы →
--- статический запрос → query_file!. $1 = варианты user_id (URN + голый).
 WITH listens AS (SELECT sc_track_id,
                         MAX(created_at)                   AS last_listen,
                         bool_or(event_type = 'full_play') AS fully

@@ -2,15 +2,16 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-use crate::cache::{CacheService, ListCacheService};
+use crate::background_jobs::{BackgroundJobs, CollabJobs};
+use crate::cache::CacheService;
+use crate::common::admission::PublicAdmission;
 use crate::common::http_metrics::HttpMetrics;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
 use crate::modules::auth::{AuthService, LinkService};
-use crate::modules::collab::{CollabTrainerService, CollabVectorService};
+use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
 use crate::modules::dislikes::DislikesService;
-use crate::modules::enrich::{ArtistCrawlService, EnrichService, WantedResolverService};
 use crate::modules::events::EventsService;
 use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
@@ -32,10 +33,11 @@ use crate::sc::ScReadService;
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub pg: PgPool,
+    pub background_jobs: Arc<BackgroundJobs>,
     pub http_metrics: Arc<HttpMetrics>,
     pub cache: Arc<CacheService>,
-    pub list_cache: Arc<ListCacheService>,
     pub auth: Arc<AuthService>,
+    pub admission: Arc<PublicAdmission>,
     pub link: Arc<LinkService>,
     pub oauth_apps: Arc<OAuthAppsService>,
     pub events: Arc<EventsService>,
@@ -54,12 +56,9 @@ pub struct AppState {
     pub featured: Arc<FeaturedService>,
     pub lyrics: Arc<LyricsService>,
     pub collab_vector: Arc<CollabVectorService>,
-    pub collab_trainer: Arc<CollabTrainerService>,
+    pub collab_jobs: Arc<CollabJobs>,
     pub indexing: Arc<IndexingService>,
     pub recommendations: Arc<RecommendationsService>,
-    pub enrich: Arc<EnrichService>,
-    pub artist_crawl: Arc<ArtistCrawlService>,
-    pub wanted_resolver: Arc<WantedResolverService>,
     pub discover: Arc<DiscoverService>,
     pub sync_queue: Arc<SyncQueueService>,
 }

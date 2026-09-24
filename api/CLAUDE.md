@@ -1,8 +1,8 @@
 # SoundCloud-Backend
 
-Rust (axum) API + background pipelines for a SoundCloud desktop client. Mirrors SoundCloud content into our own catalog,
+Rust (axum) request-serving API for a SoundCloud desktop client. Mirrors SoundCloud content into our own catalog,
 enriches it (artists/albums/lyrics), embeds it for a vector-based recommendation "wave", and streams audio. Built for *
-*high load**: ~1.5M tracks, many concurrent users + background jobs.
+*high load**: ~5M tracks, many concurrent users + background jobs.
 
 ## Stack & data stores
 
@@ -25,7 +25,7 @@ enriches it (artists/albums/lyrics), embeds it for a vector-based recommendation
 
 `ingest` (like/playlist/discovery → `indexing::ingest_track_from_sc`, UPSERT `tracks`, priority set) → **storage** (
 `streaming` downloads from SC → S3; `storage_state`) → **index** (worker embeds audio+lyrics → Qdrant; `index_state`) →
-**enrich** (link artists/albums; `enrich_state`) → **lyrics** (aggregators + self-gen whisper). Each stage has its own
+**enrich** (link artists/albums; `enrich_state`) → **lyrics** (jobs: relay-backed external lookup; worker получает только plain→synced align). Each stage has its own
 state column + pickup. The bottleneck in prod is **SC download** (rate limits) — mitigated by the `call` relay + rotating
 proxies.
 
@@ -44,13 +44,12 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   `pg_advisory_lock` bug → pool exhaustion at 1 track/min.) Dedup via in-memory `mini_moka` cache + **idempotent UPSERT
   ** (`ON CONFLICT`) + freshness checks, not session locks. Acquire a connection only for the query, release
   immediately.
-- **Parallelize fan-out with `futures::future::join_all` + a `Semaphore` cap**, not serial `for x { ...await... }` and
-  not a global `Throttle` (a `Throttle` serializes a hot path). Ban-resistance comes from the rotating ipv6 proxies, not
-  from app-side throttling.
-- **External APIs** (Genius/MB/lrclib) go through the proxy via `common/external_fetch.rs`. Force
-  `Accept-Encoding: identity` (the proxy strips `content-encoding` without decompressing — see [proxy bug] below).
-  `get_api` = direct-first (token APIs), `get_scrape` = proxy-first (web). Genius concurrency =
-  `GENIUS_MAX_CONCURRENT_SCRAPES`.
+- **Parallelize bounded fan-out with `FuturesUnordered` or a semaphore-backed stream**, not serial `for x { ...await... }`
+  and not unbounded `join_all`. Network work owns no PostgreSQL connection.
+- **API не держит внешних каталожных клиентов.** MusicBrainz/Genius/lyrics-агрегаторы живут только в `jobs`; serving-процесс ходит наружу лишь в SoundCloud через `ScReadService`.
+- **Mass external reads** run only in jobs through **relay Lua → relay raw → own proxy**. A semantic miss stops the
+  transport chain and never poisons relay health; ban/429/5xx/transport/malformed advances to the next tier. Relay
+  saturation backpressures instead of spilling a burst onto the smaller proxy pool. Force `Accept-Encoding: identity`.
 - **Reading from SoundCloud** — do NOT call `ScClient::api_get_value` directly for a public read.
   Public reads go through the `ScReadService` facade (`sc/read.rs`): a 3-tier chain **apiv2 via relay
   (Lua) → apiv2 via proxy&relay → apiv1 (direct→proxy&relay, token, lazy)**, normalized to apiv1 shape.
@@ -67,13 +66,13 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   `x-admin-token` vs `config.admin.token`, fail-closed). There is **no** global auth layer in `router.rs` — a new admin
   handler MUST take `_: AdminAuth` as its **first** argument or the route is open to the world (this is how
   `/admin/collab/*` leaked). Body extractors (`Json`, `Option<Json<…>>`) are `FromRequest` and must stay **last**.
-- **Comment style:** terse, current-state only. No narrative-of-the-change comments, no rationale paragraphs.
+- **Комментариев в коде нет** — ни `//`, ни `///`, ни `//!`, ни в SQL, TOML, Dockerfile и CI. Смысл несут имена, типы и структура; объяснения идут в `docs/` и в чат.
 
 ## Gotchas (verified in prod)
 
 - **Proxy strips `Content-Encoding` without decompressing** → gzip/br bodies arrive as garbage; logged only at `debug`.
   Always send `Accept-Encoding: identity` for proxied fetches. Fixed in `proxy-common/headers.rs` (forces identity) +
-  backend `external_fetch`.
+  backend-side external fetching now lives entirely in `jobs`.
 - **`call` relay** must reach its control endpoint; the call server expects PROXY-protocol only
   from haproxy. Internal services connect direct (docker alias, bypassing haproxy) → tls-common does optional
   PROXY-detect + trusts only `TLS_PROXY_TRUSTED_HOSTS=haproxy` (auto-resolved). Port `:444` is the desktop's direct
@@ -81,15 +80,14 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
 
 ## Module map (`src/modules/`)
 
-`indexing` (ingest + pipeline kick + reaps), `tracks` (repository/UPSERT/projection), `enrich` (`resolver` artist/album
-resolution: ISRC→MB→Genius→AI→heuristic; `artist_crawl` Genius/MB catalog → `wanted_tracks`; `persist`), `lyrics` (
-aggregators lrclib/mxm/genius/netease + self-gen transcribe), `recommendations` (`smart_wave`, arms, blender, cursors,
+`indexing` (ingest + pipeline kick + reaps), `tracks` (repository/UPSERT/projection), `enrich` (только админские ручки и
+DTO — резолвер, кравл и wanted-резолвер живут в `jobs`), `admin` (read/CRUD + durable enqueue; тяжёлый maintenance — job `admin.*` в `jobs`), `lyrics` (cache/state read, local preview и durable lookup wake;
+LRCLIB/Musixmatch/Genius lookup и align decision живут в `jobs`), `recommendations` (`smart_wave`, arms, blender, cursors,
 clusters, bandits, trainer), `collab`/`centroids` (vectors), `cold_refresh` (TTL-based SC re-sync), `auth`/
 `oauth_apps` (SC token chains + proxy), `sync_queue` (write-back to SC), `resolve` (`/resolve` handler → `ScReadService`), read-path:
 `search discover albums artists playlists users me likes dislikes history auras featured subscriptions`. Infra: `bus/` (
 nats), `cache/`, `db/`, `qdrant/`, `redis/`, `sc/` (`ScClient` transport + `ScReadService` public-read facade +
-`apiv2`/`mapping`/`lua_methods` — see [docs/sc-networking.md](docs/sc-networking.md)), `common/` (`external_fetch`,
-`throttle`), `config.rs`, `main.rs`.
+`apiv2`/`mapping`/`lua_methods` — see [docs/sc-networking.md](docs/sc-networking.md)), `common/`, `config.rs`, `main.rs`.
 
 ## Two databases: core + ops (FOLLOW THESE)
 
@@ -150,7 +148,7 @@ cargo check --all-targets        # macros are validated against this schema
 CI and `docker build` do the same automatically (spin up an ephemeral Postgres → apply migrations → build online).
 Nothing to commit, nothing to keep in sync.
 
-**Keep on runtime `sqlx::query(...)`** — these CANNOT be macros; leave a one-line comment saying which case:
+**Keep on runtime `sqlx::query(...)`** — these CANNOT be macros; the reason is always one of:
 
 - **Dynamic SQL** — built with `format!` / conditional `WHERE` / `QueryBuilder` (the string isn't static).
 - **`INSERT … VALUES` binding `Option<…>`** — Postgres `DESCRIBE` doesn't report parameter nullability, so the macro
@@ -169,12 +167,12 @@ Nothing to commit, nothing to keep in sync.
 
 ## Migrations (FOLLOW THESE)
 
-`migrations/NNNN_*.sql` (core) и `migrations-ops/9NNN_*.sql` (ops), sqlx, **embedded at compile time**
-(`sqlx::migrate!()` in `db/mod.rs`). Applied on boot under an advisory lock when `MIGRATE_ON_BOOT` ≠ `false`;
-otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them as a discrete pre-start deploy step
-(a failed migration then fails the deploy, not the running app). Ops-набор катится только если задана
-`OPS_DATABASE_URL`; на main/star он просто пропускается. Правила ниже действуют для обоих наборов —
-`scripts/check-migrations.sh` проверяет их по отдельности (нумерация append-only в пределах набора).
+`migrations/NNNN_*.sql` (core) и `migrations-ops/9NNN_*.sql` (ops) встраиваются в бинарник
+`jobs-migrate`. API никогда не применяет DDL и при старте проверяет обязательную версию core-схемы.
+Перед API запускается `migrate core`; на jobs-хосте `migrate ops`, а локальный all-in-one deploy использует
+`migrate all`. Двухфазный core-migrator применяет 0059, создаёт или обновляет настроенный OAuth app,
+перевязывает legacy connections и только затем завершает оставшиеся миграции. Правила ниже действуют для
+обоих наборов; `scripts/check-migrations.sh` проверяет их независимо.
 
 - **A `.sql` edit needs a rebuild+redeploy** to take effect — patching the file and restarting the old binary changes
   nothing. **Never edit an already-applied migration:** the checksum (SHA-384 of the file) lives in `_sqlx_migrations`,
@@ -195,19 +193,22 @@ otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them as a dis
     `CREATE INDEX CONCURRENTLY` = two statements = implicit tx = the error that took prod down — `0029`.)
 - **A failed `CREATE INDEX CONCURRENTLY` leaves an INVALID index** that `IF NOT EXISTS` then silently skips (planner
   ignores it → seq scans). Drop invalid leftovers by hand; self-heal can't share the file with the concurrent build.
-- **Keep boot migrations cheap.** They run while every starting instance blocks on the migration advisory lock; a heavy
-  in-transaction index build or backfill stalls the whole fleet — pre-create or backfill on prod instead.
+- **Keep deploy migrations cheap.** A heavy in-transaction index build or backfill stalls the rollout — pre-create or
+  backfill on prod instead.
 
 ## Commands
 
 - Build/check: needs a migrated Postgres (see **Database queries**) — `DATABASE_URL=… cargo check --all-targets` (in
   `api/`). Lint: `cargo clippy --all-targets -- -D warnings` — CI runs latest stable, so keep your toolchain current
   (`rustup update`) or you'll miss newer lints it rejects. Migrations: see **Migrations** above.
-- Query plans: `scripts/check-query-plans.sh` (CI `query-plans.yml`) flags `Seq Scan` on big tables (advisory; warms
-  prod-like sizes via `scripts/load-approx-stats.sql`). Prod slow queries / unused indexes: `GET /admin/slow-queries`,
+- Query plans: `scripts/check-query-plans.sh` (CI `query-plans.yml`) flags `Seq Scan` on big tables (advisory). It only
+  means something on a seeded base: `scripts/seed-plan-fixtures.sql` fills 23 big tables with 50000 rows each (dates
+  spread over 400 days, realistic `user_events`/likes/credits distributions); `scripts/seed-plan-fixtures-scale.sh`
+  does the same at prod row counts with `PSQL=… OVERRIDES='{"user_events":…}'`, dropping and rebuilding the
+  non-constraint indexes of the scaled tables around the load. Prod slow queries / unused indexes: `GET /admin/slow-queries`,
   `GET /admin/index-usage` (header `x-admin-token`).
-- Key env: `PG_POOL_MAX`, `ENRICH_CONSUMER_CONCURRENCY`, `LYRICS_INDEXING_CONCURRENCY`, `GENIUS_MAX_CONCURRENT_SCRAPES`,
-  `GENIUS_ACCESS_TOKEN`, `MAX_TRACK_DURATION_SEC`, `ENRICH_*`, `SC_PROXY_URL`, `CALL_*`, `TLS_PROXY_TRUSTED_HOSTS`.
+- Key env: `PG_POOL_MAX`, `MAX_TRACK_DURATION_SEC`, `ENRICH_MB_RATE_LIMIT_MS`, `SC_PROXY_URL`, `CALL_*`,
+  `TLS_PROXY_TRUSTED_HOSTS`. Lyrics/crawl concurrency and Genius/Musixmatch configuration belong to jobs.
 - Prod: compose on dedic `ssh dedic-ru:/root/docker-compose.yml`; DB/qdrant/minio creds in
   `../Infra/main-host/docker-compose.yml`. Query prod DB from PC via
   `podman run ... postgres:17-alpine psql -h <dedic> ...`.
@@ -215,29 +216,25 @@ otherwise the standalone `migrate` bin (`src/bin/migrate.rs`) runs them as a dis
 ## Session & SC token — читать до правок в auth/me
 
 **`SessionCtx` НЕ материализует SC-токен.** Он даёт `session_id` + `sc_user_id`, и
-резолвится через `get_session` (без обновления). Причина: токен реально нужен
-**4 ручкам** (`/me`, `/me/cold`, `/me/followings/tracks`, `/me/followers`) против
-~95 обращений к сессии по остальным модулям — те читают НАШУ базу. Пока экстрактор
-обновлял токен всем подряд, любой тупёж SoundCloud на рефреше клал всё приложение.
-Нужен токен — зови `ctx.access_token().await?`, и только там запрос ждёт SC.
+резолвится через `get_session` без обновления. `/me` читает локальный профиль;
+маршрут `/me/cold` удалён. Обновление профиля и устаревших сущностей каталога
+принадлежит durable job `catalog.refresh`. В API нет отцепленных задач для этих обновлений.
 
-**Приложение обязано работать с протухшим SC-токеном.** `/me/cold` на то и
-холодный: источник истины — наше зеркало `user_profiles`, токен нужен лишь чтобы
-освежить протухшую запись (фоном) или засеять пустое зеркало; нет токена — отдаём
-`session_profile_stub` из базы, а не отказ. Не делай токен load-bearing там, где
-данные уже есть локально.
+**Приложение обязано работать с протухшим SC-токеном.** `/me` возвращает зеркало
+`user_profiles` либо минимальный профиль из локальных данных. Только разрешённые
+SC-пути запрашивают токен через `ctx.with_access_token(...)`.
 
-**`get_valid_session` не блокирует, пока токен ещё жив.** `REFRESH_BUFFER` = 5 мин,
-то есть «пора обновить» наступает задолго до реального истечения. Обновление
-уходит в фон (single-flight по `try_lock_owned`); ждать заставляем только при
-`is_expired`. Раньше мьютекс держался всю сетевую операцию — десятки параллельных
-запросов вставали в очередь и получали секунды латентности.
+**Проверка подключения отделена от профиля.** `GET /auth/soundcloud` читает
+состояние из PostgreSQL без SC-запроса. Явное обновление — `POST /auth/soundcloud/refresh`.
+Общая аренда в `soundcloud_connections` защищает обновления из API и jobs.
 
-**Диагностический признак:** `/health` быстрый (~0.2 с — он сессию не трогает), а
-всё авторизованное медленное → смотри сюда, а не в SQL.
+**Одиночный `invalid_grant` не требует входа.** Миграция 0089 и общий SQL записи
+отказа требуют минимум три отказа за период не менее 15 минут, последнего успеха
+не менее 30 минут назад и уже истёкшего access token. Между попытками — 10 минут.
+Успех, повторная авторизация и временная ошибка сбрасывают серию отказов.
+Таймауты, 429, 5xx и недоступная конфигурация OAuth сохраняют локальную сессию.
 
-**502 «Renewing your session, try again shortly»** — circuit breaker после
-неудачного рефреша, НЕ смерть сессии. Клиент не должен уводить юзера в ре-логин.
+Контракт фронтенда: [docs/frontend-api-rewrite.md](../docs/frontend-api-rewrite.md).
 
 ## Сборка локально
 
@@ -255,6 +252,6 @@ for f in migrations/*.sql migrations-ops/*.sql; do \
 DATABASE_URL=postgres://scd:x@127.0.0.1:5432/scd cargo check
 ```
 
-**Деплой api на main-host = ~8 минут даунтайма**: миграции накатываются на старте,
-`tracks` ~34 ГБ, контейнер висит `health: starting`, haproxy отдаёт 503. Это не
-поломка — прерывать нельзя. Катить star (резерв) первым как канарейку, потом main.
+API проверяет обязательную версию core-схемы и не применяет миграции при старте.
+Перед запуском API миграции выполняет `jobs-migrate`. Production rollout описан
+в [backend-rewrite-roadmap.md](../docs/backend-rewrite-roadmap.md); до завершения переписи деплой запрещён.

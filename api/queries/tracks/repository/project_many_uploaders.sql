@@ -1,4 +1,3 @@
--- Uploader SC-shape JSON for project_many fan-in; one query instead of N JOINs.
 SELECT sc_user_id,
        jsonb_build_object(
                'kind', 'user',

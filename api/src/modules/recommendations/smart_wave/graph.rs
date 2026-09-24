@@ -1,71 +1,37 @@
-//! Сетка близости артистов вокруг вкуса + аддитивное распространение.
-//!
-//! Модель:
-//! 1. TIER A (сиды) = участники последних лайков (`primary`+`featured`+
-//!    `remixer`; если у трека нет кредитов — фолбэк через `album_artists`).
-//!    Вес сида ∝ частота лайков × свежесть × сколько реально слушаешь (плеи),
-//!    затем ln-компрессия: доминантный артист остаётся первым, но не
-//!    схлопывает нормализацию остальных сидов в ~0.
-//! 2. Рёбра «близости %» = `artist_coplay` (коллаборации) ∪ `artist_colike`
-//!    («фанаты тоже лайкают», Ochiai). Нормализация ПО ИСТОЧНИКУ И ВИДУ ребра
-//!    (масштабы разные), близость = max по видам: ближайший сосед = 1.0.
-//! 3. `affinity(v)` — затухающее spreading-activation на [HOPS] хопов. Вклады
-//!    РАЗНЫХ путей к одному артисту складываются с геометрическим затуханием
-//!    ([PATH_DECAY]): сильнейший целиком, следующий вдвое слабее:
-//!    psychosis→мокери(.9)→shadow(.5) + psychosis→гуль(.5)→shadow(.1) =
-//!    0.45 + 0.5·0.05 ≈ 0.48. Хаб с двадцатью слабыми путями так НЕ перерастает
-//!    прямого соседа, а пропагация капится ниже сида ([PROP_CAP]) — сиды святы.
-//! 4. Диз-артист (≥ [DISLIKE_ARTIST_MIN] дизов на его треки) выкидывается из
-//!    графа и гасит близких соседей (анти-спред).
-
 use std::collections::HashMap;
 
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool as RedisPool;
+use deadpool_redis::redis::AsyncCommands;
 use sqlx::PgPool;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::modules::recommendations::service::util::user_id_variants;
 use crate::modules::recommendations::service::RecommendationsService;
+use crate::modules::recommendations::service::util::user_id_variants;
 
 const SEED_LIMIT: i64 = 48;
 const LIKES_WINDOW_DAYS: i32 = 365;
 const PLAYS_WINDOW_DAYS: i32 = 120;
-/// Во сколько плеи весят относительно лайков при сборке сида.
 const PLAY_BOOST: f32 = 0.6;
 const HOPS: usize = 3;
-/// Глобальный демпинг хопа: ≈1, чтобы честно повторять модель «45+5%», но <1,
-/// чтобы дальние хопы затухали и пропагация сходилась.
 const GAMMA: f32 = 0.9;
-/// Прунинг: активация ниже порога не распространяется дальше.
 const EPS: f32 = 0.004;
-/// Затухание вкладов доп. путей к одному узлу (сортировка по убыванию).
 const PATH_DECAY: f32 = 0.5;
-/// Потолок пропагированной близости — строго ниже сида.
 const PROP_CAP: f32 = 0.98;
-/// Кап фронтира на хоп (highload: ограничивает размер ANY-массива в SQL).
 const FRONTIER_CAP: usize = 320;
-/// Кап итогового графа.
 const TOTAL_CAP: usize = 1500;
 const DISLIKE_ARTIST_MIN: i64 = 3;
-/// Сколько вычитаем у соседей диз-артиста (анти-хотелка).
 const ANTISPREAD_MU: f32 = 0.6;
 const CACHE_TTL_SECS: u64 = 90;
 
-/// Чем затравливаем сетку. Юзер — взвешенными лайками+плеями; трек — его
-/// участниками; артист — самим собой.
 pub enum GraphSeed {
     User,
     Track(u64),
     Artist(Uuid),
 }
 
-/// Карта `artist_id → affinity`. Сиды ≈1.0, дальше затухает; диз-артистов нет.
 pub type Affinity = HashMap<Uuid, f32>;
 
-/// Сетка + кого юзер «задизил» как артиста (нужно жёстко резать их треки даже
-/// в чистом MERT-хвосте, где affinity уже 0).
 pub struct GraphResult {
     pub affinity: Affinity,
     pub disliked_artists: Vec<Uuid>,
@@ -80,12 +46,13 @@ pub async fn build_affinity(
     let disliked = load_disliked_artists(&svc.pg, &variants).await;
 
     if let GraphSeed::User = seed
-        && let Some(cached) = read_cache(&svc.redis, sc_user_id).await {
-            return GraphResult {
-                affinity: cached,
-                disliked_artists: disliked,
-            };
-        }
+        && let Some(cached) = read_cache(&svc.redis, sc_user_id).await
+    {
+        return GraphResult {
+            affinity: cached,
+            disliked_artists: disliked,
+        };
+    }
 
     let mut seeds = match seed {
         GraphSeed::User => {
@@ -126,14 +93,8 @@ pub async fn build_affinity(
     }
 }
 
-/// Spreading-activation с decay-fold вкладов: внутри хопа вклады разных
-/// фронтир-узлов к одному артисту сворачиваются через [decay_fold], между
-/// хопами — так же. Сид подпитывается соседями (`max(вес, fold)` — близкий
-/// сосед сильного сида не должен обгонять сид-«второго любимого»), но не
-/// перераспространяет чужую активацию; в диз-артистов активация не течёт.
 async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity {
     let disliked_set: std::collections::HashSet<Uuid> = disliked.iter().copied().collect();
-    // Вклады каждого хопа; для сидов — отдельная копилка (не входит в activation).
     let mut contribs: HashMap<Uuid, Vec<f32>> = HashMap::new();
     let mut seed_contribs: HashMap<Uuid, Vec<f32>> = HashMap::new();
     let mut activation = seeds.clone();
@@ -148,7 +109,6 @@ async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity
             break;
         }
 
-        // adjacency[src][kind] = (dst, raw_weight); src — узел фронтира.
         let frontier_set: std::collections::HashSet<Uuid> = frontier.iter().copied().collect();
         let mut adjacency: HashMap<Uuid, HashMap<i16, Vec<(Uuid, f32)>>> = HashMap::new();
         for (a, b, w, kind) in edges {
@@ -213,8 +173,6 @@ async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity
     total
 }
 
-/// Свёртка вкладов путей: сильнейший целиком, каждый следующий ×[PATH_DECAY],
-/// потолок [PROP_CAP]. Хаб со множеством слабых связей не обгоняет сида.
 fn decay_fold(mut xs: Vec<f32>) -> f32 {
     xs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
     let mut mult = 1.0f32;
@@ -226,7 +184,6 @@ fn decay_fold(mut xs: Vec<f32>) -> f32 {
     sum.min(PROP_CAP)
 }
 
-/// Диз-артист радиирует «анти-хотелку»: соседи по сетке слегка глушатся.
 async fn anti_spread(pg: &PgPool, affinity: &mut Affinity, disliked: &[Uuid]) {
     if disliked.is_empty() {
         return;
@@ -265,9 +222,6 @@ async fn anti_spread(pg: &PgPool, affinity: &mut Affinity, disliked: &[Uuid]) {
     affinity.retain(|_, v| *v > 0.0);
 }
 
-/// «Близость %» соседей одного узла: рёбра нормализуются по max ВНУТРИ своего
-/// вида (коллаб-каунты и ко-лайк Ochiai в разных масштабах), затем по соседу
-/// берётся максимум видов.
 fn merge_normalized(kinds: &HashMap<i16, Vec<(Uuid, f32)>>) -> HashMap<Uuid, f32> {
     let mut merged: HashMap<Uuid, f32> = HashMap::new();
     for dsts in kinds.values() {
@@ -310,7 +264,6 @@ async fn load_track_seeds(pg: &PgPool, sc_track_id: u64) -> Affinity {
     if !rows.is_empty() {
         return rows.into_iter().map(|r| (r.artist_id, r.w)).collect();
     }
-    // Фолбэк: трек без кредитов → через альбом.
     let rows = sqlx::query_file!(
         "queries/recommendations/smart_wave/graph/load_track_seeds_via_album.sql",
         &scid
@@ -322,8 +275,6 @@ async fn load_track_seeds(pg: &PgPool, sc_track_id: u64) -> Affinity {
 }
 
 async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
-    // Артист «дизнут» только если дизов >= порога И дизов БОЛЬШЕ, чем лайков на
-    // нём: 0 лайков + 3 диза → дизнут; 5 лайков + 3 диза → нет (ты его любишь).
     sqlx::query_file_scalar!(
         "queries/recommendations/smart_wave/graph/load_disliked_artists.sql",
         variants,
@@ -334,8 +285,6 @@ async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
     .unwrap_or_default()
 }
 
-/// Рёбра обоих видов разом: kind 0 = коллабы (`artist_coplay`),
-/// kind 1 = ко-лайки (`artist_colike`).
 async fn load_graph_edges(pg: &PgPool, nodes: &[Uuid]) -> Vec<(Uuid, Uuid, f32, i16)> {
     if nodes.is_empty() {
         return Vec::new();
@@ -354,9 +303,6 @@ async fn load_graph_edges(pg: &PgPool, nodes: &[Uuid]) -> Vec<(Uuid, Uuid, f32, 
     .unwrap_or_default()
 }
 
-/// Треки близких артистов — сетка как ИСТОЧНИК кандидатов (не только ре-ранкер).
-/// Только playable+indexed (иначе qdrant/плеер их не отдаст), top по play_count,
-/// `per_artist` штук на артиста (анти-моно), не из exclude.
 pub async fn collect_artist_tracks(
     pg: &PgPool,
     artist_ids: &[Uuid],
@@ -442,14 +388,12 @@ mod tests {
 
     #[test]
     fn decay_fold_tz_case() {
-        // ТЗ: psychosis→мокери(.9)→shadow(.5)=0.45 + psychosis→гуль(.5)→shadow(.1)=0.05.
         let v = decay_fold(vec![0.05, 0.45]);
         assert!((v - 0.475).abs() < 1e-6, "got {v}");
     }
 
     #[test]
     fn decay_fold_hub_stays_below_direct_neighbor() {
-        // Хаб: 15 слабых путей по 0.15 — не должен перерасти прямого соседа 0.45.
         let hub = decay_fold(vec![0.15; 15]);
         let direct = decay_fold(vec![0.45]);
         assert!(hub < 0.31, "hub={hub}");
@@ -472,12 +416,10 @@ mod tests {
         let a = Uuid::from_u128(1);
         let b = Uuid::from_u128(2);
         let mut kinds: HashMap<i16, Vec<(Uuid, f32)>> = HashMap::new();
-        kinds.insert(0, vec![(a, 2.0), (b, 1.0)]); // коллабы: счёт треков
-        kinds.insert(1, vec![(a, 0.05), (b, 0.24)]); // ко-лайк: ochiai
+        kinds.insert(0, vec![(a, 2.0), (b, 1.0)]);
+        kinds.insert(1, vec![(a, 0.05), (b, 0.24)]);
         let m = merge_normalized(&kinds);
-        // a: топ-коллаб (2/2=1.0) важнее слабого ко-лайка (0.05/0.24).
         assert!((m[&a] - 1.0).abs() < 1e-6);
-        // b: топ-ко-лайк (0.24/0.24=1.0) важнее пол-коллаба (1/2=0.5).
         assert!((m[&b] - 1.0).abs() < 1e-6);
     }
 

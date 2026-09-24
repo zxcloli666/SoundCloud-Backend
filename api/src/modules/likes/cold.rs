@@ -25,10 +25,6 @@ async fn fetch_liked_playlist_urns(
     Ok(rows.into_iter().collect())
 }
 
-/// Подмешать `user_favorite=true` к плейлистам, лайкнутым юзером
-/// (`user_likes_playlists`). Используется в read-path /me/likes/playlists,
-/// /playlists/{urn} и в listing'ах с плейлистами, чтобы UI сразу подсвечивал
-/// сердечко без отдельного запроса.
 pub async fn apply_user_favorite_flag_to_playlists(
     pg: &PgPool,
     sc_user_id: &str,
@@ -48,15 +44,14 @@ pub async fn apply_user_favorite_flag_to_playlists(
     for p in playlists.iter_mut() {
         let urn = p.get("urn").and_then(|v| v.as_str()).unwrap_or("");
         if liked.contains(urn)
-            && let Some(obj) = p.as_object_mut() {
-                obj.insert("user_favorite".into(), Value::Bool(true));
-            }
+            && let Some(obj) = p.as_object_mut()
+        {
+            obj.insert("user_favorite".into(), Value::Bool(true));
+        }
     }
     Ok(())
 }
 
-/// Подмножество sc_track_id из переданного списка urns, которые юзер залайкал
-/// (wanted_state=true — pending unlike исключены).
 async fn fetch_liked_ids(
     pg: &PgPool,
     sc_user_id: &str,
@@ -76,7 +71,6 @@ async fn fetch_liked_ids(
     Ok(rows.into_iter().collect())
 }
 
-/// Подмешать `user_favorite=true` к трекам, которые есть в user_likes_tracks.
 pub async fn apply_user_favorite_flag(
     pg: &PgPool,
     sc_user_id: &str,
@@ -99,10 +93,9 @@ pub async fn apply_user_favorite_flag(
             .get("urn")
             .and_then(|v| v.as_str())
             .is_some_and(|u| liked_ids.contains(extract_sc_id(u)));
-        if liked
-            && let Some(obj) = t.as_object_mut() {
-                obj.insert("user_favorite".into(), Value::Bool(true));
-            }
+        if liked && let Some(obj) = t.as_object_mut() {
+            obj.insert("user_favorite".into(), Value::Bool(true));
+        }
     }
     Ok(())
 }

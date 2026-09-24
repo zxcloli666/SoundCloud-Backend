@@ -1,294 +1,93 @@
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
-use tracing::debug;
 
-use crate::cache::cache_service::CacheScope;
-use crate::cache::{FetchChunkResult, GetPageOptions, ListCacheService, ListPageResult};
-use crate::common::session::SessionCtx;
 use crate::error::AppResult;
-use crate::modules::likes::cold as likes_cold;
-use crate::modules::sync_queue::mirror::{self, FOLLOWINGS as FOLLOWINGS_MIRROR};
+use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
 use crate::modules::sync_queue::SyncQueueService;
-use crate::sc::ScClient;
-
-const TTL_FOLLOWINGS_TRACKS: u64 = 60;
-const TTL_FOLLOWERS: u64 = 600;
-const PROFILE_TTL_SEC: i64 = 600;
-const PROFILE_SEED_TIMEOUT_SEC: u64 = 3;
-
-/// MeService держит только то, что у нас **нет** как отдельной коллекции:
-/// SC-фид (`/me/followings/tracks`),
-/// followers (входящие подписчики бизнесу не нужны cold), follow/unfollow
-/// мутации и `/me` профиль. Tracks/playlists/likes/followings того же юзера
-/// ходят через [`UsersService`] с `target == ctx.sc_user_id` — общие mirror
-/// таблицы (`user_owned_*`, `user_likes_*`, `user_followings`).
+use crate::modules::sync_queue::mirror::FOLLOWINGS as FOLLOWINGS_MIRROR;
 pub struct MeService {
-    sc: ScClient,
     pg: PgPool,
-    list_cache: Arc<ListCacheService>,
     sync_queue: Arc<SyncQueueService>,
+    cold_refresh: Arc<ColdRefreshService>,
 }
 
 impl MeService {
     pub fn new(
-        sc: ScClient,
         pg: PgPool,
-        list_cache: Arc<ListCacheService>,
         sync_queue: Arc<SyncQueueService>,
+        cold_refresh: Arc<ColdRefreshService>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            sc,
             pg,
-            list_cache,
             sync_queue,
+            cold_refresh,
         })
     }
 
-    pub async fn get_profile(&self, token: &str) -> AppResult<Value> {
-        self.sc.api_get_value("/me", token, None).await
-    }
-
-    /// DB-backed profile for Library: serve the mirror immediately, revalidate
-    /// from SC in the background when stale; synchronous seed on first read.
-    /// «Холодный» профиль: источник истины — НАШЕ зеркало. Токен SoundCloud тут
-    /// не load-bearing и берётся лениво: он нужен лишь чтобы освежить протухшую
-    /// запись (фоном) или засеять пустое зеркало. Нет токена — отдаём то, что
-    /// есть в базе. Иначе протухшая сессия SC роняла бы старт приложения.
-    pub async fn get_profile_cold(
-        self: &Arc<Self>,
-        sc_user_id: &str,
-        ctx: &SessionCtx,
-    ) -> AppResult<Value> {
-        // user_profiles ключ — URN (пишет login); ctx.sc_user_id теперь bare →
-        // матчим оба варианта, LIMIT 1 по свежести (дубль URN+bare до бэкфилла).
-        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let row = sqlx::query_file!("queries/me/service/profile_cold_fetch.sql", &variants)
-            .fetch_one(&self.pg)
-            .await
-            .ok();
-
-        if let Some(row) = row {
-            let (profile, synced_at) = (row.profile_json, row.synced_at);
-            if Utc::now() - synced_at > Duration::seconds(PROFILE_TTL_SEC)
-                && let Ok(tok) = ctx.access_token().await {
-                    let me = Arc::clone(self);
-                    let uid = sc_user_id.to_string();
-                    tokio::spawn(async move {
-                        if let Err(e) = me.refresh_profile(&uid, &tok).await {
-                            debug!(error = %e, "me cold background refresh failed");
-                        }
-                    });
-                }
-            return Ok(profile);
-        }
-
-        // Empty mirror: seed from SC under a short budget; if SC is slow or
-        // unreachable, serve a session/users-derived stub now and finish seeding
-        // in the background so Library/auth boot without blocking.
-        // Засеять можем только с живым токеном; без него сразу отдаём заглушку
-        // из своей базы — это по-прежнему рабочий ответ, а не отказ.
-        let Ok(token) = ctx.access_token().await else {
-            return Ok(self.session_profile_stub(sc_user_id).await);
-        };
-        let seed = self.refresh_profile(sc_user_id, &token);
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(PROFILE_SEED_TIMEOUT_SEC),
-            seed,
-        )
-        .await
-        {
-            Ok(Ok(profile)) => Ok(profile),
-            other => {
-                if let Ok(Err(e)) = other {
-                    debug!(error = %e, "me cold seed failed, serving stub");
-                }
-                let me = Arc::clone(self);
-                let uid = sc_user_id.to_string();
-                tokio::spawn(async move {
-                    let _ = me.refresh_profile(&uid, &token).await;
-                });
-                Ok(self.session_profile_stub(sc_user_id).await)
-            }
-        }
-    }
-
-    async fn session_profile_stub(&self, sc_user_id: &str) -> Value {
-        let id: i64 = sc_user_id
-            .rsplit(':')
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        // Prefer the users mirror (carries avatar/counts); fall back to the
-        // session row (username only) when the user was never synced.
-        let mirrored: Option<Value> =
-            sqlx::query_file_scalar!("queries/me/service/stub_from_users.sql", sc_user_id, id)
-                .fetch_optional(&self.pg)
-                .await
-                .ok()
-                .flatten();
-        if let Some(profile) = mirrored {
-            return profile;
-        }
-
-        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let username: Option<String> = sqlx::query_file_scalar!(
-            "queries/me/service/stub_username_from_sessions.sql",
-            &variants
-        )
-        .fetch_optional(&self.pg)
-        .await
-        .ok()
-        .flatten();
-        json!({
-            "id": id,
-            "urn": sc_user_id,
-            "username": username.unwrap_or_default(),
-            "avatar_url": "",
-            "permalink_url": "",
-            "followers_count": 0,
-            "followings_count": 0,
-            "track_count": 0,
-            "playlist_count": 0,
-            "public_favorites_count": 0,
-        })
-    }
-
-    async fn refresh_profile(&self, sc_user_id: &str, token: &str) -> AppResult<Value> {
-        let profile = self.sc.api_get_value("/me", token, None).await?;
-        sqlx::query_file!(
-            "queries/me/service/upsert_profile.sql",
-            sc_user_id,
-            &profile
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(profile)
-    }
-
-    // Internal helper — all 9 params used to build a single ListCache GetPageOptions
-    // call. Bundling them into a struct here would just add an extra layer of
-    // indirection for no clarity gain.
-    #[allow(clippy::too_many_arguments)]
-    async fn list_page(
-        &self,
-        cache_key: &str,
-        ttl: u64,
-        session_id: &str,
-        page: i64,
-        limit: i64,
-        path: String,
-        token: String,
-        extra_params: Vec<(String, String)>,
-    ) -> AppResult<ListPageResult<Value>> {
-        let sc = self.sc.clone();
-        self.list_cache
-            .get_page::<Value, _, _>(
-                GetPageOptions {
-                    key: cache_key,
-                    scope: CacheScope::User,
-                    session_id: Some(session_id),
-                    ttl_sec: ttl,
-                    page,
-                    limit,
-                    chunk_size: None,
-                },
-                |next_href, chunk_size| {
-                    let sc = sc.clone();
-                    let path = path.clone();
-                    let token = token.clone();
-                    let extra = extra_params.clone();
-                    async move {
-                        let resp: Value = match next_href {
-                            Some(href) => sc.api_get_absolute_value(&href, &token).await?,
-                            None => {
-                                let mut params: Vec<(String, String)> = extra;
-                                params.push(("limit".into(), chunk_size.to_string()));
-                                params.push(("linked_partitioning".into(), "true".into()));
-                                sc.api_get_value(&path, &token, Some(&params)).await?
-                            }
-                        };
-                        let items: Vec<Value> = resp
-                            .get("collection")
-                            .and_then(|v| v.as_array().cloned())
-                            .unwrap_or_default();
-                        let next_href = resp
-                            .get("next_href")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                            .filter(|s| !s.is_empty());
-                        Ok::<_, crate::error::AppError>(FetchChunkResult { items, next_href })
-                    }
-                },
-            )
-            .await
+    pub async fn get_profile(&self, sc_user_id: &str) -> AppResult<Value> {
+        super::profile::read(&self.pg, sc_user_id).await
     }
 
     pub async fn get_followings_tracks(
         &self,
-        token: &str,
-        session_id: &str,
         sc_user_id: &str,
         page: i64,
         limit: i64,
-    ) -> AppResult<ListPageResult<Value>> {
-        let mut result = self
-            .list_page(
-                "me-followings-tracks",
-                TTL_FOLLOWINGS_TRACKS,
-                session_id,
-                page,
-                limit,
-                "/me/followings/tracks".into(),
-                token.to_string(),
-                vec![],
-            )
+    ) -> AppResult<super::FollowingsTracksPage> {
+        let sync = self
+            .cold_refresh
+            .ensure_collection(FOLLOWINGS, sc_user_id, true)
             .await?;
-        likes_cold::apply_user_favorite_flag(&self.pg, sc_user_id, &mut result.collection).await?;
-        Ok(result)
+        let page = super::feed::read(&self.pg, sc_user_id, page, limit).await?;
+        Ok(super::FollowingsTracksPage {
+            page,
+            followings_sync: sync,
+        })
     }
 
     pub async fn follow_user(&self, sc_user_id: &str, target_user_urn: &str) -> AppResult<Value> {
-        mirror::set_wanted(&self.pg, FOLLOWINGS_MIRROR, sc_user_id, target_user_urn).await?;
+        let target_user_urn = super::feed::target_urn(target_user_urn)?;
+        let target_user_urn = target_user_urn.as_str();
+        let mut tx = self.pg.begin().await?;
+        crate::modules::sync_queue::mirror::set_wanted(
+            &mut tx,
+            FOLLOWINGS_MIRROR,
+            sc_user_id,
+            target_user_urn,
+        )
+        .await?;
         self.sync_queue
-            .enqueue(sc_user_id, "follow_user", target_user_urn, None)
+            .enqueue_on(&mut tx, sc_user_id, "follow_user", target_user_urn, None)
             .await?;
+        sqlx::query_file!(
+            "queries/me/service/enqueue_followed_uploads.sql",
+            &[crate::common::sc_ids::extract_sc_id(target_user_urn).to_owned()],
+            crate::common::sc_ids::extract_sc_id(sc_user_id)
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(json!({ "status": "queued", "actionType": "follow_user" }))
     }
 
     pub async fn unfollow_user(&self, sc_user_id: &str, target_user_urn: &str) -> AppResult<Value> {
-        mirror::clear_wanted(&self.pg, FOLLOWINGS_MIRROR, sc_user_id, target_user_urn).await?;
+        let target_user_urn = super::feed::target_urn(target_user_urn)?;
+        let target_user_urn = target_user_urn.as_str();
         self.sync_queue
-            .enqueue(sc_user_id, "unfollow_user", target_user_urn, None)
+            .clear_wanted(
+                FOLLOWINGS_MIRROR,
+                sc_user_id,
+                target_user_urn,
+                "unfollow_user",
+                target_user_urn,
+            )
             .await?;
         Ok(json!({ "status": "queued", "actionType": "unfollow_user" }))
     }
-
-    pub async fn get_followers(
-        &self,
-        token: &str,
-        session_id: &str,
-        page: i64,
-        limit: i64,
-    ) -> AppResult<ListPageResult<Value>> {
-        self.list_page(
-            "me-followers",
-            TTL_FOLLOWERS,
-            session_id,
-            page,
-            limit,
-            "/me/followers".into(),
-            token.to_string(),
-            vec![],
-        )
-        .await
-    }
 }
 
-/// `{ premium: bool }` — ответ `/me/subscription`.
 pub fn premium_response(premium: bool) -> Value {
     json!({ "premium": premium })
 }

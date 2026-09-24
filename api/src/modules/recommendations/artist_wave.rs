@@ -72,7 +72,7 @@ impl RecommendationsService {
         let exclude_artist: Vec<String> = top_tracks.to_vec();
         let filter = self.build_filter(&exclude_artist, None);
 
-        let wave_fut = smart_wave::cluster_track_ids(
+        let wave_fut = smart_wave::cluster_tracks(
             self,
             sc_user_id,
             None,
@@ -171,18 +171,23 @@ impl RecommendationsService {
             merge_audio_pools(&mert_pool, &clap_pool, &lyrics_pool)
         };
 
-        let (wave_ids, vibe_pool, neighbors_raw, deep_pool) =
+        let (wave_results, vibe_pool, neighbors_raw, deep_pool) =
             tokio::join!(wave_fut, vibe_fut, neighbors_fut, deep_fut);
 
         let mut builder = ClusterBuilder::new();
         builder.reserve(top_tracks.iter().cloned());
-        builder.push("wave", wave_ids);
+        let wave_ids = wave_results
+            .iter()
+            .map(|result| super::clusters::recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        builder.push_observed("wave", wave_ids, &wave_results);
 
         let essence_ids: Vec<String> = top_tracks.iter().take(per_cluster).cloned().collect();
-        builder.push("essence", essence_ids);
+        builder.push_reserved("essence", essence_ids);
 
         let vibe_ids = super::clusters::pick_unique_ids(&vibe_pool, builder.taken(), per_cluster);
-        builder.push("vibe", vibe_ids);
+        builder.push_observed("vibe", vibe_ids, &vibe_pool);
 
         let filtered_neighbors: Vec<ClusterNeighbor> = neighbors_raw
             .into_iter()
@@ -199,7 +204,7 @@ impl RecommendationsService {
             per_cluster,
         )
         .await;
-        builder.push("deep", deep_ids);
+        builder.push_observed("deep", deep_ids, &deep_pool);
 
         let missing = self
             .s3
@@ -214,13 +219,12 @@ impl RecommendationsService {
             "artist_wave built"
         );
         let response = builder.finish();
-        super::impressions::log_clusters_async(
-            self.ops.clone(),
-            sc_user_id.to_string(),
+        self.record_impressions(
+            sc_user_id,
             super::impressions::ImpressionSource::Artist,
-            &response.clusters,
-            &std::collections::HashMap::new(),
-        );
+            &response,
+        )
+        .await;
         Ok(response)
     }
 
@@ -235,8 +239,6 @@ impl RecommendationsService {
         Ok(rows)
     }
 
-    /// Публичный helper для handlers::wave_artist — нужен seed-список треков
-    /// артиста чтобы стартовать SmartWave прямо от него.
     pub async fn load_artist_top_track_ids(
         &self,
         artist_id: Uuid,

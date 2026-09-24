@@ -5,3 +5,5 @@ SET status            = 'completed',
     username          = $3,
     profile_ok        = $4
 WHERE id = $1
+  AND status = 'processing'
+RETURNING id

@@ -5,5 +5,6 @@ FROM track_artists ta
 WHERE ta.artist_id = $1
   AND ta.role = 'primary'
   AND NOT t.is_cover
+  AND t.superseded_by IS NULL
 ORDER BY t.release_date DESC NULLS LAST, t.sc_created_at DESC NULLS LAST, t.release_year DESC NULLS LAST, t.created_at DESC, t.id DESC LIMIT $2
 OFFSET $3

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, put};
@@ -5,12 +7,11 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::cache::cache_service::CacheScope;
 use crate::cache::ListPageResult;
-use crate::common::cache_helper::cached_or_fetch;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::state::AppState;
 
@@ -21,7 +22,6 @@ pub fn router() -> Router<AppState> {
             "/tracks/{track_urn}",
             get(get_by_id).put(update_track).delete(delete_track),
         )
-        .route("/tracks/{track_urn}/streams", get(get_streams))
         .route("/tracks/{track_urn}/stream", get(proxy_stream))
         .route(
             "/tracks/{track_urn}/comments",
@@ -38,33 +38,13 @@ struct SharingBody {
     sharing: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct SearchQuery {
-    #[serde(default)]
-    q: Option<String>,
-    #[serde(default)]
-    ids: Option<String>,
-    #[serde(default)]
-    genres: Option<String>,
-    #[serde(default)]
-    tags: Option<String>,
-    #[serde(default)]
-    access: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SecretTokenQuery {
     #[serde(default)]
     secret_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct AccessQuery {
-    #[serde(default)]
-    access: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct StreamProxyQuery {
     #[serde(default)]
     secret_token: Option<String>,
@@ -76,30 +56,16 @@ async fn search(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<SearchQuery>,
+    Query(q): Query<crate::modules::search::query::TrackSearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let access = q
-        .access
-        .unwrap_or_else(|| "playable,preview,blocked".into());
-    let mut extra: Vec<(String, String)> = vec![("access".into(), access)];
-    if let Some(v) = q.q {
-        extra.push(("q".into(), v));
-    }
-    if let Some(v) = q.ids {
-        extra.push(("ids".into(), v));
-    }
-    if let Some(v) = q.genres {
-        extra.push(("genres".into(), v));
-    }
-    if let Some(v) = q.tags {
-        extra.push(("tags".into(), v));
-    }
-    let mut result = st
-        .tracks
-        .search(ctx.session_id, &ctx.sc_user_id, page, limit, extra)
-        .await?;
-    enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
+    let mut result = st.search.tracks(&q, page, limit).await?;
+    crate::modules::likes::cold::apply_user_favorite_flag(
+        &st.pg,
+        &ctx.sc_user_id,
+        &mut result.collection,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -128,7 +94,7 @@ async fn update_track(
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
     Ok(Json(
-        st.tracks.update(ctx.session_id, &track_urn, &body).await?,
+        st.tracks.update(&ctx.sc_user_id, &track_urn, &body).await?,
     ))
 }
 
@@ -137,7 +103,7 @@ async fn delete_track(
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
-    Ok(Json(st.tracks.delete(ctx.session_id, &track_urn).await?))
+    Ok(Json(st.tracks.delete(&ctx.sc_user_id, &track_urn).await?))
 }
 
 async fn set_track_sharing(
@@ -153,56 +119,42 @@ async fn set_track_sharing(
     ))
 }
 
-async fn get_streams(
-    State(st): State<AppState>,
-    ctx: SessionCtx,
-    Path(track_urn): Path<String>,
-    Query(s): Query<SecretTokenQuery>,
-) -> AppResult<Response> {
-    let mut params: Vec<(String, String)> = Vec::new();
-    if let Some(t) = s.secret_token {
-        params.push(("secret_token".into(), t));
-    }
-    let url = request_url(&format!("/tracks/{track_urn}/streams"), "", &params);
-    cached_or_fetch(
-        &st,
-        crate::common::cache_helper::CacheOpts {
-            method: "GET",
-            url: &url,
-            scope: CacheScope::Shared,
-            session_id: None,
-            ttl_sec: 3600,
-            cache_key: None,
-        },
-        || async {
-            st.tracks
-                .get_streams(ctx.session_id, &track_urn, &params)
-                .await
-        },
-    )
-    .await
-}
-
 async fn proxy_stream(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
     Query(q): Query<StreamProxyQuery>,
-) -> Response {
-    let mut params: Vec<(String, String)> = vec![("session_id".into(), ctx.session_id.to_string())];
-    if let Some(t) = q.secret_token {
-        params.push(("secret_token".into(), t));
+) -> AppResult<Response> {
+    st.tracks
+        .ensure_read_access(&ctx.sc_user_id, &track_urn, q.secret_token.is_some())
+        .await?;
+    if q.secret_token.is_some() {
+        ctx.access_token().await?;
     }
-    if let Some(h) = q.hq {
-        params.push(("hq".into(), h));
-    }
-    let qs = serde_urlencoded::to_string(&params).unwrap_or_default();
-    let url = format!(
-        "{}/stream/{}?{qs}",
-        st.config.streaming.service_url,
-        urlencoding::encode(&track_urn),
-    );
-    Redirect::permanent(&url).into_response()
+    let high_quality = q.hq.as_deref() == Some("true");
+    let ticket = st
+        .config
+        .streaming
+        .ticket_key
+        .issue(
+            ctx.session_id,
+            &track_urn,
+            q.secret_token.as_deref(),
+            high_quality,
+            Duration::from_secs(120),
+        )
+        .map_err(|error| match error {
+            stream_ticket::StreamTicketError::SecretTooLong => {
+                AppError::bad_request("secret_token is too long")
+            }
+            error => AppError::internal(format!("failed to issue stream ticket: {error}")),
+        })?;
+    let mut url = st.config.streaming.service_url.clone();
+    url.path_segments_mut()
+        .map_err(|_| AppError::internal("streaming service URL cannot be a base URL"))?
+        .extend(["stream", &track_urn]);
+    url.query_pairs_mut().append_pair("ticket", &ticket);
+    Ok(Redirect::temporary(url.as_str()).into_response())
 }
 
 async fn get_comments(
@@ -210,11 +162,11 @@ async fn get_comments(
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     Ok(Json(
         st.tracks
-            .get_comments(ctx.session_id, &track_urn, page, limit)
+            .get_comments(&ctx.sc_user_id, &track_urn, page, limit)
             .await?,
     ))
 }
@@ -225,19 +177,11 @@ async fn create_comment(
     Path(track_urn): Path<String>,
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    let v = st
-        .tracks
-        .create_comment(&ctx.sc_user_id, &track_urn, &body)
-        .await?;
-    let _ = st
-        .cache
-        .clear_by_cache_keys(&[format!("track-comments:{track_urn}")], None)
-        .await;
-    let _ = st
-        .list_cache
-        .invalidate_by_cache_keys(&[format!("track-comments:{track_urn}")], None)
-        .await;
-    Ok(Json(v))
+    Ok(Json(
+        st.tracks
+            .create_comment(&ctx.sc_user_id, &track_urn, &body)
+            .await?,
+    ))
 }
 
 async fn get_favoriters(
@@ -245,11 +189,11 @@ async fn get_favoriters(
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     Ok(Json(
         st.tracks
-            .get_favoriters(ctx.session_id, &track_urn, page, limit)
+            .get_favoriters(&ctx.sc_user_id, &track_urn, page, limit)
             .await?,
     ))
 }
@@ -259,11 +203,11 @@ async fn get_reposters(
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     Ok(Json(
         st.tracks
-            .get_reposters(ctx.session_id, &track_urn, page, limit)
+            .get_reposters(&ctx.sc_user_id, &track_urn, page, limit)
             .await?,
     ))
 }
@@ -273,40 +217,16 @@ async fn get_related(
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-    Query(a): Query<AccessQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let access = a
-        .access
-        .unwrap_or_else(|| "playable,preview,blocked".into());
-    let mut result = st
+    let sc_track_id = st
         .tracks
-        .get_related(
-            ctx.session_id,
-            &ctx.sc_user_id,
-            &track_urn,
-            page,
-            limit,
-            &access,
-        )
+        .readable_sc_track_id(&ctx.sc_user_id, &track_urn)
+        .await?;
+    let mut result = st
+        .recommendations
+        .related_tracks(&ctx.sc_user_id, &sc_track_id, page, limit)
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
     Ok(Json(result))
-}
-
-fn request_url(prefix: &str, suffix: &str, params: &[(String, String)]) -> String {
-    let path = if suffix.is_empty() {
-        prefix.to_string()
-    } else {
-        format!("{prefix}/{suffix}")
-    };
-    if params.is_empty() {
-        return path;
-    }
-    let qs = serde_urlencoded::to_string(params).unwrap_or_default();
-    if qs.is_empty() {
-        path
-    } else {
-        format!("{path}?{qs}")
-    }
 }

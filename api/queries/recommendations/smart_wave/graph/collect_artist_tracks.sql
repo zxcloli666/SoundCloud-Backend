@@ -9,6 +9,7 @@ WITH ranked AS (SELECT ta.artist_id,
                 WHERE ta.artist_id = ANY ($1)
                   AND ta.role = 'primary'
                   AND it.sharing = 'public'
+                  AND it.superseded_by IS NULL
                   AND it.storage_state = 'ok'
                   AND it.index_state = 'indexed'
                   AND NOT (it.sc_track_id = ANY ($2)))

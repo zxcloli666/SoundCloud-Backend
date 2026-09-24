@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
+use deadpool_redis::redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::error::AppResult;
 
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(600);
 const DATA_PREFIX: &str = "api:";
 const INDEX_PREFIX: &str = "idx:";
 const LOCK_PREFIX: &str = "lock:";
@@ -31,17 +33,21 @@ pub struct CacheService {
     redis: Pool,
 }
 
+pub struct CacheLock {
+    redis: Pool,
+    key: String,
+    token: String,
+}
+
 impl CacheService {
     pub fn new(redis: Pool) -> Arc<Self> {
         Arc::new(Self { redis })
     }
 
-    /// Lightweight Redis liveness: a GET that confirms the pool can round-trip.
     pub async fn ping(&self) -> bool {
         self.get_raw("__healthcheck__").await.is_ok()
     }
 
-    /// deadpool counters: (size = in-use + idle, available, max_size).
     pub fn pool_status(&self) -> (usize, usize, usize) {
         let s = self.redis.status();
         (s.size, s.available, s.max_size)
@@ -73,6 +79,19 @@ impl CacheService {
     }
 
     pub async fn get_raw(&self, key: &str) -> AppResult<Option<String>> {
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(READ_TIMEOUT, self.get_raw_inner(key)).await;
+        let (outcome, value) = match result {
+            Ok(Ok(Some(found))) => (crate::metrics::Outcome::Ok, Ok(Some(found))),
+            Ok(Ok(None)) => (crate::metrics::Outcome::Miss, Ok(None)),
+            Ok(Err(error)) => (crate::metrics::Outcome::Error, Err(error)),
+            Err(_) => (crate::metrics::Outcome::Timeout, Ok(None)),
+        };
+        crate::metrics::record_dependency("redis", "get", outcome, started.elapsed());
+        value
+    }
+
+    async fn get_raw_inner(&self, key: &str) -> AppResult<Option<String>> {
         let mut conn = self.redis.get().await?;
         let full = format!("{DATA_PREFIX}{key}");
         let v: Option<String> = conn.get(&full).await?;
@@ -88,7 +107,6 @@ impl CacheService {
         scope: CacheScope,
         session_id: Option<&str>,
     ) -> AppResult<()> {
-        let mut conn = self.redis.get().await?;
         let full = format!("{DATA_PREFIX}{key}");
 
         let mut pipe = deadpool_redis::redis::pipe();
@@ -105,7 +123,23 @@ impl CacheService {
             pipe.pexpire_at(&index_key, expire_at).ignore();
         }
 
-        pipe.query_async::<()>(&mut conn).await?;
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(WRITE_TIMEOUT, async {
+            let mut conn = self.redis.get().await?;
+            pipe.query_async::<()>(&mut conn).await?;
+            Ok::<(), crate::error::AppError>(())
+        })
+        .await;
+        let outcome = match &result {
+            Ok(Ok(())) => crate::metrics::Outcome::Ok,
+            Ok(Err(_)) => crate::metrics::Outcome::Error,
+            Err(_) => crate::metrics::Outcome::Timeout,
+        };
+        crate::metrics::record_dependency("redis", "set", outcome, started.elapsed());
+        match result {
+            Ok(inner) => inner?,
+            Err(_) => warn!(key, "redis write timed out"),
+        }
         Ok(())
     }
 
@@ -141,11 +175,6 @@ impl CacheService {
         Ok(())
     }
 
-    /// SETNX-лок. Возвращает true если лок захвачен этим воркером.
-    /// Используется для дедупа фоновых refresh-task'ов: ключ вида
-    /// `refresh:user_likes_tracks:{user_id}` живёт TTL, лишние spawn'ы
-    /// видят занято и тихо отваливаются. Освобождать необязательно —
-    /// TTL сам делает это.
     pub async fn try_acquire_lock(&self, key: &str, ttl_sec: u64) -> AppResult<bool> {
         let mut conn = self.redis.get().await?;
         let full = format!("{LOCK_PREFIX}{key}");
@@ -160,9 +189,30 @@ impl CacheService {
         Ok(acquired.is_some())
     }
 
-    /// Снимает SETNX-лок досрочно. Нужно когда фоновая работа под локом
-    /// сорвалась (например джоб не опубликовался) и переспрос должен
-    /// пере-диспатчиться сразу, не дожидаясь TTL.
+    pub async fn try_acquire_owned_lock(
+        &self,
+        key: &str,
+        ttl_sec: u64,
+    ) -> AppResult<Option<CacheLock>> {
+        let mut conn = self.redis.get().await?;
+        let key = format!("{LOCK_PREFIX}{key}");
+        let token = uuid::Uuid::now_v7().to_string();
+        let acquired: Option<String> = deadpool_redis::redis::cmd("SET")
+            .arg(&key)
+            .arg(&token)
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_sec)
+            .query_async(&mut conn)
+            .await?;
+
+        Ok(acquired.map(|_| CacheLock {
+            redis: self.redis.clone(),
+            key,
+            token,
+        }))
+    }
+
     pub async fn release_lock(&self, key: &str) -> AppResult<()> {
         let mut conn = self.redis.get().await?;
         let full = format!("{LOCK_PREFIX}{key}");
@@ -187,6 +237,25 @@ impl CacheService {
     }
 }
 
+impl CacheLock {
+    pub async fn release(self) -> AppResult<()> {
+        release_owned_lock(&self.redis, &self.key, &self.token).await
+    }
+}
+
+async fn release_owned_lock(redis: &Pool, key: &str, token: &str) -> AppResult<()> {
+    let mut conn = redis.get().await?;
+    let script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+    let _: i64 = deadpool_redis::redis::cmd("EVAL")
+        .arg(script)
+        .arg(1)
+        .arg(key)
+        .arg(token)
+        .query_async(&mut conn)
+        .await?;
+    Ok(())
+}
+
 pub fn build_index_key(cache_key: &str, scope: CacheScope, session_id: Option<&str>) -> String {
     match scope {
         CacheScope::User => format!(
@@ -196,5 +265,64 @@ pub fn build_index_key(cache_key: &str, scope: CacheScope, session_id: Option<&s
             cache_key
         ),
         CacheScope::Shared => format!("{INDEX_PREFIX}{}:{}", scope.as_str(), cache_key),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use deadpool_redis::{Config, Runtime};
+
+    use super::*;
+
+    fn service() -> Arc<CacheService> {
+        let pool = Config::from_url("redis://127.0.0.1:1")
+            .create_pool(Some(Runtime::Tokio1))
+            .expect("offline redis pool builds");
+        CacheService::new(pool)
+    }
+
+    #[test]
+    fn a_user_scoped_answer_is_never_shared_between_owners() {
+        let cache = service();
+        let url = "/users/soundcloud:users:42/subscription";
+
+        let first = cache.build_key("GET", url, CacheScope::User, Some("111"));
+        let second = cache.build_key("GET", url, CacheScope::User, Some("222"));
+        let shared = cache.build_key("GET", url, CacheScope::Shared, None);
+
+        assert_ne!(first, second);
+        assert_ne!(first, shared);
+        assert_ne!(second, shared);
+    }
+
+    #[test]
+    fn a_user_scope_without_an_owner_collapses_into_one_key() {
+        let cache = service();
+        let url = "/users/soundcloud:users:42/subscription";
+
+        let first = cache.build_key("GET", url, CacheScope::User, None);
+        let second = cache.build_key("GET", url, CacheScope::User, None);
+
+        assert_eq!(first, second);
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_redis_turns_a_read_into_a_miss_instead_of_a_stall() {
+        let started = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(READ_TIMEOUT, std::future::pending::<()>()).await;
+        assert!(outcome.is_err());
+        assert!(started.elapsed() >= READ_TIMEOUT);
+        assert!(READ_TIMEOUT < WRITE_TIMEOUT);
+    }
+
+    #[test]
+    fn cache_timeouts_stay_below_the_request_deadline() {
+        assert!(READ_TIMEOUT.as_millis() <= 500);
+        assert!(WRITE_TIMEOUT.as_millis() <= 1000);
     }
 }

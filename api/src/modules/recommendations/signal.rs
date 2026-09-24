@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::PgPool;
 
@@ -47,8 +47,27 @@ impl UserSignals {
         match self.best_seed_kind() {
             SeedKind::Strong => self.strong_positives.clone(),
             SeedKind::Implicit => {
-                let mut out = self.strong_positives.clone();
-                out.extend(self.implicit_positives.iter().cloned());
+                let mut out: Vec<WeightedTrack> =
+                    Vec::with_capacity(self.strong_positives.len() + self.implicit_positives.len());
+                let mut placed: HashMap<&str, usize> = HashMap::new();
+                for track in self
+                    .strong_positives
+                    .iter()
+                    .chain(self.implicit_positives.iter())
+                {
+                    match placed.get(track.sc_track_id.as_str()) {
+                        Some(&at) => {
+                            let kept: &mut WeightedTrack = &mut out[at];
+                            if track.weight > kept.weight {
+                                kept.weight = track.weight;
+                            }
+                        }
+                        None => {
+                            placed.insert(track.sc_track_id.as_str(), out.len());
+                            out.push(track.clone());
+                        }
+                    }
+                }
                 out
             }
             SeedKind::Played => self
@@ -162,11 +181,6 @@ pub async fn load_user_signals(pg: &PgPool, sc_user_id: &str) -> AppResult<UserS
     })
 }
 
-/// Лайки приоритетно тянем из `user_events` — это реальные click-actions с
-/// весом. Если их меньше порога (например, свежий юзер, у которого только
-/// синканулось зеркало `/me/likes/tracks`) — добираем недостающее из
-/// `user_likes_tracks` тем же порядком, что отдаёт зеркало:
-/// `ORDER BY created_at DESC, ctid DESC` (ctid резолвит ties в батче refresh'а).
 async fn load_strong_positives(
     pg: &PgPool,
     sc_user_id: &str,
@@ -203,8 +217,6 @@ async fn load_strong_positives(
         return out;
     }
 
-    // Fallback: зеркало `/me/likes/tracks`. Сортируем как зеркало
-    // (ORDER BY created_at DESC, ctid DESC) — свежий лайк приоритетный.
     let need_more = (POSITIVE_LIMIT as usize).saturating_sub(out.len());
     let mirror_likes = sqlx::query_file!(
         "queries/recommendations/signal/mirror_likes.sql",
@@ -236,4 +248,164 @@ fn decay_factor(age_days: f32) -> f32 {
         return 1.0;
     }
     (-age_days * std::f32::consts::LN_2 / DECAY_HALF_LIFE_DAYS).exp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(id: &str, weight: f32) -> WeightedTrack {
+        WeightedTrack {
+            sc_track_id: id.to_owned(),
+            weight,
+        }
+    }
+
+    fn many(prefix: &str, count: usize) -> Vec<WeightedTrack> {
+        (0..count)
+            .map(|index| track(&format!("{prefix}{index}"), 1.0))
+            .collect()
+    }
+
+    fn ids(seed: &[WeightedTrack]) -> Vec<String> {
+        seed.iter().map(|w| w.sc_track_id.clone()).collect()
+    }
+
+    #[test]
+    fn a_user_with_nothing_is_a_cold_start_and_seeds_nothing() {
+        let signals = UserSignals::default();
+
+        assert_eq!(signals.best_seed_kind(), SeedKind::ColdStart);
+        assert!(signals.positive_seed().is_empty());
+        assert!(!signals.has_any_signal());
+    }
+
+    #[test]
+    fn each_seed_kind_starts_exactly_at_its_threshold() {
+        let strong = UserSignals {
+            strong_positives: many("like", STRONG_POSITIVE_MIN),
+            ..UserSignals::default()
+        };
+        assert_eq!(strong.best_seed_kind(), SeedKind::Strong);
+
+        let almost_strong = UserSignals {
+            strong_positives: many("like", STRONG_POSITIVE_MIN - 1),
+            implicit_positives: many("play", IMPLICIT_POSITIVE_MIN),
+            ..UserSignals::default()
+        };
+        assert_eq!(almost_strong.best_seed_kind(), SeedKind::Implicit);
+
+        let only_played = UserSignals {
+            implicit_positives: many("play", IMPLICIT_POSITIVE_MIN - 1),
+            played: (0..PLAYED_FALLBACK_MIN).map(|i| format!("p{i}")).collect(),
+            ..UserSignals::default()
+        };
+        assert_eq!(only_played.best_seed_kind(), SeedKind::Played);
+
+        let too_thin = UserSignals {
+            played: (0..PLAYED_FALLBACK_MIN - 1)
+                .map(|i| format!("p{i}"))
+                .collect(),
+            ..UserSignals::default()
+        };
+        assert_eq!(too_thin.best_seed_kind(), SeedKind::ColdStart);
+    }
+
+    #[test]
+    fn a_strong_taste_is_seeded_from_likes_alone() {
+        let signals = UserSignals {
+            strong_positives: many("like", STRONG_POSITIVE_MIN),
+            implicit_positives: many("play", IMPLICIT_POSITIVE_MIN),
+            ..UserSignals::default()
+        };
+
+        let seed = signals.positive_seed();
+
+        assert_eq!(seed.len(), STRONG_POSITIVE_MIN);
+        assert!(
+            seed.iter().all(|w| w.sc_track_id.starts_with("like")),
+            "with enough likes the full plays must not dilute the taste"
+        );
+    }
+
+    #[test]
+    fn a_thin_taste_is_topped_up_with_full_plays() {
+        let signals = UserSignals {
+            strong_positives: many("like", 2),
+            implicit_positives: many("play", IMPLICIT_POSITIVE_MIN),
+            ..UserSignals::default()
+        };
+
+        let seed = signals.positive_seed();
+
+        assert_eq!(seed.len(), 2 + IMPLICIT_POSITIVE_MIN);
+        assert_eq!(&ids(&seed)[..2], &["like0".to_owned(), "like1".to_owned()]);
+    }
+
+    #[test]
+    fn a_track_both_liked_and_played_through_enters_the_seed_once() {
+        let signals = UserSignals {
+            strong_positives: vec![track("42", 1.0)],
+            implicit_positives: many("play", IMPLICIT_POSITIVE_MIN - 1)
+                .into_iter()
+                .chain([track("42", 0.6)])
+                .collect(),
+            ..UserSignals::default()
+        };
+
+        let seed = signals.positive_seed();
+
+        assert_eq!(
+            ids(&seed).iter().filter(|id| *id == "42").count(),
+            1,
+            "one track is one point: counted twice it drags the centroid and the k-means split \
+             towards itself"
+        );
+        assert_eq!(
+            seed.iter()
+                .find(|w| w.sc_track_id == "42")
+                .map(|w| w.weight),
+            Some(1.0),
+            "the stronger signal decides the weight, so a like is not diluted by a full play"
+        );
+        assert_eq!(seed.len(), IMPLICIT_POSITIVE_MIN);
+    }
+
+    #[test]
+    fn a_played_only_seed_carries_a_deliberately_faint_weight() {
+        let signals = UserSignals {
+            played: (0..PLAYED_FALLBACK_MIN).map(|i| format!("p{i}")).collect(),
+            ..UserSignals::default()
+        };
+
+        let seed = signals.positive_seed();
+
+        assert_eq!(seed.len(), PLAYED_FALLBACK_MIN);
+        assert!(seed.iter().all(|w| w.weight < 0.2));
+    }
+
+    #[test]
+    fn taste_halves_every_ninety_days() {
+        assert!((decay_factor(0.0) - 1.0).abs() < 1e-6);
+        assert!((decay_factor(DECAY_HALF_LIFE_DAYS) - 0.5).abs() < 1e-5);
+        assert!((decay_factor(DECAY_HALF_LIFE_DAYS * 2.0) - 0.25).abs() < 1e-5);
+        assert!(decay_factor(3650.0) > 0.0, "decay must not reach zero");
+    }
+
+    #[test]
+    fn a_broken_timestamp_does_not_erase_the_signal() {
+        assert_eq!(decay_factor(f32::NAN), 1.0);
+        assert_eq!(decay_factor(-5.0), 1.0);
+    }
+
+    #[test]
+    fn a_single_dislike_is_already_a_signal() {
+        let signals = UserSignals {
+            negatives: vec![track("42", 1.0)],
+            ..UserSignals::default()
+        };
+
+        assert!(signals.has_any_signal());
+        assert_eq!(signals.best_seed_kind(), SeedKind::ColdStart);
+    }
 }

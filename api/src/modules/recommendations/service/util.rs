@@ -1,5 +1,5 @@
-use qdrant_client::qdrant::{point_id::PointIdOptions, PointId, Value as QValue};
-use serde_json::{json, Value};
+use qdrant_client::qdrant::{PointId, Value as QValue, point_id::PointIdOptions};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub(crate) fn parse_id_or_null(raw: &str) -> Option<u64> {
@@ -14,7 +14,6 @@ pub(crate) fn parse_id_or_null(raw: &str) -> Option<u64> {
     last.parse::<u64>().ok()
 }
 
-// Переехало в common::sc_ids — единый канон для всех per-user запросов.
 pub(crate) use crate::common::sc_ids::user_id_variants;
 
 pub(crate) fn numeric_id(id: u64) -> PointId {

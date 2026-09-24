@@ -1,11 +1,21 @@
 FROM rust:1-bookworm AS builder
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler postgresql postgresql-client \
+    && apt-get install -y --no-install-recommends protobuf-compiler curl ca-certificates gnupg cmake clang libclang-dev pkg-config \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 
 COPY --from=tls-common . /build/utils/tls-common
 COPY --from=call . /build/utils/call
+COPY --from=stream-ticket . /build/utils/stream-ticket
+COPY --from=sc-fingerprint . /build/utils/sc-fingerprint
+COPY --from=backend-contracts . /build/backend-contracts
 
 WORKDIR /build/api
 COPY Cargo.toml ./
@@ -16,14 +26,7 @@ COPY migrations ./migrations
 COPY migrations-ops ./migrations-ops
 COPY queries ./queries
 COPY sc_methods ./sc_methods
-# Версию вшиваем ТОЛЬКО здесь, на финальном компиле, а не в Cargo.toml слоя
-# зависимостей выше — иначе бамп версии инвалидирует кэш всех зависимостей.
 ARG APP_VERSION
-# query_file! макросы сверяются на компиляции с РЕАЛЬНОЙ схемой: поднимаем эфемерный
-# postgres прямо в билд-стадии, катим миграции, собираемся online. Никакого .sqlx.
-# Оба набора (core + ops) — в ОДНУ билд-базу: рантайм их разводит по разным
-# пулам, но проверка типов у sqlx одна и должна видеть обе схемы. Порядок важен:
-# ops-набор пересоздаёт то, что core у себя дропает.
 RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
@@ -39,8 +42,6 @@ RUN apt-get update \
     && mkdir -p /var/cache/acme
 
 COPY --from=builder /build/api/target/release/api /usr/local/bin/api
-# Standalone-мигратор для деплоя отдельным шагом (MIGRATE_ON_BOOT=false).
-COPY --from=builder /build/api/target/release/migrate /usr/local/bin/migrate
 
 EXPOSE 80 443 3000
 

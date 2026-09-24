@@ -4,3 +4,5 @@ WHERE user_id = $1
   AND action_type = $2
   AND target_urn = $3
   AND locked_at IS NULL
+  AND remote_attempted_generation IS NULL
+  AND remote_completed_generation IS NULL

@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod cursor;
 pub mod handlers;
 pub mod service;

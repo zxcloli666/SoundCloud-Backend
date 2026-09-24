@@ -5,5 +5,6 @@ FROM track_artists ta
 WHERE ta.artist_id = $1
   AND ta.role = 'primary'
   AND NOT t.is_cover
+  AND t.superseded_by IS NULL
 ORDER BY COALESCE(c.play_count, 0) DESC, t.created_at DESC LIMIT $2
 OFFSET $3

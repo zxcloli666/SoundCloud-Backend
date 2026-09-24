@@ -1,4 +1,3 @@
--- LEFT JOIN -> a.name/a.avatar_url forced nullable to match Option fields.
 SELECT al.id,
        al.title,
        al.normalized_title,

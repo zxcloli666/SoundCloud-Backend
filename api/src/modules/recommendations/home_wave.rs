@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
-use deadpool_redis::redis::AsyncCommands;
 use tracing::info;
 use uuid::Uuid;
 
@@ -10,17 +9,18 @@ use crate::qdrant::collections;
 
 use super::bandits;
 use super::clusters::{
-    recommend_id_str, Cluster, ClusterBuilder, ClusterNeighbor, ClusterResponse,
+    Cluster, ClusterBuilder, ClusterNeighbor, ClusterResponse, recommend_id_str,
 };
 use super::debias::ips_debias;
-use super::impressions::{log_clusters_async, ImpressionSource};
+use super::impressions::ImpressionSource;
 use super::quality;
 use super::rerank_multi::RerankOptions;
 use super::service::util::user_id_variants;
 use super::service::{RecommendResult, RecommendationsService};
 use super::sessions::mix_centroids;
-use super::signal::{load_user_signals, SeedKind};
+use super::signal::{SeedKind, load_user_signals};
 use super::smart_wave::{self, SmartWaveSeed};
+use super::taste_vectors::TasteShelf;
 
 const ALL_CLUSTERS: &[&str] = &[
     "wave",
@@ -29,12 +29,9 @@ const ALL_CLUSTERS: &[&str] = &[
     "fresh_drops",
     "same_vibe",
     "deep_cuts",
+    "taste",
 ];
 
-/// TTL кэша ответов кластерных страниц (home/similar/artist). Длинный, т.к.
-/// волна реально меняется редко; инвалидация по «отпечатку вкуса» (лайки/дизы)
-/// делает выдачу свежей мгновенно, TTL лишь бьёт play-stale + брошенные ключи.
-const CLUSTER_CACHE_TTL: u64 = 600;
 const WAVE_LIMIT: usize = 24;
 const POOL_FOR_VIBE_DEEP: usize = 500;
 const NEIGHBORS_TOP_LIMIT: i64 = 16;
@@ -46,9 +43,55 @@ pub struct HomeRequest {
     pub sc_user_id: String,
     pub languages: Option<Vec<String>>,
     pub per_cluster: usize,
-    /// «Скрыть прослушанное» — тиерно режем недавно слушанное (лайк 7д ·
-    /// full_play 14д · skip 30д) вместо слепого played-дедупа.
     pub hide_listened: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ContentSpace {
+    Clap,
+    Lyrics,
+}
+
+impl ContentSpace {
+    fn collection(self) -> &'static str {
+        match self {
+            Self::Clap => collections::TRACKS_CLAP,
+            Self::Lyrics => collections::TRACKS_LYRICS,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SearchInput<'a> {
+    collection: &'static str,
+    vector: &'a [f32],
+}
+
+struct MultimodalSearchInputs<'a> {
+    mert: SearchInput<'a>,
+    clap: Option<SearchInput<'a>>,
+    lyrics: Option<SearchInput<'a>>,
+}
+
+fn multimodal_search_inputs<'a>(
+    mert: &'a [f32],
+    clap: Option<&'a [f32]>,
+    lyrics: Option<&'a [f32]>,
+) -> MultimodalSearchInputs<'a> {
+    MultimodalSearchInputs {
+        mert: SearchInput {
+            collection: collections::TRACKS_MERT,
+            vector: mert,
+        },
+        clap: clap.map(|vector| SearchInput {
+            collection: collections::TRACKS_CLAP,
+            vector,
+        }),
+        lyrics: lyrics.map(|vector| SearchInput {
+            collection: collections::TRACKS_LYRICS,
+            vector,
+        }),
+    }
 }
 
 impl RecommendationsService {
@@ -66,7 +109,6 @@ impl RecommendationsService {
                 .await;
         }
 
-        // «Скрыть прослушанное» (тиерно 7/14/30д) вместо слепого played; диз — всегда.
         let hidden_listen = if req.hide_listened {
             super::smart_wave::signals::load_hidden_by_listen(
                 &self.pg,
@@ -85,35 +127,41 @@ impl RecommendationsService {
 
         let seeds = signals.positive_seed();
         let taste_modes_fut = self.build_taste_modes(&seeds);
-        let clap_centroid_fut = self.build_clap_centroid(&seeds);
+        let clap_centroid_fut = self.build_content_centroid(&seeds, ContentSpace::Clap);
+        let lyrics_centroid_fut = self.build_content_centroid(&seeds, ContentSpace::Lyrics);
         let session_fut = self.detect_current_session(&sc_user_id);
         let hour_fut = self.hour_context(&sc_user_id, Utc::now());
         let anti_fut = self.build_anti_centroid_from_negatives(&signals.negatives);
         let bandits_fut = bandits::load_stats(&self.pg, &sc_user_id);
-        let wave_fut = smart_wave::cluster_track_ids(
+        let taste_pool_fut = self.taste_pool(&sc_user_id, &exclude_vec);
+        let wave_fut = Box::pin(smart_wave::cluster_tracks(
             self,
             &sc_user_id,
             languages,
             SmartWaveSeed::User,
             WAVE_LIMIT,
             req.hide_listened,
-        );
+        ));
 
         let (
             taste_modes,
             clap_centroid,
+            lyrics_centroid,
             session_ctx,
             hour_ctx,
             anti_centroid,
             bandit_stats,
-            wave_ids,
+            taste_pool,
+            wave_results,
         ) = tokio::join!(
             taste_modes_fut,
             clap_centroid_fut,
+            lyrics_centroid_fut,
             session_fut,
             hour_fut,
             anti_fut,
             bandits_fut,
+            taste_pool_fut,
             wave_fut,
         );
         let session_ctx = session_ctx.unwrap_or(None);
@@ -134,7 +182,12 @@ impl RecommendationsService {
 
         let mut builder = ClusterBuilder::new();
         builder.reserve(exclude_vec.iter().cloned());
-        builder.push("wave", wave_ids);
+        let wave_ids = wave_results
+            .iter()
+            .map(|result| recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        builder.push_observed("wave", wave_ids, &wave_results);
 
         let top_artists = self
             .load_top_artists_cluster(&sc_user_id, builder.taken(), NEIGHBORS_TOP_LIMIT)
@@ -164,11 +217,48 @@ impl RecommendationsService {
                 .collect(),
         );
 
-        let (vibe_ids, deep_ids) = match mixed_for_search.as_deref() {
+        if seeds.is_empty() {
+            let pool = self
+                .cold_start_pool(languages, per_cluster * 4)
+                .await
+                .unwrap_or_default();
+            builder.push(
+                "discover",
+                pool.into_iter()
+                    .filter(|id| !builder.taken().contains(id))
+                    .take(per_cluster)
+                    .collect(),
+            );
+        }
+
+        let taste_version = taste_pool.as_ref().map(|pool| pool.version.clone());
+        if let Some(pool) = taste_pool {
+            let taste_results = self
+                .build_taste_shelf(
+                    pool,
+                    TasteShelf {
+                        taken: builder.taken(),
+                        per_cluster,
+                        anti_centroid: anti_centroid.as_deref(),
+                        recent_artists: &recent_artists,
+                        user_centroid: overall_centroid.as_deref(),
+                    },
+                )
+                .await;
+            let taste_ids = taste_results
+                .iter()
+                .map(|result| recommend_id_str(&result.id))
+                .filter(|id| !id.is_empty())
+                .collect();
+            builder.push_observed("taste", taste_ids, &taste_results);
+        }
+
+        let (vibe_results, deep_results) = match mixed_for_search.as_deref() {
             Some(centroid) => {
                 self.build_vibe_and_deep(
                     centroid,
                     clap_centroid.as_deref(),
+                    lyrics_centroid.as_deref(),
                     &exclude_vec,
                     languages,
                     builder.taken(),
@@ -181,8 +271,18 @@ impl RecommendationsService {
             }
             None => (Vec::new(), Vec::new()),
         };
-        builder.push("same_vibe", vibe_ids);
-        builder.push("deep_cuts", deep_ids);
+        let vibe_ids = vibe_results
+            .iter()
+            .map(|result| recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        builder.push_observed("same_vibe", vibe_ids, &vibe_results);
+        let deep_ids = deep_results
+            .iter()
+            .map(|result| recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        builder.push_observed("deep_cuts", deep_ids, &deep_results);
 
         self.apply_quality_filter(&mut builder).await;
 
@@ -193,7 +293,6 @@ impl RecommendationsService {
             .unwrap_or_default();
         builder.drop_missing(&missing);
 
-        let features_map = builder.features_map().clone();
         let mut response = builder.finish();
         reorder_by_bandits(&mut response.clusters, &bandit_stats);
 
@@ -202,26 +301,20 @@ impl RecommendationsService {
             .iter()
             .map(|c| (c.id.to_string(), c.track_ids.len() as i64))
             .collect();
-        if !counts.is_empty() {
-            let pg = self.pg.clone();
-            let user = sc_user_id.clone();
-            tokio::spawn(async move {
-                let _ = bandits::record_shows(&pg, &user, &counts).await;
-            });
+        if !counts.is_empty()
+            && let Err(error) = bandits::record_shows(&self.pg, &sc_user_id, &counts).await
+        {
+            tracing::warn!(user = %sc_user_id, %error, "bandit show counts were not recorded");
         }
 
-        log_clusters_async(
-            self.ops.clone(),
-            sc_user_id.clone(),
-            ImpressionSource::Home,
-            &response.clusters,
-            &features_map,
-        );
+        self.record_impressions(&sc_user_id, ImpressionSource::Home, &response)
+            .await;
 
         info!(
             user = %sc_user_id,
             clusters = response.clusters.len(),
             modes = taste_modes.len(),
+            taste_version = taste_version.as_deref(),
             session = session_ctx.is_some(),
             hour = hour_ctx.is_some(),
             "home_wave built"
@@ -229,33 +322,29 @@ impl RecommendationsService {
         Ok(response)
     }
 
-    /// `home_wave` с Redis-кэшем ответа (per user/fingerprint/lang/limit). На
-    /// хит отдаём готовый JSON, пропуская тяжёлую ANN-сборку (и её side-effects:
-    /// impression-лог + bandit-show — чтобы не двоить на повторном показе).
-    /// Кэшируем JSON-строку: `Cluster.id = &'static str` не десериализуется.
-    pub async fn home_wave_cached(&self, req: HomeRequest) -> AppResult<String> {
-        let fp = self.taste_fingerprint(&req.sc_user_id).await;
+    pub async fn home_wave_coalesced(&self, req: HomeRequest) -> AppResult<String> {
         let lang = req
             .languages
             .as_ref()
             .map(|l| l.join(","))
             .unwrap_or_default();
         let key = format!(
-            "rec:home:{}:{}:{}:{}:{}",
-            req.sc_user_id, fp, lang, req.per_cluster, req.hide_listened
+            "home:{}:{}:{}:{}",
+            req.sc_user_id, lang, req.per_cluster, req.hide_listened
         );
-        if let Some(cached) = self.cluster_cache_get(&key).await {
-            return Ok(cached);
-        }
-        let resp = self.home_wave(req).await?;
-        let json =
-            serde_json::to_string(&resp).unwrap_or_else(|_| String::from("{\"clusters\":[]}"));
-        self.cluster_cache_put(&key, &json, CLUSTER_CACHE_TTL).await;
-        Ok(json)
+        self.cluster_flights
+            .run(&key, || {
+                let request = req;
+                async move {
+                    let response = Box::pin(self.home_wave(request)).await?;
+                    Ok(serde_json::to_string(&response)
+                        .unwrap_or_else(|_| String::from("{\"clusters\":[]}")))
+                }
+            })
+            .await
     }
 
-    /// `similar_wave` (страница трека) с тем же кэшем (per user-fp/track/lang/limit).
-    pub async fn similar_wave_cached(
+    pub async fn similar_wave_coalesced(
         &self,
         sc_track_id: &str,
         sc_user_id: &str,
@@ -263,78 +352,42 @@ impl RecommendationsService {
         per_cluster: usize,
         hide_listened: bool,
     ) -> AppResult<String> {
-        let fp = self.taste_fingerprint(sc_user_id).await;
         let lang = languages.map(|l| l.join(",")).unwrap_or_default();
         let key =
-            format!("rec:sim:{sc_user_id}:{fp}:{sc_track_id}:{lang}:{per_cluster}:{hide_listened}");
-        if let Some(cached) = self.cluster_cache_get(&key).await {
-            return Ok(cached);
-        }
-        let resp = self
-            .similar_wave(
-                sc_track_id,
-                sc_user_id,
-                languages,
-                per_cluster,
-                hide_listened,
-            )
-            .await?;
-        let json =
-            serde_json::to_string(&resp).unwrap_or_else(|_| String::from("{\"clusters\":[]}"));
-        self.cluster_cache_put(&key, &json, CLUSTER_CACHE_TTL).await;
-        Ok(json)
+            format!("similar:{sc_user_id}:{sc_track_id}:{lang}:{per_cluster}:{hide_listened}");
+        self.cluster_flights
+            .run(&key, || async move {
+                let response = Box::pin(self.similar_wave(
+                    sc_track_id,
+                    sc_user_id,
+                    languages,
+                    per_cluster,
+                    hide_listened,
+                ))
+                .await?;
+                Ok(serde_json::to_string(&response)
+                    .unwrap_or_else(|_| String::from("{\"clusters\":[]}")))
+            })
+            .await
     }
 
-    /// `artist_wave` (страница артиста) с тем же кэшем (per user-fp/artist/limit).
-    pub async fn artist_wave_cached(
+    pub async fn artist_wave_coalesced(
         &self,
         artist_id: Uuid,
         sc_user_id: &str,
         per_cluster: usize,
         hide_listened: bool,
     ) -> AppResult<String> {
-        let fp = self.taste_fingerprint(sc_user_id).await;
-        let key = format!("rec:art:{sc_user_id}:{fp}:{artist_id}:{per_cluster}:{hide_listened}");
-        if let Some(cached) = self.cluster_cache_get(&key).await {
-            return Ok(cached);
-        }
-        let resp = self
-            .artist_wave(artist_id, sc_user_id, per_cluster, hide_listened)
-            .await?;
-        let json =
-            serde_json::to_string(&resp).unwrap_or_else(|_| String::from("{\"clusters\":[]}"));
-        self.cluster_cache_put(&key, &json, CLUSTER_CACHE_TTL).await;
-        Ok(json)
-    }
-
-    /// «Отпечаток вкуса» — дешёвый индексный запрос. Меняется при лайке/анлайке
-    /// (count+max лайков) и дизлайке (count дизов) → ключ кэша протухает сам,
-    /// без проводки инвалидации в event-сервис. Плеи в отпечаток НЕ входят
-    /// (слишком часто) → сыгранное может повисеть в снапшоте ≤TTL (ок).
-    pub(crate) async fn taste_fingerprint(&self, sc_user_id: &str) -> String {
-        let ids = user_id_variants(sc_user_id);
-        let (likes, last_like, dislikes) = match sqlx::query_file!(
-            "queries/recommendations/home_wave/taste_fingerprint.sql",
-            &ids
-        )
-        .fetch_one(&self.pg)
-        .await
-        {
-            Ok(r) => (r.likes, r.last_like, r.dislikes),
-            Err(_) => (0, 0, 0),
-        };
-        format!("{likes}-{last_like}-{dislikes}")
-    }
-
-    pub(crate) async fn cluster_cache_get(&self, key: &str) -> Option<String> {
-        let mut conn = self.redis.get().await.ok()?;
-        conn.get::<_, Option<String>>(key).await.ok().flatten()
-    }
-
-    pub(crate) async fn cluster_cache_put(&self, key: &str, json: &str, ttl: u64) {
-        if let Ok(mut conn) = self.redis.get().await {
-            let _: Result<(), _> = conn.set_ex::<_, _, ()>(key, json, ttl).await;
-        }
+        let key = format!("artist:{sc_user_id}:{artist_id}:{per_cluster}:{hide_listened}");
+        self.cluster_flights
+            .run(&key, || async move {
+                let response =
+                    Box::pin(self.artist_wave(artist_id, sc_user_id, per_cluster, hide_listened))
+                        .await?;
+                Ok(serde_json::to_string(&response)
+                    .unwrap_or_else(|_| String::from("{\"clusters\":[]}")))
+            })
+            .await
     }
 
     async fn cold_start_response(
@@ -353,30 +406,18 @@ impl RecommendationsService {
             .await
             .unwrap_or_default();
         builder.drop_missing(&missing);
-        let features_map = builder.features_map().clone();
         let response = builder.finish();
-        log_clusters_async(
-            self.ops.clone(),
-            sc_user_id.to_string(),
-            ImpressionSource::Home,
-            &response.clusters,
-            &features_map,
-        );
+        self.record_impressions(sc_user_id, ImpressionSource::Home, &response)
+            .await;
         Ok(response)
     }
 
-    /// Vibe = центральный микс audio-вкуса; deep = более разнообразный
-    /// дозор за горизонт. Под обоими — пул из ТРЁХ коллекций (mert+clap+lyrics)
-    /// со взвешенным слиянием, не одна mert как раньше.
-    // Vibe+deep build is intrinsically coupled to the wave search context —
-    // grouping these args (centroid, anti_centroid, user_centroid, exclude,
-    // languages, taken, recent_artists, per_cluster) into a struct would only
-    // add a new type with no shared reuse anywhere else.
     #[allow(clippy::too_many_arguments)]
     async fn build_vibe_and_deep(
         &self,
         centroid: &[f32],
         clap_centroid: Option<&[f32]>,
+        lyrics_centroid: Option<&[f32]>,
         exclude: &[String],
         languages: Option<&[String]>,
         taken: &HashSet<String>,
@@ -384,22 +425,21 @@ impl RecommendationsService {
         anti_centroid: Option<&[f32]>,
         recent_artists: &HashSet<String>,
         user_centroid: Option<&[f32]>,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> (Vec<RecommendResult>, Vec<RecommendResult>) {
         let filter = self.build_filter(exclude, languages);
+        let inputs = multimodal_search_inputs(centroid, clap_centroid, lyrics_centroid);
         let mert_fut = self.search_by_vector(
-            collections::TRACKS_MERT,
-            centroid,
+            inputs.mert.collection,
+            inputs.mert.vector,
             filter.as_ref(),
             POOL_FOR_VIBE_DEEP,
         );
-        // CLAP collection is 512-dim; MERT centroid is 1024-dim — must use a
-        // separately computed CLAP-space centroid or skip the arm entirely.
         let clap_fut = async {
-            match clap_centroid {
-                Some(c) => {
+            match inputs.clap {
+                Some(input) => {
                     self.search_by_vector(
-                        collections::TRACKS_CLAP,
-                        c,
+                        input.collection,
+                        input.vector,
                         filter.as_ref(),
                         POOL_FOR_VIBE_DEEP / 2,
                     )
@@ -408,12 +448,20 @@ impl RecommendationsService {
                 None => Vec::new(),
             }
         };
-        let lyrics_fut = self.search_by_vector(
-            collections::TRACKS_LYRICS,
-            centroid,
-            filter.as_ref(),
-            POOL_FOR_VIBE_DEEP / 2,
-        );
+        let lyrics_fut = async {
+            match inputs.lyrics {
+                Some(input) => {
+                    self.search_by_vector(
+                        input.collection,
+                        input.vector,
+                        filter.as_ref(),
+                        POOL_FOR_VIBE_DEEP / 2,
+                    )
+                    .await
+                }
+                None => Vec::new(),
+            }
+        };
         let (mert_pool, clap_pool, lyrics_pool) = tokio::join!(mert_fut, clap_fut, lyrics_fut);
         let mut pool = merge_audio_pools(&mert_pool, &clap_pool, &lyrics_pool);
         if pool.is_empty() {
@@ -471,21 +519,16 @@ impl RecommendationsService {
                 },
             )
             .await;
-        let deep_ids: Vec<String> = deep_ranked
-            .iter()
-            .take(per_cluster)
-            .map(|r| recommend_id_str(&r.id))
-            .collect();
-
-        (vibe_ids, deep_ids)
+        (
+            vibe_ranked.into_iter().take(per_cluster).collect(),
+            deep_ranked.into_iter().take(per_cluster).collect(),
+        )
     }
 
-    /// Weighted mean of CLAP vectors for the user's seed tracks (512-dim).
-    /// Used as the query centroid for TRACKS_CLAP searches; distinct from the
-    /// MERT centroid (1024-dim) to avoid the dimension mismatch error.
-    async fn build_clap_centroid(
+    async fn build_content_centroid(
         &self,
         seeds: &[super::signal::WeightedTrack],
+        space: ContentSpace,
     ) -> Option<Vec<f32>> {
         if seeds.is_empty() {
             return None;
@@ -497,9 +540,7 @@ impl RecommendationsService {
         if track_ids.is_empty() {
             return None;
         }
-        let vec_map = self
-            .retrieve_vectors(collections::TRACKS_CLAP, &track_ids)
-            .await;
+        let vec_map = self.retrieve_vectors(space.collection(), &track_ids).await;
         if vec_map.is_empty() {
             return None;
         }
@@ -570,10 +611,6 @@ impl RecommendationsService {
     ) -> Vec<ClusterNeighbor> {
         let exclude_vec: Vec<String> = exclude.iter().cloned().collect();
         let ids = user_id_variants(sc_user_id);
-        // Ранг артиста = лайки + плеи (раньше только лайки → play-heavy артисты
-        // типа Psychosis выпадали). Берём только playable треки
-        // (storage_state='ok'): иначе единственный выбранный недоступный трек
-        // режется s3-дропом и карточка артиста исчезает целиком.
         let rows = match sqlx::query_file!(
             "queries/recommendations/home_wave/top_artists_cluster.sql",
             &ids,
@@ -634,9 +671,6 @@ impl RecommendationsService {
     ) -> Vec<String> {
         let exclude_vec: Vec<String> = exclude.iter().cloned().collect();
         let ids = user_id_variants(sc_user_id);
-        // Артист попадает в «дропы» только если ты лайкнул его >=2 раз —
-        // один случайный лайк (напр. фит, который ты не следишь) больше не
-        // заливает ленту его релизами. Только playable треки.
         sqlx::query_file_scalar!(
             "queries/recommendations/home_wave/fresh_drops.sql",
             &ids,
@@ -757,7 +791,6 @@ fn reorder_by_bandits(clusters: &mut [Cluster], stats: &HashMap<String, bandits:
     if clusters.len() <= 1 {
         return;
     }
-    // `wave` всегда первый — это главная дорожка, бандиты её не таскают.
     let order: Vec<&str> = bandits::order_by_thompson(&ALL_CLUSTERS[1..], stats);
     let mut priority: HashMap<&str, usize> = HashMap::new();
     priority.insert("wave", 0);
@@ -767,11 +800,6 @@ fn reorder_by_bandits(clusters: &mut [Cluster], stats: &HashMap<String, bandits:
     clusters.sort_by_key(|c| priority.get(c.id).copied().unwrap_or(usize::MAX));
 }
 
-/// Слить 3 audio-пула (mert/clap/lyrics) в один взвешенный score-order.
-/// Используется в same_vibe/deep_cuts и аналогах для similar/artist.
-/// Каждый пул z-нормализуется внутри себя, чтобы коллекции с разным
-/// распределением score не подавляли друг друга. Финальный score —
-/// взвешенная сумма z-score'ов (mert главный, lyrics доводит до 1.0).
 pub(crate) fn merge_audio_pools(
     mert: &[RecommendResult],
     clap: &[RecommendResult],

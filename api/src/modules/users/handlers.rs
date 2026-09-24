@@ -5,19 +5,16 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::cache::cache_service::CacheScope;
 use crate::cache::ListPageResult;
 use crate::common::cache_helper::cached_or_fetch;
 use crate::common::pagination::PaginationQuery;
 use crate::common::sc_ids::extract_sc_id;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
+use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::modules::me::service::premium_response;
 use crate::state::AppState;
-
-// `/users/{my_urn}/*` и `/me/*` — одна и та же mirror-таблица. UsersService
-// сам разрулит is_self → /me/ vs /users/{id}/ path + правильный TokenKind.
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,46 +45,41 @@ struct SearchQuery {
     ids: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct AccessQuery {
-    #[serde(default)]
-    access: Option<String>,
-}
-
 async fn search(
     State(st): State<AppState>,
-    ctx: SessionCtx,
+    _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
     Ok(Json(
-        st.users
-            .search(ctx.session_id, page, limit, q.q, q.ids)
+        st.search
+            .users(
+                q.q.as_deref().unwrap_or_default(),
+                q.ids.as_deref(),
+                page,
+                limit,
+            )
             .await?,
     ))
 }
 
 async fn get_by_id(
     State(st): State<AppState>,
-    ctx: SessionCtx,
+    _ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
-    Ok(Json(st.users.get_by_id(ctx.session_id, &user_urn).await?))
+    Ok(Json(st.users.get_by_id(&user_urn).await?))
 }
 
 async fn get_followers(
     State(st): State<AppState>,
-    ctx: SessionCtx,
+    _ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    Ok(Json(
-        st.users
-            .get_followers(ctx.session_id, &user_urn, page, limit)
-            .await?,
-    ))
+    Ok(Json(st.users.get_followers(&user_urn, page, limit).await?))
 }
 
 async fn get_followings(
@@ -95,12 +87,12 @@ async fn get_followings(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     let target = extract_sc_id(&user_urn);
     Ok(Json(
         st.users
-            .get_followings(ctx.session_id, &ctx.sc_user_id, target, page, limit)
+            .get_followings(&ctx.sc_user_id, target, page, limit)
             .await?,
     ))
 }
@@ -109,27 +101,12 @@ async fn get_is_following(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Path((user_urn, following_urn)): Path<(String, String)>,
-) -> AppResult<Response> {
-    let url = format!("/users/{user_urn}/followings/{following_urn}");
-    cached_or_fetch(
-        &st,
-        crate::common::cache_helper::CacheOpts {
-            method: "GET",
-            url: &url,
-            scope: CacheScope::Shared,
-            session_id: None,
-            ttl_sec: 30,
-            cache_key: None,
-        },
-        || async {
-            let v = st
-                .users
-                .get_is_following(ctx.session_id, &user_urn, &following_urn)
-                .await?;
-            Ok(Value::Bool(v))
-        },
-    )
-    .await
+) -> AppResult<Json<bool>> {
+    Ok(Json(
+        st.users
+            .get_is_following(&ctx.sc_user_id, &user_urn, &following_urn)
+            .await?,
+    ))
 }
 
 async fn get_tracks(
@@ -137,13 +114,12 @@ async fn get_tracks(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-    Query(_q): Query<AccessQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     let target = extract_sc_id(&user_urn);
     let mut result = st
         .users
-        .get_owned_tracks(ctx.session_id, &ctx.sc_user_id, target, page, limit)
+        .get_owned_tracks(&ctx.sc_user_id, target, page, limit)
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
     Ok(Json(result))
@@ -154,12 +130,12 @@ async fn get_playlists(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     let target = extract_sc_id(&user_urn);
     Ok(Json(
         st.users
-            .get_owned_playlists(ctx.session_id, &ctx.sc_user_id, target, page, limit)
+            .get_owned_playlists(&ctx.sc_user_id, target, page, limit)
             .await?,
     ))
 }
@@ -169,23 +145,12 @@ async fn get_liked_tracks(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<AccessQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let access = q
-        .access
-        .unwrap_or_else(|| "playable,preview,blocked".into());
     let target = extract_sc_id(&user_urn);
     let mut result = st
         .users
-        .get_liked_tracks(
-            ctx.session_id,
-            &ctx.sc_user_id,
-            target,
-            page,
-            limit,
-            &access,
-        )
+        .get_liked_tracks(&ctx.sc_user_id, target, page, limit)
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
     Ok(Json(result))
@@ -196,12 +161,12 @@ async fn get_liked_playlists(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
     Query(p): Query<PaginationQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
+) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
     let target = extract_sc_id(&user_urn);
     Ok(Json(
         st.users
-            .get_liked_playlists(ctx.session_id, &ctx.sc_user_id, target, page, limit)
+            .get_liked_playlists(&ctx.sc_user_id, target, page, limit)
             .await?,
     ))
 }
@@ -217,8 +182,6 @@ async fn get_subscription(
         crate::common::cache_helper::CacheOpts {
             method: "GET",
             url: &url,
-            scope: CacheScope::Shared,
-            session_id: None,
             ttl_sec: 300,
             cache_key: None,
         },
@@ -232,21 +195,8 @@ async fn get_subscription(
 
 async fn get_web_profiles(
     State(st): State<AppState>,
-    ctx: SessionCtx,
+    _ctx: SessionCtx,
     Path(user_urn): Path<String>,
-) -> AppResult<Response> {
-    let url = format!("/users/{user_urn}/web-profiles");
-    cached_or_fetch(
-        &st,
-        crate::common::cache_helper::CacheOpts {
-            method: "GET",
-            url: &url,
-            scope: CacheScope::Shared,
-            session_id: None,
-            ttl_sec: 86400,
-            cache_key: None,
-        },
-        || async { st.users.get_web_profiles(ctx.session_id, &user_urn).await },
-    )
-    .await
+) -> AppResult<Json<Value>> {
+    Ok(Json(st.users.get_web_profiles(&user_urn).await?))
 }

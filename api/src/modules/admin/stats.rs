@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::cache_service::CacheScope;
@@ -24,9 +24,10 @@ pub async fn get_stats(
     State(state): State<AppState>,
 ) -> AppResult<Json<StatsResponse>> {
     if let Ok(Some(raw)) = state.cache.get_raw(CACHE_KEY).await
-        && let Ok(cached) = serde_json::from_str::<StatsResponse>(&raw) {
-            return Ok(Json(cached));
-        }
+        && let Ok(cached) = serde_json::from_str::<StatsResponse>(&raw)
+    {
+        return Ok(Json(cached));
+    }
 
     let row = sqlx::query_file!("queries/admin/stats/sessions.sql")
         .fetch_one(&state.pg)

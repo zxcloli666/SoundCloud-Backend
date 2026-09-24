@@ -1,8 +1,8 @@
 use crate::error::AppResult;
 
+use super::RecommendationsService;
 use super::types::RecommendResult;
 use super::util::value_id_to_string;
-use super::RecommendationsService;
 
 impl RecommendationsService {
     pub(crate) async fn take_verified(

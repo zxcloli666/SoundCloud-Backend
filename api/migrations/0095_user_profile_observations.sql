@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sc_observation bigint NOT NULL DEFAULT 0;
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS sc_observation bigint NOT NULL DEFAULT 0;

@@ -14,16 +14,14 @@ pub fn normalize_sc_track_id(input: &str) -> Option<String> {
     }
 }
 
-/// "soundcloud:tracks:1234" → "1234". Без валидации формата — для случаев
-/// когда URN заведомо корректен (приходит из SC ответа / роута).
 pub fn extract_sc_id(urn: &str) -> &str {
     urn.rsplit_once(':').map(|(_, id)| id).unwrap_or(urn)
 }
 
-/// SoundCloud user-id живёт в двух формах — URN (`soundcloud:users:123`) и
-/// голой (`123`). На проде строки исторически расщеплены по обеим; чтобы
-/// per-user запрос видел ВСЕ строки юзера до канонизации (миграция 0043),
-/// матчим по обоим вариантам (`user_id = ANY(...)`). Канон записи — bare.
+pub fn user_urn(sc_user_id: &str) -> String {
+    format!("soundcloud:users:{}", extract_sc_id(sc_user_id))
+}
+
 pub fn user_id_variants(sc_user_id: &str) -> Vec<String> {
     let trimmed = sc_user_id.trim();
     if trimmed.is_empty() {

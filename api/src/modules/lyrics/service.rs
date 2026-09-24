@@ -1,79 +1,18 @@
-use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
-use mini_moka::sync::Cache;
+use backend_contracts::{JobKind, LyricsLookupPayload};
+use catalog_normalize::{name_similarity, normalize_title};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
-use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use uuid::Uuid;
 
-use crate::bus::nats::NatsService;
-use crate::bus::subjects::{self, streams};
-use crate::error::AppResult;
-use crate::modules::lyrics::genius::GeniusService;
-use crate::modules::lyrics::lrclib::LrclibService;
-use crate::modules::lyrics::musixmatch::MusixmatchService;
-use crate::modules::lyrics::util::{
-    canon_meta, detect_language_heuristic, heuristic_queries, pick_lyrics_text,
-    strip_lrc_timestamps,
-};
-use crate::modules::lyrics::worker_client::{RankCandidate, WorkerClient};
-use crate::modules::recommendations::S3VerifierService;
-use crate::modules::transcode::TranscodeTriggerService;
-use crate::qdrant::{parse_f32_vec, QdrantService};
+use crate::background_jobs::{BackgroundJob, BackgroundJobs};
+use crate::error::{AppError, AppResult};
 
-const MIN_RANK_SCORE: f32 = 6.0;
-const MAX_CANDIDATES: usize = 8;
-const SNIPPET_LEN: usize = 220;
-const MIN_META_OVERLAP: f32 = 0.25;
-const MAX_DURATION_DIFF: f32 = 0.25;
-
-const REAP_INTERVAL: Duration = Duration::from_secs(10 * 60);
-const REAP_MIN_AGE: Duration = Duration::from_secs(10 * 60);
-const REAP_LIMIT_ALIGN: i64 = 30;
-const REAP_LIMIT_FULL: i64 = 20;
-
-const INFLIGHT_CAPACITY: u64 = 4096;
-const INFLIGHT_TTL: Duration = Duration::from_secs(5 * 60);
-
-/// «Зависший» pending-транскрайб старше порога считаем потерянным (воркер
-/// умер / max_deliver исчерпан / бэк упал между клеймом и publish) и
-/// перевыставляем. Порог большой: backlog транскрайба легально тянется часами.
-const TRANSCRIBE_STALE: Duration = Duration::from_secs(3 * 60 * 60);
-
-const STOPWORDS: &[&str] = &[
-    "feat",
-    "ft",
-    "featuring",
-    "prod",
-    "remix",
-    "edit",
-    "version",
-    "mix",
-    "cover",
-    "live",
-    "acoustic",
-    "instrumental",
-    "original",
-    "official",
-    "audio",
-    "video",
-    "lyrics",
-    "lyric",
-    "sped",
-    "slowed",
-    "nightcore",
-    "reverb",
-    "extended",
-    "radio",
-    "clean",
-    "explicit",
-    "hd",
-    "hq",
-    "mv",
-];
+const LOOKUP_PRIORITY: i16 = 10;
+const LOOKUP_MAX_ATTEMPTS: i16 = 8;
+const MAX_OPERATIONAL_FAILURES: i32 = 8;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LyricsResponse {
@@ -87,8 +26,6 @@ pub struct LyricsResponse {
     pub language: Option<String>,
     #[serde(rename = "languageConfidence")]
     pub language_confidence: Option<f32>,
-    /// `found` — лирика в кэше; `pending` — не нашли, индексируем в фоне;
-    /// `none` — искали и ничего нет (только `/lyrics/search`).
     pub status: String,
 }
 
@@ -97,1272 +34,578 @@ pub struct LyricsHints {
     pub title: String,
     pub artist: String,
     pub duration_sec: Option<i64>,
-    /// Трек связан с Genius (enrich/crawl) → лирику тянем прямо со связанной
-    /// страницы, минуя фаззи-поиск.
-    pub genius_song_id: Option<i64>,
-    pub genius_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
-pub struct LyricsCacheRow {
-    pub sc_track_id: String,
-    pub synced_lrc: Option<String>,
-    pub plain_text: Option<String>,
-    pub source: String,
-    pub language: Option<String>,
-    pub language_confidence: Option<f32>,
-    pub embedded_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Debug, Clone)]
-struct Candidate {
-    source: String,
+struct LyricsStatusRow {
+    track_id: Uuid,
     synced_lrc: Option<String>,
     plain_text: Option<String>,
-    artist_guess: Option<String>,
-    title_guess: Option<String>,
-    duration_sec: Option<i64>,
+    source: Option<String>,
+    language: Option<String>,
+    language_confidence: Option<f32>,
+    lookup_status: Option<String>,
+    next_run_at: Option<DateTime<Utc>>,
+    failure_streak: Option<i32>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct LyricsSearchRow {
+    sc_track_id: String,
+    metadata_artist: Option<String>,
+    uploader_username: Option<String>,
+    duration_ms: i32,
+    synced_lrc: Option<String>,
+    plain_text: Option<String>,
+    source: String,
+    language: Option<String>,
+    language_confidence: Option<f32>,
 }
 
 pub struct LyricsService {
     pg: PgPool,
-    nats: Arc<NatsService>,
-    qdrant: Arc<QdrantService>,
-    lrclib: Arc<LrclibService>,
-    mxm: Arc<MusixmatchService>,
-    genius: Arc<GeniusService>,
-    worker: Arc<WorkerClient>,
-    trigger: Arc<TranscodeTriggerService>,
-    verifier: Arc<S3VerifierService>,
-    inflight: Cache<String, ()>,
-    indexing_sem: Arc<Semaphore>,
+    background_jobs: Arc<BackgroundJobs>,
     reserve: bool,
 }
 
 impl LyricsService {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        pg: PgPool,
-        nats: Arc<NatsService>,
-        qdrant: Arc<QdrantService>,
-        lrclib: Arc<LrclibService>,
-        mxm: Arc<MusixmatchService>,
-        genius: Arc<GeniusService>,
-        worker: Arc<WorkerClient>,
-        trigger: Arc<TranscodeTriggerService>,
-        verifier: Arc<S3VerifierService>,
-        indexing_concurrency: usize,
-        reserve: bool,
-    ) -> Arc<Self> {
+    pub fn new(pg: PgPool, background_jobs: Arc<BackgroundJobs>, reserve: bool) -> Arc<Self> {
         Arc::new(Self {
             pg,
-            nats,
-            qdrant,
-            lrclib,
-            mxm,
-            genius,
-            worker,
-            trigger,
-            verifier,
-            inflight: Cache::builder()
-                .max_capacity(INFLIGHT_CAPACITY)
-                .time_to_live(INFLIGHT_TTL)
-                .build(),
-            indexing_sem: Arc::new(Semaphore::new(indexing_concurrency.max(1))),
+            background_jobs,
             reserve,
         })
     }
 
-    pub fn spawn_consumers(self: &Arc<Self>) {
-        let svc = self.clone();
-        self.nats.consume(
-            streams::DONE.name,
-            "backend-done-embed-lyrics",
-            Some(subjects::DONE_EMBED_LYRICS),
-            16,
-            move |data| {
-                let svc = svc.clone();
-                async move {
-                    let sc_track_id = data
-                        .get("sc_track_id")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let skipped = data
-                        .get("skipped")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let Some(id) = sc_track_id else { return Ok(()) };
-                    if skipped {
-                        return Ok(());
-                    }
-                    // Вектор в payload → пишем в Qdrant ДО embedded_at. Upsert
-                    // упал → Err → NAK → передоставка (эмбеддинг не потеряем).
-                    if let Some(vec) = parse_f32_vec(data.get("vec"))
-                        && let Ok(num_id) = id.parse::<u64>() {
-                            let language = data.get("language").and_then(|v| v.as_str());
-                            svc.qdrant.upsert_lyrics(num_id, vec, language).await?;
-                        }
-                    sqlx::query_file!("queries/lyrics/service/mark_embedded.sql", &id)
-                        .execute(&svc.pg)
-                        .await?;
-                    Ok(())
-                }
-            },
-        );
-        self.subscribe_done_transcribe();
-    }
-
-    pub fn spawn_reap_loops(self: &Arc<Self>, shutdown: CancellationToken) {
-        let svc = self.clone();
-        let token = shutdown.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(REAP_INTERVAL);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            ticker.tick().await;
-            loop {
-                tokio::select! {
-                    _ = token.cancelled() => break,
-                    _ = ticker.tick() => {
-                        if let Err(e) = svc.reap_whisper().await {
-                            debug!(error = %e, "reap_whisper failed");
-                        }
-                        if let Err(e) = svc.reap_embeds().await {
-                            debug!(error = %e, "reap_embeds failed");
-                        }
-                    }
-                }
+    pub async fn ensure_lyrics(&self, sc_track_id: &str) -> AppResult<LyricsResponse> {
+        let sc_track_id = canonical_track_id(sc_track_id)?;
+        let status = self.status(&sc_track_id).await?;
+        let Some(status) = status else {
+            return Err(AppError::not_found("track not found"));
+        };
+        if status.source.is_some() {
+            return Ok(found_response(&sc_track_id, status));
+        }
+        if is_fresh_negative(&status) {
+            return Ok(none_response(Some(&sc_track_id)));
+        }
+        if is_operationally_blocked(&status) {
+            return Err(AppError::service_unavailable(
+                "lyrics lookup is temporarily unavailable",
+            ));
+        }
+        if self.reserve {
+            if status.lookup_status.is_some() {
+                return Ok(pending_response(Some(&sc_track_id)));
             }
-        });
-    }
-
-    pub async fn ensure_lyrics(
-        self: &Arc<Self>,
-        sc_track_id_raw: &str,
-    ) -> AppResult<LyricsResponse> {
-        let sc_track_id = normalize(sc_track_id_raw);
-
-        // Быстрый путь: PK-чтение кэша. Есть строка → сразу отдаём (`found`).
-        if let Some(row) = self.read_cache(&sc_track_id).await? {
-            self.maybe_reembed(&row);
-            return Ok(to_response(&row));
+            return Err(AppError::service_unavailable(
+                "lyrics lookup is unavailable on this replica",
+            ));
         }
 
-        // Кэш-промах: НЕ блокируем запрос живым поиском (агрегаторы ~сек). Ставим
-        // фоновую индексацию и сразу отдаём `pending` — клиент показывает «лирика
-        // ещё не найдена, индексируем»; результат осядет в кэше и прилетит готовым
-        // на следующем запросе.
-        self.spawn_lookup(&sc_track_id);
+        let mut transaction = self.pg.begin().await?;
+        sqlx::query_file!(
+            "queries/lyrics/service/ensure_lookup_state.sql",
+            &sc_track_id
+        )
+        .execute(&mut *transaction)
+        .await?;
+        let wake = sqlx::query_file!("queries/lyrics/service/request_lookup.sql", &sc_track_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+
+        let Some(wake) = wake else {
+            let status = self.status(&sc_track_id).await?;
+            return match status {
+                Some(status) if status.source.is_some() => Ok(found_response(&sc_track_id, status)),
+                Some(status) if is_fresh_negative(&status) => Ok(none_response(Some(&sc_track_id))),
+                Some(_) => Ok(pending_response(Some(&sc_track_id))),
+                None => Err(AppError::not_found("track not found")),
+            };
+        };
+        if wake.status == "not_found" && wake.next_run_at > Utc::now() {
+            return Ok(none_response(Some(&sc_track_id)));
+        }
+        if wake.status == "retry" && wake.failure_streak >= MAX_OPERATIONAL_FAILURES {
+            return Err(AppError::service_unavailable(
+                "lyrics lookup is temporarily unavailable",
+            ));
+        }
+        if wake.claim_job_id.is_none()
+            && wake.wake_durable_at.is_none()
+            && let (Some(message_id), Some(generation)) =
+                (wake.wake_message_id, wake.wake_generation)
+        {
+            let job = BackgroundJob::coalescing(
+                JobKind::LyricsLookup,
+                &sc_track_id,
+                LyricsLookupPayload {
+                    sc_track_id: sc_track_id.clone(),
+                },
+            )?
+            .with_id(message_id)
+            .with_priority(LOOKUP_PRIORITY)
+            .with_max_attempts(LOOKUP_MAX_ATTEMPTS)?
+            .if_absent();
+            match self.background_jobs.enqueue(&job).await {
+                Ok(_) => {
+                    sqlx::query_file!(
+                        "queries/lyrics/service/mark_wake_durable.sql",
+                        status.track_id,
+                        generation,
+                        message_id
+                    )
+                    .execute(&self.pg)
+                    .await?;
+                }
+                Err(error) => {
+                    tracing::warn!(track = %sc_track_id, %error, "lyrics wake publish deferred to sweep");
+                }
+            }
+        }
         Ok(pending_response(Some(&sc_track_id)))
     }
 
-    pub async fn search_lyrics(self: &Arc<Self>, hints: &LyricsHints) -> AppResult<LyricsResponse> {
-        if hints.title.is_empty() || hints.artist.is_empty() {
-            return Ok(empty_response(None));
+    pub async fn search_lyrics(&self, hints: &LyricsHints) -> AppResult<LyricsResponse> {
+        let title = hints.title.trim();
+        let artist = hints.artist.trim();
+        if title.is_empty() || artist.is_empty() {
+            return Ok(none_response(None));
         }
-        self.run_pipeline(None, hints, false).await
+        let normalized_title = normalize_title(title);
+        if normalized_title.is_empty() {
+            return Ok(none_response(None));
+        }
+        let candidates = sqlx::query_file_as!(
+            LyricsSearchRow,
+            "queries/lyrics/service/search_cache.sql",
+            &normalized_title
+        )
+        .fetch_all(&self.pg)
+        .await?;
+        let selected = candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let candidate_artist = candidate
+                    .metadata_artist
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .or(candidate.uploader_username.as_deref())
+                    .unwrap_or_default();
+                let artist_score = name_similarity(artist, candidate_artist);
+                if artist_score < 0.72
+                    || !duration_matches(hints.duration_sec, candidate.duration_ms)
+                {
+                    return None;
+                }
+                Some((artist_score.to_bits(), candidate))
+            })
+            .max_by_key(|(score, _)| *score)
+            .map(|(_, candidate)| candidate);
+        let Some(candidate) = selected else {
+            return Ok(none_response(None));
+        };
+        Ok(LyricsResponse {
+            sc_track_id: Some(candidate.sc_track_id),
+            synced_lrc: candidate.synced_lrc,
+            plain_text: candidate.plain_text,
+            source: candidate.source,
+            language: candidate.language,
+            language_confidence: candidate.language_confidence,
+            status: "found".to_owned(),
+        })
     }
 
-    /// Фоновая индексация лирики трека с дедупом. `inflight` держит трек, пока
-    /// идёт поиск, и ещё `INFLIGHT_TTL` после — не перезапускаем поиск на каждый
-    /// poll клиента (заодно негативный кэш на неудачу).
-    fn spawn_lookup(self: &Arc<Self>, sc_track_id: &str) {
-        let key = sc_track_id.to_string();
-        if self.inflight.get(&key).is_some() {
-            return;
-        }
-        self.inflight.insert(key.clone(), ());
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.lookup_and_cache(&key).await {
-                debug!(track = %key, error = %e, "background lyrics lookup failed");
-                svc.inflight.invalidate(&key); // ошибка — разрешаем ретрай раньше TTL
-            }
-        });
-    }
-
-    /// Блокирующий поиск+кэш: агрегаторы (при связке — прямая страница Genius),
-    /// пусто → self-gen whisper в фон. Зовётся из фонового `spawn_lookup` и из
-    /// ограниченного семафором indexing-пути.
-    async fn lookup_and_cache(self: &Arc<Self>, sc_track_id: &str) -> AppResult<()> {
-        // Мог записать другой путь, пока ждали слот.
-        if self.read_cache(sc_track_id).await?.is_some() {
-            return Ok(());
-        }
-        let hints = self.load_hints_from_db(sc_track_id).await?;
-        let result = self.run_pipeline(Some(sc_track_id), &hints, true).await?;
-        // fork B: агрегаторы пусты → фоном self-gen (whisper), если не disabled.
-        if result.synced_lrc.is_none() && result.plain_text.is_none() {
-            self.enqueue_transcribe(sc_track_id, None).await;
-        }
-        Ok(())
-    }
-
-    async fn read_cache(&self, sc_track_id: &str) -> AppResult<Option<LyricsCacheRow>> {
+    async fn status(&self, sc_track_id: &str) -> AppResult<Option<LyricsStatusRow>> {
         Ok(sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/lyrics_cache_by_id.sql",
+            LyricsStatusRow,
+            "queries/lyrics/service/lyrics_status.sql",
             sc_track_id
         )
         .fetch_optional(&self.pg)
         .await?)
     }
-
-    /// Кэш-строка без эмбеддинга → добираем вектор в фоне (self-heal записей,
-    /// сделанных до колонки-вектора / при упавшем upsert).
-    fn maybe_reembed(self: &Arc<Self>, row: &LyricsCacheRow) {
-        if row.embedded_at.is_some() {
-            return;
-        }
-        let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-        else {
-            return;
-        };
-        if text.len() <= 30 {
-            return;
-        }
-        let svc = self.clone();
-        let row = row.clone();
-        tokio::spawn(async move {
-            if let Err(e) = svc.after_found(&row, &text).await {
-                warn!(track = %row.sc_track_id, error = %e, "re-embed retry failed");
-            }
-        });
-    }
-
-    pub async fn ensure_lyrics_for_indexing(
-        self: &Arc<Self>,
-        sc_track_id_raw: &str,
-    ) -> AppResult<()> {
-        let sc_track_id = normalize(sc_track_id_raw);
-        if sc_track_id.is_empty() {
-            return Ok(());
-        }
-        // Дешёвый PK-чек до семафора: уже в кэше — работать не над чем.
-        if self.read_cache(&sc_track_id).await?.is_some() {
-            return Ok(());
-        }
-        // Дедуп с HTTP-путём: кто-то уже индексирует этот трек.
-        if self.inflight.get(&sc_track_id).is_some() {
-            return Ok(());
-        }
-        self.inflight.insert(sc_track_id.clone(), ());
-        let permit = match self.indexing_sem.clone().acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => {
-                self.inflight.invalidate(&sc_track_id);
-                return Ok(());
-            }
-        };
-        if let Err(e) = self.lookup_and_cache(&sc_track_id).await {
-            debug!(track = %sc_track_id, error = %e, "ensureLyricsForIndexing failed");
-            self.inflight.invalidate(&sc_track_id);
-        }
-        drop(permit);
-        Ok(())
-    }
-
-    /// Немедленно тянет лирику со связанной страницы Genius — при кравле/линковке
-    /// трека с Genius (genius_song_id/url уже проставлен на трек). Идемпотентно,
-    /// best-effort: есть текст — не трогаем; связки/страницы нет — тихо выходим
-    /// (обычный путь/whisper добьют позже). Минует inflight и фаззи-поиск.
-    pub async fn pull_genius_direct(self: &Arc<Self>, sc_track_id_raw: &str) {
-        if self.reserve {
-            return;
-        }
-        let sc_track_id = normalize(sc_track_id_raw);
-        if sc_track_id.is_empty() {
-            return;
-        }
-        match self.read_cache(&sc_track_id).await {
-            Ok(Some(row))
-                if pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-                    .is_some() =>
-            {
-                return;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "pull_genius_direct: cache read failed");
-                return;
-            }
-        }
-        let hints = match self.load_hints_from_db(&sc_track_id).await {
-            Ok(h) => h,
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "pull_genius_direct: hints failed");
-                return;
-            }
-        };
-        let Some(pick) = self
-            .genius_direct(&sc_track_id, hints.genius_song_id, hints.genius_url.as_deref())
-            .await
-        else {
-            return;
-        };
-        if let Err(e) = self.save_candidate(&sc_track_id, &pick).await {
-            // конфликт = параллельный путь уже закэшировал — норм.
-            debug!(track = %sc_track_id, error = %e, "pull_genius_direct: save failed");
-        }
-    }
-
-    async fn run_pipeline(
-        self: &Arc<Self>,
-        sc_track_id: Option<&str>,
-        hints: &LyricsHints,
-        allow_save: bool,
-    ) -> AppResult<LyricsResponse> {
-        let artist = hints.artist.trim();
-        let title = hints.title.trim();
-        let duration_sec = hints.duration_sec.unwrap_or(0);
-        let log_id = sc_track_id
-            .map(String::from)
-            .unwrap_or_else(|| format!("{artist} - {title}"));
-
-        if title.is_empty() {
-            warn!(log_id = %log_id, "lyrics: empty title, skip");
-            return Ok(empty_response(sc_track_id));
-        }
-
-        let picked = self
-            .find_lyrics(
-                &log_id,
-                artist,
-                title,
-                duration_sec,
-                hints.genius_song_id,
-                hints.genius_url.as_deref(),
-            )
-            .await?;
-        if picked.plain_text.is_none() && picked.synced_lrc.is_none() {
-            info!(log_id = %log_id, "no lyrics found — not caching");
-            return Ok(empty_response(sc_track_id));
-        }
-
-        if !allow_save || sc_track_id.is_none() {
-            return Ok(LyricsResponse {
-                sc_track_id: sc_track_id.map(String::from),
-                synced_lrc: picked.synced_lrc.clone(),
-                plain_text: picked.plain_text.clone(),
-                source: picked.source.clone(),
-                language: None,
-                language_confidence: None,
-                status: "found".into(),
-            });
-        }
-        let sc_track_id = sc_track_id.unwrap();
-        let row = self.save_candidate(sc_track_id, &picked).await?;
-        Ok(to_response(&row))
-    }
-
-    /// INSERT кандидата в lyrics_cache + фоновый эмбеддинг. Возвращает строку.
-    async fn save_candidate(
-        self: &Arc<Self>,
-        sc_track_id: &str,
-        picked: &Candidate,
-    ) -> AppResult<LyricsCacheRow> {
-        let row: LyricsCacheRow = sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/insert_lyrics_cache.sql",
-            sc_track_id,
-            picked.synced_lrc,
-            picked.plain_text,
-            picked.source
-        )
-        .fetch_one(&self.pg)
-        .await?;
-        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-            && text.len() > 30 {
-                let svc = self.clone();
-                let row_clone = row.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = svc.after_found(&row_clone, &text).await {
-                        warn!(track = %row_clone.sc_track_id, error = %e, "after-found failed");
-                    }
-                });
-            }
-        Ok(row)
-    }
-
-    async fn load_hints_from_db(&self, sc_track_id: &str) -> AppResult<LyricsHints> {
-        // Источники artist для лирики, в порядке предпочтения:
-        // 1. metadata_artist из SC payload (наиболее каноничный для лейбловых
-        //    upload'ов; раньше брался из publisher_metadata.artist);
-        // 2. uploader_username (= user.username).
-        let row = sqlx::query_file!("queries/lyrics/service/load_track_hints.sql", sc_track_id)
-            .fetch_optional(&self.pg)
-            .await?;
-        let Some(r) = row else {
-            return Ok(LyricsHints::default());
-        };
-        let artist = r
-            .metadata_artist
-            .or(r.uploader_username)
-            .unwrap_or_default();
-        Ok(LyricsHints {
-            title: r.title,
-            artist,
-            duration_sec: if r.duration_ms > 0 {
-                Some((r.duration_ms as f64 / 1000.0).round() as i64)
-            } else {
-                None
-            },
-            genius_song_id: r.genius_song_id,
-            genius_url: r.genius_url,
-        })
-    }
-
-    async fn find_lyrics(
-        self: &Arc<Self>,
-        log_id: &str,
-        artist: &str,
-        title: &str,
-        duration_sec: i64,
-        genius_song_id: Option<i64>,
-        genius_url: Option<&str>,
-    ) -> AppResult<Candidate> {
-        info!(log_id, artist, title, duration_sec, "findLyrics");
-
-        // stage0: трек связан с Genius (enrich/crawl) → лирику берём прямо со
-        // связанной страницы. Точное совпадение, без фаззи-поиска и фильтров.
-        if let Some(pick) = self.genius_direct(log_id, genius_song_id, genius_url).await {
-            return Ok(pick);
-        }
-
-        let heuristics = heuristic_queries(artist, title);
-        info!(log_id, queries = ?heuristics, "[stage1] queries");
-        if let Some(pick) = self
-            .search_and_pick(&heuristics, artist, title, duration_sec, log_id, "[stage1]")
-            .await?
-        {
-            return Ok(pick);
-        }
-
-        let llm_queries = self
-            .worker
-            .generate_search_queries(artist, title)
-            .await
-            .unwrap_or_default();
-        info!(log_id, queries = ?llm_queries, "[stage2] queries");
-        let heur_lower: HashSet<String> = heuristics.iter().map(|q| q.to_lowercase()).collect();
-        let new_queries: Vec<String> = llm_queries
-            .iter()
-            .filter(|q| !heur_lower.contains(&q.trim().to_lowercase()))
-            .cloned()
-            .collect();
-        if !new_queries.is_empty() {
-            if let Some(pick) = self
-                .search_and_pick(
-                    &llm_queries,
-                    artist,
-                    title,
-                    duration_sec,
-                    log_id,
-                    "[stage2]",
-                )
-                .await?
-            {
-                return Ok(pick);
-            }
-        } else {
-            info!(log_id, "[stage2] LLM added nothing new, skipping fanout");
-        }
-
-        Ok(Candidate {
-            source: "none".into(),
-            synced_lrc: None,
-            plain_text: None,
-            artist_guess: None,
-            title_guess: None,
-            duration_sec: None,
-        })
-    }
-
-    /// Лирика со связанной страницы Genius: сперва по сохранённому URL, иначе по
-    /// genius_song_id (резолвим URL). `None` — связки нет либо страница пустая.
-    async fn genius_direct(
-        &self,
-        log_id: &str,
-        genius_song_id: Option<i64>,
-        genius_url: Option<&str>,
-    ) -> Option<Candidate> {
-        let text = match genius_url.filter(|u| !u.is_empty()) {
-            Some(u) => self.genius.lyrics_by_url(u).await,
-            None => self.genius.lyrics_by_song_id(genius_song_id?).await,
-        }?;
-        info!(log_id, "[stage0] genius linked page");
-        Some(Candidate {
-            source: "genius".into(),
-            synced_lrc: None,
-            plain_text: Some(text),
-            artist_guess: None,
-            title_guess: None,
-            duration_sec: None,
-        })
-    }
-
-    async fn search_and_pick(
-        self: &Arc<Self>,
-        queries: &[String],
-        artist: &str,
-        title: &str,
-        duration_sec: i64,
-        sc_track_id: &str,
-        stage: &str,
-    ) -> AppResult<Option<Candidate>> {
-        let raw = self.fanout_search(queries).await;
-        info!(stage, sc_track_id, count = raw.len(), "raw candidates");
-        let candidates = self.filter_by_metadata(raw, artist, title, duration_sec, sc_track_id);
-        if candidates.is_empty() {
-            info!(stage, sc_track_id, "no candidates survived metadata filter");
-            return Ok(None);
-        }
-        if let Some(exact) =
-            self.pick_exact_match(&candidates, queries, artist, title, sc_track_id, stage)
-        {
-            return Ok(Some(exact));
-        }
-        let rank_cands: Vec<RankCandidate> = candidates
-            .iter()
-            .enumerate()
-            .map(|(idx, c)| RankCandidate {
-                idx,
-                source: c.source.clone(),
-                snippet: build_snippet(c),
-            })
-            .collect();
-        let ranked = self.worker.rank_lyrics(artist, title, &rank_cands).await?;
-        info!(stage, sc_track_id, ranked = ?ranked, "rank result");
-        if let Some(r) = ranked
-            && r.score >= MIN_RANK_SCORE
-                && let Some(pick) = candidates.get(r.best_idx) {
-                    info!(
-                        stage,
-                        sc_track_id,
-                        source = %pick.source,
-                        score = r.score,
-                        "picked"
-                    );
-                    return Ok(Some(pick.clone()));
-                }
-        Ok(None)
-    }
-
-    fn pick_exact_match(
-        &self,
-        candidates: &[Candidate],
-        queries: &[String],
-        artist: &str,
-        title: &str,
-        sc_track_id: &str,
-        stage: &str,
-    ) -> Option<Candidate> {
-        let a = canon_meta(artist);
-        let t = canon_meta(title);
-        let mut query_set: HashSet<String> = HashSet::new();
-        for q in queries {
-            let c = canon_meta(q);
-            if !c.is_empty() {
-                query_set.insert(c);
-            }
-        }
-        for c in candidates {
-            let ca = canon_meta(c.artist_guess.as_deref().unwrap_or(""));
-            let ct = canon_meta(c.title_guess.as_deref().unwrap_or(""));
-            if ca.is_empty() || ct.is_empty() {
-                continue;
-            }
-            if !a.is_empty() && !t.is_empty() && ca == a && ct == t {
-                info!(stage, sc_track_id, "exact match (direct)");
-                return Some(c.clone());
-            }
-            let fwd = format!("{ca} {ct}");
-            let rev = format!("{ct} {ca}");
-            if query_set.contains(&fwd) || query_set.contains(&rev) {
-                info!(stage, sc_track_id, "exact match (via query)");
-                return Some(c.clone());
-            }
-        }
-        None
-    }
-
-    fn filter_by_metadata(
-        &self,
-        candidates: Vec<Candidate>,
-        artist: &str,
-        title: &str,
-        duration_sec: i64,
-        sc_track_id: &str,
-    ) -> Vec<Candidate> {
-        let source = format!("{artist} {title}").trim().to_string();
-        let mut out: Vec<Candidate> = Vec::new();
-        let total = candidates.len();
-        for c in candidates {
-            let cand_meta = format!(
-                "{} {}",
-                c.artist_guess.as_deref().unwrap_or(""),
-                c.title_guess.as_deref().unwrap_or("")
-            )
-            .trim()
-            .to_string();
-            if !cand_meta.is_empty() {
-                let overlap = meta_overlap(&source, &cand_meta);
-                if overlap < MIN_META_OVERLAP {
-                    debug!(
-                        track = %sc_track_id,
-                        source = %c.source,
-                        overlap,
-                        "drop: low meta overlap"
-                    );
-                    continue;
-                }
-            }
-            if duration_sec > 0
-                && let Some(d) = c.duration_sec {
-                    let max = duration_sec.max(d) as f32;
-                    if max > 0.0 {
-                        let diff = (duration_sec as f32 - d as f32).abs() / max;
-                        if diff > MAX_DURATION_DIFF {
-                            debug!(
-                                track = %sc_track_id,
-                                source = %c.source,
-                                diff,
-                                "drop: duration mismatch"
-                            );
-                            continue;
-                        }
-                    }
-                }
-            out.push(c);
-        }
-        info!(
-            track = %sc_track_id,
-            kept = out.len(),
-            total,
-            "metadata filter"
-        );
-        out
-    }
-
-    async fn fanout_search(&self, queries: &[String]) -> Vec<Candidate> {
-        let mut seen = HashSet::new();
-        let mut unique: Vec<String> = Vec::new();
-        for q in queries
-            .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-        {
-            if seen.insert(q.clone()) {
-                unique.push(q);
-            }
-            if unique.len() >= 4 {
-                break;
-            }
-        }
-
-        let mut tasks: Vec<tokio::task::JoinHandle<Vec<Candidate>>> = Vec::new();
-        for q in &unique {
-            let q_clone = q.clone();
-            let lrc = self.lrclib.clone();
-            tasks.push(tokio::spawn(async move {
-                lrc.search_by_query(&q_clone, 10)
-                    .await
-                    .into_iter()
-                    .map(|r| {
-                        let plain = r
-                            .plain_text
-                            .clone()
-                            .or_else(|| r.synced_lrc.as_deref().map(strip_lrc_timestamps));
-                        Candidate {
-                            source: "lrclib".into(),
-                            synced_lrc: r.synced_lrc,
-                            plain_text: plain,
-                            artist_guess: r.artist_guess,
-                            title_guess: r.title_guess,
-                            duration_sec: r.duration_sec,
-                        }
-                    })
-                    .collect()
-            }));
-
-            let q_clone = q.clone();
-            let mxm = self.mxm.clone();
-            tasks.push(tokio::spawn(async move {
-                mxm.search_by_query(&q_clone, 10)
-                    .await
-                    .into_iter()
-                    .map(|r| {
-                        let plain = r
-                            .plain_text
-                            .clone()
-                            .or_else(|| r.synced_lrc.as_deref().map(strip_lrc_timestamps));
-                        Candidate {
-                            source: "musixmatch".into(),
-                            synced_lrc: r.synced_lrc,
-                            plain_text: plain,
-                            artist_guess: r.artist_guess,
-                            title_guess: r.title_guess,
-                            duration_sec: r.duration_sec,
-                        }
-                    })
-                    .collect()
-            }));
-
-            let q_clone = q.clone();
-            let r#gen = self.genius.clone();
-            tasks.push(tokio::spawn(async move {
-                r#gen.search_by_query(&q_clone, 10)
-                    .await
-                    .into_iter()
-                    .map(|r| Candidate {
-                        source: "genius".into(),
-                        synced_lrc: None,
-                        plain_text: Some(r.plain_text),
-                        artist_guess: r.artist_guess,
-                        title_guess: r.title_guess,
-                        duration_sec: None,
-                    })
-                    .collect()
-            }));
-        }
-
-        let mut all: Vec<Candidate> = Vec::new();
-        for t in tasks {
-            if let Ok(items) = t.await {
-                all.extend(items);
-            }
-        }
-        let deduped = dedupe(all);
-        deduped.into_iter().take(MAX_CANDIDATES).collect()
-    }
-
-    /// Аудио залито в S3 → ставим self-gen транскрайб в фон. Никакого inline
-    /// req/res и in-process мьютекса: дедуп и защита от рейсов целиком на
-    /// `tracks.transcribe_state` (атомарный клейм внутри `enqueue_transcribe`).
-    pub async fn handle_uploaded(self: &Arc<Self>, sc_track_id_raw: &str, storage_url: &str) {
-        if storage_url.is_empty() {
-            return;
-        }
-        self.enqueue_transcribe(sc_track_id_raw, Some(storage_url.to_string()))
-            .await;
-    }
-
-    /// Единая точка постановки self-gen транскрайба (work-queue, НЕ req/res).
-    /// Источники: upload-событие (`handle_uploaded`, `storage_url=Some`), reap и
-    /// user-запрос (fork B, `storage_url=None`).
-    ///
-    /// Гонки целиком на `tracks.transcribe_state`:
-    ///   * `disabled`/`done`/свежий `pending` → no-op (early-out + клейм);
-    ///   * клейм `UPDATE ... RETURNING` атомарен между upload-событием,
-    ///     user-запросом и воркерами;
-    ///   * аудио ещё не в S3 → кикаем transcode и выходим: по заливке storage
-    ///     пришлёт `storage.track_uploaded` → `handle_uploaded` → сюда же с URL.
-    async fn enqueue_transcribe(
-        self: &Arc<Self>,
-        sc_track_id_raw: &str,
-        storage_url: Option<String>,
-    ) {
-        // Self-gen транскрайб (тяжёлый GPU-джоб) — только на основном хосте.
-        if self.reserve {
-            return;
-        }
-        let sc_track_id = normalize(sc_track_id_raw);
-        if sc_track_id.is_empty() {
-            return;
-        }
-
-        // Дешёвый early-out до S3-HEAD: не ходим в сеть для disabled/done/pending.
-        match self.transcribe_eligible(&sc_track_id).await {
-            Ok(true) => {}
-            Ok(false) => return,
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "enqueue_transcribe: eligibility check failed");
-                return;
-            }
-        }
-
-        // URL: из события, либо из S3 (если уже залит), иначе кикаем transcode.
-        let url = match storage_url {
-            Some(u) if !u.is_empty() => u,
-            _ => {
-                if self.verifier.is_present(&sc_track_id).await {
-                    self.verifier.redirect_url_for(&sc_track_id)
-                } else {
-                    self.trigger.trigger(&sc_track_id);
-                    return;
-                }
-            }
-        };
-
-        // Режим из текущего состояния lyrics_cache: есть synced — делать нечего;
-        // есть plain (агрегатор) — align (досинхронизировать); пусто — full.
-        let row: Option<LyricsCacheRow> = match sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/lyrics_cache_by_id.sql",
-            &sc_track_id
-        )
-        .fetch_optional(&self.pg)
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "enqueue_transcribe: lyrics read failed");
-                return;
-            }
-        };
-        let (mode, language, initial_prompt) = match row {
-            Some(r) if r.synced_lrc.is_some() => return, // уже полностью готово
-            Some(r)
-                if r.plain_text
-                    .as_deref()
-                    .map(|p| !p.is_empty())
-                    .unwrap_or(false) =>
-            {
-                let plain = r.plain_text.unwrap_or_default();
-                let initial = plain.chars().take(2000).collect::<String>();
-                ("align", r.language, Some(initial))
-            }
-            _ => ("full", None, None),
-        };
-
-        // Атомарный клейм: pending только если eligible. 0 строк → кто-то успел
-        // раньше / уже done|disabled → не публикуем.
-        match self.claim_transcribe(&sc_track_id).await {
-            Ok(true) => {}
-            Ok(false) => return,
-            Err(e) => {
-                debug!(track = %sc_track_id, error = %e, "enqueue_transcribe: claim failed");
-                return;
-            }
-        }
-
-        let job = serde_json::json!({
-            "sc_track_id": sc_track_id,
-            "audio_url": url,
-            "language": language,
-            "initial_prompt": initial_prompt,
-            "mode": mode,
-        });
-        match self.nats.publish(subjects::TRANSCRIBE_AUDIO, &job).await { Err(e) => {
-            // Клейм останется pending → стейл-реап перевыставит через TRANSCRIBE_STALE.
-            warn!(track = %sc_track_id, error = %e, "enqueue_transcribe: publish failed");
-        } _ => {
-            info!(track = %sc_track_id, mode, "[transcribe] enqueued");
-        }}
-    }
-
-    /// true если трек можно ставить в транскрайб: `transcribe_state` IS NULL или
-    /// «зависший» pending. done/disabled/свежий pending → false.
-    async fn transcribe_eligible(&self, sc_track_id: &str) -> AppResult<bool> {
-        let row = sqlx::query_file!("queries/lyrics/service/transcribe_state.sql", sc_track_id)
-            .fetch_optional(&self.pg)
-            .await?;
-        let Some(r) = row else {
-            return Ok(false); // нет трека — нечего транскрайбить
-        };
-        let (state, at) = (r.transcribe_state, r.transcribe_at);
-        Ok(match state.as_deref() {
-            None => true,
-            Some("pending") => {
-                let cutoff =
-                    chrono::Utc::now() - chrono::Duration::from_std(TRANSCRIBE_STALE).unwrap();
-                at.map(|t| t < cutoff).unwrap_or(true)
-            }
-            _ => false, // done / disabled
-        })
-    }
-
-    /// Атомарно помечает трек `pending`, если он eligible. true → клейм наш
-    /// (публикуем джоб), false → опередили / state терминальный.
-    async fn claim_transcribe(&self, sc_track_id: &str) -> AppResult<bool> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(TRANSCRIBE_STALE).unwrap();
-        let res = sqlx::query_file!(
-            "queries/lyrics/service/claim_transcribe.sql",
-            sc_track_id,
-            cutoff
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    fn subscribe_done_transcribe(self: &Arc<Self>) {
-        let svc = self.clone();
-        self.nats.consume(
-            streams::DONE.name,
-            "backend-done-transcribe",
-            Some(subjects::DONE_TRANSCRIBE),
-            16,
-            move |data| {
-                let svc = svc.clone();
-                async move { svc.persist_transcribe(data).await }
-            },
-        );
-    }
-
-    /// Идемпотентно применяет результат self-gen транскрайба:
-    ///   * пусто (нет речи / шум) → `transcribe_state='disabled'` (self-gen-disable):
-    ///     трек больше не транскрайбим, но агрегаторы продолжают пытаться;
-    ///   * `full` → INSERT self_gen ON CONFLICT DO NOTHING (не затираем агрегатор,
-    ///     если он успел вписаться), `state='done'`, эмбеддинг через `after_found`;
-    ///   * `align` → дозаполняем `synced_lrc` если пуст, `state='done'`.
-    async fn persist_transcribe(self: &Arc<Self>, data: serde_json::Value) -> AppResult<()> {
-        let Some(sc_track_id) = data
-            .get("sc_track_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-        else {
-            return Ok(());
-        };
-        let mode = data.get("mode").and_then(|v| v.as_str()).unwrap_or("full");
-        let synced = data
-            .get("syncedLrc")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        let plain = data
-            .get("plainText")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-
-        if synced.is_none() && plain.is_none() {
-            // self-gen-disable: whisper нечего дал — больше не берём этот трек.
-            sqlx::query_file!(
-                "queries/lyrics/service/disable_transcribe.sql",
-                &sc_track_id
-            )
-            .execute(&self.pg)
-            .await?;
-            info!(track = %sc_track_id, mode, "self-gen disabled (whisper empty)");
-            return Ok(());
-        }
-
-        if mode == "align" {
-            sqlx::query_file!(
-                "queries/lyrics/service/align_synced_lrc.sql",
-                &sc_track_id,
-                synced
-            )
-            .execute(&self.pg)
-            .await?;
-            self.mark_transcribe_done(&sc_track_id).await?;
-            info!(track = %sc_track_id, "self-gen aligned sync LRC");
-            return Ok(());
-        }
-
-        // full: не затираем реальный источник, если агрегатор успел вписаться.
-        let inserted: Option<LyricsCacheRow> = sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/insert_self_gen_lyrics.sql",
-            &sc_track_id,
-            synced,
-            plain
-        )
-        .fetch_optional(&self.pg)
-        .await?;
-        self.mark_transcribe_done(&sc_track_id).await?;
-
-        let Some(row) = inserted else {
-            info!(track = %sc_track_id, "self-gen: aggregator already present, kept");
-            return Ok(());
-        };
-        info!(track = %sc_track_id, "self-generated LRC");
-        if let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-            && text.len() > 30 {
-                let svc = self.clone();
-                let row_clone = row.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = svc.after_found(&row_clone, &text).await {
-                        warn!(track = %row_clone.sc_track_id, error = %e, "after-found failed");
-                    }
-                });
-            }
-        Ok(())
-    }
-
-    async fn mark_transcribe_done(&self, sc_track_id: &str) -> AppResult<()> {
-        sqlx::query_file!(
-            "queries/lyrics/service/mark_transcribe_done.sql",
-            sc_track_id
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(())
-    }
-
-    async fn after_found(&self, entity: &LyricsCacheRow, text: &str) -> AppResult<()> {
-        let lang_input = text.chars().take(2000).collect::<String>();
-        let mut lang = match self.worker.detect_language(&lang_input).await {
-            Ok(v) => v,
-            Err(e) => {
-                debug!(track = %entity.sc_track_id, error = %e, "detectLanguage worker error");
-                None
-            }
-        };
-        if lang.is_none() {
-            lang = detect_language_heuristic(text).map(|h| {
-                crate::modules::lyrics::worker_client::LangResult {
-                    language: h.language,
-                    confidence: h.confidence,
-                }
-            });
-            if let Some(l) = &lang {
-                info!(track = %entity.sc_track_id, language = %l.language, confidence = l.confidence, "detectLanguage heuristic");
-            } else {
-                warn!(track = %entity.sc_track_id, "detectLanguage: both worker and heuristic returned null");
-            }
-        } else if let Some(l) = &lang {
-            info!(track = %entity.sc_track_id, language = %l.language, confidence = l.confidence, "detectLanguage worker");
-        }
-        let final_lang = lang.as_ref().map(|l| l.language.clone());
-        if let Some(l) = &lang {
-            sqlx::query_file!(
-                "queries/lyrics/service/update_lyrics_language.sql",
-                &entity.sc_track_id,
-                &l.language,
-                l.confidence
-            )
-            .execute(&self.pg)
-            .await?;
-            sqlx::query_file!(
-                "queries/lyrics/service/update_track_language.sql",
-                &entity.sc_track_id,
-                &l.language,
-                l.confidence
-            )
-            .execute(&self.pg)
-            .await?;
-        }
-
-        let body = serde_json::json!({
-            "sc_track_id": entity.sc_track_id,
-            "text": text.chars().take(4000).collect::<String>(),
-            "language": final_lang,
-        });
-        if let Err(e) = self.nats.publish(subjects::EMBED_LYRICS, &body).await {
-            warn!(track = %entity.sc_track_id, error = %e, "embed publish failed");
-        }
-        Ok(())
-    }
-
-    async fn reap_whisper(self: &Arc<Self>) -> AppResult<()> {
-        // align гейтит по lyrics_cache.created_at (timestamp, naive); full — по
-        // tracks.created_at (timestamptz). Одно и то же wall-clock, разные типы.
-        let cutoff =
-            chrono::Utc::now().naive_utc() - chrono::Duration::from_std(REAP_MIN_AGE).unwrap();
-        let cutoff_tz = chrono::Utc::now() - chrono::Duration::from_std(REAP_MIN_AGE).unwrap();
-
-        // Зависшие pending перевыставляем только после TRANSCRIBE_STALE; свежий
-        // pending и disabled/done реап пропускает (иначе HEAD'ил бы инструменталы
-        // вечно). enqueue_transcribe ниже всё равно клеймит атомарно.
-        let stale_cutoff =
-            chrono::Utc::now() - chrono::Duration::from_std(TRANSCRIBE_STALE).unwrap();
-
-        let need_align = sqlx::query_file_scalar!(
-            "queries/lyrics/service/reap_need_align.sql",
-            cutoff,
-            REAP_LIMIT_ALIGN,
-            stale_cutoff
-        )
-        .fetch_all(&self.pg)
-        .await?;
-
-        let need_full = sqlx::query_file_scalar!(
-            "queries/lyrics/service/reap_need_full.sql",
-            cutoff_tz,
-            REAP_LIMIT_FULL,
-            stale_cutoff
-        )
-        .fetch_all(&self.pg)
-        .await?;
-
-        let total = need_align.len() + need_full.len();
-        if total == 0 {
-            return Ok(());
-        }
-        info!(
-            align = need_align.len(),
-            full = need_full.len(),
-            "[lyrics-reap] retrying whisper"
-        );
-        for id in need_align.into_iter().chain(need_full) {
-            let svc = self.clone();
-            tokio::spawn(async move {
-                svc.enqueue_transcribe(&id, None).await;
-            });
-        }
-        Ok(())
-    }
-
-    async fn reap_embeds(self: &Arc<Self>) -> AppResult<()> {
-        let cutoff =
-            chrono::Utc::now().naive_utc() - chrono::Duration::from_std(REAP_MIN_AGE).unwrap();
-        let stuck: Vec<LyricsCacheRow> = sqlx::query_file_as!(
-            LyricsCacheRow,
-            "queries/lyrics/service/reap_embeds_stuck.sql",
-            cutoff,
-            REAP_LIMIT_FULL
-        )
-        .fetch_all(&self.pg)
-        .await?;
-        if stuck.is_empty() {
-            return Ok(());
-        }
-        info!(count = stuck.len(), "[lyrics-reap] re-publishing embed");
-        for row in stuck {
-            let Some(text) = pick_lyrics_text(row.plain_text.as_deref(), row.synced_lrc.as_deref())
-            else {
-                continue;
-            };
-            if text.len() <= 30 {
-                continue;
-            }
-            let svc = self.clone();
-            let row_clone = row.clone();
-            tokio::spawn(async move {
-                if let Err(e) = svc.after_found(&row_clone, &text).await {
-                    warn!(track = %row_clone.sc_track_id, error = %e, "embed-reap failed");
-                }
-            });
-        }
-        Ok(())
-    }
 }
 
-fn empty_response(sc_track_id: Option<&str>) -> LyricsResponse {
+fn canonical_track_id(value: &str) -> AppResult<String> {
+    let value = value.trim();
+    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
+    let id = value
+        .parse::<u64>()
+        .map_err(|_| AppError::bad_request("invalid SoundCloud track id"))?;
+    if id == 0 || id.to_string() != value {
+        return Err(AppError::bad_request("invalid SoundCloud track id"));
+    }
+    Ok(value.to_owned())
+}
+
+fn is_fresh_negative(status: &LyricsStatusRow) -> bool {
+    status.lookup_status.as_deref() == Some("not_found")
+        && status.next_run_at.is_some_and(|next| next > Utc::now())
+}
+
+fn is_operationally_blocked(status: &LyricsStatusRow) -> bool {
+    status.lookup_status.as_deref() == Some("retry")
+        && status.failure_streak.unwrap_or_default() >= MAX_OPERATIONAL_FAILURES
+}
+
+fn duration_matches(target_sec: Option<i64>, candidate_ms: i32) -> bool {
+    let Some(target) = target_sec.filter(|value| *value > 0) else {
+        return true;
+    };
+    if candidate_ms <= 0 {
+        return true;
+    }
+    let candidate = (candidate_ms as f64 / 1000.0).round() as i64;
+    let maximum = target.max(candidate) as f64;
+    (target - candidate).abs() as f64 / maximum <= 0.25
+}
+
+fn found_response(sc_track_id: &str, row: LyricsStatusRow) -> LyricsResponse {
     LyricsResponse {
-        sc_track_id: sc_track_id.map(String::from),
-        synced_lrc: None,
-        plain_text: None,
-        source: "none".into(),
-        language: None,
-        language_confidence: None,
-        status: "none".into(),
+        sc_track_id: Some(sc_track_id.to_owned()),
+        synced_lrc: row.synced_lrc,
+        plain_text: row.plain_text,
+        source: row.source.unwrap_or_else(|| "none".to_owned()),
+        language: row.language,
+        language_confidence: row.language_confidence,
+        status: "found".to_owned(),
     }
 }
 
-/// Лирики в кэше нет — поставили фоновую индексацию. Клиент показывает «лирика
-/// ещё не найдена, индексируем».
 fn pending_response(sc_track_id: Option<&str>) -> LyricsResponse {
     LyricsResponse {
-        sc_track_id: sc_track_id.map(String::from),
+        sc_track_id: sc_track_id.map(str::to_owned),
         synced_lrc: None,
         plain_text: None,
-        source: "none".into(),
+        source: "none".to_owned(),
         language: None,
         language_confidence: None,
-        status: "pending".into(),
+        status: "pending".to_owned(),
     }
 }
 
-fn to_response(row: &LyricsCacheRow) -> LyricsResponse {
+fn none_response(sc_track_id: Option<&str>) -> LyricsResponse {
     LyricsResponse {
-        sc_track_id: Some(row.sc_track_id.clone()),
-        synced_lrc: row.synced_lrc.clone(),
-        plain_text: row.plain_text.clone(),
-        source: row.source.clone(),
-        language: row.language.clone(),
-        language_confidence: row.language_confidence,
-        status: "found".into(),
+        sc_track_id: sc_track_id.map(str::to_owned),
+        synced_lrc: None,
+        plain_text: None,
+        source: "none".to_owned(),
+        language: None,
+        language_confidence: None,
+        status: "none".to_owned(),
     }
 }
 
-fn build_snippet(c: &Candidate) -> String {
-    let text = c.plain_text.clone().unwrap_or_else(|| {
-        c.synced_lrc
-            .as_deref()
-            .map(strip_lrc_timestamps)
-            .unwrap_or_default()
-    });
-    let guess = if c.artist_guess.is_some() || c.title_guess.is_some() {
-        format!(
-            "({} — {}) ",
-            c.artist_guess.as_deref().unwrap_or("?"),
-            c.title_guess.as_deref().unwrap_or("?")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_id_boundary_is_strict() {
+        assert_eq!(canonical_track_id("42").unwrap(), "42");
+        assert_eq!(canonical_track_id("soundcloud:tracks:42").unwrap(), "42");
+        for value in ["", "0", "042", "+42", "tracks:42", "foo:42"] {
+            assert!(canonical_track_id(value).is_err(), "accepted {value}");
+        }
+    }
+
+    #[test]
+    fn duration_filter_keeps_the_inclusive_boundary() {
+        assert!(duration_matches(Some(100), 133_000));
+        assert!(!duration_matches(Some(100), 134_000));
+        assert!(duration_matches(None, 134_000));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_track_without_lyrics_or_lookup_state_still_reports_status(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+             VALUES ('42', 'soundcloud:tracks:42', 'Track', 'track', 120000)",
         )
-    } else {
-        String::new()
-    };
-    let combined = format!("{guess}{text}");
-    combined.chars().take(SNIPPET_LEN).collect()
-}
+        .execute(&pool)
+        .await?;
 
-fn dedupe(candidates: Vec<Candidate>) -> Vec<Candidate> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for c in candidates {
-        let body_src = c
-            .plain_text
-            .clone()
-            .or_else(|| c.synced_lrc.clone())
-            .unwrap_or_default();
-        let body: String = body_src.chars().take(80).collect();
-        let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        if collapsed.is_empty() {
-            continue;
-        }
-        let key = collapsed.to_lowercase();
-        if seen.insert(key) {
-            out.push(c);
+        let row = sqlx::query_file_as!(
+            LyricsStatusRow,
+            "queries/lyrics/service/lyrics_status.sql",
+            "42"
+        )
+        .fetch_optional(&pool)
+        .await?
+        .expect("status row");
+
+        assert!(
+            row.source.is_none()
+                && row.synced_lrc.is_none()
+                && row.plain_text.is_none()
+                && row.language.is_none()
+                && row.language_confidence.is_none(),
+            "an unjoined lyrics cache must decode as absent, not fail: {row:?}"
+        );
+        Ok(())
+    }
+
+    async fn service(pool: &sqlx::PgPool, reserve: bool) -> anyhow::Result<Arc<LyricsService>> {
+        let nats = crate::bus::nats::NatsService::connect(
+            "nats://127.0.0.1:1",
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await?;
+        Ok(LyricsService::new(
+            pool.clone(),
+            BackgroundJobs::new(nats),
+            reserve,
+        ))
+    }
+
+    async fn seed_track(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+             VALUES ('42', 'soundcloud:tracks:42', 'Track', 'track', 120000)",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn seed_cached(
+        pool: &sqlx::PgPool,
+        sc_track_id: &str,
+        artist: &str,
+        duration_ms: i32,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (
+                 sc_track_id, urn, title, title_normalized, duration_ms, metadata_artist
+             ) VALUES ($1, 'soundcloud:tracks:' || $1, 'Midnight Dreams', 'midnight dreams', $2, $3)",
+        )
+        .bind(sc_track_id)
+        .bind(duration_ms)
+        .bind(artist)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, language)
+             VALUES ($1, $2, 'lrclib', 'en')",
+        )
+        .bind(sc_track_id)
+        .bind(text)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn hints(title: &str, artist: &str, duration_sec: Option<i64>) -> LyricsHints {
+        LyricsHints {
+            title: title.to_owned(),
+            artist: artist.to_owned(),
+            duration_sec,
         }
     }
-    out
-}
 
-fn tokenize(s: &str) -> HashSet<String> {
-    let lowered = s.to_lowercase();
-    let mut buf = String::with_capacity(lowered.len());
-    let mut skip_paren = false;
-    let mut skip_bracket = false;
-    for ch in lowered.chars() {
-        match ch {
-            '(' => {
-                skip_paren = true;
-                buf.push(' ');
-            }
-            ')' => {
-                skip_paren = false;
-                buf.push(' ');
-            }
-            '[' => {
-                skip_bracket = true;
-                buf.push(' ');
-            }
-            ']' => {
-                skip_bracket = false;
-                buf.push(' ');
-            }
-            _ if skip_paren || skip_bracket => buf.push(' '),
-            _ if ch.is_alphanumeric() || ch.is_whitespace() => buf.push(ch),
-            _ => buf.push(' '),
-        }
-    }
-    let mut out = HashSet::new();
-    for t in buf.split_whitespace() {
-        if t.len() < 2 {
-            continue;
-        }
-        if STOPWORDS.contains(&t) {
-            continue;
-        }
-        out.insert(t.to_string());
-    }
-    out
-}
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_search_without_a_title_or_an_artist_asks_nothing_of_the_catalog(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        let lyrics = service(&pool, false).await?;
 
-fn meta_overlap(src: &str, cand: &str) -> f32 {
-    let a = tokenize(src);
-    let b = tokenize(cand);
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
+        for (title, artist) in [
+            ("", "Boards of Canada"),
+            ("Midnight Dreams", "  "),
+            ("", ""),
+        ] {
+            let answer = lyrics.search_lyrics(&hints(title, artist, None)).await?;
+            assert_eq!(answer.status, "none");
+            assert!(answer.sc_track_id.is_none());
+        }
+        Ok(())
     }
-    let common = a.iter().filter(|t| b.contains(*t)).count();
-    let min = a.len().min(b.len()) as f32;
-    common as f32 / min
-}
 
-fn normalize(raw: &str) -> String {
-    let s = raw.trim();
-    match s.rfind(':') {
-        Some(idx) => s[idx + 1..].to_string(),
-        None => s.to_string(),
+    #[sqlx::test(migrations = "./migrations")]
+    async fn another_artist_with_the_same_title_is_not_served(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        let lyrics = service(&pool, false).await?;
+        seed_cached(&pool, "100", "Boards of Canada", 240_000, "their words").await?;
+
+        let answer = lyrics
+            .search_lyrics(&hints("Midnight Dreams", "Aphex Twin", Some(240)))
+            .await?;
+
+        assert_eq!(
+            answer.status, "none",
+            "a title match alone must never hand over someone else's lyrics"
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn the_same_artist_at_a_different_length_is_not_the_same_song(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        let lyrics = service(&pool, false).await?;
+        seed_cached(&pool, "100", "Boards of Canada", 240_000, "their words").await?;
+
+        let far = lyrics
+            .search_lyrics(&hints("Midnight Dreams", "Boards of Canada", Some(60)))
+            .await?;
+        assert_eq!(far.status, "none", "a quarter is the whole tolerance");
+
+        let near = lyrics
+            .search_lyrics(&hints("Midnight Dreams", "Boards of Canada", Some(200)))
+            .await?;
+        assert_eq!(near.status, "found");
+        assert_eq!(near.plain_text.as_deref(), Some("their words"));
+        assert_eq!(near.sc_track_id.as_deref(), Some("100"));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn the_closest_artist_wins_when_several_tracks_share_a_title(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        let lyrics = service(&pool, false).await?;
+        seed_cached(&pool, "100", "Boards of Canada", 240_000, "exact words").await?;
+        seed_cached(
+            &pool,
+            "101",
+            "Boards of Canada Tribute",
+            240_000,
+            "tribute words",
+        )
+        .await?;
+
+        let answer = lyrics
+            .search_lyrics(&hints("Midnight Dreams", "Boards of Canada", Some(240)))
+            .await?;
+
+        assert_eq!(answer.sc_track_id.as_deref(), Some("100"));
+        assert_eq!(answer.plain_text.as_deref(), Some("exact words"));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn an_empty_cache_row_cannot_even_be_written(pool: sqlx::PgPool) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+
+        let refused = sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source)
+             VALUES ('42', '   ', NULL, 'lrclib')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("the schema must refuse lyrics that are only whitespace");
+
+        assert!(
+            refused.to_string().contains("lyrics_cache_text_present"),
+            "the guard in search_cache.sql is a second line of defence: the first is this check \
+             constraint, and it is the one that makes the state unreachable, saw {refused}"
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn an_unknown_track_is_not_found_rather_than_pending(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        let lyrics = service(&pool, false).await?;
+
+        let error = lyrics.ensure_lyrics("42").await.unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn stored_lyrics_are_served_without_touching_the_queue(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, source, plain_text, synced_lrc, language)
+             VALUES ('42', 'lrclib', 'a line', '[00:01.00] a line', 'en')",
+        )
+        .execute(&pool)
+        .await?;
+        let lyrics = service(&pool, false).await?;
+
+        let response = lyrics.ensure_lyrics("soundcloud:tracks:42").await?;
+
+        assert_eq!(response.status, "found");
+        assert_eq!(response.source, "lrclib");
+        assert_eq!(response.plain_text.as_deref(), Some("a line"));
+        let queued: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'lyrics.lookup'")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(queued, 0);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_reserve_replica_answers_pending_without_touching_the_lookup(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        let before: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT updated_at FROM lyrics_lookup_state")
+                .fetch_optional(&pool)
+                .await?;
+        let lyrics = service(&pool, true).await?;
+
+        let response = lyrics.ensure_lyrics("42").await?;
+
+        assert_eq!(response.status, "pending");
+        let after: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT updated_at FROM lyrics_lookup_state")
+                .fetch_optional(&pool)
+                .await?;
+        assert_eq!(
+            before, after,
+            "a reserve replica must not rewrite the lookup state"
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_reserve_replica_without_lookup_state_refuses_instead_of_pretending(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        sqlx::query("DELETE FROM lyrics_lookup_state")
+            .execute(&pool)
+            .await?;
+        let lyrics = service(&pool, true).await?;
+
+        let error = lyrics.ensure_lyrics("42").await.unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_missing_lookup_becomes_a_durable_request_and_a_pending_answer(
+        pool: sqlx::PgPool,
+    ) -> anyhow::Result<()> {
+        seed_track(&pool).await?;
+        let lyrics = service(&pool, false).await?;
+
+        let response = lyrics.ensure_lyrics("42").await?;
+
+        assert_eq!(response.status, "pending");
+        assert_eq!(response.sc_track_id.as_deref(), Some("42"));
+        let (priority, wake): (i16, Option<uuid::Uuid>) = sqlx::query_as(
+            "SELECT priority, wake_message_id FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(priority, 0, "a user request must take the top priority");
+        assert!(wake.is_some(), "the wake marker must survive in PostgreSQL");
+        Ok(())
     }
 }

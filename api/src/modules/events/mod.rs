@@ -2,4 +2,4 @@ pub mod handlers;
 pub mod service;
 
 pub use handlers::router;
-pub use service::EventsService;
+pub use service::{EventsService, PLAYLIST_ADD_WEIGHT};

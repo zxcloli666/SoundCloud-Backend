@@ -1,51 +1,36 @@
 use std::time::Duration;
 
+use stream_ticket::StreamTicketKey;
+use url::Url;
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub port: u16,
 
     pub soundcloud: SoundcloudCfg,
-    /// Core-БД: каталог, юзеры, всё, что нужно отдаче. На main/star — локальная,
-    /// на load — main по mTLS. Обязательна.
     pub database: DatabaseCfg,
-    /// Ops-БД: телеметрия и прочая кроновская муть, которую отдача не читает.
-    /// `None` — фичи, завязанные на неё, выключены (main/star стартуют без неё
-    /// и без заглушки). См. `db::OpsDb`.
-    pub ops_database: Option<DatabaseCfg>,
     pub streaming: StreamingCfg,
     pub admin: AdminCfg,
     pub redis: RedisCfg,
+    pub admission: AdmissionCfg,
     pub nats: NatsCfg,
     pub qdrant: QdrantCfg,
     pub storage: StorageCfg,
-    pub internal: InternalCfg,
     pub subscriptions: SubscriptionsCfg,
     pub soundwave: SoundwaveCfg,
-    pub collab: CollabCfg,
-    pub lyrics: LyricsCfg,
-    pub mxm: MxmCfg,
-    pub genius: GeniusCfg,
-    pub enrich: EnrichCfg,
-    pub enrich_crawl: EnrichCrawlCfg,
-    pub discovery: DiscoveryCfg,
+    pub collab_trigger: CollabTriggerCfg,
     pub cold: ColdCfg,
     pub max_track_duration_ms: i32,
-    /// Резерв-нода для премиума: фоновые пайплайны off + ендпоинты только премиум.
     pub premium_reserve: bool,
-    /// Как `premium_reserve`, но БЕЗ премиум-гейта (ходят обычные юзеры). Кроны
-    /// глушит любой из двух (`premium_reserve` его подразумевает).
     pub reserve_backend: bool,
 }
 
 impl AppConfig {
-    /// Нода не гоняет фоновую работу пайплайна (кроны/консьюмеры/обсёрверы).
     pub fn is_reserve(&self) -> bool {
         self.premium_reserve || self.reserve_backend
     }
 }
 
-/// TTL'и для cold-cache. Если sc_synced_at старше TTL — на чтении спавним
-/// фоновый refresh (с Redis SETNX-дедупом).
 #[derive(Clone, Debug)]
 pub struct ColdCfg {
     pub track_ttl_sec: u64,
@@ -57,42 +42,26 @@ pub struct ColdCfg {
     pub owned_ttl_sec: u64,
     #[allow(dead_code)]
     pub evict_after_sec: u64,
-    pub refresh_concurrency: usize,
-    pub refresh_lock_ttl_sec: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct GeniusCfg {
-    pub access_token: String,
-    pub max_concurrent_scrapes: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct SoundcloudCfg {
-    pub client_id: String,
-    pub client_secret: String,
-    pub redirect_uri: String,
     pub proxy_url: String,
     pub proxy_fallback: bool,
 }
 
 #[derive(Clone)]
 pub struct DatabaseCfg {
-    /// Полный libpq-URL. Может уже нести `sslmode/sslrootcert/sslcert/sslkey`.
     pub url: String,
-    /// TLS/mTLS из отдельных env — накладывается ПОВЕРХ того, что в URL
-    /// (`db::connect_opts`). Позволяет держать в URL только адрес, а серты
-    /// подсовывать файлами, как это делает streaming.
     pub ssl: DbSslCfg,
     pub pool_max: u32,
     pub acquire_timeout: Duration,
 }
 
-/// URL несёт пароль — в `Debug` его не печатаем (AppConfig целиком `Debug`).
 impl std::fmt::Debug for DatabaseCfg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DatabaseCfg")
-            .field("url", &redact_url(&self.url))
+            .field("url", &redact::url(&self.url))
             .field("ssl", &self.ssl)
             .field("pool_max", &self.pool_max)
             .field("acquire_timeout", &self.acquire_timeout)
@@ -102,49 +71,99 @@ impl std::fmt::Debug for DatabaseCfg {
 
 #[derive(Clone, Debug, Default)]
 pub struct DbSslCfg {
-    /// `disable|allow|prefer|require|verify-ca|verify-full`.
     pub mode: Option<String>,
     pub root_cert: Option<String>,
     pub client_cert: Option<String>,
     pub client_key: Option<String>,
 }
 
-/// `postgres://user:pass@host/db` → `postgres://user:***@host/db`.
-fn redact_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
-    };
-    let Some((userinfo, tail)) = rest.split_once('@') else {
-        return url.to_string();
-    };
-    let user = userinfo.split_once(':').map_or(userinfo, |(u, _)| u);
-    format!("{scheme}://{user}:***@{tail}")
-}
-
 #[derive(Clone, Debug)]
 pub struct StreamingCfg {
-    pub service_url: String,
+    pub service_url: Url,
+    pub ticket_key: StreamTicketKey,
 }
 
 #[derive(Clone, Debug)]
 pub struct AdminCfg {
-    pub token: String,
+    pub token: redact::Secret<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RedisCfg {
     pub url: String,
 }
 
+impl std::fmt::Debug for RedisCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisCfg")
+            .field("url", &redact::url(&self.url))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AdmissionLimitCfg {
+    pub per_client: u32,
+    pub global: u32,
+}
+
 #[derive(Clone, Debug)]
+pub struct AdmissionCfg {
+    pub window: Duration,
+    pub timeout: Duration,
+    pub max_in_flight: usize,
+    pub login: AdmissionLimitCfg,
+    pub link_create: AdmissionLimitCfg,
+    pub resolve: AdmissionLimitCfg,
+}
+
+impl AdmissionCfg {
+    fn from_env() -> Self {
+        let login = admission_limit("AUTH_LOGIN", 15, 300);
+        let link_create = admission_limit("AUTH_LINK_CREATE", 30, 600);
+        let resolve = admission_limit("RESOLVE", 60, 1200);
+
+        Self {
+            window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
+            timeout: Duration::from_millis(admission_value("ADMISSION_TIMEOUT_MS", 100)),
+            max_in_flight: usize::try_from(admission_value("ADMISSION_MAX_IN_FLIGHT", 16))
+                .expect("ADMISSION_MAX_IN_FLIGHT is too large"),
+            login,
+            link_create,
+            resolve,
+        }
+    }
+}
+
+fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimitCfg {
+    let limit = AdmissionLimitCfg {
+        per_client: admission_u32(&format!("{prefix}_PER_CLIENT"), per_client),
+        global: admission_u32(&format!("{prefix}_GLOBAL"), global),
+    };
+    assert!(
+        limit.per_client <= limit.global,
+        "{prefix}_PER_CLIENT must not exceed {prefix}_GLOBAL"
+    );
+    limit
+}
+
+#[derive(Clone)]
 pub struct NatsCfg {
     pub url: String,
 }
 
+impl std::fmt::Debug for NatsCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsCfg")
+            .field("url", &redact::url(&self.url))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct QdrantCfg {
-    pub url: String,
-    pub api_key: String,
+    pub grpc_url: String,
+    pub api_key: redact::Secret<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -153,81 +172,22 @@ pub struct StorageCfg {
 }
 
 #[derive(Clone, Debug)]
-pub struct InternalCfg {
-    pub token: String,
-}
-
-#[derive(Clone, Debug)]
 pub struct SubscriptionsCfg {
-    pub snapshot_dir: String,
     pub always_premium: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct SoundwaveCfg {
-    /// Бонус к score за популярность трека (log(playback_count) * boost).
-    /// Применяется в `enrich_and_boost` для search.
     pub popularity_boost: f64,
-    /// Сколько треков одного артиста максимум помещается в выдачу (anti-spam).
     pub artist_cap: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct CollabCfg {
-    pub auto_train: bool,
-    pub trigger_events: u32,
-    pub trigger_cooldown_ms: u64,
-    pub dim: u32,
-    pub min_count: u32,
-    pub min_sessions: u32,
+pub struct CollabTriggerCfg {
+    pub event_threshold: u64,
+    pub cooldown: Duration,
 }
 
-#[derive(Clone, Debug)]
-pub struct LyricsCfg {
-    pub indexing_concurrency: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct MxmCfg {
-    pub api_base: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct EnrichCfg {
-    pub enabled: bool,
-    pub mb_user_agent: String,
-    pub mb_rate_limit_ms: u64,
-    pub max_attempts: u32,
-    pub ai_enabled: bool,
-    pub ai_timeout_ms: u64,
-    pub ai_daily_budget: u64,
-    pub consumer_concurrency: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct EnrichCrawlCfg {
-    pub interval_sec: u64,
-}
-
-/// Catalog discovery (crawl every artist on Genius/MB) + wanted-track resolve,
-/// all on the work::Scheduler substrate. Separate Genius (proxy-parallel) and MB
-/// (serialized) lanes; no confidence floor, no lifetime cap — every artist with
-/// an external id is reachable on a freshness cadence.
-#[derive(Clone, Debug)]
-pub struct DiscoveryCfg {
-    pub enabled: bool,
-    pub genius_concurrency: usize,
-    pub mb_concurrency: usize,
-    pub batch: i64,
-    pub recrawl_days: i64,
-    pub max_fails: i16,
-    pub interest_interval_sec: u64,
-    pub account_concurrency: usize,
-    pub account_walk_days: i64,
-}
-
-/// Разложенная форма → URL. Юзер/пароль/имя базы percent-энкодим: без этого
-/// `@`, `/`, `?`, `#` в пароле рвут парсинг URL на стороне sqlx.
 fn compose_url(user: &str, pass: &str, host: &str, port: u16, name: &str) -> String {
     format!(
         "postgres://{}:{}@{host}:{port}/{}",
@@ -237,14 +197,6 @@ fn compose_url(user: &str, pass: &str, host: &str, port: u16, name: &str) -> Str
     )
 }
 
-/// Конфиг одной БД из env с префиксом (`""` — core, `"OPS_"` — ops).
-///
-/// Формы (в порядке приоритета): `{P}DATABASE_URL`, затем разложенная
-/// `{P}DATABASE_{HOST,PORT,USERNAME,PASSWORD,NAME}`. TLS-переменные
-/// `{P}DATABASE_SSL_{MODE,CA,CERT,KEY}` работают с обеими формами.
-///
-/// `default_host` = `Some(_)` делает БД обязательной (core), `None` — вернёт
-/// `None`, если про неё ничего не задано (ops: никаких заглушек).
 fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<DatabaseCfg> {
     let key = |name: &str| format!("{prefix}{name}");
 
@@ -274,6 +226,28 @@ fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<Databas
     })
 }
 
+fn stream_ticket_key() -> StreamTicketKey {
+    let encoded = env_opt("STREAM_TICKET_KEY").expect("STREAM_TICKET_KEY must be set");
+    StreamTicketKey::from_base64(&encoded)
+        .expect("STREAM_TICKET_KEY must be base64-encoded 32 bytes")
+}
+
+fn streaming_service_url() -> Url {
+    let mut url = Url::parse(&env_str("STREAMING_SERVICE_URL", "http://localhost:8080"))
+        .expect("STREAMING_SERVICE_URL must be an absolute URL");
+    assert!(
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+        "STREAMING_SERVICE_URL must use HTTP or HTTPS"
+    );
+    assert!(
+        url.query().is_none() && url.fragment().is_none(),
+        "STREAMING_SERVICE_URL must not contain a query or fragment"
+    );
+    let path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&path);
+    url
+}
+
 impl AppConfig {
     pub fn from_env() -> Self {
         let database = database_from_env("", Some("localhost"))
@@ -283,50 +257,41 @@ impl AppConfig {
             port: env_u16("PORT", 3000),
 
             soundcloud: SoundcloudCfg {
-                client_id: env_str("SOUNDCLOUD_CLIENT_ID", ""),
-                client_secret: env_str("SOUNDCLOUD_CLIENT_SECRET", ""),
-                redirect_uri: env_str(
-                    "SOUNDCLOUD_REDIRECT_URI",
-                    "http://localhost:3000/auth/callback",
-                ),
                 proxy_url: env_str("SC_PROXY_URL", ""),
                 proxy_fallback: env_str("SC_PROXY_FALLBACK", "") == "true",
             },
 
             database,
-            ops_database: database_from_env("OPS_", None),
 
             streaming: StreamingCfg {
-                service_url: env_str("STREAMING_SERVICE_URL", "http://localhost:8080"),
+                service_url: streaming_service_url(),
+                ticket_key: stream_ticket_key(),
             },
 
             admin: AdminCfg {
-                token: env_str("ADMIN_TOKEN", ""),
+                token: env_str("ADMIN_TOKEN", "").into(),
             },
 
             redis: RedisCfg {
                 url: env_str("REDIS_URL", "redis://localhost:6379"),
             },
 
+            admission: AdmissionCfg::from_env(),
+
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),
             },
 
             qdrant: QdrantCfg {
-                url: env_str("QDRANT_URL", "http://localhost:6333"),
-                api_key: env_str("QDRANT_API_KEY", ""),
+                grpc_url: env_str("QDRANT_URL", "http://localhost:6334"),
+                api_key: env_str("QDRANT_API_KEY", "").into(),
             },
 
             storage: StorageCfg {
                 url: env_str("STORAGE_URL", "https://storage.scdinternal.site"),
             },
 
-            internal: InternalCfg {
-                token: env_str("INTERNAL_TOKEN", ""),
-            },
-
             subscriptions: SubscriptionsCfg {
-                snapshot_dir: env_str("SUBSCRIPTIONS_SNAPSHOT_DIR", "/snapshots"),
                 always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false") == "true",
             },
 
@@ -335,59 +300,9 @@ impl AppConfig {
                 artist_cap: env_usize("SOUNDWAVE_ARTIST_CAP", 2),
             },
 
-            collab: CollabCfg {
-                auto_train: env_str("COLLAB_AUTO_TRAIN", "true") != "false",
-                trigger_events: env_u32("COLLAB_TRIGGER_EVENTS", 100),
-                trigger_cooldown_ms: env_u64("COLLAB_TRIGGER_COOLDOWN_MS", 600_000),
-                dim: env_u32("COLLAB_DIM", 128),
-                min_count: env_u32("COLLAB_MIN_COUNT", 3),
-                min_sessions: env_u32("COLLAB_MIN_SESSIONS", 20),
-            },
-
-            lyrics: LyricsCfg {
-                indexing_concurrency: env_usize("LYRICS_INDEXING_CONCURRENCY", 3),
-            },
-
-            mxm: MxmCfg {
-                api_base: env_str(
-                    "MUSIXMATCH_API_BASE",
-                    "https://apic-desktop.musixmatch.com/ws/1.1",
-                ),
-            },
-
-            genius: GeniusCfg {
-                access_token: env_str("GENIUS_ACCESS_TOKEN", ""),
-                max_concurrent_scrapes: env_usize("GENIUS_MAX_CONCURRENT_SCRAPES", 150),
-            },
-
-            enrich: EnrichCfg {
-                enabled: env_str("ENRICH_ENABLED", "true") != "false",
-                mb_user_agent: env_str(
-                    "ENRICH_MB_USER_AGENT",
-                    "scd-backend/0.1 ( https://scdinternal.site )",
-                ),
-                mb_rate_limit_ms: env_u64("ENRICH_MB_RATE_LIMIT_MS", 1100),
-                max_attempts: env_u32("ENRICH_MAX_ATTEMPTS", 5),
-                ai_enabled: env_str("ENRICH_AI_ENABLED", "true") != "false",
-                ai_timeout_ms: env_u64("ENRICH_AI_TIMEOUT_MS", 20_000),
-                ai_daily_budget: env_u64("ENRICH_AI_DAILY_BUDGET", 5000),
-                consumer_concurrency: env_usize("ENRICH_CONSUMER_CONCURRENCY", 32),
-            },
-
-            enrich_crawl: EnrichCrawlCfg {
-                interval_sec: env_u64("ENRICH_CRAWL_INTERVAL_SEC", 3600),
-            },
-
-            discovery: DiscoveryCfg {
-                enabled: env_str("DISCOVERY_ENABLED", "true") != "false",
-                genius_concurrency: env_usize("DISCOVERY_GENIUS_CONCURRENCY", 8),
-                mb_concurrency: env_usize("DISCOVERY_MB_CONCURRENCY", 1),
-                batch: env_u64("DISCOVERY_BATCH", 64) as i64,
-                recrawl_days: env_u64("DISCOVERY_RECRAWL_DAYS", 14) as i64,
-                max_fails: env_u32("DISCOVERY_MAX_FAILS", 8) as i16,
-                interest_interval_sec: env_u64("DISCOVERY_INTEREST_INTERVAL_SEC", 3600),
-                account_concurrency: env_usize("DISCOVERY_ACCOUNT_CONCURRENCY", 6),
-                account_walk_days: env_u64("DISCOVERY_ACCOUNT_WALK_DAYS", 2) as i64,
+            collab_trigger: CollabTriggerCfg {
+                event_threshold: u64::from(env_u32("COLLAB_TRIGGER_EVENTS", 100).max(1)),
+                cooldown: Duration::from_millis(env_u64("COLLAB_TRIGGER_COOLDOWN_MS", 600_000)),
             },
 
             cold: ColdCfg {
@@ -399,8 +314,6 @@ impl AppConfig {
                 followings_ttl_sec: env_u64("COLD_TTL_FOLLOWINGS_SEC", 1800),
                 owned_ttl_sec: env_u64("COLD_TTL_OWNED_SEC", 300),
                 evict_after_sec: env_u64("COLD_EVICT_AFTER_SEC", 2_592_000),
-                refresh_concurrency: env_usize("COLD_REFRESH_CONCURRENCY", 32),
-                refresh_lock_ttl_sec: env_u64("COLD_REFRESH_LOCK_TTL_SEC", 60),
             },
 
             max_track_duration_ms: (env_u64("MAX_TRACK_DURATION_SEC", 420) * 1000) as i32,
@@ -453,13 +366,29 @@ fn env_usize(key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn admission_value(key: &str, default: u64) -> u64 {
+    match std::env::var(key) {
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .unwrap_or_else(|| panic!("{key} must be a positive integer")),
+        Err(std::env::VarError::NotPresent) => default,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("{key} must be valid UTF-8"),
+    }
+}
+
+fn admission_u32(key: &str, default: u32) -> u32 {
+    u32::try_from(admission_value(key, u64::from(default)))
+        .unwrap_or_else(|_| panic!("{key} is too large"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::postgres::PgConnectOptions;
     use std::str::FromStr;
 
-    /// Спецсимволы в пароле должны пережить сборку URL и разбор его sqlx'ом.
     #[test]
     fn composed_url_round_trips_special_chars() {
         let pass = "p@ss/w?rd#1 &x";
@@ -485,7 +414,36 @@ mod tests {
     }
 
     #[test]
-    fn redact_leaves_passwordless_urls_alone() {
-        assert_eq!(redact_url("postgres://h:5432/db"), "postgres://h:5432/db");
+    fn no_configured_secret_can_reach_a_log_through_a_derived_debug() {
+        let admin = AdminCfg {
+            token: "s3cr3t-admin-token".to_owned().into(),
+        };
+        let qdrant = QdrantCfg {
+            grpc_url: "http://vectors:6334".to_owned(),
+            api_key: "s3cr3t-qdrant-key".to_owned().into(),
+        };
+        let redis = RedisCfg {
+            url: "redis://user:s3cr3t-redis-pw@cache:6379".to_owned(),
+        };
+        let nats = NatsCfg {
+            url: "nats://user:s3cr3t-nats-pw@bus:4222".to_owned(),
+        };
+
+        for rendered in [
+            format!("{admin:?}"),
+            format!("{qdrant:?}"),
+            format!("{redis:?}"),
+            format!("{nats:?}"),
+        ] {
+            assert!(
+                !rendered.contains("s3cr3t"),
+                "one `tracing::debug!(?config)` anywhere would write this to disk: {rendered}"
+            );
+        }
+
+        assert!(
+            format!("{qdrant:?}").contains("vectors:6334"),
+            "masking must not swallow the part that makes the line worth logging"
+        );
     }
 }

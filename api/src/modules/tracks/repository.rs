@@ -1,51 +1,12 @@
-//! CRUD над `tracks` + проекция в SC-shape JSON для read-path.
-//!
-//! Этот слой ничего не знает про NATS / transcode / qdrant — он только пишет
-//! и читает Postgres. Кикинг пайплайнов на новый трек живёт в
-//! [`crate::modules::indexing::IndexingService::ingest_track_from_sc`], который
-//! композирует репозиторий и шину.
-
 use chrono::{DateTime, NaiveDate, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sqlx::FromRow;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::common::sc_payload::parse_id_or_string;
 use crate::error::AppResult;
-use crate::modules::tracks::normalize::ScTrackFields;
 
-/// Шкала pickup-приоритетов для индексации и storage-аплоада.
-/// Меньше — раньше; синхронизирована с `tracks.{index_priority,storage_priority}`.
-/// `Played`/`FreshDrop` пока не используются callers'ами, но зарезервированы
-/// под events/discovery — оставлены для семантической полноты схемы.
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-pub enum TrackPriority {
-    Like = 1,
-    Playlist = 2,
-    Played = 3,
-    FreshDrop = 4,
-    Discovery = 5,
-}
-
-impl TrackPriority {
-    pub fn as_i16(self) -> i16 {
-        self as i16
-    }
-}
-
-/// Результат UPSERT'а: id строки + true если строка только что создана
-/// (через PostgreSQL idiom `xmax = 0` в RETURNING).
-#[allow(dead_code)]
-pub struct IngestResult {
-    pub id: Uuid,
-    pub was_new: bool,
-}
-
-/// Полная строка `tracks` в виде, удобном для read-path и воркеров.
-/// Все Option-поля — те, которые SC может не отдать или которые заполняются
-/// нашими пайплайнами уже после первого ingest'а.
 #[derive(Debug, Clone, FromRow)]
 #[allow(dead_code)]
 pub struct TrackRow {
@@ -67,6 +28,8 @@ pub struct TrackRow {
     pub isrc: Option<String>,
     pub metadata_artist: Option<String>,
     pub sharing: String,
+    pub sc_metadata: Value,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub sc_created_at: Option<DateTime<Utc>>,
     pub sc_last_modified: Option<DateTime<Utc>>,
     pub release_year: Option<i16>,
@@ -121,357 +84,43 @@ pub struct TrackRow {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Дефолт `sync_ttl_sec` — совпадает с `COLD_TTL_TRACK_SEC`. Используется
-/// конструкторами, которые не делают UPSERT'ов (duration-resolver, walker).
-const DEFAULT_SYNC_TTL_SEC: i64 = 21_600;
-
 pub struct TrackRepository {
     pg: PgPool,
-    /// Окно heartbeat'а `sc_synced_at` в UPSERT'е. Должно быть ≤ TTL, по
-    /// которому read-path считает трек протухшим (`ColdCfg::track_ttl_sec`),
-    /// иначе каждое чтение будет спавнить refresh, который ничего не пишет.
-    sync_ttl_sec: i64,
 }
 
 impl TrackRepository {
     pub fn new(pg: PgPool) -> Self {
-        Self {
-            pg,
-            sync_ttl_sec: DEFAULT_SYNC_TTL_SEC,
-        }
+        Self { pg }
     }
 
-    /// Для ingest-путей: TTL берётся из `ColdCfg`, а не из дефолта.
-    pub fn with_sync_ttl(pg: PgPool, sync_ttl_sec: u64) -> Self {
-        Self {
-            pg,
-            sync_ttl_sec: sync_ttl_sec as i64,
-        }
-    }
-
-    /// UPSERT из SC payload. Сохраняет owned-поля (primary_artist_id, album_id,
-    /// canonical_track_id, audio_fingerprint, *_state, *_at, *_priority) —
-    /// они находятся под управлением enrich/indexing/storage пайплайнов и
-    /// не должны затираться при каждом cold-refresh'е. Исключение: смена
-    /// duration_ms снимает `storage_state='failed'` — реджекты duration-гейта
-    /// считались против устаревшего expected.
-    ///
-    /// Возвращает [`IngestResult`] с флагом `was_new`. true — это значит
-    /// строка только что создана и каллер должен kick-нуть пайплайны.
-    ///
-    /// `WHERE`-гард пропускает UPDATE только при реальном изменении. `tracks` —
-    /// 34 ГБ с ~20 индексами, и `sc_synced_at`/`play_count_sc` тоже
-    /// проиндексированы, поэтому любая перезапись строки — не-HOT update:
-    /// новый heap-tuple + запись во все индексы + full-page writes в WAL.
-    /// Отсюда два отличия от наивного «сравнить все поля»:
-    /// * волатильные счётчики сравниваются через [`sc_counter_drifted`] (>5%),
-    ///   а не точно — иначе тикающий play_count переписывал бы строку на каждый
-    ///   sighting;
-    /// * `sc_synced_at` служит heartbeat'ом с окном `sync_ttl_sec` — read-path
-    ///   гоняет refresh по нему, и без этого терма подавленный UPDATE оставлял
-    ///   бы `sc_synced_at` вечно протухшим (refresh на каждое чтение).
     pub async fn upsert_from_sc(
         &self,
-        fields: &ScTrackFields,
-        new_index_priority: TrackPriority,
-        new_storage_priority: TrackPriority,
-    ) -> AppResult<IngestResult> {
-        // NB: оставлено на runtime query_as. sqlx query! для большого INSERT выводит
-        // bind-параметры как non-null (&str), а ScTrackFields несёт ~12 nullable-полей
-        // как Option<String> → конфликт. Чинится не тут, а аудитом nullability
-        // ScTrackFields↔схема — отдельной задачей; до тех пор не трогаем рабочий upsert.
-        let row: Option<(Uuid, bool)> = sqlx::query_as(
-            "INSERT INTO tracks (
-                sc_track_id, urn, title, title_normalized, description, genre, tags,
-                duration_ms, artwork_url, permalink_url, waveform_url, language, isrc,
-                metadata_artist, sharing, sc_created_at, sc_last_modified, release_year, release_date,
-                uploader_sc_user_id, uploader_urn, uploader_username, uploader_avatar_url,
-                play_count_sc, likes_count_sc, reposts_count_sc, comments_count_sc,
-                needs_duration_resolve, index_priority, storage_priority, is_cover, sc_synced_at
-             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31, now()
-             )
-             ON CONFLICT (sc_track_id) DO UPDATE SET
-                urn = EXCLUDED.urn,
-                title = EXCLUDED.title,
-                title_normalized = EXCLUDED.title_normalized,
-                description = EXCLUDED.description,
-                genre = EXCLUDED.genre,
-                tags = EXCLUDED.tags,
-                duration_ms = CASE
-                    WHEN EXCLUDED.duration_ms > 0 THEN EXCLUDED.duration_ms
-                    ELSE tracks.duration_ms
-                END,
-                storage_state = CASE
-                    WHEN tracks.storage_state = 'failed'
-                         AND EXCLUDED.duration_ms > 0
-                         AND EXCLUDED.duration_ms IS DISTINCT FROM tracks.duration_ms
-                        THEN 'pending'
-                    ELSE tracks.storage_state
-                END,
-                storage_attempts = CASE
-                    WHEN tracks.storage_state = 'failed'
-                         AND EXCLUDED.duration_ms > 0
-                         AND EXCLUDED.duration_ms IS DISTINCT FROM tracks.duration_ms
-                        THEN 0
-                    ELSE tracks.storage_attempts
-                END,
-                artwork_url = EXCLUDED.artwork_url,
-                permalink_url = EXCLUDED.permalink_url,
-                waveform_url = EXCLUDED.waveform_url,
-                language = COALESCE(EXCLUDED.language, tracks.language),
-                isrc = COALESCE(EXCLUDED.isrc, tracks.isrc),
-                metadata_artist = COALESCE(EXCLUDED.metadata_artist, tracks.metadata_artist),
-                sharing = EXCLUDED.sharing,
-                sc_created_at = COALESCE(EXCLUDED.sc_created_at, tracks.sc_created_at),
-                sc_last_modified = COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified),
-                release_year = COALESCE(EXCLUDED.release_year, tracks.release_year),
-                release_date = COALESCE(EXCLUDED.release_date, tracks.release_date),
-                uploader_sc_user_id = COALESCE(EXCLUDED.uploader_sc_user_id, tracks.uploader_sc_user_id),
-                uploader_urn = COALESCE(EXCLUDED.uploader_urn, tracks.uploader_urn),
-                uploader_username = COALESCE(EXCLUDED.uploader_username, tracks.uploader_username),
-                uploader_avatar_url = COALESCE(EXCLUDED.uploader_avatar_url, tracks.uploader_avatar_url),
-                play_count_sc = COALESCE(EXCLUDED.play_count_sc, tracks.play_count_sc),
-                likes_count_sc = COALESCE(EXCLUDED.likes_count_sc, tracks.likes_count_sc),
-                reposts_count_sc = COALESCE(EXCLUDED.reposts_count_sc, tracks.reposts_count_sc),
-                comments_count_sc = COALESCE(EXCLUDED.comments_count_sc, tracks.comments_count_sc),
-                needs_duration_resolve = EXCLUDED.needs_duration_resolve,
-                index_priority = LEAST(tracks.index_priority, EXCLUDED.index_priority),
-                storage_priority = LEAST(tracks.storage_priority, EXCLUDED.storage_priority),
-                is_cover = tracks.is_cover OR EXCLUDED.is_cover,
-                sc_synced_at = now(),
-                updated_at = now()
-             WHERE
-                tracks.title IS DISTINCT FROM EXCLUDED.title
-                OR tracks.description IS DISTINCT FROM EXCLUDED.description
-                OR tracks.artwork_url IS DISTINCT FROM EXCLUDED.artwork_url
-                OR tracks.sharing IS DISTINCT FROM EXCLUDED.sharing
-                OR tracks.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
-                OR tracks.genre IS DISTINCT FROM EXCLUDED.genre
-                OR tracks.tags IS DISTINCT FROM EXCLUDED.tags
-                OR tracks.duration_ms IS DISTINCT FROM (CASE WHEN EXCLUDED.duration_ms > 0 THEN EXCLUDED.duration_ms ELSE tracks.duration_ms END)
-                OR tracks.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified)
-                OR tracks.uploader_username IS DISTINCT FROM COALESCE(EXCLUDED.uploader_username, tracks.uploader_username)
-                OR tracks.uploader_avatar_url IS DISTINCT FROM COALESCE(EXCLUDED.uploader_avatar_url, tracks.uploader_avatar_url)
-                OR sc_counter_drifted(tracks.play_count_sc, EXCLUDED.play_count_sc)
-                OR sc_counter_drifted(tracks.likes_count_sc, EXCLUDED.likes_count_sc)
-                OR LEAST(tracks.index_priority, EXCLUDED.index_priority) IS DISTINCT FROM tracks.index_priority
-                OR LEAST(tracks.storage_priority, EXCLUDED.storage_priority) IS DISTINCT FROM tracks.storage_priority
-                OR tracks.sc_synced_at < now() - ($32::bigint * INTERVAL '1 second')
-             RETURNING id, (xmax = 0) AS was_new",
+        fields: &catalog_ingest::ScTrackFields,
+        index_priority: catalog_ingest::TrackPriority,
+        storage_priority: catalog_ingest::TrackPriority,
+        observation: catalog_ingest::Observation,
+    ) -> AppResult<catalog_ingest::IngestResult> {
+        let result = catalog_ingest::upsert_from_sc(
+            &self.pg,
+            fields,
+            index_priority,
+            storage_priority,
+            observation,
         )
-        .bind(&fields.sc_track_id)
-        .bind(&fields.urn)
-        .bind(&fields.title)
-        .bind(&fields.title_normalized)
-        .bind(&fields.description)
-        .bind(&fields.genre)
-        .bind(&fields.tags)
-        .bind(fields.duration_ms)
-        .bind(&fields.artwork_url)
-        .bind(&fields.permalink_url)
-        .bind(&fields.waveform_url)
-        .bind(&fields.language)
-        .bind(&fields.isrc)
-        .bind(&fields.metadata_artist)
-        .bind(&fields.sharing)
-        .bind(fields.sc_created_at)
-        .bind(fields.sc_last_modified)
-        .bind(fields.release_year)
-        .bind(fields.release_date)
-        .bind(&fields.uploader_sc_user_id)
-        .bind(&fields.uploader_urn)
-        .bind(&fields.uploader_username)
-        .bind(&fields.uploader_avatar_url)
-        .bind(fields.play_count_sc)
-        .bind(fields.likes_count_sc)
-        .bind(fields.reposts_count_sc)
-        .bind(fields.comments_count_sc)
-        .bind(fields.needs_duration_resolve)
-        .bind(new_index_priority.as_i16())
-        .bind(new_storage_priority.as_i16())
-        .bind(fields.is_cover)
-        .bind(self.sync_ttl_sec)
-        .fetch_optional(&self.pg)
         .await?;
-
-        // WHERE guard may suppress the UPDATE when nothing changed —
-        // RETURNING yields no row. The track already exists (was_new=false),
-        // look up its id.
-        match row {
-            Some(r) => Ok(IngestResult {
-                id: r.0,
-                was_new: r.1,
-            }),
-            None => {
-                let existing: (Uuid,) = sqlx::query_as(
-                    "SELECT id FROM tracks WHERE sc_track_id = $1",
-                )
-                .bind(&fields.sc_track_id)
-                .fetch_one(&self.pg)
-                .await?;
-                Ok(IngestResult {
-                    id: existing.0,
-                    was_new: false,
-                })
-            }
-        }
+        Ok(result)
     }
 
-    pub async fn find_by_sc_track_id(&self, sc_track_id: &str) -> AppResult<Option<TrackRow>> {
-        let row = sqlx::query_file_as!(
-            TrackRow,
-            "queries/tracks/repository/find_by_sc_track_id.sql",
-            sc_track_id
-        )
-        .fetch_optional(&self.pg)
-        .await?;
-        Ok(row)
-    }
-
-    /// Terminal `too_long`: excluded from storage/index/transcribe pickup queues.
     pub async fn mark_too_long(&self, sc_track_id: &str) -> AppResult<()> {
         sqlx::query_file!("queries/tracks/mark_too_long.sql", sc_track_id)
             .execute(&self.pg)
             .await?;
         Ok(())
     }
-
-    /// S3-аплоад завершён. `quality` ∈ {`Some("sq")`,`Some("hq")`} — кладём в
-    /// `storage_quality`; `None` (синтетический S3-hit event без quality) НЕ
-    /// трогает quality/флаг, чтобы не даунгрейдить уже известный `hq` в `sq`.
-    /// `storage_state` всегда `'ok'`. Если приземлился `sq` — взводим
-    /// `hq_upgrade_pending`, чтобы стриминговый cron позже перекачал в hq. На
-    /// приземление `hq` — флаг сбрасываем.
-    pub async fn mark_storage_done(
-        &self,
-        sc_track_id: &str,
-        quality: Option<&str>,
-    ) -> AppResult<()> {
-        sqlx::query_file!("queries/tracks/mark_storage_done.sql", sc_track_id, quality)
-            .execute(&self.pg)
-            .await?;
-        Ok(())
-    }
-
-    /// Storage отверг аплоад. pending/missing копят `storage_attempts`
-    /// (после `max_attempts` → 'failed', дальше только суточный ретрай реапа);
-    /// 'ok' не трогаем, `hq_upgrade_pending` снимаем — иначе hq-cron крутил бы
-    /// бракуемый апгрейд каждые 6 часов. mark_storage_done всё сбрасывает.
-    pub async fn mark_storage_rejected(
-        &self,
-        sc_track_id: &str,
-        max_attempts: i32,
-    ) -> AppResult<()> {
-        sqlx::query_file!(
-            "queries/tracks/mark_storage_rejected.sql",
-            sc_track_id,
-            max_attempts
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(())
-    }
-
-    /// Pickup треков, которые SC отдал с подозрительной длительностью
-    /// (sentinel 30000ms без full_duration). Cron перечитывает через apiv2
-    /// и фиксит duration_ms.
-    pub async fn pick_duration_resolve(&self, limit: i64) -> AppResult<Vec<String>> {
-        let rows = sqlx::query_file_scalar!("queries/tracks/pick_duration_resolve.sql", limit)
-            .fetch_all(&self.pg)
-            .await?;
-        Ok(rows)
-    }
-
-    pub async fn apply_resolved_duration(
-        &self,
-        sc_track_id: &str,
-        duration_ms: i32,
-    ) -> AppResult<()> {
-        sqlx::query_file!(
-            "queries/tracks/apply_resolved_duration.sql",
-            sc_track_id,
-            duration_ms
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn clear_duration_resolve(&self, sc_track_id: &str) -> AppResult<()> {
-        sqlx::query_file!("queries/tracks/clear_duration_resolve.sql", sc_track_id)
-            .execute(&self.pg)
-            .await?;
-        Ok(())
-    }
-
-    /// Воркер qdrant'а сообщает: indexing завершён. Снимает pending → indexed.
-    pub async fn mark_indexed(&self, sc_track_id: &str) -> AppResult<()> {
-        sqlx::query_file!("queries/tracks/mark_indexed.sql", sc_track_id)
-            .execute(&self.pg)
-            .await?;
-        Ok(())
-    }
-
-    /// Помечаем fingerprint, ищем близкого соседа по prefix и сшиваем
-    /// `canonical_track_id`. Возвращает id канонического трека (если есть).
-    pub async fn apply_fingerprint(
-        &self,
-        sc_track_id: &str,
-        fingerprint: &str,
-    ) -> AppResult<Option<Uuid>> {
-        let Some(row) =
-            sqlx::query_file!("queries/tracks/find_id_canonical_by_sc.sql", sc_track_id)
-                .fetch_optional(&self.pg)
-                .await?
-        else {
-            return Ok(None);
-        };
-        let track_id = row.id;
-        let current_canonical = row.canonical_track_id;
-
-        sqlx::query_file!("queries/tracks/set_fingerprint.sql", track_id, fingerprint)
-            .execute(&self.pg)
-            .await?;
-
-        let prefix: String = fingerprint.chars().take(64).collect();
-        let Some(neighbour) = sqlx::query_file!(
-            "queries/tracks/find_fingerprint_neighbour.sql",
-            prefix,
-            track_id
-        )
-        .fetch_optional(&self.pg)
-        .await?
-        else {
-            return Ok(current_canonical);
-        };
-
-        let canonical_id = current_canonical
-            .or(neighbour.canonical_track_id)
-            .unwrap_or_else(Uuid::new_v4);
-        sqlx::query_file!(
-            "queries/tracks/link_canonical.sql",
-            canonical_id,
-            track_id,
-            neighbour.id
-        )
-        .execute(&self.pg)
-        .await?;
-        Ok(Some(canonical_id))
-    }
 }
 
-/// Собрать SC-shape v1 payload из строки tracks + опционального уже-известного
-/// uploader-карты (если read-path сделал JOIN на `users`). Без uploader-карты
-/// используется денорм минимум (uploader_username/uploader_avatar_url из самого
-/// трек-row).
-///
-/// Этот вид payload'а потребляют существующие клиентские поля (UI / desktop).
-/// Не воссоздаём поля, которые SC отдаёт но мы не используем (label, monetization,
-/// publisher_metadata.*, media.transcodings — берётся в живую через стриминг).
 pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Value {
-    let mut obj = Map::new();
+    let mut obj = row.sc_metadata.as_object().cloned().unwrap_or_default();
     obj.insert("kind".into(), Value::String("track".into()));
     obj.insert("id".into(), parse_id_or_string(&row.sc_track_id));
     obj.insert("urn".into(), Value::String(row.urn.clone()));
@@ -510,10 +159,17 @@ pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Val
     if let Some(l) = &row.language {
         obj.insert("language".into(), Value::String(l.clone()));
     }
+    let mut publisher = Map::new();
     if let Some(isrc) = &row.isrc {
-        let mut pm = Map::new();
-        pm.insert("isrc".into(), Value::String(isrc.clone()));
-        obj.insert("publisher_metadata".into(), Value::Object(pm));
+        obj.insert("isrc".into(), Value::String(isrc.clone()));
+        publisher.insert("isrc".into(), Value::String(isrc.clone()));
+    }
+    if let Some(artist) = &row.metadata_artist {
+        obj.insert("metadata_artist".into(), Value::String(artist.clone()));
+        publisher.insert("artist".into(), Value::String(artist.clone()));
+    }
+    if !publisher.is_empty() {
+        obj.insert("publisher_metadata".into(), Value::Object(publisher));
     }
     obj.insert(
         "playback_count".into(),
@@ -555,8 +211,6 @@ pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Val
     });
     obj.insert("user".into(), user);
 
-    // Мета для UI-бейджей: позволяет показывать "в кэше" / "анализ идёт" /
-    // "проиндексирован" без отдельных запросов.
     let mut meta = Map::new();
     meta.insert(
         "storage_state".into(),
@@ -575,19 +229,10 @@ pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Val
     Value::Object(obj)
 }
 
-/// Bulk-load с проекцией. Возвращает упорядоченный по входному порядку
-/// массив. Отсутствующие в БД sc_track_id заменяются Value::Null (caller
-/// решает что с ними делать — обычно фильтрует).
-///
-/// Видит ВСЕ строки, включая `sharing='private'` — звать только когда видимость
-/// уже установлена caller'ом (`/me/*`, single-track после owner-guard, internal
-/// replay). Для discovery/чужих профилей — [`project_many_public`].
 pub async fn project_many(pg: &PgPool, sc_track_ids: &[String]) -> AppResult<Vec<Option<Value>>> {
     project_many_filtered(pg, sc_track_ids, false).await
 }
 
-/// То же, но отдаёт только `sharing='public'`. Приватные строки выпадают в
-/// `None` (caller'ы их `flatten`'ят). Default для всех публичных read-path'ов.
 pub async fn project_many_public(
     pg: &PgPool,
     sc_track_ids: &[String],
@@ -625,8 +270,6 @@ async fn project_many_filtered(
         .map(|r| (r.sc_track_id.clone(), r))
         .collect();
 
-    // Сразу подмешиваем uploader из users (если есть) — один доп. запрос
-    // взамен N JOIN'ов.
     let uploader_ids: Vec<String> = by_id
         .values()
         .filter_map(|r| r.uploader_sc_user_id.clone())

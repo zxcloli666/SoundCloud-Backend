@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -21,24 +21,17 @@ pub struct CallbackQuery {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionResponse {
     pub authenticated: bool,
-    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    #[serde(rename = "soundcloudUserId", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub soundcloud_user_id: Option<String>,
-    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<NaiveDateTime>,
-}
-
-#[derive(Serialize)]
-pub struct RefreshResponse {
-    #[serde(rename = "sessionId")]
-    pub session_id: Uuid,
-    #[serde(rename = "expiresAt")]
-    pub expires_at: NaiveDateTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -52,24 +45,22 @@ pub struct CreateLinkRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateLinkResponse {
-    #[serde(rename = "linkRequestId")]
     pub link_request_id: Uuid,
-    #[serde(rename = "claimToken")]
     pub claim_token: String,
-    #[serde(rename = "expiresAt")]
     pub expires_at: NaiveDateTime,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaimLinkRequest {
-    #[serde(rename = "claimToken")]
     pub claim_token: String,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaimLinkResponse {
-    #[serde(rename = "sessionId")]
     pub session_id: Uuid,
     pub mode: String,
 }
@@ -80,38 +71,49 @@ pub struct LinkStatusQuery {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LinkStatusResponse {
     pub status: String,
     pub mode: String,
-    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct AuthStatusResponse {
-    pub authenticated: bool,
-    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<Uuid>,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundCloudConnectionState {
+    Ready,
+    RefreshDue,
+    Refreshing,
+    RetryLater,
+    ReauthorizationRequired,
+    NotConnected,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundCloudConnectionResponse {
+    pub state: SoundCloudConnectionState,
+    pub can_use_soundcloud: bool,
+    pub can_refresh: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(rename = "soundcloudUserId", skip_serializing_if = "Option::is_none")]
     pub soundcloud_user_id: Option<String>,
-    #[serde(rename = "oauthAppId", skip_serializing_if = "Option::is_none")]
-    pub oauth_app_id: Option<String>,
-    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<NaiveDateTime>,
-    /// Сколько секунд осталось до истечения access_token (отрицательное = expired).
-    #[serde(rename = "expiresInSec", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soundcloud_urn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token_expires_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_sec: Option<i64>,
-    /// Состояние свежести: ok | stale (нужен refresh скоро) | expired.
-    #[serde(rename = "tokenState")]
-    pub token_state: String,
-    /// Размер очереди фоновых мутаций (для UI индикатора).
-    #[serde(rename = "pendingSyncCount")]
-    pub pending_sync_count: i64,
-    /// Размер очереди, по которым исчерпан retry (visible под "что-то пошло не так").
-    #[serde(rename = "failedSyncCount")]
-    pub failed_sync_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_sec: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }

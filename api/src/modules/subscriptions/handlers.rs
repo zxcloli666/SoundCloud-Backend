@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::common::admin::AdminAuth;
 use crate::error::AppResult;

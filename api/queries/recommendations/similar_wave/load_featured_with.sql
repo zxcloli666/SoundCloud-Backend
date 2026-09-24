@@ -21,7 +21,8 @@ WITH anchor_artists AS (SELECT artist_id
                          JOIN tracks it ON it.id = ta.track_id
                          LEFT JOIN sc_track_counters c ON c.sc_track_id = it.sc_track_id
                 WHERE it.sc_track_id <> $1
-                  AND it.sharing = 'public')
+                  AND it.sharing = 'public'
+                  AND it.superseded_by IS NULL)
 SELECT a.id AS artist_id, a.name AS artist_name, a.avatar_url, r.sc_track_id AS "sc_track_id!"
 FROM ranked r
          JOIN artists a ON a.id = r.artist_id

@@ -6,21 +6,20 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::cache::cache_service::CacheScope;
-use crate::common::admin::AdminAuth;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
 use crate::modules::discover::cursor::{self, AlbumCursor, ArtistCursor};
-use crate::modules::discover::service::{
-    CachedSummary, CachedTagList, REDIS_KEY_SUMMARY, REDIS_KEY_TAGS,
-};
+use crate::modules::discover::service::CachedTagList;
 use crate::modules::discover::tags::{canonicalize_tag, canonicalize_tags};
 use crate::state::AppState;
+
+#[cfg(test)]
+#[path = "paging_tests.rs"]
+mod paging_tests;
 
 const DEFAULT_LIMIT: i64 = 80;
 const MAX_LIMIT: i64 = 200;
 const MIN_SEARCH_LEN: usize = 2;
-const ON_DEMAND_CACHE_TTL: u64 = 60;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -31,34 +30,6 @@ pub fn router() -> Router<AppState> {
         .route("/discover/summary", get(summary))
         .route("/discover/random", get(random))
         .route("/discover/tags", get(tags))
-        .route(
-            "/admin/discover/promoted",
-            get(admin_promoted_list).post(admin_promoted_create),
-        )
-        .route(
-            "/admin/discover/promoted/{id}",
-            axum::routing::patch(admin_promoted_update).delete(admin_promoted_delete),
-        )
-        .route(
-            "/admin/discover/settings",
-            get(admin_settings_get).patch(admin_settings_update),
-        )
-        .route(
-            "/admin/discover/refresh",
-            axum::routing::post(admin_refresh),
-        )
-}
-
-/// POST /admin/discover/refresh — trigger DiscoverService::refresh_aggregates now,
-/// instead of waiting for the periodic tick. Single-flight: `ran=false` means a
-/// refresh was already in progress and this call was a no-op.
-#[tracing::instrument(skip_all)]
-pub async fn admin_refresh(
-    _: AdminAuth,
-    State(st): State<AppState>,
-) -> AppResult<Json<serde_json::Value>> {
-    let ran = st.discover.try_refresh_aggregates().await?;
-    Ok(Json(serde_json::json!({ "ok": true, "ran": ran })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,8 +211,6 @@ fn usable_search(s: &str) -> Option<&str> {
 }
 
 fn artist_sort_kind(s: Option<&str>) -> &'static str {
-    // Default: popular (по прослушиваниям). trending вырождался в алфавит —
-    // у большинства артистов trending_score = 0.
     match s.unwrap_or("popular") {
         "trending" => "trending",
         "listeners" => "listeners",
@@ -253,9 +222,6 @@ fn artist_sort_kind(s: Option<&str>) -> &'static str {
 }
 
 fn album_sort_kind(s: Option<&str>) -> &'static str {
-    // Default: popular — recently дискавер альбомов отдавал почти-random микс
-    // (release_year + наскоро залитые альбомы с фейковым годом). Top-popular
-    // даёт что-то осмысленное на холодной странице.
     match s.unwrap_or("popular") {
         "recent" => "recent",
         "tracks" => "tracks",
@@ -294,22 +260,32 @@ fn artist_cursor_for_sort(sort: &str, row: &ArtistRow) -> ArtistCursor {
     }
 }
 
+fn cursor_row(fetched: usize, limit: i64) -> Option<usize> {
+    let limit = usize::try_from(limit).ok()?;
+    (fetched > limit && limit > 0).then_some(limit - 1)
+}
+
+fn epoch() -> NaiveDate {
+    NaiveDate::from_ymd_opt(1970, 1, 1).expect("static date 1970-01-01")
+}
+
+fn release_ordering_days(row: &AlbumRow) -> f64 {
+    let ordered_by = row.release_date.unwrap_or_else(|| {
+        NaiveDate::from_ymd_opt(row.release_year.map(i32::from).unwrap_or(1970), 1, 1)
+            .unwrap_or_else(epoch)
+    });
+    ordered_by.signed_duration_since(epoch()).num_days() as f64
+}
+
 fn album_cursor_for_sort(sort: &str, row: &AlbumRow) -> AlbumCursor {
     let (p, p2) = match sort {
         "popular" => (row.popularity_score as f64, 0.0),
         "tracks" => (row.track_count as f64, 0.0),
         "az" => (0.0, 0.0),
-        _ => {
-            let y = row.release_year.unwrap_or(0) as f64;
-            let d = row
-                .release_date
-                .map(|d| {
-                    d.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-                        .num_days() as f64
-                })
-                .unwrap_or(0.0);
-            (y, d)
-        }
+        _ => (
+            row.release_year.unwrap_or(0) as f64,
+            release_ordering_days(row),
+        ),
     };
     AlbumCursor {
         p,
@@ -466,9 +442,6 @@ async fn fetch_artists(
         }
     }
 
-    // order_clause — статичный whitelist (см. match выше), параметризация не
-    // нужна и физически невозможна (PostgreSQL не принимает параметры в
-    // ORDER BY).
     qb.push(" ORDER BY ")
         .push(order_clause)
         .push(" LIMIT ")
@@ -489,14 +462,11 @@ async fn fetch_albums(
         "popular" => "al.popularity_score DESC, al.normalized_title ASC, al.id ASC",
         "tracks" => "al.track_count DESC, al.normalized_title ASC, al.id ASC",
         "az" => "al.normalized_title ASC, al.id ASC",
-        _ => "COALESCE(al.release_date, make_date(COALESCE(al.release_year::int, 1970), 1, 1)) DESC, al.normalized_title ASC, al.id ASC",
+        _ => {
+            "COALESCE(al.release_date, make_date(COALESCE(al.release_year::int, 1970), 1, 1)) DESC, al.normalized_title ASC, al.id ASC"
+        }
     };
 
-    // release_year > текущий год отсекаем — встречаются «умники» с 2027-м.
-    // NULL release_year оставляем (часть треков просто без даты).
-    // Гейт качества: popularity_score > 0 (есть SC-прослушивания) и есть
-    // primary-артист — иначе каталог на ~60% состоит из never-played мусора
-    // (старые compilation/Greatest Hits/региональные издания, орфаны без артиста).
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT al.id, al.title, al.normalized_title, al.type AS kind, al.release_year, \
                 al.release_date, al.cover_url, al.confidence, \
@@ -572,18 +542,13 @@ async fn fetch_albums(
                     .push("))");
             }
             _ => {
-                // Курсор по recent — `release_date` (days since epoch) + tie-breakers.
-                // chrono::Duration::days принимает только i64 без overflow check,
-                // но days from f64 на любом разумном диапазоне (≤ 36500 = 100 лет)
-                // безопасно конвертируется.
                 let cursor_date = NaiveDate::from_ymd_opt(1970, 1, 1)
                     .expect("static date 1970-01-01")
                     .checked_add_signed(chrono::Duration::days(c.p2 as i64))
                     .unwrap_or_else(|| {
                         NaiveDate::from_ymd_opt(1970, 1, 1).expect("static date 1970-01-01")
                     });
-                let date_expr =
-                    "COALESCE(al.release_date, make_date(COALESCE(al.release_year::int, 1970), 1, 1))";
+                let date_expr = "COALESCE(al.release_date, make_date(COALESCE(al.release_year::int, 1970), 1, 1))";
                 qb.push(" AND (")
                     .push(date_expr)
                     .push(" < ")
@@ -636,13 +601,9 @@ async fn artists(
     )
     .await?;
 
-    let has_more = rows.len() as i64 > limit;
-    let last_for_cursor = if has_more {
-        rows.get(limit as usize - 1)
-    } else {
-        None
-    };
-    let next_cursor = last_for_cursor.map(|r| cursor::encode(&artist_cursor_for_sort(sort, r)));
+    let next_cursor = cursor_row(rows.len(), limit)
+        .and_then(|at| rows.get(at))
+        .map(|r| cursor::encode(&artist_cursor_for_sort(sort, r)));
 
     let items: Vec<CatalogArtist> = rows
         .into_iter()
@@ -691,13 +652,9 @@ async fn albums(
     )
     .await?;
 
-    let has_more = rows.len() as i64 > limit;
-    let last_for_cursor = if has_more {
-        rows.get(limit as usize - 1)
-    } else {
-        None
-    };
-    let next_cursor = last_for_cursor.map(|r| cursor::encode(&album_cursor_for_sort(sort, r)));
+    let next_cursor = cursor_row(rows.len(), limit)
+        .and_then(|at| rows.get(at))
+        .map(|r| cursor::encode(&album_cursor_for_sort(sort, r)));
 
     let items: Vec<CatalogAlbum> = rows
         .into_iter()
@@ -742,10 +699,6 @@ async fn albums_by_year(
     let per_year = q.per_year.unwrap_or(20).clamp(1, 40);
     let kind = album_kind_filter(q.kind.as_deref());
 
-    // max_y клампим текущим годом — иначе альбом с release_year=2027 (а они в
-    // базе есть, см. бриф) сдвигает всю шкалу buckets вперёд. Тот же kind-фильтр,
-    // что и в LATERAL — иначе якорный год берётся по всем типам, а bucket'ы по
-    // выбранному kind, и при kind=single запрошенный span схлопывается.
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "WITH max_y AS ( \
              SELECT LEAST( \
@@ -1026,208 +979,8 @@ async fn spotlight(
     Ok(Json(SpotlightResponse { items }))
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct AdminPromotedRow {
-    id: Uuid,
-    entity_type: String,
-    entity_id: Uuid,
-    position: i32,
-    active: bool,
-    note: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// List row enriched with the promoted entity's human name + image so the admin UI
-/// never renders a bare artist/album UUID.
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct AdminPromotedListRow {
-    id: Uuid,
-    entity_type: String,
-    entity_id: Uuid,
-    position: i32,
-    active: bool,
-    note: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
-    name: Option<String>,
-    image_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminPromotedCreate {
-    entity_type: String,
-    entity_id: Uuid,
-    #[serde(default)]
-    position: Option<i32>,
-    #[serde(default)]
-    active: Option<bool>,
-    #[serde(default)]
-    note: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminPromotedUpdate {
-    #[serde(default)]
-    position: Option<i32>,
-    #[serde(default)]
-    active: Option<bool>,
-    #[serde(default)]
-    note: Option<Option<String>>,
-}
-
-async fn admin_promoted_list(
-    _: AdminAuth,
-    State(st): State<AppState>,
-) -> AppResult<Json<Vec<AdminPromotedListRow>>> {
-    let rows = sqlx::query_file_as!(
-        AdminPromotedListRow,
-        "queries/discover/handlers/admin_promoted_list.sql"
-    )
-    .fetch_all(&st.pg)
-    .await?;
-    Ok(Json(rows))
-}
-
-async fn admin_promoted_create(
-    _: AdminAuth,
-    State(st): State<AppState>,
-    Json(body): Json<AdminPromotedCreate>,
-) -> AppResult<Json<AdminPromotedRow>> {
-    if body.entity_type != "artist" && body.entity_type != "album" {
-        return Err(AppError::bad_request(
-            "entity_type must be 'artist' or 'album'",
-        ));
-    }
-    let row: AdminPromotedRow = sqlx::query_as(
-        r#"INSERT INTO discover_promoted (entity_type, entity_id, position, active, note)
-           VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, TRUE), $5)
-           ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-               position = COALESCE($3, discover_promoted.position),
-               active   = COALESCE($4, discover_promoted.active),
-               note     = COALESCE($5, discover_promoted.note),
-               updated_at = NOW()
-           RETURNING id, entity_type, entity_id, position, active, note, created_at, updated_at"#,
-    )
-    .bind(&body.entity_type)
-    .bind(body.entity_id)
-    .bind(body.position)
-    .bind(body.active)
-    .bind(body.note)
-    .fetch_one(&st.pg)
-    .await?;
-    Ok(Json(row))
-}
-
-async fn admin_promoted_update(
-    _: AdminAuth,
-    State(st): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<Uuid>,
-    Json(body): Json<AdminPromotedUpdate>,
-) -> AppResult<Json<AdminPromotedRow>> {
-    let note_set = body.note.is_some();
-    let note_value = body.note.unwrap_or(None);
-    let row: Option<AdminPromotedRow> = sqlx::query_as(
-        r#"UPDATE discover_promoted SET
-               position   = COALESCE($2, position),
-               active     = COALESCE($3, active),
-               note       = CASE WHEN $4::bool THEN $5 ELSE note END,
-               updated_at = NOW()
-           WHERE id = $1
-           RETURNING id, entity_type, entity_id, position, active, note, created_at, updated_at"#,
-    )
-    .bind(id)
-    .bind(body.position)
-    .bind(body.active)
-    .bind(note_set)
-    .bind(note_value)
-    .fetch_optional(&st.pg)
-    .await?;
-    row.map(Json)
-        .ok_or_else(|| AppError::not_found("promoted not found"))
-}
-
-async fn admin_promoted_delete(
-    _: AdminAuth,
-    State(st): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<Uuid>,
-) -> AppResult<Json<serde_json::Value>> {
-    let n = sqlx::query_file!("queries/discover/handlers/promoted_delete.sql", id)
-        .execute(&st.pg)
-        .await?
-        .rows_affected();
-    Ok(Json(serde_json::json!({ "deleted": n })))
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct AdminSettingsRow {
-    show_star: bool,
-    star_strategy: String,
-    star_limit: i32,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AdminSettingsUpdate {
-    #[serde(default)]
-    show_star: Option<bool>,
-    #[serde(default)]
-    star_strategy: Option<String>,
-    #[serde(default)]
-    star_limit: Option<i32>,
-}
-
-async fn admin_settings_get(
-    _: AdminAuth,
-    State(st): State<AppState>,
-) -> AppResult<Json<AdminSettingsRow>> {
-    let row = sqlx::query_file_as!(
-        AdminSettingsRow,
-        "queries/discover/handlers/admin_settings_get.sql"
-    )
-    .fetch_one(&st.pg)
-    .await?;
-    Ok(Json(row))
-}
-
-async fn admin_settings_update(
-    _: AdminAuth,
-    State(st): State<AppState>,
-    Json(body): Json<AdminSettingsUpdate>,
-) -> AppResult<Json<AdminSettingsRow>> {
-    if let Some(s) = body.star_strategy.as_deref()
-        && s != "popular" && s != "random" {
-            return Err(AppError::bad_request(
-                "star_strategy must be 'popular' or 'random'",
-            ));
-        }
-    let row: AdminSettingsRow = sqlx::query_as(
-        r#"UPDATE discover_settings SET
-               show_star     = COALESCE($1, show_star),
-               star_strategy = COALESCE($2, star_strategy),
-               star_limit    = COALESCE($3, star_limit),
-               updated_at    = NOW()
-           WHERE id = 1
-           RETURNING show_star, star_strategy, star_limit, updated_at"#,
-    )
-    .bind(body.show_star)
-    .bind(body.star_strategy)
-    .bind(body.star_limit)
-    .fetch_one(&st.pg)
-    .await?;
-    Ok(Json(row))
-}
-
 async fn summary(State(st): State<AppState>, _: SessionCtx) -> AppResult<Json<DiscoverSummary>> {
-    let cached = read_cached::<CachedSummary>(&st, REDIS_KEY_SUMMARY).await;
-    let s = match cached {
-        Some(s) => s,
-        None => {
-            let computed = st.discover.compute_summary().await?;
-            cache_payload(&st, REDIS_KEY_SUMMARY, &computed).await;
-            computed
-        }
-    };
+    let s = st.discover.cached_summary().await?;
     Ok(Json(DiscoverSummary {
         artists_count: s.artists_count,
         albums_count: s.albums_count,
@@ -1261,14 +1014,7 @@ async fn tags(
 ) -> AppResult<Json<ListResponse<CatalogTag>>> {
     let limit = q.limit.unwrap_or(12).clamp(1, 64) as usize;
 
-    let cached: CachedTagList = match read_cached::<CachedTagList>(&st, REDIS_KEY_TAGS).await {
-        Some(c) => c,
-        None => {
-            let computed = st.discover.compute_tag_list().await?;
-            cache_payload(&st, REDIS_KEY_TAGS, &computed).await;
-            computed
-        }
-    };
+    let cached: CachedTagList = st.discover.cached_tag_list().await?;
 
     let items: Vec<CatalogTag> = cached
         .items
@@ -1327,26 +1073,4 @@ async fn pick_random_artist(pg: &PgPool) -> AppResult<Option<Uuid>> {
         .fetch_optional(pg)
         .await?;
     Ok(row)
-}
-
-async fn read_cached<T: for<'de> serde::Deserialize<'de>>(st: &AppState, key: &str) -> Option<T> {
-    let raw = st.cache.get_raw(key).await.ok().flatten()?;
-    serde_json::from_str(&raw).ok()
-}
-
-async fn cache_payload<T: serde::Serialize>(st: &AppState, key: &str, value: &T) {
-    let Ok(json) = serde_json::to_string(value) else {
-        return;
-    };
-    let _ = st
-        .cache
-        .set_raw(
-            key,
-            &json,
-            ON_DEMAND_CACHE_TTL,
-            None,
-            CacheScope::Shared,
-            None,
-        )
-        .await;
 }

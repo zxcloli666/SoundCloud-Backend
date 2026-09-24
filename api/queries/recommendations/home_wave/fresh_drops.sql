@@ -21,7 +21,9 @@ FROM track_artists ta
 WHERE ta.artist_id IN (SELECT artist_id FROM user_artists)
   AND ta.role = 'primary'
   AND it.sharing = 'public'
+  AND it.superseded_by IS NULL
   AND it.storage_state = 'ok'
+  AND it.needs_duration_resolve = false
   AND it.sc_synced_at > NOW() - INTERVAL '30 days'
   AND NOT (it.sc_track_id = ANY ($2))
 ORDER BY it.sc_synced_at DESC

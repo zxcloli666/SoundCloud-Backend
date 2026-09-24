@@ -1,22 +1,7 @@
-//! Cursor для бесконечной волны.
-//!
-//! Хранится в Redis с TTL 30 минут под ключом
-//! `smartwave:cursor:{seed_kind}:{seed_key}`. Если Redis грохнули — клиент
-//! просто получит свежий старт, всё остальное (избежание уже сыгранного
-//! и т.д.) переоткроется из user_events. Cursor — opaque-токен, клиент
-//! его эхает обратно в follow-up запросах.
-//!
-//! Что хранится:
-//! - `served` — сколько треков уже отдали этому юзеру в этом сеансе волны;
-//! - `seen_tracks` — ringbuffer последних 200 sc_track_id, чтобы не повторять;
-//! - `seen_artists` — счётчик per-artist в скользящем окне 30 треков;
-//! - `neg_window` — сколько дизов/скипов было в последних 20 треках от волны
-//!   (записывает feedback endpoint), используется blender'ом для адаптации.
-
 use std::collections::VecDeque;
 
-use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool as RedisPool;
+use deadpool_redis::redis::AsyncCommands;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -46,15 +31,12 @@ impl SeedKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaveCursor {
-    /// Полу-случайный handle: даже одинаковый seed у одного юзера может вести
-    /// несколько параллельных сессий волны (например в двух вкладках).
     pub handle: String,
     pub seed_kind: SeedKind,
     pub seed_key: String,
     pub served: u32,
     pub seen_tracks: VecDeque<u64>,
     pub seen_artists: VecDeque<Uuid>,
-    /// Последние NEG_WINDOW исходов (0 = нейтрал/позитив, 1 = негатив).
     pub neg_flags: VecDeque<u8>,
 }
 
@@ -133,9 +115,11 @@ pub async fn load_or_new(
 ) -> WaveCursor {
     if let Some(t) = token
         && let Some(c) = read(redis, owner, t).await
-            && c.seed_kind == seed_kind && c.seed_key == seed_key {
-                return c;
-            }
+        && c.seed_kind == seed_kind
+        && c.seed_key == seed_key
+    {
+        return c;
+    }
     WaveCursor::new(seed_kind, seed_key.to_string())
 }
 
@@ -158,9 +142,6 @@ pub async fn save(redis: &RedisPool, owner: &str, cursor: &WaveCursor) -> Option
 
 async fn read(redis: &RedisPool, owner: &str, handle: &str) -> Option<WaveCursor> {
     let mut conn = redis.get().await.ok()?;
-    // Сканировать не нужно — handle включает все ключи seed/owner; но клиент
-    // присылает только handle, без seed_kind. Чтобы избежать SCAN, держим
-    // отдельный backref handle→full_key (cheap).
     let backref: Option<String> = conn
         .get(handle_lookup_key(owner, handle))
         .await

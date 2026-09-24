@@ -1,5 +1,5 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use serde::Serialize;
 
 use crate::common::admin::AdminAuth;
@@ -27,8 +27,6 @@ pub struct InfraStats {
     pub redis: RedisPoolStats,
 }
 
-/// GET /admin/infra — internal connection-pool health of the main backend
-/// (Postgres + Redis) — the bits the BFF can't see from outside.
 #[tracing::instrument(skip_all)]
 pub async fn get_infra(_: AdminAuth, State(state): State<AppState>) -> AppResult<Json<InfraStats>> {
     let pg = PgPoolStats {
@@ -48,8 +46,6 @@ pub async fn get_infra(_: AdminAuth, State(state): State<AppState>) -> AppResult
     Ok(Json(InfraStats { pg, redis }))
 }
 
-// ───────────────────────── HTTP RPS / latency ─────────────────────────
-
 #[derive(Serialize)]
 pub struct EndpointStat {
     pub route: String,
@@ -67,8 +63,6 @@ pub struct HttpStats {
     pub endpoints: Vec<EndpointStat>,
 }
 
-/// GET /admin/http-stats — per-route request counts + latency since boot,
-/// captured by the router's tracking middleware (top 30 by volume).
 #[tracing::instrument(skip_all)]
 pub async fn http_stats(_: AdminAuth, State(state): State<AppState>) -> AppResult<Json<HttpStats>> {
     let snap = state.http_metrics.snapshot();
@@ -96,8 +90,6 @@ pub async fn http_stats(_: AdminAuth, State(state): State<AppState>) -> AppResul
     }))
 }
 
-// ───────────────────────── slow queries (pg_stat_statements) ─────────────────────────
-
 #[derive(Serialize, sqlx::FromRow)]
 pub struct SlowQuery {
     pub query: String,
@@ -113,19 +105,11 @@ pub struct SlowQueries {
     pub queries: Vec<SlowQuery>,
 }
 
-/// GET /admin/slow-queries — top statements by mean execution time from
-/// pg_stat_statements. Degrades to `enabled:false` when the extension isn't
-/// preloaded (set `shared_preload_libraries=pg_stat_statements` on Postgres).
 #[tracing::instrument(skip_all)]
 pub async fn slow_queries(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<SlowQueries>> {
-    // Best-effort: no-op once enabled, errors (ignored) if the lib isn't preloaded.
-    let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
-        .execute(&state.pg)
-        .await;
-
     let res = sqlx::query_as::<_, SlowQuery>(
         "SELECT query, calls::int8 AS calls, mean_exec_time AS mean_ms, \
                 total_exec_time AS total_ms, rows::int8 AS rows \
@@ -146,8 +130,6 @@ pub async fn slow_queries(
     }
 }
 
-// ───────────────────────── index usage (pg_stat_user_indexes) ─────────────────────────
-
 #[derive(Serialize, sqlx::FromRow)]
 pub struct IndexUsage {
     pub table: String,
@@ -163,9 +145,6 @@ pub struct IndexUsageReport {
     pub indexes: Vec<IndexUsage>,
 }
 
-/// GET /admin/index-usage — per-index scan counts + size from pg_stat_user_indexes,
-/// least-used first. A non-unique/non-pk index with idx_scan≈0 is a drop candidate:
-/// it earns nothing on reads but is rewritten on every insert/update of a hot table.
 #[tracing::instrument(skip_all)]
 pub async fn index_usage(
     _: AdminAuth,
@@ -182,4 +161,26 @@ pub async fn index_usage(
     .fetch_all(&state.pg)
     .await?;
     Ok(Json(IndexUsageReport { indexes }))
+}
+
+#[tracing::instrument(skip_all)]
+pub async fn metrics(_: AdminAuth, State(state): State<AppState>) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+
+    match crate::metrics::render(&state.pg).await {
+        Some(body) => (
+            [(
+                header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "metrics recorder is not installed",
+        )
+            .into_response(),
+    }
 }
