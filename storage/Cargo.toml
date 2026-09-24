@@ -21,7 +21,7 @@ aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-ve
 aws-credential-types = "1"
 aws-smithy-types = { version = "1", features = ["rt-tokio"] }
 async-nats = "0.49"
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem"] }
 url = "2"
 subtle = "2"
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
