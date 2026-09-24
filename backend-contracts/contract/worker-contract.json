@@ -1,0 +1,2932 @@
+{
+  "dimensions": {
+    "clap": 512,
+    "collab": 128,
+    "lyrics": 1024,
+    "mert": 1024,
+    "mulan_text": 512,
+    "taste": 128
+  },
+  "headers": {
+    "deadline": "X-Deadline",
+    "deliveries": "X-Deliveries",
+    "msg_id": "Nats-Msg-Id",
+    "public_node": "X-Public-Node",
+    "reply_to": "X-Reply-To",
+    "worker_build": "X-Worker-Build",
+    "worker_id": "X-Worker-Id"
+  },
+  "lanes": {
+    "ai": {
+      "ack_wait_s": 30,
+      "attempt_window_s": null,
+      "bridge_ttl_s": null,
+      "correlation": [],
+      "correlation_prefix": "ai",
+      "correlation_separator": ":",
+      "deadline_s": 20,
+      "done_msg_id_template": null,
+      "done_subject": null,
+      "durable": "ai-workers",
+      "echo": {},
+      "filter_subject": "ai.rpc.>",
+      "heartbeat_s": 6,
+      "max_ack_pending": 128,
+      "max_deliver": 5,
+      "nak_base_s": null,
+      "nak_cap_s": null,
+      "public": false,
+      "quarantine_after_s": null,
+      "reasons": [],
+      "reopenable": [],
+      "result_max_bytes": 16384,
+      "result_object_template": null,
+      "rpc": true,
+      "stream": "AI_RPC",
+      "worker_reasons": []
+    },
+    "audio": {
+      "ack_wait_s": 60,
+      "attempt_window_s": 1650,
+      "bridge_ttl_s": 240,
+      "correlation": [
+        "sc_track_id",
+        "upload_generation",
+        "attempt"
+      ],
+      "correlation_prefix": "index_audio",
+      "correlation_separator": ":",
+      "deadline_s": 180,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.index_audio",
+      "durable": "audio-workers",
+      "echo": {
+        "attempt": "attempt",
+        "sc_track_id": "sc_track_id",
+        "upload_generation": "upload_generation"
+      },
+      "filter_subject": "index.audio.new",
+      "heartbeat_s": 12,
+      "max_ack_pending": 256,
+      "max_deliver": 5,
+      "nak_base_s": 30,
+      "nak_cap_s": 600,
+      "public": true,
+      "quarantine_after_s": 88050,
+      "reasons": [
+        "silent_audio",
+        "audio_too_short",
+        "audio_not_found",
+        "audio_forbidden",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "result_max_bytes": 65536,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "INDEX_AUDIO",
+      "worker_reasons": [
+        "silent_audio",
+        "audio_too_short",
+        "audio_not_found",
+        "audio_forbidden",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted"
+      ]
+    },
+    "collab": {
+      "ack_wait_s": 300,
+      "attempt_window_s": 19800,
+      "bridge_ttl_s": null,
+      "correlation": [
+        "object"
+      ],
+      "correlation_prefix": "train_collab",
+      "correlation_separator": ":",
+      "deadline_s": 3600,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.train_collab",
+      "durable": "collab-workers",
+      "echo": {
+        "object": "input_object"
+      },
+      "filter_subject": "train.collab.new",
+      "heartbeat_s": 60,
+      "max_ack_pending": 1,
+      "max_deliver": 5,
+      "nak_base_s": 120,
+      "nak_cap_s": 1800,
+      "public": false,
+      "quarantine_after_s": 41400,
+      "reasons": [
+        "empty_vocab",
+        "object_not_found",
+        "below_baseline",
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "object_store_unavailable",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "result_max_bytes": 8192,
+      "result_object_template": "{object}-vectors",
+      "rpc": false,
+      "stream": "TRAIN_COLLAB",
+      "worker_reasons": [
+        "empty_vocab",
+        "object_not_found",
+        "below_baseline",
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "object_store_unavailable",
+        "internal_error",
+        "engine_restarted"
+      ]
+    },
+    "encode": {
+      "ack_wait_s": 30,
+      "attempt_window_s": 225,
+      "bridge_ttl_s": null,
+      "correlation": [
+        "model",
+        "hash"
+      ],
+      "correlation_prefix": "encode",
+      "correlation_separator": ":",
+      "deadline_s": 30,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.encode",
+      "durable": "encode-workers",
+      "echo": {
+        "hash": "hash",
+        "model": "model"
+      },
+      "filter_subject": "encode.text.new",
+      "heartbeat_s": 6,
+      "max_ack_pending": 256,
+      "max_deliver": 5,
+      "nak_base_s": 5,
+      "nak_cap_s": 60,
+      "public": false,
+      "quarantine_after_s": 86625,
+      "reasons": [
+        "empty_text",
+        "invalid_request",
+        "text_too_long_for_model",
+        "hash_mismatch",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "internal_error"
+      ],
+      "reopenable": [],
+      "result_max_bytes": 16384,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "ENCODE",
+      "worker_reasons": [
+        "empty_text",
+        "invalid_request",
+        "text_too_long_for_model",
+        "hash_mismatch",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "internal_error"
+      ]
+    },
+    "lyrics": {
+      "ack_wait_s": 30,
+      "attempt_window_s": 825,
+      "bridge_ttl_s": 120,
+      "correlation": [
+        "sc_track_id",
+        "request_id"
+      ],
+      "correlation_prefix": "embed_lyrics",
+      "correlation_separator": ":",
+      "deadline_s": 60,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.embed_lyrics",
+      "durable": "lyrics-workers",
+      "echo": {
+        "request_id": "request_id",
+        "sc_track_id": "sc_track_id"
+      },
+      "filter_subject": "embed.lyrics.new",
+      "heartbeat_s": 6,
+      "max_ack_pending": 512,
+      "max_deliver": 5,
+      "nak_base_s": 15,
+      "nak_cap_s": 300,
+      "public": true,
+      "quarantine_after_s": 87225,
+      "reasons": [
+        "empty_text",
+        "invalid_request",
+        "text_too_long_for_model",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "result_max_bytes": 32768,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "EMBED_LYRICS",
+      "worker_reasons": [
+        "empty_text",
+        "invalid_request",
+        "text_too_long_for_model",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "internal_error",
+        "engine_restarted"
+      ]
+    },
+    "taste": {
+      "ack_wait_s": 300,
+      "attempt_window_s": 39900,
+      "bridge_ttl_s": null,
+      "correlation": [
+        "object"
+      ],
+      "correlation_prefix": "train_taste",
+      "correlation_separator": ":",
+      "deadline_s": 7200,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.train_taste",
+      "durable": "taste-workers",
+      "echo": {
+        "object": "input_object"
+      },
+      "filter_subject": "train.taste.new",
+      "heartbeat_s": 60,
+      "max_ack_pending": 1,
+      "max_deliver": 5,
+      "nak_base_s": 300,
+      "nak_cap_s": 1800,
+      "public": false,
+      "quarantine_after_s": 126300,
+      "reasons": [
+        "too_few_users",
+        "object_not_found",
+        "below_baseline",
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "object_store_unavailable",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost"
+      ],
+      "result_max_bytes": 8192,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "TRAIN_TASTE",
+      "worker_reasons": [
+        "too_few_users",
+        "object_not_found",
+        "below_baseline",
+        "invalid_request",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "object_store_unavailable",
+        "internal_error",
+        "engine_restarted"
+      ]
+    },
+    "transcribe": {
+      "ack_wait_s": 120,
+      "attempt_window_s": 5700,
+      "bridge_ttl_s": 960,
+      "correlation": [
+        "sc_track_id",
+        "upload_generation",
+        "attempt"
+      ],
+      "correlation_prefix": "transcribe",
+      "correlation_separator": ":",
+      "deadline_s": 900,
+      "done_msg_id_template": "done.{lane}:{correlation}:{task_seq}:{status}",
+      "done_subject": "done.transcribe",
+      "durable": "transcribe-workers",
+      "echo": {
+        "attempt": "attempt",
+        "mode": "mode",
+        "sc_track_id": "sc_track_id",
+        "upload_generation": "upload_generation"
+      },
+      "filter_subject": "transcribe.audio.new",
+      "heartbeat_s": 24,
+      "max_ack_pending": 64,
+      "max_deliver": 5,
+      "nak_base_s": 60,
+      "nak_cap_s": 900,
+      "public": true,
+      "quarantine_after_s": 92100,
+      "reasons": [
+        "empty_reference_text",
+        "silent_audio",
+        "audio_not_found",
+        "audio_forbidden",
+        "low_confidence",
+        "too_few_lines_placed",
+        "no_vocal_detected",
+        "unsupported_language",
+        "lyrics_mismatch",
+        "out_of_order",
+        "placed_in_silence",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "reopenable": [
+        "engine_restarted",
+        "worker_lost",
+        "public_node_timeout"
+      ],
+      "result_max_bytes": 524288,
+      "result_object_template": null,
+      "rpc": false,
+      "stream": "TRANSCRIBE",
+      "worker_reasons": [
+        "empty_reference_text",
+        "silent_audio",
+        "audio_not_found",
+        "audio_forbidden",
+        "low_confidence",
+        "too_few_lines_placed",
+        "no_vocal_detected",
+        "unsupported_language",
+        "lyrics_mismatch",
+        "out_of_order",
+        "placed_in_silence",
+        "invalid_request",
+        "undecodable_audio",
+        "audio_too_long",
+        "audio_too_large",
+        "model_output_invalid",
+        "deadline_exceeded",
+        "engine_crashed",
+        "out_of_memory",
+        "download_failed",
+        "internal_error",
+        "engine_restarted"
+      ]
+    }
+  },
+  "limits": {
+    "max_message_bytes": 900000
+  },
+  "object_stores": {
+    "COLLAB_DATA": {
+      "max_age_s": 86400
+    },
+    "TASTE_DATA": {
+      "max_age_s": 86400
+    },
+    "TASTE_MODELS": {
+      "max_age_s": null
+    }
+  },
+  "reason_classes": {
+    "deterministic": [
+      "invalid_request",
+      "undecodable_audio",
+      "audio_too_long",
+      "audio_too_large",
+      "text_too_long_for_model",
+      "hash_mismatch",
+      "model_output_invalid"
+    ],
+    "reopenable": [
+      "engine_restarted",
+      "worker_lost",
+      "public_node_timeout"
+    ],
+    "transient": [
+      "deadline_exceeded",
+      "engine_crashed",
+      "out_of_memory",
+      "download_failed",
+      "object_store_unavailable",
+      "internal_error"
+    ]
+  },
+  "reasons": {
+    "empty": [
+      "empty_text",
+      "empty_reference_text",
+      "silent_audio",
+      "audio_too_short",
+      "empty_vocab",
+      "too_few_users"
+    ],
+    "failed": [
+      "invalid_request",
+      "undecodable_audio",
+      "audio_too_long",
+      "audio_too_large",
+      "text_too_long_for_model",
+      "hash_mismatch",
+      "model_output_invalid",
+      "deadline_exceeded",
+      "engine_crashed",
+      "out_of_memory",
+      "download_failed",
+      "object_store_unavailable",
+      "internal_error",
+      "engine_restarted",
+      "worker_lost",
+      "public_node_timeout"
+    ],
+    "missing": [
+      "audio_not_found",
+      "audio_forbidden",
+      "object_not_found"
+    ],
+    "ok": [],
+    "rejected": [
+      "low_confidence",
+      "too_few_lines_placed",
+      "no_vocal_detected",
+      "unsupported_language",
+      "lyrics_mismatch",
+      "out_of_order",
+      "placed_in_silence",
+      "below_baseline"
+    ]
+  },
+  "rpc": {
+    "deadline_header": "X-Deadline",
+    "reply_header": "X-Reply-To",
+    "windows_s": {
+      "match_track": 10,
+      "resolve_artist": 20
+    }
+  },
+  "schemas": {
+    "ai.rpc.match_track": {
+      "$defs": {
+        "MatchCandidate": {
+          "properties": {
+            "artist": {
+              "type": "string"
+            },
+            "duration_sec": {
+              "format": "double",
+              "minimum": 0.0,
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "artist",
+            "title"
+          ],
+          "type": "object"
+        },
+        "MatchTarget": {
+          "properties": {
+            "artist": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "artist",
+            "title"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/MatchCandidate"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/MatchTarget"
+        }
+      },
+      "required": [
+        "target",
+        "candidates"
+      ],
+      "title": "ai.rpc.match_track",
+      "type": "object"
+    },
+    "ai.rpc.match_track.reply": {
+      "$defs": {
+        "MatchTrackData": {
+          "properties": {
+            "confidence": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "match_id": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/RpcSource"
+            }
+          },
+          "required": [
+            "match_id",
+            "confidence",
+            "source"
+          ],
+          "type": "object"
+        },
+        "RpcError": {
+          "enum": [
+            "expired",
+            "invalid_request",
+            "internal"
+          ],
+          "type": "string"
+        },
+        "RpcSource": {
+          "enum": [
+            "deterministic",
+            "llm"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/MatchTrackData"
+            },
+            "ok": {
+              "const": true
+            }
+          },
+          "required": [
+            "ok",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
+            },
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ai.rpc.match_track.reply"
+    },
+    "ai.rpc.resolve_artist": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "description": {
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "isrc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_artist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "uploader": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "ai.rpc.resolve_artist",
+      "type": "object"
+    },
+    "ai.rpc.resolve_artist.reply": {
+      "$defs": {
+        "ResolveArtistData": {
+          "properties": {
+            "album": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResolvedAlbum"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "confidence": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "featured": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "primary_artist": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "producers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "remixers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "$ref": "#/$defs/RpcSource"
+            }
+          },
+          "required": [
+            "primary_artist",
+            "featured",
+            "producers",
+            "remixers",
+            "album",
+            "confidence",
+            "source"
+          ],
+          "type": "object"
+        },
+        "ResolvedAlbum": {
+          "properties": {
+            "primary_artist": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "year": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "RpcError": {
+          "enum": [
+            "expired",
+            "invalid_request",
+            "internal"
+          ],
+          "type": "string"
+        },
+        "RpcSource": {
+          "enum": [
+            "deterministic",
+            "llm"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ResolveArtistData"
+            },
+            "ok": {
+              "const": true
+            }
+          },
+          "required": [
+            "ok",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/RpcError"
+            },
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "ok",
+            "error"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ai.rpc.resolve_artist.reply"
+    },
+    "done.embed_lyrics": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "vec",
+              "language"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "empty_text"
+                ]
+              }
+            },
+            "required": [
+              "reason",
+              "language"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "text_too_long_for_model",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "language": {
+          "pattern": "^[a-z]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "vec": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 1024,
+          "minItems": 1024,
+          "type": "array"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "request_id",
+        "status",
+        "producer"
+      ],
+      "title": "done.embed_lyrics",
+      "type": "object"
+    },
+    "done.encode": {
+      "$defs": {
+        "EncodeModel": {
+          "enum": [
+            "mulan",
+            "lyrics"
+          ],
+          "type": "string"
+        },
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "allOf": [
+              {
+                "else": {
+                  "properties": {
+                    "vector": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 1024,
+                      "minItems": 1024,
+                      "type": "array"
+                    }
+                  }
+                },
+                "if": {
+                  "properties": {
+                    "model": {
+                      "const": "mulan"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "vector": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 512,
+                      "minItems": 512,
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            ],
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "empty_text"
+                ]
+              },
+              "vector": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "text_too_long_for_model",
+                  "hash_mismatch",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "internal_error"
+                ]
+              },
+              "vector": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "model": {
+          "$ref": "#/$defs/EncodeModel"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "vector": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 512,
+              "minItems": 512,
+              "type": "array"
+            },
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 1024,
+              "minItems": 1024,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "hash",
+        "status",
+        "producer",
+        "vector"
+      ],
+      "title": "done.encode",
+      "type": "object"
+    },
+    "done.index_audio": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "mert",
+              "clap"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "silent_audio",
+                  "audio_too_short"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "audio_not_found",
+                  "audio_forbidden"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": false
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "undecodable_audio",
+                  "audio_too_long",
+                  "audio_too_large",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost",
+                  "public_node_timeout"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "clap": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 512,
+          "minItems": 512,
+          "type": "array"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "fingerprint": {
+          "maxLength": 64,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mert": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 1024,
+          "minItems": 1024,
+          "type": "array"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "upload_generation": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "upload_generation",
+        "attempt",
+        "status",
+        "producer"
+      ],
+      "title": "done.index_audio",
+      "type": "object"
+    },
+    "done.train_collab": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "properties": {
+              "object": {
+                "pattern": "-vectors$"
+              },
+              "trained": {
+                "const": true
+              }
+            },
+            "required": [
+              "object"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "empty_vocab"
+                ]
+              },
+              "trained": {
+                "const": false
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "object_not_found"
+                ]
+              },
+              "trained": {
+                "const": false
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "below_baseline"
+                ]
+              },
+              "trained": {
+                "const": false
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "object_store_unavailable",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost"
+                ]
+              },
+              "trained": {
+                "const": false
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "dim": {
+          "const": 128,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "points_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "trained": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_object",
+        "status",
+        "producer",
+        "trained",
+        "dim",
+        "points_count"
+      ],
+      "title": "done.train_collab",
+      "type": "object"
+    },
+    "done.train_taste": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "TasteBaselines": {
+          "properties": {
+            "content": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "item2vec": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "popularity": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "popularity",
+            "item2vec",
+            "content"
+          ],
+          "type": "object"
+        },
+        "TasteMetrics": {
+          "properties": {
+            "baselines": {
+              "$ref": "#/$defs/TasteBaselines"
+            },
+            "cold_recall_at_50": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "coverage_at_50": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "ndcg_at_20": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "recall_at_50": {
+              "format": "double",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            }
+          },
+          "required": [
+            "recall_at_50",
+            "ndcg_at_20",
+            "cold_recall_at_50",
+            "coverage_at_50",
+            "baselines"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "version",
+              "object",
+              "items_count",
+              "users_count",
+              "metrics"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "too_few_users"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "object_not_found"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "below_baseline"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "object_store_unavailable",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "dim": {
+          "const": 128,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "items_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metrics": {
+          "$ref": "#/$defs/TasteMetrics"
+        },
+        "object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/Producer"
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "users_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_object",
+        "status",
+        "producer",
+        "dim"
+      ],
+      "title": "done.train_taste",
+      "type": "object"
+    },
+    "done.transcribe": {
+      "$defs": {
+        "Producer": {
+          "properties": {
+            "build": {
+              "type": "string"
+            },
+            "models": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "sync_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "build",
+            "models",
+            "sync_version"
+          ],
+          "type": "object"
+        },
+        "TranscriptionMode": {
+          "enum": [
+            "align"
+          ],
+          "type": "string"
+        },
+        "TranscriptionWord": {
+          "properties": {
+            "end_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "interpolated": {
+              "type": "boolean"
+            },
+            "line": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "unplaced": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "line",
+            "text",
+            "start_ms",
+            "end_ms",
+            "interpolated",
+            "unplaced"
+          ],
+          "type": "object"
+        },
+        "WorkerReason": {
+          "enum": [
+            "empty_text",
+            "empty_reference_text",
+            "silent_audio",
+            "audio_too_short",
+            "empty_vocab",
+            "too_few_users",
+            "audio_not_found",
+            "audio_forbidden",
+            "object_not_found",
+            "low_confidence",
+            "too_few_lines_placed",
+            "no_vocal_detected",
+            "unsupported_language",
+            "lyrics_mismatch",
+            "out_of_order",
+            "placed_in_silence",
+            "below_baseline",
+            "invalid_request",
+            "undecodable_audio",
+            "audio_too_long",
+            "audio_too_large",
+            "text_too_long_for_model",
+            "hash_mismatch",
+            "model_output_invalid",
+            "deadline_exceeded",
+            "engine_crashed",
+            "out_of_memory",
+            "download_failed",
+            "object_store_unavailable",
+            "internal_error",
+            "engine_restarted",
+            "worker_lost",
+            "public_node_timeout"
+          ],
+          "type": "string"
+        },
+        "WorkerStatus": {
+          "enum": [
+            "ok",
+            "empty",
+            "missing",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            },
+            "required": [
+              "confidence",
+              "placed_share",
+              "aligned_share",
+              "lines_total",
+              "lines_unplaced",
+              "language",
+              "synced_lrc"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "empty_reference_text",
+                  "silent_audio"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "missing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "audio_not_found",
+                  "audio_forbidden"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "low_confidence",
+                  "too_few_lines_placed",
+                  "no_vocal_detected",
+                  "unsupported_language",
+                  "lyrics_mismatch",
+                  "out_of_order",
+                  "placed_in_silence"
+                ]
+              }
+            },
+            "required": [
+              "reason",
+              "confidence",
+              "placed_share",
+              "aligned_share",
+              "lines_total",
+              "lines_unplaced",
+              "language"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "invalid_request",
+                  "undecodable_audio",
+                  "audio_too_long",
+                  "audio_too_large",
+                  "model_output_invalid",
+                  "deadline_exceeded",
+                  "engine_crashed",
+                  "out_of_memory",
+                  "download_failed",
+                  "internal_error",
+                  "engine_restarted",
+                  "worker_lost",
+                  "public_node_timeout"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "aligned_share": {
+          "format": "double",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "confidence": {
+          "format": "double",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "detail": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "language": {
+          "pattern": "^[a-z]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lines_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lines_unplaced": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/TranscriptionMode"
+        },
+        "placed_share": {
+          "format": "double",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "producer": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Producer"
+            },
+            {
+              "properties": {
+                "sync_version": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/WorkerReason"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkerStatus"
+        },
+        "sync_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "synced_lrc": {
+          "type": "string"
+        },
+        "upload_generation": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "words": {
+          "items": {
+            "$ref": "#/$defs/TranscriptionWord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "upload_generation",
+        "attempt",
+        "mode",
+        "status",
+        "producer",
+        "sync_version"
+      ],
+      "title": "done.transcribe",
+      "type": "object"
+    },
+    "embed.lyrics.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "language": {
+          "pattern": "^[a-z]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "type": "string",
+          "x-max-utf8-bytes": 16000
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "request_id",
+        "text"
+      ],
+      "title": "embed.lyrics.new",
+      "type": "object"
+    },
+    "encode.text.new": {
+      "$defs": {
+        "EncodeModel": {
+          "enum": [
+            "mulan",
+            "lyrics"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "model": {
+          "$ref": "#/$defs/EncodeModel"
+        },
+        "text": {
+          "type": "string",
+          "x-max-utf8-bytes": 512
+        }
+      },
+      "required": [
+        "model",
+        "text",
+        "hash"
+      ],
+      "title": "encode.text.new",
+      "type": "object"
+    },
+    "index.audio.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "s3_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "upload_generation": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "s3_url",
+        "upload_generation",
+        "attempt"
+      ],
+      "title": "index.audio.new",
+      "type": "object"
+    },
+    "train.collab.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "dataset_version": {
+          "const": 2,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dim": {
+          "const": 128,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epochs": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_count": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "negative": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "window": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "object",
+        "dataset_version",
+        "dim",
+        "min_count",
+        "window",
+        "epochs",
+        "negative"
+      ],
+      "title": "train.collab.new",
+      "type": "object"
+    },
+    "train.taste.new": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "batch_size": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "dataset_version": {
+          "const": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dim": {
+          "const": 128,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epochs": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "negatives": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "object": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "previous_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "object",
+        "dataset_version",
+        "dim",
+        "epochs",
+        "batch_size",
+        "negatives",
+        "seed",
+        "previous_version"
+      ],
+      "title": "train.taste.new",
+      "type": "object"
+    },
+    "transcribe.audio.new": {
+      "$defs": {
+        "TranscriptionMode": {
+          "enum": [
+            "align"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attempt": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "audio_url": {
+          "maxLength": 4096,
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "language": {
+          "pattern": "^[a-z]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/TranscriptionMode"
+        },
+        "reference_lines_total": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reference_text": {
+          "minLength": 1,
+          "type": "string",
+          "x-max-utf8-bytes": 16000
+        },
+        "sc_track_id": {
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "type": "string"
+        },
+        "upload_generation": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sc_track_id",
+        "upload_generation",
+        "attempt",
+        "audio_url",
+        "reference_text",
+        "reference_lines_total",
+        "language",
+        "mode"
+      ],
+      "title": "transcribe.audio.new",
+      "type": "object"
+    }
+  },
+  "streams": {
+    "AI_RPC": {
+      "discard": "new",
+      "duplicate_window_s": 120,
+      "max_age_s": 120,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "ai.rpc.>"
+      ]
+    },
+    "EMBED_LYRICS": {
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "embed.lyrics.>"
+      ]
+    },
+    "ENCODE": {
+      "discard": "new",
+      "duplicate_window_s": 900,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "encode.>"
+      ]
+    },
+    "INDEX_AUDIO": {
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "index.audio.>"
+      ]
+    },
+    "PIPELINE_DONE": {
+      "discard": "old",
+      "duplicate_window_s": 43200,
+      "max_age_s": 259200,
+      "max_bytes": 25769803776,
+      "retention": "limits",
+      "subjects": [
+        "done.>"
+      ]
+    },
+    "TRAIN_COLLAB": {
+      "discard": "new",
+      "duplicate_window_s": 3600,
+      "max_age_s": 21600,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "train.collab.>"
+      ]
+    },
+    "TRAIN_TASTE": {
+      "discard": "new",
+      "duplicate_window_s": 3600,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "train.taste.>"
+      ]
+    },
+    "TRANSCRIBE": {
+      "discard": "new",
+      "duplicate_window_s": 86400,
+      "max_age_s": 86400,
+      "max_bytes": 1073741824,
+      "retention": "work_queue",
+      "subjects": [
+        "transcribe.>"
+      ]
+    },
+    "WORKER_INVALID": {
+      "discard": "new",
+      "duplicate_window_s": 120,
+      "max_age_s": 604800,
+      "max_bytes": 1073741824,
+      "retention": "limits",
+      "subjects": [
+        "worker.invalid.>"
+      ]
+    }
+  },
+  "subjects": {
+    "health": "worker.health.<worker_id>",
+    "invalid": "worker.invalid.<lane>",
+    "status": "worker.status.<worker_id>"
+  },
+  "version": 2
+}
