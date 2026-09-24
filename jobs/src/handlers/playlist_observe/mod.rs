@@ -395,7 +395,7 @@ fn failure(
         state_status,
         conflict_code,
         retry_at: retry.map(|retry| {
-            let seconds = i64::try_from(retry.as_secs()).map_or(i64::MAX, |seconds| seconds);
+            let seconds = i64::try_from(retry.as_secs()).unwrap_or(i64::MAX);
             observed_at + chrono::Duration::seconds(seconds)
         }),
         error_kind: error_kind.to_owned(),

@@ -166,6 +166,7 @@ jobs:
           context: storage
           build-contexts: |
             tls-common=utils/tls-common
+            sc-fingerprint=utils/sc-fingerprint
           push: false
           load: true
           tags: soundcloud-backend-storage:ci
@@ -209,6 +210,7 @@ jobs:
             decrypt=utils/decrypt
             decrypt-client=utils/decrypt-client
             stream-ticket=utils/stream-ticket
+            sc-fingerprint=utils/sc-fingerprint
           push: false
           load: true
           tags: soundcloud-backend-streaming:ci
@@ -225,6 +227,12 @@ jobs:
         working-directory: worker
     steps:
       - uses: actions/checkout@v4
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libchromaprint1
+
+      - name: Unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - uses: actions/setup-python@v5
         with:

@@ -239,7 +239,7 @@ fn failure_backoff(refresh_attempts: i32) -> chrono::Duration {
         .saturating_mul(2_u32.saturating_pow(exponent))
         .min(MAX_BACKOFF)
         .as_secs();
-    chrono::Duration::seconds(i64::try_from(seconds).map_or(i64::MAX, |value| value))
+    chrono::Duration::seconds(i64::try_from(seconds).unwrap_or(i64::MAX))
 }
 
 fn seconds_until(deadline: DateTime<Utc>) -> i64 {

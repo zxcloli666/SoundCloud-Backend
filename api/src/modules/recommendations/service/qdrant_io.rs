@@ -27,14 +27,11 @@ fn vec_to_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 fn bytes_to_vec(b: &[u8]) -> Option<Vec<f32>> {
-    if b.is_empty() || !b.len().is_multiple_of(4) {
+    let (chunks, remainder) = b.as_chunks::<4>();
+    if chunks.is_empty() || !remainder.is_empty() {
         return None;
     }
-    Some(
-        b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect(),
-    )
+    Some(chunks.iter().copied().map(f32::from_le_bytes).collect())
 }
 
 use super::RecommendationsService;
