@@ -1,0 +1,5 @@
+SELECT id
+FROM background_jobs
+ORDER BY id
+LIMIT 1
+FOR UPDATE

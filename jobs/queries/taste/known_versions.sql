@@ -1,0 +1,2 @@
+SELECT version
+FROM taste_model_versions
