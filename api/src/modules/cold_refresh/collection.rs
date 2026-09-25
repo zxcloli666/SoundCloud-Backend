@@ -1,6 +1,7 @@
 use backend_contracts::{CatalogCollection, CatalogCollectionPayload, JobKind, Versioned};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -17,14 +18,27 @@ pub struct CollectionSync {
     pub retry_after_seconds: u64,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct CollectionPage {
     pub collection: Vec<Value>,
     pub page: i64,
     pub page_size: i64,
     pub has_more: bool,
     pub sync: CollectionSync,
+}
+
+impl Serialize for CollectionPage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut wire = serializer.serialize_struct("CollectionPage", 7)?;
+        wire.serialize_field("collection", &self.collection)?;
+        wire.serialize_field("page", &self.page)?;
+        wire.serialize_field("pageSize", &self.page_size)?;
+        wire.serialize_field("page_size", &self.page_size)?;
+        wire.serialize_field("hasMore", &self.has_more)?;
+        wire.serialize_field("has_more", &self.has_more)?;
+        wire.serialize_field("sync", &self.sync)?;
+        wire.end()
+    }
 }
 
 impl CollectionPage {

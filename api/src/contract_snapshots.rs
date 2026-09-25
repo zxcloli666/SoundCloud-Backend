@@ -48,7 +48,7 @@ fn sc_card() -> Value {
 }
 
 #[test]
-fn a_collection_page_stays_camel_case_and_passes_soundcloud_cards_through_untouched() {
+fn a_collection_page_passes_soundcloud_cards_through_untouched() {
     let page = CollectionPage::new(
         ListPageResult {
             collection: vec![sc_card()],
@@ -70,7 +70,9 @@ fn a_collection_page_stays_camel_case_and_passes_soundcloud_cards_through_untouc
             }],
             "page": 2,
             "pageSize": 30,
+            "page_size": 30,
             "hasMore": true,
+            "has_more": true,
             "sync": {
                 "status": "refreshing",
                 "lastCompletedAt": "2026-09-12T10:00:00Z",
@@ -98,7 +100,9 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
             "collection": [],
             "page": 0,
             "pageSize": 30,
+            "page_size": 30,
             "hasMore": false,
+            "has_more": false,
             "sync": {
                 "status": "ready",
                 "lastCompletedAt": null,
@@ -106,6 +110,30 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
             }
         })
     );
+}
+
+#[test]
+fn a_collection_page_reports_paging_under_both_spellings_with_one_value() {
+    for (page_size, has_more) in [(30, true), (200, false), (1, true)] {
+        let page = wire(&CollectionPage::new(
+            ListPageResult {
+                collection: vec![sc_card()],
+                page: 1,
+                page_size,
+                has_more,
+            },
+            sync(),
+        ));
+        let object = page.as_object().expect("collection page is an object");
+
+        for key in ["pageSize", "page_size", "hasMore", "has_more"] {
+            assert!(object.contains_key(key), "missing {key}");
+        }
+        assert_eq!(page["pageSize"], json!(page_size));
+        assert_eq!(page["page_size"], page["pageSize"]);
+        assert_eq!(page["hasMore"], json!(has_more));
+        assert_eq!(page["has_more"], page["hasMore"]);
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 109;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 115;
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     let mut opts = PgConnectOptions::from_str(&cfg.url)?;

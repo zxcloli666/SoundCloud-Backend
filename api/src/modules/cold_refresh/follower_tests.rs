@@ -50,7 +50,8 @@ async fn followers_read_the_local_snapshot_and_schedule_one_public_refresh(
     let wire = serde_json::to_value(CollectionPage::new(page, sync))?;
     assert_eq!(wire["pageSize"], 1);
     assert_eq!(wire["hasMore"], true);
-    assert!(wire.get("page_size").is_none());
+    assert_eq!(wire["page_size"], 1);
+    assert_eq!(wire["has_more"], true);
     ensure(
         &pool,
         backend_contracts::CatalogCollection::Followers,
