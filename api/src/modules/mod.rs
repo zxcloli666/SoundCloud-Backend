@@ -12,6 +12,7 @@ pub mod events;
 pub mod featured;
 pub mod history;
 pub mod indexing;
+pub mod legacy_clients;
 pub mod likes;
 pub mod lyrics;
 pub mod me;

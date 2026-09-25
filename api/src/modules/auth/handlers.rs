@@ -219,7 +219,7 @@ async fn link_status(
     }))
 }
 
-fn refresh_response(attempt: RefreshAttempt) -> Response {
+pub(crate) fn refresh_response(attempt: RefreshAttempt) -> Response {
     let body = attempt.response();
     let retry_after = body.retry_after_sec;
     let status = match attempt.outcome {
@@ -259,7 +259,7 @@ fn insert_no_store(response: &mut Response) {
     );
 }
 
-fn required_session_id(raw: Option<&str>) -> AppResult<uuid::Uuid> {
+pub(crate) fn required_session_id(raw: Option<&str>) -> AppResult<uuid::Uuid> {
     raw.and_then(parse_uuid)
         .ok_or_else(|| AppError::unauthorized("Missing or malformed session id"))
 }
