@@ -34,7 +34,7 @@ call-lua-macros = { path = "../utils/call/lua-macros" }
 decrypt = { path = "../utils/decrypt" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 once_cell = "1"
-rand = "0.8"
+rand = "0.10"
 subtle = "2"
 
 [dev-dependencies]
