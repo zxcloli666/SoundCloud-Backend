@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
+    tls_common::init_crypto();
     let mut arguments = std::env::args().skip(1);
     let scope = match (arguments.next(), arguments.next()) {
         (Some(scope), None) => match jobs::MigrationScope::from_str(&scope) {

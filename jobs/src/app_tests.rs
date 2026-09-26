@@ -54,3 +54,16 @@ async fn if_absent_ingress_preserves_existing_work(pool: PgPool) -> anyhow::Resu
     assert_eq!(state, (existing.id, existing.payload, 2, 1, 0, 4));
     Ok(())
 }
+
+#[tokio::test]
+async fn qdrant_tls_client_starts_once_the_crypto_provider_is_installed() -> anyhow::Result<()> {
+    tls_common::init_crypto();
+    let config = crate::config::QdrantConfig {
+        grpc_url: "https://127.0.0.1:9".to_owned(),
+        api_key: redact::Secret::new(String::new()),
+    };
+    let qdrant = crate::qdrant::QdrantProvisioner::connect(&config)?;
+
+    assert!(qdrant.provision().await.is_err());
+    Ok(())
+}
