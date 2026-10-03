@@ -60,7 +60,7 @@ impl CookiesPool {
         self.entries.is_empty()
     }
 
-    async fn try_rotate<'a, F, Fut, T>(&'a self, mut op: F) -> Result<T, BoxErr>
+    async fn try_rotate<'a, F, Fut, T>(&'a self, authed: bool, mut op: F) -> Result<T, BoxErr>
     where
         F: FnMut(&'a CookiesClient) -> Fut,
         Fut: std::future::Future<Output = Result<T, BoxErr>>,
@@ -94,7 +94,7 @@ impl CookiesPool {
                     let cooldown = if is_rate_limited(&msg) {
                         warn!("[cookies-pool] client #{idx} rate-limited: {msg}");
                         RATE_LIMIT_COOLDOWN
-                    } else if is_rejected(&msg) {
+                    } else if authed && is_rejected(&msg) {
                         warn!("[cookies-pool] client #{idx} rejected, cookies look expired: {msg}");
                         REJECTED_COOLDOWN
                     } else {
@@ -114,8 +114,10 @@ impl CookiesPool {
         track_urn: &str,
         hq_only: bool,
     ) -> Result<Option<CookieStreamResult>, BoxErr> {
-        self.try_rotate(|client| async move { client.get_stream(track_urn, hq_only).await })
-            .await
+        self.try_rotate(false, |client| async move {
+            client.get_stream(track_urn, hq_only).await
+        })
+        .await
     }
 
     pub async fn fetch_track_meta(
@@ -130,7 +132,7 @@ impl CookiesPool {
         ),
         BoxErr,
     > {
-        self.try_rotate(|client| async move {
+        self.try_rotate(true, |client| async move {
             let (tcs, auth, cid) = client.fetch_track_meta(track_urn).await?;
             Ok((tcs, auth, cid, client.cookie_auth_headers()))
         })
@@ -142,9 +144,9 @@ impl CookiesPool {
         track_urn: &str,
         hq_first: bool,
     ) -> Result<Option<RestrictedSource>, BoxErr> {
-        self.try_rotate(
-            |client| async move { client.resolve_restricted(track_urn, hq_first).await },
-        )
+        self.try_rotate(true, |client| async move {
+            client.resolve_restricted(track_urn, hq_first).await
+        })
         .await
     }
 
