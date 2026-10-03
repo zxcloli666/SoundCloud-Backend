@@ -99,7 +99,9 @@ async fn stream_inner(
     let is_premium = check_is_premium(&state, &session).await;
     let hq = access.high_quality;
     let secret_token = access.secret_token.as_deref();
-    let is_public = state.pg.track_is_public(&track_urn).await?;
+    let track = state.pg.find_track(&track_urn).await?;
+    let is_public = track.as_ref().map(|track| track.is_public);
+    let stored_quality = track.as_ref().and_then(|track| track.stored_quality());
     let policy = TrackAccessPolicy::new(is_public, secret_token.is_some());
 
     if state.config.premium_only && !is_premium {
@@ -125,7 +127,7 @@ async fn stream_inner(
 
     if cacheable {
         if headers.contains_key("x-session-id") {
-            if let Some(response) = state.storage.try_proxy(&track_urn).await {
+            if let Some(response) = state.storage.try_proxy(&track_urn, stored_quality).await {
                 served(tag, &track_urn, "cdn_proxy");
                 return Ok(response);
             }

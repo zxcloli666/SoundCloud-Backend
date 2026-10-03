@@ -88,7 +88,11 @@ impl StorageClient {
         }
     }
 
-    pub async fn try_proxy(&self, track_urn: &str) -> Option<Response> {
+    pub async fn try_proxy(
+        &self,
+        track_urn: &str,
+        stored_quality: Option<&'static str>,
+    ) -> Option<Response> {
         if !self.enabled() || self.is_temporarily_unavailable() {
             return None;
         }
@@ -124,6 +128,9 @@ impl StorageClient {
         }
         if let Some(content_length) = content_length {
             builder = builder.header(CONTENT_LENGTH, content_length);
+        }
+        if let Some(quality) = stored_quality {
+            builder = builder.header("x-audio-quality", quality);
         }
         builder
             .body(Body::from_stream(response.bytes_stream()))
