@@ -15,10 +15,11 @@ use crate::config::parse_cookie_value;
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
+const REJECTED_COOLDOWN: Duration = Duration::from_secs(600);
 
 struct PoolEntry {
     client: CookiesClient,
-    rate_limited_until: Mutex<Option<tokio::time::Instant>>,
+    cooldown_until: Mutex<Option<tokio::time::Instant>>,
 }
 
 pub struct CookiesPool {
@@ -41,7 +42,7 @@ impl CookiesPool {
                 );
                 Some(PoolEntry {
                     client,
-                    rate_limited_until: Mutex::new(None),
+                    cooldown_until: Mutex::new(None),
                 })
             })
             .collect::<Vec<_>>();
@@ -76,7 +77,7 @@ impl CookiesPool {
             let idx = (start + off) % n;
             let entry = &self.entries[idx];
 
-            if let Some(until) = *entry.rate_limited_until.lock().await
+            if let Some(until) = *entry.cooldown_until.lock().await
                 && until > now
             {
                 continue;
@@ -85,23 +86,27 @@ impl CookiesPool {
             match op(&entry.client).await {
                 Ok(v) => {
                     self.cursor.store(idx, Ordering::Relaxed);
-                    *entry.rate_limited_until.lock().await = None;
+                    *entry.cooldown_until.lock().await = None;
                     return Ok(v);
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    if is_rate_limited(&msg) {
+                    let cooldown = if is_rate_limited(&msg) {
                         warn!("[cookies-pool] client #{idx} rate-limited: {msg}");
-                        *entry.rate_limited_until.lock().await = Some(now + RATE_LIMIT_COOLDOWN);
-                        last_err = Some(e);
+                        RATE_LIMIT_COOLDOWN
+                    } else if is_rejected(&msg) {
+                        warn!("[cookies-pool] client #{idx} rejected, cookies look expired: {msg}");
+                        REJECTED_COOLDOWN
                     } else {
                         return Err(e);
-                    }
+                    };
+                    *entry.cooldown_until.lock().await = Some(now + cooldown);
+                    last_err = Some(e);
                 }
             }
         }
 
-        Err(last_err.unwrap_or_else(|| "all cookies clients rate-limited".into()))
+        Err(last_err.unwrap_or_else(|| "all cookies clients cooling down".into()))
     }
 
     pub async fn get_stream(
@@ -155,9 +160,13 @@ fn is_rate_limited(msg: &str) -> bool {
     msg.contains("429") || msg.to_ascii_lowercase().contains("too many requests")
 }
 
+fn is_rejected(msg: &str) -> bool {
+    msg.ends_with("status 401")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_rate_limited;
+    use super::{is_rate_limited, is_rejected};
 
     #[test]
     fn detects_429_variants() {
@@ -167,5 +176,14 @@ mod tests {
         assert!(!is_rate_limited("status 404"));
         assert!(!is_rate_limited("status 502"));
         assert!(!is_rate_limited("connection reset"));
+    }
+
+    #[test]
+    fn an_expired_account_is_told_apart_from_a_missing_track() {
+        assert!(is_rejected("status 401"));
+        assert!(is_rejected("relay status 401"));
+        assert!(!is_rejected("status 403"));
+        assert!(!is_rejected("status 404"));
+        assert!(!is_rejected("cookies: no transcodings"));
     }
 }
