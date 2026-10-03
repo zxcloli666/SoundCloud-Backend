@@ -11,6 +11,9 @@ use crate::common::pagination::last_page;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
+const OWNER_PRIORITY: i16 = 20;
+const PUBLIC_PRIORITY: i16 = 5;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionSync {
@@ -98,13 +101,19 @@ pub(super) async fn ensure(
         let body = serde_json::to_value(Versioned::V1(payload))
             .map_err(|error| AppError::internal(error.to_string()))?;
         let kind = JobKind::CatalogCollection;
+        let priority = if owner {
+            OWNER_PRIORITY
+        } else {
+            PUBLIC_PRIORITY
+        };
         sqlx::query_file!(
             "queries/cold_refresh/enqueue_entity.sql",
             Uuid::now_v7(),
             kind.as_str(),
             kind.lane().as_str(),
             &key,
-            body
+            body,
+            priority
         )
         .execute(pool)
         .await?;
