@@ -797,7 +797,7 @@ fn reconciliation_decision(
             state_status: "conflict",
             conflict_code: Some("catalog_incomplete"),
             reason: Some("not every observed track has a durable catalog row"),
-            replace_projection: false,
+            replace_projection: !is_legacy && !pending_operations,
         };
     }
     if pending_operations {
@@ -1074,11 +1074,20 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_catalog_cannot_advance_projection_count() {
+    fn incomplete_catalog_still_shows_the_observed_membership() {
         let decision =
             reconciliation_decision(false, false, false, MembershipRelation::RemoteSuperset);
 
         assert_eq!(decision.conflict_code, Some("catalog_incomplete"));
-        assert!(!decision.replace_projection);
+        assert!(decision.replace_projection);
+    }
+
+    #[test]
+    fn incomplete_catalog_keeps_local_work_in_the_projection() {
+        let legacy = reconciliation_decision(true, false, false, MembershipRelation::Diverged);
+        let pending = reconciliation_decision(false, true, false, MembershipRelation::Diverged);
+
+        assert!(!legacy.replace_projection);
+        assert!(!pending.replace_projection);
     }
 }
