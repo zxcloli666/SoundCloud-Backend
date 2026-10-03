@@ -14,6 +14,9 @@ mod user_tests;
 mod catalog_tests;
 
 #[cfg(test)]
+mod failure_tests;
+
+#[cfg(test)]
 mod stampede_tests;
 
 #[cfg(test)]

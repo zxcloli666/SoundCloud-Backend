@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -8,8 +9,10 @@ use crate::cache::cache_service::CacheScope;
 use crate::cache::{CacheService, ListPageResult, build_list_cache_key};
 use crate::error::AppResult;
 use crate::modules::enrich::dto as enrich_dto;
+use crate::modules::search::failure::{self, SearchFailure};
 use crate::modules::search::repository;
 use catalog_normalize::normalize_name;
+
 const TTL_SECONDS: u64 = 60;
 pub const MIN_QUERY_LEN: usize = 2;
 pub const MAX_QUERY_LEN: usize = 128;
@@ -19,7 +22,7 @@ pub const MAX_LIMIT: i64 = 50;
 pub struct SearchService {
     pg: PgPool,
     cache: Arc<CacheService>,
-    flights: crate::cache::KeyedCoalesce<String>,
+    flights: crate::cache::KeyedCoalesce<Result<String, SearchFailure>>,
 }
 
 impl SearchService {
@@ -58,11 +61,13 @@ impl SearchService {
         {
             return Ok(v);
         }
-        let json = self
+        let Ok(shared) = self
             .flights
             .run(cache_key, || async {
-                let value = compute().await?;
-                let json = serde_json::to_string(&value).unwrap_or_default();
+                let json = match compute().await {
+                    Ok(value) => serde_json::to_string(&value).unwrap_or_default(),
+                    Err(error) => return Ok::<_, Infallible>(Err(SearchFailure::from_app(error))),
+                };
                 if !json.is_empty() {
                     let _ = self
                         .cache
@@ -76,11 +81,47 @@ impl SearchService {
                         )
                         .await;
                 }
-                Ok::<String, crate::error::AppError>(json)
+                Ok(Ok(json))
             })
-            .await?;
+            .await;
+        let json = shared.map_err(SearchFailure::into_app)?;
         serde_json::from_str::<Value>(&json)
             .map_err(|error| crate::error::AppError::internal(error.to_string()))
+    }
+
+    async fn search_page<F, Fut>(
+        &self,
+        cache_key: Option<String>,
+        page: i64,
+        limit: i64,
+        compute: F,
+    ) -> AppResult<ListPageResult<Value>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = AppResult<(Vec<Value>, bool)>>,
+    {
+        let Some(cache_key) = cache_key else {
+            let (collection, has_more) = compute().await?;
+            return Ok(ListPageResult {
+                collection,
+                page,
+                page_size: limit,
+                has_more: has_more && page < MAX_PAGE,
+            });
+        };
+        let value = self
+            .cached(&cache_key, || async {
+                let (collection, has_more) = compute().await?;
+                Ok(serde_json::to_value(PageEnvelope {
+                    collection,
+                    page,
+                    page_size: limit,
+                    has_more: has_more && page < MAX_PAGE,
+                })
+                .unwrap_or(Value::Null))
+            })
+            .await?;
+        Ok(decode_page(value, page, limit))
     }
 
     pub async fn tracks(
@@ -117,15 +158,22 @@ impl SearchService {
             genres: genres.as_deref(),
             tags: tags.as_deref(),
         };
-        let (mut collection, has_more) =
-            repository::search_tracks(&self.pg, &filters, page, limit).await?;
-        enrich_dto::apply_to_tracks(&self.pg, &mut collection).await?;
-        Ok(ListPageResult {
-            collection,
-            page,
-            page_size: limit,
-            has_more: has_more && page < MAX_PAGE,
+        let plain_query = normalized.is_some()
+            && owner.is_none()
+            && ids.is_none()
+            && genres.is_none()
+            && tags.is_none();
+        let cache_key =
+            plain_query.then(|| phrase_cache_key("search-db-tracks", &raw_query, page, limit));
+        self.search_page(cache_key, page, limit, || async {
+            let (mut collection, has_more) =
+                repository::search_tracks(&self.pg, &filters, page, limit).await?;
+            enrich_dto::apply_to_tracks(&self.pg, &mut collection)
+                .await
+                .map_err(failure::from_app)?;
+            Ok((collection, has_more))
         })
+        .await
     }
 
     pub async fn playlists(
@@ -158,20 +206,18 @@ impl SearchService {
         if normalized.is_none() && (!raw_query.trim().is_empty() || owner.is_none()) {
             return Ok(empty_page(page, limit));
         }
-        let (collection, has_more) = repository::search_playlists(
-            &self.pg,
-            normalized.as_ref().map(|_| raw_query.as_str()),
-            owner.as_deref(),
-            page,
-            limit,
-        )
-        .await?;
-        Ok(ListPageResult {
-            collection,
-            page,
-            page_size: limit,
-            has_more: has_more && page < MAX_PAGE,
+        let cache_key = (normalized.is_some() && owner.is_none())
+            .then(|| phrase_cache_key("search-db-playlists", &raw_query, page, limit));
+        self.search_page(cache_key, page, limit, || {
+            repository::search_playlists(
+                &self.pg,
+                normalized.as_ref().map(|_| raw_query.as_str()),
+                owner.as_deref(),
+                page,
+                limit,
+            )
         })
+        .await
     }
 
     pub async fn users(
@@ -188,20 +234,18 @@ impl SearchService {
         if (query.is_none() && !q.trim().is_empty()) || (query.is_none() && ids.is_none()) {
             return Ok(empty_page(page, limit));
         }
-        let (collection, has_more) = repository::search_users(
-            &self.pg,
-            query.as_ref().map(|_| raw_query.as_str()),
-            ids.as_deref(),
-            page,
-            limit,
-        )
-        .await?;
-        Ok(ListPageResult {
-            collection,
-            page,
-            page_size: limit,
-            has_more: has_more && page < MAX_PAGE,
+        let cache_key = (query.is_some() && ids.is_none())
+            .then(|| phrase_cache_key("search-db-users", &raw_query, page, limit));
+        self.search_page(cache_key, page, limit, || {
+            repository::search_users(
+                &self.pg,
+                query.as_ref().map(|_| raw_query.as_str()),
+                ids.as_deref(),
+                page,
+                limit,
+            )
         })
+        .await
     }
 
     pub async fn artists(
@@ -222,21 +266,12 @@ impl SearchService {
         ];
         let key = build_list_cache_key("search-db-artists", &params);
 
-        let value = self
-            .cached(&key, || async {
-                let (rows, has_more) =
-                    repository::search_artists(&self.pg, &q_norm, page, limit).await?;
-                let items: Vec<Value> = rows.into_iter().map(artist_to_value).collect();
-                Ok(serde_json::to_value(PageEnvelope {
-                    collection: items,
-                    page,
-                    page_size: limit,
-                    has_more: has_more && page < MAX_PAGE,
-                })
-                .unwrap_or(Value::Null))
-            })
-            .await?;
-        Ok(decode_page(value, page, limit))
+        self.search_page(Some(key), page, limit, || async {
+            let (rows, has_more) =
+                repository::search_artists(&self.pg, &q_norm, page, limit).await?;
+            Ok((rows.into_iter().map(artist_to_value).collect(), has_more))
+        })
+        .await
     }
 
     pub async fn albums(&self, q: &str, page: i64, limit: i64) -> AppResult<ListPageResult<Value>> {
@@ -252,21 +287,12 @@ impl SearchService {
         ];
         let key = build_list_cache_key("search-db-albums", &params);
 
-        let value = self
-            .cached(&key, || async {
-                let (rows, has_more) =
-                    repository::search_albums(&self.pg, &q_norm, page, limit).await?;
-                let items: Vec<Value> = rows.into_iter().map(album_to_value).collect();
-                Ok(serde_json::to_value(PageEnvelope {
-                    collection: items,
-                    page,
-                    page_size: limit,
-                    has_more: has_more && page < MAX_PAGE,
-                })
-                .unwrap_or(Value::Null))
-            })
-            .await?;
-        Ok(decode_page(value, page, limit))
+        self.search_page(Some(key), page, limit, || async {
+            let (rows, has_more) =
+                repository::search_albums(&self.pg, &q_norm, page, limit).await?;
+            Ok((rows.into_iter().map(album_to_value).collect(), has_more))
+        })
+        .await
     }
 }
 
@@ -276,6 +302,15 @@ struct PageEnvelope {
     page: i64,
     page_size: i64,
     has_more: bool,
+}
+
+fn phrase_cache_key(prefix: &str, raw_query: &str, page: i64, limit: i64) -> String {
+    let params: Vec<(&str, String)> = vec![
+        ("q", raw_query.trim().to_lowercase()),
+        ("page", page.to_string()),
+        ("limit", limit.to_string()),
+    ];
+    build_list_cache_key(prefix, &params)
 }
 
 fn decode_page(v: Value, fallback_page: i64, fallback_limit: i64) -> ListPageResult<Value> {

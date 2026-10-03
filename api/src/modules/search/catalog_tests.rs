@@ -432,3 +432,50 @@ async fn a_catalog_page_served_from_the_cache_is_the_page_that_was_stored(
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_phrase_page_is_cached_and_a_filtered_page_is_read_live(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let id = std::process::id().to_string();
+    let title = format!("Cachable track {id}");
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing)
+         VALUES ($1, 'soundcloud:tracks:' || $1, $2, lower($2), 1000, 'public')",
+    )
+    .bind(&id)
+    .bind(&title)
+    .execute(&pool)
+    .await?;
+    let search = cached_service(&pool)?;
+    let phrase = TrackSearchQuery {
+        q: Some(title.clone()),
+        ..Default::default()
+    };
+    let cold = search.tracks(&phrase, 0, 10).await?;
+    assert_eq!(cold.collection.len(), 1);
+
+    sqlx::query("UPDATE tracks SET title = title || ' renamed' WHERE sc_track_id = $1")
+        .bind(&id)
+        .execute(&pool)
+        .await?;
+
+    let warm = search.tracks(&phrase, 0, 10).await?;
+    assert_eq!(
+        serde_json::to_value(&warm)?,
+        serde_json::to_value(&cold)?,
+        "a repeated phrase must be answered from the shared page cache"
+    );
+    let filtered = TrackSearchQuery {
+        q: Some(title.clone()),
+        ids: Some(id.clone()),
+        ..Default::default()
+    };
+    let live = search.tracks(&filtered, 0, 10).await?;
+    assert_eq!(
+        live.collection[0]["title"],
+        json!(format!("{title} renamed"))
+    );
+    Ok(())
+}
