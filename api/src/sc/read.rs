@@ -9,6 +9,9 @@ use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
 use crate::sc::{EGRESS_APP, FetchStrategy, PgEgressHealth, hedge, race, within_budget};
 use sc_transport::{Apiv2Proxy, EGRESS_RELAY_LUA, EgressHealth, ScClient};
 
+#[path = "read_search.rs"]
+mod search;
+
 const HEDGE_DELAY: Duration = Duration::from_millis(700);
 const CALL_BUDGET: Duration = Duration::from_secs(20);
 
