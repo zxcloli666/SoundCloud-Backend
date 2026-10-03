@@ -1,3 +1,4 @@
+pub mod failure;
 pub mod handlers;
 pub mod lyrics;
 pub mod query;

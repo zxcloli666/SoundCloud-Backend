@@ -14,6 +14,7 @@ const SC_TIER_DURATION: &str = "api_sc_tier_call_duration_seconds";
 const SC_RELAY_BREAKER_OPEN: &str = "api_sc_relay_breaker_open";
 const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
+const SEARCH_FAILURES: &str = "api_search_failures_total";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const PG_BACKENDS: &str = "api_pg_backends";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
@@ -150,6 +151,13 @@ pub fn record_sc_failure(error: &crate::error::AppError) {
     if let Some(seconds) = crate::sc::retry_after_seconds(error) {
         metrics::histogram!(SC_RETRY_AFTER).record(seconds as f64);
     }
+}
+
+pub fn record_search_failure(code: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SEARCH_FAILURES, "code" => code).increment(1);
 }
 
 pub fn record_taste_vector_read_error() {
