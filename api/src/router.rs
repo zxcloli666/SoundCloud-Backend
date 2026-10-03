@@ -55,6 +55,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::tracks::router())
         .merge(modules::playlists::router())
         .merge(modules::users::router())
+        .merge(modules::live_search::router())
         .merge(modules::resolve::router(state.admission.clone()))
         .merge(modules::history::router())
         .merge(modules::events::router())

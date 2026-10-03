@@ -17,6 +17,7 @@ use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
+use crate::modules::live_search::LiveSearch;
 use crate::modules::lyrics::LyricsService;
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::OAuthAppsService;
@@ -51,6 +52,7 @@ pub struct AppState {
     pub likes: Arc<LikesService>,
     pub resolve: Arc<ScReadService>,
     pub search: Arc<SearchService>,
+    pub live_search: Arc<LiveSearch>,
     pub vibe: Arc<VibeSearchService>,
     pub history: Arc<HistoryService>,
     pub featured: Arc<FeaturedService>,

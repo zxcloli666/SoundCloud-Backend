@@ -14,6 +14,7 @@ pub mod history;
 pub mod indexing;
 pub mod legacy_clients;
 pub mod likes;
+pub mod live_search;
 pub mod lyrics;
 pub mod me;
 pub mod oauth_apps;

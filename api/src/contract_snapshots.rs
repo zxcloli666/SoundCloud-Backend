@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::cache::ListPageResult;
 use crate::error::AppError;
 use crate::modules::cold_refresh::collection::{CollectionPage, CollectionSync};
+use crate::modules::live_search::meta::{LiveMeta, LivePage, LiveState};
 use crate::modules::playlists::PlaylistMembershipStatus;
 
 fn wire<T: serde::Serialize>(value: &T) -> Value {
@@ -153,6 +154,110 @@ fn a_plain_list_page_stays_snake_case() {
             "page_size": 30,
             "has_more": false
         })
+    );
+}
+
+#[test]
+fn a_live_page_adds_its_state_beside_the_plain_page() {
+    let page = LivePage::new(
+        ListPageResult {
+            collection: vec![json!({
+                "urn": "soundcloud:tracks:1",
+                "_scd_search": {"source": "soundcloud"}
+            })],
+            page: 0,
+            page_size: 20,
+            has_more: true,
+        },
+        LiveMeta::new(LiveState::Fresh, None),
+    );
+
+    assert_eq!(
+        wire(&page),
+        json!({
+            "collection": [{"urn": "soundcloud:tracks:1", "_scd_search": {"source": "soundcloud"}}],
+            "page": 0,
+            "page_size": 20,
+            "has_more": true,
+            "live": {"state": "fresh", "retry_after_sec": null, "local": null},
+            "weak": false
+        })
+    );
+
+    let held = LivePage::new(
+        ListPageResult {
+            collection: Vec::new(),
+            page: 0,
+            page_size: 20,
+            has_more: false,
+        },
+        LiveMeta::new(LiveState::Limited, Some(12)).local_unavailable(),
+    );
+    assert_eq!(
+        wire(&held)["live"],
+        json!({"state": "limited", "retry_after_sec": 12, "local": "unavailable"})
+    );
+}
+
+#[test]
+fn every_live_state_keeps_its_wire_name() {
+    let states = [
+        LiveState::Fresh,
+        LiveState::Cached,
+        LiveState::Stale,
+        LiveState::Local,
+        LiveState::Limited,
+        LiveState::Busy,
+        LiveState::Paused,
+        LiveState::Cooling,
+        LiveState::Unavailable,
+        LiveState::Timeout,
+        LiveState::Off,
+        LiveState::Skipped,
+    ];
+    let names: Vec<Value> = states.iter().map(wire).collect();
+    assert_eq!(
+        names,
+        [
+            "fresh",
+            "cached",
+            "stale",
+            "local",
+            "limited",
+            "busy",
+            "paused",
+            "cooling",
+            "unavailable",
+            "timeout",
+            "off",
+            "skipped"
+        ]
+    );
+    for state in states {
+        assert_eq!(wire(&state), json!(state.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn a_live_page_names_its_state_in_a_header() {
+    let page = LivePage::new(
+        ListPageResult {
+            collection: Vec::new(),
+            page: 0,
+            page_size: 20,
+            has_more: false,
+        },
+        LiveMeta::new(LiveState::Cooling, Some(60)),
+    );
+    let response = page.into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-search-live")
+            .and_then(|value| value.to_str().ok()),
+        Some("cooling")
     );
 }
 

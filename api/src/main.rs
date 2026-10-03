@@ -60,6 +60,7 @@ use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
+use crate::modules::live_search::LiveSearch;
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
@@ -214,6 +215,17 @@ async fn main() {
     let users = UsersService::new(pg.clone(), cold_refresh.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
+    let live_search = LiveSearch::new(
+        resolve.clone(),
+        cache.clone(),
+        PublicAdmission::for_live_search(
+            redis::connect_admission(&config).expect("Failed to create live search Redis pool"),
+            config.admission.clone(),
+        ),
+        pg.clone(),
+        config.live_search,
+    );
+    info!(mode = ?config.live_search.mode, "live search ready");
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
@@ -267,6 +279,7 @@ async fn main() {
         likes,
         resolve,
         search,
+        live_search,
         vibe,
         history,
         featured,

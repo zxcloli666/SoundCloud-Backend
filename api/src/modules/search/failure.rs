@@ -61,6 +61,10 @@ pub fn busy() -> AppError {
     failed("search_busy")
 }
 
+pub fn timed_out() -> AppError {
+    failed("search_timeout")
+}
+
 fn failed(code: &'static str) -> AppError {
     crate::metrics::record_search_failure(code);
     coded(code)

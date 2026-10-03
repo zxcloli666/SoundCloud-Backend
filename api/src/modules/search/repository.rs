@@ -275,7 +275,7 @@ pub async fn search_playlists(
     Ok((projected, has_more))
 }
 
-async fn project_playlists_with_owners(
+pub(crate) async fn project_playlists_with_owners(
     pg: &PgPool,
     rows: Vec<PlaylistRow>,
 ) -> AppResult<Vec<Value>> {
