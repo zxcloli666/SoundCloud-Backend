@@ -60,6 +60,27 @@ impl EgressHealthStore for SharedEgress {
     }
 }
 
+struct UnreachableEgress;
+
+impl EgressHealthStore for UnreachableEgress {
+    fn publish_open<'a>(
+        &'a self,
+        _channel: &'a str,
+        _app: &'a str,
+        _cooldown: Duration,
+    ) -> EgressFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
+    fn publish_closed<'a>(&'a self, _channel: &'a str) -> EgressFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
+    fn remaining<'a>(&'a self, _channel: &'a str) -> EgressFuture<'a, EgressState> {
+        Box::pin(async { EgressState::Closed })
+    }
+}
+
 pub(super) fn admission(redis_url: &str, limit: AdmissionLimitCfg) -> Arc<PublicAdmission> {
     let pool = Config::from_url(redis_url)
         .create_pool(Some(Runtime::Tokio1))
@@ -82,7 +103,7 @@ pub(super) fn admission(redis_url: &str, limit: AdmissionLimitCfg) -> Arc<Public
     )
 }
 
-fn offline_gate(store: Arc<SharedEgress>, in_flight: usize) -> LiveGate {
+fn offline_gate(store: Arc<dyn EgressHealthStore>, in_flight: usize) -> LiveGate {
     let limit = AdmissionLimitCfg {
         per_client: 10,
         global: 10,
@@ -114,7 +135,8 @@ async fn the_pause_row_beats_every_other_gate() {
 
     assert_eq!(
         gate.open(LiveClass::Main, "anyone").await.err(),
-        Some(Closed::new(LiveState::Paused, 60))
+        Some(Closed::new(LiveState::Paused, 3600)),
+        "a pause says how long it still holds"
     );
 }
 
@@ -157,8 +179,8 @@ async fn four_silent_searches_open_the_breaker_for_both_nodes() {
     gate.record_silence().await;
 
     assert_eq!(
-        state_of(&gate, LiveClass::Main).await,
-        Some(LiveState::Cooling)
+        gate.open(LiveClass::Main, &identity()).await.err(),
+        Some(Closed::new(LiveState::Cooling, 60))
     );
     assert_eq!(
         store.published(),
@@ -188,9 +210,38 @@ async fn a_rate_limit_cools_search_live_for_the_clamped_retry_after() {
         Some(LiveState::Cooling)
     );
 
+    assert_eq!(
+        gate.open(LiveClass::Main, &identity()).await.err(),
+        Some(Closed::new(LiveState::Cooling, 120)),
+        "a cooling gate reports the cooldown it still has, not a fixed minute"
+    );
+
     assert_eq!(cooling_seconds(None), 300);
     assert_eq!(cooling_seconds(Some(400)), 400);
     assert_eq!(cooling_seconds(Some(86_400)), 900);
+}
+
+#[tokio::test]
+async fn a_rate_limit_shuts_this_node_before_the_shared_row_is_read_back() {
+    let gate = offline_gate(Arc::new(UnreachableEgress), 8);
+
+    gate.cool_down(Some(200)).await;
+
+    assert_eq!(
+        gate.open(LiveClass::Main, &identity()).await.err(),
+        Some(Closed::new(LiveState::Cooling, 200)),
+        "the next leader must not reach SoundCloud while the row is on its way"
+    );
+    assert!(
+        !gate.proxy_admits().await,
+        "a leader already past the gate must not race the proxy into another 429"
+    );
+    gate.record_answer().await;
+    assert_eq!(
+        state_of(&gate, LiveClass::Main).await,
+        Some(LiveState::Cooling),
+        "an answer that was already in flight does not lift a rate-limit cooldown"
+    );
 }
 
 #[tokio::test(start_paused = true)]

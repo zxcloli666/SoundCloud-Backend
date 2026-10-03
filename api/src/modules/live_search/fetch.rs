@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -57,16 +58,22 @@ pub struct Fetch<'a> {
 impl Fetch<'_> {
     pub async fn run(&self) -> Fetched {
         let started = Instant::now();
-        match tokio::time::timeout(self.class.budget(), self.tiers(started)).await {
+        let on_proxy = AtomicBool::new(false);
+        match tokio::time::timeout(self.class.budget(), self.tiers(started, &on_proxy)).await {
             Ok(fetched) => fetched,
             Err(_) => {
-                self.report("budget", &Fetched::Timeout, started);
+                let tier = if on_proxy.load(Ordering::Relaxed) {
+                    "proxy"
+                } else {
+                    "relay"
+                };
+                self.report(tier, &Fetched::Timeout, started);
                 Fetched::Timeout
             }
         }
     }
 
-    async fn tiers(&self, started: Instant) -> Fetched {
+    async fn tiers(&self, started: Instant, on_proxy: &AtomicBool) -> Fetched {
         let limit = self.class.window_size(self.kind);
         let wait = self.class.relay_wait();
         let mut missed = Fetched::Untried;
@@ -87,6 +94,7 @@ impl Fetch<'_> {
         if !self.class.proxy_allowed() || left < PROXY_MIN_LEFT || !self.gate.proxy_admits().await {
             return missed;
         }
+        on_proxy.store(true, Ordering::Relaxed);
         let fetched = match self
             .read
             .search_proxy(self.kind.search_type(), &self.query.text, limit, left)

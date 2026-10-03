@@ -474,7 +474,14 @@ async fn the_pause_row_stops_live_search_and_keeps_cached_windows(
         )
         .await;
     assert_eq!(paused.state(), LiveState::Paused);
-    assert_eq!(paused.live.retry_after_sec, Some(60));
+    assert!(
+        paused
+            .live
+            .retry_after_sec
+            .is_some_and(|left| left > 6 * 3600 - 60 && left <= 6 * 3600),
+        "a pause reports how long it still holds: {:?}",
+        paused.live.retry_after_sec
+    );
     let kept = lab.tracks(&cached, 0, Vec::new()).await;
     assert_eq!(kept.state(), LiveState::Cached);
     assert_eq!(kept.page.collection.len(), 4);

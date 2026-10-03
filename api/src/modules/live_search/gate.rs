@@ -15,7 +15,6 @@ use crate::sc::EGRESS_APP;
 pub const PAUSE_CHANNEL: &str = "search_live_pause";
 pub const BREAKER_CHANNEL: &str = "search_live";
 
-const CLOSED_RETRY_AFTER: i64 = 60;
 const BUSY_RETRY_AFTER: i64 = 1;
 const COOLING_DEFAULT: i64 = 300;
 const COOLING_MIN: i64 = 120;
@@ -45,6 +44,7 @@ pub struct LiveGate {
     store: Arc<dyn EgressHealthStore>,
     admission: Arc<PublicAdmission>,
     in_flight: Arc<Semaphore>,
+    cooling_until_ms: AtomicI64,
     breaker_open: AtomicBool,
     warned_at_ms: AtomicI64,
 }
@@ -61,6 +61,7 @@ impl LiveGate {
             store,
             admission,
             in_flight: Arc::new(Semaphore::new(max_in_flight)),
+            cooling_until_ms: AtomicI64::new(0),
             breaker_open: AtomicBool::new(false),
             warned_at_ms: AtomicI64::new(0),
         }
@@ -96,24 +97,29 @@ impl LiveGate {
     }
 
     pub async fn proxy_admits(&self) -> bool {
-        self.admission
-            .check_identity(Endpoint::LiveProxy, PROXY_IDENTITY)
-            .await
-            == Decision::Allowed
+        self.cooling_left().is_none()
+            && self
+                .admission
+                .check_identity(Endpoint::LiveProxy, PROXY_IDENTITY)
+                .await
+                == Decision::Allowed
     }
 
     pub async fn record_answer(&self) {
         let open = self.breaker.record_ok().await;
-        self.note_breaker(open);
+        self.note_breaker(open || self.cooling_left().is_some());
     }
 
     pub async fn record_silence(&self) {
         let open = self.breaker.record_ban().await;
-        self.note_breaker(open);
+        self.note_breaker(open || self.cooling_left().is_some());
     }
 
     pub async fn cool_down(&self, retry_after: Option<i64>) -> i64 {
         let seconds = cooling_seconds(retry_after);
+        self.cooling_until_ms
+            .fetch_max(now_ms() + seconds * 1000, Ordering::AcqRel);
+        self.note_breaker(true);
         if self.warning_due() {
             warn!(
                 retry_after,
@@ -131,18 +137,23 @@ impl LiveGate {
     }
 
     async fn shut(&self) -> Result<(), Closed> {
-        let paused = self.pause.is_open().await;
-        crate::metrics::set_live_gate_closed("pause", paused);
-        if paused {
-            return Err(Closed::new(LiveState::Paused, CLOSED_RETRY_AFTER));
+        let paused = self.pause.open_for().await;
+        crate::metrics::set_live_gate_closed("pause", paused.is_some());
+        if let Some(left) = paused {
+            return Err(Closed::new(LiveState::Paused, whole_seconds(left)));
         }
-        let cooling = self.breaker.is_open().await;
-        crate::metrics::set_live_gate_closed("breaker", cooling);
-        self.note_breaker(cooling);
-        if cooling {
-            return Err(Closed::new(LiveState::Cooling, CLOSED_RETRY_AFTER));
+        let cooling = self.breaker.open_for().await.max(self.cooling_left());
+        crate::metrics::set_live_gate_closed("breaker", cooling.is_some());
+        self.note_breaker(cooling.is_some());
+        if let Some(left) = cooling {
+            return Err(Closed::new(LiveState::Cooling, whole_seconds(left)));
         }
         Ok(())
+    }
+
+    fn cooling_left(&self) -> Option<Duration> {
+        let left = self.cooling_until_ms.load(Ordering::Acquire) - now_ms();
+        (left > 0).then(|| Duration::from_millis(left.unsigned_abs()))
     }
 
     fn note_breaker(&self, open: bool) {
@@ -158,7 +169,7 @@ impl LiveGate {
     }
 
     fn warning_due(&self) -> bool {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = now_ms();
         let previous = self.warned_at_ms.load(Ordering::Relaxed);
         now - previous >= WARNING_INTERVAL_MS
             && self
@@ -166,6 +177,16 @@ impl LiveGate {
                 .compare_exchange(previous, now, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
     }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn whole_seconds(left: Duration) -> i64 {
+    i64::try_from(left.as_millis().div_ceil(1000))
+        .unwrap_or(i64::MAX)
+        .max(1)
 }
 
 pub fn cooling_seconds(retry_after: Option<i64>) -> i64 {
