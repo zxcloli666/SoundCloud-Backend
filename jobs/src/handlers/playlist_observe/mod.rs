@@ -160,6 +160,9 @@ impl PlaylistObserveHandler {
                     .await
                 {
                     Ok(token) => token,
+                    Err(ConnectionError::ReauthorizationRequired) => {
+                        return self.observe_without_owner(urn, capture).await;
+                    }
                     Err(error) => return self.finish_connection_failure(capture, error).await,
                 };
                 match self.reader.observe(urn, &refreshed.value).await {
