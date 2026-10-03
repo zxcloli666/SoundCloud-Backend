@@ -145,6 +145,30 @@ impl LiveSearch {
         })
     }
 
+    pub fn rescue_plan(
+        &self,
+        raw: Option<&str>,
+        headers: &HeaderMap,
+        pagination: &PaginationQuery,
+        sc_user_id: &str,
+    ) -> Option<LiveRequest> {
+        let wanted = LiveClass::Rescue.allowed_in(self.cfg.mode, self.cfg.db_rescue)
+            && Intent::from_headers(headers) == Intent::Absent
+            && pagination.page() == 0;
+        if !wanted {
+            return None;
+        }
+        let query = LiveQuery::parse(raw?).filter(LiveQuery::is_specific)?;
+        Some(LiveRequest {
+            kind: LiveKind::Tracks,
+            class: LiveClass::Rescue,
+            query,
+            page: 0,
+            limit: pagination.limit().min(MAX_LIMIT),
+            identity: identity_of(sc_user_id),
+        })
+    }
+
     pub async fn page<F, Fut>(&self, request: &LiveRequest, local: F) -> AppResult<LivePage>
     where
         F: Fn(i64) -> Fut,

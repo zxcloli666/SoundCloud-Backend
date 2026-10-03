@@ -58,6 +58,16 @@ fn a_short_query_or_a_link_never_goes_live() {
 }
 
 #[test]
+fn a_rescue_needs_two_words_or_five_characters() {
+    let specific = |raw: &str| LiveQuery::parse(raw).is_some_and(|query| query.is_specific());
+    assert!(!specific("abc"));
+    assert!(!specific("abcd"));
+    assert!(specific("abcde"));
+    assert!(specific("ab cd"));
+    assert!(specific("u2 one"));
+}
+
+#[test]
 fn only_a_plain_phrase_is_eligible() {
     assert_eq!(plain_tracks(&plain_query()), Some("lucid dreams"));
     for filtered in [

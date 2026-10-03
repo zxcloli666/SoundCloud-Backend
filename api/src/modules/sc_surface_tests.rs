@@ -33,7 +33,8 @@ const ALLOWED: [(&str, &str); 6] = [
     (
         "live_search",
         "SEARCH_LIVE: page 0 of ?q= on /tracks /playlists /users and the YM import when the \
-         local page is thin; cached, budgeted, breaker-guarded",
+         local page is thin, and an empty /search/db/tracks page 0 behind SEARCH_LIVE_DB_RESCUE; \
+         cached, budgeted, breaker-guarded",
     ),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
     (
@@ -115,7 +116,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 64] = [
+const CLASSIFIED_ROUTES: [&str; 65] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -171,6 +172,7 @@ const CLASSIFIED_ROUTES: [&str; 64] = [
     "/playlists/{playlist_urn}/sharing",
     "/playlists/{playlist_urn}/tracks",
     "/resolve",
+    "/search/db/tracks",
     "/tracks",
     "/tracks/{track_urn}",
     "/tracks/{track_urn}/comments",

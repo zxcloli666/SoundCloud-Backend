@@ -29,6 +29,8 @@ pub const SIDE_ENOUGH_ROWS: usize = 5;
 const MAX_QUERY_CHARS: usize = 128;
 const MIN_NORMALIZED_CHARS: usize = 3;
 const IMPORT_MAX_LIMIT: i64 = 5;
+const RESCUE_MIN_TOKENS: usize = 2;
+const RESCUE_MIN_CHARS: usize = 5;
 const LINK_MARKERS: [&str; 3] = ["soundcloud.com", "snd.sc", "://"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +185,11 @@ impl LiveQuery {
 
     pub fn short_hash(&self) -> &str {
         &self.hash[..8]
+    }
+
+    pub fn is_specific(&self) -> bool {
+        self.norm.split_whitespace().count() >= RESCUE_MIN_TOKENS
+            || self.norm.chars().count() >= RESCUE_MIN_CHARS
     }
 }
 

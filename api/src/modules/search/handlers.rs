@@ -15,7 +15,6 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/search/db/tracks", get(tracks))
         .route("/search/db/playlists", get(playlists))
         .route("/search/db/users", get(users))
         .route("/search/db/artists", get(artists))
@@ -79,16 +78,6 @@ async fn lyrics(
 struct CommonSearchQuery {
     #[serde(default)]
     q: Option<String>,
-}
-
-async fn tracks(
-    State(st): State<AppState>,
-    _ctx: SessionCtx,
-    Query(p): Query<PaginationQuery>,
-    Query(q): Query<super::query::TrackSearchQuery>,
-) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    Ok(Json(st.search.tracks(&q, page, limit).await?))
 }
 
 async fn playlists(

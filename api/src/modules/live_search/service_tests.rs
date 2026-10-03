@@ -129,6 +129,18 @@ fn live_admission() -> Arc<PublicAdmission> {
 }
 
 fn harness(pool: &PgPool, script: Script, mode: LiveMode) -> anyhow::Result<Harness> {
+    harness_with(
+        pool,
+        script,
+        LiveSearchCfg {
+            mode,
+            db_rescue: false,
+            max_in_flight: 8,
+        },
+    )
+}
+
+fn harness_with(pool: &PgPool, script: Script, cfg: LiveSearchCfg) -> anyhow::Result<Harness> {
     let relay = SearchRelay::new(script);
     let sc = ScClient::new(&sc_transport::ScConfig {
         proxy_url: String::new(),
@@ -150,11 +162,7 @@ fn harness(pool: &PgPool, script: Script, mode: LiveMode) -> anyhow::Result<Harn
         CacheService::new(redis()),
         live_admission(),
         pool.clone(),
-        LiveSearchCfg {
-            mode,
-            db_rescue: false,
-            max_in_flight: 8,
-        },
+        cfg,
     );
     Ok(Harness {
         live,
@@ -566,6 +574,109 @@ async fn the_fill_is_off_in_explicit_mode_and_a_failed_local_page_keeps_the_wind
     assert_eq!(page.live.local, Some("unavailable"));
     assert_eq!(page.page.collection.len(), 2);
     assert!(!page.page.has_more);
+    Ok(())
+}
+
+fn rescuing(mode: LiveMode) -> LiveSearchCfg {
+    LiveSearchCfg {
+        mode,
+        db_rescue: true,
+        max_in_flight: 8,
+    }
+}
+
+fn first_page() -> PaginationQuery {
+    PaginationQuery {
+        page: Some(0),
+        limit: Some(20),
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn only_an_old_client_on_page_zero_with_a_specific_phrase_is_rescued(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let lab = harness_with(&pool, Script::Silent, rescuing(LiveMode::Auto))?;
+    let none = HeaderMap::new();
+    let mut wall = HeaderMap::new();
+    wall.insert("x-search-intent", HeaderValue::from_static("wall"));
+    let later = PaginationQuery {
+        page: Some(1),
+        limit: Some(20),
+    };
+
+    let rescue = lab
+        .live
+        .rescue_plan(Some("lucid dreams"), &none, &first_page(), "17")
+        .expect("an old default-mode search is rescued");
+    assert_eq!(rescue.class, LiveClass::Rescue);
+    assert_eq!(rescue.kind, LiveKind::Tracks);
+    assert!(
+        lab.live
+            .rescue_plan(Some("lucid dreams"), &wall, &first_page(), "17")
+            .is_none(),
+        "a client that names its intent opted out"
+    );
+    assert!(
+        lab.live
+            .rescue_plan(Some("lucid dreams"), &none, &later, "17")
+            .is_none()
+    );
+    assert!(
+        lab.live
+            .rescue_plan(Some("abc"), &none, &first_page(), "17")
+            .is_none(),
+        "a short single word is too vague to spend SoundCloud on"
+    );
+    assert!(
+        lab.live
+            .rescue_plan(None, &none, &first_page(), "17")
+            .is_none()
+    );
+
+    for cfg in [
+        rescuing(LiveMode::Explicit),
+        LiveSearchCfg {
+            mode: LiveMode::Auto,
+            db_rescue: false,
+            max_in_flight: 8,
+        },
+    ] {
+        let off = harness_with(&pool, Script::Silent, cfg)?;
+        assert!(
+            off.live
+                .rescue_plan(Some("lucid dreams"), &none, &first_page(), "17")
+                .is_none()
+        );
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn an_empty_wall_page_is_rescued_with_the_soundcloud_window(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let at = base();
+    let lab = harness_with(
+        &pool,
+        Script::Answers(hits(at, 3)),
+        rescuing(LiveMode::Auto),
+    )?;
+    let phrase = lab.phrase("nothing local");
+    let request = lab
+        .live
+        .rescue_plan(Some(&phrase), &HeaderMap::new(), &first_page(), "17")
+        .expect("eligible");
+
+    let page = lab
+        .live
+        .page(&request, |_| async { page_of(Vec::new(), 0, false) })
+        .await?;
+
+    assert_eq!(page.state(), LiveState::Fresh);
+    assert_eq!(sources(&page), ["soundcloud"; 3]);
+    assert_eq!(lab.relay.calls(), 1);
     Ok(())
 }
 
