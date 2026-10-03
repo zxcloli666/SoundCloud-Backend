@@ -7,6 +7,7 @@ use sqlx::PgPool;
 
 use crate::background_jobs::{BackgroundJob, BackgroundJobs};
 use crate::error::AppResult;
+use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,7 +100,7 @@ impl PlaylistMembership {
                 playlist_urn: playlist_urn.to_owned(),
             },
         )
-        .map(BackgroundJob::if_absent);
+        .map(|job| job.if_absent().with_priority(VIEWER_PRIORITY));
         let published = match job {
             Ok(job) => self.jobs.enqueue_opportunistic(&job).await,
             Err(_) => false,

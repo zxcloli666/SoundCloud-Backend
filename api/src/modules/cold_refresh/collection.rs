@@ -11,8 +11,9 @@ use crate::common::pagination::last_page;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
+use super::VIEWER_PRIORITY;
+
 const OWNER_PRIORITY: i16 = 20;
-const PUBLIC_PRIORITY: i16 = 15;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +105,7 @@ pub(super) async fn ensure(
         let priority = if owner {
             OWNER_PRIORITY
         } else {
-            PUBLIC_PRIORITY
+            VIEWER_PRIORITY
         };
         sqlx::query_file!(
             "queries/cold_refresh/enqueue_entity.sql",

@@ -3,6 +3,8 @@ pub mod entity;
 mod read;
 pub mod service;
 
+pub const VIEWER_PRIORITY: i16 = 15;
+
 #[cfg(test)]
 mod page_tests;
 
