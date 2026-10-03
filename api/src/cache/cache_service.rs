@@ -143,6 +143,93 @@ impl CacheService {
         Ok(())
     }
 
+    pub async fn get_many_raw(&self, keys: &[String]) -> Vec<Option<String>> {
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        let full: Vec<String> = keys
+            .iter()
+            .map(|key| format!("{DATA_PREFIX}{key}"))
+            .collect();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(READ_TIMEOUT, async {
+            let mut conn = self.redis.get().await?;
+            let values: Vec<Option<String>> = deadpool_redis::redis::cmd("MGET")
+                .arg(&full)
+                .query_async(&mut conn)
+                .await?;
+            Ok::<_, crate::error::AppError>(values)
+        })
+        .await;
+        let (outcome, values) = match result {
+            Ok(Ok(values)) if values.len() == keys.len() => (crate::metrics::Outcome::Ok, values),
+            Ok(_) => (crate::metrics::Outcome::Error, vec![None; keys.len()]),
+            Err(_) => (crate::metrics::Outcome::Timeout, vec![None; keys.len()]),
+        };
+        crate::metrics::record_dependency("redis", "mget", outcome, started.elapsed());
+        values
+    }
+
+    pub async fn set_many_raw(&self, entries: &[(String, String, u64)]) -> AppResult<()> {
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic();
+        for (key, payload, ttl_sec) in entries {
+            pipe.set_ex::<_, _>(format!("{DATA_PREFIX}{key}"), payload, *ttl_sec)
+                .ignore();
+        }
+        self.write_pipeline("set_many", entries.len(), pipe).await
+    }
+
+    pub async fn set_many_raw_nx(
+        &self,
+        entries: &[(String, String)],
+        ttl_sec: u64,
+    ) -> AppResult<()> {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for (key, payload) in entries {
+            pipe.cmd("SET")
+                .arg(format!("{DATA_PREFIX}{key}"))
+                .arg(payload)
+                .arg("NX")
+                .arg("EX")
+                .arg(ttl_sec)
+                .ignore();
+        }
+        self.write_pipeline("set_many_nx", entries.len(), pipe)
+            .await
+    }
+
+    async fn write_pipeline(
+        &self,
+        operation: &'static str,
+        entries: usize,
+        pipe: deadpool_redis::redis::Pipeline,
+    ) -> AppResult<()> {
+        if entries == 0 {
+            return Ok(());
+        }
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(WRITE_TIMEOUT, async {
+            let mut conn = self.redis.get().await?;
+            pipe.query_async::<()>(&mut conn).await?;
+            Ok::<(), crate::error::AppError>(())
+        })
+        .await;
+        let outcome = match &result {
+            Ok(Ok(())) => crate::metrics::Outcome::Ok,
+            Ok(Err(_)) => crate::metrics::Outcome::Error,
+            Err(_) => crate::metrics::Outcome::Timeout,
+        };
+        crate::metrics::record_dependency("redis", operation, outcome, started.elapsed());
+        match result {
+            Ok(inner) => inner,
+            Err(_) => {
+                warn!(operation, entries, "redis write timed out");
+                Ok(())
+            }
+        }
+    }
+
     pub async fn clear_by_cache_keys(
         &self,
         cache_keys: &[String],
