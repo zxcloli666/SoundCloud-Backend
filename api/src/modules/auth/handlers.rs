@@ -177,7 +177,7 @@ async fn link_create(
     Ok(no_store_json(CreateLinkResponse {
         link_request_id: result.link_request_id,
         claim_token: result.claim_token,
-        expires_at: result.expires_at,
+        expires_at: result.expires_at.and_utc(),
     }))
 }
 

@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -49,7 +49,7 @@ pub struct CreateLinkRequest {
 pub struct CreateLinkResponse {
     pub link_request_id: Uuid,
     pub claim_token: String,
-    pub expires_at: NaiveDateTime,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
