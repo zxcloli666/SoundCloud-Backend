@@ -23,4 +23,12 @@ WHERE playlist_membership_state.last_operation_sequence
       SELECT playlist.track_count
       FROM playlists AS playlist
       WHERE playlist.urn = $1 AND playlist.deleted_at IS NULL
-  ) <> playlist_membership_state.projection_track_count
+  ) <> COALESCE(
+      (
+          SELECT baseline.declared_track_count
+          FROM playlist_remote_observations AS baseline
+          WHERE baseline.playlist_urn = playlist_membership_state.playlist_urn
+            AND baseline.id = playlist_membership_state.baseline_observation_id
+      ),
+      playlist_membership_state.projection_track_count
+  )

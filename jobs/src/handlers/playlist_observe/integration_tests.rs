@@ -16,6 +16,7 @@ use crate::config::{OAuthConfig, PlaylistReconcileConfig, SyncQueueConfig};
 use crate::queue::JobRepository;
 
 use super::client::PlaylistReadClient;
+use super::model::Authority;
 use super::remote::PlaylistReader;
 use super::repository::PlaylistObserveRepository;
 use super::{ConnectionManager, PlaylistObserveHandler, TokenRefreshClient};
@@ -281,6 +282,12 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              client_id text NOT NULL,
              client_secret text NOT NULL,
              active boolean NOT NULL DEFAULT true
+         );
+         CREATE TABLE oauth_app_tokens (
+             oauth_app_id uuid PRIMARY KEY REFERENCES oauth_apps(id) ON DELETE CASCADE,
+             generation uuid NOT NULL DEFAULT gen_random_uuid(),
+             access_token text,
+             expires_at timestamptz NOT NULL
          );
          CREATE TABLE soundcloud_connections (
              id uuid PRIMARY KEY,
@@ -693,6 +700,7 @@ async fn reduce_with(
         .persist_success(
             &capture,
             snapshot,
+            Authority::Owner,
             catalog_ingest::Observation::begin(pool).await?,
         )
         .await?;
@@ -1066,6 +1074,7 @@ async fn a_membership_write_during_the_read_supersedes_the_run(pool: PgPool) -> 
         .persist_success(
             &capture,
             &snapshot_of(&["1", "2"]),
+            Authority::Owner,
             catalog_ingest::Observation::begin(&pool).await?,
         )
         .await?;
@@ -1115,7 +1124,12 @@ async fn deleting_a_playlist_finishes_inflight_observation_without_rescheduling(
 
     assert_eq!(
         repository
-            .persist_success(&capture, &snapshot_of(&["1", "2", "9"]), observation)
+            .persist_success(
+                &capture,
+                &snapshot_of(&["1", "2", "9"]),
+                Authority::Owner,
+                observation,
+            )
             .await?,
         super::repository::PersistResult::Finished
     );
@@ -1649,3 +1663,5 @@ async fn the_sweep_rotates_owners_instead_of_restarting_from_the_first(
     );
     Ok(())
 }
+
+mod partial_and_public;

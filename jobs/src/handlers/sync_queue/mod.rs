@@ -25,7 +25,7 @@ use self::repository::{FinalizeError, SyncQueueRepository};
 use self::storage::TrackStorage;
 
 pub(super) use self::client::TokenRefreshClient;
-pub(super) use self::connection::{ConnectionError, ConnectionManager};
+pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
 
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;

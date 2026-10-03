@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::classification::{MembershipRelation, membership_relation};
 use super::fingerprint::membership_fingerprint;
-use super::model::PlaylistSnapshot;
+use super::model::{Authority, PlaylistSnapshot};
 use super::reduce::{
     Boundary, Intent, Operation, Placement, Reduction, ReductionOutcome, Resolution,
     ResolvedOperation, committed_prefix, reduce,
@@ -15,6 +15,7 @@ use super::reduce::{
 use super::urn::PlaylistUrn;
 
 pub const OPERATION_MALFORMED: &str = "operation_malformed";
+const PARTIAL_OBSERVATION: &str = "soundcloud_playlist_partial";
 
 pub struct PlaylistObserveRepository {
     pool: PgPool,
@@ -236,19 +237,35 @@ impl PlaylistObserveRepository {
         Ok(ready_capture(capture))
     }
 
+    pub async fn is_public(&self, urn: &PlaylistUrn) -> Result<bool, RepositoryError> {
+        Ok(
+            sqlx::query_file_scalar!("queries/playlist_observe/is_public.sql", urn.as_str())
+                .fetch_one(&self.pool)
+                .await?,
+        )
+    }
+
     pub async fn persist_success(
         &self,
         capture: &ObservationCapture,
         snapshot: &PlaylistSnapshot,
+        authority: Authority,
         metadata_observation: catalog_ingest::Observation,
     ) -> Result<PersistResult, RepositoryError> {
         if snapshot.owner_id != capture.owner_id
-            || snapshot.track_count < 0
-            || usize::try_from(snapshot.track_count).ok() != Some(snapshot.track_ids.len())
+            || !usize::try_from(snapshot.track_count)
+                .is_ok_and(|declared| snapshot.track_ids.len() <= declared)
             || !hydration_matches_snapshot(snapshot)
         {
             return Err(RepositoryError::InconsistentSnapshot);
         }
+        let observed_track_count = i32::try_from(snapshot.track_ids.len())
+            .map_err(|_| RepositoryError::InconsistentSnapshot)?;
+        let (outcome, error_kind) = if snapshot.is_partial() {
+            ("incomplete", Some(PARTIAL_OBSERVATION))
+        } else {
+            ("complete", None)
+        };
         let mut transaction = self.pool.begin().await?;
         let locked = lock_run(&mut transaction, capture).await?;
         if locked.decision != "started" {
@@ -264,12 +281,16 @@ impl PlaylistObserveRepository {
         )
         .await?;
         let observation_id = sqlx::query_file_scalar!(
-            "queries/playlist_observe/insert_complete_observation.sql",
+            "queries/playlist_observe/insert_snapshot_observation.sql",
             &capture.playlist_urn,
             snapshot_id,
+            authority.as_str(),
+            outcome,
             snapshot.track_count,
+            observed_track_count,
             snapshot.remote_last_modified,
-            snapshot.observed_at
+            snapshot.observed_at,
+            error_kind
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -388,8 +409,10 @@ impl PlaylistObserveRepository {
         if state_updated.rows_affected() != 1 {
             return Err(RepositoryError::InconsistentSnapshot);
         }
-        self.enqueue_membership_apply(&mut transaction, capture, &outcome)
-            .await?;
+        if authority == Authority::Owner && !snapshot.is_partial() {
+            self.enqueue_membership_apply(&mut transaction, capture, &outcome)
+                .await?;
+        }
         let run_updated = sqlx::query_file!(
             "queries/playlist_observe/complete_run.sql",
             capture.run_id,

@@ -17,11 +17,19 @@ const TRANSIENT_RETRY_MAX_SECONDS: i32 = 15 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i32 = 5 * 60;
 const APP_CREDENTIALS_RETRY_SECONDS: i64 = 30 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
+const APP_TOKEN_MIN_LIFETIME_SECONDS: i64 = 30;
 
 #[derive(Clone, Debug)]
 pub struct AccessToken {
     pub value: String,
     pub oauth_app_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppToken {
+    pub value: String,
+    pub oauth_app_id: Uuid,
+    pub generation: Uuid,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +105,34 @@ impl ConnectionManager {
         oauth_app_id: Uuid,
     ) -> Result<Option<i64>, ConnectionError> {
         Ok(self.cooldowns.retry_after_seconds(oauth_app_id).await?)
+    }
+
+    pub async fn app_tokens(&self) -> Result<Vec<AppToken>, ConnectionError> {
+        let rows = sqlx::query_file!(
+            "../api/queries/oauth_apps/token_service/reload_snapshot.sql",
+            chrono::Utc::now() + chrono::Duration::seconds(APP_TOKEN_MIN_LIFETIME_SECONDS)
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| AppToken {
+                value: row.access_token,
+                oauth_app_id: row.oauth_app_id,
+                generation: row.generation,
+            })
+            .collect())
+    }
+
+    pub async fn reject_app_token(&self, token: &AppToken) -> Result<(), ConnectionError> {
+        sqlx::query_file!(
+            "../api/queries/oauth_apps/token_service/reject_generation.sql",
+            token.oauth_app_id,
+            token.generation
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn reject_for_later(

@@ -23,6 +23,7 @@ use crate::config::{JobsConfig, PlaylistReconcileConfig};
 use crate::queue::{JobError, JobRepository, JobResult, NewJob};
 
 pub(super) use self::client::{PlaylistReadClient, PlaylistReadError};
+use self::model::{Authority, PlaylistSnapshot};
 use self::remote::{PlaylistObserveError, PlaylistReader};
 use self::repository::{
     CaptureResult, FailureObservation, ObservationCapture, PersistResult,
@@ -30,7 +31,7 @@ use self::repository::{
 };
 use self::urn::PlaylistUrn;
 use super::lyrics::wake;
-use super::sync_queue::{ConnectionError, ConnectionManager, TokenRefreshClient};
+use super::sync_queue::{AccessToken, ConnectionError, ConnectionManager, TokenRefreshClient};
 
 const REAUTHORIZATION_RETRY: Duration = Duration::from_secs(15 * 60);
 const RATE_LIMIT_RETRY: Duration = Duration::from_secs(5 * 60);
@@ -39,6 +40,7 @@ const MALFORMED_RETRY: Duration = Duration::from_secs(5 * 60);
 const FORBIDDEN_RETRY: Duration = Duration::from_secs(30 * 60);
 const MAX_REMOTE_RETRY: Duration = Duration::from_secs(24 * 60 * 60);
 const OBSERVE_MAX_ATTEMPTS: i16 = 8;
+const PUBLIC_TOKEN_ATTEMPTS: usize = 4;
 
 pub struct PlaylistObserveHandler {
     pool: PgPool,
@@ -115,14 +117,25 @@ impl PlaylistObserveHandler {
         let capture = captured
             .capture
             .ok_or_else(|| JobError::retryable(anyhow::anyhow!("playlist capture is missing")))?;
-        let token = match self
+        match self
             .connections
             .access_token(&self.token_client, &capture.owner_id)
             .await
         {
-            Ok(token) => token,
-            Err(error) => return self.finish_connection_failure(&capture, error).await,
-        };
+            Ok(token) => self.observe_as_owner(&urn, &capture, token).await,
+            Err(ConnectionError::ReauthorizationRequired) => {
+                self.observe_without_owner(&urn, &capture).await
+            }
+            Err(error) => self.finish_connection_failure(&capture, error).await,
+        }
+    }
+
+    async fn observe_as_owner(
+        &self,
+        urn: &PlaylistUrn,
+        capture: &ObservationCapture,
+        token: AccessToken,
+    ) -> JobResult {
         if let Some(app_id) = token.oauth_app_id
             && let Some(retry_after_seconds) = self
                 .connections
@@ -132,13 +145,13 @@ impl PlaylistObserveHandler {
         {
             let retry = seconds(retry_after_seconds, RATE_LIMIT_RETRY);
             return self
-                .finish_failure(&capture, cooling_down_failure(retry))
+                .finish_failure(capture, cooling_down_failure(retry))
                 .await;
         }
         let metadata_observation = catalog_ingest::Observation::begin(&self.pool)
             .await
             .map_err(JobError::retryable)?;
-        let snapshot = match self.reader.observe(&urn, &token.value).await {
+        let snapshot = match self.reader.observe(urn, &token.value).await {
             Ok(snapshot) => snapshot,
             Err(error) if is_unauthorized(&error) => {
                 let refreshed = match self
@@ -147,33 +160,98 @@ impl PlaylistObserveHandler {
                     .await
                 {
                     Ok(token) => token,
-                    Err(error) => return self.finish_connection_failure(&capture, error).await,
+                    Err(error) => return self.finish_connection_failure(capture, error).await,
                 };
-                match self.reader.observe(&urn, &refreshed.value).await {
+                match self.reader.observe(urn, &refreshed.value).await {
                     Ok(snapshot) => snapshot,
                     Err(error) if is_unauthorized(&error) => {
                         self.connections
                             .reject_for_later(&capture.owner_id, &refreshed.value)
                             .await
                             .map_err(connection_job_error)?;
-                        return self.finish_failure(&capture, unauthorized_failure()).await;
+                        return self.finish_failure(capture, unauthorized_failure()).await;
                     }
                     Err(error) => {
                         return self
-                            .finish_read_failure(&capture, error, refreshed.oauth_app_id)
+                            .finish_read_failure(capture, error, refreshed.oauth_app_id)
                             .await;
                     }
                 }
             }
             Err(error) => {
                 return self
-                    .finish_read_failure(&capture, error, token.oauth_app_id)
+                    .finish_read_failure(capture, error, token.oauth_app_id)
                     .await;
             }
         };
+        self.finish_success(capture, &snapshot, Authority::Owner, metadata_observation)
+            .await
+    }
+
+    async fn observe_without_owner(
+        &self,
+        urn: &PlaylistUrn,
+        capture: &ObservationCapture,
+    ) -> JobResult {
+        let public = self
+            .repository
+            .is_public(urn)
+            .await
+            .map_err(repository_job_error)?;
+        if !public {
+            return self.finish_failure(capture, unauthorized_failure()).await;
+        }
+        let tokens = self
+            .connections
+            .app_tokens()
+            .await
+            .map_err(connection_job_error)?;
+        let metadata_observation = catalog_ingest::Observation::begin(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+        let mut failure = unauthorized_failure();
+        for token in tokens.into_iter().take(PUBLIC_TOKEN_ATTEMPTS) {
+            if let Some(retry_after_seconds) = self
+                .connections
+                .app_retry_after_seconds(token.oauth_app_id)
+                .await
+                .map_err(connection_job_error)?
+            {
+                failure = cooling_down_failure(seconds(retry_after_seconds, RATE_LIMIT_RETRY));
+                continue;
+            }
+            match self.reader.observe(urn, &token.value).await {
+                Ok(snapshot) => {
+                    return self
+                        .finish_success(capture, &snapshot, Authority::Public, metadata_observation)
+                        .await;
+                }
+                Err(error) if is_unauthorized(&error) => {
+                    self.connections
+                        .reject_app_token(&token)
+                        .await
+                        .map_err(connection_job_error)?;
+                }
+                Err(error) => {
+                    return self
+                        .finish_read_failure(capture, error, Some(token.oauth_app_id))
+                        .await;
+                }
+            }
+        }
+        self.finish_failure(capture, failure).await
+    }
+
+    async fn finish_success(
+        &self,
+        capture: &ObservationCapture,
+        snapshot: &PlaylistSnapshot,
+        authority: Authority,
+        metadata_observation: catalog_ingest::Observation,
+    ) -> JobResult {
         let result = self
             .repository
-            .persist_success(&capture, &snapshot, metadata_observation)
+            .persist_success(capture, snapshot, authority, metadata_observation)
             .await
             .map_err(repository_job_error)?;
         if result == PersistResult::Applied {

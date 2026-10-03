@@ -132,6 +132,7 @@ impl PlaylistReader {
         let mut track_ids = Vec::with_capacity(expected_count);
         let mut hydrated_tracks = Vec::with_capacity(expected_count);
         let mut seen_ids = HashSet::with_capacity(expected_count);
+        let mut hydrated_ids = HashSet::with_capacity(expected_count);
         for _ in 0..MAX_PAGES {
             let Some(target) = next.take() else {
                 break;
@@ -155,14 +156,15 @@ impl PlaylistReader {
                 ));
             }
             for track_id in page.track_ids {
-                if !seen_ids.insert(track_id.clone()) {
-                    return Err(PlaylistObserveError::Invalid(
-                        "playlist contains duplicate track IDs",
-                    ));
+                if seen_ids.insert(track_id.clone()) {
+                    track_ids.push(track_id);
                 }
-                track_ids.push(track_id);
             }
-            hydrated_tracks.extend(page.hydrated_tracks);
+            hydrated_tracks.extend(
+                page.hydrated_tracks
+                    .into_iter()
+                    .filter(|track| hydrated_ids.insert(track.sc_track_id.clone())),
+            );
             if track_ids.len() > expected_count || track_ids.len() > MAX_TRACKS {
                 return Err(PlaylistObserveError::Invalid(
                     "playlist returned more tracks than declared",
@@ -178,11 +180,6 @@ impl PlaylistReader {
         if next.is_some() {
             return Err(PlaylistObserveError::Invalid(
                 "playlist pagination exceeded the page limit",
-            ));
-        }
-        if track_ids.len() != expected_count {
-            return Err(PlaylistObserveError::Invalid(
-                "playlist pagination ended before the declared track count",
             ));
         }
         Ok(ObservedMembership {
