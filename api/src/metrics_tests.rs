@@ -223,6 +223,9 @@ async fn every_metric_an_alert_watches_is_actually_exported(
         retry_after_sec: Some(30),
     });
     set_relay_breaker_open(false);
+    record_live_request("tracks", "main", "limited");
+    record_live_fetch("tracks", "proxy", "rate_limited");
+    set_live_gate_closed("pause", false);
     sample_pool_wait(&pool).await;
 
     let Some(body) = render(&pool).await else {

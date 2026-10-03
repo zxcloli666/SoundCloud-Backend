@@ -15,6 +15,11 @@ const SC_RELAY_BREAKER_OPEN: &str = "api_sc_relay_breaker_open";
 const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
 const SEARCH_FAILURES: &str = "api_search_failures_total";
+const LIVE_REQUESTS: &str = "api_live_search_requests_total";
+const LIVE_FETCHES: &str = "api_live_search_fetch_total";
+const LIVE_GATE_CLOSED: &str = "api_live_search_gate_closed";
+const LIVE_ADOPTS: &str = "api_live_search_adopt_total";
+const LIVE_WINDOW_BYTES: &str = "api_live_search_window_bytes_total";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const PG_BACKENDS: &str = "api_pg_backends";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
@@ -158,6 +163,43 @@ pub fn record_search_failure(code: &'static str) {
         return;
     }
     metrics::counter!(SEARCH_FAILURES, "code" => code).increment(1);
+}
+
+pub fn record_live_request(kind: &'static str, class: &'static str, state: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(LIVE_REQUESTS, "kind" => kind, "class" => class, "state" => state)
+        .increment(1);
+}
+
+pub fn record_live_fetch(kind: &'static str, tier: &'static str, outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(LIVE_FETCHES, "kind" => kind, "tier" => tier, "outcome" => outcome)
+        .increment(1);
+}
+
+pub fn set_live_gate_closed(gate: &'static str, closed: bool) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::gauge!(LIVE_GATE_CLOSED, "gate" => gate).set(f64::from(u8::from(closed)));
+}
+
+pub fn record_live_adopt(entity: &'static str, outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(LIVE_ADOPTS, "entity" => entity, "outcome" => outcome).increment(1);
+}
+
+pub fn record_live_window_bytes(bytes: usize) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(LIVE_WINDOW_BYTES).increment(bytes as u64);
 }
 
 pub fn record_taste_vector_read_error() {
