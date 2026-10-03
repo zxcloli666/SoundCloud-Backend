@@ -114,14 +114,17 @@ impl ConnectionManager {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
+        let mut tokens: Vec<AppToken> = rows
             .into_iter()
             .map(|row| AppToken {
                 value: row.access_token,
                 oauth_app_id: row.oauth_app_id,
                 generation: row.generation,
             })
-            .collect())
+            .collect();
+        let start = usize::from(Uuid::new_v4().as_bytes()[0]) % tokens.len().max(1);
+        tokens.rotate_left(start);
+        Ok(tokens)
     }
 
     pub async fn reject_app_token(&self, token: &AppToken) -> Result<(), ConnectionError> {
