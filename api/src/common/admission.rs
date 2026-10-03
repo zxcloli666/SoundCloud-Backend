@@ -65,14 +65,19 @@ pub struct PublicAdmission {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Endpoint {
+pub(crate) enum Endpoint {
     Login,
     LinkCreate,
     Resolve,
+    LiveMain,
+    LiveSide,
+    LiveImport,
+    LiveRescue,
+    LiveProxy,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Decision {
+pub(crate) enum Decision {
     Allowed,
     Limited { retry_after_seconds: u64 },
     Unavailable,
@@ -91,6 +96,10 @@ impl PublicAdmission {
         Self::with_namespace(redis, config, "public:admission")
     }
 
+    pub fn for_live_search(redis: RedisPool, config: AdmissionCfg) -> Arc<Self> {
+        Self::with_namespace(redis, config, "live:admission")
+    }
+
     fn with_namespace(
         redis: RedisPool,
         config: AdmissionCfg,
@@ -106,14 +115,23 @@ impl PublicAdmission {
     }
 
     async fn check(&self, endpoint: Endpoint, address: SocketAddr) -> Decision {
+        self.decide(endpoint, &client_identity(address.ip())).await
+    }
+
+    pub(crate) async fn check_identity(&self, endpoint: Endpoint, identity: &str) -> Decision {
+        self.decide(endpoint, identity).await
+    }
+
+    async fn decide(&self, endpoint: Endpoint, identity: &str) -> Decision {
         let Ok(_permit) = self.in_flight.try_acquire() else {
             return Decision::Unavailable;
         };
-        match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, address)).await {
+        match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, identity)).await
+        {
             Ok(Ok(decision)) => decision,
             Ok(Err(error)) => {
                 if self.warning_due() {
-                    warn!(endpoint = endpoint.name(), %error, "Auth admission store failed");
+                    warn!(endpoint = endpoint.name(), %error, "Admission store failed");
                 }
                 Decision::Unavailable
             }
@@ -122,7 +140,7 @@ impl PublicAdmission {
                     warn!(
                         endpoint = endpoint.name(),
                         timeout_ms = self.config.timeout.as_millis(),
-                        "Auth admission store timed out"
+                        "Admission store timed out"
                     );
                 }
                 Decision::Unavailable
@@ -133,15 +151,14 @@ impl PublicAdmission {
     async fn check_redis(
         &self,
         endpoint: Endpoint,
-        address: SocketAddr,
+        identity: &str,
     ) -> Result<Decision, StoreError> {
         let limits = self.limits(endpoint);
         let global_key = format!("{}:{{{}}}:global", self.namespace, endpoint.key());
         let client_key = format!(
-            "{}:{{{}}}:client:{}",
+            "{}:{{{}}}:client:{identity}",
             self.namespace,
-            endpoint.key(),
-            client_identity(address.ip())
+            endpoint.key()
         );
         let window_milliseconds = i64::try_from(self.config.window.as_millis()).unwrap_or(i64::MAX);
         let mut connection = self.redis.get().await?;
@@ -167,6 +184,11 @@ impl PublicAdmission {
             Endpoint::Login => self.config.login,
             Endpoint::LinkCreate => self.config.link_create,
             Endpoint::Resolve => self.config.resolve,
+            Endpoint::LiveMain => self.config.live_main,
+            Endpoint::LiveSide => self.config.live_side,
+            Endpoint::LiveImport => self.config.live_import,
+            Endpoint::LiveRescue => self.config.live_rescue,
+            Endpoint::LiveProxy => self.config.live_proxy,
         }
     }
 
@@ -200,6 +222,11 @@ impl Endpoint {
             Self::Login => "login",
             Self::LinkCreate => "link-create",
             Self::Resolve => "resolve",
+            Self::LiveMain => "live-main",
+            Self::LiveSide => "live-side",
+            Self::LiveImport => "live-import",
+            Self::LiveRescue => "live-rescue",
+            Self::LiveProxy => "live-proxy",
         }
     }
 
@@ -208,6 +235,11 @@ impl Endpoint {
             Self::Login => "/auth/login",
             Self::LinkCreate => "/auth/link/create",
             Self::Resolve => "/resolve",
+            Self::LiveMain => "live search main",
+            Self::LiveSide => "live search side",
+            Self::LiveImport => "live search import",
+            Self::LiveRescue => "live search rescue",
+            Self::LiveProxy => "live search proxy",
         }
     }
 }
