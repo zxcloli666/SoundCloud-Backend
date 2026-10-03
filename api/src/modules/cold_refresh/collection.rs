@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::cache::ListPageResult;
+use crate::common::pagination::last_page;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
@@ -55,7 +56,7 @@ impl CollectionPage {
     pub fn empty(sync: CollectionSync, page: i64, limit: i64) -> Self {
         Self {
             collection: Vec::new(),
-            page: page.clamp(0, 100),
+            page: page.clamp(0, last_page(limit)),
             page_size: limit,
             has_more: false,
             sync,
