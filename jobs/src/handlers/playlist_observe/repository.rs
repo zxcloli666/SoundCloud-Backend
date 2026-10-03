@@ -45,6 +45,7 @@ pub enum PersistResult {
     Applied,
     Superseded,
     Finished,
+    EmptyRead,
 }
 
 pub struct CapturedObservation {
@@ -272,6 +273,16 @@ impl PlaylistObserveRepository {
             transaction.commit().await?;
             return Ok(PersistResult::Finished);
         }
+        let local_track_ids = sqlx::query_file_scalar!(
+            "queries/playlist_observe/load_projection.sql",
+            &capture.playlist_urn
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        if snapshot.track_ids.is_empty() && snapshot.is_partial() && !local_track_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(PersistResult::EmptyRead);
+        }
         let fingerprint = membership_fingerprint(&snapshot.track_ids);
         let snapshot_id = store_snapshot(
             &mut transaction,
@@ -309,12 +320,6 @@ impl PlaylistObserveRepository {
         let catalog_complete =
             hydrate_catalog(&mut transaction, snapshot, metadata_observation).await?;
 
-        let local_track_ids = sqlx::query_file_scalar!(
-            "queries/playlist_observe/load_projection.sql",
-            &capture.playlist_urn
-        )
-        .fetch_all(&mut *transaction)
-        .await?;
         let has_legacy_intents = sqlx::query_file_scalar!(
             "queries/playlist_observe/has_legacy_intents.sql",
             &capture.playlist_urn

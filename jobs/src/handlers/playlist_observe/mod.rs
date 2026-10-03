@@ -257,15 +257,23 @@ impl PlaylistObserveHandler {
             .persist_success(capture, snapshot, authority, metadata_observation)
             .await
             .map_err(repository_job_error)?;
-        if result == PersistResult::Applied {
-            for track in &snapshot.hydrated_tracks {
-                if let Err(error) = wake::enqueue(&self.pool, &self.queue, &track.sc_track_id).await
-                {
-                    tracing::debug!(track = %track.sc_track_id, %error, "lyrics wake deferred to sweep");
+        match result {
+            PersistResult::Applied => {
+                for track in &snapshot.hydrated_tracks {
+                    if let Err(error) =
+                        wake::enqueue(&self.pool, &self.queue, &track.sc_track_id).await
+                    {
+                        tracing::debug!(track = %track.sc_track_id, %error, "lyrics wake deferred to sweep");
+                    }
                 }
+                Ok(())
             }
+            PersistResult::EmptyRead => {
+                self.finish_failure(capture, malformed_failure("soundcloud_playlist_malformed"))
+                    .await
+            }
+            PersistResult::Superseded | PersistResult::Finished => Ok(()),
         }
-        Ok(())
     }
 
     async fn finish_connection_failure(

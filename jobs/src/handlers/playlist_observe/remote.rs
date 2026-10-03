@@ -182,11 +182,6 @@ impl PlaylistReader {
                 "playlist pagination exceeded the page limit",
             ));
         }
-        if track_ids.is_empty() && expected_count > 0 {
-            return Err(PlaylistObserveError::Invalid(
-                "playlist returned no tracks for a non-empty playlist",
-            ));
-        }
         Ok(ObservedMembership {
             track_ids,
             hydrated_tracks,

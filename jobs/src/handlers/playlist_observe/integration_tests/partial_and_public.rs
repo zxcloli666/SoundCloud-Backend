@@ -277,6 +277,30 @@ async fn an_empty_read_of_a_non_empty_playlist_keeps_the_shown_tracks(
 }
 
 #[sqlx::test(migrations = false)]
+async fn an_empty_read_of_a_never_shown_playlist_settles_with_nothing_available(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_foreign_playlist(&pool, "public").await?;
+    let (api_url, _, server) = serve_foreign_playlist(Vec::new()).await?;
+
+    observe_foreign(&pool, api_url).await?;
+    server.await??;
+
+    assert_eq!(foreign_state(&pool).await?, ("clean".to_owned(), None));
+    assert!(foreign_projection(&pool).await?.is_empty());
+    let observation = sqlx::query_as::<_, (String, i32, i32)>(
+        "SELECT outcome, declared_track_count, observed_track_count
+         FROM playlist_remote_observations WHERE playlist_urn = $1",
+    )
+    .bind(FOREIGN)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(observation, ("incomplete".to_owned(), 3, 0));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_short_owner_read_is_shown_but_never_offered_to_soundcloud(
     pool: PgPool,
 ) -> anyhow::Result<()> {
