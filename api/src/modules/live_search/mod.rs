@@ -7,6 +7,7 @@ pub mod query;
 pub mod service;
 pub mod serving;
 pub mod slim;
+pub mod stash;
 pub mod store;
 
 #[cfg(test)]
@@ -24,6 +25,10 @@ mod service_tests;
 #[cfg(test)]
 mod slim_tests;
 
+#[cfg(test)]
+mod stash_tests;
+
 pub use handlers::router;
 pub use query::{LiveKind, LiveParams, plain_playlists, plain_tracks};
 pub use service::LiveSearch;
+pub use stash::{Adoption, LiveStash};

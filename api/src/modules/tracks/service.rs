@@ -11,6 +11,7 @@ use crate::modules::cold_refresh::{
     AudienceCollection, ColdRefreshService, TRACK_FAVORITERS, TRACK_REPOSTERS,
 };
 use crate::modules::likes::cold as likes_cold;
+use crate::modules::live_search::{Adoption, LiveStash};
 use crate::modules::sync_queue::SyncQueueService;
 use crate::sc::ScClient;
 
@@ -20,6 +21,7 @@ pub struct TracksService {
     sync_queue: Arc<SyncQueueService>,
     cold_refresh: Arc<ColdRefreshService>,
     tokens: Arc<TokenProvider>,
+    live_stash: Arc<LiveStash>,
     mutations: super::mutations::TrackMutations,
 }
 
@@ -29,6 +31,7 @@ pub(crate) struct TracksServiceDependencies {
     pub sync_queue: Arc<SyncQueueService>,
     pub cold_refresh: Arc<ColdRefreshService>,
     pub tokens: Arc<TokenProvider>,
+    pub live_stash: Arc<LiveStash>,
 }
 
 impl TracksService {
@@ -39,6 +42,7 @@ impl TracksService {
             sync_queue,
             cold_refresh,
             tokens,
+            live_stash,
         } = dependencies;
         let mutations = super::mutations::TrackMutations::new(pg.clone(), sync_queue.clone());
         Arc::new(Self {
@@ -47,6 +51,7 @@ impl TracksService {
             sync_queue,
             cold_refresh,
             tokens,
+            live_stash,
             mutations,
         })
     }
@@ -126,15 +131,18 @@ impl TracksService {
             if known_locally {
                 return Err(crate::error::AppError::not_found("Track not found"));
             }
-            return Err(crate::modules::cold_refresh::entity::refresh_pending(
-                &self.pg,
-                backend_contracts::CatalogEntity::Track,
-                track_urn,
-                None,
-                "track_refresh_pending",
-                "Track is being loaded",
-            )
-            .await);
+            if !self.adopt_live_hit(track_urn, sc_track_id).await? {
+                return Err(crate::modules::cold_refresh::entity::refresh_pending(
+                    &self.pg,
+                    backend_contracts::CatalogEntity::Track,
+                    track_urn,
+                    None,
+                    "track_refresh_pending",
+                    "Track is being loaded",
+                )
+                .await);
+            }
+            false
         } else {
             let indexing = self
                 .cold_refresh
@@ -170,6 +178,22 @@ impl TracksService {
             .into_iter()
             .next()
             .ok_or_else(|| crate::error::AppError::not_found("Track not found"))
+    }
+
+    async fn adopt_live_hit(&self, track_urn: &str, sc_track_id: &str) -> AppResult<bool> {
+        let Some(indexing) = self.cold_refresh.indexing_for_ingest() else {
+            return Ok(false);
+        };
+        match self.live_stash.adopt_track(indexing, track_urn).await {
+            Adoption::Unseen => Ok(false),
+            Adoption::Adopted => Ok(true),
+            Adoption::Failed => Ok(sqlx::query_file_scalar!(
+                "queries/tracks/service/track_exists.sql",
+                sc_track_id
+            )
+            .fetch_one(&self.pg)
+            .await?),
+        }
     }
 
     pub async fn update(

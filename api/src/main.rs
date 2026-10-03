@@ -60,7 +60,7 @@ use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
-use crate::modules::live_search::LiveSearch;
+use crate::modules::live_search::{LiveSearch, LiveStash};
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
@@ -165,6 +165,7 @@ async fn main() {
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 
     let cache = CacheService::new(redis_pool.clone());
+    let live_stash = LiveStash::new(cache.clone());
     let background_jobs = crate::background_jobs::BackgroundJobs::new(nats.clone());
     let indexing_jobs = crate::background_jobs::IndexingJobs::new(background_jobs.clone());
     let collab_jobs = crate::background_jobs::CollabJobs::new(
@@ -203,6 +204,7 @@ async fn main() {
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
+        live_stash: live_stash.clone(),
     });
     let playlists = PlaylistsService::new(PlaylistsDeps {
         sc: sc.clone(),
@@ -211,8 +213,9 @@ async fn main() {
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
         background_jobs: background_jobs.clone(),
+        live_stash: live_stash.clone(),
     });
-    let users = UsersService::new(pg.clone(), cold_refresh.clone());
+    let users = UsersService::new(pg.clone(), cold_refresh.clone(), live_stash);
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
     let live_search = LiveSearch::new(

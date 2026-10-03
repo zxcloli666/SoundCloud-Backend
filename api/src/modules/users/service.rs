@@ -11,15 +11,25 @@ use crate::modules::cold_refresh::{
     OWNED_TRACKS, read_collection_page,
 };
 use crate::modules::likes::cold as likes_cold;
+use crate::modules::live_search::LiveStash;
 
 pub struct UsersService {
     pg: PgPool,
     cold_refresh: Arc<ColdRefreshService>,
+    live_stash: Arc<LiveStash>,
 }
 
 impl UsersService {
-    pub fn new(pg: PgPool, cold_refresh: Arc<ColdRefreshService>) -> Arc<Self> {
-        Arc::new(Self { pg, cold_refresh })
+    pub fn new(
+        pg: PgPool,
+        cold_refresh: Arc<ColdRefreshService>,
+        live_stash: Arc<LiveStash>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            pg,
+            cold_refresh,
+            live_stash,
+        })
     }
 
     pub async fn get_by_id(&self, user_urn: &str) -> AppResult<Value> {
@@ -38,6 +48,20 @@ impl UsersService {
             {
                 tracing::debug!(%error, "catalog refresh enqueue deferred");
             }
+            return Ok(crate::modules::users::project_to_sc_shape(&row));
+        }
+        let canonical = if user_urn.contains(':') {
+            user_urn.to_owned()
+        } else {
+            crate::common::sc_ids::user_urn(user_urn)
+        };
+        if self
+            .live_stash
+            .adopt_user(&self.pg, &canonical)
+            .await
+            .was_seen()
+            && let Some(row) = repo.find_by_urn(&canonical).await?
+        {
             return Ok(crate::modules::users::project_to_sc_shape(&row));
         }
         Err(crate::modules::cold_refresh::entity::refresh_pending(
