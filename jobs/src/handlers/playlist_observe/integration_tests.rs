@@ -301,8 +301,13 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              refresh_failure_count integer NOT NULL DEFAULT 0,
              refresh_lease_id uuid,
              refresh_lease_expires_at timestamptz,
+             last_refresh_attempt_at timestamptz,
+             last_refresh_success_at timestamptz,
              last_refresh_error_kind text,
+             last_refresh_error text,
              retry_at timestamptz,
+             refresh_rejection_count integer NOT NULL DEFAULT 0,
+             first_refresh_rejection_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );
          CREATE TABLE background_jobs (
