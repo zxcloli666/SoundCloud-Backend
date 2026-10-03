@@ -62,8 +62,9 @@ fn content_type_from_mime(mime: Option<&str>) -> &'static str {
     }
 }
 
-fn is_encrypted(t: &Transcoding) -> bool {
+fn is_full_encrypted(t: &Transcoding) -> bool {
     t.format.as_ref().and_then(|f| f.protocol.as_deref()) == Some("ctr-encrypted-hls")
+        && !t.snipped.unwrap_or(false)
 }
 
 fn pick_encrypted<'a>(transcodings: &'a [Transcoding], hq_first: bool) -> Option<&'a Transcoding> {
@@ -71,11 +72,11 @@ fn pick_encrypted<'a>(transcodings: &'a [Transcoding], hq_first: bool) -> Option
         let tag = if hq { "hq" } else { "sq" };
         transcodings
             .iter()
-            .find(|t| is_encrypted(t) && t.quality.as_deref() == Some(tag))
+            .find(|t| is_full_encrypted(t) && t.quality.as_deref() == Some(tag))
     };
     want(hq_first)
         .or_else(|| want(!hq_first))
-        .or_else(|| transcodings.iter().find(|t| is_encrypted(t)))
+        .or_else(|| transcodings.iter().find(|t| is_full_encrypted(t)))
 }
 
 pub(crate) async fn resolve(
@@ -111,4 +112,31 @@ pub(crate) async fn resolve(
         content_type,
         is_hq,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Transcoding, pick_encrypted};
+
+    fn encrypted(quality: &str, snipped: bool) -> Transcoding {
+        serde_json::from_value(serde_json::json!({
+            "url": format!("https://api-v2.soundcloud.com/media/soundcloud:tracks:1/{quality}/stream/ctr-encrypted-hls"),
+            "preset": "aac_160k",
+            "snipped": snipped,
+            "quality": quality,
+            "format": { "protocol": "ctr-encrypted-hls", "mime_type": "audio/mp4" }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_snipped_preview_is_never_served_as_the_whole_track() {
+        let previews = [encrypted("hq", true), encrypted("sq", true)];
+        assert!(pick_encrypted(&previews, true).is_none());
+
+        let mixed = [encrypted("hq", true), encrypted("sq", false)];
+        let picked = pick_encrypted(&mixed, true).unwrap();
+        assert_eq!(picked.quality.as_deref(), Some("sq"));
+        assert_eq!(picked.snipped, Some(false));
+    }
 }
