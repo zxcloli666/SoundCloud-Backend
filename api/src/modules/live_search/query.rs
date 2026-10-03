@@ -25,6 +25,7 @@ pub const ITEM_TTL: u64 = 1800;
 pub const FAIL_TTL: u64 = 60;
 pub const TRACKS_ENOUGH_ROWS: usize = 10;
 pub const SIDE_ENOUGH_ROWS: usize = 5;
+pub const IMPORT_LOCAL_ROWS: i64 = 20;
 
 const MAX_QUERY_CHARS: usize = 128;
 const MIN_NORMALIZED_CHARS: usize = 3;
@@ -64,6 +65,7 @@ pub enum LiveClass {
     Side,
     Fill,
     Import,
+    Match,
     Rescue,
 }
 
@@ -74,6 +76,7 @@ impl LiveClass {
             Self::Side => "side",
             Self::Fill => "fill",
             Self::Import => "import",
+            Self::Match => "match",
             Self::Rescue => "rescue",
         }
     }
@@ -82,34 +85,38 @@ impl LiveClass {
         match self {
             Self::Main | Self::Fill => Endpoint::LiveMain,
             Self::Side => Endpoint::LiveSide,
-            Self::Import => Endpoint::LiveImport,
+            Self::Import | Self::Match => Endpoint::LiveImport,
             Self::Rescue => Endpoint::LiveRescue,
         }
     }
 
     pub fn proxy_allowed(self) -> bool {
-        matches!(self, Self::Main | Self::Side | Self::Import)
+        matches!(self, Self::Main | Self::Side | Self::Import | Self::Match)
     }
 
     pub fn budget(self) -> Duration {
         match self {
             Self::Main | Self::Side => Duration::from_millis(3000),
             Self::Fill | Self::Rescue => Duration::from_millis(2500),
-            Self::Import => Duration::from_millis(4500),
+            Self::Import | Self::Match => Duration::from_millis(4500),
         }
     }
 
     pub fn relay_wait(self) -> Duration {
         match self {
-            Self::Import => Duration::from_millis(3000),
+            Self::Import | Self::Match => Duration::from_millis(3000),
             _ => Duration::from_millis(2000),
         }
+    }
+
+    pub fn paces(self) -> bool {
+        self == Self::Import
     }
 
     pub fn allowed_in(self, mode: LiveMode, rescue: bool) -> bool {
         match (mode, self) {
             (LiveMode::Off, _) => false,
-            (_, Self::Main | Self::Side | Self::Import) => true,
+            (_, Self::Main | Self::Side | Self::Import | Self::Match) => true,
             (LiveMode::Auto, Self::Fill) => true,
             (LiveMode::Auto, Self::Rescue) => rescue,
             (LiveMode::Explicit, Self::Fill | Self::Rescue) => false,
@@ -118,14 +125,14 @@ impl LiveClass {
 
     pub fn scope(self, kind: LiveKind) -> &'static str {
         match self {
-            Self::Import => "import",
+            Self::Import | Self::Match => "import",
             _ => kind.as_str(),
         }
     }
 
     pub fn window_size(self, kind: LiveKind) -> i64 {
         match (self, kind) {
-            (Self::Import, _) => 10,
+            (Self::Import | Self::Match, _) => 10,
             (_, LiveKind::Tracks) => 40,
             (_, LiveKind::Users | LiveKind::Playlists) => 20,
         }
@@ -133,7 +140,7 @@ impl LiveClass {
 
     pub fn window_ttl(self, empty: bool) -> u64 {
         match (self, empty) {
-            (Self::Import, _) => WINDOW_TTL_IMPORT,
+            (Self::Import | Self::Match, _) => WINDOW_TTL_IMPORT,
             (_, true) => WINDOW_TTL_EMPTY,
             (_, false) => WINDOW_TTL_OK,
         }

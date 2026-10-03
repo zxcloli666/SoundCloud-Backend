@@ -244,6 +244,7 @@ async fn main() {
         config.max_track_duration_ms,
     );
     cold_refresh.install_indexing(indexing.clone());
+    live_search.install_indexing(indexing.clone());
 
     let likes = LikesService::new(
         pg.clone(),

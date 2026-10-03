@@ -165,10 +165,12 @@ fn the_mode_decides_which_classes_may_reach_soundcloud() {
         LiveClass::Side,
         LiveClass::Fill,
         LiveClass::Import,
+        LiveClass::Match,
         LiveClass::Rescue,
     ] {
         assert!(!class.allowed_in(LiveMode::Off, true), "{class:?}");
     }
+    assert!(LiveClass::Match.allowed_in(LiveMode::Explicit, false));
     assert!(LiveClass::Main.allowed_in(LiveMode::Explicit, false));
     assert!(LiveClass::Import.allowed_in(LiveMode::Explicit, false));
     assert!(!LiveClass::Fill.allowed_in(LiveMode::Explicit, true));
@@ -224,4 +226,25 @@ fn linked_partitioning_is_read_as_a_flag() {
     assert!(on.linked());
     assert!(!off.linked());
     assert!(!LiveParams::default().linked());
+}
+
+#[test]
+fn a_match_shares_the_import_window_and_bucket_but_never_waits_for_it() {
+    assert_eq!(
+        LiveClass::Match.scope(LiveKind::Tracks),
+        LiveClass::Import.scope(LiveKind::Tracks)
+    );
+    assert_eq!(
+        LiveClass::Match.endpoint(),
+        LiveClass::Import.endpoint(),
+        "a match spends the import budget"
+    );
+    assert_eq!(LiveClass::Match.window_size(LiveKind::Tracks), 10);
+    assert_eq!(LiveClass::Match.budget().as_millis(), 4500);
+    assert!(LiveClass::Match.proxy_allowed());
+    assert!(LiveClass::Import.paces());
+    assert!(
+        !LiveClass::Match.paces(),
+        "the importer waits out a 429 itself instead of holding the request"
+    );
 }

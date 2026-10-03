@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 
 use super::query::{LiveKind, SIDE_ENOUGH_ROWS, TRACKS_ENOUGH_ROWS};
 use super::slim::urn_of;
+use crate::modules::search::rank::{Candidate, Ranking, rank};
+use crate::modules::search::ranked::{score_value, set_search_field};
+use crate::modules::search::terms::QueryTerms;
 
 pub const SOURCE_SOUNDCLOUD: &str = "soundcloud";
 pub const SOURCE_LOCAL: &str = "local";
@@ -54,9 +57,7 @@ pub fn substitute(items: Vec<Value>, serving: &HashMap<String, Option<Value>>) -
 }
 
 pub fn tag_source(item: &mut Value, source: &'static str) {
-    if let Some(object) = item.as_object_mut() {
-        object.insert("_scd_search".into(), json!({ "source": source }));
-    }
+    set_search_field(item, "source", json!(source));
 }
 
 pub fn tag_all(items: &mut [Value], source: &'static str) {
@@ -76,15 +77,17 @@ pub fn dedupe_by_urn(items: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-pub fn local_is_enough(kind: LiveKind, query_norm: &str, rows: &[Value]) -> bool {
+pub fn local_is_enough(kind: LiveKind, query: &str, rows: &[Value], ranked: bool) -> bool {
     match kind {
         LiveKind::Users | LiveKind::Playlists => rows.len() >= SIDE_ENOUGH_ROWS,
+        LiveKind::Tracks if ranked => rows.len() >= TRACKS_ENOUGH_ROWS && confident(query, rows),
         LiveKind::Tracks => {
+            let query_norm = normalize_name(query);
             rows.len() >= TRACKS_ENOUGH_ROWS
                 && rows
                     .iter()
                     .take(TRACKS_ENOUGH_ROWS)
-                    .any(|row| names_the_track(row, query_norm))
+                    .any(|row| names_the_track(row, &query_norm))
         }
     }
 }
@@ -105,4 +108,63 @@ fn names_the_track(row: &Value, query_norm: &str) -> bool {
         normalize_name(&format!("{name} {title}")) == query_norm
             || normalize_name(&format!("{title} {name}")) == query_norm
     })
+}
+
+pub fn confident(query: &str, rows: &[Value]) -> bool {
+    ranking(query, rows, |_| None).confident()
+}
+
+pub fn mark_scores(query: &str, items: &mut [Value], window_offset: usize) {
+    let scores: HashMap<String, f32> = ranking(query, items, |at| Some(window_offset + at))
+        .scored
+        .into_iter()
+        .map(|scored| (scored.key, scored.score))
+        .collect();
+    for item in items {
+        if let Some(score) = urn_of(item).and_then(|urn| scores.get(urn)) {
+            set_search_field(item, "score", score_value(*score));
+        }
+    }
+}
+
+pub fn confident_pick(query: &str, hits: Vec<Value>, local: Vec<Value>) -> Option<Value> {
+    let hits = dedupe_by_urn(hits);
+    let live = hits.len();
+    let known: HashSet<String> = hits
+        .iter()
+        .filter_map(|item| urn_of(item).map(str::to_owned))
+        .collect();
+    let mut items = hits;
+    items.extend(
+        local
+            .into_iter()
+            .filter(|row| urn_of(row).is_none_or(|urn| !known.contains(urn))),
+    );
+    let ranked = ranking(query, &items, |at| (at < live).then_some(at));
+    if !ranked.confident() {
+        return None;
+    }
+    let top = ranked.top()?;
+    let mut pick = items
+        .into_iter()
+        .find(|item| urn_of(item) == Some(top.key.as_str()))?;
+    set_search_field(&mut pick, "score", score_value(top.score));
+    Some(pick)
+}
+
+fn ranking(query: &str, items: &[Value], sc_rank: impl Fn(usize) -> Option<usize>) -> Ranking {
+    let candidates = items
+        .iter()
+        .enumerate()
+        .filter_map(|(at, item)| {
+            let mut candidate = Candidate::from_item(item)?;
+            candidate.sc_rank = sc_rank(at);
+            Some(candidate)
+        })
+        .collect();
+    rank(&QueryTerms::parse(query), None, candidates)
+}
+
+pub fn is_live(item: &Value) -> bool {
+    item.pointer("/_scd_search/source").and_then(Value::as_str) == Some(SOURCE_SOUNDCLOUD)
 }

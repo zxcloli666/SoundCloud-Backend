@@ -1,6 +1,8 @@
 pub mod fetch;
 pub mod gate;
 pub mod handlers;
+pub mod match_search;
+pub mod matching;
 pub mod merge;
 pub mod meta;
 pub mod query;
@@ -12,6 +14,12 @@ pub mod store;
 
 #[cfg(test)]
 mod gate_tests;
+
+#[cfg(test)]
+mod import_tests;
+
+#[cfg(test)]
+mod matching_tests;
 
 #[cfg(test)]
 mod merge_tests;

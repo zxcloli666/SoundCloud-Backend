@@ -64,7 +64,7 @@ pub struct PublicAdmission {
     last_warning_at: AtomicU64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Endpoint {
     Login,
     LinkCreate,

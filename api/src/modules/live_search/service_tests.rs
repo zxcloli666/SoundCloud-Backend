@@ -24,14 +24,14 @@ type RelayFuture<'a, T> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, call_relay::Error>> + Send + 'a>>;
 
 #[derive(Clone)]
-enum Script {
+pub(super) enum Script {
     Answers(Vec<Value>),
     Slow(Duration),
     Silent,
 }
 
-struct SearchRelay {
-    script: Mutex<Script>,
+pub(super) struct SearchRelay {
+    pub(super) script: Mutex<Script>,
     calls: AtomicUsize,
 }
 
@@ -43,7 +43,7 @@ impl SearchRelay {
         })
     }
 
-    fn calls(&self) -> usize {
+    pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
@@ -87,13 +87,13 @@ impl RelayTransport for SearchRelay {
     }
 }
 
-struct Harness {
-    live: Arc<LiveSearch>,
-    relay: Arc<SearchRelay>,
-    tag: String,
+pub(super) struct Harness {
+    pub(super) live: Arc<LiveSearch>,
+    pub(super) relay: Arc<SearchRelay>,
+    pub(super) tag: String,
 }
 
-fn redis() -> deadpool_redis::Pool {
+pub(super) fn redis() -> deadpool_redis::Pool {
     deadpool_redis::Config::from_url(
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
@@ -141,7 +141,11 @@ fn harness(pool: &PgPool, script: Script, mode: LiveMode) -> anyhow::Result<Harn
     )
 }
 
-fn harness_with(pool: &PgPool, script: Script, cfg: LiveSearchCfg) -> anyhow::Result<Harness> {
+pub(super) fn harness_with(
+    pool: &PgPool,
+    script: Script,
+    cfg: LiveSearchCfg,
+) -> anyhow::Result<Harness> {
     let relay = SearchRelay::new(script);
     let sc = ScClient::new(&sc_transport::ScConfig {
         proxy_url: String::new(),
@@ -172,7 +176,7 @@ fn harness_with(pool: &PgPool, script: Script, cfg: LiveSearchCfg) -> anyhow::Re
     })
 }
 
-fn hits(base: u64, n: u64) -> Vec<Value> {
+pub(super) fn hits(base: u64, n: u64) -> Vec<Value> {
     (base..base + n)
         .map(|id| {
             json!({
@@ -188,11 +192,11 @@ fn hits(base: u64, n: u64) -> Vec<Value> {
         .collect()
 }
 
-fn base() -> u64 {
+pub(super) fn base() -> u64 {
     9_000_000_000 + u64::from(uuid::Uuid::now_v7().as_fields().1) * 1000
 }
 
-fn rows(base: u64, n: u64, title: &str) -> Vec<Value> {
+pub(super) fn rows(base: u64, n: u64, title: &str) -> Vec<Value> {
     (base..base + n)
         .map(|id| json!({"urn": format!("soundcloud:tracks:{id}"), "title": title, "user": {"username": "someone"}}))
         .collect()
@@ -208,11 +212,11 @@ fn page_of(collection: Vec<Value>, page: i64, has_more: bool) -> AppResult<ListP
 }
 
 impl Harness {
-    fn phrase(&self, words: &str) -> String {
+    pub(super) fn phrase(&self, words: &str) -> String {
         format!("{words} {}", self.tag)
     }
 
-    fn request(
+    pub(super) fn request(
         &self,
         kind: LiveKind,
         phrase: &str,
@@ -245,7 +249,12 @@ impl Harness {
         self.ask(&request, local, Duration::ZERO).await
     }
 
-    async fn ask(&self, request: &LiveRequest, local: Vec<Value>, takes: Duration) -> LivePage {
+    pub(super) async fn ask(
+        &self,
+        request: &LiveRequest,
+        local: Vec<Value>,
+        takes: Duration,
+    ) -> LivePage {
         self.live
             .page(request, |page| {
                 let local = local.clone();
@@ -263,7 +272,7 @@ impl Harness {
     }
 }
 
-fn sources(page: &LivePage) -> Vec<&str> {
+pub(super) fn sources(page: &LivePage) -> Vec<&str> {
     page.page
         .collection
         .iter()
@@ -271,7 +280,7 @@ fn sources(page: &LivePage) -> Vec<&str> {
         .collect()
 }
 
-fn titles(page: &LivePage) -> Vec<String> {
+pub(super) fn titles(page: &LivePage) -> Vec<String> {
     page.page
         .collection
         .iter()

@@ -80,7 +80,7 @@ async fn search(
     let mut live = st
         .live_search
         .page(&request, |local_page| {
-            st.search.tracks(&q, local_page, request.limit)
+            st.search.tracks(&q, local_page, request.local_limit)
         })
         .await?;
     apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut live.page.collection).await?;

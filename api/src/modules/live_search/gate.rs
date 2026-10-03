@@ -210,7 +210,7 @@ where
             return decision;
         };
         let left = IMPORT_PACING.saturating_sub(started.elapsed());
-        if class != LiveClass::Import || left.is_zero() {
+        if !class.paces() || left.is_zero() {
             return decision;
         }
         tokio::time::sleep(Duration::from_secs(retry_after_seconds.max(1)).min(left)).await;

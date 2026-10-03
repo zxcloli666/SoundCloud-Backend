@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::merge::{
-    dedupe_by_urn, local_after_window, local_is_enough, substitute, window_slice, wpages,
+    confident_pick, dedupe_by_urn, local_after_window, local_is_enough, mark_scores, substitute,
+    tag_all, window_slice, wpages,
 };
 use super::query::LiveKind;
 
@@ -110,26 +111,26 @@ fn dedupe_keeps_the_first_of_each_urn() {
     assert_eq!(kept, ["first", "two", "no urn"]);
 }
 
+fn phase_one(query: &str, rows: &[Value]) -> bool {
+    local_is_enough(LiveKind::Tracks, query, rows, false)
+}
+
+fn ranked(query: &str, rows: &[Value]) -> bool {
+    local_is_enough(LiveKind::Tracks, query, rows, true)
+}
+
 #[test]
 fn ten_rows_with_a_named_match_keep_the_search_local() {
     let mut rows: Vec<Value> = (10..19)
         .map(|id| row(id, "something else", "nobody"))
         .collect();
     rows.push(row(42, "Lucid Dreams", "Juice WRLD"));
-    assert!(local_is_enough(
-        LiveKind::Tracks,
-        "juice wrld lucid dreams",
-        &rows
-    ));
-    assert!(local_is_enough(
-        LiveKind::Tracks,
-        "lucid dreams juice wrld",
-        &rows
-    ));
-    assert!(local_is_enough(LiveKind::Tracks, "lucid dreams", &rows));
-    assert!(!local_is_enough(LiveKind::Tracks, "lucid", &rows));
+    assert!(phase_one("juice wrld lucid dreams", &rows));
+    assert!(phase_one("Lucid Dreams - Juice WRLD", &rows));
+    assert!(phase_one("lucid dreams", &rows));
+    assert!(!phase_one("lucid", &rows));
     assert!(
-        !local_is_enough(LiveKind::Tracks, "juice wrld lucid dreams", &rows[1..]),
+        !phase_one("juice wrld lucid dreams", &rows[1..]),
         "nine rows are thin whatever they hold"
     );
 
@@ -140,17 +141,13 @@ fn ten_rows_with_a_named_match_keep_the_search_local() {
         "user": {"username": "Record Makers"},
         "metadata_artist": "Kavinsky"
     });
-    assert!(local_is_enough(
-        LiveKind::Tracks,
-        "kavinsky nightcall",
-        &labelled
-    ));
+    assert!(phase_one("kavinsky nightcall", &labelled));
 
     let mut buried = rows.clone();
     buried.insert(9, row(99, "filler", "nobody"));
     assert_eq!(buried[10]["title"], "Lucid Dreams");
     assert!(
-        !local_is_enough(LiveKind::Tracks, "juice wrld lucid dreams", &buried),
+        !phase_one("juice wrld lucid dreams", &buried),
         "a match below the top ten does not count"
     );
 }
@@ -158,10 +155,76 @@ fn ten_rows_with_a_named_match_keep_the_search_local() {
 #[test]
 fn users_and_playlists_go_live_below_five_rows() {
     let rows: Vec<Value> = (1..=5).map(|id| row(id, "x", "x")).collect();
-    assert!(local_is_enough(LiveKind::Users, "anything", &rows));
-    assert!(!local_is_enough(
-        LiveKind::Playlists,
-        "anything",
-        &rows[..4]
-    ));
+    for ranked in [false, true] {
+        assert!(local_is_enough(LiveKind::Users, "anything", &rows, ranked));
+        assert!(!local_is_enough(
+            LiveKind::Playlists,
+            "anything",
+            &rows[..4],
+            ranked
+        ));
+    }
+}
+
+#[test]
+fn the_ranker_keeps_the_search_local_only_for_a_confident_page() {
+    let mut rows: Vec<Value> = (10..19)
+        .map(|id| row(id, "something else", "nobody"))
+        .collect();
+    rows.push(row(42, "Lucid Dreams", "Juice WRLD"));
+    assert!(ranked("Juice WRLD - Lucid Dreams", &rows));
+    assert!(ranked("lucid dreams juice wrld", &rows));
+    assert!(
+        !ranked("lucid dreams", &rows),
+        "a title alone does not say which upload is meant"
+    );
+    assert!(
+        !ranked("juice wrld lucid dreams", &rows[1..]),
+        "nine rows are thin whatever they hold"
+    );
+}
+
+#[test]
+fn an_import_takes_one_confident_track_and_says_where_it_came_from() {
+    let mut hits = vec![
+        row(1, "Juice WRLD - Lucid Dreams (Lyrics)", "vault"),
+        row(2, "Lucid Dreams", "Juice WRLD"),
+    ];
+    tag_all(&mut hits, "soundcloud");
+    let mut local = vec![
+        row(3, "Robbery", "Juice WRLD"),
+        row(2, "Lucid Dreams", "Juice WRLD"),
+    ];
+    tag_all(&mut local, "local");
+
+    let pick = confident_pick("Juice WRLD Lucid Dreams", hits, local).expect("a confident pick");
+    assert_eq!(pick["urn"], "soundcloud:tracks:2");
+    assert_eq!(pick["_scd_search"]["source"], "soundcloud");
+    assert!(
+        pick["_scd_search"]["score"]
+            .as_f64()
+            .is_some_and(|score| score >= 0.8)
+    );
+
+    let unsure = confident_pick(
+        "Unknown Artist Unknown Song",
+        vec![row(5, "Something else", "someone")],
+        Vec::new(),
+    );
+    assert!(unsure.is_none(), "no pick is better than a wrong one");
+}
+
+#[test]
+fn window_hits_are_scored_and_keep_their_source() {
+    let mut items = vec![
+        row(1, "Lucid Dreams (Sped Up)", "speedy"),
+        row(2, "Lucid Dreams", "Juice WRLD"),
+    ];
+    tag_all(&mut items, "soundcloud");
+    mark_scores("juice wrld lucid dreams", &mut items, 20);
+
+    let score = |item: &Value| item["_scd_search"]["score"].as_f64().expect("a score");
+    assert!(score(&items[1]) > score(&items[0]), "{items:#?}");
+    assert!(score(&items[1]) >= 0.8);
+    assert_eq!(items[0]["_scd_search"]["source"], "soundcloud");
 }

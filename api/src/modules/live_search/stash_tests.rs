@@ -18,7 +18,7 @@ fn cache() -> anyhow::Result<Arc<CacheService>> {
     Ok(CacheService::new(redis))
 }
 
-async fn indexing(pool: &PgPool) -> anyhow::Result<Arc<IndexingService>> {
+pub(super) async fn indexing(pool: &PgPool) -> anyhow::Result<Arc<IndexingService>> {
     let nats = crate::bus::nats::NatsService::connect(
         "nats://127.0.0.1:1",
         tokio_util::sync::CancellationToken::new(),
