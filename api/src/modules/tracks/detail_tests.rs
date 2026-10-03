@@ -426,6 +426,33 @@ async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_forever(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+    sqlx::query(
+        "INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation,
+             attempts, max_attempts, last_error, created_at
+         ) VALUES ($1, 'catalog.refresh', 'core_fast', 'playlist:42:public', '{}', 15, 1,
+                   1, 8, 'SoundCloud answered 404', now())",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(pending_jobs(&pool).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     pool: PgPool,
 ) -> anyhow::Result<()> {
