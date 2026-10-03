@@ -126,7 +126,7 @@ impl PlaylistReader {
     ) -> Result<ObservedMembership, PlaylistObserveError> {
         let expected_path = format!("/playlists/{}/tracks", urn.id());
         let mut next = Some(format!(
-            "{expected_path}?limit={PAGE_SIZE}&linked_partitioning=true"
+            "{expected_path}?limit={PAGE_SIZE}&linked_partitioning=true&access=playable,preview,blocked"
         ));
         let mut visited = HashSet::new();
         let mut track_ids = Vec::with_capacity(expected_count);
