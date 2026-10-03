@@ -158,13 +158,11 @@ impl SearchService {
             genres: genres.as_deref(),
             tags: tags.as_deref(),
         };
-        let plain_query = normalized.is_some()
-            && owner.is_none()
-            && ids.is_none()
-            && genres.is_none()
-            && tags.is_none();
+        let phrase = normalized
+            .as_deref()
+            .filter(|_| owner.is_none() && ids.is_none() && genres.is_none() && tags.is_none());
         let cache_key =
-            plain_query.then(|| phrase_cache_key("search-db-tracks", &raw_query, page, limit));
+            phrase.map(|phrase| phrase_cache_key("search-db-tracks", phrase, page, limit));
         self.search_page(cache_key, page, limit, || async {
             let (mut collection, has_more) =
                 repository::search_tracks(&self.pg, &filters, page, limit).await?;
@@ -206,8 +204,10 @@ impl SearchService {
         if normalized.is_none() && (!raw_query.trim().is_empty() || owner.is_none()) {
             return Ok(empty_page(page, limit));
         }
-        let cache_key = (normalized.is_some() && owner.is_none())
-            .then(|| phrase_cache_key("search-db-playlists", &raw_query, page, limit));
+        let cache_key = normalized
+            .as_deref()
+            .filter(|_| owner.is_none())
+            .map(|phrase| phrase_cache_key("search-db-playlists", phrase, page, limit));
         self.search_page(cache_key, page, limit, || {
             repository::search_playlists(
                 &self.pg,
@@ -234,8 +234,10 @@ impl SearchService {
         if (query.is_none() && !q.trim().is_empty()) || (query.is_none() && ids.is_none()) {
             return Ok(empty_page(page, limit));
         }
-        let cache_key = (query.is_some() && ids.is_none())
-            .then(|| phrase_cache_key("search-db-users", &raw_query, page, limit));
+        let cache_key = query
+            .as_deref()
+            .filter(|_| ids.is_none())
+            .map(|phrase| phrase_cache_key("search-db-users", phrase, page, limit));
         self.search_page(cache_key, page, limit, || {
             repository::search_users(
                 &self.pg,
@@ -304,9 +306,9 @@ struct PageEnvelope {
     has_more: bool,
 }
 
-fn phrase_cache_key(prefix: &str, raw_query: &str, page: i64, limit: i64) -> String {
+fn phrase_cache_key(prefix: &str, phrase: &str, page: i64, limit: i64) -> String {
     let params: Vec<(&str, String)> = vec![
-        ("q", raw_query.trim().to_lowercase()),
+        ("q", phrase.to_owned()),
         ("page", page.to_string()),
         ("limit", limit.to_string()),
     ];

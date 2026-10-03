@@ -467,6 +467,15 @@ async fn a_phrase_page_is_cached_and_a_filtered_page_is_read_live(
         serde_json::to_value(&cold)?,
         "a repeated phrase must be answered from the shared page cache"
     );
+    let respelled = TrackSearchQuery {
+        q: Some(format!("  CACHABLE -- Track,  {id}! ")),
+        ..Default::default()
+    };
+    assert_eq!(
+        serde_json::to_value(search.tracks(&respelled, 0, 10).await?)?,
+        serde_json::to_value(&cold)?,
+        "a spelling that normalizes to the same phrase shares its cached page"
+    );
     let filtered = TrackSearchQuery {
         q: Some(title.clone()),
         ids: Some(id.clone()),
