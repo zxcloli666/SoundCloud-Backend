@@ -159,7 +159,7 @@ impl CookiesPool {
 }
 
 fn is_rate_limited(msg: &str) -> bool {
-    msg.contains("429") || msg.to_ascii_lowercase().contains("too many requests")
+    msg.ends_with("status 429") || msg.to_ascii_lowercase().contains("too many requests")
 }
 
 fn is_rejected(msg: &str) -> bool {
@@ -178,6 +178,7 @@ mod tests {
         assert!(!is_rate_limited("status 404"));
         assert!(!is_rate_limited("status 502"));
         assert!(!is_rate_limited("connection reset"));
+        assert!(!is_rate_limited("no transcodings for tracks:4290"));
     }
 
     #[test]
