@@ -405,6 +405,27 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.public_code(), "playlist_refresh_pending");
+    assert_eq!(
+        pending_jobs(&pool).await?,
+        vec!["playlist:42:public".to_owned()]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     pool: PgPool,
 ) -> anyhow::Result<()> {
