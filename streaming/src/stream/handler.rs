@@ -167,6 +167,10 @@ async fn stream_inner(
             served(tag, &track_urn, "cookies_sq");
             return respond_with_data(&state, &track_urn, r.0, r.1, "sq", cacheable);
         }
+        if let Some(r) = try_relay_track(&state, &track_urn, "sq").await {
+            served(tag, &track_urn, "relay_track");
+            return respond_with_data(&state, &track_urn, r.0, r.1, "sq", cacheable);
+        }
     } else {
         if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, false).await {
             served(tag, &track_urn, "oauth_sq");
