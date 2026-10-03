@@ -16,6 +16,11 @@ fn resolve_input_normalizes_public_links_without_reusing_secret_capabilities() -
             .contains(&"https://soundcloud.com/artist/song".into())
     );
     assert!(!public.requires_upstream);
+    let shared = ResolveInput::parse(
+        "https://soundcloud.com/artist/song?in=artist/sets/mix&ref=clipboard&p=a&c=1&in_system_playlist=weekly",
+    )?;
+    assert!(!shared.requires_upstream);
+    assert_eq!(shared.upstream, "https://soundcloud.com/artist/song");
     assert!(!ResolveInput::parse("https://soundcloud.com/s-artist/s-song")?.requires_upstream);
     for url in [
         "https://soundcloud.com/artist/song/s-secret",
