@@ -116,7 +116,7 @@ async fn a_scrape_reports_the_database_it_actually_serves(
 ) -> anyhow::Result<()> {
     init();
 
-    let Some(body) = render(&pool).await else {
+    let Some(body) = render(&pool, &offline_cache()).await else {
         return Ok(());
     };
 
@@ -149,7 +149,7 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     pool.close().await;
 
     sample_pool_wait(&pool).await;
-    let Some(body) = render(&pool).await else {
+    let Some(body) = render(&pool, &offline_cache()).await else {
         return Ok(());
     };
 
@@ -159,6 +159,13 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
         "a pool that refuses a connection must not read as a healthy wait"
     );
     Ok(())
+}
+
+fn offline_cache() -> std::sync::Arc<crate::cache::CacheService> {
+    let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .expect("a redis pool builds without connecting");
+    crate::cache::CacheService::new(redis)
 }
 
 fn ops_artifacts() -> String {
@@ -226,9 +233,10 @@ async fn every_metric_an_alert_watches_is_actually_exported(
     record_live_request("tracks", "main", "limited");
     record_live_fetch("tracks", "proxy", "rate_limited");
     set_live_gate_closed("pause", false);
+    set_redis_memory(1, 2);
     sample_pool_wait(&pool).await;
 
-    let Some(body) = render(&pool).await else {
+    let Some(body) = render(&pool, &offline_cache()).await else {
         return Ok(());
     };
 
@@ -253,11 +261,34 @@ async fn a_scrape_never_fails_because_statistics_are_unavailable(
     init();
     pool.close().await;
 
-    let body = render(&pool).await;
+    let body = render(&pool, &offline_cache()).await;
 
     assert!(
         body.is_some(),
         "a closed database must not take the whole scrape down"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_scrape_reports_how_full_redis_is(pool: sqlx::PgPool) -> anyhow::Result<()> {
+    init();
+    let redis = deadpool_redis::Config::from_url(
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
+    )
+    .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+
+    let Some(body) = render(&pool, &crate::cache::CacheService::new(redis)).await else {
+        return Ok(());
+    };
+
+    let used = body
+        .lines()
+        .find_map(|line| line.strip_prefix("api_redis_memory_bytes{kind=\"used\"} "))
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .expect("the scrape carries the memory Redis uses");
+    assert!(used > 1000.0, "a running Redis uses more than {used} bytes");
+    assert!(body.contains("api_redis_memory_bytes{kind=\"max\"}"));
     Ok(())
 }

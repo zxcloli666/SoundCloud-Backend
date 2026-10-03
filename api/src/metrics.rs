@@ -4,6 +4,8 @@ use std::time::Duration;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
+use crate::cache::CacheService;
+
 const REQUEST_DURATION: &str = "api_http_request_duration_seconds";
 const REQUESTS_TOTAL: &str = "api_http_requests_total";
 const DEPENDENCY_DURATION: &str = "api_dependency_call_duration_seconds";
@@ -22,6 +24,7 @@ const LIVE_ADOPTS: &str = "api_live_search_adopt_total";
 const LIVE_WINDOW_BYTES: &str = "api_live_search_window_bytes_total";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const PG_BACKENDS: &str = "api_pg_backends";
+const REDIS_MEMORY: &str = "api_redis_memory_bytes";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
 const PG_DEADLOCKS: &str = "api_pg_deadlocks_total";
 const PG_BLOCKS: &str = "api_pg_blocks_total";
@@ -240,7 +243,7 @@ pub fn render_for_tests() -> Option<String> {
     HANDLE.get().map(PrometheusHandle::render)
 }
 
-pub async fn render(pool: &PgPool) -> Option<String> {
+pub async fn render(pool: &PgPool, cache: &CacheService) -> Option<String> {
     let handle = HANDLE.get()?;
     let size = f64::from(pool.size());
     let idle = pool.num_idle() as f64;
@@ -249,7 +252,15 @@ pub async fn render(pool: &PgPool) -> Option<String> {
     metrics::gauge!(POOL_CONNECTIONS, "state" => "busy").set((size - idle).max(0.0));
     sample_pool_wait(pool).await;
     sample_database(pool).await;
+    if let Some((used, max)) = cache.memory().await {
+        set_redis_memory(used, max);
+    }
     Some(handle.render())
+}
+
+pub fn set_redis_memory(used: u64, max: u64) {
+    metrics::gauge!(REDIS_MEMORY, "kind" => "used").set(used as f64);
+    metrics::gauge!(REDIS_MEMORY, "kind" => "max").set(max as f64);
 }
 
 pub async fn sample_pool_wait(pool: &PgPool) {

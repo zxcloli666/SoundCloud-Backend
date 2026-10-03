@@ -168,7 +168,7 @@ pub async fn metrics(_: AdminAuth, State(state): State<AppState>) -> axum::respo
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 
-    match crate::metrics::render(&state.pg).await {
+    match crate::metrics::render(&state.pg, &state.cache).await {
         Some(body) => (
             [(
                 header::CONTENT_TYPE,

@@ -53,6 +53,30 @@ impl CacheService {
         (s.size, s.available, s.max_size)
     }
 
+    pub async fn memory(&self) -> Option<(u64, u64)> {
+        let info = tokio::time::timeout(READ_TIMEOUT, async {
+            let mut conn = self.redis.get().await.ok()?;
+            deadpool_redis::redis::cmd("INFO")
+                .arg("memory")
+                .query_async::<String>(&mut conn)
+                .await
+                .ok()
+        })
+        .await
+        .ok()
+        .flatten()?;
+        let field = |name: &str| {
+            info.lines().find_map(|line| {
+                line.strip_prefix(name)?
+                    .strip_prefix(':')?
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+        };
+        Some((field("used_memory")?, field("maxmemory")?))
+    }
+
     pub fn build_key(
         &self,
         method: &str,
