@@ -299,6 +299,10 @@ impl PlaylistsService {
         request: MembershipRequest,
         idempotency_key: Uuid,
     ) -> AppResult<crate::modules::playlists::journal::JournalOutcome> {
+        let added_track = match &request.edit {
+            TrackEdit::Add { track_id } => Some(track_id.clone()),
+            _ => None,
+        };
         match self
             .journal
             .append(
@@ -315,6 +319,13 @@ impl PlaylistsService {
                     self.membership
                         .enqueue_observation_if_due(playlist_urn)
                         .await;
+                }
+                if error.public_code() == crate::modules::playlists::journal::UNKNOWN_TRACK
+                    && let Some(track_id) = added_track
+                    && let Err(enqueue_error) =
+                        enqueue_entity(&self.pg, CatalogEntity::Track, &track_id, None).await
+                {
+                    tracing::debug!(%enqueue_error, "unknown playlist track enqueue deferred");
                 }
                 Err(error)
             }
