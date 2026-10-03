@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
-const REFRESH_PRIORITY: i16 = 5;
+const REFRESH_PRIORITY: i16 = 15;
 
 pub async fn enqueue_entity(
     pool: &PgPool,

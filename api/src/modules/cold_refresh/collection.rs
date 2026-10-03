@@ -12,7 +12,7 @@ use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
 const OWNER_PRIORITY: i16 = 20;
-const PUBLIC_PRIORITY: i16 = 5;
+const PUBLIC_PRIORITY: i16 = 15;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

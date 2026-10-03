@@ -148,7 +148,7 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
         priorities,
         [
             ("liked-tracks:42:owner".into(), 20),
-            ("liked-tracks:42:public".into(), 5)
+            ("liked-tracks:42:public".into(), 15)
         ]
     );
     sqlx::query("UPDATE background_jobs SET priority = 5")
