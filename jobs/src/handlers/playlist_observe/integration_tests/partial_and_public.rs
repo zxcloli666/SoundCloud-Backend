@@ -127,6 +127,16 @@ async fn foreign_state(pool: &PgPool) -> anyhow::Result<(String, Option<String>)
     .await?)
 }
 
+async fn foreign_due_in(pool: &PgPool) -> anyhow::Result<chrono::Duration> {
+    let due = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        "SELECT next_reconcile_at FROM playlist_membership_state WHERE playlist_urn = $1",
+    )
+    .bind(FOREIGN)
+    .fetch_one(pool)
+    .await?;
+    Ok(due - chrono::Utc::now())
+}
+
 async fn foreign_projection(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     Ok(sqlx::query_scalar::<_, String>(
         "SELECT sc_track_id FROM playlist_track_projection
@@ -169,6 +179,10 @@ async fn a_public_playlist_of_a_stranger_is_read_with_an_app_token_and_never_wri
     assert_eq!(
         observation,
         ("public".to_owned(), "incomplete".to_owned(), 3, 2, false)
+    );
+    assert!(
+        foreign_due_in(&pool).await? > chrono::Duration::minutes(55),
+        "a stranger's clean playlist was due on the shared app tokens within the hour"
     );
     Ok(())
 }

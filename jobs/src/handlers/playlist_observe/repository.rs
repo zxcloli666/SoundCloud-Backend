@@ -407,7 +407,8 @@ impl PlaylistObserveRepository {
             outcome.reason.as_deref(),
             capture.reconcile_generation,
             outcome.committed_through_sequence,
-            &fingerprint
+            &fingerprint,
+            authority.as_str()
         )
         .execute(&mut *transaction)
         .await?;
