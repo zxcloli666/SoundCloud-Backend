@@ -10,6 +10,7 @@ use super::meta::{LivePage, LiveState};
 use super::query::{LiveClass, LiveKind};
 use super::service::{LiveRequest, LiveSearch};
 use super::serving;
+use super::store::{LiveStore, Window};
 use crate::cache::{CacheService, ListPageResult};
 use crate::common::admission::PublicAdmission;
 use crate::common::pagination::PaginationQuery;
@@ -146,6 +147,15 @@ pub(super) fn harness_with(
     script: Script,
     cfg: LiveSearchCfg,
 ) -> anyhow::Result<Harness> {
+    harness_on(pool, script, cfg, redis())
+}
+
+fn harness_on(
+    pool: &PgPool,
+    script: Script,
+    cfg: LiveSearchCfg,
+    cache: deadpool_redis::Pool,
+) -> anyhow::Result<Harness> {
     let relay = SearchRelay::new(script);
     let sc = ScClient::new(&sc_transport::ScConfig {
         proxy_url: String::new(),
@@ -164,7 +174,7 @@ pub(super) fn harness_with(
     let read = ScReadService::new(sc, tokens, pool.clone());
     let live = LiveSearch::new(
         read,
-        CacheService::new(redis()),
+        CacheService::new(cache),
         live_admission(),
         pool.clone(),
         cfg,
@@ -541,6 +551,91 @@ async fn later_pages_read_the_window_and_then_continue_with_local_rows(
         .tracks(&lab.phrase("never searched"), 1, Vec::new())
         .await;
     assert_eq!(unseen.state(), LiveState::Skipped);
+    Ok(())
+}
+
+fn enough_for(phrase: &str, at: u64) -> Vec<Value> {
+    let mut enough = rows(at, 9, "filler");
+    enough.push(json!({"urn": format!("soundcloud:tracks:{}", at + 100), "title": phrase, "user": {"username": "x"}}));
+    enough
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn the_local_page_runs_while_the_window_is_read(pool: PgPool) -> anyhow::Result<()> {
+    let silent = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let unanswered = deadpool_redis::Config::from_url(format!("redis://{}", silent.local_addr()?))
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    let lab = harness_on(
+        &pool,
+        Script::Answers(hits(base(), 2)),
+        LiveSearchCfg {
+            mode: LiveMode::Explicit,
+            db_rescue: false,
+            max_in_flight: 8,
+            ranked: false,
+        },
+        unanswered,
+    )?;
+    let phrase = lab.phrase("slow window");
+    let request = lab.request(LiveKind::Tracks, &phrase, Some("sc"), Some(0), 20, false);
+
+    let started = Instant::now();
+    let page = lab
+        .ask(
+            &request,
+            enough_for(&phrase, base()),
+            Duration::from_millis(300),
+        )
+        .await;
+
+    assert_eq!(page.state(), LiveState::Local);
+    assert!(
+        started.elapsed() < Duration::from_millis(600),
+        "a window read stuck for 400 ms must not delay a 300 ms local page, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(lab.relay.calls(), 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_stale_window_never_follows_a_first_page_that_went_local(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let at = base();
+    let lab = harness(&pool, Script::Answers(hits(at, 40)), LiveMode::Explicit)?;
+    let phrase = lab.phrase("stale window");
+    let request = lab.request(LiveKind::Tracks, &phrase, Some("sc"), Some(0), 20, false);
+    let stale_ids: Vec<String> = (at + 1000..at + 1040)
+        .map(|id| format!("soundcloud:tracks:{id}"))
+        .collect();
+    LiveStore::new(CacheService::new(redis()))
+        .write(
+            request.class.scope(request.kind),
+            &request.query.hash,
+            &Window::new(stale_ids, chrono::Utc::now().timestamp() - 700),
+            1800,
+            &hits(at + 1000, 40),
+            &[],
+        )
+        .await;
+    let enough = enough_for(&phrase, at + 500);
+
+    let first = lab.ask(&request, enough.clone(), Duration::ZERO).await;
+    assert_eq!(first.state(), LiveState::Local);
+
+    let later = lab.request(LiveKind::Tracks, &phrase, Some("sc"), Some(1), 20, false);
+    let second = lab.ask(&later, enough, Duration::ZERO).await;
+    assert_eq!(second.state(), LiveState::Skipped);
+    assert_eq!(second.page.page, 1);
+    assert!(
+        second.page.collection.is_empty(),
+        "page 1 continues the local pages page 0 started, not the old window: {:?}",
+        titles(&second)
+    );
+    assert_eq!(lab.relay.calls(), 0);
     Ok(())
 }
 

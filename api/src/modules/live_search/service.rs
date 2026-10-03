@@ -84,6 +84,13 @@ impl Served {
             meta: LiveMeta::new(state, retry_after),
         }
     }
+
+    fn with_local(mut self, local: Option<&LocalPage>) -> Self {
+        if matches!(local, Some(Err(_))) {
+            self.meta = self.meta.local_unavailable();
+        }
+        self
+    }
 }
 
 pub struct LiveSearch {
@@ -218,29 +225,42 @@ impl LiveSearch {
         F: Fn(i64) -> Fut,
         Fut: Future<Output = LocalPage>,
     {
-        let previous = self
-            .store
-            .window(request.scope(), &request.query.hash)
-            .await;
-        if let Some(window) = previous.as_ref().filter(|window| window.is_fresh(now())) {
-            let served = Served::window(window.clone(), Vec::new(), LiveState::Cached);
-            return self.serve(request, served, None, local).await;
-        }
+        let started = tokio::time::Instant::now();
         let mut pending = std::pin::pin!(bounded(local(0)));
-        let landed = match tokio::time::timeout(LOCAL_PATIENCE, &mut pending).await {
-            Ok(Ok(page)) if self.local_is_enough(request, &page.collection) => {
+        let window = self.store.window(request.scope(), &request.query.hash);
+        let (previous, early) = alongside(window, pending.as_mut()).await;
+        if let Some(window) = previous.as_ref().filter(|window| window.is_fresh(now())) {
+            let served = Served::window(window.clone(), Vec::new(), LiveState::Cached)
+                .with_local(early.as_ref());
+            let first = async {
+                match early {
+                    Some(result) => result,
+                    None => pending.await,
+                }
+            };
+            return self.serve(request, served, first, local).await;
+        }
+        let landed = match early {
+            Some(result) => Some(result),
+            None => {
+                let patience = LOCAL_PATIENCE.saturating_sub(started.elapsed());
+                tokio::time::timeout(patience, &mut pending).await.ok()
+            }
+        };
+        let landed = match landed {
+            Some(Ok(page)) if self.local_is_enough(request, &page.collection) => {
                 let meta = LiveMeta::new(LiveState::Local, None);
                 return Ok(self.local_answer(request, page, meta).await);
             }
-            Ok(result) => Some(result),
-            Err(_) => None,
+            landed => landed,
         };
         let (outcome, landed) = match landed {
             Some(result) => (self.live(request).await, result),
             None => tokio::join!(self.live(request), pending),
         };
-        let served = served_from(outcome, previous);
-        self.serve(request, served, Some(landed), local).await
+        let served = served_from(outcome, previous).with_local(Some(&landed));
+        self.serve(request, served, std::future::ready(landed), local)
+            .await
     }
 
     async fn later_page<F, Fut>(&self, request: &LiveRequest, local: &F) -> AppResult<LivePage>
@@ -248,76 +268,88 @@ impl LiveSearch {
         F: Fn(i64) -> Fut,
         Fut: Future<Output = LocalPage>,
     {
-        let served = match self
+        let window = self
             .store
             .window(request.scope(), &request.query.hash)
-            .await
-        {
+            .await;
+        let (served, first) = match window {
             Some(window) if window.is_fresh(now()) => {
-                Served::window(window, Vec::new(), LiveState::Cached)
+                (Served::window(window, Vec::new(), LiveState::Cached), None)
             }
-            Some(window) => Served::window(window, Vec::new(), LiveState::Stale),
-            None => Served::nothing(LiveState::Skipped, None),
+            Some(window) => {
+                let first = bounded(local(0)).await;
+                let went_local = matches!(
+                    &first,
+                    Ok(page) if self.local_is_enough(request, &page.collection)
+                );
+                let served = if went_local {
+                    Served::nothing(LiveState::Skipped, None)
+                } else {
+                    Served::window(window, Vec::new(), LiveState::Stale)
+                };
+                (served, Some(first))
+            }
+            None => (Served::nothing(LiveState::Skipped, None), None),
         };
-        self.serve(request, served, None, local).await
+        let first = async {
+            match first {
+                Some(result) => result,
+                None => bounded(local(0)).await,
+            }
+        };
+        self.serve(request, served, first, local).await
     }
 
-    async fn serve<F, Fut>(
+    async fn serve<F, Fut, First>(
         &self,
         request: &LiveRequest,
         served: Served,
-        landed: Option<LocalPage>,
+        first: First,
         local: &F,
     ) -> AppResult<LivePage>
     where
         F: Fn(i64) -> Fut,
         Fut: Future<Output = LocalPage>,
+        First: Future<Output = LocalPage>,
     {
         let Served {
             window,
             items,
             meta,
         } = served;
-        let local_failed = matches!(landed, Some(Err(_)));
-        let local_page_at = |index: i64, landed: Option<LocalPage>| async move {
-            match landed {
-                Some(result) if index == 0 => result,
-                _ => bounded(local(index)).await,
+        let local_page_at = |index: i64| async move {
+            if index == 0 {
+                first.await
+            } else {
+                bounded(local(index)).await
             }
         };
         let Some(window) = window else {
-            let page = local_page_at(request.page, landed).await?;
+            let page = local_page_at(request.page).await?;
             return Ok(self.local_answer(request, page, meta).await);
         };
         if request.class == LiveClass::Import && request.page == 0 {
             let (hits, after) = tokio::join!(
                 self.build(request, &window.ids, 0, &items),
-                local_page_at(0, landed)
+                local_page_at(0)
             );
             return Ok(self.import_page(request, hits, after, meta).await);
         }
         let wpages = merge::wpages(window.ids.len(), request.limit);
         if request.page >= wpages {
-            let mut after = local_page_at(request.page - wpages, landed).await?;
+            let mut after = local_page_at(request.page - wpages).await?;
             after.collection = merge::local_after_window(after.collection, &window.ids);
             after.page = request.page;
             return Ok(local_page(after, meta));
         }
         let slice = merge::window_slice(&window.ids, request.page, request.limit);
         let offset = usize::try_from(request.page.saturating_mul(request.limit)).unwrap_or(0);
-        let meta = if local_failed {
-            meta.local_unavailable()
-        } else {
-            meta
-        };
         let (collection, has_more, meta) = if request.page + 1 < wpages {
             let collection = self.build(request, slice, offset, &items).await;
             (collection, true, meta)
         } else {
-            let (collection, after) = tokio::join!(
-                self.build(request, slice, offset, &items),
-                local_page_at(0, landed)
-            );
+            let (collection, after) =
+                tokio::join!(self.build(request, slice, offset, &items), local_page_at(0));
             match after {
                 Ok(after) => {
                     let more = after.has_more
@@ -538,6 +570,24 @@ fn served_from(outcome: Outcome, previous: Option<Window>) -> Served {
 fn local_page(mut page: ListPageResult<Value>, meta: LiveMeta) -> LivePage {
     merge::tag_all(&mut page.collection, SOURCE_LOCAL);
     LivePage::new(page, meta)
+}
+
+async fn alongside<T, Other>(
+    main: impl Future<Output = T>,
+    mut other: std::pin::Pin<&mut Other>,
+) -> (T, Option<Other::Output>)
+where
+    Other: Future,
+{
+    let mut main = std::pin::pin!(main);
+    let mut landed = None;
+    loop {
+        tokio::select! {
+            biased;
+            done = &mut main => return (done, landed),
+            result = other.as_mut(), if landed.is_none() => landed = Some(result),
+        }
+    }
 }
 
 async fn bounded<Fut>(local: Fut) -> LocalPage
