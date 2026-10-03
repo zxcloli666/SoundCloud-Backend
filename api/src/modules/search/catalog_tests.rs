@@ -7,7 +7,11 @@ use sqlx::PgPool;
 fn service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<SearchService>> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(SearchService::new(pool.clone(), CacheService::new(redis)))
+    Ok(SearchService::new(
+        pool.clone(),
+        CacheService::new(redis),
+        false,
+    ))
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -377,7 +381,11 @@ fn cached_service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<SearchService>
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
     .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(SearchService::new(pool.clone(), CacheService::new(redis)))
+    Ok(SearchService::new(
+        pool.clone(),
+        CacheService::new(redis),
+        false,
+    ))
 }
 
 #[sqlx::test(migrations = "./migrations")]

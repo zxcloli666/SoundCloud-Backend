@@ -10,7 +10,9 @@ use crate::cache::{CacheService, ListPageResult, build_list_cache_key};
 use crate::error::AppResult;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::modules::search::failure::{self, SearchFailure};
+use crate::modules::search::ranked::{RankedSearch, TrackPage};
 use crate::modules::search::repository;
+use crate::modules::search::terms::QueryTerms;
 use catalog_normalize::normalize_name;
 
 const TTL_SECONDS: u64 = 60;
@@ -23,11 +25,13 @@ pub struct SearchService {
     pg: PgPool,
     cache: Arc<CacheService>,
     flights: crate::cache::KeyedCoalesce<Result<String, SearchFailure>>,
+    ranked: Option<RankedSearch>,
 }
 
 impl SearchService {
-    pub fn new(pg: PgPool, cache: Arc<CacheService>) -> Arc<Self> {
+    pub fn new(pg: PgPool, cache: Arc<CacheService>, ranked: bool) -> Arc<Self> {
         Arc::new(Self {
+            ranked: ranked.then(|| RankedSearch::new(pg.clone(), cache.clone())),
             pg,
             cache,
             flights: crate::cache::KeyedCoalesce::new(),
@@ -130,6 +134,15 @@ impl SearchService {
         page: i64,
         limit: i64,
     ) -> AppResult<ListPageResult<Value>> {
+        Ok(self.track_page(query, page, limit).await?.page)
+    }
+
+    pub async fn track_page(
+        &self,
+        query: &super::query::TrackSearchQuery,
+        page: i64,
+        limit: i64,
+    ) -> AppResult<TrackPage> {
         let (page, limit) = Self::clamp_page_limit(page, limit);
         super::query::validate_access(query.access.as_deref())?;
         let ids = super::query::parse_ids(query.ids.as_deref(), "tracks")?;
@@ -149,7 +162,7 @@ impl SearchService {
             && (!raw_query.trim().is_empty()
                 || (ids.is_none() && genres.is_none() && tags.is_none() && owner.is_none()))
         {
-            return Ok(empty_page(page, limit));
+            return Ok(unranked(empty_page(page, limit)));
         }
         let filters = repository::TrackSearch {
             query: normalized.as_ref().map(|_| raw_query.as_str()),
@@ -161,6 +174,11 @@ impl SearchService {
         let phrase = normalized
             .as_deref()
             .filter(|_| owner.is_none() && ids.is_none() && genres.is_none() && tags.is_none());
+        if let (Some(ranked), Some(phrase)) = (self.ranked.as_ref(), phrase) {
+            return self
+                .ranked_page(ranked, &raw_query, phrase, page, limit)
+                .await;
+        }
         let cache_key =
             phrase.map(|phrase| phrase_cache_key("search-db-tracks", phrase, page, limit));
         self.search_page(cache_key, page, limit, || async {
@@ -172,6 +190,30 @@ impl SearchService {
             Ok((collection, has_more))
         })
         .await
+        .map(unranked)
+    }
+
+    async fn ranked_page(
+        &self,
+        ranked: &RankedSearch,
+        raw_query: &str,
+        phrase: &str,
+        page: i64,
+        limit: i64,
+    ) -> AppResult<TrackPage> {
+        let cache_key = phrase_cache_key("search-db-tracks-ranked", phrase, page, limit);
+        let value = self
+            .cached(&cache_key, || async {
+                let found = ranked.page(raw_query, page, limit, MAX_PAGE).await?;
+                Ok(serde_json::to_value(found).unwrap_or(Value::Null))
+            })
+            .await?;
+        let found = serde_json::from_value::<TrackPage>(value)
+            .unwrap_or_else(|_| unranked(empty_page(page, limit)));
+        if page == 0 && found.weak == Some(true) {
+            crate::metrics::record_search_weak();
+        }
+        Ok(found)
     }
 
     pub async fn playlists(
@@ -271,6 +313,12 @@ impl SearchService {
         self.search_page(Some(key), page, limit, || async {
             let (rows, has_more) =
                 repository::search_artists(&self.pg, &q_norm, page, limit).await?;
+            let named = if self.ranked.is_some() {
+                repository::artists_named(&self.pg, &QueryTerms::parse(q).span_names()).await?
+            } else {
+                Vec::new()
+            };
+            let rows = named_first(named, rows, page);
             Ok((rows.into_iter().map(artist_to_value).collect(), has_more))
         })
         .await
@@ -313,6 +361,24 @@ fn phrase_cache_key(prefix: &str, phrase: &str, page: i64, limit: i64) -> String
         ("limit", limit.to_string()),
     ];
     build_list_cache_key(prefix, &params)
+}
+
+fn unranked(page: ListPageResult<Value>) -> TrackPage {
+    TrackPage { page, weak: None }
+}
+
+fn named_first(
+    named: Vec<repository::ArtistSearchRow>,
+    rows: Vec<repository::ArtistSearchRow>,
+    page: i64,
+) -> Vec<repository::ArtistSearchRow> {
+    let lead: Vec<uuid::Uuid> = named.iter().map(|row| row.id).collect();
+    let rest = rows.into_iter().filter(|row| !lead.contains(&row.id));
+    if page == 0 {
+        named.into_iter().chain(rest).collect()
+    } else {
+        rest.collect()
+    }
 }
 
 fn decode_page(v: Value, fallback_page: i64, fallback_limit: i64) -> ListPageResult<Value> {

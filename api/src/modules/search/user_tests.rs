@@ -17,7 +17,7 @@ async fn user_search_is_local_bounded_and_reads_current_profiles(
     .await?;
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let service = SearchService::new(pool.clone(), CacheService::new(redis));
+    let service = SearchService::new(pool.clone(), CacheService::new(redis), false);
 
     let first = service.users("AL", None, 0, 1).await?;
     assert_eq!(first.collection[0]["username"], "Alpine");

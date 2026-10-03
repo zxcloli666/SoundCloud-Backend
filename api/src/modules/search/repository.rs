@@ -47,7 +47,7 @@ pub fn like_needle_normalized(q: &str) -> String {
     }
 }
 
-async fn begin(pg: &PgPool) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+pub(super) async fn begin(pg: &PgPool) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
     match tokio::time::timeout(BEGIN_TIMEOUT, pg.begin()).await {
         Ok(begun) => begun.map_err(failure::from_db),
         Err(_) => Err(failure::busy()),
@@ -65,9 +65,16 @@ async fn set_statement_timeout(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -
 }
 
 async fn configure_catalog_search(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<()> {
+    configure_search(tx, STATEMENT_TIMEOUT_MS).await
+}
+
+pub(super) async fn configure_search(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    timeout_ms: i32,
+) -> AppResult<()> {
     sqlx::query_file!(
         "queries/search/repository/configure_catalog_search.sql",
-        &STATEMENT_TIMEOUT_MS.to_string()
+        &timeout_ms.to_string()
     )
     .fetch_one(&mut **tx)
     .await
@@ -181,7 +188,10 @@ pub async fn search_tracks(
     Ok((projected, has_more))
 }
 
-async fn project_tracks_with_uploaders(pg: &PgPool, rows: Vec<TrackRow>) -> AppResult<Vec<Value>> {
+pub(super) async fn project_tracks_with_uploaders(
+    pg: &PgPool,
+    rows: Vec<TrackRow>,
+) -> AppResult<Vec<Value>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -411,6 +421,24 @@ pub async fn search_artists(
 
     let has_more = rows.len() as i64 > limit;
     Ok((rows.into_iter().take(limit as usize).collect(), has_more))
+}
+
+pub async fn artists_named(pg: &PgPool, names: &[String]) -> AppResult<Vec<ArtistSearchRow>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = begin(pg).await?;
+    set_statement_timeout(&mut tx).await?;
+    let rows = sqlx::query_file_as!(
+        ArtistSearchRow,
+        "queries/search/ranked/artists_named.sql",
+        names
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(failure::from_db)?;
+    tx.commit().await.map_err(failure::from_db)?;
+    Ok(rows)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

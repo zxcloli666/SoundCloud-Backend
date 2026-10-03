@@ -17,6 +17,8 @@ const SC_RELAY_BREAKER_OPEN: &str = "api_sc_relay_breaker_open";
 const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
 const SEARCH_FAILURES: &str = "api_search_failures_total";
+const SEARCH_WEAK: &str = "api_search_weak_total";
+const SEARCH_PHASE: &str = "api_search_phase_seconds";
 const LIVE_REQUESTS: &str = "api_live_search_requests_total";
 const LIVE_FETCHES: &str = "api_live_search_fetch_total";
 const LIVE_GATE_CLOSED: &str = "api_live_search_gate_closed";
@@ -64,6 +66,9 @@ pub fn init() {
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(Matcher::Full(POOL_WAIT.to_owned()), POOL_WAIT_BUCKETS)
+        })
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(Matcher::Full(SEARCH_PHASE.to_owned()), LATENCY_BUCKETS)
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(
@@ -166,6 +171,20 @@ pub fn record_search_failure(code: &'static str) {
         return;
     }
     metrics::counter!(SEARCH_FAILURES, "code" => code).increment(1);
+}
+
+pub fn record_search_weak() {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SEARCH_WEAK).increment(1);
+}
+
+pub fn record_search_phase(phase: &'static str, elapsed: Duration) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::histogram!(SEARCH_PHASE, "phase" => phase).record(elapsed.as_secs_f64());
 }
 
 pub fn record_live_request(kind: &'static str, class: &'static str, state: &'static str) {

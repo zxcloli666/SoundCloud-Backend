@@ -60,19 +60,20 @@ async fn db_tracks(
     Query(q): Query<TrackSearchQuery>,
 ) -> AppResult<Response> {
     let (page, limit) = p.resolved();
-    let result = st.search.tracks(&q, page, limit).await?;
+    let found = st.search.track_page(&q, page, limit).await?;
     let rescue = st
         .live_search
         .rescue_plan(plain_tracks(&q), &headers, &p, &ctx.sc_user_id);
-    let Some(request) = rescue.filter(|_| result.collection.is_empty()) else {
-        return Ok(Json(result).into_response());
+    let Some(request) = rescue.filter(|_| found.page.collection.is_empty()) else {
+        return Ok(Json(found).into_response());
     };
-    let live = st
+    let mut live = st
         .live_search
         .page(&request, |_| {
-            let empty = result.clone();
+            let empty = found.page.clone();
             async move { Ok(empty) }
         })
         .await?;
+    live.weak = found.weak.unwrap_or(live.weak);
     Ok(live.into_response())
 }

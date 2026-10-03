@@ -17,7 +17,7 @@ fn offline_service() -> anyhow::Result<Arc<SearchService>> {
     let pg = PgPool::connect_lazy("postgres://search@127.0.0.1:1/offline")?;
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(SearchService::new(pg, CacheService::new(redis)))
+    Ok(SearchService::new(pg, CacheService::new(redis), false))
 }
 
 fn assert_retryable(error: AppError, code: &str) {

@@ -14,4 +14,5 @@ pub use title::{
     ParsedTitle, clean_artist_name, compact_title, normalize_name, normalize_title, parse_sc_title,
     strip_translit_parens, title_marks_cover,
 };
+pub use translit::cyrillic_to_latin;
 pub use work::{TitleForms, VersionMarker, title_forms, works_match};

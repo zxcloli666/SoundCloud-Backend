@@ -217,7 +217,7 @@ async fn main() {
     });
     let users = UsersService::new(pg.clone(), cold_refresh.clone(), live_stash);
     let dislikes = DislikesService::new(pg.clone(), events.clone());
-    let search = SearchService::new(pg.clone(), cache.clone());
+    let search = SearchService::new(pg.clone(), cache.clone(), config.live_search.ranked);
     let live_search = LiveSearch::new(
         resolve.clone(),
         cache.clone(),
@@ -228,7 +228,11 @@ async fn main() {
         pg.clone(),
         config.live_search,
     );
-    info!(mode = ?config.live_search.mode, "live search ready");
+    info!(
+        mode = ?config.live_search.mode,
+        ranked = config.live_search.ranked,
+        "live search ready"
+    );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);

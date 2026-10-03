@@ -136,6 +136,7 @@ fn harness(pool: &PgPool, script: Script, mode: LiveMode) -> anyhow::Result<Harn
             mode,
             db_rescue: false,
             max_in_flight: 8,
+            ranked: false,
         },
     )
 }
@@ -589,6 +590,7 @@ fn rescuing(mode: LiveMode) -> LiveSearchCfg {
         mode,
         db_rescue: true,
         max_in_flight: 8,
+        ranked: false,
     }
 }
 
@@ -647,6 +649,7 @@ async fn only_an_old_client_on_page_zero_with_a_specific_phrase_is_rescued(
             mode: LiveMode::Auto,
             db_rescue: false,
             max_in_flight: 8,
+            ranked: false,
         },
     ] {
         let off = harness_with(&pool, Script::Silent, cfg)?;

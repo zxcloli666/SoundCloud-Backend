@@ -129,6 +129,7 @@ async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::service::Search
     Ok(super::service::SearchService::new(
         pg,
         CacheService::new(redis),
+        false,
     ))
 }
 

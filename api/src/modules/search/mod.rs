@@ -1,10 +1,14 @@
+pub mod candidates;
 pub mod failure;
 pub mod handlers;
 pub mod lyrics;
 pub mod query;
+pub mod rank;
+pub mod ranked;
 pub mod repository;
 pub mod semantic;
 pub mod service;
+pub mod terms;
 pub mod vibe;
 
 #[cfg(test)]
@@ -15,6 +19,12 @@ mod catalog_tests;
 
 #[cfg(test)]
 mod failure_tests;
+
+#[cfg(test)]
+mod rank_tests;
+
+#[cfg(test)]
+mod ranked_tests;
 
 #[cfg(test)]
 mod stampede_tests;

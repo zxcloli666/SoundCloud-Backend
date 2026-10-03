@@ -174,6 +174,7 @@ pub struct LiveSearchCfg {
     pub mode: LiveMode,
     pub db_rescue: bool,
     pub max_in_flight: usize,
+    pub ranked: bool,
 }
 
 impl LiveSearchCfg {
@@ -185,6 +186,7 @@ impl LiveSearchCfg {
             db_rescue: env_str("SEARCH_LIVE_DB_RESCUE", "false") == "true",
             max_in_flight: usize::try_from(admission_value("SEARCH_LIVE_MAX_IN_FLIGHT", 8))
                 .expect("SEARCH_LIVE_MAX_IN_FLIGHT is too large"),
+            ranked: env_str("SEARCH_RANKED", "true") == "true",
         }
     }
 }
