@@ -208,12 +208,12 @@ async fn stream_private(
         && let Some((data, content_type)) =
             try_session_oauth(state, access_token, track_urn, secret_token, true).await
     {
-        return data_response(data, content_type);
+        return data_response(data, content_type, "hq");
     }
     if let Some((data, content_type)) =
         try_session_oauth(state, access_token, track_urn, secret_token, false).await
     {
-        return data_response(data, content_type);
+        return data_response(data, content_type, "sq");
     }
 
     warn!("[stream] {track_urn} → private stream unavailable");
@@ -346,6 +346,7 @@ async fn try_restricted(
     cacheable: bool,
 ) -> Option<Response> {
     let src = restricted_source(state, track_urn, tag, hq_first).await?;
+    let quality = if src.is_hq { "hq" } else { "sq" };
 
     if let (Some(wvd_url), Some(wvd_token)) = (
         state.config.edge_wvd_url.as_deref(),
@@ -354,7 +355,6 @@ async fn try_restricted(
         crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
             .await
     {
-        let quality = if src.is_hq { "hq" } else { "sq" };
         let bytes = Bytes::from(audio);
         if cacheable && bytes.len() > 8192 {
             state.storage.upload_in_background_with_quality(
@@ -367,6 +367,7 @@ async fn try_restricted(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
+                .header("x-audio-quality", quality)
                 .body(Body::from(bytes))
                 .unwrap(),
         );
@@ -394,6 +395,7 @@ async fn try_restricted(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
+                .header("x-audio-quality", quality)
                 .body(Body::from_stream(stream))
                 .unwrap(),
         );
@@ -403,7 +405,6 @@ async fn try_restricted(
     let acc_w = acc.clone();
     let storage = state.storage.clone();
     let urn = track_urn.to_string();
-    let quality = if src.is_hq { "hq" } else { "sq" };
     let teed = stream
         .map(move |chunk| {
             if let Ok(b) = &chunk {
@@ -423,6 +424,7 @@ async fn try_restricted(
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", src.content_type)
+            .header("x-audio-quality", quality)
             .body(Body::from_stream(teed))
             .unwrap(),
     )
@@ -476,14 +478,19 @@ fn respond_with_data(
         );
     }
 
-    data_response(data, content_type)
+    data_response(data, content_type, quality)
 }
 
-fn data_response(data: Bytes, content_type: &'static str) -> Result<Response, AppError> {
+fn data_response(
+    data: Bytes,
+    content_type: &'static str,
+    quality: &'static str,
+) -> Result<Response, AppError> {
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", content_type)
         .header("content-length", data.len().to_string())
+        .header("x-audio-quality", quality)
         .body(Body::from(data))
         .unwrap())
 }
