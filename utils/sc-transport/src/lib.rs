@@ -21,7 +21,8 @@ pub use bytes::Bytes;
 pub use channel_health::{ChannelHealth, Trip};
 pub use client::{OAuthCredentials, RelayTransport, ScClient};
 pub use egress_health::{
-    EGRESS_RELAY_LUA, EGRESS_RELAY_RAW, EgressFuture, EgressHealth, EgressHealthStore, EgressState,
+    EGRESS_RELAY_LUA, EGRESS_RELAY_LUA_SEARCH, EGRESS_RELAY_RAW, EgressFuture, EgressHealth,
+    EgressHealthStore, EgressState,
 };
 pub use error::{ScError, ScResult};
 pub use mapping::{PublicCollection, SearchType, normalize_v2_to_v1, unwrap_collection_items};
