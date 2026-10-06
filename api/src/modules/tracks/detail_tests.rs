@@ -465,6 +465,69 @@ async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
     Ok(())
 }
 
+async fn park_without_owner(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE playlist_membership_state
+         SET sync_status = 'auth_required',
+             next_reconcile_at = now() + interval '17 hours',
+             reconcile_failure_streak = 9",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn membership_state(pool: &PgPool) -> anyhow::Result<(String, bool, i32)> {
+    Ok(sqlx::query_as(
+        "SELECT sync_status,
+                next_reconcile_at < now() + interval '1 minute',
+                reconcile_failure_streak
+         FROM playlist_membership_state",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn opening_a_public_playlist_parked_without_its_owner_wakes_its_observation(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query("INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, sharing)
+        VALUES ('42', 'soundcloud:playlists:42', 'Stranger mix', 'stranger mix', '17', 'public')")
+        .execute(&pool).await?;
+    sqlx::query(
+        "INSERT INTO playlist_membership_state (playlist_urn) VALUES ('soundcloud:playlists:42')",
+    )
+    .execute(&pool)
+    .await?;
+    park_without_owner(&pool).await?;
+    let services = services(&pool).await?;
+
+    services
+        .playlists
+        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .await?;
+    let page = services.playlists.get_tracks("18", "42", 0, 50).await?;
+
+    assert_eq!(page.sync.status, "retry_wait");
+    assert_eq!(
+        membership_state(&pool).await?,
+        ("retry_wait".to_owned(), true, 0)
+    );
+
+    park_without_owner(&pool).await?;
+    services
+        .playlists
+        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .await?;
+
+    assert_eq!(
+        membership_state(&pool).await?,
+        ("auth_required".to_owned(), false, 9)
+    );
+    Ok(())
+}
+
 async fn record_refusal(pool: &PgPool, dedup_key: &str) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO background_job_failures (
