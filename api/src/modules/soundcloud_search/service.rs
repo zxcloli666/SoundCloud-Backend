@@ -222,7 +222,7 @@ fn empty_page(page: i64, limit: i64) -> ListPageResult<Value> {
     }
 }
 
-pub(super) fn unavailable(retry_after: i64) -> AppError {
+pub(crate) fn unavailable(retry_after: i64) -> AppError {
     AppError::coded(
         StatusCode::SERVICE_UNAVAILABLE,
         "soundcloud_search_unavailable",
@@ -231,7 +231,7 @@ pub(super) fn unavailable(retry_after: i64) -> AppError {
     .with_retry_after(retry_after)
 }
 
-pub(super) fn busy(rejection: AdmissionRejection) -> AppError {
+pub(crate) fn busy(rejection: AdmissionRejection) -> AppError {
     let retry_after = match rejection {
         AdmissionRejection::Limited {
             retry_after_seconds,

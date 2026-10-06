@@ -1,4 +1,4 @@
-mod service;
+pub(crate) mod service;
 
 #[cfg(test)]
 mod tests;
