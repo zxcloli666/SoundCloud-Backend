@@ -439,7 +439,7 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(
         pending_jobs(&pool).await?,
-        vec!["playlist:42:18".to_owned()]
+        vec!["playlist:42:public".to_owned()]
     );
     Ok(())
 }
@@ -460,6 +460,42 @@ async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
     assert_eq!(error.public_code(), "playlist_refresh_pending");
     assert_eq!(
         pending_jobs(&pool).await?,
+        vec!["playlist:42:public".to_owned()]
+    );
+    Ok(())
+}
+
+async fn record_refusal(pool: &PgPool, dedup_key: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation,
+             attempts, max_attempts, last_error, created_at
+         ) VALUES ($1, 'catalog.refresh', 'core_fast', $2, '{}', 15, 1,
+                   1, 8, 'SoundCloud answered 404', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dedup_key)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_playlist_the_public_reader_refused_is_loaded_as_the_viewer(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+    record_refusal(&pool, "playlist:42:public").await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.public_code(), "playlist_refresh_pending");
+    assert_eq!(
+        pending_jobs(&pool).await?,
         vec!["playlist:42:18".to_owned()]
     );
     Ok(())
@@ -470,16 +506,8 @@ async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_fore
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let services = services(&pool).await?;
-    sqlx::query(
-        "INSERT INTO background_job_failures (
-             id, kind, lane, dedup_key, payload, priority, generation,
-             attempts, max_attempts, last_error, created_at
-         ) VALUES ($1, 'catalog.refresh', 'core_fast', 'playlist:42:18', '{}', 15, 1,
-                   1, 8, 'SoundCloud answered 404', now())",
-    )
-    .bind(Uuid::now_v7())
-    .execute(&pool)
-    .await?;
+    record_refusal(&pool, "playlist:42:public").await?;
+    record_refusal(&pool, "playlist:42:18").await?;
 
     let error = services
         .playlists

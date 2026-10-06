@@ -22,39 +22,42 @@ pub async fn refresh_pending(
     pool: &PgPool,
     entity: CatalogEntity,
     urn: &str,
-    owner_id: Option<&str>,
+    viewer: Option<&str>,
     code: &'static str,
     message: &'static str,
 ) -> AppError {
-    let payload = CatalogRefreshPayload {
-        entity,
-        sc_id: extract_sc_id(urn).to_owned(),
-        owner_id: owner_id.map(extract_sc_id).map(str::to_owned),
-    };
-    let dedup_key = payload.dedup_key();
-    match sqlx::query_file_scalar!(
-        "queries/cold_refresh/entity_recently_unavailable.sql",
-        &dedup_key
-    )
-    .fetch_one(pool)
-    .await
-    {
-        Ok(true) => return not_found(entity),
-        Ok(false) => {}
-        Err(error) => return error.into(),
+    for owner_id in [None].into_iter().chain(viewer.map(Some)) {
+        let payload = CatalogRefreshPayload {
+            entity,
+            sc_id: extract_sc_id(urn).to_owned(),
+            owner_id: owner_id.map(extract_sc_id).map(str::to_owned),
+        };
+        let dedup_key = payload.dedup_key();
+        match sqlx::query_file_scalar!(
+            "queries/cold_refresh/entity_recently_unavailable.sql",
+            &dedup_key
+        )
+        .fetch_one(pool)
+        .await
+        {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return error.into(),
+        }
+        if let Err(error) = enqueue_entity(pool, entity, urn, owner_id, VIEWER_PRIORITY).await {
+            return error;
+        }
+        let retry_after =
+            sqlx::query_file_scalar!("queries/cold_refresh/entity_retry_after.sql", dedup_key)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(5);
+        return AppError::coded(axum::http::StatusCode::SERVICE_UNAVAILABLE, code, message)
+            .with_retry_after(retry_after);
     }
-    if let Err(error) = enqueue_entity(pool, entity, urn, owner_id, VIEWER_PRIORITY).await {
-        return error;
-    }
-    let retry_after =
-        sqlx::query_file_scalar!("queries/cold_refresh/entity_retry_after.sql", dedup_key)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(5);
-    AppError::coded(axum::http::StatusCode::SERVICE_UNAVAILABLE, code, message)
-        .with_retry_after(retry_after)
+    not_found(entity)
 }
 
 fn not_found(entity: CatalogEntity) -> AppError {
