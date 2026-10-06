@@ -26,6 +26,7 @@ const TTL_SECONDS: u64 = 60;
 const MIN_QUERY_LEN: usize = 2;
 const MAX_QUERY_LEN: usize = 128;
 pub const MAX_PAGE: i64 = 24;
+pub const DEFAULT_LIMIT: i64 = 20;
 const MAX_LIMIT: i64 = 50;
 const PERMITS: usize = 8;
 const PERMIT_WAIT: Duration = Duration::from_secs(1);

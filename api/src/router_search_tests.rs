@@ -500,3 +500,24 @@ async fn catalog_tracks_carry_the_listener_like(pool: PgPool) -> anyhow::Result<
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn catalog_search_pages_twenty_without_a_limit(pool: PgPool) -> anyhow::Result<()> {
+    seed_tracks(&pool, &["5"]).await?;
+    let app = app(&pool, "redis://127.0.0.1:1").await?;
+    let session = session(&pool).await?;
+    for path in [
+        "/search/db/tracks",
+        "/search/db/playlists",
+        "/search/db/users",
+        "/search/db/artists",
+        "/search/db/albums",
+        "/search/lyrics",
+    ] {
+        let uri = format!("{path}?q=midnight");
+        let (status, body) = get(&app, session, &uri).await?;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert_eq!(body["page_size"], 20, "{uri}");
+    }
+    Ok(())
+}

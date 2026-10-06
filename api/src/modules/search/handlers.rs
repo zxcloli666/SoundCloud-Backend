@@ -9,6 +9,7 @@ use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::likes::cold::apply_user_favorite_flag;
+use crate::modules::search::catalog::DEFAULT_LIMIT;
 use crate::modules::search::lyrics::LyricsSearchResponse;
 use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
@@ -74,6 +75,10 @@ async fn lyrics(
     Ok(Json(result))
 }
 
+fn catalog_page(p: &PaginationQuery) -> (i64, i64) {
+    (p.page(), p.limit.unwrap_or(DEFAULT_LIMIT))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CatalogQuery {
     #[serde(default)]
@@ -88,7 +93,7 @@ async fn tracks(
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
+    let (page, limit) = catalog_page(&p);
     let query = q.q.unwrap_or_default();
     let mut result = st
         .search
@@ -104,7 +109,7 @@ async fn playlists(
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
+    let (page, limit) = catalog_page(&p);
     let query = q.q.unwrap_or_default();
     Ok(Json(
         st.search
@@ -119,7 +124,7 @@ async fn users(
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
+    let (page, limit) = catalog_page(&p);
     Ok(Json(
         st.search
             .users(&q.q.unwrap_or_default(), page, limit)
@@ -133,7 +138,7 @@ async fn artists(
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
+    let (page, limit) = catalog_page(&p);
     Ok(Json(
         st.search
             .artists(&q.q.unwrap_or_default(), page, limit)
@@ -147,7 +152,7 @@ async fn albums(
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
+    let (page, limit) = catalog_page(&p);
     Ok(Json(
         st.search
             .albums(&q.q.unwrap_or_default(), page, limit)

@@ -1,13 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::catalog::{Request, SearchService};
+use super::catalog::{DEFAULT_LIMIT, Request, SearchService};
 use super::terms::{self, Shape};
 use crate::error::AppResult;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::modules::tracks::repository::project_many_public;
 
-const DEFAULT_LIMIT: i64 = 20;
 const MODE: &str = "text";
 
 #[derive(Debug, Serialize, Deserialize)]
