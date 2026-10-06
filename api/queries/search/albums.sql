@@ -18,7 +18,7 @@ hits AS (
 scored AS (
     SELECT hits.id, hits.tier,
            similarity(search_latin($3), d.doc) + word_similarity(search_latin($3), d.doc)
-             + 0.3 * least(1, ln(1 + al.popularity_score) / 18) AS score
+             + 0.3 * coalesce(al.popularity_score, 0) AS score
     FROM hits
     JOIN albums al ON al.id = hits.id
     LEFT JOIN artists a ON a.id = al.primary_artist_id AND a.merged_into IS NULL
