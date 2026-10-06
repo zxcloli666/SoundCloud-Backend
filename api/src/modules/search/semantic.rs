@@ -6,6 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
+use super::failure::vibe_unavailable;
 use crate::cache::CacheService;
 use crate::cache::cache_service::CacheScope;
 use crate::error::AppResult;
@@ -20,7 +21,7 @@ pub struct VibeSearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
     pub(super) recommendations: Arc<RecommendationsService>,
-    flights: crate::cache::KeyedCoalesce<String>,
+    flights: crate::cache::KeyedCoalesce<Option<String>>,
 }
 
 impl VibeSearchService {
@@ -73,10 +74,18 @@ impl VibeSearchService {
         {
             return Ok(v);
         }
-        let json = self
+        let mut failure = None;
+        let failed = &mut failure;
+        let outcome = self
             .flights
             .run(key, || async {
-                let Cacheable { value, cache } = compute().await?;
+                let Cacheable { value, cache } = match compute().await {
+                    Ok(computed) => computed,
+                    Err(error) => {
+                        *failed = Some(error);
+                        return Ok(None);
+                    }
+                };
                 let json = serde_json::to_string(&value).unwrap_or_default();
                 if cache && !json.is_empty() {
                     let _ = self
@@ -84,9 +93,12 @@ impl VibeSearchService {
                         .set_raw(key, &json, ttl, None, CacheScope::Shared, None)
                         .await;
                 }
-                Ok::<String, crate::error::AppError>(json)
+                Ok::<_, crate::error::AppError>(Some(json))
             })
             .await?;
+        let Some(json) = outcome else {
+            return Err(failure.unwrap_or_else(vibe_unavailable));
+        };
         serde_json::from_str::<T>(&json)
             .map_err(|error| crate::error::AppError::internal(error.to_string()))
     }

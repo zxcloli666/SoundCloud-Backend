@@ -73,6 +73,44 @@ async fn sixteen_identical_misses_do_the_expensive_work_once(pg: PgPool) -> anyh
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
+async fn a_failed_vibe_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
+    let vibe = vibe(pg).await?;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let key = key("vibe-failed");
+
+    let started = std::time::Instant::now();
+    let answers = futures::future::join_all((0..WAITERS).map(|_| {
+        let vibe = vibe.clone();
+        let runs = runs.clone();
+        let key = key.clone();
+        async move {
+            testing::expensive_once(&vibe, &key, move || {
+                let runs = runs.clone();
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(WORK).await;
+                    Err(super::failure::vibe_unavailable())
+                }
+            })
+            .await
+        }
+    }))
+    .await;
+    let waited = started.elapsed();
+
+    for answer in &answers {
+        let error = answer
+            .as_ref()
+            .expect_err("a failed vibe search is an error");
+        assert_eq!(error.public_code(), "vibe_unavailable");
+    }
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert!(waited < WORK * 4, "{waited:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn two_different_keys_are_not_made_to_wait_for_each_other(pg: PgPool) -> anyhow::Result<()> {
     let vibe = vibe(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
