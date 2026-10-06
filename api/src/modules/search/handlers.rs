@@ -8,6 +8,7 @@ use crate::cache::ListPageResult;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
+use crate::modules::likes::cold::apply_user_favorite_flag;
 use crate::modules::search::lyrics::LyricsSearchResponse;
 use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
@@ -52,16 +53,25 @@ struct LyricsQuery {
 
 async fn lyrics(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(q): Query<LyricsQuery>,
 ) -> AppResult<Json<LyricsSearchResponse>> {
     let page = q.page.as_deref().and_then(|s| s.parse::<i64>().ok());
     let limit = q.limit.as_deref().and_then(|s| s.parse::<i64>().ok());
-    Ok(Json(
-        st.search
-            .lyrics(&q.q.unwrap_or_default(), page, limit)
-            .await?,
-    ))
+    let mut result = st
+        .search
+        .lyrics(&q.q.unwrap_or_default(), page, limit)
+        .await?;
+    let mut tracks: Vec<Value> = result
+        .collection
+        .iter_mut()
+        .map(|hit| hit.track.take())
+        .collect();
+    apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut tracks).await?;
+    for (hit, track) in result.collection.iter_mut().zip(tracks) {
+        hit.track = track;
+    }
+    Ok(Json(result))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,17 +84,18 @@ struct CatalogQuery {
 
 async fn tracks(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
     Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
     let query = q.q.unwrap_or_default();
-    Ok(Json(
-        st.search
-            .tracks(&query, q.user_urn.as_deref(), page, limit)
-            .await?,
-    ))
+    let mut result = st
+        .search
+        .tracks(&query, q.user_urn.as_deref(), page, limit)
+        .await?;
+    apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut result.collection).await?;
+    Ok(Json(result))
 }
 
 async fn playlists(
