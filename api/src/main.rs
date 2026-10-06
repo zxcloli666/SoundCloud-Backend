@@ -244,8 +244,6 @@ async fn main() {
         pg.clone(),
         cache.clone(),
         recommendations.clone(),
-        worker.clone(),
-        qdrant.clone(),
     );
 
     events.install_dislikes(dislikes.clone());

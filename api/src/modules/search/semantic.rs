@@ -9,33 +9,17 @@ use sqlx::PgPool;
 use crate::cache::CacheService;
 use crate::cache::cache_service::CacheScope;
 use crate::error::AppResult;
-use crate::modules::lyrics::WorkerClient;
 use crate::modules::recommendations::RecommendationsService;
 use crate::modules::tracks::{TrackRow, project_to_sc_shape};
-use crate::qdrant::QdrantService;
 
 pub(super) const MAX_QUERY_LEN: usize = 512;
 
 pub(super) type CacheTrackIds<T> = fn(&T) -> Option<Vec<String>>;
 
-pub(super) enum CacheHitPolicy<T> {
-    Disabled,
-    Public(CacheTrackIds<T>),
-    PublicLyricsVectors(CacheTrackIds<T>),
-}
-
-impl<T> CacheHitPolicy<T> {
-    fn can_store(&self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
-}
-
 pub struct VibeSearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
     pub(super) recommendations: Arc<RecommendationsService>,
-    pub(super) worker: Arc<WorkerClient>,
-    pub(super) qdrant: Arc<QdrantService>,
     flights: crate::cache::KeyedCoalesce<String>,
 }
 
@@ -44,15 +28,11 @@ impl VibeSearchService {
         pg: PgPool,
         cache: Arc<CacheService>,
         recommendations: Arc<RecommendationsService>,
-        worker: Arc<WorkerClient>,
-        qdrant: Arc<QdrantService>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
             cache,
             recommendations,
-            worker,
-            qdrant,
             flights: crate::cache::KeyedCoalesce::new(),
         })
     }
@@ -79,7 +59,7 @@ impl VibeSearchService {
         &self,
         key: &str,
         ttl: u64,
-        policy: CacheHitPolicy<T>,
+        track_ids: CacheTrackIds<T>,
         compute: F,
     ) -> AppResult<T>
     where
@@ -87,20 +67,18 @@ impl VibeSearchService {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = AppResult<Cacheable<T>>>,
     {
-        if policy.can_store()
-            && let Ok(Some(raw)) = self.cache.get_raw(key).await
+        if let Ok(Some(raw)) = self.cache.get_raw(key).await
             && let Ok(v) = serde_json::from_str::<T>(&raw)
-            && self.cache_hit_is_eligible(&v, &policy).await
+            && self.cache_hit_is_eligible(&v, track_ids).await
         {
             return Ok(v);
         }
-        let may_store = policy.can_store();
         let json = self
             .flights
             .run(key, || async {
                 let Cacheable { value, cache } = compute().await?;
                 let json = serde_json::to_string(&value).unwrap_or_default();
-                if cache && may_store && !json.is_empty() {
+                if cache && !json.is_empty() {
                     let _ = self
                         .cache
                         .set_raw(key, &json, ttl, None, CacheScope::Shared, None)
@@ -113,17 +91,12 @@ impl VibeSearchService {
             .map_err(|error| crate::error::AppError::internal(error.to_string()))
     }
 
-    async fn cache_hit_is_eligible<T>(&self, value: &T, policy: &CacheHitPolicy<T>) -> bool {
-        let (track_ids, require_lyrics_vectors) = match policy {
-            CacheHitPolicy::Disabled => return false,
-            CacheHitPolicy::Public(track_ids) => (track_ids, false),
-            CacheHitPolicy::PublicLyricsVectors(track_ids) => (track_ids, true),
-        };
+    async fn cache_hit_is_eligible<T>(&self, value: &T, track_ids: CacheTrackIds<T>) -> bool {
         let Some(track_ids) = track_ids(value) else {
             return false;
         };
         self.recommendations
-            .cached_tracks_still_eligible(&track_ids, require_lyrics_vectors)
+            .cached_tracks_still_eligible(&track_ids)
             .await
     }
 
@@ -220,7 +193,7 @@ pub(super) fn sha_key(prefix: &str, parts: &[&str]) -> String {
 
 #[cfg(test)]
 pub(crate) mod testing {
-    use super::{CacheHitPolicy, Cacheable, VibeSearchService};
+    use super::{Cacheable, VibeSearchService};
     use crate::error::AppResult;
 
     pub(crate) async fn expensive_once<Load, LoadFuture>(
@@ -233,9 +206,12 @@ pub(crate) mod testing {
         LoadFuture: std::future::Future<Output = AppResult<u32>>,
     {
         service
-            .cached_typed(key, 60, CacheHitPolicy::<u32>::Disabled, || async {
-                Ok(Cacheable::skip(compute().await?))
-            })
+            .cached_typed(
+                key,
+                60,
+                |_| None,
+                || async { Ok(Cacheable::skip(compute().await?)) },
+            )
             .await
     }
 }
@@ -243,8 +219,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::search::lyrics::{LyricsMode, lyrics_res_key};
-    use crate::modules::search::vibe::{VibeResponse, vibe_cache_track_ids, vibe_res_key};
+    use crate::modules::search::vibe::vibe_res_key;
 
     #[test]
     fn a_blank_query_is_no_query_and_a_long_one_is_cut_to_the_limit() {
@@ -264,19 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lyrics_line_longer_than_the_encoder_limit_reaches_full_text_search_whole() {
-        let line = format!("{} my love", "notice ".repeat(19).trim_end());
-        assert!(
-            line.chars().count() > crate::modules::lyrics::worker_client::MAX_ENCODE_TEXT_CHARS
-        );
-
-        assert_eq!(
-            VibeSearchService::normalize_query(&line).as_deref(),
-            Some(line.as_str())
-        );
-    }
-
-    #[test]
     fn a_query_past_the_limit_is_cut_between_words() {
         let words = "love ".repeat(MAX_QUERY_LEN / 5 + 10);
         let cut = VibeSearchService::normalize_query(&format!("x{words}"))
@@ -291,40 +253,15 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_policy_never_stores_and_the_others_always_may() {
-        let disabled: CacheHitPolicy<VibeResponse> = CacheHitPolicy::Disabled;
-        let public: CacheHitPolicy<VibeResponse> = CacheHitPolicy::Public(vibe_cache_track_ids);
-        let lyrics_vectors: CacheHitPolicy<VibeResponse> =
-            CacheHitPolicy::PublicLyricsVectors(vibe_cache_track_ids);
-        assert!(!disabled.can_store());
-        assert!(public.can_store());
-        assert!(lyrics_vectors.can_store());
-    }
-
-    #[test]
     fn cache_keys_separate_every_input_that_changes_the_answer() {
-        let base = lyrics_res_key("rain", LyricsMode::Text, 0, 20);
-        assert_ne!(base, lyrics_res_key("rain", LyricsMode::Semantic, 0, 20));
-        assert_ne!(base, lyrics_res_key("rain", LyricsMode::Text, 1, 20));
-        assert_ne!(base, lyrics_res_key("rain", LyricsMode::Text, 0, 21));
-        assert_ne!(base, lyrics_res_key("rains", LyricsMode::Text, 0, 20));
-        assert_eq!(base, lyrics_res_key("rain", LyricsMode::Text, 0, 20));
-
         let vibe = vibe_res_key("rain", 24);
         assert_ne!(vibe, vibe_res_key("rain", 25));
         assert_ne!(vibe, vibe_res_key("rains", 24));
-        assert!(
-            vibe.starts_with("vibe:res:v3:") && base.starts_with("lyrics:res:v4:"),
-            "the two searches must not share a key space"
-        );
+        assert!(vibe.starts_with("vibe:res:v3:"));
     }
 
     #[test]
     fn a_query_carrying_the_separator_cannot_steal_another_requests_answer() {
         assert_ne!(vibe_res_key("rain|24", 24), vibe_res_key("rain", 2424));
-        assert_ne!(
-            lyrics_res_key("rain|text", LyricsMode::Auto, 0, 20),
-            lyrics_res_key("rain", LyricsMode::Text, 0, 20)
-        );
     }
 }

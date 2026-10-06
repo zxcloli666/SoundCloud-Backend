@@ -5,7 +5,6 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::cache::CacheService;
-use crate::modules::lyrics::WorkerClient;
 use crate::modules::recommendations::live_fixture::service;
 
 use super::semantic::{VibeSearchService, testing};
@@ -19,15 +18,10 @@ async fn vibe(pg: PgPool) -> anyhow::Result<Arc<VibeSearchService>> {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
     .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let cache = CacheService::new(redis);
-    let qdrant = recommendations.qdrant.clone();
-    let worker = WorkerClient::new(recommendations.nats.clone(), cache.clone(), qdrant.clone());
     Ok(VibeSearchService::new(
         pg,
-        cache,
+        CacheService::new(redis),
         recommendations,
-        worker,
-        qdrant,
     ))
 }
 
@@ -121,19 +115,13 @@ async fn two_different_keys_are_not_made_to_wait_for_each_other(pg: PgPool) -> a
     Ok(())
 }
 
-async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::service::SearchService>> {
-    let redis = deadpool_redis::Config::from_url(
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
-    )
-    .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(super::service::SearchService::new(
-        pg,
-        CacheService::new(redis),
-    ))
+async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::SearchService>> {
+    let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    Ok(super::SearchService::new(pg, CacheService::new(redis)))
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
 async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> anyhow::Result<()> {
     let search = catalog_search(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
@@ -144,15 +132,16 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
         let runs = runs.clone();
         let key = key.clone();
         async move {
-            super::service::testing::expensive_once(&search, &key, move || {
-                let runs = runs.clone();
-                async move {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(WORK).await;
-                    Ok(7_u32)
-                }
-            })
-            .await
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Ok(7_u32)
+                    }
+                })
+                .await
         }
     }))
     .await;
@@ -163,7 +152,7 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
     assert_eq!(
         runs.load(Ordering::SeqCst),
         1,
-        "sixteen callers asking `/search/db/artists` for the same phrase ran the full-text \
+        "sixteen callers asking `/search/db/tracks` for the same phrase ran the catalog \
          search {} times; a popular phrase whose cache just expired brings all of that to \
          PostgreSQL at once",
         runs.load(Ordering::SeqCst)
@@ -172,7 +161,6 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
 async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -185,15 +173,16 @@ async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
         let runs = runs.clone();
         let key = key(&format!("catalog-different-{index}"));
         async move {
-            super::service::testing::expensive_once(&search, &key, move || {
-                let runs = runs.clone();
-                async move {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(WORK).await;
-                    Ok(index as u32)
-                }
-            })
-            .await
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Ok(index as u32)
+                    }
+                })
+                .await
         }
     }))
     .await;

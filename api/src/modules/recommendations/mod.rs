@@ -36,5 +36,5 @@ mod taste_vectors_live_tests;
 
 pub use handlers::router;
 pub use s3_verifier::S3VerifierService;
-pub(crate) use service::util::{point_id_to_value, value_id_to_string};
+pub(crate) use service::util::value_id_to_string;
 pub use service::{RecommendResult, RecommendationsService};

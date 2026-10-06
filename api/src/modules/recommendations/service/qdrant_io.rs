@@ -67,10 +67,6 @@ impl LyricsVectorEligibility {
             .get(track_id)
             .map(|request_id| lyrics_vec_cache_key(track_id, request_id))
     }
-
-    fn allows_all(&self, track_ids: &[String]) -> bool {
-        track_ids.iter().all(|track_id| self.contains(track_id))
-    }
 }
 
 impl RecommendationsService {
@@ -132,21 +128,9 @@ impl RecommendationsService {
             .unwrap_or_default()
     }
 
-    pub(crate) async fn cached_tracks_still_eligible(
-        &self,
-        track_ids: &[String],
-        require_lyrics_vectors: bool,
-    ) -> bool {
+    pub(crate) async fn cached_tracks_still_eligible(&self, track_ids: &[String]) -> bool {
         if track_ids.is_empty() {
             return true;
-        }
-        if require_lyrics_vectors {
-            let (public, lyrics) = tokio::join!(
-                self.public_track_ids(track_ids),
-                self.lyrics_vector_eligibility(track_ids)
-            );
-            return track_ids.iter().all(|track_id| public.contains(track_id))
-                && lyrics.allows_all(track_ids);
         }
         let public = self.public_track_ids(track_ids).await;
         track_ids.iter().all(|track_id| public.contains(track_id))
@@ -516,7 +500,7 @@ mod tests {
         .execute(&pool)
         .await?;
         let eligibility = load_lyrics_vector_eligibility(&pool, &ids).await?;
-        assert!(!eligibility.allows_all(&["1".to_owned()]));
+        assert!(!eligibility.contains("1"));
         Ok(())
     }
 

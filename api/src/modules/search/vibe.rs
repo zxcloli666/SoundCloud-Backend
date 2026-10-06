@@ -5,7 +5,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::failure::vibe_unavailable;
-use super::semantic::{CacheHitPolicy, Cacheable, VibeSearchService, sc_id_of_track, sha_key};
+use super::semantic::{Cacheable, VibeSearchService, sc_id_of_track, sha_key};
 use crate::error::{AppError, AppResult};
 use crate::modules::enrich::dto as enrich_dto;
 
@@ -36,38 +36,33 @@ impl VibeSearchService {
         let limit = limit.unwrap_or(VIBE_DEFAULT_LIMIT).clamp(1, VIBE_MAX_LIMIT);
         let key = vibe_res_key(&q_norm, limit);
 
-        self.cached_typed(
-            &key,
-            VIBE_RES_TTL_SECS,
-            CacheHitPolicy::Public(vibe_cache_track_ids),
-            || async {
-                let st = self
-                    .recommendations
-                    .search_by_text(&q_norm, limit, None)
-                    .await?;
-                if st.preparing {
-                    return Ok(Cacheable::skip(preparing_vibe()));
-                }
-                if st.failed {
-                    return Err(vibe_unavailable());
-                }
+        self.cached_typed(&key, VIBE_RES_TTL_SECS, vibe_cache_track_ids, || async {
+            let st = self
+                .recommendations
+                .search_by_text(&q_norm, limit, None)
+                .await?;
+            if st.preparing {
+                return Ok(Cacheable::skip(preparing_vibe()));
+            }
+            if st.failed {
+                return Err(vibe_unavailable());
+            }
 
-                let top_genres = top_genres_of(&st.results, TOP_GENRES);
-                let sc_ids: Vec<String> = st
-                    .results
-                    .iter()
-                    .map(|r| crate::modules::recommendations::value_id_to_string(&r.id))
-                    .collect();
-                let mut items = self.project_ordered(&sc_ids).await?;
-                enrich_dto::apply_to_tracks(&self.pg, &mut items).await?;
+            let top_genres = top_genres_of(&st.results, TOP_GENRES);
+            let sc_ids: Vec<String> = st
+                .results
+                .iter()
+                .map(|r| crate::modules::recommendations::value_id_to_string(&r.id))
+                .collect();
+            let mut items = self.project_ordered(&sc_ids).await?;
+            enrich_dto::apply_to_tracks(&self.pg, &mut items).await?;
 
-                Ok(Cacheable::keep(VibeResponse {
-                    items,
-                    atmosphere: Atmosphere { top_genres },
-                    status: "ready".into(),
-                }))
-            },
-        )
+            Ok(Cacheable::keep(VibeResponse {
+                items,
+                atmosphere: Atmosphere { top_genres },
+                status: "ready".into(),
+            }))
+        })
         .await
         .map_err(|error| match error {
             AppError::Coded { .. } => error,

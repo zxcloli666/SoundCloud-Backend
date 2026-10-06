@@ -84,11 +84,12 @@ const MULAN: EncodeTarget = EncodeTarget {
     prefix: "vibe:vec:mulan:v1:",
     collection: collections::QUERY_VEC_MULAN,
 };
+#[cfg(test)]
 const LYRICS: EncodeTarget = EncodeTarget {
     model: EncodeModel::Lyrics,
     encoder: "Qwen/Qwen3-Embedding-0.6B",
     prefix: "vibe:vec:lyrics:v2:",
-    collection: collections::QUERY_VEC_LYRICS,
+    collection: backend_contracts::vector_store::QUERY_VEC_LYRICS,
 };
 
 struct EncodeKeys {
@@ -188,10 +189,6 @@ impl WorkerClient {
 
     pub async fn encode_text_mulan(&self, text: &str) -> AppResult<EncodeOutcome> {
         Ok(encode(self, &MULAN, text).await)
-    }
-
-    pub async fn encode_lyrics_text(&self, text: &str) -> AppResult<EncodeOutcome> {
-        Ok(encode(self, &LYRICS, text).await)
     }
 
     async fn write(&self, key: &str, json: &str, ttl_secs: u64) {
@@ -1379,7 +1376,10 @@ mod tests {
     #[test]
     fn lyrics_vectors_live_under_a_prefix_no_bge_m3_vector_was_written_to() {
         assert_eq!(LYRICS.prefix, "vibe:vec:lyrics:v2:");
-        assert_eq!(LYRICS.collection, collections::QUERY_VEC_LYRICS);
+        assert_eq!(
+            LYRICS.collection,
+            backend_contracts::vector_store::QUERY_VEC_LYRICS
+        );
         assert_eq!(MULAN.collection, collections::QUERY_VEC_MULAN);
         assert_ne!(LYRICS.prefix, MULAN.prefix);
     }

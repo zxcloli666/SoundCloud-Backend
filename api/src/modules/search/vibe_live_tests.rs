@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use crate::cache::CacheService;
-use crate::modules::lyrics::WorkerClient;
 use crate::modules::recommendations::RecommendationsService;
 use crate::modules::recommendations::live_fixture::{
     ARTISTS, TrackSeed, catalogue, genre_of, install_all_vectors, install_catalog, pointing_in,
@@ -30,10 +29,7 @@ async fn vibe(pg: PgPool) -> anyhow::Result<(Arc<VibeSearchService>, Arc<Recomme
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
     .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let cache = CacheService::new(redis);
-    let qdrant = recommendations.qdrant.clone();
-    let worker = WorkerClient::new(recommendations.nats.clone(), cache.clone(), qdrant.clone());
-    let vibe = VibeSearchService::new(pg, cache, recommendations.clone(), worker, qdrant);
+    let vibe = VibeSearchService::new(pg, CacheService::new(redis), recommendations.clone());
     Ok((vibe, recommendations))
 }
 
