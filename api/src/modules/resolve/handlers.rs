@@ -201,9 +201,14 @@ async fn enqueue_stale(
     if !local.public && owner.is_none() {
         return;
     }
-    if let Err(error) =
-        crate::modules::cold_refresh::entity::enqueue_entity(&st.pg, key.entity, &key.urn(), owner)
-            .await
+    if let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
+        &st.pg,
+        key.entity,
+        &key.urn(),
+        owner,
+        crate::modules::cold_refresh::BACKGROUND_PRIORITY,
+    )
+    .await
     {
         tracing::debug!(%error, "resolved entity refresh enqueue deferred");
     }

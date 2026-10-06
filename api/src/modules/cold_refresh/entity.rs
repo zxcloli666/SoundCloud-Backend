@@ -12,9 +12,10 @@ pub async fn enqueue_entity(
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    priority: i16,
 ) -> AppResult<()> {
     let mut connection = pool.acquire().await?;
-    enqueue_entity_in(&mut connection, entity, urn, owner_id).await
+    enqueue_entity_in(&mut connection, entity, urn, owner_id, priority).await
 }
 
 pub async fn refresh_pending(
@@ -42,7 +43,7 @@ pub async fn refresh_pending(
         Ok(false) => {}
         Err(error) => return error.into(),
     }
-    if let Err(error) = enqueue_entity(pool, entity, urn, owner_id).await {
+    if let Err(error) = enqueue_entity(pool, entity, urn, owner_id, VIEWER_PRIORITY).await {
         return error;
     }
     let retry_after =
@@ -71,6 +72,7 @@ pub async fn enqueue_entity_in(
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    priority: i16,
 ) -> AppResult<()> {
     let payload = CatalogRefreshPayload {
         entity,
@@ -91,7 +93,7 @@ pub async fn enqueue_entity_in(
         kind.lane().as_str(),
         dedup_key,
         body,
-        VIEWER_PRIORITY
+        priority
     )
     .execute(connection)
     .await?;

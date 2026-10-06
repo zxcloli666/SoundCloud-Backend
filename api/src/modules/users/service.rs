@@ -33,6 +33,7 @@ impl UsersService {
                     backend_contracts::CatalogEntity::User,
                     user_urn,
                     None,
+                    crate::modules::cold_refresh::BACKGROUND_PRIORITY,
                 )
                 .await
             {

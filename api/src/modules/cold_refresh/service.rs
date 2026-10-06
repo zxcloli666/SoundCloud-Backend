@@ -197,7 +197,14 @@ impl ColdRefreshService {
     ) -> AppResult<super::collection::CollectionPage> {
         let subject = coll.subject_urn(subject_urn);
         let Some(public) = self.subject_is_public(coll.subject, &subject).await? else {
-            super::entity::enqueue_entity(&self.pg, coll.subject, &subject, None).await?;
+            super::entity::enqueue_entity(
+                &self.pg,
+                coll.subject,
+                &subject,
+                None,
+                super::BACKGROUND_PRIORITY,
+            )
+            .await?;
             return Ok(super::collection::CollectionPage::empty(
                 refreshing(),
                 page,
@@ -241,6 +248,7 @@ impl ColdRefreshService {
                 backend_contracts::CatalogEntity::Track,
                 &subject,
                 None,
+                super::BACKGROUND_PRIORITY,
             )
             .await?;
             return Ok(super::collection::CollectionPage::empty(

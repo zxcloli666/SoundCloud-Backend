@@ -12,7 +12,9 @@ use crate::error::{AppError, AppResult};
 use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
 use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::cold_refresh::entity::{enqueue_entity, refresh_pending};
-use crate::modules::cold_refresh::{ColdRefreshService, PLAYLIST_REPOSTERS};
+use crate::modules::cold_refresh::{
+    BACKGROUND_PRIORITY, ColdRefreshService, PLAYLIST_REPOSTERS, VIEWER_PRIORITY,
+};
 use crate::modules::playlists::edit::{MembershipRequest, TrackEdit};
 use crate::modules::playlists::journal::PlaylistJournal;
 use crate::modules::playlists::membership::PlaylistMembership;
@@ -143,6 +145,7 @@ impl PlaylistsService {
                     CatalogEntity::Playlist,
                     playlist_urn,
                     (row.sharing != "public").then_some(sc_user_id),
+                    BACKGROUND_PRIORITY,
                 )
                 .await
             {
@@ -322,8 +325,14 @@ impl PlaylistsService {
                 }
                 if error.public_code() == crate::modules::playlists::journal::UNKNOWN_TRACK
                     && let Some(track_id) = added_track
-                    && let Err(enqueue_error) =
-                        enqueue_entity(&self.pg, CatalogEntity::Track, &track_id, None).await
+                    && let Err(enqueue_error) = enqueue_entity(
+                        &self.pg,
+                        CatalogEntity::Track,
+                        &track_id,
+                        None,
+                        VIEWER_PRIORITY,
+                    )
+                    .await
                 {
                     tracing::debug!(%enqueue_error, "unknown playlist track enqueue deferred");
                 }

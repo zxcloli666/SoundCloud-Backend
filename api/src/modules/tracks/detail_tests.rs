@@ -354,6 +354,46 @@ async fn pending_jobs(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     Ok(rows.into_iter().map(|row| row.0).collect())
 }
 
+async fn job_priority(pool: &PgPool, dedup_key: &str) -> anyhow::Result<i16> {
+    Ok(sqlx::query_scalar(
+        "SELECT priority FROM background_jobs WHERE kind = 'catalog.refresh' AND dedup_key = $1",
+    )
+    .bind(dedup_key)
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stale_refresh_nobody_waits_on_stays_below_a_refresh_a_viewer_waits_on(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_private(&pool).await?;
+    sqlx::query("UPDATE tracks SET sc_synced_at = now() - interval '1 day'")
+        .execute(&pool)
+        .await?;
+    let services = services(&pool).await?;
+
+    services
+        .tracks
+        .get_by_id_with_fetch("17", "42", false, || async { Ok(remote_track()) })
+        .await?;
+    services
+        .tracks
+        .get_by_id_with_fetch("18", "43", false, || async { Ok(remote_track()) })
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        job_priority(&pool, "track:42:17").await?,
+        crate::modules::cold_refresh::BACKGROUND_PRIORITY
+    );
+    assert_eq!(
+        job_priority(&pool, "track:43:public").await?,
+        crate::modules::cold_refresh::VIEWER_PRIORITY
+    );
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn an_unknown_track_is_queued_for_refresh_instead_of_fetched_in_the_request(
     pool: PgPool,

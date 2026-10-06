@@ -5,6 +5,7 @@ use sqlx::PgPool;
 
 use crate::common::sc_ids::{extract_sc_id, user_id_variants, user_urn};
 use crate::error::AppResult;
+use crate::modules::cold_refresh::BACKGROUND_PRIORITY;
 use crate::modules::cold_refresh::entity::enqueue_entity;
 
 const PROFILE_TTL_SEC: i64 = 600;
@@ -17,14 +18,27 @@ pub async fn read(pool: &PgPool, sc_user_id: &str) -> AppResult<Value> {
     if let Some(row) = row {
         let age = Utc::now() - row.synced_at;
         if (age > Duration::seconds(PROFILE_TTL_SEC) || age < Duration::zero())
-            && let Err(error) =
-                enqueue_entity(pool, CatalogEntity::Profile, sc_user_id, Some(sc_user_id)).await
+            && let Err(error) = enqueue_entity(
+                pool,
+                CatalogEntity::Profile,
+                sc_user_id,
+                Some(sc_user_id),
+                BACKGROUND_PRIORITY,
+            )
+            .await
         {
             tracing::debug!(%error, "profile refresh enqueue deferred");
         }
         return Ok(row.profile_json);
     }
-    enqueue_entity(pool, CatalogEntity::Profile, sc_user_id, Some(sc_user_id)).await?;
+    enqueue_entity(
+        pool,
+        CatalogEntity::Profile,
+        sc_user_id,
+        Some(sc_user_id),
+        BACKGROUND_PRIORITY,
+    )
+    .await?;
     stub(pool, sc_user_id).await
 }
 
