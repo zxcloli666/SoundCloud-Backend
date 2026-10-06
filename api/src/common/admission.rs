@@ -74,6 +74,7 @@ pub(crate) enum Endpoint {
     LiveImport,
     LiveRescue,
     LiveProxy,
+    LiveEntity,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -189,6 +190,7 @@ impl PublicAdmission {
             Endpoint::LiveImport => self.config.live_import,
             Endpoint::LiveRescue => self.config.live_rescue,
             Endpoint::LiveProxy => self.config.live_proxy,
+            Endpoint::LiveEntity => self.config.live_entity,
         }
     }
 
@@ -227,6 +229,7 @@ impl Endpoint {
             Self::LiveImport => "live-import",
             Self::LiveRescue => "live-rescue",
             Self::LiveProxy => "live-proxy",
+            Self::LiveEntity => "live-entity",
         }
     }
 
@@ -240,6 +243,7 @@ impl Endpoint {
             Self::LiveImport => "live search import",
             Self::LiveRescue => "live search rescue",
             Self::LiveProxy => "live search proxy",
+            Self::LiveEntity => "entity miss inline read",
         }
     }
 }

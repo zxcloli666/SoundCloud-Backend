@@ -99,6 +99,7 @@ pub(super) fn admission(redis_url: &str, limit: AdmissionLimitCfg) -> Arc<Public
             live_import: limit,
             live_rescue: limit,
             live_proxy: limit,
+            live_entity: limit,
         },
     )
 }

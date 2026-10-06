@@ -125,6 +125,7 @@ fn live_admission() -> Arc<PublicAdmission> {
             live_import: open,
             live_rescue: open,
             live_proxy: shut,
+            live_entity: open,
         },
     )
 }

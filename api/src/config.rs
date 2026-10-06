@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub redis: RedisCfg,
     pub admission: AdmissionCfg,
     pub live_search: LiveSearchCfg,
+    pub entity_miss_inline: bool,
     pub nats: NatsCfg,
     pub qdrant: QdrantCfg,
     pub storage: StorageCfg,
@@ -121,6 +122,7 @@ pub struct AdmissionCfg {
     pub live_import: AdmissionLimitCfg,
     pub live_rescue: AdmissionLimitCfg,
     pub live_proxy: AdmissionLimitCfg,
+    pub live_entity: AdmissionLimitCfg,
 }
 
 impl AdmissionCfg {
@@ -133,6 +135,7 @@ impl AdmissionCfg {
         let live_import = admission_limit("SEARCH_LIVE_IMPORT", 20, 40);
         let live_rescue = admission_limit("SEARCH_LIVE_RESCUE", 4, 20);
         let live_proxy = admission_limit("SEARCH_LIVE_PROXY", 20, 20);
+        let live_entity = admission_limit("ENTITY_MISS_INLINE", 10, 60);
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -147,6 +150,7 @@ impl AdmissionCfg {
             live_import,
             live_rescue,
             live_proxy,
+            live_entity,
         }
     }
 }
@@ -335,6 +339,8 @@ impl AppConfig {
             admission: AdmissionCfg::from_env(),
 
             live_search: LiveSearchCfg::from_env(),
+
+            entity_miss_inline: env_str("ENTITY_MISS_INLINE", "false") == "true",
 
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),

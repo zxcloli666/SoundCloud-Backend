@@ -246,6 +246,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             live_import: limits(11, 12),
             live_rescue: limits(13, 14),
             live_proxy: limits(15, 16),
+            live_entity: limits(17, 18),
         },
         "test:public:admission:budgets",
     );
@@ -263,6 +264,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
     assert_eq!(admission.limits(Endpoint::LiveImport).per_client, 11);
     assert_eq!(admission.limits(Endpoint::LiveRescue).per_client, 13);
     assert_eq!(admission.limits(Endpoint::LiveProxy).global, 16);
+    assert_eq!(admission.limits(Endpoint::LiveEntity).per_client, 17);
 
     let keys = [
         Endpoint::Login.key(),
@@ -273,6 +275,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         Endpoint::LiveImport.key(),
         Endpoint::LiveRescue.key(),
         Endpoint::LiveProxy.key(),
+        Endpoint::LiveEntity.key(),
     ];
     assert_eq!(
         keys.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -334,6 +337,7 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         live_import: limit,
         live_rescue: limit,
         live_proxy: limit,
+        live_entity: limit,
     }
 }
 

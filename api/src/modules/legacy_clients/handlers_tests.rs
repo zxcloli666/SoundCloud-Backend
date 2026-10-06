@@ -51,6 +51,7 @@ fn admission() -> anyhow::Result<Arc<PublicAdmission>> {
             live_import: limit,
             live_rescue: limit,
             live_proxy: limit,
+            live_entity: limit,
         },
     ))
 }
