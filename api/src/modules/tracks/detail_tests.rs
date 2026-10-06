@@ -399,7 +399,7 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(
         pending_jobs(&pool).await?,
-        vec!["playlist:42:public".to_owned()]
+        vec!["playlist:42:18".to_owned()]
     );
     Ok(())
 }
@@ -420,7 +420,7 @@ async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
     assert_eq!(error.public_code(), "playlist_refresh_pending");
     assert_eq!(
         pending_jobs(&pool).await?,
-        vec!["playlist:42:public".to_owned()]
+        vec!["playlist:42:18".to_owned()]
     );
     Ok(())
 }
@@ -434,7 +434,7 @@ async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_fore
         "INSERT INTO background_job_failures (
              id, kind, lane, dedup_key, payload, priority, generation,
              attempts, max_attempts, last_error, created_at
-         ) VALUES ($1, 'catalog.refresh', 'core_fast', 'playlist:42:public', '{}', 15, 1,
+         ) VALUES ($1, 'catalog.refresh', 'core_fast', 'playlist:42:18', '{}', 15, 1,
                    1, 8, 'SoundCloud answered 404', now())",
     )
     .bind(Uuid::now_v7())

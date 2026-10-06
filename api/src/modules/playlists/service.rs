@@ -157,7 +157,7 @@ impl PlaylistsService {
                 &self.pg,
                 CatalogEntity::Playlist,
                 playlist_urn,
-                None,
+                Some(sc_user_id),
                 "playlist_refresh_pending",
                 "Playlist is being loaded",
             )
@@ -428,7 +428,7 @@ impl PlaylistsService {
                 &self.pg,
                 CatalogEntity::Playlist,
                 playlist_urn,
-                None,
+                Some(sc_user_id),
                 "playlist_refresh_pending",
                 "Playlist is being loaded",
             )
