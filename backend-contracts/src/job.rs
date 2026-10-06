@@ -119,6 +119,7 @@ pub enum JobKind {
     RecordHardNegative,
     ResolveDurations,
     ResolveWantedTracks,
+    SearchTermsRefresh,
     SubscriptionsSnapshot,
     SyncQueueFlush,
     SyncQueueHeal,
@@ -165,6 +166,7 @@ impl JobKind {
         Self::RecordHardNegative,
         Self::ResolveDurations,
         Self::ResolveWantedTracks,
+        Self::SearchTermsRefresh,
         Self::SubscriptionsSnapshot,
         Self::SyncQueueFlush,
         Self::SyncQueueHeal,
@@ -211,6 +213,7 @@ impl JobKind {
             Self::RecordHardNegative => "telemetry.hard_negative",
             Self::ResolveDurations => "indexing.resolve_durations",
             Self::ResolveWantedTracks => "enrich.resolve_wanted",
+            Self::SearchTermsRefresh => "search.refresh_terms",
             Self::SubscriptionsSnapshot => "subscriptions.snapshot",
             Self::SyncQueueFlush => "sync_queue.flush",
             Self::SyncQueueHeal => "sync_queue.heal",
@@ -227,7 +230,7 @@ impl JobKind {
             | Self::OAuthAppsRefresh
             | Self::SyncQueueFlush
             | Self::SyncQueueHeal => JobLane::CoreFast,
-            Self::RecordHardNegative => JobLane::Ops,
+            Self::RecordHardNegative | Self::SearchTermsRefresh => JobLane::Ops,
             Self::AdminCatalogRenormalize
             | Self::AdminMusicBrainzNames
             | Self::ArtistAttributionRevalidate
@@ -315,6 +318,7 @@ impl FromStr for JobKind {
             "telemetry.hard_negative" => Self::RecordHardNegative,
             "indexing.resolve_durations" => Self::ResolveDurations,
             "enrich.resolve_wanted" => Self::ResolveWantedTracks,
+            "search.refresh_terms" => Self::SearchTermsRefresh,
             "subscriptions.snapshot" => Self::SubscriptionsSnapshot,
             "sync_queue.flush" => Self::SyncQueueFlush,
             "sync_queue.heal" => Self::SyncQueueHeal,
@@ -406,7 +410,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 42);
+        assert_eq!(kinds.len(), 43);
     }
 
     #[test]
@@ -418,6 +422,7 @@ mod tests {
         assert_eq!(JobKind::DiscoverAggregates.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::PlaylistObserveShadow.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::RecordHardNegative.lane(), JobLane::Ops);
+        assert_eq!(JobKind::SearchTermsRefresh.lane(), JobLane::Ops);
     }
 
     #[test]

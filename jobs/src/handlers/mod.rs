@@ -124,7 +124,8 @@ pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::SubscriptionsSnapshot,
 ];
 
-pub(crate) const OPS_KINDS: &[JobKind] = &[JobKind::RecordHardNegative];
+pub(crate) const OPS_KINDS: &[JobKind] =
+    &[JobKind::RecordHardNegative, JobKind::SearchTermsRefresh];
 
 pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
     matches!(
@@ -554,6 +555,10 @@ impl JobHandlers {
             JobKind::RecommendationWavePriority => {
                 empty_payload(job)?;
                 self.recommendations.bump_wave_priority().await
+            }
+            JobKind::SearchTermsRefresh => {
+                empty_payload(job)?;
+                self.maintenance.refresh_search_terms().await
             }
             JobKind::SubscriptionsSnapshot => {
                 empty_payload(job)?;
