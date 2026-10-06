@@ -11,7 +11,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use super::failure::{self, search_busy, search_timeout};
+use super::failure::{self, Shed, search_busy, search_timeout};
 use super::terms::{self, Shape};
 use crate::cache::cache_service::CacheScope;
 use crate::cache::{CacheService, KeyedCoalesce, ListPageResult, build_list_cache_key};
@@ -36,7 +36,7 @@ const BUDGET: Duration = Duration::from_millis(2500);
 pub struct SearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
-    flights: KeyedCoalesce<String>,
+    flights: KeyedCoalesce<Result<String, Shed>>,
     pub(super) permits: Semaphore,
 }
 
@@ -136,16 +136,20 @@ impl SearchService {
         let json = self
             .flights
             .run(key, || async {
-                let value = self.guarded(compute).await?;
+                let value = match self.guarded(compute).await {
+                    Ok(value) => value,
+                    Err(error) => return Shed::of(&error).map(Err).ok_or(error),
+                };
                 let json = serde_json::to_string(&value)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 let _ = self
                     .cache
                     .set_raw(key, &json, TTL_SECONDS, None, CacheScope::Shared, None)
                     .await;
-                Ok::<String, AppError>(json)
+                Ok::<_, AppError>(Ok(json))
             })
-            .await?;
+            .await?
+            .map_err(Shed::error)?;
         serde_json::from_str::<T>(&json).map_err(|error| AppError::internal(error.to_string()))
     }
 

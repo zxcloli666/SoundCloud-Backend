@@ -160,6 +160,52 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
     Ok(())
 }
 
+const STAMPEDE: usize = 8;
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_timed_out_catalog_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
+    let search = catalog_search(pg).await?;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let key = key("catalog-timeout");
+
+    let started = std::time::Instant::now();
+    let answers = futures::future::join_all((0..STAMPEDE).map(|_| {
+        let search = search.clone();
+        let runs = runs.clone();
+        let key = key.clone();
+        async move {
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Err::<u32, _>(super::failure::search_timeout())
+                    }
+                })
+                .await
+        }
+    }))
+    .await;
+    let waited = started.elapsed();
+
+    for answer in &answers {
+        let error = answer.as_ref().expect_err("a timed out search is an error");
+        assert_eq!(error.public_code(), "search_timeout");
+    }
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "callers waiting on a phrase that timed out ran it again one after another"
+    );
+    assert!(
+        waited < WORK * 4,
+        "{STAMPEDE} callers of a timed out phrase took {waited:?}; the waiters queued for \
+         their own rerun instead of sharing the leader's answer"
+    );
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
     pg: PgPool,

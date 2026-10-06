@@ -31,6 +31,29 @@ pub fn search_busy() -> AppError {
     .with_retry_after(2)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shed {
+    Timeout,
+    Busy,
+}
+
+impl Shed {
+    pub fn of(error: &AppError) -> Option<Self> {
+        match error.public_code() {
+            "search_timeout" => Some(Self::Timeout),
+            "search_busy" => Some(Self::Busy),
+            _ => None,
+        }
+    }
+
+    pub fn error(self) -> AppError {
+        match self {
+            Self::Timeout => search_timeout(),
+            Self::Busy => search_busy(),
+        }
+    }
+}
+
 pub fn map(error: AppError) -> AppError {
     match error {
         AppError::Db(sqlx::Error::Database(db))
