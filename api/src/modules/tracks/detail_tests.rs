@@ -18,7 +18,10 @@ struct Services {
 }
 
 async fn services(pool: &PgPool) -> anyhow::Result<Services> {
-    let deps = dependencies(pool).await?;
+    services_from(pool, dependencies(pool).await?).await
+}
+
+async fn services_from(pool: &PgPool, deps: TracksServiceDependencies) -> anyhow::Result<Services> {
     let nats = crate::bus::nats::NatsService::connect(
         "nats://127.0.0.1:1",
         tokio_util::sync::CancellationToken::new(),
@@ -462,5 +465,65 @@ async fn an_unknown_public_track_is_read_through_and_served(pool: PgPool) -> any
         .fetch_one(&pool)
         .await?;
     assert_eq!(stored, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_playlist_write_with_unknown_tracks_is_bounded_when_soundcloud_stalls(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    use crate::modules::resolve::miss_tests::{miss_with, redis_url};
+    let mut deps = dependencies(&pool).await?;
+    deps.miss = miss_with(
+        &pool,
+        crate::sc::read_tests::SearchRelay::stalled(),
+        &redis_url(),
+        1000,
+    )
+    .await?;
+    let services = services_from(&pool, deps).await?;
+    sqlx::query("INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, sharing)
+        VALUES ('42', 'soundcloud:playlists:42', 'Mix', 'mix', '17', 'public')")
+        .execute(&pool).await?;
+    sqlx::query("INSERT INTO user_owned_playlists (user_id, playlist_urn) VALUES ('17', 'soundcloud:playlists:42')")
+        .execute(&pool).await?;
+    let snapshot: Uuid = sqlx::query_scalar("INSERT INTO playlist_remote_snapshots
+        (playlist_urn, content_fingerprint, track_count) VALUES ('soundcloud:playlists:42', sha256(''::bytea), 0) RETURNING id")
+        .fetch_one(&pool).await?;
+    let observation: Uuid = sqlx::query_scalar("INSERT INTO playlist_remote_observations
+        (playlist_urn, snapshot_id, authority, outcome, pagination_complete, all_items_identified, declared_track_count, observed_track_count)
+        VALUES ('soundcloud:playlists:42', $1, 'owner', 'complete', true, true, 0, 0) RETURNING id")
+        .bind(snapshot).fetch_one(&pool).await?;
+    sqlx::query("INSERT INTO playlist_membership_state (playlist_urn) VALUES ('soundcloud:playlists:42') ON CONFLICT DO NOTHING")
+        .execute(&pool).await?;
+    sqlx::query("UPDATE playlist_membership_state SET baseline_generation = 1, baseline_observation_id = $1,
+        latest_observation_id = $1, sync_status = 'clean' WHERE playlist_urn = 'soundcloud:playlists:42'")
+        .bind(observation).execute(&pool).await?;
+    let tracks: Vec<serde_json::Value> = (501..=525)
+        .map(|id| serde_json::json!({"urn": format!("soundcloud:tracks:{id}")}))
+        .collect();
+    let started = std::time::Instant::now();
+    let error = services
+        .playlists
+        .update(
+            Uuid::now_v7(),
+            "17",
+            "soundcloud:playlists:42",
+            &serde_json::json!({"playlist": {"tracks": tracks}, "expectedProjectionRevision": 0}),
+            true,
+            Uuid::now_v7(),
+        )
+        .await
+        .expect_err("unknown tracks cannot be journaled");
+    assert!(
+        started.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        error.public_code(),
+        crate::modules::playlists::journal::UNKNOWN_TRACK
+    );
     Ok(())
 }

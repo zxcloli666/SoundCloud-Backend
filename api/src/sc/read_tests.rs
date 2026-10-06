@@ -185,6 +185,7 @@ pub(crate) struct SearchRelay {
     lua_inputs: std::sync::Mutex<Vec<Value>>,
     lua_calls: AtomicUsize,
     fetched: std::sync::Mutex<Vec<String>>,
+    stalled: bool,
 }
 
 impl SearchRelay {
@@ -200,6 +201,19 @@ impl SearchRelay {
             lua_inputs: std::sync::Mutex::default(),
             lua_calls: AtomicUsize::new(0),
             fetched: std::sync::Mutex::default(),
+            stalled: false,
+        })
+    }
+
+    pub(crate) fn stalled() -> Arc<Self> {
+        Arc::new(Self {
+            lua: Box::new(|_| None),
+            proxy_status: 500,
+            proxy_body: Value::Null,
+            lua_inputs: std::sync::Mutex::default(),
+            lua_calls: AtomicUsize::new(0),
+            fetched: std::sync::Mutex::default(),
+            stalled: true,
         })
     }
 
@@ -233,6 +247,9 @@ impl RelayTransport for SearchRelay {
         >,
     > {
         self.fetched.lock().unwrap().push(request.url.clone());
+        if self.stalled {
+            return Box::pin(std::future::pending());
+        }
         let (status, body) = if request.url.starts_with(HOME) {
             (
                 200,
@@ -262,6 +279,9 @@ impl RelayTransport for SearchRelay {
         Box<dyn std::future::Future<Output = Result<Bytes, call_relay::Error>> + Send + 'a>,
     > {
         self.lua_calls.fetch_add(1, Ordering::SeqCst);
+        if self.stalled {
+            return Box::pin(std::future::pending());
+        }
         let inputs = serde_json::from_slice::<Value>(&inputs).unwrap_or_default();
         let body = (self.lua)(&inputs).map(|answer| answer.to_string());
         self.lua_inputs.lock().unwrap().push(inputs);

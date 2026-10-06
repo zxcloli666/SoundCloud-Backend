@@ -162,19 +162,15 @@ async fn edit_tracks(
 ) -> AppResult<Json<crate::modules::playlists::PlaylistTracksPage>> {
     let idempotency_key = idempotency_key(&headers)?;
     let request = body.into_request()?;
-    st.miss
-        .tracks(ctx.session_id, &request.edit.submitted_track_ids())
-        .await?;
-    let (page, limit) = p.resolved();
     let mut result = st
         .playlists
         .edit_tracks(
+            ctx.session_id,
             &ctx.sc_user_id,
             &playlist_urn,
             request,
             idempotency_key,
-            page,
-            limit,
+            p.resolved(),
         )
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.page.collection).await?;

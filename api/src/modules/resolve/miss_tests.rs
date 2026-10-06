@@ -207,3 +207,26 @@ async fn an_exhausted_session_stops_adopting(pool: PgPool) -> anyhow::Result<()>
     assert_eq!(relay.lua_calls(), 1);
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyhow::Result<()> {
+    let miss = miss_with(&pool, SearchRelay::stalled(), &redis_url(), 1000).await?;
+    let unknown: Vec<String> = (301..=325).map(|id| id.to_string()).collect();
+    let started = std::time::Instant::now();
+    miss.tracks(Uuid::now_v7(), &unknown).await?;
+    assert!(
+        started.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM tracks WHERE sc_track_id::bigint BETWEEN 301 AND 325"
+        )
+        .await?,
+        0
+    );
+    Ok(())
+}

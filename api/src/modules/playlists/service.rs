@@ -215,16 +215,19 @@ impl PlaylistsService {
 
     pub async fn edit_tracks(
         &self,
+        session_id: Uuid,
         sc_user_id: &str,
         playlist_urn: &str,
         request: MembershipRequest,
         idempotency_key: Uuid,
-        page: i64,
-        limit: i64,
+        (page, limit): (i64, i64),
     ) -> AppResult<PlaylistTracksPage> {
         let canonical = super::mutations::target_urn(playlist_urn)?;
         let playlist_urn = canonical.as_str();
         self.assert_owner(sc_user_id, playlist_urn).await?;
+        self.miss
+            .tracks(session_id, &request.edit.submitted_track_ids())
+            .await?;
         self.journal_or_wake(playlist_urn, sc_user_id, request, idempotency_key)
             .await?;
         let (page, sync) = tokio::try_join!(
@@ -276,6 +279,7 @@ impl PlaylistsService {
         let membership = match submitted {
             Some(submitted) => {
                 let track_ids = crate::modules::playlists::edit::track_ids_of(&submitted)?;
+                self.assert_owner(sc_user_id, playlist_urn).await?;
                 self.miss.tracks(session_id, &track_ids).await?;
                 let edit = if replace {
                     TrackEdit::Replace { track_ids }

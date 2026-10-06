@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use backend_contracts::CatalogEntity;
 use catalog_ingest::{Observation, TrackPriority};
@@ -17,6 +18,8 @@ use crate::modules::users::UserRepository;
 use crate::sc::ScReadService;
 
 const ADOPT_CONCURRENCY: usize = 4;
+const ADOPT_TRACKS_DEADLINE: Duration = Duration::from_secs(8);
+const ADOPT_ONE_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Adopted {
@@ -84,8 +87,23 @@ impl CatalogMiss {
         let missing = sqlx::query_file_scalar!("queries/playlists/missing_catalog_tracks.sql", ids)
             .fetch_all(&self.pg)
             .await?;
-        futures::stream::iter(missing)
-            .map(|id| async move { self.track(session, &id, TrackPriority::Playlist).await })
+        let fetched: Vec<Fetched> = futures::stream::iter(missing)
+            .map(|id| async move {
+                tokio::time::timeout(
+                    ADOPT_ONE_DEADLINE,
+                    self.fetch(session, CatalogEntity::Track, &id),
+                )
+                .await
+                .ok()
+                .and_then(Result::ok)
+            })
+            .buffer_unordered(ADOPT_CONCURRENCY)
+            .take_until(tokio::time::sleep(ADOPT_TRACKS_DEADLINE))
+            .filter_map(futures::future::ready)
+            .collect()
+            .await;
+        futures::stream::iter(fetched)
+            .map(|fetched| self.store(fetched, TrackPriority::Playlist))
             .buffer_unordered(ADOPT_CONCURRENCY)
             .collect::<Vec<_>>()
             .await;
@@ -130,8 +148,20 @@ impl CatalogMiss {
         id: &str,
         priority: TrackPriority,
     ) -> Adopted {
+        match self.fetch(session, entity, id).await {
+            Ok(fetched) => self.store(fetched, priority).await,
+            Err(outcome) => outcome,
+        }
+    }
+
+    async fn fetch(
+        &self,
+        session: Uuid,
+        entity: CatalogEntity,
+        id: &str,
+    ) -> Result<Fetched, Adopted> {
         if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Adopted::Unavailable;
+            return Err(Adopted::Unavailable);
         }
         if self
             .admission
@@ -139,27 +169,18 @@ impl CatalogMiss {
             .await
             .is_err()
         {
-            return Adopted::Unavailable;
+            return Err(Adopted::Unavailable);
         }
-        match self.fetch_and_store(session, entity, id, priority).await {
-            Ok(()) => Adopted::Stored,
-            Err(error) => {
-                tracing::debug!(%error, ?entity, id, "catalog miss was not adopted");
-                outcome_of(&error)
-            }
-        }
+        self.read(session, entity, id).await.map_err(|error| {
+            tracing::debug!(%error, ?entity, id, "catalog miss was not fetched");
+            outcome_of(&error)
+        })
     }
 
-    async fn fetch_and_store(
-        &self,
-        session: Uuid,
-        entity: CatalogEntity,
-        id: &str,
-        priority: TrackPriority,
-    ) -> AppResult<()> {
+    async fn read(&self, session: Uuid, entity: CatalogEntity, id: &str) -> AppResult<Fetched> {
         let observation = Observation::begin(&self.pg).await?;
         let kind = TokenKind::UserFirst(session);
-        let fetched = match entity {
+        let value = match entity {
             CatalogEntity::Track => self.reads.track_by_id(kind, id).await?,
             CatalogEntity::User => self.reads.user_by_id(kind, id).await?,
             CatalogEntity::Playlist => self.reads.playlist_meta(kind, id).await?,
@@ -167,9 +188,37 @@ impl CatalogMiss {
                 return Err(AppError::bad_request("Unsupported entity"));
             }
         };
-        validate_entity_identity(&fetched, entity, id)?;
-        self.persist(entity, &fetched, priority, observation).await
+        validate_entity_identity(&value, entity, id)?;
+        Ok(Fetched {
+            entity,
+            value,
+            observation,
+        })
     }
+
+    async fn store(&self, fetched: Fetched, priority: TrackPriority) -> Adopted {
+        match self
+            .persist(
+                fetched.entity,
+                &fetched.value,
+                priority,
+                fetched.observation,
+            )
+            .await
+        {
+            Ok(()) => Adopted::Stored,
+            Err(error) => {
+                tracing::debug!(%error, entity = ?fetched.entity, "catalog miss was not stored");
+                outcome_of(&error)
+            }
+        }
+    }
+}
+
+struct Fetched {
+    entity: CatalogEntity,
+    value: Value,
+    observation: Observation,
 }
 
 pub(super) fn outcome_of(error: &AppError) -> Adopted {
