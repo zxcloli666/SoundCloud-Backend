@@ -9,7 +9,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tracing::debug;
 
-use super::gate::PAUSE_CHANNEL;
+use super::gate::{BREAKER_CHANNEL, PAUSE_CHANNEL};
 use super::query::identity_of;
 use crate::common::admission::{Decision, Endpoint, PublicAdmission};
 use crate::common::sc_ids::extract_sc_id;
@@ -27,6 +27,7 @@ pub struct EntityMiss {
     read: Arc<ScReadService>,
     admission: Arc<PublicAdmission>,
     pause: EgressHealth,
+    breaker: EgressHealth,
     pg: PgPool,
 }
 
@@ -37,6 +38,11 @@ impl EntityMiss {
             admission,
             pause: EgressHealth::new(
                 PAUSE_CHANNEL,
+                EGRESS_APP,
+                Some(PgEgressHealth::new(pg.clone())),
+            ),
+            breaker: EgressHealth::new(
+                BREAKER_CHANNEL,
                 EGRESS_APP,
                 Some(PgEgressHealth::new(pg.clone())),
             ),
@@ -138,6 +144,7 @@ impl EntityMiss {
 
     async fn admits(&self, sc_user_id: &str) -> bool {
         self.pause.open_for().await.is_none()
+            && self.breaker.open_for().await.is_none()
             && self
                 .admission
                 .check_identity(Endpoint::LiveEntity, &identity_of(sc_user_id))

@@ -255,3 +255,27 @@ async fn without_the_flag_a_miss_never_reaches_soundcloud(pool: PgPool) -> anyho
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn an_open_search_live_breaker_stops_inline_reads(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO sc_egress_health (channel, open_until, opened_by) \
+         VALUES ('search_live', now() + interval '5 minutes', 'api')",
+    )
+    .execute(&pool)
+    .await?;
+    let (stash, relay) = stash(&pool, 10)?;
+
+    assert!(
+        !stash
+            .read_track(
+                &indexing(&pool).await?,
+                &format!("soundcloud:tracks:{}", unique_id()),
+                &listener()
+            )
+            .await
+    );
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
