@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn recommendations_take_a_quarter_of_the_pool_without_growing_it() {
+    fn recommendations_take_a_quarter_of_the_pool() {
         assert_eq!((core_share(20), recommendations_share(20)), (15, 5));
         assert_eq!((core_share(10), recommendations_share(10)), (8, 2));
         assert_eq!((core_share(1), recommendations_share(1)), (1, 1));
