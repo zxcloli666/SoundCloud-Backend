@@ -236,6 +236,50 @@ async fn a_public_playlist_nobody_viewed_this_week_is_not_read_on_app_tokens(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_public_playlist_waits_briefly_while_no_app_token_is_ready(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_foreign_playlist(&pool, "public").await?;
+    sqlx::query("DELETE FROM oauth_app_tokens")
+        .execute(&pool)
+        .await?;
+    let (api_url, requests, server) = serve_foreign_playlist(vec![track(11)]).await?;
+
+    observe_foreign(&pool, api_url).await?;
+    server.abort();
+
+    assert!(requests.lock().await.is_empty());
+    assert_eq!(
+        foreign_state(&pool).await?,
+        (
+            "retry_wait".to_owned(),
+            Some("soundcloud_public_tokens_unavailable".to_owned())
+        )
+    );
+    assert!(foreign_due_in(&pool).await? <= chrono::Duration::minutes(2));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_public_playlist_whose_app_token_was_rejected_waits_briefly_for_a_new_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_foreign_playlist(&pool, "public").await?;
+    let (api_url, requests, server) =
+        serve_foreign(vec![("401 Unauthorized", "{}".to_owned())]).await?;
+
+    observe_foreign(&pool, api_url).await?;
+    server.await??;
+
+    assert!(requests.lock().await[0].contains("OAuth app-access"));
+    assert_eq!(foreign_state(&pool).await?.0, "retry_wait");
+    assert!(foreign_due_in(&pool).await? <= chrono::Duration::minutes(2));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_public_playlist_whose_owner_revoked_the_app_falls_back_to_an_app_token(
     pool: PgPool,
 ) -> anyhow::Result<()> {

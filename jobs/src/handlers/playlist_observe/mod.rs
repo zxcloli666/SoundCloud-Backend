@@ -212,7 +212,8 @@ impl PlaylistObserveHandler {
         let metadata_observation = catalog_ingest::Observation::begin(&self.pool)
             .await
             .map_err(JobError::retryable)?;
-        let mut failure = unauthorized_failure();
+        let mut failure =
+            transport_failure("soundcloud_public_tokens_unavailable", TRANSPORT_RETRY);
         for token in tokens.into_iter().take(PUBLIC_TOKEN_ATTEMPTS) {
             if let Some(retry_after_seconds) = self
                 .connections
