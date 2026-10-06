@@ -160,6 +160,10 @@ impl PlaylistsService {
                 .adopt_playlist(&self.pg, playlist_urn)
                 .await
                 .was_seen()
+                || self
+                    .live_stash
+                    .read_playlist(playlist_urn, sc_user_id)
+                    .await
             {
                 repo.find_by_urn(playlist_urn).await?
             } else {

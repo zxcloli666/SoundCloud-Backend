@@ -1,3 +1,4 @@
+pub mod entity_miss;
 pub mod fetch;
 pub mod gate;
 pub mod handlers;
@@ -11,6 +12,9 @@ pub mod serving;
 pub mod slim;
 pub mod stash;
 pub mod store;
+
+#[cfg(test)]
+mod entity_miss_tests;
 
 #[cfg(test)]
 mod gate_tests;
@@ -36,6 +40,7 @@ mod slim_tests;
 #[cfg(test)]
 mod stash_tests;
 
+pub use entity_miss::EntityMiss;
 pub use handlers::router;
 pub use query::{LiveKind, LiveParams, plain_playlists, plain_tracks};
 pub use service::LiveSearch;

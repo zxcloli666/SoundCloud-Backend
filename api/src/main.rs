@@ -60,7 +60,7 @@ use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
-use crate::modules::live_search::{LiveSearch, LiveStash};
+use crate::modules::live_search::{EntityMiss, LiveSearch, LiveStash};
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
@@ -165,7 +165,18 @@ async fn main() {
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 
     let cache = CacheService::new(redis_pool.clone());
-    let live_stash = LiveStash::new(cache.clone());
+    let live_admission = PublicAdmission::for_live_search(
+        redis::connect_admission(&config).expect("Failed to create live search Redis pool"),
+        config.admission.clone(),
+    );
+    let live_stash = if config.entity_miss_inline {
+        LiveStash::with_inline_reads(
+            cache.clone(),
+            EntityMiss::new(resolve.clone(), live_admission.clone(), pg.clone()),
+        )
+    } else {
+        LiveStash::new(cache.clone())
+    };
     let background_jobs = crate::background_jobs::BackgroundJobs::new(nats.clone());
     let indexing_jobs = crate::background_jobs::IndexingJobs::new(background_jobs.clone());
     let collab_jobs = crate::background_jobs::CollabJobs::new(
@@ -221,16 +232,14 @@ async fn main() {
     let live_search = LiveSearch::new(
         resolve.clone(),
         cache.clone(),
-        PublicAdmission::for_live_search(
-            redis::connect_admission(&config).expect("Failed to create live search Redis pool"),
-            config.admission.clone(),
-        ),
+        live_admission,
         pg.clone(),
         config.live_search,
     );
     info!(
         mode = ?config.live_search.mode,
         ranked = config.live_search.ranked,
+        entity_miss_inline = config.entity_miss_inline,
         "live search ready"
     );
     let history = HistoryService::new(pg.clone());

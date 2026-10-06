@@ -24,6 +24,7 @@ const LIVE_FETCHES: &str = "api_live_search_fetch_total";
 const LIVE_GATE_CLOSED: &str = "api_live_search_gate_closed";
 const LIVE_ADOPTS: &str = "api_live_search_adopt_total";
 const LIVE_WINDOW_BYTES: &str = "api_live_search_window_bytes_total";
+const ENTITY_MISS_READS: &str = "api_entity_miss_inline_total";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const PG_BACKENDS: &str = "api_pg_backends";
 const REDIS_MEMORY: &str = "api_redis_memory_bytes";
@@ -215,6 +216,13 @@ pub fn record_live_adopt(entity: &'static str, outcome: &'static str) {
         return;
     }
     metrics::counter!(LIVE_ADOPTS, "entity" => entity, "outcome" => outcome).increment(1);
+}
+
+pub fn record_entity_miss_read(entity: &'static str, outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(ENTITY_MISS_READS, "entity" => entity, "outcome" => outcome).increment(1);
 }
 
 pub fn record_live_window_bytes(bytes: usize) {

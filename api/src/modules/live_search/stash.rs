@@ -6,6 +6,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tracing::debug;
 
+use super::entity_miss::EntityMiss;
 use super::query::ADOPT_CAP;
 use super::store::LiveStore;
 use crate::cache::CacheService;
@@ -30,13 +31,41 @@ impl Adoption {
 
 pub struct LiveStash {
     store: LiveStore,
+    misses: Option<EntityMiss>,
 }
 
 impl LiveStash {
     pub fn new(cache: Arc<CacheService>) -> Arc<Self> {
         Arc::new(Self {
             store: LiveStore::new(cache),
+            misses: None,
         })
+    }
+
+    pub fn with_inline_reads(cache: Arc<CacheService>, misses: EntityMiss) -> Arc<Self> {
+        Arc::new(Self {
+            store: LiveStore::new(cache),
+            misses: Some(misses),
+        })
+    }
+
+    pub async fn read_track(
+        &self,
+        indexing: &Arc<IndexingService>,
+        urn: &str,
+        sc_user_id: &str,
+    ) -> bool {
+        match &self.misses {
+            Some(misses) => misses.track(indexing, urn, sc_user_id).await,
+            None => false,
+        }
+    }
+
+    pub async fn read_playlist(&self, urn: &str, sc_user_id: &str) -> bool {
+        match &self.misses {
+            Some(misses) => misses.playlist(urn, sc_user_id).await,
+            None => false,
+        }
     }
 
     pub async fn adopt_track(&self, indexing: &Arc<IndexingService>, urn: &str) -> Adoption {

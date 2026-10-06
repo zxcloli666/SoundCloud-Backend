@@ -34,7 +34,8 @@ const ALLOWED: [(&str, &str); 6] = [
         "live_search",
         "SEARCH_LIVE: page 0 of ?q= on /tracks /playlists /users and the YM import when the \
          local page is thin, an empty /search/db/tracks page 0 behind SEARCH_LIVE_DB_RESCUE, \
-         and /search/match for the YM import when the catalog has no confident match; cached, \
+         /search/match for the YM import when the catalog has no confident match, and one inline \
+         read of a track or playlist nobody has sighted behind ENTITY_MISS_INLINE; cached, \
          budgeted, breaker-guarded",
     ),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
