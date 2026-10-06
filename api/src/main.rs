@@ -214,6 +214,11 @@ async fn main() {
     let users = UsersService::new(pg.clone(), cold_refresh.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
+    let soundcloud_search = crate::modules::soundcloud_search::SoundCloudSearch::new(
+        resolve.clone(),
+        cache.clone(),
+        admission.clone(),
+    );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
@@ -267,6 +272,7 @@ async fn main() {
         likes,
         resolve,
         search,
+        soundcloud_search,
         vibe,
         history,
         featured,

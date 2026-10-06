@@ -56,6 +56,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   Owner `/me/*` private reads and all writes stay on apiv1 + the user's token; writes go via `sync_queue`.
   Adding an apiv2 endpoint? **curl-test it first** (some are 401/404 for anon). Full rules + how to write a
   new SC Lua method: **[docs/sc-networking.md](docs/sc-networking.md)**.
+  SC_SEARCH: /tracks|/playlists|/users ?q= read apiv2 search through ScReadService::search (relay Lua then proxy, own breaker, no apiv1, no token), cached 300 s.
 - **Prioritize user-relevant work.** `TrackPriority` (Like=1 … Discovery=5) → `tracks.{index,storage}_priority`; enrich
   backfill orders by `index_priority` too. Likes/owned must beat the discovery firehose for SC-download/index/enrich.
 - **Skip pointless external work.** MusicBrainz only for ISRC/`metadata_artist` (label) tracks — it never matches

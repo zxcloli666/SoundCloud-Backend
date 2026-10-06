@@ -50,14 +50,30 @@ struct DetailQuery {
     show_tracks: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+}
+
 async fn search(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<crate::modules::search::query::PlaylistSearchQuery>,
+    Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    Ok(Json(st.search.playlists(&q, page, limit).await?))
+    Ok(Json(
+        st.soundcloud_search
+            .page(
+                ctx.session_id,
+                sc_transport::SearchType::PlaylistsWithoutAlbums,
+                q.q.as_deref().unwrap_or_default(),
+                page,
+                limit,
+            )
+            .await?,
+    ))
 }
 
 async fn create(

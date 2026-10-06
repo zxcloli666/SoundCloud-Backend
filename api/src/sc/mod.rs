@@ -9,7 +9,7 @@ mod read_metrics_tests;
 
 #[cfg(test)]
 #[path = "read_tests.rs"]
-mod read_tests;
+pub(crate) mod read_tests;
 
 pub use egress::{EGRESS_APP, PgEgressHealth};
 pub use errors::{

@@ -24,6 +24,8 @@ const READ_THROUGH_A_PREFIX: &[&str] = &[
     "AUTH_LINK_CREATE_GLOBAL",
     "RESOLVE_PER_CLIENT",
     "RESOLVE_GLOBAL",
+    "SC_SEARCH_PER_CLIENT",
+    "SC_SEARCH_GLOBAL",
 ];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

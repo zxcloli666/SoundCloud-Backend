@@ -41,22 +41,21 @@ pub fn router() -> Router<AppState> {
 struct SearchQuery {
     #[serde(default)]
     q: Option<String>,
-    #[serde(default)]
-    ids: Option<String>,
 }
 
 async fn search(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
     Ok(Json(
-        st.search
-            .users(
+        st.soundcloud_search
+            .page(
+                ctx.session_id,
+                sc_transport::SearchType::Users,
                 q.q.as_deref().unwrap_or_default(),
-                q.ids.as_deref(),
                 page,
                 limit,
             )

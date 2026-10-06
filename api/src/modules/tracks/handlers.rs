@@ -4,6 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use sc_transport::SearchType;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -52,14 +53,32 @@ struct StreamProxyQuery {
     hq: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ListQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    ids: Option<String>,
+}
+
+const MAX_IDS: usize = 100;
+
 async fn search(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<crate::modules::search::query::TrackSearchQuery>,
+    Query(list): Query<ListQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let mut result = st.search.tracks(&q, page, limit).await?;
+    let q = list.q.as_deref().unwrap_or_default();
+    let mut result = match list.ids.as_deref() {
+        Some(ids) if q.trim().is_empty() => tracks_by_ids(&st, ids, page, limit).await?,
+        _ => {
+            st.soundcloud_search
+                .page(ctx.session_id, SearchType::Tracks, q, page, limit)
+                .await?
+        }
+    };
     crate::modules::likes::cold::apply_user_favorite_flag(
         &st.pg,
         &ctx.sc_user_id,
@@ -67,6 +86,52 @@ async fn search(
     )
     .await?;
     Ok(Json(result))
+}
+
+async fn tracks_by_ids(
+    st: &AppState,
+    raw: &str,
+    page: i64,
+    limit: i64,
+) -> AppResult<ListPageResult<Value>> {
+    let ids = parse_ids(raw);
+    let wanted: Vec<String> = ids
+        .iter()
+        .skip((page * limit) as usize)
+        .take(limit as usize)
+        .cloned()
+        .collect();
+    let mut collection: Vec<Value> =
+        crate::modules::tracks::repository::project_many_public(&st.pg, &wanted)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+    enrich_dto::apply_to_tracks(&st.pg, &mut collection).await?;
+    Ok(ListPageResult {
+        collection,
+        page,
+        page_size: limit,
+        has_more: ids.len() as i64 > (page + 1) * limit,
+    })
+}
+
+fn parse_ids(raw: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for value in raw.split(',').take(MAX_IDS) {
+        let value = value.trim();
+        let bare = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
+        if bare.is_empty() || !bare.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(id) = bare.parse::<u64>()
+            && id > 0
+            && !ids.contains(&id.to_string())
+        {
+            ids.push(id.to_string());
+        }
+    }
+    ids
 }
 
 async fn get_by_id(
@@ -229,4 +294,23 @@ async fn get_related(
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::parse_ids;
+
+    #[test]
+    fn ids_keep_their_order_and_skip_what_is_not_a_track_id() {
+        assert_eq!(
+            parse_ids("3, soundcloud:tracks:1,abc,soundcloud:users:2,03,0,-4"),
+            vec!["3".to_owned(), "1".to_owned()]
+        );
+        let many = (1..=150)
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(parse_ids(&many).len(), 100);
+        assert!(parse_ids("").is_empty());
+    }
 }
