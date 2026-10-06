@@ -134,3 +134,41 @@ async fn a_short_query_is_an_empty_text_page(pool: PgPool) -> anyhow::Result<()>
     assert!(answer.collection.is_empty());
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_common_chorus_over_long_lyrics_stays_fast(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing, play_count_sc)
+         SELECT n::text, 'soundcloud:tracks:' || n, 'cover ' || n, 'cover ' || n, 200000, 'public', n
+         FROM generate_series(1, 400) n;
+         INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source)
+         SELECT n::text,
+                (SELECT string_agg(CASE WHEN k = 75 THEN 'forever young heart of glass'
+                                        ELSE 'we keep on dancing through the neon night ' || k || ' baby ' || n END, E'\\n')
+                 FROM generate_series(1, 150) k),
+                'lrclib', 'lrclib'
+         FROM generate_series(1, 400) n;
+         REFRESH MATERIALIZED VIEW search_terms;
+         ANALYZE tracks, lyrics_cache, search_terms;",
+    )
+    .execute(&pool)
+    .await?;
+    let search = service(&pool)?;
+    for page in [0, 1] {
+        let started = std::time::Instant::now();
+        let answer = search
+            .lyrics("forever yung hart of glas", Some(page), Some(50))
+            .await?;
+        let elapsed = started.elapsed();
+        assert!(elapsed.as_millis() < 750, "page {page} took {elapsed:?}");
+        assert_eq!(answer.collection.len(), 50);
+        assert!(
+            answer
+                .collection
+                .iter()
+                .all(|hit| hit.matched_line.as_deref() == Some("forever young heart of glass")),
+            "page {page}"
+        );
+    }
+    Ok(())
+}
