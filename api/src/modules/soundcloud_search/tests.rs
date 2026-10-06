@@ -327,3 +327,50 @@ async fn a_session_past_its_budget_is_told_search_is_busy(pool: PgPool) -> anyho
     assert_eq!(relay.lua_calls(), 1);
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_refetched_first_chunk_makes_the_old_chain_stale(pool: PgPool) -> anyhow::Result<()> {
+    let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let relay = SearchRelay::answering(
+        Box::new(move |inputs| {
+            let cursor = inputs["cursor"].as_str();
+            let run = match cursor {
+                None => generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1,
+                Some(_) => generation.load(std::sync::atomic::Ordering::SeqCst),
+            };
+            let offset = cursor
+                .and_then(|cursor| cursor.rsplit('=').next())
+                .and_then(|offset| offset.parse::<u64>().ok())
+                .unwrap_or(0);
+            let last = offset + 20;
+            Some(json!({
+                "ok": true,
+                "collection": (offset + 1..=last).map(|id| hit(id + run * 1000)).collect::<Vec<_>>(),
+                "next_href": format!("https://next?urn={run}&offset={last}"),
+            }))
+        }),
+        500,
+        json!({}),
+    );
+    let search = search(&pool, relay.clone(), &redis_url(), 100)?;
+    let q = query();
+    let session = Uuid::now_v7();
+
+    let first = search.page(session, SearchType::Tracks, &q, 1, 20).await?;
+    assert_eq!(ids(&first), (1021..=1040).collect::<Vec<_>>());
+    assert_eq!(relay.lua_calls(), 2);
+
+    let redis = deadpool_redis::Config::from_url(redis_url())
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    let mut conn = redis.get().await?;
+    deadpool_redis::redis::cmd("DEL")
+        .arg(format!("api:{}:0", chunk_prefix(SearchType::Tracks, &q)))
+        .query_async::<()>(&mut conn)
+        .await?;
+
+    let again = search.page(session, SearchType::Tracks, &q, 1, 20).await?;
+    assert_eq!(ids(&again), (2021..=2040).collect::<Vec<_>>());
+    assert_eq!(relay.lua_calls(), 4);
+    Ok(())
+}

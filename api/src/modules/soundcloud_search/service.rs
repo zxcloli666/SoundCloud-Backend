@@ -28,6 +28,8 @@ const BUDGET: Duration = Duration::from_secs(8);
 struct Chunk {
     items: Vec<Value>,
     next_href: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -126,7 +128,9 @@ impl SoundCloudSearch {
         key: &str,
         cursor: Option<String>,
     ) -> AppResult<Chunk> {
-        if let Some(chunk) = self.read::<Chunk>(key).await {
+        if let Some(chunk) = self.read::<Chunk>(key).await
+            && chunk.cursor == cursor
+        {
             return Ok(chunk);
         }
         let failure_key = format!("{key}:fail");
@@ -158,11 +162,15 @@ impl SoundCloudSearch {
             Ok(page) => Chunk {
                 items: page.items,
                 next_href: page.next_href,
+                cursor,
             },
             Err(AppError::ScApi {
                 status: 400 | 404 | 422,
                 ..
-            }) => Chunk::default(),
+            }) => Chunk {
+                cursor,
+                ..Chunk::default()
+            },
             Err(error) => {
                 tracing::warn!(%error, search = ty.as_str(), "SoundCloud search failed");
                 let retry_after = self.retry_after().await;
