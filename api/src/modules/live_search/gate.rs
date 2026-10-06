@@ -136,19 +136,28 @@ impl LiveGate {
         seconds
     }
 
+    pub async fn report(&self) {
+        self.closed_for().await;
+    }
+
     async fn shut(&self) -> Result<(), Closed> {
-        let paused = self.pause.open_for().await;
-        crate::metrics::set_live_gate_closed("pause", paused.is_some());
+        let (paused, cooling) = self.closed_for().await;
         if let Some(left) = paused {
             return Err(Closed::new(LiveState::Paused, whole_seconds(left)));
         }
-        let cooling = self.breaker.open_for().await.max(self.cooling_left());
-        crate::metrics::set_live_gate_closed("breaker", cooling.is_some());
-        self.note_breaker(cooling.is_some());
         if let Some(left) = cooling {
             return Err(Closed::new(LiveState::Cooling, whole_seconds(left)));
         }
         Ok(())
+    }
+
+    pub(super) async fn closed_for(&self) -> (Option<Duration>, Option<Duration>) {
+        let paused = self.pause.open_for().await;
+        crate::metrics::set_live_gate_closed("pause", paused.is_some());
+        let cooling = self.breaker.open_for().await.max(self.cooling_left());
+        crate::metrics::set_live_gate_closed("breaker", cooling.is_some());
+        self.note_breaker(cooling.is_some());
+        (paused, cooling)
     }
 
     fn cooling_left(&self) -> Option<Duration> {

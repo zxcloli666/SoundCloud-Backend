@@ -347,3 +347,21 @@ async fn the_in_flight_cap_is_never_queued_on() {
     drop(held);
     assert_eq!(state_of(&gate, LiveClass::Main).await, None);
 }
+
+#[tokio::test]
+async fn a_report_reads_both_gates_without_any_request() {
+    let store = Arc::new(SharedEgress::default());
+    let gate = offline_gate(store.clone(), 8);
+    assert_eq!(gate.closed_for().await, (None, None));
+
+    store.opened(PAUSE_CHANNEL, Duration::from_secs(3600));
+    store.opened(BREAKER_CHANNEL, Duration::from_secs(60));
+    let fresh = offline_gate(store, 8);
+    let (paused, cooling) = fresh.closed_for().await;
+
+    assert!(paused.is_some(), "a pause shows up while nobody searches");
+    assert!(
+        cooling.is_some(),
+        "an open breaker is read even while the pause holds"
+    );
+}
