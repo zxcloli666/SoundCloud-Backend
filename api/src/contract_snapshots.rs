@@ -419,7 +419,7 @@ fn a_soundcloud_search_page_is_snake_case_with_its_page_size() {
 
 #[tokio::test]
 async fn every_search_failure_is_a_coded_503_with_retry_after() {
-    use crate::common::admission::AdmissionRejection;
+    use crate::common::admission::{AdmissionRejection, resolve_busy};
     use crate::modules::search::failure::{search_busy, search_timeout, vibe_unavailable};
     use crate::modules::soundcloud_search::service::{busy, unavailable};
 
@@ -455,6 +455,12 @@ async fn every_search_failure_is_a_coded_503_with_retry_after() {
             "soundcloud_search_busy",
             "SoundCloud search is busy, try again shortly",
             "7",
+        ),
+        (
+            resolve_busy(4),
+            "resolve_busy",
+            "Opening links is busy, try again shortly",
+            "4",
         ),
     ] {
         let (status, served_retry_after, body) = error_wire(error).await;

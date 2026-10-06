@@ -18,6 +18,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::config::{AdmissionCfg, AdmissionLimitCfg};
+use crate::error::AppError;
 
 const ADMISSION_SCRIPT: &str = r#"
 local window = tonumber(ARGV[3])
@@ -61,6 +62,7 @@ pub struct PublicAdmission {
     redis: RedisPool,
     config: AdmissionCfg,
     in_flight: Semaphore,
+    session_in_flight: Semaphore,
     namespace: String,
     last_warning_at: AtomicU64,
 }
@@ -108,6 +110,7 @@ impl PublicAdmission {
         Arc::new(Self {
             redis,
             in_flight: Semaphore::new(config.max_in_flight),
+            session_in_flight: Semaphore::new(config.max_in_flight),
             config,
             namespace: namespace.into(),
             last_warning_at: AtomicU64::new(0),
@@ -131,7 +134,7 @@ impl PublicAdmission {
     }
 
     async fn check(&self, endpoint: Endpoint, identity: String) -> Decision {
-        let Ok(_permit) = self.in_flight.try_acquire() else {
+        let Ok(_permit) = self.gate(endpoint).try_acquire() else {
             return Decision::Unavailable;
         };
         match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, identity)).await
@@ -185,6 +188,13 @@ impl PublicAdmission {
         Ok(Decision::Limited {
             retry_after_seconds: milliseconds_to_seconds(retry_after_milliseconds),
         })
+    }
+
+    fn gate(&self, endpoint: Endpoint) -> &Semaphore {
+        match endpoint {
+            Endpoint::Login | Endpoint::LinkCreate | Endpoint::Resolve => &self.in_flight,
+            Endpoint::SoundCloudSearch | Endpoint::CatalogMiss => &self.session_in_flight,
+        }
     }
 
     fn limits(&self, endpoint: Endpoint) -> AdmissionLimitCfg {
@@ -316,18 +326,20 @@ fn rejection(endpoint: Endpoint, kind: AdmissionRejection) -> Response {
         } => retry_after_seconds,
         AdmissionRejection::Unavailable => 1,
     };
-    let (status, code, message) = match (endpoint, kind) {
-        (Endpoint::Resolve, _) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "resolve_busy",
-            "Opening links is busy, try again shortly",
-        ),
-        (_, AdmissionRejection::Limited { .. }) => (
+    if let Endpoint::Resolve = endpoint {
+        let mut response = resolve_busy(retry_after_seconds).into_response();
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
+        return response;
+    }
+    let (status, code, message) = match kind {
+        AdmissionRejection::Limited { .. } => (
             StatusCode::TOO_MANY_REQUESTS,
             "auth_admission_limited",
             "Too many authentication requests",
         ),
-        (_, AdmissionRejection::Unavailable) => (
+        AdmissionRejection::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             "auth_admission_unavailable",
             "Authentication is temporarily unavailable",
@@ -349,6 +361,15 @@ fn rejection(endpoint: Endpoint, kind: AdmissionRejection) -> Response {
         response.headers_mut().insert(RETRY_AFTER, value);
     }
     response
+}
+
+pub(crate) fn resolve_busy(retry_after_seconds: u64) -> AppError {
+    AppError::coded(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "resolve_busy",
+        "Opening links is busy, try again shortly",
+    )
+    .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))
 }
 
 fn client_identity(address: IpAddr) -> String {
