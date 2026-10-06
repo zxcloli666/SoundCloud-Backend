@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const REACHES_SOUNDCLOUD: [&str; 11] = [
+const REACHES_SOUNDCLOUD: [&str; 13] = [
     "ScReadService",
     "ScClient",
     "api_get_value",
@@ -13,6 +13,8 @@ const REACHES_SOUNDCLOUD: [&str; 11] = [
     "self.read.",
     "self.sc.",
     "st.soundcloud_search",
+    "CatalogMiss",
+    "self.miss.",
 ];
 
 const ALLOWED: [(&str, &str); 7] = [
@@ -22,17 +24,20 @@ const ALLOWED: [(&str, &str); 7] = [
     ),
     (
         "tracks",
-        "USER_PRIVATE: secret_token detail and the stream token readiness check; SC_SEARCH: /tracks?q=",
+        "USER_PRIVATE: secret_token detail and the stream token readiness check; RESOLVE_MISS: a track opened or added to a playlist before the catalog has it; SC_SEARCH: /tracks?q=",
     ),
     (
         "playlists",
-        "USER_PRIVATE: secret_token detail; SC_SEARCH: /playlists?q=",
+        "USER_PRIVATE: secret_token detail; RESOLVE_MISS: a public playlist opened before the catalog has it; SC_SEARCH: /playlists?q=",
     ),
     (
         "soundcloud_search",
         "SC_SEARCH: SoundCloud's own search pages for the SoundCloud mode",
     ),
-    ("users", "SC_SEARCH: /users?q="),
+    (
+        "users",
+        "RESOLVE_MISS: a public profile opened before the catalog has it; SC_SEARCH: /users?q=",
+    ),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
     (
         "admin",

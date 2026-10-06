@@ -116,6 +116,7 @@ pub struct AdmissionCfg {
     pub link_create: AdmissionLimitCfg,
     pub resolve: AdmissionLimitCfg,
     pub sc_search: AdmissionLimitCfg,
+    pub catalog_miss: AdmissionLimitCfg,
 }
 
 impl AdmissionCfg {
@@ -124,6 +125,7 @@ impl AdmissionCfg {
         let link_create = admission_limit("AUTH_LINK_CREATE", 30, 600);
         let resolve = admission_limit("RESOLVE", 60, 1200);
         let sc_search = admission_limit("SC_SEARCH", 600, 6000);
+        let catalog_miss = admission_limit("CATALOG_MISS", 120, 2400);
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -134,6 +136,7 @@ impl AdmissionCfg {
             link_create,
             resolve,
             sc_search,
+            catalog_miss,
         }
     }
 }

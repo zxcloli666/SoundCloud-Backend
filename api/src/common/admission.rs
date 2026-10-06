@@ -71,6 +71,7 @@ pub enum Endpoint {
     LinkCreate,
     Resolve,
     SoundCloudSearch,
+    CatalogMiss,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +193,7 @@ impl PublicAdmission {
             Endpoint::LinkCreate => self.config.link_create,
             Endpoint::Resolve => self.config.resolve,
             Endpoint::SoundCloudSearch => self.config.sc_search,
+            Endpoint::CatalogMiss => self.config.catalog_miss,
         }
     }
 
@@ -226,6 +228,7 @@ impl Endpoint {
             Self::LinkCreate => "link-create",
             Self::Resolve => "resolve",
             Self::SoundCloudSearch => "sc-search",
+            Self::CatalogMiss => "catalog-miss",
         }
     }
 
@@ -235,6 +238,7 @@ impl Endpoint {
             Self::LinkCreate => "/auth/link/create",
             Self::Resolve => "/resolve",
             Self::SoundCloudSearch => "SoundCloud search",
+            Self::CatalogMiss => "catalog miss",
         }
     }
 }

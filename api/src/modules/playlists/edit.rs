@@ -38,6 +38,16 @@ pub enum TrackEdit {
     Replace { track_ids: Vec<String> },
 }
 
+impl TrackEdit {
+    pub fn submitted_track_ids(&self) -> Vec<String> {
+        match self {
+            Self::Add { track_id } => vec![track_id.clone()],
+            Self::Order { track_ids } | Self::Replace { track_ids } => track_ids.clone(),
+            Self::Remove { .. } | Self::Move { .. } => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Boundary {
     Front,

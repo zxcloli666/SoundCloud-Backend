@@ -26,6 +26,8 @@ const READ_THROUGH_A_PREFIX: &[&str] = &[
     "RESOLVE_GLOBAL",
     "SC_SEARCH_PER_CLIENT",
     "SC_SEARCH_GLOBAL",
+    "CATALOG_MISS_PER_CLIENT",
+    "CATALOG_MISS_GLOBAL",
 ];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

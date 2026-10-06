@@ -94,7 +94,14 @@ async fn resolve(
             "SoundCloud returned a different entity",
         ));
     }
-    persist_resolved(&st, &key, &fetched, observation).await?;
+    st.miss
+        .persist(
+            key.entity,
+            &fetched,
+            catalog_ingest::TrackPriority::Discovery,
+            observation,
+        )
+        .await?;
     let local = repository::load(
         &st.pg,
         &key,
@@ -141,35 +148,6 @@ fn response(value: &Value) -> AppResult<Response> {
         axum::http::HeaderValue::from_static("no-store, private"),
     );
     Ok(response)
-}
-
-async fn persist_resolved(
-    st: &AppState,
-    key: &EntityKey,
-    value: &Value,
-    observation: catalog_ingest::Observation,
-) -> AppResult<()> {
-    match key.entity {
-        CatalogEntity::Track => {
-            st.indexing
-                .ingest_track_from_sc(value, catalog_ingest::TrackPriority::Discovery, observation)
-                .await?
-        }
-        CatalogEntity::User => {
-            crate::modules::users::UserRepository::new(st.pg.clone())
-                .upsert_from_sc(value, observation)
-                .await?;
-        }
-        CatalogEntity::Playlist => {
-            crate::modules::playlists::PlaylistRepository::new(st.pg.clone())
-                .upsert_from_sc(value, observation)
-                .await?;
-        }
-        CatalogEntity::Profile | CatalogEntity::WebProfiles => {
-            return Err(AppError::bad_request("Unsupported entity"));
-        }
-    }
-    Ok(())
 }
 
 async fn enqueue_stale(

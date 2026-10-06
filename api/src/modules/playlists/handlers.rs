@@ -81,7 +81,10 @@ async fn create(
     ctx: SessionCtx,
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    let v = st.playlists.create(&ctx.sc_user_id, &body).await?;
+    let v = st
+        .playlists
+        .create(ctx.session_id, &ctx.sc_user_id, &body)
+        .await?;
     Ok(Json(v))
 }
 
@@ -138,6 +141,7 @@ async fn update_playlist(
     let value = st
         .playlists
         .update(
+            ctx.session_id,
             &ctx.sc_user_id,
             &playlist_urn,
             &body,
@@ -158,6 +162,9 @@ async fn edit_tracks(
 ) -> AppResult<Json<crate::modules::playlists::PlaylistTracksPage>> {
     let idempotency_key = idempotency_key(&headers)?;
     let request = body.into_request()?;
+    st.miss
+        .tracks(ctx.session_id, &request.edit.submitted_track_ids())
+        .await?;
     let (page, limit) = p.resolved();
     let mut result = st
         .playlists

@@ -11,18 +11,28 @@ use crate::modules::cold_refresh::{
     OWNED_TRACKS, read_collection_page,
 };
 use crate::modules::likes::cold as likes_cold;
+use crate::modules::resolve::{Adopted, CatalogMiss};
 
 pub struct UsersService {
     pg: PgPool,
     cold_refresh: Arc<ColdRefreshService>,
+    miss: Arc<CatalogMiss>,
 }
 
 impl UsersService {
-    pub fn new(pg: PgPool, cold_refresh: Arc<ColdRefreshService>) -> Arc<Self> {
-        Arc::new(Self { pg, cold_refresh })
+    pub fn new(
+        pg: PgPool,
+        cold_refresh: Arc<ColdRefreshService>,
+        miss: Arc<CatalogMiss>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            pg,
+            cold_refresh,
+            miss,
+        })
     }
 
-    pub async fn get_by_id(&self, user_urn: &str) -> AppResult<Value> {
+    pub async fn get_by_id(&self, session_id: uuid::Uuid, user_urn: &str) -> AppResult<Value> {
         let repo = crate::modules::users::UserRepository::new(self.pg.clone());
         if let Some(row) = repo.find_by_urn(user_urn).await? {
             let synced_at = row.sc_synced_at;
@@ -39,6 +49,16 @@ impl UsersService {
                 tracing::debug!(%error, "catalog refresh enqueue deferred");
             }
             return Ok(crate::modules::users::project_to_sc_shape(&row));
+        }
+        match self.miss.user(session_id, extract_sc_id(user_urn)).await {
+            Adopted::Stored => {
+                if let Some(row) = repo.find_by_urn(user_urn).await? {
+                    return Ok(crate::modules::users::project_to_sc_shape(&row));
+                }
+                return Err(AppError::not_found("User not found"));
+            }
+            Adopted::Gone => return Err(AppError::not_found("User not found")),
+            Adopted::Unavailable => {}
         }
         Err(crate::modules::cold_refresh::entity::refresh_pending(
             &self.pg,

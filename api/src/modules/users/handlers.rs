@@ -65,10 +65,10 @@ async fn search(
 
 async fn get_by_id(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
-    Ok(Json(st.users.get_by_id(&user_urn).await?))
+    Ok(Json(st.users.get_by_id(ctx.session_id, &user_urn).await?))
 }
 
 async fn get_followers(

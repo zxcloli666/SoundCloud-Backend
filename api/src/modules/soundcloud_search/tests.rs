@@ -36,6 +36,7 @@ fn admission(url: &str, per_session: u32) -> anyhow::Result<Arc<PublicAdmission>
             link_create: limit,
             resolve: limit,
             sc_search: limit,
+            catalog_miss: limit,
         },
     ))
 }

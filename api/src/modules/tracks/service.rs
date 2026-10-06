@@ -11,6 +11,7 @@ use crate::modules::cold_refresh::{
     AudienceCollection, ColdRefreshService, TRACK_FAVORITERS, TRACK_REPOSTERS,
 };
 use crate::modules::likes::cold as likes_cold;
+use crate::modules::resolve::{Adopted, CatalogMiss};
 use crate::modules::sync_queue::SyncQueueService;
 use crate::sc::ScClient;
 
@@ -20,6 +21,7 @@ pub struct TracksService {
     sync_queue: Arc<SyncQueueService>,
     cold_refresh: Arc<ColdRefreshService>,
     tokens: Arc<TokenProvider>,
+    miss: Arc<CatalogMiss>,
     mutations: super::mutations::TrackMutations,
 }
 
@@ -29,6 +31,7 @@ pub(crate) struct TracksServiceDependencies {
     pub sync_queue: Arc<SyncQueueService>,
     pub cold_refresh: Arc<ColdRefreshService>,
     pub tokens: Arc<TokenProvider>,
+    pub miss: Arc<CatalogMiss>,
 }
 
 impl TracksService {
@@ -39,6 +42,7 @@ impl TracksService {
             sync_queue,
             cold_refresh,
             tokens,
+            miss,
         } = dependencies;
         let mutations = super::mutations::TrackMutations::new(pg.clone(), sync_queue.clone());
         Arc::new(Self {
@@ -47,6 +51,7 @@ impl TracksService {
             sync_queue,
             cold_refresh,
             tokens,
+            miss,
             mutations,
         })
     }
@@ -59,7 +64,7 @@ impl TracksService {
         params: &[(String, String)],
     ) -> AppResult<Value> {
         let has_secret = params.iter().any(|(key, _)| key == "secret_token");
-        self.get_by_id_with_fetch(sc_user_id, track_urn, has_secret, || async {
+        self.get_by_id_with_fetch(session_id, sc_user_id, track_urn, has_secret, || async {
             let chain = self.tokens.chain(TokenKind::UserFirst(session_id)).await?;
             try_with_chain(&chain, |token| {
                 let sc = self.sc.clone();
@@ -74,6 +79,7 @@ impl TracksService {
 
     pub(crate) async fn get_by_id_with_fetch<F, Fut>(
         &self,
+        session_id: uuid::Uuid,
         sc_user_id: &str,
         track_urn: &str,
         has_secret: bool,
@@ -126,15 +132,29 @@ impl TracksService {
             if known_locally {
                 return Err(crate::error::AppError::not_found("Track not found"));
             }
-            return Err(crate::modules::cold_refresh::entity::refresh_pending(
-                &self.pg,
-                backend_contracts::CatalogEntity::Track,
-                track_urn,
-                None,
-                "track_refresh_pending",
-                "Track is being loaded",
-            )
-            .await);
+            match self
+                .miss
+                .track(
+                    session_id,
+                    sc_track_id,
+                    crate::modules::tracks::TrackPriority::Discovery,
+                )
+                .await
+            {
+                Adopted::Stored => false,
+                Adopted::Gone => return Err(crate::error::AppError::not_found("Track not found")),
+                Adopted::Unavailable => {
+                    return Err(crate::modules::cold_refresh::entity::refresh_pending(
+                        &self.pg,
+                        backend_contracts::CatalogEntity::Track,
+                        track_urn,
+                        None,
+                        "track_refresh_pending",
+                        "Track is being loaded",
+                    )
+                    .await);
+                }
+            }
         } else {
             let indexing = self
                 .cold_refresh
