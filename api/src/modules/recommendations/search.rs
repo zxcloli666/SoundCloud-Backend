@@ -35,15 +35,16 @@ fn query_vector(outcome: EncodeOutcome) -> Result<Vec<f32>, SearchTextResult> {
             preparing: true,
             ..SearchTextResult::default()
         }),
-        EncodeOutcome::Ready(_)
-        | EncodeOutcome::Declined {
-            status: WorkerStatus::Empty,
+        EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
             ..
-        } => Err(SearchTextResult::default()),
-        EncodeOutcome::Declined { .. } => Err(SearchTextResult {
+        } => Err(SearchTextResult {
             failed: true,
             ..SearchTextResult::default()
         }),
+        EncodeOutcome::Ready(_) | EncodeOutcome::Declined { .. } => {
+            Err(SearchTextResult::default())
+        }
     }
 }
 
@@ -150,6 +151,15 @@ mod tests {
             }),
             (false, false)
         );
+        for status in [WorkerStatus::Rejected, WorkerStatus::Missing] {
+            assert_eq!(
+                answer_to(EncodeOutcome::Declined {
+                    status,
+                    reason: None,
+                }),
+                (false, false)
+            );
+        }
         assert_eq!(answer_to(EncodeOutcome::Preparing), (true, false));
         assert_eq!(
             query_vector(EncodeOutcome::Ready(vec![0.5; 512])).expect("a vector"),
