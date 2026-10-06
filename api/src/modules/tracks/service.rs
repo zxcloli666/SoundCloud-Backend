@@ -131,10 +131,7 @@ impl TracksService {
             if known_locally {
                 return Err(crate::error::AppError::not_found("Track not found"));
             }
-            if !self
-                .adopt_live_hit(sc_user_id, track_urn, sc_track_id)
-                .await?
-            {
+            if !self.adopt_live_hit(sc_user_id, sc_track_id).await? {
                 return Err(crate::modules::cold_refresh::entity::refresh_pending(
                     &self.pg,
                     backend_contracts::CatalogEntity::Track,
@@ -183,19 +180,15 @@ impl TracksService {
             .ok_or_else(|| crate::error::AppError::not_found("Track not found"))
     }
 
-    async fn adopt_live_hit(
-        &self,
-        sc_user_id: &str,
-        track_urn: &str,
-        sc_track_id: &str,
-    ) -> AppResult<bool> {
+    async fn adopt_live_hit(&self, sc_user_id: &str, sc_track_id: &str) -> AppResult<bool> {
         let Some(indexing) = self.cold_refresh.indexing_for_ingest() else {
             return Ok(false);
         };
-        match self.live_stash.adopt_track(indexing, track_urn).await {
+        let canonical = backend_contracts::CatalogEntity::Track.urn(sc_track_id);
+        match self.live_stash.adopt_track(indexing, &canonical).await {
             Adoption::Unseen => Ok(self
                 .live_stash
-                .read_track(indexing, track_urn, sc_user_id)
+                .read_track(indexing, &canonical, sc_user_id)
                 .await),
             Adoption::Adopted => Ok(true),
             Adoption::Failed => Ok(sqlx::query_file_scalar!(

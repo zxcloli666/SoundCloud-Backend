@@ -495,3 +495,36 @@ async fn opening_a_live_search_hit_answers_from_its_sighting_without_soundcloud(
     assert_eq!(unseen.public_code(), "track_refresh_pending");
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_live_search_hit_opened_by_its_bare_id_is_adopted(pool: PgPool) -> anyhow::Result<()> {
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let id = 7_000_000_000 + u64::from(Uuid::now_v7().as_fields().1);
+    let urn = format!("soundcloud:tracks:{id}");
+    let hit = serde_json::json!({
+        "id": id, "urn": urn, "kind": "track", "title": "Opened by id", "duration": 200000,
+        "sharing": "public", "access": "playable",
+        "user": {"id": 17, "urn": "soundcloud:users:17", "kind": "user", "username": "Uploader"}
+    });
+    let cache = crate::cache::CacheService::new(
+        deadpool_redis::Config::from_url(&redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
+    );
+    cache
+        .set_many_raw(&[(format!("live:v1:i:{urn}"), hit.to_string(), 60)])
+        .await?;
+    let services = services_with(&pool, &redis_url).await?;
+
+    let track = services
+        .tracks
+        .get_by_id_with_fetch("18", &id.to_string(), false, || async {
+            Ok(remote_track())
+        })
+        .await?;
+
+    assert_eq!(track["title"], "Opened by id");
+    assert_eq!(track["urn"], urn.as_str());
+    Ok(())
+}
