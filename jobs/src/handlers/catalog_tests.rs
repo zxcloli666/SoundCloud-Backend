@@ -16,8 +16,6 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              work_normalizer_version smallint,
              canonical_track_id uuid,
              superseded_by uuid REFERENCES tracks(id) ON DELETE SET NULL,
-             sharing varchar(16) NOT NULL DEFAULT 'public',
-             deleted_at timestamptz,
              storage_state varchar(16) NOT NULL DEFAULT 'pending',
              index_state varchar(16) NOT NULL DEFAULT 'pending',
              s3_verified_at timestamptz,
@@ -344,96 +342,5 @@ async fn a_longer_recording_is_not_folded_into_a_short_one(pool: PgPool) -> anyh
 
     assert_eq!(superseded_by(&pool, long).await?, None);
     assert_eq!(superseded_by(&pool, short).await?, None);
-    Ok(())
-}
-
-async fn make_private(pool: &PgPool, track: Uuid) -> anyhow::Result<()> {
-    sqlx::query("UPDATE tracks SET sharing = 'private' WHERE id = $1")
-        .bind(track)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_private_playable_copy_never_hides_the_public_ones(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist = seed_artist(&pool).await?;
-    let private = seed_playable(&pool, artist, "Холод", 0.9).await?;
-    make_private(&pool, private).await?;
-    let public = seed_track(&pool, artist, "Холод", Some(181_000)).await?;
-
-    run(&pool).await?;
-
-    assert_eq!(superseded_by(&pool, public).await?, None);
-    assert_eq!(superseded_by(&pool, private).await?, Some(public));
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_group_without_a_serving_copy_is_left_alone(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist = seed_artist(&pool).await?;
-    let first = seed_playable(&pool, artist, "Холод", 0.9).await?;
-    let second = seed_playable(&pool, artist, "Холод", 0.2).await?;
-    make_private(&pool, first).await?;
-    sqlx::query("UPDATE tracks SET deleted_at = now() WHERE id = $1")
-        .bind(second)
-        .execute(&pool)
-        .await?;
-
-    run(&pool).await?;
-
-    assert_eq!(superseded_by(&pool, first).await?, None);
-    assert_eq!(superseded_by(&pool, second).await?, None);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_duplicate_without_a_duration_is_not_folded(pool: PgPool) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist = seed_artist(&pool).await?;
-    let playable = seed_playable(&pool, artist, "Холод", 0.9).await?;
-    let unknown = seed_track(&pool, artist, "Холод", None).await?;
-
-    run(&pool).await?;
-
-    assert_eq!(superseded_by(&pool, unknown).await?, None);
-    assert_eq!(superseded_by(&pool, playable).await?, None);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn copies_hidden_behind_a_non_serving_winner_are_released(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist = seed_artist(&pool).await?;
-    let private = seed_playable(&pool, artist, "Холод", 0.9).await?;
-    make_private(&pool, private).await?;
-    let public = seed_track(&pool, artist, "Холод", Some(180_000)).await?;
-    let silent = seed_track(&pool, artist, "Холод", None).await?;
-    let serving = seed_playable(&pool, artist, "Другая", 0.5).await?;
-    let kept = seed_track(&pool, artist, "Другая", Some(180_000)).await?;
-    sqlx::query("UPDATE tracks SET superseded_by = $1 WHERE id IN ($2, $3)")
-        .bind(private)
-        .bind(public)
-        .bind(silent)
-        .execute(&pool)
-        .await?;
-    sqlx::query("UPDATE tracks SET superseded_by = $1 WHERE id = $2")
-        .bind(serving)
-        .bind(kept)
-        .execute(&pool)
-        .await?;
-
-    CatalogWorkHandler::new(pool.clone())
-        .release_hidden_winners()
-        .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-
-    assert_eq!(superseded_by(&pool, public).await?, None);
-    assert_eq!(superseded_by(&pool, silent).await?, None);
-    assert_eq!(superseded_by(&pool, kept).await?, Some(serving));
     Ok(())
 }

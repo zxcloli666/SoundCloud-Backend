@@ -11,7 +11,6 @@ use crate::error::{AppError, AppResult};
 use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
 use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::cold_refresh::{ColdRefreshService, PLAYLIST_REPOSTERS};
-use crate::modules::live_search::LiveStash;
 use crate::modules::playlists::edit::{MembershipRequest, TrackEdit};
 use crate::modules::playlists::journal::PlaylistJournal;
 use crate::modules::playlists::membership::PlaylistMembership;
@@ -27,7 +26,6 @@ pub struct PlaylistsService {
     sync_queue: Arc<SyncQueueService>,
     cold_refresh: Arc<ColdRefreshService>,
     tokens: Arc<TokenProvider>,
-    live_stash: Arc<LiveStash>,
     membership: PlaylistMembership,
     journal: PlaylistJournal,
     mutations: super::mutations::PlaylistMutations,
@@ -47,7 +45,6 @@ pub struct PlaylistsDeps {
     pub cold_refresh: Arc<ColdRefreshService>,
     pub tokens: Arc<TokenProvider>,
     pub background_jobs: Arc<crate::background_jobs::BackgroundJobs>,
-    pub live_stash: Arc<LiveStash>,
 }
 
 impl PlaylistsService {
@@ -62,7 +59,6 @@ impl PlaylistsService {
             sync_queue: deps.sync_queue,
             cold_refresh: deps.cold_refresh,
             tokens: deps.tokens,
-            live_stash: deps.live_stash,
             membership,
             journal,
             mutations,
@@ -155,32 +151,15 @@ impl PlaylistsService {
             if known_locally {
                 return Err(AppError::not_found("Playlist not found"));
             }
-            let adopted = if self
-                .live_stash
-                .adopt_playlist(&self.pg, playlist_urn)
-                .await
-                .was_seen()
-                || self
-                    .live_stash
-                    .read_playlist(playlist_urn, sc_user_id)
-                    .await
-            {
-                repo.find_by_urn(playlist_urn).await?
-            } else {
-                None
-            };
-            let Some(current) = adopted else {
-                return Err(crate::modules::cold_refresh::entity::refresh_pending(
-                    &self.pg,
-                    backend_contracts::CatalogEntity::Playlist,
-                    playlist_urn,
-                    None,
-                    "playlist_refresh_pending",
-                    "Playlist is being loaded",
-                )
-                .await);
-            };
-            (current, false)
+            return Err(crate::modules::cold_refresh::entity::refresh_pending(
+                &self.pg,
+                backend_contracts::CatalogEntity::Playlist,
+                playlist_urn,
+                None,
+                "playlist_refresh_pending",
+                "Playlist is being loaded",
+            )
+            .await);
         } else {
             let observation = catalog_ingest::Observation::begin(&self.pg).await?;
             let fetched = fetch().await?;

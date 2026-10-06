@@ -17,14 +17,8 @@ struct Services {
     playlists: Arc<crate::modules::playlists::PlaylistsService>,
 }
 
-const OFFLINE_REDIS: &str = "redis://127.0.0.1:1";
-
 async fn services(pool: &PgPool) -> anyhow::Result<Services> {
-    services_with(pool, OFFLINE_REDIS).await
-}
-
-async fn services_with(pool: &PgPool, stash_redis: &str) -> anyhow::Result<Services> {
-    let deps = dependencies_with(pool, stash_redis)?;
+    let deps = dependencies(pool)?;
     let nats = crate::bus::nats::NatsService::connect(
         "nats://127.0.0.1:1",
         tokio_util::sync::CancellationToken::new(),
@@ -46,7 +40,6 @@ async fn services_with(pool: &PgPool, stash_redis: &str) -> anyhow::Result<Servi
             cold_refresh: deps.cold_refresh.clone(),
             tokens: deps.tokens.clone(),
             background_jobs: background,
-            live_stash: deps.live_stash.clone(),
         },
     );
     Ok(Services {
@@ -270,19 +263,8 @@ async fn secret_response_identity_must_match_the_requested_entity(
 }
 
 fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies> {
-    dependencies_with(pool, OFFLINE_REDIS)
-}
-
-fn dependencies_with(
-    pool: &PgPool,
-    stash_redis: &str,
-) -> anyhow::Result<TracksServiceDependencies> {
-    let redis = deadpool_redis::Config::from_url(OFFLINE_REDIS)
+    let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let stash_cache = crate::cache::CacheService::new(
-        deadpool_redis::Config::from_url(stash_redis)
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
-    );
     let sc = ScClient::new(&sc_transport::ScConfig {
         proxy_url: "http://127.0.0.1:1".into(),
         proxy_fallback: false,
@@ -299,7 +281,6 @@ fn dependencies_with(
     Ok(TracksServiceDependencies {
         sc,
         pg: pool.clone(),
-        live_stash: crate::modules::live_search::LiveStash::new(stash_cache),
         sync_queue: SyncQueueService::new(pool.clone(), redis),
         tokens,
         cold_refresh: ColdRefreshService::new(
@@ -443,88 +424,5 @@ async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert!(pending_jobs(&pool).await?.is_empty());
-    Ok(())
-}
-
-#[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
-async fn opening_a_live_search_hit_answers_from_its_sighting_without_soundcloud(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
-    let id = 7_000_000_000 + u64::from(Uuid::now_v7().as_fields().1);
-    let urn = format!("soundcloud:tracks:{id}");
-    let hit = serde_json::json!({
-        "id": id, "urn": urn, "kind": "track", "title": "Seen in search", "duration": 200000,
-        "sharing": "public", "access": "playable",
-        "user": {"id": 17, "urn": "soundcloud:users:17", "kind": "user", "username": "Uploader"}
-    });
-    let cache = crate::cache::CacheService::new(
-        deadpool_redis::Config::from_url(&redis_url)
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
-    );
-    cache
-        .set_many_raw(&[(format!("live:v1:i:{urn}"), hit.to_string(), 60)])
-        .await?;
-    let services = services_with(&pool, &redis_url).await?;
-    let fetches = std::sync::atomic::AtomicUsize::new(0);
-
-    let track = services
-        .tracks
-        .get_by_id_with_fetch("18", &urn, false, || async {
-            fetches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(remote_track())
-        })
-        .await?;
-
-    assert_eq!(track["title"], "Seen in search");
-    assert_eq!(track["urn"], urn.as_str());
-    assert_eq!(fetches.load(std::sync::atomic::Ordering::Relaxed), 0);
-
-    let unseen = services
-        .tracks
-        .get_by_id_with_fetch(
-            "18",
-            &format!("soundcloud:tracks:{}", id + 1),
-            false,
-            || async { Ok(remote_track()) },
-        )
-        .await
-        .expect_err("an unseen track still waits for the catalog refresh");
-    assert_eq!(unseen.public_code(), "track_refresh_pending");
-    Ok(())
-}
-
-#[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
-async fn a_live_search_hit_opened_by_its_bare_id_is_adopted(pool: PgPool) -> anyhow::Result<()> {
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
-    let id = 7_000_000_000 + u64::from(Uuid::now_v7().as_fields().1);
-    let urn = format!("soundcloud:tracks:{id}");
-    let hit = serde_json::json!({
-        "id": id, "urn": urn, "kind": "track", "title": "Opened by id", "duration": 200000,
-        "sharing": "public", "access": "playable",
-        "user": {"id": 17, "urn": "soundcloud:users:17", "kind": "user", "username": "Uploader"}
-    });
-    let cache = crate::cache::CacheService::new(
-        deadpool_redis::Config::from_url(&redis_url)
-            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
-    );
-    cache
-        .set_many_raw(&[(format!("live:v1:i:{urn}"), hit.to_string(), 60)])
-        .await?;
-    let services = services_with(&pool, &redis_url).await?;
-
-    let track = services
-        .tracks
-        .get_by_id_with_fetch("18", &id.to_string(), false, || async {
-            Ok(remote_track())
-        })
-        .await?;
-
-    assert_eq!(track["title"], "Opened by id");
-    assert_eq!(track["urn"], urn.as_str());
     Ok(())
 }

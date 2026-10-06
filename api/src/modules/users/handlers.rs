@@ -2,8 +2,10 @@ use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::cache::ListPageResult;
 use crate::common::cache_helper::cached_or_fetch;
 use crate::common::pagination::PaginationQuery;
 use crate::common::sc_ids::extract_sc_id;
@@ -16,6 +18,7 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/users", get(search))
         .route("/users/{user_urn}", get(get_by_id))
         .route("/users/{user_urn}/followers", get(get_followers))
         .route("/users/{user_urn}/followings", get(get_followings))
@@ -32,6 +35,33 @@ pub fn router() -> Router<AppState> {
         )
         .route("/users/{user_urn}/subscription", get(get_subscription))
         .route("/users/{user_urn}/web-profiles", get(get_web_profiles))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    ids: Option<String>,
+}
+
+async fn search(
+    State(st): State<AppState>,
+    _ctx: SessionCtx,
+    Query(p): Query<PaginationQuery>,
+    Query(q): Query<SearchQuery>,
+) -> AppResult<Json<ListPageResult<Value>>> {
+    let (page, limit) = p.resolved();
+    Ok(Json(
+        st.search
+            .users(
+                q.q.as_deref().unwrap_or_default(),
+                q.ids.as_deref(),
+                page,
+                limit,
+            )
+            .await?,
+    ))
 }
 
 async fn get_by_id(

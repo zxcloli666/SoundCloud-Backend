@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -7,15 +5,12 @@ use uuid::Uuid;
 
 use crate::error::AppResult;
 use crate::modules::playlists::{PlaylistRow, project_to_sc_shape as project_playlist};
-use crate::modules::search::failure;
 use crate::modules::tracks::{TrackRow, project_to_sc_shape as project_track};
 use crate::modules::users::{UserRow, project_to_sc_shape as project_user};
 
 pub const STATEMENT_TIMEOUT_MS: i32 = 2500;
 
 pub const TRIGRAM_MIN_LEN: usize = 3;
-
-const BEGIN_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn escape_like(q: &str) -> String {
     q.trim()
@@ -47,38 +42,22 @@ pub fn like_needle_normalized(q: &str) -> String {
     }
 }
 
-pub(super) async fn begin(pg: &PgPool) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
-    match tokio::time::timeout(BEGIN_TIMEOUT, pg.begin()).await {
-        Ok(begun) => begun.map_err(failure::from_db),
-        Err(_) => Err(failure::busy()),
-    }
-}
-
 async fn set_statement_timeout(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<()> {
     sqlx::query(&format!(
         "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
     ))
     .execute(&mut **tx)
-    .await
-    .map_err(failure::from_db)?;
+    .await?;
     Ok(())
 }
 
 async fn configure_catalog_search(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<()> {
-    configure_search(tx, STATEMENT_TIMEOUT_MS).await
-}
-
-pub(super) async fn configure_search(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    timeout_ms: i32,
-) -> AppResult<()> {
     sqlx::query_file!(
         "queries/search/repository/configure_catalog_search.sql",
-        &timeout_ms.to_string()
+        &STATEMENT_TIMEOUT_MS.to_string()
     )
     .fetch_one(&mut **tx)
-    .await
-    .map_err(failure::from_db)?;
+    .await?;
     Ok(())
 }
 
@@ -108,7 +87,7 @@ pub async fn search_tracks(
     let prefix = filters.query.is_some_and(prefix_only);
     let offset = page * limit;
 
-    let mut tx = begin(pg).await?;
+    let mut tx = pg.begin().await?;
     configure_catalog_search(&mut tx).await?;
 
     let fetch_limit = limit + 1;
@@ -116,71 +95,75 @@ pub async fn search_tracks(
     let sole_genre = filters.genres.and_then(sole_term);
 
     let rows: Vec<TrackRow> = match (filters.owner, filters.ids) {
-        (Some(uid), Some(ids)) => sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_by_uploader_ids.sql",
-            uid,
-            needle.as_deref(),
-            fetch_limit,
-            offset,
-            norm_needle.as_deref(),
-            ids,
-            filters.genres,
-            filters.tags,
-            prefix
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?,
-        (Some(uid), None) => sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_by_uploader.sql",
-            uid,
-            needle.as_deref(),
-            fetch_limit,
-            offset,
-            norm_needle.as_deref(),
-            filters.genres,
-            sole_genre,
-            filters.tags,
-            prefix
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?,
-        (None, Some(ids)) => sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_by_ids.sql",
-            needle.as_deref(),
-            fetch_limit,
-            offset,
-            norm_needle.as_deref(),
-            ids,
-            filters.genres,
-            filters.tags,
-            prefix
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?,
-        (None, None) => sqlx::query_file_as!(
-            TrackRow,
-            "queries/search/repository/search_tracks_global.sql",
-            needle.as_deref(),
-            fetch_limit,
-            offset,
-            norm_needle.as_deref(),
-            filters.genres,
-            sole_genre,
-            filters.tags,
-            prefix
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?,
+        (Some(uid), Some(ids)) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_uploader_ids.sql",
+                uid,
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                ids,
+                filters.genres,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (Some(uid), None) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_uploader.sql",
+                uid,
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                filters.genres,
+                sole_genre,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (None, Some(ids)) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_by_ids.sql",
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                ids,
+                filters.genres,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        (None, None) => {
+            sqlx::query_file_as!(
+                TrackRow,
+                "queries/search/repository/search_tracks_global.sql",
+                needle.as_deref(),
+                fetch_limit,
+                offset,
+                norm_needle.as_deref(),
+                filters.genres,
+                sole_genre,
+                filters.tags,
+                prefix
+            )
+            .fetch_all(&mut *tx)
+            .await?
+        }
     };
 
-    tx.commit().await.map_err(failure::from_db)?;
+    tx.commit().await?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<TrackRow> = rows.into_iter().take(limit as usize).collect();
@@ -188,10 +171,7 @@ pub async fn search_tracks(
     Ok((projected, has_more))
 }
 
-pub(super) async fn project_tracks_with_uploaders(
-    pg: &PgPool,
-    rows: Vec<TrackRow>,
-) -> AppResult<Vec<Value>> {
+async fn project_tracks_with_uploaders(pg: &PgPool, rows: Vec<TrackRow>) -> AppResult<Vec<Value>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -211,8 +191,7 @@ pub(super) async fn project_tracks_with_uploaders(
             &uploader_ids
         )
         .fetch_all(pg)
-        .await
-        .map_err(failure::from_db)?;
+        .await?;
         users
             .into_iter()
             .map(|u| (u.sc_user_id.clone(), project_user(&u)))
@@ -243,7 +222,7 @@ pub async fn search_playlists(
     let prefix = q_lower.is_some_and(prefix_only);
     let offset = page * limit;
 
-    let mut tx = begin(pg).await?;
+    let mut tx = pg.begin().await?;
     configure_catalog_search(&mut tx).await?;
 
     let fetch_limit = limit + 1;
@@ -260,8 +239,7 @@ pub async fn search_playlists(
             prefix
         )
         .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?
+        .await?
     } else {
         sqlx::query_file_as!(
             PlaylistRow,
@@ -273,11 +251,10 @@ pub async fn search_playlists(
             prefix
         )
         .fetch_all(&mut *tx)
-        .await
-        .map_err(failure::from_db)?
+        .await?
     };
 
-    tx.commit().await.map_err(failure::from_db)?;
+    tx.commit().await?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<PlaylistRow> = rows.into_iter().take(limit as usize).collect();
@@ -285,7 +262,7 @@ pub async fn search_playlists(
     Ok((projected, has_more))
 }
 
-pub(crate) async fn project_playlists_with_owners(
+async fn project_playlists_with_owners(
     pg: &PgPool,
     rows: Vec<PlaylistRow>,
 ) -> AppResult<Vec<Value>> {
@@ -308,8 +285,7 @@ pub(crate) async fn project_playlists_with_owners(
             &owner_ids
         )
         .fetch_all(pg)
-        .await
-        .map_err(failure::from_db)?;
+        .await?;
         users
             .into_iter()
             .map(|u| (u.sc_user_id.clone(), project_user(&u)))
@@ -340,7 +316,7 @@ pub async fn search_users(
     let prefix = q_lower.is_some_and(prefix_only);
     let offset = page * limit;
 
-    let mut tx = begin(pg).await?;
+    let mut tx = pg.begin().await?;
     configure_catalog_search(&mut tx).await?;
 
     let fetch_limit = limit + 1;
@@ -356,10 +332,9 @@ pub async fn search_users(
         prefix
     )
     .fetch_all(&mut *tx)
-    .await
-    .map_err(failure::from_db)?;
+    .await?;
 
-    tx.commit().await.map_err(failure::from_db)?;
+    tx.commit().await?;
 
     let has_more = rows.len() as i64 > limit;
     let collection: Vec<Value> = rows
@@ -398,7 +373,7 @@ pub async fn search_artists(
     let prefix = prefix_only(q_lower);
     let offset = page * limit;
 
-    let mut tx = begin(pg).await?;
+    let mut tx = pg.begin().await?;
     set_statement_timeout(&mut tx).await?;
 
     let fetch_limit = limit + 1;
@@ -414,31 +389,12 @@ pub async fn search_artists(
         prefix
     )
     .fetch_all(&mut *tx)
-    .await
-    .map_err(failure::from_db)?;
+    .await?;
 
-    tx.commit().await.map_err(failure::from_db)?;
+    tx.commit().await?;
 
     let has_more = rows.len() as i64 > limit;
     Ok((rows.into_iter().take(limit as usize).collect(), has_more))
-}
-
-pub async fn artists_named(pg: &PgPool, names: &[String]) -> AppResult<Vec<ArtistSearchRow>> {
-    if names.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut tx = begin(pg).await?;
-    set_statement_timeout(&mut tx).await?;
-    let rows = sqlx::query_file_as!(
-        ArtistSearchRow,
-        "queries/search/ranked/artists_named.sql",
-        names
-    )
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(failure::from_db)?;
-    tx.commit().await.map_err(failure::from_db)?;
-    Ok(rows)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -469,7 +425,7 @@ pub async fn search_albums(
     let prefix = prefix_only(q_lower);
     let offset = page * limit;
 
-    let mut tx = begin(pg).await?;
+    let mut tx = pg.begin().await?;
     set_statement_timeout(&mut tx).await?;
 
     let fetch_limit = limit + 1;
@@ -485,10 +441,9 @@ pub async fn search_albums(
         prefix
     )
     .fetch_all(&mut *tx)
-    .await
-    .map_err(failure::from_db)?;
+    .await?;
 
-    tx.commit().await.map_err(failure::from_db)?;
+    tx.commit().await?;
 
     let has_more = rows.len() as i64 > limit;
     Ok((rows.into_iter().take(limit as usize).collect(), has_more))
@@ -498,8 +453,7 @@ pub async fn search_albums(
 pub async fn db_last_synced(pg: &PgPool) -> AppResult<Option<DateTime<Utc>>> {
     let row = sqlx::query_file_scalar!("queries/search/repository/db_last_synced.sql")
         .fetch_optional(pg)
-        .await
-        .map_err(failure::from_db)?;
+        .await?;
     Ok(row.flatten())
 }
 

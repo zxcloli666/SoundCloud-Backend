@@ -134,30 +134,6 @@ async fn per_client_limit_is_shared_across_ports() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[ignore = "requires a local Redis server"]
-async fn a_live_identity_has_its_own_bucket_on_every_live_endpoint() -> anyhow::Result<()> {
-    let limiter = redis_limiter(limits(1, 10)).await?;
-
-    assert_eq!(
-        limiter.check_identity(Endpoint::LiveMain, "a1").await,
-        Decision::Allowed
-    );
-    assert!(matches!(
-        limiter.check_identity(Endpoint::LiveMain, "a1").await,
-        Decision::Limited { .. }
-    ));
-    assert_eq!(
-        limiter.check_identity(Endpoint::LiveMain, "b2").await,
-        Decision::Allowed
-    );
-    assert_eq!(
-        limiter.check_identity(Endpoint::LiveSide, "a1").await,
-        Decision::Allowed
-    );
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis server"]
 async fn concurrent_clients_cannot_exceed_the_global_limit() -> anyhow::Result<()> {
     let limiter = redis_limiter(limits(100, 10)).await?;
     let requests = (1..=40).map(|last_octet| {
@@ -241,12 +217,6 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             login: limits(1, 2),
             link_create: limits(3, 4),
             resolve: limits(5, 6),
-            live_main: limits(7, 8),
-            live_side: limits(9, 10),
-            live_import: limits(11, 12),
-            live_rescue: limits(13, 14),
-            live_proxy: limits(15, 16),
-            live_entity: limits(17, 18),
         },
         "test:public:admission:budgets",
     );
@@ -259,23 +229,10 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         "a link a listener pasted must not be able to spend the budget that lets them log in"
     );
 
-    assert_eq!(admission.limits(Endpoint::LiveMain).per_client, 7);
-    assert_eq!(admission.limits(Endpoint::LiveSide).per_client, 9);
-    assert_eq!(admission.limits(Endpoint::LiveImport).per_client, 11);
-    assert_eq!(admission.limits(Endpoint::LiveRescue).per_client, 13);
-    assert_eq!(admission.limits(Endpoint::LiveProxy).global, 16);
-    assert_eq!(admission.limits(Endpoint::LiveEntity).per_client, 17);
-
     let keys = [
         Endpoint::Login.key(),
         Endpoint::LinkCreate.key(),
         Endpoint::Resolve.key(),
-        Endpoint::LiveMain.key(),
-        Endpoint::LiveSide.key(),
-        Endpoint::LiveImport.key(),
-        Endpoint::LiveRescue.key(),
-        Endpoint::LiveProxy.key(),
-        Endpoint::LiveEntity.key(),
     ];
     assert_eq!(
         keys.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -332,12 +289,6 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         login: limit,
         link_create: limit,
         resolve: limit,
-        live_main: limit,
-        live_side: limit,
-        live_import: limit,
-        live_rescue: limit,
-        live_proxy: limit,
-        live_entity: limit,
     }
 }
 

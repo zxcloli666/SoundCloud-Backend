@@ -7,11 +7,7 @@ use sqlx::PgPool;
 fn service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<SearchService>> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(SearchService::new(
-        pool.clone(),
-        CacheService::new(redis),
-        false,
-    ))
+    Ok(SearchService::new(pool.clone(), CacheService::new(redis)))
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -381,11 +377,7 @@ fn cached_service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<SearchService>
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
     .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(SearchService::new(
-        pool.clone(),
-        CacheService::new(redis),
-        false,
-    ))
+    Ok(SearchService::new(pool.clone(), CacheService::new(redis)))
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -437,62 +429,6 @@ async fn a_catalog_page_served_from_the_cache_is_the_page_that_was_stored(
         serde_json::to_value(&warm_albums)?,
         serde_json::to_value(&cold_albums)?,
         "the second ask is served from Redis, and it came back different from what was stored"
-    );
-    Ok(())
-}
-
-#[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
-async fn a_phrase_page_is_cached_and_a_filtered_page_is_read_live(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let id = std::process::id().to_string();
-    let title = format!("Cachable track {id}");
-    sqlx::query(
-        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing)
-         VALUES ($1, 'soundcloud:tracks:' || $1, $2, lower($2), 1000, 'public')",
-    )
-    .bind(&id)
-    .bind(&title)
-    .execute(&pool)
-    .await?;
-    let search = cached_service(&pool)?;
-    let phrase = TrackSearchQuery {
-        q: Some(title.clone()),
-        ..Default::default()
-    };
-    let cold = search.tracks(&phrase, 0, 10).await?;
-    assert_eq!(cold.collection.len(), 1);
-
-    sqlx::query("UPDATE tracks SET title = title || ' renamed' WHERE sc_track_id = $1")
-        .bind(&id)
-        .execute(&pool)
-        .await?;
-
-    let warm = search.tracks(&phrase, 0, 10).await?;
-    assert_eq!(
-        serde_json::to_value(&warm)?,
-        serde_json::to_value(&cold)?,
-        "a repeated phrase must be answered from the shared page cache"
-    );
-    let respelled = TrackSearchQuery {
-        q: Some(format!("  CACHABLE -- Track,  {id}! ")),
-        ..Default::default()
-    };
-    assert_eq!(
-        serde_json::to_value(search.tracks(&respelled, 0, 10).await?)?,
-        serde_json::to_value(&cold)?,
-        "a spelling that normalizes to the same phrase shares its cached page"
-    );
-    let filtered = TrackSearchQuery {
-        q: Some(title.clone()),
-        ids: Some(id.clone()),
-        ..Default::default()
-    };
-    let live = search.tracks(&filtered, 0, 10).await?;
-    assert_eq!(
-        live.collection[0]["title"],
-        json!(format!("{title} renamed"))
     );
     Ok(())
 }

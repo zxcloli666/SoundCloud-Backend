@@ -1,18 +1,17 @@
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::cache::ListPageResult;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
-use crate::modules::live_search::{LiveKind, plain_playlists};
 use crate::modules::playlists::EditBody;
 use crate::state::AppState;
 
@@ -53,30 +52,12 @@ struct DetailQuery {
 
 async fn search(
     State(st): State<AppState>,
-    ctx: SessionCtx,
-    headers: HeaderMap,
+    _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
     Query(q): Query<crate::modules::search::query::PlaylistSearchQuery>,
-) -> AppResult<Response> {
+) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let plan = st.live_search.plan(
-        LiveKind::Playlists,
-        plain_playlists(&q),
-        &headers,
-        &p,
-        false,
-        &ctx.sc_user_id,
-    );
-    let Some(request) = plan else {
-        return Ok(Json(st.search.playlists(&q, page, limit).await?).into_response());
-    };
-    let live = st
-        .live_search
-        .page(&request, |local_page| {
-            st.search.playlists(&q, local_page, request.limit)
-        })
-        .await?;
-    Ok(live.into_response())
+    Ok(Json(st.search.playlists(&q, page, limit).await?))
 }
 
 async fn create(

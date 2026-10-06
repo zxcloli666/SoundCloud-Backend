@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const REACHES_SOUNDCLOUD: [&str; 11] = [
+const REACHES_SOUNDCLOUD: [&str; 10] = [
     "ScReadService",
     "ScClient",
     "api_get_value",
@@ -12,32 +12,18 @@ const REACHES_SOUNDCLOUD: [&str; 11] = [
     "st.sc.",
     "self.read.",
     "self.sc.",
-    "st.live_search.",
 ];
 
-const ALLOWED: [(&str, &str); 6] = [
+const ALLOWED: [(&str, &str); 5] = [
     (
         "auth",
         "AUTH_CONTROL: login, token exchange, explicit refresh",
     ),
     (
         "tracks",
-        "USER_PRIVATE: secret_token detail and the stream token readiness check; \
-         SEARCH_LIVE: page 0 of /tracks?q= through live_search",
+        "USER_PRIVATE: secret_token detail and the stream token readiness check",
     ),
-    (
-        "playlists",
-        "USER_PRIVATE: secret_token detail; SEARCH_LIVE: page 0 of /playlists?q= through \
-         live_search",
-    ),
-    (
-        "live_search",
-        "SEARCH_LIVE: page 0 of ?q= on /tracks /playlists /users and the YM import when the \
-         local page is thin, an empty /search/db/tracks page 0 behind SEARCH_LIVE_DB_RESCUE, \
-         /search/match for the YM import when the catalog has no confident match, and one inline \
-         read of a track or playlist nobody has sighted behind ENTITY_MISS_INLINE; cached, \
-         budgeted, breaker-guarded",
-    ),
+    ("playlists", "USER_PRIVATE: secret_token detail"),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
     (
         "admin",
@@ -118,7 +104,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 66] = [
+const CLASSIFIED_ROUTES: [&str; 63] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -174,8 +160,6 @@ const CLASSIFIED_ROUTES: [&str; 66] = [
     "/playlists/{playlist_urn}/sharing",
     "/playlists/{playlist_urn}/tracks",
     "/resolve",
-    "/search/db/tracks",
-    "/search/match",
     "/tracks",
     "/tracks/{track_urn}",
     "/tracks/{track_urn}/comments",
@@ -184,7 +168,6 @@ const CLASSIFIED_ROUTES: [&str; 66] = [
     "/tracks/{track_urn}/reposters",
     "/tracks/{track_urn}/sharing",
     "/tracks/{track_urn}/stream",
-    "/users",
 ];
 
 fn routes_of_allowed_families() -> Vec<String> {

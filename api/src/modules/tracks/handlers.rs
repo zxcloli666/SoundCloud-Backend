@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
@@ -14,8 +13,6 @@ use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
-use crate::modules::likes::cold::apply_user_favorite_flag;
-use crate::modules::live_search::{LiveKind, LiveParams, plain_tracks};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -58,33 +55,18 @@ struct StreamProxyQuery {
 async fn search(
     State(st): State<AppState>,
     ctx: SessionCtx,
-    headers: HeaderMap,
     Query(p): Query<PaginationQuery>,
     Query(q): Query<crate::modules::search::query::TrackSearchQuery>,
-    Query(shape): Query<LiveParams>,
-) -> AppResult<Response> {
+) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    let plan = st.live_search.plan(
-        LiveKind::Tracks,
-        plain_tracks(&q),
-        &headers,
-        &p,
-        shape.linked(),
+    let mut result = st.search.tracks(&q, page, limit).await?;
+    crate::modules::likes::cold::apply_user_favorite_flag(
+        &st.pg,
         &ctx.sc_user_id,
-    );
-    let Some(request) = plan else {
-        let mut result = st.search.tracks(&q, page, limit).await?;
-        apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut result.collection).await?;
-        return Ok(Json(result).into_response());
-    };
-    let mut live = st
-        .live_search
-        .page(&request, |local_page| {
-            st.search.tracks(&q, local_page, request.local_limit)
-        })
-        .await?;
-    apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut live.page.collection).await?;
-    Ok(live.into_response())
+        &mut result.collection,
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 async fn get_by_id(

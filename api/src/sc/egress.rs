@@ -140,24 +140,4 @@ mod tests {
             "a withdrawn outage must free the other process without waiting out the cooldown"
         );
     }
-
-    #[sqlx::test(migrations = "./migrations")]
-    async fn a_recovery_never_withdraws_a_longer_rate_limit_cooldown(pg: PgPool) {
-        let store = PgEgressHealth::new(pg.clone());
-        let serving = process("api", "search_live", &pg);
-
-        trip(&serving).await;
-        store
-            .publish_open("search_live", "api", Duration::from_secs(300))
-            .await;
-        serving.observe(&RelayRead::<()>::Found(())).await;
-
-        match store.remaining("search_live").await {
-            EgressState::Open(left) => assert!(
-                left > Duration::from_secs(290),
-                "a rate-limit cooldown must outlive the recovery of a short trip, saw {left:?}"
-            ),
-            other => panic!("the rate-limit cooldown was withdrawn: {other:?}"),
-        }
-    }
 }

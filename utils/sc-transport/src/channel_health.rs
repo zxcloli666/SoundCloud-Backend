@@ -24,10 +24,6 @@ impl ChannelHealth {
         now_ms() < self.open_until_ms.load(Ordering::Acquire)
     }
 
-    pub fn open_for(&self) -> Option<Duration> {
-        left_until(self.open_until_ms.load(Ordering::Acquire))
-    }
-
     pub fn record_ok(&self) -> Trip {
         self.consecutive_bans.store(0, Ordering::Release);
         if self.open_until_ms.swap(0, Ordering::AcqRel) > now_ms() {
@@ -60,11 +56,6 @@ impl ChannelHealth {
             self.record_ok()
         }
     }
-}
-
-pub(crate) fn left_until(until_ms: i64) -> Option<Duration> {
-    let left = until_ms - now_ms();
-    (left > 0).then(|| Duration::from_millis(left.unsigned_abs()))
 }
 
 pub(crate) fn now_ms() -> i64 {

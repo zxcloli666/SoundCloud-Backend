@@ -13,8 +13,6 @@ pub struct AppConfig {
     pub admin: AdminCfg,
     pub redis: RedisCfg,
     pub admission: AdmissionCfg,
-    pub live_search: LiveSearchCfg,
-    pub entity_miss_inline: bool,
     pub nats: NatsCfg,
     pub qdrant: QdrantCfg,
     pub storage: StorageCfg,
@@ -117,12 +115,6 @@ pub struct AdmissionCfg {
     pub login: AdmissionLimitCfg,
     pub link_create: AdmissionLimitCfg,
     pub resolve: AdmissionLimitCfg,
-    pub live_main: AdmissionLimitCfg,
-    pub live_side: AdmissionLimitCfg,
-    pub live_import: AdmissionLimitCfg,
-    pub live_rescue: AdmissionLimitCfg,
-    pub live_proxy: AdmissionLimitCfg,
-    pub live_entity: AdmissionLimitCfg,
 }
 
 impl AdmissionCfg {
@@ -130,12 +122,6 @@ impl AdmissionCfg {
         let login = admission_limit("AUTH_LOGIN", 15, 300);
         let link_create = admission_limit("AUTH_LINK_CREATE", 30, 600);
         let resolve = admission_limit("RESOLVE", 60, 1200);
-        let live_main = admission_limit("SEARCH_LIVE_MAIN", 10, 60);
-        let live_side = admission_limit("SEARCH_LIVE_SIDE", 6, 30);
-        let live_import = admission_limit("SEARCH_LIVE_IMPORT", 20, 40);
-        let live_rescue = admission_limit("SEARCH_LIVE_RESCUE", 4, 20);
-        let live_proxy = admission_limit("SEARCH_LIVE_PROXY", 20, 20);
-        let live_entity = admission_limit("ENTITY_MISS_INLINE", 10, 60);
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -145,52 +131,6 @@ impl AdmissionCfg {
             login,
             link_create,
             resolve,
-            live_main,
-            live_side,
-            live_import,
-            live_rescue,
-            live_proxy,
-            live_entity,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LiveMode {
-    Off,
-    Explicit,
-    Auto,
-}
-
-impl LiveMode {
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "off" => Some(Self::Off),
-            "explicit" => Some(Self::Explicit),
-            "auto" => Some(Self::Auto),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct LiveSearchCfg {
-    pub mode: LiveMode,
-    pub db_rescue: bool,
-    pub max_in_flight: usize,
-    pub ranked: bool,
-}
-
-impl LiveSearchCfg {
-    fn from_env() -> Self {
-        let mode = env_str("SEARCH_LIVE_MODE", "auto");
-        Self {
-            mode: LiveMode::parse(&mode)
-                .unwrap_or_else(|| panic!("SEARCH_LIVE_MODE must be off, explicit or auto")),
-            db_rescue: env_str("SEARCH_LIVE_DB_RESCUE", "false") == "true",
-            max_in_flight: usize::try_from(admission_value("SEARCH_LIVE_MAX_IN_FLIGHT", 8))
-                .expect("SEARCH_LIVE_MAX_IN_FLIGHT is too large"),
-            ranked: env_str("SEARCH_RANKED", "true") == "true",
         }
     }
 }
@@ -338,10 +278,6 @@ impl AppConfig {
 
             admission: AdmissionCfg::from_env(),
 
-            live_search: LiveSearchCfg::from_env(),
-
-            entity_miss_inline: env_str("ENTITY_MISS_INLINE", "false") == "true",
-
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),
             },
@@ -462,16 +398,6 @@ mod tests {
         assert_eq!(opts.get_port(), 5433);
         assert_eq!(opts.get_username(), "us er");
         assert_eq!(opts.get_database(), Some("sc-ops"));
-    }
-
-    #[test]
-    fn the_live_search_mode_accepts_only_its_three_names() {
-        assert_eq!(LiveMode::parse("off"), Some(LiveMode::Off));
-        assert_eq!(LiveMode::parse(" explicit "), Some(LiveMode::Explicit));
-        assert_eq!(LiveMode::parse("auto"), Some(LiveMode::Auto));
-        for typo in ["", "of", "Auto", "on", "true"] {
-            assert_eq!(LiveMode::parse(typo), None, "{typo:?}");
-        }
     }
 
     #[test]

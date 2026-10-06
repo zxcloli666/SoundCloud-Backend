@@ -60,7 +60,6 @@ use crate::modules::featured::FeaturedService;
 use crate::modules::history::HistoryService;
 use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
-use crate::modules::live_search::{EntityMiss, LiveSearch, LiveStash};
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
@@ -165,18 +164,6 @@ async fn main() {
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 
     let cache = CacheService::new(redis_pool.clone());
-    let live_admission = PublicAdmission::for_live_search(
-        redis::connect_admission(&config).expect("Failed to create live search Redis pool"),
-        config.admission.clone(),
-    );
-    let live_stash = if config.entity_miss_inline {
-        LiveStash::with_inline_reads(
-            cache.clone(),
-            EntityMiss::new(resolve.clone(), live_admission.clone(), pg.clone()),
-        )
-    } else {
-        LiveStash::new(cache.clone())
-    };
     let background_jobs = crate::background_jobs::BackgroundJobs::new(nats.clone());
     let indexing_jobs = crate::background_jobs::IndexingJobs::new(background_jobs.clone());
     let collab_jobs = crate::background_jobs::CollabJobs::new(
@@ -215,7 +202,6 @@ async fn main() {
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
-        live_stash: live_stash.clone(),
     });
     let playlists = PlaylistsService::new(PlaylistsDeps {
         sc: sc.clone(),
@@ -224,24 +210,10 @@ async fn main() {
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
         background_jobs: background_jobs.clone(),
-        live_stash: live_stash.clone(),
     });
-    let users = UsersService::new(pg.clone(), cold_refresh.clone(), live_stash);
+    let users = UsersService::new(pg.clone(), cold_refresh.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
-    let search = SearchService::new(pg.clone(), cache.clone(), config.live_search.ranked);
-    let live_search = LiveSearch::new(
-        resolve.clone(),
-        cache.clone(),
-        live_admission,
-        pg.clone(),
-        config.live_search,
-    );
-    info!(
-        mode = ?config.live_search.mode,
-        ranked = config.live_search.ranked,
-        entity_miss_inline = config.entity_miss_inline,
-        "live search ready"
-    );
+    let search = SearchService::new(pg.clone(), cache.clone());
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
@@ -253,7 +225,6 @@ async fn main() {
         config.max_track_duration_ms,
     );
     cold_refresh.install_indexing(indexing.clone());
-    live_search.install_indexing(indexing.clone());
 
     let likes = LikesService::new(
         pg.clone(),
@@ -296,7 +267,6 @@ async fn main() {
         likes,
         resolve,
         search,
-        live_search,
         vibe,
         history,
         featured,

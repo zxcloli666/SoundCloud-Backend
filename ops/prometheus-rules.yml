@@ -13,17 +13,17 @@ groups:
           description: "No api_* series for 10 minutes. The exporter emits every lane at zero rather than omitting it, so an absent series means a dead process or a broken scrape, never an idle one."
 
       - alert: ApiLatencyDegraded
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics|db/tracks)|/tracks|/users|/playlists"}[5m]))) > 0.25
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 0.25
         for: 10m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "p99 on {{ $labels.route }} is above 250ms"
-          description: "Measured release-build p99 on the stand is 15-22ms across read routes, auth burst and mixed load. 250ms is more than ten times that, so this is a regression rather than noise. Semantic search is excluded on purpose: a cold query waits for the encoder. The legacy search routes and /search/db/tracks are excluded too: their page 0 may wait for SoundCloud (the old-client rescue behind SEARCH_LIVE_DB_RESCUE) or for the ranked candidate phases, and ApiLiveSearchSlow watches them."
+          description: "Measured release-build p99 on the stand is 15-22ms across read routes, auth burst and mixed load. 250ms is more than ten times that, so this is a regression rather than noise. Semantic search is excluded on purpose: a cold query waits for the encoder."
 
       - alert: ApiLatencyCritical
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics|db/tracks)|/tracks|/users|/playlists"}[5m]))) > 1
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 1
         for: 5m
         labels:
           severity: critical
@@ -160,56 +160,6 @@ groups:
         annotations:
           summary: "Sustained traffic to paths nobody routes"
           description: "Every unrouted request lands on the single unmatched label, so this cannot explode cardinality. Threshold is not derived from a production baseline yet, tune it on the first week of real traffic."
-
-      - alert: ApiLiveSearchSlow
-        expr: histogram_quantile(0.95, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~"/tracks|/users|/playlists|/search/db/tracks"}[5m]))) > 3.5
-        for: 10m
-        labels:
-          severity: warning
-          service: api
-        annotations:
-          summary: "p95 on {{ $labels.route }} is above 3.5s"
-          description: "A live page waits 600ms for the local page and then at most one class budget of 2.5-4.5s for SoundCloud. A p95 above 3.5s means most pages run into the budget, so SoundCloud or the relay is slow."
-
-      - alert: ApiLiveSearchRateLimited
-        expr: sum(increase(api_live_search_fetch_total{outcome="rate_limited"}[5m])) > 5
-        for: 1m
-        labels:
-          severity: warning
-          service: api
-        annotations:
-          summary: "SoundCloud rate-limits live search"
-          description: "Every 429 or ban on the proxy tier cools search_live for 2-15 minutes on both nodes. More than five in five minutes means the budgets are too generous for the egress we have."
-
-      - alert: ApiLiveSearchGateClosed
-        expr: max by (gate) (api_live_search_gate_closed) == 1
-        for: 10m
-        labels:
-          severity: warning
-          service: api
-        annotations:
-          summary: "Live search is held by the {{ $labels.gate }} gate"
-          description: "pause is the search_live_pause row an operator inserted into sc_egress_health; breaker is search_live, opened by four silent searches in a row or by a 429. Pages fall back to cached windows and local rows."
-
-      - alert: ApiLiveSearchLimited
-        expr: sum(rate(api_live_search_requests_total{state="limited"}[15m])) / sum(rate(api_live_search_requests_total[15m])) > 0.3
-        for: 15m
-        labels:
-          severity: warning
-          service: api
-        annotations:
-          summary: "Almost a third of live searches hit their budget"
-          description: "Listeners see local rows instead of SoundCloud. Raise SEARCH_LIVE_*_GLOBAL if the egress allows it, or keep it and accept the thinner pages."
-
-      - alert: ApiRedisMemoryHigh
-        expr: max by (instance) (api_redis_memory_bytes{kind="used"}) / max by (instance) (api_redis_memory_bytes{kind="max"} > 0) > 0.8
-        for: 15m
-        labels:
-          severity: warning
-          service: api
-        annotations:
-          summary: "Redis behind {{ $labels.instance }} is above 80% of maxmemory"
-          description: "The api samples INFO memory on every scrape. Live search windows, ranked lists and page caches share this Redis under allkeys-lru, so a full Redis evicts windows early and live search starts paying SoundCloud for repeats. Main runs 384mb and star 512mb; raise main to 512mb or lower the live search budgets."
 
   - name: scd-jobs
     interval: 30s

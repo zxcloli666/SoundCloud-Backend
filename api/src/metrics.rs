@@ -4,8 +4,6 @@ use std::time::Duration;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
-use crate::cache::CacheService;
-
 const REQUEST_DURATION: &str = "api_http_request_duration_seconds";
 const REQUESTS_TOTAL: &str = "api_http_requests_total";
 const DEPENDENCY_DURATION: &str = "api_dependency_call_duration_seconds";
@@ -16,18 +14,8 @@ const SC_TIER_DURATION: &str = "api_sc_tier_call_duration_seconds";
 const SC_RELAY_BREAKER_OPEN: &str = "api_sc_relay_breaker_open";
 const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
-const SEARCH_FAILURES: &str = "api_search_failures_total";
-const SEARCH_WEAK: &str = "api_search_weak_total";
-const SEARCH_PHASE: &str = "api_search_phase_seconds";
-const LIVE_REQUESTS: &str = "api_live_search_requests_total";
-const LIVE_FETCHES: &str = "api_live_search_fetch_total";
-const LIVE_GATE_CLOSED: &str = "api_live_search_gate_closed";
-const LIVE_ADOPTS: &str = "api_live_search_adopt_total";
-const LIVE_WINDOW_BYTES: &str = "api_live_search_window_bytes_total";
-const ENTITY_MISS_READS: &str = "api_entity_miss_inline_total";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const PG_BACKENDS: &str = "api_pg_backends";
-const REDIS_MEMORY: &str = "api_redis_memory_bytes";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
 const PG_DEADLOCKS: &str = "api_pg_deadlocks_total";
 const PG_BLOCKS: &str = "api_pg_blocks_total";
@@ -67,9 +55,6 @@ pub fn init() {
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(Matcher::Full(POOL_WAIT.to_owned()), POOL_WAIT_BUCKETS)
-        })
-        .and_then(|builder| {
-            builder.set_buckets_for_metric(Matcher::Full(SEARCH_PHASE.to_owned()), LATENCY_BUCKETS)
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(
@@ -167,71 +152,6 @@ pub fn record_sc_failure(error: &crate::error::AppError) {
     }
 }
 
-pub fn record_search_failure(code: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(SEARCH_FAILURES, "code" => code).increment(1);
-}
-
-pub fn record_search_weak() {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(SEARCH_WEAK).increment(1);
-}
-
-pub fn record_search_phase(phase: &'static str, elapsed: Duration) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::histogram!(SEARCH_PHASE, "phase" => phase).record(elapsed.as_secs_f64());
-}
-
-pub fn record_live_request(kind: &'static str, class: &'static str, state: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(LIVE_REQUESTS, "kind" => kind, "class" => class, "state" => state)
-        .increment(1);
-}
-
-pub fn record_live_fetch(kind: &'static str, tier: &'static str, outcome: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(LIVE_FETCHES, "kind" => kind, "tier" => tier, "outcome" => outcome)
-        .increment(1);
-}
-
-pub fn set_live_gate_closed(gate: &'static str, closed: bool) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::gauge!(LIVE_GATE_CLOSED, "gate" => gate).set(f64::from(u8::from(closed)));
-}
-
-pub fn record_live_adopt(entity: &'static str, outcome: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(LIVE_ADOPTS, "entity" => entity, "outcome" => outcome).increment(1);
-}
-
-pub fn record_entity_miss_read(entity: &'static str, outcome: &'static str) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(ENTITY_MISS_READS, "entity" => entity, "outcome" => outcome).increment(1);
-}
-
-pub fn record_live_window_bytes(bytes: usize) {
-    if HANDLE.get().is_none() {
-        return;
-    }
-    metrics::counter!(LIVE_WINDOW_BYTES).increment(bytes as u64);
-}
-
 pub fn record_taste_vector_read_error() {
     if HANDLE.get().is_none() {
         return;
@@ -270,7 +190,7 @@ pub fn render_for_tests() -> Option<String> {
     HANDLE.get().map(PrometheusHandle::render)
 }
 
-pub async fn render(pool: &PgPool, cache: &CacheService) -> Option<String> {
+pub async fn render(pool: &PgPool) -> Option<String> {
     let handle = HANDLE.get()?;
     let size = f64::from(pool.size());
     let idle = pool.num_idle() as f64;
@@ -279,15 +199,7 @@ pub async fn render(pool: &PgPool, cache: &CacheService) -> Option<String> {
     metrics::gauge!(POOL_CONNECTIONS, "state" => "busy").set((size - idle).max(0.0));
     sample_pool_wait(pool).await;
     sample_database(pool).await;
-    if let Some((used, max)) = cache.memory().await {
-        set_redis_memory(used, max);
-    }
     Some(handle.render())
-}
-
-pub fn set_redis_memory(used: u64, max: u64) {
-    metrics::gauge!(REDIS_MEMORY, "kind" => "used").set(used as f64);
-    metrics::gauge!(REDIS_MEMORY, "kind" => "max").set(max as f64);
 }
 
 pub async fn sample_pool_wait(pool: &PgPool) {

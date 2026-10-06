@@ -65,10 +65,6 @@ fn invalid_payload() -> AppError {
     )
 }
 
-fn is_share_tracking(key: &str) -> bool {
-    matches!(key, "si" | "in" | "ref" | "p" | "c" | "in_system_playlist") || key.starts_with("utm_")
-}
-
 pub(super) struct ResolveInput {
     pub upstream: String,
     pub entity: Option<EntityKey>,
@@ -113,8 +109,10 @@ impl ResolveInput {
         let segments: Vec<_> = url.path_segments().into_iter().flatten().collect();
         let secret_path = matches!(segments.as_slice(), [_, _, secret] if secret.starts_with("s-"))
             || matches!(segments.as_slice(), [_, "sets", _, secret] if secret.starts_with("s-"));
-        let requires_upstream =
-            secret_path || url.query_pairs().any(|(key, _)| !is_share_tracking(&key));
+        let requires_upstream = secret_path
+            || url
+                .query_pairs()
+                .any(|(key, _)| key != "si" && !key.starts_with("utm_"));
         let mut permalinks = Vec::new();
         if !requires_upstream {
             url.set_query(None);
