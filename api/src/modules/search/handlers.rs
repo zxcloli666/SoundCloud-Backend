@@ -6,7 +6,6 @@ use serde_json::Value;
 
 use crate::cache::ListPageResult;
 use crate::common::pagination::PaginationQuery;
-use crate::common::query::parse_languages;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::search::lyrics::{LyricsMode, LyricsSearchResponse};
@@ -30,8 +29,6 @@ struct VibeQuery {
     q: Option<String>,
     #[serde(default)]
     limit: Option<String>,
-    #[serde(default)]
-    languages: Option<String>,
 }
 
 async fn vibe(
@@ -40,12 +37,7 @@ async fn vibe(
     Query(q): Query<VibeQuery>,
 ) -> AppResult<Json<VibeResponse>> {
     let limit = q.limit.as_deref().and_then(|s| s.parse::<usize>().ok());
-    let languages = parse_languages(q.languages.as_deref());
-    Ok(Json(
-        st.vibe
-            .vibe(&q.q.unwrap_or_default(), limit, languages.as_deref())
-            .await?,
-    ))
+    Ok(Json(st.vibe.vibe(&q.q.unwrap_or_default(), limit).await?))
 }
 
 #[derive(Debug, Deserialize)]

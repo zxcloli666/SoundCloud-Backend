@@ -336,7 +336,7 @@ async fn load_lyrics_vector_eligibility(
     })
 }
 
-async fn load_public_track_ids(
+pub(crate) async fn load_public_track_ids(
     pool: &sqlx::PgPool,
     ids: &[String],
 ) -> Result<HashSet<String>, sqlx::Error> {
@@ -531,7 +531,8 @@ mod tests {
                  index_state text NOT NULL,
                  storage_state text NOT NULL,
                  needs_duration_resolve boolean NOT NULL,
-                 superseded_by uuid
+                 superseded_by uuid,
+                 deleted_at timestamptz
              );
              INSERT INTO tracks (sc_track_id, sharing, index_state, storage_state, needs_duration_resolve)
              VALUES ('1', 'public', 'indexed', 'ok', false)",

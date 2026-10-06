@@ -27,6 +27,7 @@ pub const MAX_ENCODE_TEXT_CHARS: usize = MAX_ENCODE_TEXT_BYTES as usize / 4;
 
 const VEC_CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 const ENCODE_DEDUP_WINDOW_SECS: u64 = 15 * 60;
+const ENCODE_CLAIM_SECS: u64 = 60;
 const FAILURE_ANSWER_SECS: i64 = 60;
 const ENCODE_WAIT: Duration = Duration::from_secs(10);
 const CACHE_RECHECK: Duration = Duration::from_millis(500);
@@ -244,7 +245,7 @@ impl EncodeStores for WorkerClient {
 
     async fn claim(&self, inflight_key: &str) -> bool {
         self.cache
-            .try_acquire_lock(inflight_key, ENCODE_DEDUP_WINDOW_SECS)
+            .try_acquire_lock(inflight_key, ENCODE_CLAIM_SECS)
             .await
             .unwrap_or(true)
     }
@@ -295,7 +296,10 @@ async fn encode<S: EncodeStores>(
     let attempt = EncodeFailure::next_attempt(failure.as_ref());
     let request = request_encoding(stores, target, &text, &hash, &keys, attempt).await;
     if request == Request::Unpublished {
-        return EncodeOutcome::Preparing;
+        return EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
+            reason: None,
+        };
     }
     if request == Request::HeldElsewhere
         && let Some(vector) = stored_vector(stores, target, &hash, &keys).await
@@ -355,7 +359,10 @@ async fn request_encoding<S: EncodeStores>(
         hash: hash.to_owned(),
     };
     match stores
-        .publish(&request, &message_id(target, hash, attempt))
+        .publish(
+            &request,
+            &message_id(target, hash, attempt, claim_round(unix_now())),
+        )
         .await
     {
         Ok(()) => Request::Published,
@@ -829,13 +836,17 @@ fn result_key(model: EncodeModel, hash: &str) -> String {
     format!("{}:{hash}", model.as_str())
 }
 
-fn message_id(target: &EncodeTarget, hash: &str, attempt: u32) -> String {
-    let first = result_key(target.model, hash);
+fn message_id(target: &EncodeTarget, hash: &str, attempt: u32, round: i64) -> String {
+    let first = format!("{}:{round}", result_key(target.model, hash));
     if attempt == 0 {
         first
     } else {
         format!("{first}:retry{attempt}")
     }
+}
+
+fn claim_round(now: i64) -> i64 {
+    now.div_euclid(ENCODE_CLAIM_SECS as i64)
 }
 
 fn unix_now() -> i64 {
@@ -1041,7 +1052,14 @@ mod tests {
         }
 
         fn published(&self) -> Vec<String> {
-            guard(&self.published).clone()
+            guard(&self.published)
+                .iter()
+                .map(|id| {
+                    let mut parts: Vec<&str> = id.split(':').collect();
+                    parts.remove(2);
+                    parts.join(":")
+                })
+                .collect()
         }
 
         fn locked(&self, key: &str) -> bool {
@@ -1101,6 +1119,39 @@ mod tests {
         fn results(&self) -> &Arc<ResultFeed> {
             &self.results
         }
+    }
+
+    fn unpublished() -> EncodeOutcome {
+        EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
+            reason: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_that_expired_is_published_again_under_a_new_round() {
+        let stores = FakeStores::default();
+        let hash = text_hash("rain");
+        let keys = EncodeKeys::new(&MULAN, &hash);
+
+        assert_eq!(
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Preparing
+        );
+        guard(&stores.locks).remove(&keys.inflight);
+        assert_eq!(
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Preparing
+        );
+
+        assert_eq!(guard(&stores.published).len(), 2);
+        assert_eq!(ENCODE_CLAIM_SECS, 60);
+        assert_ne!(
+            message_id(&MULAN, &hash, 0, claim_round(1_000)),
+            message_id(&MULAN, &hash, 0, claim_round(1_060)),
+            "a republish after the claim expired must not be swallowed by the stream's dedup window"
+        );
+        assert_eq!(claim_round(1_000), claim_round(1_019));
     }
 
     async fn answer_after(source: &FakeSource, after: Duration, payload: Vec<u8>) {
@@ -1359,10 +1410,7 @@ mod tests {
         };
         stores.keep(&hash, Some(BGE_M3), 1024);
 
-        assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Preparing
-        );
+        assert_eq!(encode(&stores, &LYRICS, "rain").await, unpublished());
         assert!(!guard(&stores.cache).contains_key(&keys.cache));
 
         stores.keep(&hash, Some(QWEN), 1024);
@@ -1419,7 +1467,7 @@ mod tests {
             EncodeOutcome::Preparing
         );
         assert_eq!(stores.published(), vec![format!("lyrics:{hash}:retry1")]);
-        assert_eq!(message_id(&LYRICS, &hash, 0), format!("lyrics:{hash}"));
+        assert_eq!(message_id(&LYRICS, &hash, 0, 7), format!("lyrics:{hash}:7"));
     }
 
     #[test]
@@ -1453,10 +1501,7 @@ mod tests {
         let keys = EncodeKeys::new(&LYRICS, &hash);
 
         let started = Instant::now();
-        assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Preparing
-        );
+        assert_eq!(encode(&stores, &LYRICS, "rain").await, unpublished());
         assert!(
             started.elapsed() < CACHE_RECHECK,
             "an unpublished job was waited on for {:?}",

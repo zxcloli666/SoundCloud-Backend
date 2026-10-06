@@ -87,7 +87,7 @@ fn fresh(base: &str) -> String {
 }
 
 async fn ask(vibe: &VibeSearchService, query: &str) -> anyhow::Result<VibeResponse> {
-    Ok(Box::pin(vibe.vibe(query, Some(LIMIT), None)).await?)
+    Ok(Box::pin(vibe.vibe(query, Some(LIMIT))).await?)
 }
 
 fn ids(page: &VibeResponse) -> Vec<String> {

@@ -132,7 +132,7 @@ impl VibeSearchService {
             return Ok(Vec::new());
         }
         let rows: Vec<TrackRow> = sqlx::query_as(
-            "SELECT * FROM tracks WHERE sc_track_id = ANY($1) AND sharing = 'public'",
+            "SELECT * FROM tracks WHERE sc_track_id = ANY($1) AND sharing = 'public' AND deleted_at IS NULL",
         )
         .bind(ids)
         .fetch_all(&self.pg)
@@ -310,23 +310,18 @@ mod tests {
         assert_ne!(base, lyrics_res_key("rains", LyricsMode::Text, 0, 20));
         assert_eq!(base, lyrics_res_key("rain", LyricsMode::Text, 0, 20));
 
-        let vibe = vibe_res_key("rain", 24, "en");
-        assert_ne!(vibe, vibe_res_key("rain", 24, "ru"));
-        assert_ne!(vibe, vibe_res_key("rain", 25, "en"));
+        let vibe = vibe_res_key("rain", 24);
+        assert_ne!(vibe, vibe_res_key("rain", 25));
+        assert_ne!(vibe, vibe_res_key("rains", 24));
         assert!(
-            vibe.starts_with("vibe:res:v2:") && base.starts_with("lyrics:res:v4:"),
+            vibe.starts_with("vibe:res:v3:") && base.starts_with("lyrics:res:v4:"),
             "the two searches must not share a key space"
         );
     }
 
     #[test]
     fn a_query_carrying_the_separator_cannot_steal_another_requests_answer() {
-        assert_ne!(
-            vibe_res_key("rain|24", 24, "en"),
-            vibe_res_key("rain", 24, "24|en"),
-            "both the query and the language list come from the caller: \
-             they must not be able to spell the same key"
-        );
+        assert_ne!(vibe_res_key("rain|24", 24), vibe_res_key("rain", 2424));
         assert_ne!(
             lyrics_res_key("rain|text", LyricsMode::Auto, 0, 20),
             lyrics_res_key("rain", LyricsMode::Text, 0, 20)
