@@ -114,7 +114,7 @@ impl CookiesPool {
         track_urn: &str,
         hq_only: bool,
     ) -> Result<Option<CookieStreamResult>, BoxErr> {
-        self.try_rotate(false, |client| async move {
+        self.try_rotate(true, |client| async move {
             client.get_stream(track_urn, hq_only).await
         })
         .await

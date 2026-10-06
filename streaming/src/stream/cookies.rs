@@ -74,7 +74,11 @@ impl CookiesClient {
     ) -> Result<Option<CookieStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
-        let track = self.anon.get_track_by_id(track_id).await?;
+        let track = self
+            .anon
+            .get_track_by_id(track_id)
+            .await
+            .map_err(|err| format!("anon track lookup failed ({err})"))?;
         let permalink = match track.permalink_url {
             Some(ref p) => p.clone(),
             None => {
@@ -106,7 +110,7 @@ impl CookiesClient {
 
         if full.is_empty() {
             debug!("[cookies] no full transcodings for {track_id}");
-            return Ok(None);
+            return Err("cookies: previews only, status 401".into());
         }
 
         let is_encrypted = |t: &&Transcoding| {
