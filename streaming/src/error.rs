@@ -11,6 +11,8 @@ pub enum AppError {
     Forbidden,
     #[error("no stream available")]
     NoStream,
+    #[error("timed out")]
+    Timeout,
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -22,6 +24,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::NoStream => (StatusCode::NOT_FOUND, self.to_string()),
+            AppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, self.to_string()),
             AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
         (status, serde_json::json!({"error": msg}).to_string()).into_response()

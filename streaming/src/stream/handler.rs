@@ -78,7 +78,7 @@ pub async fn stream(
         Err(_) => {
             warn!("[stream] {urn_for_log} → deadline {STREAM_DEADLINE:?} exceeded");
             crate::metrics::record_source("none", "deadline");
-            AppError::NoStream.into_response()
+            AppError::Timeout.into_response()
         }
     }
 }
