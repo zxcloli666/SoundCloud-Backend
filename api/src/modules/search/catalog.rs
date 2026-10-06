@@ -195,7 +195,7 @@ impl SearchService {
         let key = request.key("search-db-v2-tracks", &q, owner.as_deref());
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Catalog).await? else {
+            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Tracks).await? else {
                 return Ok(request.empty());
             };
             let ids = sqlx::query_file_scalar!(
@@ -237,7 +237,7 @@ impl SearchService {
         let key = request.key("search-db-v2-playlists", &q, owner.as_deref());
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Catalog).await? else {
+            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -268,7 +268,7 @@ impl SearchService {
         let key = request.key("search-db-v2-users", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Catalog).await? else {
+            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -302,7 +302,7 @@ impl SearchService {
         let key = request.key("search-db-v2-artists", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Catalog).await? else {
+            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -331,7 +331,7 @@ impl SearchService {
         let key = request.key("search-db-v2-albums", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Catalog).await? else {
+            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(

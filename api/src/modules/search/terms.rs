@@ -46,14 +46,15 @@ const VARIANTS: &[&str] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
-    Catalog,
+    Tracks,
+    Entities,
     Lyrics,
 }
 
 impl Shape {
     fn token_cap(self) -> i64 {
         match self {
-            Self::Catalog => CATALOG_GROUPS as i64,
+            Self::Tracks | Self::Entities => CATALOG_GROUPS as i64,
             Self::Lyrics => LYRICS_TOKENS,
         }
     }
@@ -113,7 +114,15 @@ pub fn build(rows: &[TermRow], shape: Shape) -> Option<Terms> {
     let variant = VARIANTS
         .iter()
         .any(|word| format!(" {spoken} ").contains(&format!(" {word} ")));
-    let mut required: Vec<&Group> = groups.iter().filter(|group| is_required(group)).collect();
+    let backed = groups
+        .iter()
+        .any(|group| is_word(group) && is_listed(group));
+    let mut required: Vec<&Group> = groups
+        .iter()
+        .filter(|group| {
+            is_word(group) && (is_listed(group) || (shape == Shape::Entities && backed))
+        })
+        .collect();
     if required.is_empty() {
         let longest = groups
             .iter()
@@ -121,7 +130,7 @@ pub fn build(rows: &[TermRow], shape: Shape) -> Option<Terms> {
         required.push(longest);
     }
     let limit = match shape {
-        Shape::Catalog => CATALOG_GROUPS,
+        Shape::Tracks | Shape::Entities => CATALOG_GROUPS,
         Shape::Lyrics => LYRICS_GROUPS,
     };
     if shape == Shape::Lyrics {
@@ -135,7 +144,7 @@ pub fn build(rows: &[TermRow], shape: Shape) -> Option<Terms> {
     let clauses: Vec<String> = required.iter().map(|group| clause(group)).collect();
     let loose = match (shape, clauses.len()) {
         (_, 0 | 1) => None,
-        (Shape::Catalog, 2) => Some(clauses.join(" | ")),
+        (Shape::Tracks | Shape::Entities, 2) => Some(clauses.join(" | ")),
         (Shape::Lyrics, 2) => None,
         _ => Some(all_but_one(&clauses)),
     };
@@ -189,10 +198,12 @@ fn groups(rows: &[TermRow]) -> Vec<Group> {
         .collect()
 }
 
-fn is_required(group: &Group) -> bool {
-    group.lexeme.chars().count() > 1
-        && (group.known || group.corrected)
-        && !NOISE.contains(&group.lexeme.as_str())
+fn is_word(group: &Group) -> bool {
+    group.lexeme.chars().count() > 1 && !NOISE.contains(&group.lexeme.as_str())
+}
+
+fn is_listed(group: &Group) -> bool {
+    group.known || group.corrected
 }
 
 fn clause(group: &Group) -> String {
