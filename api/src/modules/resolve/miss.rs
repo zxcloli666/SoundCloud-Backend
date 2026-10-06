@@ -88,15 +88,7 @@ impl CatalogMiss {
             .fetch_all(&self.pg)
             .await?;
         let fetched: Vec<Fetched> = futures::stream::iter(missing)
-            .map(|id| async move {
-                tokio::time::timeout(
-                    ADOPT_ONE_DEADLINE,
-                    self.fetch(session, CatalogEntity::Track, &id),
-                )
-                .await
-                .ok()
-                .and_then(Result::ok)
-            })
+            .map(|id| async move { self.fetch(session, CatalogEntity::Track, &id).await.ok() })
             .buffer_unordered(ADOPT_CONCURRENCY)
             .take_until(tokio::time::sleep(ADOPT_TRACKS_DEADLINE))
             .filter_map(futures::future::ready)
@@ -171,7 +163,13 @@ impl CatalogMiss {
         {
             return Err(Adopted::Unavailable);
         }
-        self.read(session, entity, id).await.map_err(|error| {
+        let Ok(read) =
+            tokio::time::timeout(ADOPT_ONE_DEADLINE, self.read(session, entity, id)).await
+        else {
+            tracing::debug!(?entity, id, "catalog miss fetch ran out of time");
+            return Err(Adopted::Unavailable);
+        };
+        read.map_err(|error| {
             tracing::debug!(%error, ?entity, id, "catalog miss was not fetched");
             outcome_of(&error)
         })

@@ -230,3 +230,23 @@ async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyh
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_stalled_soundcloud_answers_an_opened_entity_as_unavailable_quickly(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let miss = miss_with(&pool, SearchRelay::stalled(), &redis_url(), 1000).await?;
+    let started = std::time::Instant::now();
+    assert_eq!(
+        miss.track(Uuid::now_v7(), "401", TrackPriority::Discovery)
+            .await,
+        Adopted::Unavailable
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(7),
+        "{:?}",
+        started.elapsed()
+    );
+    Ok(())
+}
