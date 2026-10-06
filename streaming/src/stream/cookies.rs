@@ -13,6 +13,8 @@ use super::restricted::Transcoding;
 
 const FAILURE_THRESHOLD: u32 = 3;
 
+pub(crate) const PREVIEWS_ONLY: &str = "cookies: previews only";
+
 pub struct CookieStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
@@ -103,14 +105,11 @@ impl CookiesClient {
 
         let track_auth = sound.track_authorization.unwrap_or_default();
 
-        let full: Vec<&Transcoding> = transcodings
-            .iter()
-            .filter(|t| !t.snipped.unwrap_or(false) && !t.url.contains("/preview"))
-            .collect();
+        let full: Vec<&Transcoding> = transcodings.iter().filter(|t| is_full(t)).collect();
 
         if full.is_empty() {
             debug!("[cookies] no full transcodings for {track_id}");
-            return Err("cookies: previews only, status 401".into());
+            return Err(PREVIEWS_ONLY.into());
         }
 
         let is_encrypted = |t: &&Transcoding| {
@@ -246,6 +245,9 @@ impl CookiesClient {
             Some(t) if !t.is_empty() => t,
             _ => return Ok(None),
         };
+        if !tcs.iter().any(is_full) {
+            return Err(PREVIEWS_ONLY.into());
+        }
         super::restricted::resolve(
             &self.client,
             &self.proxy_url,
@@ -371,6 +373,10 @@ impl CookiesClient {
             info!("[cookies] recovered after {prev} failures");
         }
     }
+}
+
+fn is_full(t: &Transcoding) -> bool {
+    !t.snipped.unwrap_or(false) && !t.url.contains("/preview")
 }
 
 fn extract_balanced_json(s: &str) -> Option<&str> {

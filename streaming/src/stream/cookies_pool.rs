@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wreq::Client;
 
 use super::anon::AnonClient;
-use super::cookies::{CookieStreamResult, CookiesClient};
+use super::cookies::{CookieStreamResult, CookiesClient, PREVIEWS_ONLY};
 use super::restricted::{RestrictedSource, Transcoding};
 use crate::config::parse_cookie_value;
 
@@ -91,6 +91,11 @@ impl CookiesPool {
                 }
                 Err(e) => {
                     let msg = e.to_string();
+                    if msg == PREVIEWS_ONLY {
+                        debug!("[cookies-pool] client #{idx} sees previews only");
+                        last_err = Some(e);
+                        continue;
+                    }
                     let cooldown = if is_rate_limited(&msg) {
                         warn!("[cookies-pool] client #{idx} rate-limited: {msg}");
                         RATE_LIMIT_COOLDOWN
@@ -114,7 +119,7 @@ impl CookiesPool {
         track_urn: &str,
         hq_only: bool,
     ) -> Result<Option<CookieStreamResult>, BoxErr> {
-        self.try_rotate(true, |client| async move {
+        self.try_rotate(false, |client| async move {
             client.get_stream(track_urn, hq_only).await
         })
         .await
@@ -168,7 +173,9 @@ fn is_rejected(msg: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_rate_limited, is_rejected};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{BoxErr, CookiesPool, PREVIEWS_ONLY, is_rate_limited, is_rejected};
 
     #[test]
     fn detects_429_variants() {
@@ -188,5 +195,56 @@ mod tests {
         assert!(!is_rejected("status 403"));
         assert!(!is_rejected("status 404"));
         assert!(!is_rejected("cookies: no transcodings"));
+        assert!(!is_rejected(PREVIEWS_ONLY));
+    }
+
+    #[tokio::test]
+    async fn previews_only_moves_on_without_a_cooldown() {
+        let cookies = [
+            "oauth_token=first".to_string(),
+            "oauth_token=second".to_string(),
+        ];
+        let pool = CookiesPool::new(wreq::Client::new(), "", &cookies);
+        let calls = AtomicUsize::new(0);
+
+        let result: Result<(), BoxErr> = pool
+            .try_rotate(true, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                async { Err(PREVIEWS_ONLY.into()) }
+            })
+            .await;
+
+        assert_eq!(result.unwrap_err().to_string(), PREVIEWS_ONLY);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        for entry in &pool.entries {
+            assert!(entry.cooldown_until.lock().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_cursor_lands_on_the_first_account_with_full_transcodings() {
+        let cookies = [
+            "oauth_token=first".to_string(),
+            "oauth_token=second".to_string(),
+            "oauth_token=third".to_string(),
+        ];
+        let pool = CookiesPool::new(wreq::Client::new(), "", &cookies);
+        let calls = AtomicUsize::new(0);
+
+        let result: Result<usize, BoxErr> = pool
+            .try_rotate(true, |_| {
+                let call = calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if call < 2 {
+                        Err(PREVIEWS_ONLY.into())
+                    } else {
+                        Ok(call)
+                    }
+                }
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), 2);
+        assert_eq!(pool.cursor.load(Ordering::Relaxed), 2);
     }
 }
