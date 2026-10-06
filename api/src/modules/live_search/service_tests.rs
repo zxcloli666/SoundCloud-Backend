@@ -512,6 +512,51 @@ async fn the_pause_row_stops_live_search_and_keeps_cached_windows(
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
+async fn a_stale_window_served_while_paused_says_when_to_ask_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let at = base();
+    let lab = harness(&pool, Script::Answers(hits(at, 4)), LiveMode::Explicit)?;
+    let phrase = lab.phrase("stale during the pause");
+    let request = lab.request(LiveKind::Tracks, &phrase, Some("sc"), Some(0), 20, false);
+    let ids: Vec<String> = (at + 2000..at + 2004)
+        .map(|id| format!("soundcloud:tracks:{id}"))
+        .collect();
+    LiveStore::new(CacheService::new(redis()))
+        .write(
+            request.class.scope(request.kind),
+            &request.query.hash,
+            &Window::new(ids, chrono::Utc::now().timestamp() - 700),
+            1800,
+            &hits(at + 2000, 4),
+            &[],
+        )
+        .await;
+    sqlx::query(
+        "INSERT INTO sc_egress_health (channel, open_until, opened_by)
+         VALUES ('search_live_pause', now() + interval '1 hour', 'ops')",
+    )
+    .execute(&pool)
+    .await?;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    let page = lab.ask(&request, Vec::new(), Duration::ZERO).await;
+
+    assert_eq!(page.state(), LiveState::Stale);
+    assert_eq!(page.page.collection.len(), 4);
+    assert!(
+        page.live
+            .retry_after_sec
+            .is_some_and(|left| left > 3600 - 60 && left <= 3600),
+        "a stale window keeps the retry hint of the gate that kept it: {:?}",
+        page.live.retry_after_sec
+    );
+    assert_eq!(lab.relay.calls(), 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn later_pages_read_the_window_and_then_continue_with_local_rows(
     pool: PgPool,
 ) -> anyhow::Result<()> {

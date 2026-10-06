@@ -77,6 +77,14 @@ impl Served {
         }
     }
 
+    fn stale(window: Window, retry_after: Option<i64>) -> Self {
+        Self {
+            window: Some(window),
+            items: Vec::new(),
+            meta: LiveMeta::new(LiveState::Stale, retry_after),
+        }
+    }
+
     fn nothing(state: LiveState, retry_after: Option<i64>) -> Self {
         Self {
             window: None,
@@ -124,6 +132,10 @@ impl LiveSearch {
             indexing: OnceLock::new(),
             cfg,
         })
+    }
+
+    pub async fn report_gates(&self) {
+        self.gate.report().await;
     }
 
     pub fn install_indexing(&self, indexing: Arc<IndexingService>) {
@@ -562,7 +574,7 @@ fn served_from(outcome: Outcome, previous: Option<Window>) -> Served {
             },
             _,
         ) => Served::window(window, items, state),
-        (Outcome::Missed(_), Some(window)) => Served::window(window, Vec::new(), LiveState::Stale),
+        (Outcome::Missed(closed), Some(window)) => Served::stale(window, closed.retry_after),
         (Outcome::Missed(closed), None) => Served::nothing(closed.state, closed.retry_after),
     }
 }
