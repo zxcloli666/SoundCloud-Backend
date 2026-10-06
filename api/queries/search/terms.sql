@@ -15,7 +15,7 @@ LEFT JOIN LATERAL (
      WHERE latin = search_latin(t.token) ORDER BY ndoc DESC LIMIT 4)
     UNION ALL
     (SELECT word, ndoc, 'near' FROM search_terms
-     WHERE latin % search_latin(t.token)
+     WHERE char_length(t.token) >= 3 AND latin % search_latin(t.token)
        AND NOT EXISTS (SELECT 1 FROM search_terms s WHERE s.latin = search_latin(t.token))
      ORDER BY similarity(latin, search_latin(t.token)) DESC, ndoc DESC LIMIT 3)
     UNION ALL

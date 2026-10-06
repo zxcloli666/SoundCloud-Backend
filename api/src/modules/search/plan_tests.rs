@@ -1,6 +1,8 @@
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 
+use super::terms::TermRow;
+
 const BIG_TABLES: &[&str] = &["tracks", "users", "playlists", "lyrics_cache"];
 
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
@@ -213,5 +215,34 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
         !seq_scans(&plan).contains(&"search_terms".to_owned()),
         "{plan}"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn short_unknown_tokens_skip_the_fuzzy_arm(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist, uploader_username,
+                             uploader_sc_user_id, duration_ms, play_count_sc, sharing)
+         SELECT n::text, 'soundcloud:tracks:' || n, 'love song', 'love song', 'band', 'band', '1', 1000, n, 'public'
+         FROM generate_series(1, 3) n;
+         REFRESH MATERIALIZED VIEW search_terms;",
+    )
+    .execute(&pool)
+    .await?;
+    let mut tx = configured(&pool).await?;
+    let rows = sqlx::query_file_as!(
+        TermRow,
+        "queries/search/terms.sql",
+        "xx lo zq yv lov band",
+        8_i64
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let near: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.kind.as_deref() == Some("near"))
+        .map(|row| row.lexeme.as_str())
+        .collect();
+    assert_eq!(near, ["lov"]);
     Ok(())
 }
