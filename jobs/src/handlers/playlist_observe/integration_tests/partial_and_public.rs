@@ -33,8 +33,8 @@ async fn seed_foreign_playlist(pool: &PgPool, sharing: &str) -> anyhow::Result<(
     .execute(pool)
     .await?;
     sqlx::query(
-        "INSERT INTO playlists (urn, owner_sc_user_id, sharing, track_count)
-         VALUES ($1, '999', $2, 3)",
+        "INSERT INTO playlists (urn, owner_sc_user_id, sharing, track_count, last_read_at)
+         VALUES ($1, '999', $2, 3, now())",
     )
     .bind(FOREIGN)
     .bind(sharing)
@@ -209,6 +209,29 @@ async fn a_private_playlist_of_a_stranger_still_waits_for_its_owner(
     .fetch_one(&pool)
     .await?;
     assert_eq!(status, "auth_required");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_public_playlist_nobody_viewed_this_week_is_not_read_on_app_tokens(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_foreign_playlist(&pool, "public").await?;
+    sqlx::query("UPDATE playlists SET last_read_at = now() - interval '8 days' WHERE urn = $1")
+        .bind(FOREIGN)
+        .execute(&pool)
+        .await?;
+    let (api_url, requests, server) = serve_foreign_playlist(vec![track(11)]).await?;
+
+    observe_foreign(&pool, api_url).await?;
+    server.abort();
+
+    assert!(
+        requests.lock().await.is_empty(),
+        "an unviewed stranger's playlist was crawled on the shared app tokens"
+    );
+    assert_eq!(foreign_state(&pool).await?.0, "auth_required");
     Ok(())
 }
 

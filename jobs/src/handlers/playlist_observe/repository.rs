@@ -238,12 +238,16 @@ impl PlaylistObserveRepository {
         Ok(ready_capture(capture))
     }
 
-    pub async fn is_public(&self, urn: &PlaylistUrn) -> Result<bool, RepositoryError> {
-        Ok(
-            sqlx::query_file_scalar!("queries/playlist_observe/is_public.sql", urn.as_str())
-                .fetch_one(&self.pool)
-                .await?,
+    pub async fn is_recently_viewed_public(
+        &self,
+        urn: &PlaylistUrn,
+    ) -> Result<bool, RepositoryError> {
+        Ok(sqlx::query_file_scalar!(
+            "queries/playlist_observe/is_recently_viewed_public.sql",
+            urn.as_str()
         )
+        .fetch_one(&self.pool)
+        .await?)
     }
 
     pub async fn persist_success(

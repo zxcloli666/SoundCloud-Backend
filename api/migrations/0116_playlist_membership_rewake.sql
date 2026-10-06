@@ -6,6 +6,11 @@ FROM playlists AS playlist
 WHERE playlist.urn = state.playlist_urn
   AND playlist.deleted_at IS NULL
   AND (
-      state.sync_status IN ('retry_wait', 'auth_required')
+      state.sync_status = 'retry_wait'
       OR state.conflict_code = 'catalog_incomplete'
+      OR (
+          state.sync_status = 'auth_required'
+          AND playlist.sharing = 'public'
+          AND playlist.last_read_at >= now() - interval '7 days'
+      )
   );

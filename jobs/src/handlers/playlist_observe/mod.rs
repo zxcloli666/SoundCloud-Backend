@@ -196,12 +196,12 @@ impl PlaylistObserveHandler {
         urn: &PlaylistUrn,
         capture: &ObservationCapture,
     ) -> JobResult {
-        let public = self
+        let readable = self
             .repository
-            .is_public(urn)
+            .is_recently_viewed_public(urn)
             .await
             .map_err(repository_job_error)?;
-        if !public {
+        if !readable {
             return self.finish_failure(capture, unauthorized_failure()).await;
         }
         let tokens = self

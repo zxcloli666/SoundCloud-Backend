@@ -144,6 +144,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              tracks_synced_at timestamptz,
              sc_last_modified timestamptz,
              sc_synced_at timestamptz NOT NULL DEFAULT now(),
+             last_read_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );
          CREATE TABLE playlist_tracks (
