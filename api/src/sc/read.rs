@@ -255,6 +255,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(e) => {
                 debug!(error = %e, "[read] apiv2-proxy resolve failed, apiv1 fallback");
                 let params = [("url".to_string(), url.to_string())];
@@ -269,6 +270,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => self.apiv1_get(kind, &format!("/tracks/{id}"), None).await,
         }
     }
@@ -279,6 +281,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => self.apiv1_get(kind, &format!("/users/{id}"), None).await,
         }
     }
@@ -286,6 +289,7 @@ impl ScReadService {
     async fn playlist_meta_chain(&self, kind: TokenKind, id: &str) -> AppResult<Value> {
         match self.proxy.playlist(id, false).await {
             Ok(v) => Ok(v),
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => {
                 self.apiv1_get(kind, &format!("/playlists/{id}"), None)
                     .await
@@ -308,4 +312,14 @@ impl ScReadService {
         })
         .await
     }
+}
+
+fn authoritative_miss(error: &sc_transport::ScError) -> bool {
+    matches!(
+        error,
+        sc_transport::ScError::Api {
+            status: 404 | 410,
+            ..
+        }
+    )
 }
