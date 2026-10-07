@@ -50,16 +50,19 @@ async fn search(
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
+    let ty = sc_transport::SearchType::Users;
+    let found = st
+        .soundcloud_search
+        .page(
+            ctx.session_id,
+            ty,
+            q.q.as_deref().unwrap_or_default(),
+            page,
+            limit,
+        )
+        .await?;
     Ok(Json(
-        st.soundcloud_search
-            .page(
-                ctx.session_id,
-                sc_transport::SearchType::Users,
-                q.q.as_deref().unwrap_or_default(),
-                page,
-                limit,
-            )
-            .await?,
+        crate::modules::soundcloud_search::project_page(&st.pg, ty, found).await?,
     ))
 }
 

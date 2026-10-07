@@ -196,6 +196,10 @@ mod router_search_tests;
 mod router_identity_tests;
 
 #[cfg(test)]
+#[path = "router_projection_tests.rs"]
+mod router_projection_tests;
+
+#[cfg(test)]
 mod tests {
     use super::is_sensitive_path;
 

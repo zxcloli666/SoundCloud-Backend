@@ -451,6 +451,7 @@ impl PlaylistsService {
             .await?
             .ok_or_else(|| AppError::not_found("Playlist not found"))?;
         guard_private(&playlist_row)?;
+        self.membership.track_if_untracked(playlist_urn).await?;
         let can_see_private = playlist_row.sharing != "public"
             || playlist_row.owner_sc_user_id.as_deref() == Some(viewer);
 

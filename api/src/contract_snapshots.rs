@@ -396,11 +396,18 @@ fn a_vibe_answer_keeps_top_genres_and_status() {
 }
 
 #[test]
-fn a_soundcloud_search_page_is_snake_case_with_its_page_size() {
+fn a_soundcloud_search_page_is_snake_case_and_carries_the_local_projection() {
     let page = ListPageResult {
-        collection: vec![
-            json!({"id": 38394532, "urn": "soundcloud:tracks:38394532", "user_favorite": false}),
-        ],
+        collection: vec![json!({
+            "id": 38394532,
+            "urn": "soundcloud:tracks:38394532",
+            "access": "playable",
+            "policy": "ALLOW",
+            "favoritings_count": 7,
+            "user": {"id": 5, "urn": "soundcloud:users:5", "kind": "user"},
+            "_scd_meta": {"storage_state": "ok", "index_state": "indexed", "enrich_state": "done"},
+            "user_favorite": false
+        })],
         page: 0,
         page_size: 2,
         has_more: true,
@@ -409,7 +416,16 @@ fn a_soundcloud_search_page_is_snake_case_with_its_page_size() {
     assert_eq!(
         wire(&page),
         json!({
-            "collection": [{"id": 38394532, "urn": "soundcloud:tracks:38394532", "user_favorite": false}],
+            "collection": [{
+                "id": 38394532,
+                "urn": "soundcloud:tracks:38394532",
+                "access": "playable",
+                "policy": "ALLOW",
+                "favoritings_count": 7,
+                "user": {"id": 5, "urn": "soundcloud:users:5", "kind": "user"},
+                "_scd_meta": {"storage_state": "ok", "index_state": "indexed", "enrich_state": "done"},
+                "user_favorite": false
+            }],
             "page": 0,
             "page_size": 2,
             "has_more": true

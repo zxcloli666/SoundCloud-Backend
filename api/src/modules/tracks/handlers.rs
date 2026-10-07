@@ -74,8 +74,11 @@ async fn search(
     let mut result = match list.ids.as_deref() {
         Some(ids) if q.trim().is_empty() => tracks_by_ids(&st, ids, page, limit).await?,
         _ => {
-            st.soundcloud_search
+            let found = st
+                .soundcloud_search
                 .page(ctx.session_id, SearchType::Tracks, q, page, limit)
+                .await?;
+            crate::modules::soundcloud_search::project_page(&st.pg, SearchType::Tracks, found)
                 .await?
         }
     };

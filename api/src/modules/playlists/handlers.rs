@@ -63,17 +63,25 @@ async fn search(
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    Ok(Json(
-        st.soundcloud_search
-            .page(
-                ctx.session_id,
-                sc_transport::SearchType::PlaylistsWithoutAlbums,
-                q.q.as_deref().unwrap_or_default(),
-                page,
-                limit,
-            )
-            .await?,
-    ))
+    let ty = sc_transport::SearchType::PlaylistsWithoutAlbums;
+    let found = st
+        .soundcloud_search
+        .page(
+            ctx.session_id,
+            ty,
+            q.q.as_deref().unwrap_or_default(),
+            page,
+            limit,
+        )
+        .await?;
+    let mut result = crate::modules::soundcloud_search::project_page(&st.pg, ty, found).await?;
+    crate::modules::likes::cold::apply_user_favorite_flag_to_playlists(
+        &st.pg,
+        &ctx.sc_user_id,
+        &mut result.collection,
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 async fn create(
