@@ -79,13 +79,14 @@ pub fn build(state: AppState) -> Router {
     let router = router.merge(crate::profiling::router());
 
     router
-        .with_state(state)
-        .layer(body_limit())
-        .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+        .merge(modules::tracks::upload_router())
+        .with_state(state)
+        .layer(body_limit())
+        .layer(CompressionLayer::new())
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request| {
                 tracing::debug_span!(

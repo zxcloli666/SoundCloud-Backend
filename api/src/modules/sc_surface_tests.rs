@@ -24,7 +24,7 @@ const ALLOWED: [(&str, &str); 7] = [
     ),
     (
         "tracks",
-        "USER_PRIVATE: secret_token detail and the stream token readiness check; RESOLVE_MISS: a track opened or added to a playlist before the catalog has it; SC_SEARCH: /tracks?q=",
+        "USER_PRIVATE: secret_token detail and the stream token readiness check; USER_UPLOAD: an owner uploads a new track with their own token; RESOLVE_MISS: a track opened or added to a playlist before the catalog has it; SC_SEARCH: /tracks?q=",
     ),
     (
         "playlists",
@@ -118,7 +118,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 74] = [
+const CLASSIFIED_ROUTES: [&str; 75] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -182,6 +182,7 @@ const CLASSIFIED_ROUTES: [&str; 74] = [
     "/tracks/{track_urn}/reposters",
     "/tracks/{track_urn}/sharing",
     "/tracks/{track_urn}/stream",
+    "/tracks/upload",
     "/users",
     "/users/{user_urn}",
     "/users/{user_urn}/followers",
