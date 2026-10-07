@@ -104,6 +104,30 @@ async def test_busy_engines_split_the_budget_and_an_idle_one_takes_it_all() -> N
         await supervisor.stop()
 
 
+async def test_encode_holds_its_threads_and_lyrics_on_its_engine_take_a_bulk_share() -> None:
+    supervisor = await started_supervisor(
+        plans_of(
+            EnginePlan("audio", (fake_spec("a"),)),
+            EnginePlan("encode", (fake_spec("text"),), reserved=True),
+        ),
+        SHARED,
+    )
+    try:
+        query = await supervisor.acquire("text", time.monotonic() + 5, reserved=True)
+        audio = await supervisor.acquire("a", time.monotonic() + 5)
+        assert (query.call_threads, audio.call_threads) == (4, 2)
+        supervisor.release(query)
+        supervisor.release(audio)
+        lyric = await supervisor.acquire("text", time.monotonic() + 5)
+        assert lyric.call_threads == 6
+        audio = await supervisor.acquire("a", time.monotonic() + 5)
+        assert audio.call_threads == 3
+        supervisor.release(lyric)
+        supervisor.release(audio)
+    finally:
+        await supervisor.stop()
+
+
 async def test_a_fixed_thread_count_wins_over_the_shared_budget() -> None:
     policy = replace(SHARED, threads=5)
     supervisor = await started_supervisor(
