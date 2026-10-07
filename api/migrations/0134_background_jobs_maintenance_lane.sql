@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE background_jobs DROP CONSTRAINT IF EXISTS background_jobs_lane_valid;
 ALTER TABLE background_jobs
     ADD CONSTRAINT background_jobs_lane_valid
