@@ -118,6 +118,9 @@ async def test_encode_holds_its_threads_and_lyrics_on_its_engine_take_a_bulk_sha
         assert (query.call_threads, audio.call_threads) == (4, 2)
         supervisor.release(query)
         supervisor.release(audio)
+        query = await supervisor.acquire("text", time.monotonic() + 5, priority=True)
+        assert query.call_threads == 4
+        supervisor.release(query)
         lyric = await supervisor.acquire("text", time.monotonic() + 5)
         assert lyric.call_threads == 6
         audio = await supervisor.acquire("a", time.monotonic() + 5)

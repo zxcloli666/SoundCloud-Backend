@@ -83,7 +83,7 @@ class FakePool:
         self.preempted: list[str] = []
         self._changed = asyncio.Event()
 
-    async def acquire(self, slot: str, deadline_at: float) -> FakeEngine:
+    async def acquire(self, slot: str, deadline_at: float, *, priority: bool = False) -> FakeEngine:
         while True:
             if self.state != "ready":
                 raise SlotUnavailable(slot, self.state)

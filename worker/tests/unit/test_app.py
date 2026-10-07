@@ -57,7 +57,9 @@ class OneEnginePool:
     def __init__(self, engine: KillableEngine) -> None:
         self.engine = engine
 
-    async def acquire(self, slot: str, deadline_at: float) -> KillableEngine:
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> KillableEngine:
         return self.engine
 
     def release(self, client: KillableEngine) -> None:

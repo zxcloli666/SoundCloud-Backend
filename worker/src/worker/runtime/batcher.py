@@ -35,7 +35,9 @@ RowResult = tuple[dict[str, np.ndarray], dict[str, object], Mapping[str, object]
 
 
 class EnginePool(Protocol):
-    async def acquire(self, slot: str, deadline_at: float) -> EngineClient: ...
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> EngineClient: ...
 
     def release(self, client: EngineClient) -> None: ...
 
@@ -304,7 +306,9 @@ class Batcher:
     async def _acquire(self, batch: list[Row]) -> EngineClient | None:
         earliest = min(row.deadline_at for row in batch)
         try:
-            client = await self._pool.acquire(self._slot, earliest)
+            client = await self._pool.acquire(
+                self._slot, earliest, priority=any(row.priority for row in batch)
+            )
         except SlotUnavailable as error:
             for row in batch:
                 self._settle(row, error=error)

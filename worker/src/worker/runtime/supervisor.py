@@ -321,7 +321,7 @@ class Supervisor:
         return EnginePool(self, reserved)
 
     async def acquire(
-        self, slot: str, deadline_at: float, *, reserved: bool = False
+        self, slot: str, deadline_at: float, *, reserved: bool = False, priority: bool = False
     ) -> EngineClient:
         hosts = self._hosts(slot, reserved)
         if not hosts:
@@ -334,9 +334,10 @@ class Supervisor:
                 assert client is not None
                 self._leased.add(client)
                 if await self._lease(client, slot, deadline_at):
-                    client.call_threads = self._call_threads(managed.plan, reserved)
+                    urgent = reserved or priority
+                    client.call_threads = self._call_threads(managed.plan, urgent)
                     self._threads_in_use[client] = client.call_threads
-                    if reserved and managed.plan.reserved:
+                    if urgent and managed.plan.reserved:
                         self._reserved_leases.add(client)
                     return client
                 continue
@@ -407,8 +408,8 @@ class Supervisor:
     def _fixed_threads(self, plan: EnginePlan) -> int:
         return plan.threads or self._policy.threads
 
-    def _call_threads(self, plan: EnginePlan, reserved: bool) -> int:
-        if plan.inline or (reserved and plan.reserved):
+    def _call_threads(self, plan: EnginePlan, urgent: bool) -> int:
+        if plan.inline or (urgent and plan.reserved):
             return plan.threads
         if self._policy.threads or not self._policy.cpu_budget:
             return self._policy.threads
@@ -776,8 +777,12 @@ class EnginePool:
         self._supervisor = supervisor
         self._reserved = reserved
 
-    async def acquire(self, slot: str, deadline_at: float) -> EngineClient:
-        return await self._supervisor.acquire(slot, deadline_at, reserved=self._reserved)
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> EngineClient:
+        return await self._supervisor.acquire(
+            slot, deadline_at, reserved=self._reserved, priority=priority
+        )
 
     def release(self, client: EngineClient) -> None:
         self._supervisor.release(client)
