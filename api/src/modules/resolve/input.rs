@@ -86,6 +86,18 @@ const NON_ENTITY_PATHS: &[&str] = &[
     "imprint",
     "mobile",
 ];
+const PROFILE_SUBPAGES: &[&str] = &[
+    "tracks",
+    "popular-tracks",
+    "albums",
+    "sets",
+    "reposts",
+    "likes",
+    "followers",
+    "following",
+    "comments",
+    "spotlight",
+];
 const SCHEMELESS_HOSTS: &[&str] = &[
     "soundcloud.com/",
     "www.soundcloud.com/",
@@ -159,6 +171,11 @@ impl ResolveInput {
                 return Err(AppError::not_found(
                     "Not a SoundCloud track, playlist or profile link",
                 ));
+            }
+            if let [_, subpage] = segments.as_slice()
+                && PROFILE_SUBPAGES.contains(&subpage.to_lowercase().as_str())
+            {
+                segments.truncate(1);
             }
         }
         let secret_at = secret_segment(&segments);

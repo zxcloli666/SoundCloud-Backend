@@ -364,3 +364,48 @@ async fn a_short_link_is_expanded_once_and_resolved_like_its_target(
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     Ok(())
 }
+
+fn resolved_profile(inputs: &Value) -> Option<Value> {
+    inputs.get("url")?;
+    Some(json!({
+        "ok": true,
+        "track": {
+            "kind": "user",
+            "id": 960,
+            "urn": "soundcloud:users:960",
+            "username": "Owner",
+            "permalink": "owner",
+            "permalink_url": "https://soundcloud.com/owner",
+        },
+    }))
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_profile_subpage_resolves_as_the_profile_and_then_locally(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let relay = SearchRelay::answering(Box::new(resolved_profile), 500, json!({}));
+    let app = crate::router::build(state(&pool, relay.clone(), &redis_url()).await?);
+    let session = session(&pool).await?;
+
+    for url in [
+        "https://soundcloud.com/owner/popular-tracks",
+        "soundcloud.com/Owner/tracks",
+    ] {
+        let (status, body) = resolve(&app, session, url).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["urn"], "soundcloud:users:960");
+    }
+    assert_eq!(relay.lua_calls(), 1, "the second subpage resolves locally");
+    assert_eq!(relay.lua_inputs()[0]["url"], "https://soundcloud.com/owner");
+
+    let (status, body) = resolve(&app, session, "https://soundcloud.com/discover").await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        relay.lua_calls(),
+        1,
+        "a non-entity page never reaches SoundCloud"
+    );
+    Ok(())
+}

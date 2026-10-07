@@ -213,6 +213,47 @@ fn resolve_input_refuses_soundcloud_pages_that_are_not_entities() -> anyhow::Res
     Ok(())
 }
 
+#[test]
+fn resolve_input_reads_a_profile_subpage_as_the_profile() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/artist/tracks",
+        "https://soundcloud.com/Artist/Popular-Tracks/",
+        "https://m.soundcloud.com/artist/likes?si=abc",
+        "soundcloud.com/artist/reposts",
+        "https://soundcloud.com/artist/albums",
+        "https://soundcloud.com/artist/sets",
+        "https://soundcloud.com/artist/followers",
+        "https://soundcloud.com/artist/following",
+        "https://soundcloud.com/artist/comments",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(input.upstream, "https://soundcloud.com/artist", "{raw}");
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist".into()),
+            "{raw}"
+        );
+    }
+    for (raw, upstream) in [
+        (
+            "https://soundcloud.com/artist/sets/tracks",
+            "https://soundcloud.com/artist/sets/tracks",
+        ),
+        (
+            "https://soundcloud.com/artist/sets/mix",
+            "https://soundcloud.com/artist/sets/mix",
+        ),
+        (
+            "https://soundcloud.com/artist/tracks/s-secret",
+            "https://soundcloud.com/artist/tracks/s-secret",
+        ),
+    ] {
+        assert_eq!(ResolveInput::parse(raw)?.upstream, upstream, "{raw}");
+    }
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
