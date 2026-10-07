@@ -28,10 +28,7 @@ async fn like_track(
     Path(track_urn): Path<String>,
     _body: Option<Json<Value>>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
-    let v = st
-        .likes
-        .like_track(ctx.session_id, &ctx.sc_user_id, &track_urn)
-        .await?;
+    let v = st.likes.like_track(&ctx.sc_user_id, &track_urn).await?;
     Ok((StatusCode::OK, Json(v)))
 }
 

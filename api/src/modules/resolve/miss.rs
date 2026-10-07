@@ -60,34 +60,6 @@ impl CatalogMiss {
             .await
     }
 
-    pub async fn track_soon(
-        self: &Arc<Self>,
-        session: Uuid,
-        sc_track_id: &str,
-        priority: TrackPriority,
-    ) -> AppResult<()> {
-        let wanted = [sc_track_id.to_owned()];
-        let missing =
-            sqlx::query_file_scalar!("queries/playlists/missing_catalog_tracks.sql", &wanted[..])
-                .fetch_all(&self.pg)
-                .await?;
-        if missing.is_empty() {
-            catalog_ingest::bump_track_priority(&self.pg, sc_track_id, priority).await?;
-            return Ok(());
-        }
-        let miss = self.clone();
-        let sc_track_id = sc_track_id.to_owned();
-        tokio::spawn(async move {
-            let adopted = miss.track(session, &sc_track_id, priority).await;
-            tracing::debug!(
-                track = sc_track_id,
-                ?adopted,
-                "catalog miss adopted in background"
-            );
-        });
-        Ok(())
-    }
-
     pub async fn user(&self, session: Uuid, sc_user_id: &str) -> Adopted {
         self.adopt(
             session,

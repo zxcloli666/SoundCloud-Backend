@@ -35,12 +35,7 @@ async fn add(
     let track_data = body.map(|Json(v)| v);
     let result = st
         .dislikes
-        .add(
-            ctx.session_id,
-            &ctx.sc_user_id,
-            &sc_track_id,
-            track_data.as_ref(),
-        )
+        .add(&ctx.sc_user_id, &sc_track_id, track_data.as_ref())
         .await?;
     Ok((StatusCode::OK, Json(result)))
 }

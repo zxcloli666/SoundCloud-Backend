@@ -6,7 +6,6 @@ use sqlx::PgPool;
 use crate::common::sc_ids::{EntityKind, require_ref};
 use crate::error::AppResult;
 use crate::modules::events::EventsService;
-use crate::modules::resolve::CatalogMiss;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::sync_queue::mirror::{LIKES_PLAYLISTS, LIKES_TRACKS};
 use crate::modules::tracks::TrackPriority;
@@ -14,7 +13,6 @@ use crate::modules::tracks::TrackPriority;
 pub struct LikesService {
     pg: PgPool,
     sync_queue: Arc<SyncQueueService>,
-    miss: Arc<CatalogMiss>,
     events: Arc<EventsService>,
 }
 
@@ -22,28 +20,24 @@ impl LikesService {
     pub fn new(
         pg: PgPool,
         sync_queue: Arc<SyncQueueService>,
-        miss: Arc<CatalogMiss>,
         events: Arc<EventsService>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
             sync_queue,
-            miss,
             events,
         })
     }
 
-    pub async fn like_track(
-        &self,
-        session_id: uuid::Uuid,
-        sc_user_id: &str,
-        track_urn: &str,
-    ) -> AppResult<Value> {
+    pub async fn like_track(&self, sc_user_id: &str, track_urn: &str) -> AppResult<Value> {
         let track = require_ref(EntityKind::Track, track_urn)?;
         let (sc_track_id, track_urn) = (&track.sc_id(), &track.urn());
-        self.miss
-            .track_soon(session_id, sc_track_id, TrackPriority::Like)
-            .await?;
+        crate::modules::cold_refresh::entity::want_track(
+            &self.pg,
+            sc_track_id,
+            TrackPriority::Like,
+        )
+        .await?;
         self.sync_queue
             .set_wanted(
                 LIKES_TRACKS,

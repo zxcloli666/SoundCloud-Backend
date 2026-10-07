@@ -284,6 +284,12 @@ async fn a_like_body_never_becomes_catalog_data(pool: PgPool) -> anyhow::Result<
         vec![("5".to_owned(), "Midnight Train 5".to_owned(), 1)],
         "an existing track is only promoted, a missing one waits for SoundCloud"
     );
+    let refreshes: Vec<String> = sqlx::query_scalar(
+        "SELECT dedup_key FROM background_jobs WHERE kind = 'catalog.refresh' ORDER BY dedup_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(refreshes, vec!["track:42:public".to_owned()]);
     Ok(())
 }
 

@@ -8,12 +8,10 @@ use sqlx::PgPool;
 use crate::common::sc_ids::normalize_sc_track_id;
 use crate::error::{AppError, AppResult};
 use crate::modules::events::EventsService;
-use crate::modules::resolve::CatalogMiss;
 
 pub struct DislikesService {
     pg: PgPool,
     events: Arc<EventsService>,
-    miss: Arc<CatalogMiss>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,13 +26,12 @@ pub struct StatusResult {
 }
 
 impl DislikesService {
-    pub fn new(pg: PgPool, events: Arc<EventsService>, miss: Arc<CatalogMiss>) -> Arc<Self> {
-        Arc::new(Self { pg, events, miss })
+    pub fn new(pg: PgPool, events: Arc<EventsService>) -> Arc<Self> {
+        Arc::new(Self { pg, events })
     }
 
     pub async fn add(
         &self,
-        session_id: uuid::Uuid,
         sc_user_id: &str,
         sc_track_id: &str,
         track_data: Option<&Value>,
@@ -44,13 +41,12 @@ impl DislikesService {
                 status: "invalid".into(),
             });
         };
-        self.miss
-            .track_soon(
-                session_id,
-                &id,
-                crate::modules::tracks::TrackPriority::Discovery,
-            )
-            .await?;
+        crate::modules::cold_refresh::entity::want_track(
+            &self.pg,
+            &id,
+            crate::modules::tracks::TrackPriority::Discovery,
+        )
+        .await?;
 
         let inserted: Option<(uuid::Uuid,)> = sqlx::query_as(
             "INSERT INTO disliked_tracks (sc_user_id, sc_track_id, track_data) \
