@@ -58,7 +58,7 @@ async fn resolve(
             match repository::load(&st.pg, &key, viewer, false).await {
                 Ok(local) => {
                     enqueue_stale(&st, &key, &local, viewer).await;
-                    return response(&local.value);
+                    return response(&decorate(&st, &key, local.value, viewer).await?);
                 }
                 Err(error) if from_alias && error.status() == StatusCode::NOT_FOUND => {}
                 Err(error) => return Err(error),
@@ -122,7 +122,38 @@ async fn resolve(
             )
             .await;
     }
-    response(&local.value)
+    response(&decorate(&st, &key, local.value, viewer).await?)
+}
+
+async fn decorate(
+    st: &AppState,
+    key: &EntityKey,
+    value: Value,
+    viewer: Option<&str>,
+) -> AppResult<Value> {
+    let mut single = [value];
+    match key.entity {
+        CatalogEntity::Track => {
+            crate::modules::enrich::dto::apply_to_tracks(&st.pg, &mut single).await?;
+            if let Some(viewer) = viewer {
+                crate::modules::likes::cold::apply_user_favorite_flag(&st.pg, viewer, &mut single)
+                    .await?;
+            }
+        }
+        CatalogEntity::Playlist => {
+            if let Some(viewer) = viewer {
+                crate::modules::likes::cold::apply_user_favorite_flag_to_playlists(
+                    &st.pg,
+                    viewer,
+                    &mut single,
+                )
+                .await?;
+            }
+        }
+        _ => {}
+    }
+    let [value] = single;
+    Ok(value)
 }
 
 const UPSTREAM_RETRY_AFTER: i64 = 30;
