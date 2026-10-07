@@ -180,6 +180,10 @@ pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Val
         row.likes_count_sc.map(|v| json!(v)).unwrap_or(Value::Null),
     );
     obj.insert(
+        "favoritings_count".into(),
+        row.likes_count_sc.map(|v| json!(v)).unwrap_or(Value::Null),
+    );
+    obj.insert(
         "reposts_count".into(),
         row.reposts_count_sc
             .map(|v| json!(v))

@@ -1,7 +1,10 @@
 SELECT sc_user_id,
        jsonb_build_object(
                'kind', 'user',
-               'id', sc_user_id,
+               'id', CASE
+                   WHEN sc_user_id ~ '^[1-9][0-9]{0,17}$' THEN to_jsonb(sc_user_id::bigint)
+                   ELSE to_jsonb(sc_user_id)
+               END,
                'urn', urn,
                'username', username,
                'avatar_url', avatar_url,

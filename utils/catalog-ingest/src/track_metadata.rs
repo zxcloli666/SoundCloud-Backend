@@ -31,6 +31,8 @@ const EXTRA_STRINGS: &[&str] = &[
     "label_name",
     "release",
     "license",
+    "access",
+    "policy",
 ];
 
 pub struct TrackUpdate {
@@ -216,6 +218,19 @@ fn validate_string(key: &str, value: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_access_and_policy_survive_ingest_but_are_never_client_editable() {
+        let metadata = metadata_from_sc(&json!({"access": "preview", "policy": "SNIP"}));
+        assert_eq!(metadata["access"], "preview");
+        assert_eq!(metadata["policy"], "SNIP");
+        for body in [
+            json!({"track": {"access": "playable"}}),
+            json!({"track": {"policy": "ALLOW"}}),
+        ] {
+            assert!(TrackUpdate::parse(&body).is_err(), "{body}");
+        }
+    }
 
     #[test]
     fn track_updates_reject_unknown_fields_and_incorrect_types() {
