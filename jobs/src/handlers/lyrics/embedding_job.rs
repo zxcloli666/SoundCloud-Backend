@@ -2,7 +2,6 @@
 #[path = "embedding_job_tests.rs"]
 mod db_tests;
 
-use anyhow::ensure;
 use backend_contracts::LyricsEmbedPayload;
 use backend_contracts::pipeline::{EMBED_LYRICS, LyricsEmbeddingRequest, MAX_TEXT_BYTES};
 use sha2::{Digest, Sha256};
@@ -185,15 +184,8 @@ fn message_id(request: &LyricsEmbeddingRequest) -> String {
 }
 
 fn canonical_track_id(value: &str) -> anyhow::Result<String> {
-    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-    let id = value
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("lyrics embedding job has an invalid track id"))?;
-    ensure!(
-        id > 0 && id.to_string() == value,
-        "lyrics embedding job has a non-canonical track id"
-    );
-    Ok(value.to_owned())
+    catalog_ingest::normalize_sc_track_id(value)
+        .ok_or_else(|| anyhow::anyhow!("lyrics embedding job has an invalid track id"))
 }
 
 #[cfg(test)]

@@ -15,18 +15,9 @@ pub struct FollowingsTracksPage {
 }
 
 pub(super) fn target_urn(input: &str) -> AppResult<String> {
-    let id = input.strip_prefix("soundcloud:users:").unwrap_or(input);
-    let payload = backend_contracts::CatalogCollectionPayload {
-        collection: backend_contracts::CatalogCollection::OwnedTracks,
-        subject_id: id.to_owned(),
-        owner: false,
-    };
-    if !payload.is_valid() {
-        return Err(crate::error::AppError::bad_request(
-            "Invalid following account",
-        ));
-    }
-    Ok(format!("soundcloud:users:{id}"))
+    crate::common::sc_ids::EntityRef::user(input)
+        .map(crate::common::sc_ids::EntityRef::urn)
+        .ok_or_else(|| crate::error::AppError::bad_request("Invalid following account"))
 }
 
 pub(super) async fn read(

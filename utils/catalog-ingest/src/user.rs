@@ -111,11 +111,9 @@ struct ScUserFields {
 
 impl ScUserFields {
     fn from_sc(payload: &Value) -> Option<Self> {
-        let urn = payload.get("urn").and_then(|v| v.as_str())?.to_string();
-        if urn.is_empty() {
-            return None;
-        }
-        let sc_user_id = crate::sc_ids::extract_sc_id(&urn).to_string();
+        let entity = crate::sc_ids::payload_ref(crate::EntityKind::User, payload)?;
+        let urn = entity.urn();
+        let sc_user_id = entity.sc_id();
         let username = payload
             .get("username")
             .and_then(|v| v.as_str())

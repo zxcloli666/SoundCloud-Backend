@@ -119,16 +119,10 @@ async fn tracks_by_ids(
 fn parse_ids(raw: &str) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
     for value in raw.split(',').take(MAX_IDS) {
-        let value = value.trim();
-        let bare = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-        if bare.is_empty() || !bare.bytes().all(|byte| byte.is_ascii_digit()) {
-            continue;
-        }
-        if let Ok(id) = bare.parse::<u64>()
-            && id > 0
-            && !ids.contains(&id.to_string())
+        if let Some(id) = crate::common::sc_ids::normalize_sc_track_id(value)
+            && !ids.contains(&id)
         {
-            ids.push(id.to_string());
+            ids.push(id);
         }
     }
     ids

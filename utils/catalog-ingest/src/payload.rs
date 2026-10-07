@@ -43,11 +43,9 @@ pub struct ScTrackFields {
 
 impl ScTrackFields {
     pub fn from_sc(payload: &Value) -> Option<Self> {
-        let urn = payload.get("urn").and_then(|v| v.as_str())?.to_string();
-        if urn.is_empty() {
-            return None;
-        }
-        let sc_track_id = crate::sc_ids::extract_sc_id(&urn).to_string();
+        let entity = crate::sc_ids::payload_ref(crate::EntityKind::Track, payload)?;
+        let urn = entity.urn();
+        let sc_track_id = entity.sc_id();
 
         let raw_title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
         if raw_title.is_empty() {
@@ -88,18 +86,9 @@ impl ScTrackFields {
         let (release_year, release_date) = release_date::extract(payload);
 
         let user = payload.get("user");
-        let uploader_urn = user
-            .and_then(|u| u.get("urn"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let uploader_sc_user_id = uploader_urn
-            .as_deref()
-            .map(|u| crate::sc_ids::extract_sc_id(u).to_string())
-            .or_else(|| {
-                user.and_then(|u| u.get("id"))
-                    .and_then(|v| v.as_i64())
-                    .map(|i| i.to_string())
-            });
+        let uploader = user.and_then(crate::sc_ids::user_ref);
+        let uploader_urn = uploader.map(crate::EntityRef::urn);
+        let uploader_sc_user_id = uploader.map(crate::EntityRef::sc_id);
         let uploader_username = user
             .and_then(|u| u.get("username"))
             .and_then(|v| v.as_str())

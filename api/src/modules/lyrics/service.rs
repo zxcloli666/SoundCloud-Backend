@@ -229,15 +229,8 @@ impl LyricsService {
 }
 
 fn canonical_track_id(value: &str) -> AppResult<String> {
-    let value = value.trim();
-    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-    let id = value
-        .parse::<u64>()
-        .map_err(|_| AppError::bad_request("invalid SoundCloud track id"))?;
-    if id == 0 || id.to_string() != value {
-        return Err(AppError::bad_request("invalid SoundCloud track id"));
-    }
-    Ok(value.to_owned())
+    crate::common::sc_ids::normalize_sc_track_id(value)
+        .ok_or_else(|| AppError::bad_request("invalid SoundCloud track id"))
 }
 
 fn is_fresh_negative(status: &LyricsStatusRow) -> bool {

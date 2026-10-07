@@ -102,14 +102,9 @@ fn parse_owner(raw: Option<&str>) -> Result<Option<String>, ()> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
     };
-    let bare = raw.strip_prefix("soundcloud:users:").unwrap_or(raw);
-    if !bare.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(());
-    }
-    match bare.parse::<u64>() {
-        Ok(id) if id > 0 => Ok(Some(id.to_string())),
-        _ => Err(()),
-    }
+    crate::common::sc_ids::EntityRef::user(raw)
+        .map(|user| Some(user.sc_id()))
+        .ok_or(())
 }
 
 impl SearchService {
