@@ -74,7 +74,8 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::albums::router())
         .merge(modules::discover::router())
         .merge(modules::discover::admin::router())
-        .merge(modules::search::router());
+        .merge(modules::search::router())
+        .merge(modules::rooms::router());
 
     #[cfg(feature = "profiling")]
     let router = router.merge(crate::profiling::router());
@@ -199,6 +200,10 @@ mod router_identity_tests;
 #[cfg(test)]
 #[path = "router_projection_tests.rs"]
 mod router_projection_tests;
+
+#[cfg(test)]
+#[path = "router_rooms_tests.rs"]
+mod router_rooms_tests;
 
 #[cfg(test)]
 mod tests {

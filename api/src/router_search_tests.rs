@@ -156,6 +156,10 @@ pub(super) async fn state(
     let auras = crate::modules::auras::AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue =
         crate::modules::sync_queue::SyncQueueService::new(pg.clone(), redis_pool.clone());
+    let rooms = crate::modules::rooms::RoomsService::new(
+        redis_pool.clone(),
+        crate::modules::rooms::RoomHub::new(None),
+    );
     let cold_refresh =
         crate::modules::cold_refresh::ColdRefreshService::new(pg.clone(), config.cold.clone());
     let me =
@@ -261,6 +265,7 @@ pub(super) async fn state(
         indexing,
         recommendations,
         sync_queue,
+        rooms,
         pg,
     })
 }

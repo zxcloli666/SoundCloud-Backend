@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::router_search_tests::{LISTENER, app, get, seed_tracks, session};
+use super::router_search_tests::{LISTENER, app, get, redis_url, seed_tracks, session};
 
 const NO_REDIS: &str = "redis://127.0.0.1:1";
 
@@ -121,6 +121,37 @@ async fn history_is_written_canonical_and_read_back_with_a_urn(pool: PgPool) -> 
             ("43".to_owned(), "soundcloud:tracks:43".to_owned()),
         ]
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn history_stats_count_legacy_and_canonical_plays(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO listening_history (soundcloud_user_id, sc_track_id, title, artist_name, duration, played_at)
+         VALUES ($1, '43', 'Legacy', 'Someone', 1000, now() - interval '1 day')",
+    )
+    .bind(LISTENER)
+    .execute(&pool)
+    .await?;
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    let play =
+        json!({"scTrackId": "43", "title": "Legacy", "artistName": "Someone", "duration": 1000});
+    let (status, _, _) = send(&app, session, "POST", "/history", Some(play)).await?;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = get(&app, session, "/history/stats?period=week&utcOffset=180").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["period"], "week");
+    assert_eq!(body["unit"], "day");
+    assert_eq!(body["totals"]["plays"], 2);
+    assert_eq!(body["totals"]["listenedMs"], 2000);
+    assert_eq!(body["topTracks"][0]["trackUrn"], "soundcloud:tracks:43");
+    assert_eq!(body["topTracks"][0]["plays"], 2);
+    assert_eq!(body["topArtists"][0]["artistName"], "Someone");
+
+    let (status, _) = get(&app, session, "/history/stats?period=decade").await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     Ok(())
 }
 
@@ -308,5 +339,31 @@ async fn a_user_path_of_another_kind_is_refused_before_any_lookup(
         let (status, body) = get(&app, session, uri).await?;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
     }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn history_stats_are_cached_until_the_next_play(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session(&pool).await?;
+    let play = |id: &str| json!({"scTrackId": id, "title": "Song", "artistName": "Artist", "duration": 1000});
+    let plays = |body: Value| body["totals"]["plays"].as_i64();
+    send(&app, session, "POST", "/history", Some(play("51"))).await?;
+    let (_, body) = get(&app, session, "/history/stats?period=month").await?;
+    assert_eq!(plays(body), Some(1));
+
+    sqlx::query(
+        "INSERT INTO listening_history (soundcloud_user_id, sc_track_id, title, artist_name, duration)
+         VALUES ($1, 'soundcloud:tracks:52', 'Quiet', 'Artist', 1000)",
+    )
+    .bind(LISTENER)
+    .execute(&pool)
+    .await?;
+    let (_, body) = get(&app, session, "/history/stats?period=month").await?;
+    assert_eq!(plays(body), Some(1));
+
+    send(&app, session, "POST", "/history", Some(play("53"))).await?;
+    let (_, body) = get(&app, session, "/history/stats?period=month").await?;
+    assert_eq!(plays(body), Some(3));
     Ok(())
 }

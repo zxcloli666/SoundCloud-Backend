@@ -48,7 +48,7 @@ pub struct HistoryPage {
 }
 
 pub struct HistoryService {
-    pg: PgPool,
+    pub(super) pg: PgPool,
 }
 
 impl HistoryService {
