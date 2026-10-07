@@ -23,5 +23,7 @@ pub use sc_ids::{
 };
 pub use sc_payload::parse_dt;
 pub use track_metadata::TrackUpdate;
-pub use upsert::{IngestResult, TrackPriority, upsert_from_sc, upsert_track_in};
+pub use upsert::{
+    IngestResult, TrackPriority, bump_track_priority, upsert_from_sc, upsert_track_in,
+};
 pub use user::{upsert_profile_in, upsert_user_from_sc, upsert_user_in};

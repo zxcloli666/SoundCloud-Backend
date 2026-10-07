@@ -25,6 +25,22 @@ pub struct IngestResult {
     pub metadata_applied: bool,
 }
 
+pub async fn bump_track_priority(
+    pool: &PgPool,
+    sc_track_id: &str,
+    priority: TrackPriority,
+) -> Result<(), sqlx::Error> {
+    sqlx::query_file!(
+        "queries/tracks/bump_priority.sql",
+        sc_track_id,
+        priority.as_i16(),
+        priority.as_i16()
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn upsert_from_sc(
     pool: &PgPool,
     fields: &ScTrackFields,

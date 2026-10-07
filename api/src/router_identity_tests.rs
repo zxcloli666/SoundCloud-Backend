@@ -189,3 +189,100 @@ async fn likes_are_keyed_by_one_canonical_form(pool: PgPool) -> anyhow::Result<(
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn dislikes_are_read_back_from_the_catalog_not_from_the_posted_body(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_tracks(&pool, &["5"]).await?;
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    let posts = [
+        (
+            "5",
+            Some(json!({"urn": "soundcloud:tracks:5", "title": "Forged"})),
+        ),
+        (
+            "6",
+            Some(json!({"urn": "soundcloud:tracks:6", "title": "Six"})),
+        ),
+        (
+            "7",
+            Some(json!({"urn": "soundcloud:tracks:8", "title": "Mismatch"})),
+        ),
+    ];
+    for (id, body) in posts {
+        let (status, _, body) =
+            send(&app, session, "POST", &format!("/dislikes/{id}"), body).await?;
+        assert_eq!(status, StatusCode::OK, "{id}: {body}");
+    }
+    let (status, body) = get(&app, session, "/dislikes").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body["collection"].as_array().cloned().unwrap_or_default();
+    let found: Vec<(String, String)> = items
+        .iter()
+        .map(|item| {
+            (
+                item["urn"].as_str().unwrap_or_default().to_owned(),
+                item["title"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        found.contains(&(
+            "soundcloud:tracks:5".to_owned(),
+            "Midnight Train 5".to_owned()
+        )),
+        "{found:?}"
+    );
+    assert!(
+        found.contains(&("soundcloud:tracks:6".to_owned(), "Six".to_owned())),
+        "{found:?}"
+    );
+    assert_eq!(found.len(), 2, "{found:?}");
+    let catalog = items
+        .iter()
+        .find(|item| item["urn"] == "soundcloud:tracks:5")
+        .unwrap();
+    assert!(catalog["_scd_meta"].is_object());
+
+    let titles: Vec<String> = sqlx::query_scalar("SELECT title FROM tracks ORDER BY sc_track_id")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(titles, vec!["Midnight Train 5".to_owned()]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_like_body_never_becomes_catalog_data(pool: PgPool) -> anyhow::Result<()> {
+    seed_tracks(&pool, &["5"]).await?;
+    sqlx::query("UPDATE tracks SET index_priority = 5, storage_priority = 5")
+        .execute(&pool)
+        .await?;
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    for (id, title) in [("5", "Forged"), ("42", "Invented")] {
+        let body =
+            json!({"urn": format!("soundcloud:tracks:{id}"), "title": title, "duration": 1000});
+        let (status, _, body) = send(
+            &app,
+            session,
+            "POST",
+            &format!("/likes/tracks/{id}"),
+            Some(body),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let rows: Vec<(String, String, i16)> = sqlx::query_as(
+        "SELECT sc_track_id, title, index_priority FROM tracks ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        rows,
+        vec![("5".to_owned(), "Midnight Train 5".to_owned(), 1)],
+        "an existing track is only promoted, a missing one waits for SoundCloud"
+    );
+    Ok(())
+}

@@ -26,12 +26,11 @@ async fn like_track(
     State(st): State<AppState>,
     ctx: SessionCtx,
     Path(track_urn): Path<String>,
-    body: Option<Json<Value>>,
+    _body: Option<Json<Value>>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
-    let track_data = body.map(|Json(v)| v);
     let v = st
         .likes
-        .like_track(&ctx.sc_user_id, &track_urn, track_data.as_ref())
+        .like_track(ctx.session_id, &ctx.sc_user_id, &track_urn)
         .await?;
     Ok((StatusCode::OK, Json(v)))
 }

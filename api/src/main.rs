@@ -227,7 +227,7 @@ async fn main() {
         miss: miss.clone(),
     });
     let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
-    let dislikes = DislikesService::new(pg.clone(), events.clone());
+    let dislikes = DislikesService::new(pg.clone(), events.clone(), miss.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
     let soundcloud_search = crate::modules::soundcloud_search::SoundCloudSearch::new(
         resolve.clone(),
@@ -238,12 +238,7 @@ async fn main() {
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
 
-    let likes = LikesService::new(
-        pg.clone(),
-        sync_queue.clone(),
-        indexing.clone(),
-        events.clone(),
-    );
+    let likes = LikesService::new(pg.clone(), sync_queue.clone(), miss.clone(), events.clone());
 
     let discover = DiscoverService::new(pg.clone(), cache.clone());
 

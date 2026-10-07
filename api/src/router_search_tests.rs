@@ -213,11 +213,12 @@ pub(super) async fn state(
         },
     );
     let users = crate::modules::users::UsersService::new(pg.clone(), cold_refresh, miss.clone());
-    let dislikes = crate::modules::dislikes::DislikesService::new(pg.clone(), events.clone());
+    let dislikes =
+        crate::modules::dislikes::DislikesService::new(pg.clone(), events.clone(), miss.clone());
     let likes = crate::modules::likes::LikesService::new(
         pg.clone(),
         sync_queue.clone(),
-        indexing.clone(),
+        miss.clone(),
         events.clone(),
     );
     events.install_dislikes(dislikes.clone());
