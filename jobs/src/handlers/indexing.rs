@@ -55,9 +55,15 @@ pub struct IndexingHandler {
     audio_backlog: i64,
 }
 
+#[derive(Default)]
+struct Backfill {
+    dispatched: i64,
+    announced: i64,
+}
+
 struct AudioBackfill {
     sc_track_id: String,
-    uploaded_generation: i64,
+    uploaded_generation: Option<i64>,
 }
 
 impl IndexingHandler {
@@ -156,18 +162,24 @@ impl IndexingHandler {
             return Ok(());
         }
         let reopened = self.reopen_dispatches(room).await?;
-        let backfilled = self
+        let backfill = self
             .backfill_dispatches(room.saturating_sub(reopened))
             .await?;
-        if reopened > 0 || backfilled > 0 {
-            tracing::info!(reopened, backfilled, "audio index backlog topped up");
+        if reopened > 0 || backfill.dispatched > 0 || backfill.announced > 0 {
+            tracing::info!(
+                reopened,
+                backfilled = backfill.dispatched,
+                announced_through_storage = backfill.announced,
+                "audio index backlog topped up"
+            );
         }
         Ok(())
     }
 
-    async fn backfill_dispatches(&self, room: i64) -> JobResult<i64> {
+    async fn backfill_dispatches(&self, room: i64) -> JobResult<Backfill> {
+        let mut backfill = Backfill::default();
         if room == 0 {
-            return Ok(0);
+            return Ok(backfill);
         }
         let candidates = sqlx::query_file_as!(
             AudioBackfill,
@@ -179,21 +191,25 @@ impl IndexingHandler {
         .fetch_all(&self.pool)
         .await
         .map_err(JobError::retryable)?;
-        let mut dispatched = 0;
         let mut first_failure = None;
         for candidate in candidates {
+            let Some(uploaded_generation) = candidate.uploaded_generation else {
+                self.enqueue(candidate.sc_track_id).await?;
+                backfill.announced += 1;
+                continue;
+            };
             let payload = backend_contracts::StoredAudioDispatchPayload {
                 sc_track_id: candidate.sc_track_id,
-                uploaded_generation: candidate.uploaded_generation,
+                uploaded_generation,
             };
             match self.storage_uploads.dispatch_audio(payload).await {
-                Ok(()) => dispatched += 1,
+                Ok(()) => backfill.dispatched += 1,
                 Err(error) => {
                     first_failure.get_or_insert(error);
                 }
             }
         }
-        first_failure.map_or(Ok(dispatched), Err)
+        first_failure.map_or(Ok(backfill), Err)
     }
 
     async fn settle_unreopenable_dispatches(&self) -> JobResult {
@@ -347,6 +363,7 @@ mod tests {
                  storage_state varchar(16) NOT NULL,
                  index_state varchar(16) NOT NULL,
                  index_priority smallint NOT NULL DEFAULT 0,
+                 storage_priority smallint NOT NULL DEFAULT 0,
                  needs_duration_resolve boolean NOT NULL DEFAULT false,
                  pipeline_held boolean NOT NULL DEFAULT false,
                  s3_verified_at timestamptz,
@@ -390,7 +407,7 @@ mod tests {
         .await?)
     }
 
-    async fn backfilled(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    async fn backfill_candidates(pool: &PgPool) -> anyhow::Result<Vec<(String, Option<i64>)>> {
         Ok(sqlx::query_file_as!(
             AudioBackfill,
             "queries/indexing/backfill_audio.sql",
@@ -401,8 +418,16 @@ mod tests {
         .fetch_all(pool)
         .await?
         .into_iter()
-        .map(|candidate| candidate.sc_track_id)
+        .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
         .collect())
+    }
+
+    async fn backfilled(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+        Ok(backfill_candidates(pool)
+            .await?
+            .into_iter()
+            .map(|(sc_track_id, _)| sc_track_id)
+            .collect())
     }
 
     async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
@@ -633,14 +658,20 @@ mod tests {
     ) -> anyhow::Result<()> {
         install_schema(&pool).await?;
         assert!(requeued(&pool).await?.is_empty());
-        assert_eq!(backfilled(&pool).await?, vec!["42".to_owned()]);
+        assert_eq!(
+            backfill_candidates(&pool).await?,
+            vec![("42".to_owned(), Some(1))]
+        );
 
         sqlx::query("DELETE FROM storage_event_state")
             .execute(&pool)
             .await?;
 
-        assert_eq!(requeued(&pool).await?, vec!["42".to_owned()]);
-        assert!(backfilled(&pool).await?.is_empty());
+        assert!(requeued(&pool).await?.is_empty());
+        assert_eq!(
+            backfill_candidates(&pool).await?,
+            vec![("42".to_owned(), None)]
+        );
         Ok(())
     }
 
