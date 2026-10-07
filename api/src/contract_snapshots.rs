@@ -340,3 +340,156 @@ async fn a_bad_request_keeps_its_public_message() {
         })
     );
 }
+
+#[test]
+fn a_lyrics_page_keeps_matched_line_and_echoes_text_mode() {
+    use crate::modules::search::lyrics::{LyricsHit, LyricsSearchResponse};
+
+    let page = LyricsSearchResponse {
+        collection: vec![LyricsHit {
+            track: json!({"urn": "soundcloud:tracks:1"}),
+            matched_line: Some("Forever trusting who we are".to_owned()),
+            score: 0.82,
+        }],
+        page: 0,
+        page_size: 20,
+        has_more: false,
+        mode: "text".to_owned(),
+    };
+
+    assert_eq!(
+        wire(&page),
+        json!({
+            "collection": [{
+                "track": {"urn": "soundcloud:tracks:1"},
+                "matchedLine": "Forever trusting who we are",
+                "score": 0.82
+            }],
+            "page": 0,
+            "page_size": 20,
+            "has_more": false,
+            "mode": "text"
+        })
+    );
+}
+
+#[test]
+fn a_vibe_answer_keeps_top_genres_and_status() {
+    use crate::modules::search::vibe::{Atmosphere, VibeResponse};
+
+    let answer = VibeResponse {
+        items: vec![json!({"urn": "soundcloud:tracks:1"})],
+        atmosphere: Atmosphere {
+            top_genres: vec!["phonk".to_owned()],
+        },
+        status: "ready".to_owned(),
+    };
+
+    assert_eq!(
+        wire(&answer),
+        json!({
+            "items": [{"urn": "soundcloud:tracks:1"}],
+            "atmosphere": {"topGenres": ["phonk"]},
+            "status": "ready"
+        })
+    );
+}
+
+#[test]
+fn a_soundcloud_search_page_is_snake_case_and_carries_the_local_projection() {
+    let page = ListPageResult {
+        collection: vec![json!({
+            "id": 38394532,
+            "urn": "soundcloud:tracks:38394532",
+            "access": "playable",
+            "policy": "ALLOW",
+            "favoritings_count": 7,
+            "user": {"id": 5, "urn": "soundcloud:users:5", "kind": "user"},
+            "_scd_meta": {"storage_state": "ok", "index_state": "indexed", "enrich_state": "done"},
+            "user_favorite": false
+        })],
+        page: 0,
+        page_size: 2,
+        has_more: true,
+    };
+
+    assert_eq!(
+        wire(&page),
+        json!({
+            "collection": [{
+                "id": 38394532,
+                "urn": "soundcloud:tracks:38394532",
+                "access": "playable",
+                "policy": "ALLOW",
+                "favoritings_count": 7,
+                "user": {"id": 5, "urn": "soundcloud:users:5", "kind": "user"},
+                "_scd_meta": {"storage_state": "ok", "index_state": "indexed", "enrich_state": "done"},
+                "user_favorite": false
+            }],
+            "page": 0,
+            "page_size": 2,
+            "has_more": true
+        })
+    );
+}
+
+#[tokio::test]
+async fn every_search_failure_is_a_coded_503_with_retry_after() {
+    use crate::common::admission::{AdmissionRejection, resolve_busy};
+    use crate::modules::search::failure::{search_busy, search_timeout, vibe_unavailable};
+    use crate::modules::soundcloud_search::service::{busy, unavailable};
+
+    for (error, code, message, retry_after) in [
+        (
+            search_timeout(),
+            "search_timeout",
+            "Search took too long, try again",
+            "2",
+        ),
+        (
+            search_busy(),
+            "search_busy",
+            "Search is busy, try again",
+            "2",
+        ),
+        (
+            vibe_unavailable(),
+            "vibe_unavailable",
+            "Vibe search is unavailable right now",
+            "10",
+        ),
+        (
+            unavailable(10),
+            "soundcloud_search_unavailable",
+            "SoundCloud search is unavailable right now",
+            "10",
+        ),
+        (
+            busy(AdmissionRejection::Limited {
+                retry_after_seconds: 7,
+            }),
+            "soundcloud_search_busy",
+            "SoundCloud search is busy, try again shortly",
+            "7",
+        ),
+        (
+            resolve_busy(4),
+            "resolve_busy",
+            "Opening links is busy, try again shortly",
+            "4",
+        ),
+    ] {
+        let (status, served_retry_after, body) = error_wire(error).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(served_retry_after.as_deref(), Some(retry_after));
+        assert_eq!(
+            body,
+            json!({
+                "statusCode": 503,
+                "code": code,
+                "message": message,
+                "error": "Service Unavailable"
+            })
+        );
+    }
+}

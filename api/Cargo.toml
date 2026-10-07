@@ -69,6 +69,7 @@ rand_distr = "0.4"
 backend-contracts = { version = "1.0.0", path = "../backend-contracts" }
 catalog-ingest = { version = "0.1.0", path = "../utils/catalog-ingest" }
 catalog-normalize = { version = "0.1.0", path = "../utils/catalog-normalize" }
+entity-ref = { version = "0.1.0", path = "../utils/entity-ref" }
 sc-transport = { version = "0.1.0", path = "../utils/sc-transport" }
 catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }

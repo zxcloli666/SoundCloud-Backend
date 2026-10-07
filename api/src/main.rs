@@ -199,12 +199,26 @@ async fn main() {
         collab_vector.clone(),
         config.soundwave.clone(),
     );
+    let indexing = IndexingService::new(
+        pg.clone(),
+        background_jobs.clone(),
+        indexing_jobs,
+        config.max_track_duration_ms,
+    );
+    cold_refresh.install_indexing(indexing.clone());
+    let miss = crate::modules::resolve::CatalogMiss::new(
+        pg.clone(),
+        resolve.clone(),
+        indexing.clone(),
+        admission.clone(),
+    );
     let tracks = TracksService::new(crate::modules::tracks::TracksServiceDependencies {
         sc: sc.clone(),
         pg: pg.clone(),
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
+        miss: miss.clone(),
     });
     let playlists = PlaylistsService::new(PlaylistsDeps {
         sc: sc.clone(),
@@ -213,28 +227,21 @@ async fn main() {
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
         background_jobs: background_jobs.clone(),
+        miss: miss.clone(),
     });
-    let users = UsersService::new(pg.clone(), cold_refresh.clone());
+    let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
+    let soundcloud_search = crate::modules::soundcloud_search::SoundCloudSearch::new(
+        resolve.clone(),
+        cache.clone(),
+        admission.clone(),
+    );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
 
-    let indexing = IndexingService::new(
-        pg.clone(),
-        background_jobs.clone(),
-        indexing_jobs,
-        config.max_track_duration_ms,
-    );
-    cold_refresh.install_indexing(indexing.clone());
-
-    let likes = LikesService::new(
-        pg.clone(),
-        sync_queue.clone(),
-        indexing.clone(),
-        events.clone(),
-    );
+    let likes = LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
 
     let discover = DiscoverService::new(pg.clone(), cache.clone());
 
@@ -242,8 +249,6 @@ async fn main() {
         pg.clone(),
         cache.clone(),
         recommendations.clone(),
-        worker.clone(),
-        qdrant.clone(),
     );
 
     events.install_dislikes(dislikes.clone());
@@ -270,6 +275,8 @@ async fn main() {
         likes,
         resolve,
         search,
+        soundcloud_search,
+        miss,
         vibe,
         history,
         featured,

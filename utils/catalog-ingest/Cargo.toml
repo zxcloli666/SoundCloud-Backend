@@ -7,6 +7,7 @@ description = "Shared SoundCloud track ingest: payload parsing and the catalog u
 
 [dependencies]
 catalog-normalize = { version = "0.1.0", path = "../catalog-normalize" }
+entity-ref = { version = "0.1.0", path = "../entity-ref" }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "uuid", "json"] }

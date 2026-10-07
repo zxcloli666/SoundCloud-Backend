@@ -87,6 +87,16 @@ impl PlaylistMembership {
         Ok(membership_status(row))
     }
 
+    pub async fn track_if_untracked(&self, playlist_urn: &str) -> AppResult<()> {
+        sqlx::query_file!(
+            "queries/playlists/ensure_membership_tracked.sql",
+            playlist_urn
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn enqueue_observation_if_due(&self, playlist_urn: &str) {
         let claim = claim_observation_enqueue(&self.pool, playlist_urn).await;
         let Ok(Some(claimed_until)) = claim else {

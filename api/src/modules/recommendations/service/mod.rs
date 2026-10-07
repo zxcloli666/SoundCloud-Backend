@@ -5,6 +5,7 @@ mod types;
 pub(crate) mod util;
 mod verify;
 
+pub(crate) use qdrant_io::load_public_track_ids;
 #[cfg(test)]
 pub(crate) use qdrant_io::{LYRICS_VECTOR_REQUEST_FIELD, lyrics_vec_cache_key};
 pub use types::RecommendResult;

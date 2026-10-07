@@ -59,7 +59,7 @@ end
 local out = {}
 if type(data.collection) == "table" then
   for _, item in ipairs(data.collection) do
-    if type(item) == "table" and item.id ~= nil then
+    if type(item) == "table" then
       out[#out + 1] = item
     end
   end

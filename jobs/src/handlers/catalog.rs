@@ -12,6 +12,7 @@ use crate::queue::{JobError, JobResult};
 const KEY_BATCH: i64 = 500;
 const LINK_BATCH: i64 = 200;
 const MERGE_GROUP_BATCH: i64 = 100;
+const RELEASE_BATCH: i64 = 5000;
 
 pub struct CatalogWorkHandler {
     pool: PgPool,
@@ -68,6 +69,7 @@ impl CatalogWorkHandler {
     }
 
     async fn merge_duplicate_recordings(&self) -> JobResult {
+        self.release_hidden_winners().await?;
         let cursor = sqlx::query_file!("queries/catalog/load_merge_state.sql")
             .fetch_optional(&self.pool)
             .await
@@ -128,6 +130,21 @@ impl CatalogWorkHandler {
             info!(
                 groups = merged,
                 superseded, "duplicate recordings merged behind a serving winner"
+            );
+        }
+        Ok(())
+    }
+
+    async fn release_hidden_winners(&self) -> JobResult {
+        let released =
+            sqlx::query_file_scalar!("queries/catalog/release_hidden_winners.sql", RELEASE_BATCH)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(JobError::retryable)?;
+        if released > 0 {
+            info!(
+                released,
+                "duplicates released from a winner that no longer serves"
             );
         }
         Ok(())

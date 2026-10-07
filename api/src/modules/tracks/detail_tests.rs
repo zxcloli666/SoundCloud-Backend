@@ -18,7 +18,10 @@ struct Services {
 }
 
 async fn services(pool: &PgPool) -> anyhow::Result<Services> {
-    let deps = dependencies(pool)?;
+    services_from(pool, dependencies(pool).await?).await
+}
+
+async fn services_from(pool: &PgPool, deps: TracksServiceDependencies) -> anyhow::Result<Services> {
     let nats = crate::bus::nats::NatsService::connect(
         "nats://127.0.0.1:1",
         tokio_util::sync::CancellationToken::new(),
@@ -40,6 +43,7 @@ async fn services(pool: &PgPool) -> anyhow::Result<Services> {
             cold_refresh: deps.cold_refresh.clone(),
             tokens: deps.tokens.clone(),
             background_jobs: background,
+            miss: deps.miss.clone(),
         },
     );
     Ok(Services {
@@ -107,11 +111,15 @@ async fn secret_observations_return_persisted_metadata_and_do_not_persist_access
     let services = services(&pool).await?;
     let track = services
         .tracks
-        .get_by_id_with_fetch("18", "42", true, || async { Ok(remote_track()) })
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
+            Ok(remote_track())
+        })
         .await?;
     let playlist = services
         .playlists
-        .get_by_id_with_fetch("18", "42", true, || async { Ok(remote_playlist()) })
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
+            Ok(remote_playlist())
+        })
         .await?;
     assert_eq!(track["title"], "Remote title");
     assert_eq!(playlist["title"], "Remote mix");
@@ -131,14 +139,14 @@ async fn secret_observations_return_persisted_metadata_and_do_not_persist_access
     let calls = std::sync::atomic::AtomicUsize::new(0);
     let track_denied = services
         .tracks
-        .get_by_id_with_fetch("18", "42", false, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(remote_track())
         })
         .await;
     let playlist_denied = services
         .playlists
-        .get_by_id_with_fetch("18", "42", false, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(remote_playlist())
         })
@@ -154,7 +162,7 @@ async fn secret_observations_return_persisted_metadata_and_do_not_persist_access
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     let rejected = services
         .tracks
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             Err(crate::error::AppError::not_found("Secret rejected"))
         })
         .await;
@@ -173,7 +181,7 @@ async fn metadata_changed_during_secret_verification_wins_over_the_remote_reply(
     let services = services(&pool).await?;
     let track = services
         .tracks
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             services
                 .tracks
                 .update(
@@ -187,10 +195,11 @@ async fn metadata_changed_during_secret_verification_wins_over_the_remote_reply(
         .await?;
     let playlist = services
         .playlists
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             services
                 .playlists
                 .update(
+                    Uuid::nil(),
                     "17",
                     "42",
                     &serde_json::json!({"playlist":{"title":"Desired mix"}}),
@@ -214,14 +223,14 @@ async fn deletion_during_secret_verification_never_returns_the_remote_entity(
     let services = services(&pool).await?;
     let track = services
         .tracks
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             services.tracks.delete("17", "42").await?;
             Ok(remote_track())
         })
         .await;
     let playlist = services
         .playlists
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             services.playlists.delete("17", "42").await?;
             Ok(remote_playlist())
         })
@@ -245,7 +254,7 @@ async fn secret_response_identity_must_match_the_requested_entity(
     let services = services(&pool).await?;
     let result = services
         .tracks
-        .get_by_id_with_fetch("18", "42", true, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", true, || async {
             let mut wrong = remote_track();
             wrong["id"] = serde_json::json!(43);
             Ok(wrong)
@@ -262,7 +271,7 @@ async fn secret_response_identity_must_match_the_requested_entity(
     Ok(())
 }
 
-fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies> {
+async fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     let sc = ScClient::new(&sc_transport::ScConfig {
@@ -279,6 +288,7 @@ fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies> {
     );
     let tokens = TokenProvider::new(auth, OAuthAppTokenService::new(pool.clone()));
     Ok(TracksServiceDependencies {
+        miss: crate::modules::resolve::miss_tests::offline(pool).await?,
         sc,
         pg: pool.clone(),
         sync_queue: SyncQueueService::new(pool.clone(), redis),
@@ -306,7 +316,7 @@ async fn public_detail_with_secret_works_without_any_soundcloud_connection(
     sqlx::query("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id)
         VALUES ('42', 'soundcloud:tracks:42', 'Local title', 'local title', 120000, '17')")
         .execute(&pool).await?;
-    let service = TracksService::new(dependencies(&pool)?);
+    let service = TracksService::new(dependencies(&pool).await?);
     let value = tokio::time::timeout(
         Duration::from_secs(2),
         service.get_by_id(
@@ -329,7 +339,7 @@ async fn private_owner_detail_with_secret_works_without_any_soundcloud_connectio
     sqlx::query("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id, sharing)
         VALUES ('42', 'soundcloud:tracks:42', 'Private title', 'private title', 120000, '17', 'private')")
         .execute(&pool).await?;
-    let service = TracksService::new(dependencies(&pool)?);
+    let service = TracksService::new(dependencies(&pool).await?);
     let value = tokio::time::timeout(
         Duration::from_secs(2),
         service.get_by_id(
@@ -403,7 +413,7 @@ async fn an_unknown_track_is_queued_for_refresh_instead_of_fetched_in_the_reques
 
     let error = services
         .tracks
-        .get_by_id_with_fetch("18", "42", false, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(remote_track())
         })
@@ -428,7 +438,7 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
 
     let error = services
         .playlists
-        .get_by_id_with_fetch("18", "42", false, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(remote_playlist())
         })
@@ -593,7 +603,7 @@ async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
 
     let error = services
         .tracks
-        .get_by_id_with_fetch("18", "42", false, || async {
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(remote_track())
         })
@@ -603,5 +613,96 @@ async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert!(pending_jobs(&pool).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_unknown_public_track_without_soundcloud_is_refresh_pending(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let service = TracksService::new(dependencies(&pool).await?);
+    let error = service
+        .get_by_id(Uuid::now_v7(), "18", "soundcloud:tracks:4242", &[])
+        .await
+        .expect_err("nothing can load the track");
+    assert_eq!(error.public_code(), "track_refresh_pending");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn an_unknown_public_track_is_read_through_and_served(pool: PgPool) -> anyhow::Result<()> {
+    use crate::modules::resolve::miss_tests::{miss_with, redis_url, relay};
+    let mut deps = dependencies(&pool).await?;
+    deps.miss = miss_with(&pool, relay(), &redis_url(), 100).await?;
+    let service = TracksService::new(deps);
+    let track = service
+        .get_by_id(Uuid::now_v7(), "18", "soundcloud:tracks:4242", &[])
+        .await?;
+    assert_eq!(track["title"], "Remote 4242");
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM tracks WHERE sc_track_id = '4242'")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(stored, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_playlist_write_with_unknown_tracks_is_bounded_when_soundcloud_stalls(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    use crate::modules::resolve::miss_tests::{miss_with, redis_url};
+    let mut deps = dependencies(&pool).await?;
+    deps.miss = miss_with(
+        &pool,
+        crate::sc::read_tests::SearchRelay::stalled(),
+        &redis_url(),
+        1000,
+    )
+    .await?;
+    let services = services_from(&pool, deps).await?;
+    sqlx::query("INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, sharing)
+        VALUES ('42', 'soundcloud:playlists:42', 'Mix', 'mix', '17', 'public')")
+        .execute(&pool).await?;
+    sqlx::query("INSERT INTO user_owned_playlists (user_id, playlist_urn) VALUES ('17', 'soundcloud:playlists:42')")
+        .execute(&pool).await?;
+    let snapshot: Uuid = sqlx::query_scalar("INSERT INTO playlist_remote_snapshots
+        (playlist_urn, content_fingerprint, track_count) VALUES ('soundcloud:playlists:42', sha256(''::bytea), 0) RETURNING id")
+        .fetch_one(&pool).await?;
+    let observation: Uuid = sqlx::query_scalar("INSERT INTO playlist_remote_observations
+        (playlist_urn, snapshot_id, authority, outcome, pagination_complete, all_items_identified, declared_track_count, observed_track_count)
+        VALUES ('soundcloud:playlists:42', $1, 'owner', 'complete', true, true, 0, 0) RETURNING id")
+        .bind(snapshot).fetch_one(&pool).await?;
+    sqlx::query("INSERT INTO playlist_membership_state (playlist_urn) VALUES ('soundcloud:playlists:42') ON CONFLICT DO NOTHING")
+        .execute(&pool).await?;
+    sqlx::query("UPDATE playlist_membership_state SET baseline_generation = 1, baseline_observation_id = $1,
+        latest_observation_id = $1, sync_status = 'clean' WHERE playlist_urn = 'soundcloud:playlists:42'")
+        .bind(observation).execute(&pool).await?;
+    let tracks: Vec<serde_json::Value> = (501..=525)
+        .map(|id| serde_json::json!({"urn": format!("soundcloud:tracks:{id}")}))
+        .collect();
+    let started = std::time::Instant::now();
+    let error = services
+        .playlists
+        .update(
+            Uuid::now_v7(),
+            "17",
+            "soundcloud:playlists:42",
+            &serde_json::json!({"playlist": {"tracks": tracks}, "expectedProjectionRevision": 0}),
+            true,
+            Uuid::now_v7(),
+        )
+        .await
+        .expect_err("unknown tracks cannot be journaled");
+    assert!(
+        started.elapsed() < Duration::from_secs(12),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        error.public_code(),
+        crate::modules::playlists::journal::UNKNOWN_TRACK
+    );
     Ok(())
 }

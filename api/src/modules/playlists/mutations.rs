@@ -207,18 +207,9 @@ impl PlaylistMutations {
     }
 }
 
-pub(super) fn target_urn(target: &str) -> AppResult<String> {
-    let id = extract_sc_id(target);
-    let payload = backend_contracts::CatalogRefreshPayload {
-        entity: backend_contracts::CatalogEntity::Playlist,
-        sc_id: id.to_owned(),
-        owner_id: None,
-    };
-    let canonical = payload.entity.urn(id);
-    if !payload.is_valid() || (target != id && target != canonical) {
-        return Err(AppError::bad_request("invalid playlist identifier"));
-    }
-    Ok(canonical)
+pub(crate) fn target_urn(target: &str) -> AppResult<String> {
+    crate::common::sc_ids::require_ref(crate::common::sc_ids::EntityKind::Playlist, target)
+        .map(crate::common::sc_ids::EntityRef::urn)
 }
 
 #[cfg(test)]

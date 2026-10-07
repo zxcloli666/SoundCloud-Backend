@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 117;
+const LATEST_SCHEMA_VERSION: i64 = 125;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(

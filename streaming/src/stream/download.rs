@@ -82,6 +82,7 @@ async fn download_inner(
     Path(track_urn): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<DownloadResponse>, AppError> {
+    let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let session_id = extract_download_session_id(&headers)?;
     let session = state
         .pg

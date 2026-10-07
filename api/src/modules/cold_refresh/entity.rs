@@ -18,6 +18,23 @@ pub async fn enqueue_entity(
     enqueue_entity_in(&mut connection, entity, urn, owner_id, priority).await
 }
 
+pub async fn want_track(
+    pool: &PgPool,
+    sc_track_id: &str,
+    priority: catalog_ingest::TrackPriority,
+) -> AppResult<()> {
+    let wanted = [sc_track_id.to_owned()];
+    let missing =
+        sqlx::query_file_scalar!("queries/playlists/missing_catalog_tracks.sql", &wanted[..])
+            .fetch_all(pool)
+            .await?;
+    if missing.is_empty() {
+        catalog_ingest::bump_track_priority(pool, sc_track_id, priority).await?;
+        return Ok(());
+    }
+    enqueue_entity(pool, CatalogEntity::Track, sc_track_id, None).await
+}
+
 pub async fn refresh_pending(
     pool: &PgPool,
     entity: CatalogEntity,

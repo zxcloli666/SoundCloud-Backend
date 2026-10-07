@@ -107,6 +107,7 @@ dependencies = [
  "catalog-sources",
  "chrono",
  "deadpool-redis",
+ "entity-ref",
  "futures",
  "hex",
  "metrics",
@@ -774,6 +775,7 @@ version = "0.1.0"
 dependencies = [
  "catalog-normalize",
  "chrono",
+ "entity-ref",
  "serde_json",
  "sqlx",
  "uuid",
@@ -1371,6 +1373,10 @@ checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "entity-ref"
+version = "0.1.0"
 
 [[package]]
 name = "equator"

@@ -15,8 +15,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::config::{AdmissionCfg, AdmissionLimitCfg};
+use crate::error::AppError;
 
 const ADMISSION_SCRIPT: &str = r#"
 local window = tonumber(ARGV[3])
@@ -60,15 +62,24 @@ pub struct PublicAdmission {
     redis: RedisPool,
     config: AdmissionCfg,
     in_flight: Semaphore,
+    session_in_flight: Semaphore,
     namespace: String,
     last_warning_at: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Endpoint {
+pub enum Endpoint {
     Login,
     LinkCreate,
     Resolve,
+    SoundCloudSearch,
+    CatalogMiss,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionRejection {
+    Limited { retry_after_seconds: u64 },
+    Unavailable,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -99,21 +110,39 @@ impl PublicAdmission {
         Arc::new(Self {
             redis,
             in_flight: Semaphore::new(config.max_in_flight),
+            session_in_flight: Semaphore::new(config.max_in_flight),
             config,
             namespace: namespace.into(),
             last_warning_at: AtomicU64::new(0),
         })
     }
 
-    async fn check(&self, endpoint: Endpoint, address: SocketAddr) -> Decision {
-        let Ok(_permit) = self.in_flight.try_acquire() else {
+    pub async fn check_session(
+        &self,
+        endpoint: Endpoint,
+        session: Uuid,
+    ) -> Result<(), AdmissionRejection> {
+        match self.check(endpoint, session_identity(session)).await {
+            Decision::Allowed => Ok(()),
+            Decision::Limited {
+                retry_after_seconds,
+            } => Err(AdmissionRejection::Limited {
+                retry_after_seconds,
+            }),
+            Decision::Unavailable => Err(AdmissionRejection::Unavailable),
+        }
+    }
+
+    async fn check(&self, endpoint: Endpoint, identity: String) -> Decision {
+        let Ok(_permit) = self.gate(endpoint).try_acquire() else {
             return Decision::Unavailable;
         };
-        match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, address)).await {
+        match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, identity)).await
+        {
             Ok(Ok(decision)) => decision,
             Ok(Err(error)) => {
                 if self.warning_due() {
-                    warn!(endpoint = endpoint.name(), %error, "Auth admission store failed");
+                    warn!(endpoint = endpoint.name(), %error, "Admission store failed");
                 }
                 Decision::Unavailable
             }
@@ -122,7 +151,7 @@ impl PublicAdmission {
                     warn!(
                         endpoint = endpoint.name(),
                         timeout_ms = self.config.timeout.as_millis(),
-                        "Auth admission store timed out"
+                        "Admission store timed out"
                     );
                 }
                 Decision::Unavailable
@@ -133,15 +162,14 @@ impl PublicAdmission {
     async fn check_redis(
         &self,
         endpoint: Endpoint,
-        address: SocketAddr,
+        identity: String,
     ) -> Result<Decision, StoreError> {
         let limits = self.limits(endpoint);
         let global_key = format!("{}:{{{}}}:global", self.namespace, endpoint.key());
         let client_key = format!(
-            "{}:{{{}}}:client:{}",
+            "{}:{{{}}}:client:{identity}",
             self.namespace,
             endpoint.key(),
-            client_identity(address.ip())
         );
         let window_milliseconds = i64::try_from(self.config.window.as_millis()).unwrap_or(i64::MAX);
         let mut connection = self.redis.get().await?;
@@ -162,11 +190,20 @@ impl PublicAdmission {
         })
     }
 
+    fn gate(&self, endpoint: Endpoint) -> &Semaphore {
+        match endpoint {
+            Endpoint::Login | Endpoint::LinkCreate | Endpoint::Resolve => &self.in_flight,
+            Endpoint::SoundCloudSearch | Endpoint::CatalogMiss => &self.session_in_flight,
+        }
+    }
+
     fn limits(&self, endpoint: Endpoint) -> AdmissionLimitCfg {
         match endpoint {
             Endpoint::Login => self.config.login,
             Endpoint::LinkCreate => self.config.link_create,
             Endpoint::Resolve => self.config.resolve,
+            Endpoint::SoundCloudSearch => self.config.sc_search,
+            Endpoint::CatalogMiss => self.config.catalog_miss,
         }
     }
 
@@ -200,6 +237,8 @@ impl Endpoint {
             Self::Login => "login",
             Self::LinkCreate => "link-create",
             Self::Resolve => "resolve",
+            Self::SoundCloudSearch => "sc-search",
+            Self::CatalogMiss => "catalog-miss",
         }
     }
 
@@ -208,6 +247,8 @@ impl Endpoint {
             Self::Login => "/auth/login",
             Self::LinkCreate => "/auth/link/create",
             Self::Resolve => "/resolve",
+            Self::SoundCloudSearch => "SoundCloud search",
+            Self::CatalogMiss => "catalog miss",
         }
     }
 }
@@ -250,25 +291,24 @@ async fn admit(
         if limiter.warning_due() {
             warn!(
                 endpoint = endpoint.name(),
-                "Auth admission has no transport address"
+                "Admission has no transport address"
             );
         }
-        return rejection(AdmissionRejection::Unavailable, 1);
+        return rejection(endpoint, AdmissionRejection::Unavailable);
     };
 
-    match limiter.check(endpoint, address).await {
+    match limiter.check(endpoint, client_identity(address.ip())).await {
         Decision::Allowed => next.run(request).await,
         Decision::Limited {
             retry_after_seconds,
-        } => rejection(AdmissionRejection::Limited, retry_after_seconds),
-        Decision::Unavailable => rejection(AdmissionRejection::Unavailable, 1),
+        } => rejection(
+            endpoint,
+            AdmissionRejection::Limited {
+                retry_after_seconds,
+            },
+        ),
+        Decision::Unavailable => rejection(endpoint, AdmissionRejection::Unavailable),
     }
-}
-
-#[derive(Clone, Copy)]
-enum AdmissionRejection {
-    Limited,
-    Unavailable,
 }
 
 #[derive(Serialize)]
@@ -279,9 +319,22 @@ struct RejectionBody {
     message: &'static str,
 }
 
-fn rejection(kind: AdmissionRejection, retry_after_seconds: u64) -> Response {
+fn rejection(endpoint: Endpoint, kind: AdmissionRejection) -> Response {
+    let retry_after_seconds = match kind {
+        AdmissionRejection::Limited {
+            retry_after_seconds,
+        } => retry_after_seconds,
+        AdmissionRejection::Unavailable => 1,
+    };
+    if let Endpoint::Resolve = endpoint {
+        let mut response = resolve_busy(retry_after_seconds).into_response();
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
+        return response;
+    }
     let (status, code, message) = match kind {
-        AdmissionRejection::Limited => (
+        AdmissionRejection::Limited { .. } => (
             StatusCode::TOO_MANY_REQUESTS,
             "auth_admission_limited",
             "Too many authentication requests",
@@ -310,6 +363,15 @@ fn rejection(kind: AdmissionRejection, retry_after_seconds: u64) -> Response {
     response
 }
 
+pub(crate) fn resolve_busy(retry_after_seconds: u64) -> AppError {
+    AppError::coded(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "resolve_busy",
+        "Opening links is busy, try again shortly",
+    )
+    .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))
+}
+
 fn client_identity(address: IpAddr) -> String {
     let mut hash = Sha256::new();
     match address {
@@ -328,6 +390,10 @@ fn client_identity(address: IpAddr) -> String {
         }
     }
     hex::encode(hash.finalize())
+}
+
+fn session_identity(session: Uuid) -> String {
+    hex::encode(Sha256::digest(session.as_bytes()))
 }
 
 fn milliseconds_to_seconds(milliseconds: i64) -> u64 {

@@ -67,7 +67,12 @@ async fn ids(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Valu
         .dislikes
         .list_ids_by_user_id(&ctx.sc_user_id, 1000)
         .await?;
-    Ok(Json(json!({ "ids": ids })))
+    let urns: Vec<String> = ids
+        .iter()
+        .filter_map(|id| crate::common::sc_ids::EntityRef::track(id))
+        .map(crate::common::sc_ids::EntityRef::urn)
+        .collect();
+    Ok(Json(json!({ "ids": ids, "urns": urns })))
 }
 
 async fn list(

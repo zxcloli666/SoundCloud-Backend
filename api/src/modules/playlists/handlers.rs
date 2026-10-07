@@ -50,14 +50,38 @@ struct DetailQuery {
     show_tracks: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+}
+
 async fn search(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<crate::modules::search::query::PlaylistSearchQuery>,
+    Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
     let (page, limit) = p.resolved();
-    Ok(Json(st.search.playlists(&q, page, limit).await?))
+    let ty = sc_transport::SearchType::PlaylistsWithoutAlbums;
+    let found = st
+        .soundcloud_search
+        .page(
+            ctx.session_id,
+            ty,
+            q.q.as_deref().unwrap_or_default(),
+            page,
+            limit,
+        )
+        .await?;
+    let mut result = crate::modules::soundcloud_search::project_page(&st.pg, ty, found).await?;
+    crate::modules::likes::cold::apply_user_favorite_flag_to_playlists(
+        &st.pg,
+        &ctx.sc_user_id,
+        &mut result.collection,
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 async fn create(
@@ -65,7 +89,10 @@ async fn create(
     ctx: SessionCtx,
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    let v = st.playlists.create(&ctx.sc_user_id, &body).await?;
+    let v = st
+        .playlists
+        .create(ctx.session_id, &ctx.sc_user_id, &body)
+        .await?;
     Ok(Json(v))
 }
 
@@ -122,6 +149,7 @@ async fn update_playlist(
     let value = st
         .playlists
         .update(
+            ctx.session_id,
             &ctx.sc_user_id,
             &playlist_urn,
             &body,
@@ -142,16 +170,15 @@ async fn edit_tracks(
 ) -> AppResult<Json<crate::modules::playlists::PlaylistTracksPage>> {
     let idempotency_key = idempotency_key(&headers)?;
     let request = body.into_request()?;
-    let (page, limit) = p.resolved();
     let mut result = st
         .playlists
         .edit_tracks(
+            ctx.session_id,
             &ctx.sc_user_id,
             &playlist_urn,
             request,
             idempotency_key,
-            page,
-            limit,
+            p.resolved(),
         )
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.page.collection).await?;

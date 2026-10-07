@@ -15,7 +15,7 @@ mod bootstrap;
 
 pub mod collections {
     pub use backend_contracts::vector_store::{
-        QUERY_VEC_LYRICS, QUERY_VEC_MULAN, TRACKS_CLAP, TRACKS_COLLAB, TRACKS_LYRICS, TRACKS_MERT,
+        QUERY_VEC_MULAN, TRACKS_CLAP, TRACKS_COLLAB, TRACKS_LYRICS, TRACKS_MERT,
     };
 }
 

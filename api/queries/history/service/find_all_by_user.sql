@@ -6,7 +6,8 @@ SELECT id,
        artist_urn,
        artwork_url,
        duration,
-       played_at
+       played_at,
+       NULL::text AS track_urn
 FROM listening_history
 WHERE soundcloud_user_id = ANY ($1)
 ORDER BY played_at DESC LIMIT $2

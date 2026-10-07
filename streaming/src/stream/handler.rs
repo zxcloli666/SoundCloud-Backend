@@ -89,6 +89,7 @@ async fn stream_inner(
     headers: HeaderMap,
     Query(query): Query<StreamQuery>,
 ) -> Result<Response, AppError> {
+    let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let access = extract_stream_access(&state, &track_urn, &query)?;
     let session = state
         .pg
@@ -582,6 +583,39 @@ mod tests {
                  ticket; reading `{taken_from_the_caller}` here lets a caller reach the audio \
                  while skipping that check entirely"
             );
+        }
+    }
+
+    #[test]
+    fn the_path_is_canonical_before_the_ticket_or_any_storage_key_sees_it() {
+        for (file, source, entrance) in [
+            (
+                "handler.rs",
+                include_str!("handler.rs"),
+                "async fn stream_inner(",
+            ),
+            (
+                "download.rs",
+                include_str!("download.rs"),
+                "async fn download_inner(",
+            ),
+        ] {
+            let body = source
+                .split_once(entrance)
+                .expect("the entrance is still here")
+                .1;
+            let canonical = body
+                .find("canonical_track_urn(&track_urn)")
+                .unwrap_or_else(|| panic!("{file} reads its track without canonicalizing it"));
+            for later in ["extract_stream_access", "collect_entries", "storage."] {
+                if let Some(at) = body.find(later) {
+                    assert!(
+                        canonical < at,
+                        "{file}: `{later}` runs before the path is canonical, so a bare id \
+                         could reach a ticket or an object key"
+                    );
+                }
+            }
         }
     }
 

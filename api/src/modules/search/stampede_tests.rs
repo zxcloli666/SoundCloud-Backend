@@ -5,7 +5,6 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::cache::CacheService;
-use crate::modules::lyrics::WorkerClient;
 use crate::modules::recommendations::live_fixture::service;
 
 use super::semantic::{VibeSearchService, testing};
@@ -19,15 +18,10 @@ async fn vibe(pg: PgPool) -> anyhow::Result<Arc<VibeSearchService>> {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
     )
     .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let cache = CacheService::new(redis);
-    let qdrant = recommendations.qdrant.clone();
-    let worker = WorkerClient::new(recommendations.nats.clone(), cache.clone(), qdrant.clone());
     Ok(VibeSearchService::new(
         pg,
-        cache,
+        CacheService::new(redis),
         recommendations,
-        worker,
-        qdrant,
     ))
 }
 
@@ -79,6 +73,44 @@ async fn sixteen_identical_misses_do_the_expensive_work_once(pg: PgPool) -> anyh
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
+async fn a_failed_vibe_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
+    let vibe = vibe(pg).await?;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let key = key("vibe-failed");
+
+    let started = std::time::Instant::now();
+    let answers = futures::future::join_all((0..WAITERS).map(|_| {
+        let vibe = vibe.clone();
+        let runs = runs.clone();
+        let key = key.clone();
+        async move {
+            testing::expensive_once(&vibe, &key, move || {
+                let runs = runs.clone();
+                async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(WORK).await;
+                    Err(super::failure::vibe_unavailable())
+                }
+            })
+            .await
+        }
+    }))
+    .await;
+    let waited = started.elapsed();
+
+    for answer in &answers {
+        let error = answer
+            .as_ref()
+            .expect_err("a failed vibe search is an error");
+        assert_eq!(error.public_code(), "vibe_unavailable");
+    }
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert!(waited < WORK * 4, "{waited:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn two_different_keys_are_not_made_to_wait_for_each_other(pg: PgPool) -> anyhow::Result<()> {
     let vibe = vibe(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
@@ -121,19 +153,13 @@ async fn two_different_keys_are_not_made_to_wait_for_each_other(pg: PgPool) -> a
     Ok(())
 }
 
-async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::service::SearchService>> {
-    let redis = deadpool_redis::Config::from_url(
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
-    )
-    .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    Ok(super::service::SearchService::new(
-        pg,
-        CacheService::new(redis),
-    ))
+async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::SearchService>> {
+    let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    Ok(super::SearchService::new(pg, CacheService::new(redis)))
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
 async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> anyhow::Result<()> {
     let search = catalog_search(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
@@ -144,15 +170,16 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
         let runs = runs.clone();
         let key = key.clone();
         async move {
-            super::service::testing::expensive_once(&search, &key, move || {
-                let runs = runs.clone();
-                async move {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(WORK).await;
-                    Ok(7_u32)
-                }
-            })
-            .await
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Ok(7_u32)
+                    }
+                })
+                .await
         }
     }))
     .await;
@@ -163,7 +190,7 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
     assert_eq!(
         runs.load(Ordering::SeqCst),
         1,
-        "sixteen callers asking `/search/db/artists` for the same phrase ran the full-text \
+        "sixteen callers asking `/search/db/tracks` for the same phrase ran the catalog \
          search {} times; a popular phrase whose cache just expired brings all of that to \
          PostgreSQL at once",
         runs.load(Ordering::SeqCst)
@@ -171,8 +198,53 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
     Ok(())
 }
 
+const STAMPEDE: usize = 8;
+
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+async fn a_timed_out_catalog_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
+    let search = catalog_search(pg).await?;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let key = key("catalog-timeout");
+
+    let started = std::time::Instant::now();
+    let answers = futures::future::join_all((0..STAMPEDE).map(|_| {
+        let search = search.clone();
+        let runs = runs.clone();
+        let key = key.clone();
+        async move {
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Err::<u32, _>(super::failure::search_timeout())
+                    }
+                })
+                .await
+        }
+    }))
+    .await;
+    let waited = started.elapsed();
+
+    for answer in &answers {
+        let error = answer.as_ref().expect_err("a timed out search is an error");
+        assert_eq!(error.public_code(), "search_timeout");
+    }
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "callers waiting on a phrase that timed out ran it again one after another"
+    );
+    assert!(
+        waited < WORK * 4,
+        "{STAMPEDE} callers of a timed out phrase took {waited:?}; the waiters queued for \
+         their own rerun instead of sharing the leader's answer"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -185,15 +257,16 @@ async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
         let runs = runs.clone();
         let key = key(&format!("catalog-different-{index}"));
         async move {
-            super::service::testing::expensive_once(&search, &key, move || {
-                let runs = runs.clone();
-                async move {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(WORK).await;
-                    Ok(index as u32)
-                }
-            })
-            .await
+            search
+                .cached(&key, move || {
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(WORK).await;
+                        Ok(index as u32)
+                    }
+                })
+                .await
         }
     }))
     .await;

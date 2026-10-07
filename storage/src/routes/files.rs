@@ -3,21 +3,27 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
-use crate::backend::{Backend, BackendError};
 use crate::AppState;
+use crate::backend::{Backend, BackendError};
 
 const REDIRECT_PRESIGN_EXPIRES: Duration = Duration::from_secs(15 * 60);
 
-fn validate_path(path: &str) -> Result<(), StatusCode> {
+fn validate_path(path: &str) -> Result<String, StatusCode> {
     if path.contains("..") || path.starts_with('/') {
         return Err(StatusCode::FORBIDDEN);
     }
-    Ok(())
+    Ok(object_path(path))
+}
+
+fn object_path(path: &str) -> String {
+    path.strip_suffix(".m4a")
+        .and_then(crate::backend::canonical_track_filename)
+        .map_or_else(|| path.to_owned(), |stem| crate::backend::key_for(&stem))
 }
 
 /// GET /{path} — stream bytes to client (never redirect, even for S3 backend).
@@ -25,7 +31,7 @@ pub async fn serve(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_path(&path)?;
+    let path = validate_path(&path)?;
 
     let (info, stream) = match state.backend.stream(&path).await {
         Ok(v) => v,
@@ -60,7 +66,7 @@ pub async fn redirect(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_path(&path)?;
+    let path = validate_path(&path)?;
 
     match &*state.backend {
         Backend::S3(s3) => match s3.presign_get(&path, REDIRECT_PRESIGN_EXPIRES).await {
@@ -87,7 +93,7 @@ pub async fn head(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
-    validate_path(&path)?;
+    let path = validate_path(&path)?;
 
     let info = match state.backend.head(&path).await {
         Ok(Some(info)) => info,
@@ -140,6 +146,10 @@ pub async fn delete(
     if filename.contains("..") || filename.contains('/') {
         return Err((StatusCode::BAD_REQUEST, "invalid filename".into()));
     }
+    let filename = crate::backend::canonical_track_filename(&filename).ok_or((
+        StatusCode::BAD_REQUEST,
+        "filename must be a soundcloud track".into(),
+    ))?;
 
     let key = crate::backend::key_for(&filename);
     let deleted = state
@@ -155,4 +165,25 @@ pub async fn delete(
     }
 
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_path;
+
+    #[test]
+    fn a_track_object_is_always_read_under_its_canonical_key() {
+        for path in ["soundcloud_tracks_42.m4a", "42.m4a"] {
+            assert_eq!(
+                validate_path(path).unwrap(),
+                "soundcloud_tracks_42.m4a",
+                "{path}"
+            );
+        }
+        for path in ["covers/42.jpg", "soundcloud_tracks_042.m4a", "notes.txt"] {
+            assert_eq!(validate_path(path).unwrap(), path, "{path}");
+        }
+        assert!(validate_path("../42.m4a").is_err());
+        assert!(validate_path("/42.m4a").is_err());
+    }
 }

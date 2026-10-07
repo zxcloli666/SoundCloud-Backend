@@ -188,6 +188,18 @@ mod router_body_tests;
 mod router_cache_tests;
 
 #[cfg(test)]
+#[path = "router_search_tests.rs"]
+mod router_search_tests;
+
+#[cfg(test)]
+#[path = "router_identity_tests.rs"]
+mod router_identity_tests;
+
+#[cfg(test)]
+#[path = "router_projection_tests.rs"]
+mod router_projection_tests;
+
+#[cfg(test)]
 mod tests {
     use super::is_sensitive_path;
 

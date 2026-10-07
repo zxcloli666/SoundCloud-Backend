@@ -37,33 +37,17 @@ async fn resolve(
     OptionalSession(session): OptionalSession,
     Query(q): Query<ResolveQuery>,
 ) -> AppResult<Response> {
-    let input = ResolveInput::parse(&q.url)?;
+    let mut input = ResolveInput::parse(&q.url)?;
+    if input.short_link {
+        input = expand_short_link(&st, &input.upstream).await?;
+    }
     let viewer = session.as_ref().map(|session| session.sc_user_id.as_str());
-    let alias_key = st.cache.build_key(
-        "GET",
-        &format!("/resolve-identity-v1?url={}", input.upstream),
-        CacheScope::Shared,
-        None,
-    );
-    if !input.requires_upstream {
-        let mut key = repository::find(&st.pg, &input).await?;
-        let from_alias = key.is_none() && input.short_link;
-        if key.is_none()
-            && input.short_link
-            && let Ok(Some(urn)) = st.cache.get_raw(&alias_key).await
-        {
-            key = EntityKey::parse(&urn);
-        }
-        if let Some(key) = key {
-            match repository::load(&st.pg, &key, viewer, false).await {
-                Ok(local) => {
-                    enqueue_stale(&st, &key, &local, viewer).await;
-                    return response(&local.value);
-                }
-                Err(error) if from_alias && error.status() == StatusCode::NOT_FOUND => {}
-                Err(error) => return Err(error),
-            }
-        }
+    if !input.requires_upstream
+        && let Some(key) = repository::find(&st.pg, &input).await?
+    {
+        let local = repository::load(&st.pg, &key, viewer, false).await?;
+        enqueue_stale(&st, &key, &local, viewer).await;
+        return response(&decorate(&st, &key, local.value, viewer).await?);
     }
 
     let token_kind = session.as_ref().map_or(TokenKind::PublicPool, |session| {
@@ -94,28 +78,81 @@ async fn resolve(
             "SoundCloud returned a different entity",
         ));
     }
-    persist_resolved(&st, &key, &fetched, observation).await?;
-    let local = repository::load(
-        &st.pg,
-        &key,
-        viewer,
-        input.requires_upstream || input.short_link,
-    )
-    .await?;
-    if input.short_link && !input.requires_upstream && local.public {
-        let _ = st
-            .cache
-            .set_raw(
-                &alias_key,
-                &key.urn(),
-                86400,
-                None,
-                CacheScope::Shared,
-                None,
-            )
-            .await;
+    st.miss
+        .persist(
+            key.entity,
+            &fetched,
+            catalog_ingest::TrackPriority::Discovery,
+            observation,
+        )
+        .await?;
+    let local = repository::load(&st.pg, &key, viewer, input.requires_upstream).await?;
+    response(&decorate(&st, &key, local.value, viewer).await?)
+}
+
+const SHORT_LINK_TTL_SEC: u64 = 86400;
+
+async fn expand_short_link(st: &AppState, short: &str) -> AppResult<ResolveInput> {
+    let key = st.cache.build_key(
+        "GET",
+        &format!("/resolve-short-link-v1?url={short}"),
+        CacheScope::Shared,
+        None,
+    );
+    if let Ok(Some(cached)) = st.cache.get_raw(&key).await
+        && let Ok(input) = ResolveInput::expanded(&cached)
+    {
+        return Ok(input);
     }
-    response(&local.value)
+    let location = st
+        .resolve
+        .short_link_target(short)
+        .await
+        .map_err(upstream_unavailable)?;
+    let input = ResolveInput::expanded(&location)?;
+    let _ = st
+        .cache
+        .set_raw(
+            &key,
+            &input.upstream,
+            SHORT_LINK_TTL_SEC,
+            None,
+            CacheScope::Shared,
+            None,
+        )
+        .await;
+    Ok(input)
+}
+
+async fn decorate(
+    st: &AppState,
+    key: &EntityKey,
+    value: Value,
+    viewer: Option<&str>,
+) -> AppResult<Value> {
+    let mut single = [value];
+    match key.entity {
+        CatalogEntity::Track => {
+            crate::modules::enrich::dto::apply_to_tracks(&st.pg, &mut single).await?;
+            if let Some(viewer) = viewer {
+                crate::modules::likes::cold::apply_user_favorite_flag(&st.pg, viewer, &mut single)
+                    .await?;
+            }
+        }
+        CatalogEntity::Playlist => {
+            if let Some(viewer) = viewer {
+                crate::modules::likes::cold::apply_user_favorite_flag_to_playlists(
+                    &st.pg,
+                    viewer,
+                    &mut single,
+                )
+                .await?;
+            }
+        }
+        _ => {}
+    }
+    let [value] = single;
+    Ok(value)
 }
 
 const UPSTREAM_RETRY_AFTER: i64 = 30;
@@ -141,35 +178,6 @@ fn response(value: &Value) -> AppResult<Response> {
         axum::http::HeaderValue::from_static("no-store, private"),
     );
     Ok(response)
-}
-
-async fn persist_resolved(
-    st: &AppState,
-    key: &EntityKey,
-    value: &Value,
-    observation: catalog_ingest::Observation,
-) -> AppResult<()> {
-    match key.entity {
-        CatalogEntity::Track => {
-            st.indexing
-                .ingest_track_from_sc(value, catalog_ingest::TrackPriority::Discovery, observation)
-                .await?
-        }
-        CatalogEntity::User => {
-            crate::modules::users::UserRepository::new(st.pg.clone())
-                .upsert_from_sc(value, observation)
-                .await?;
-        }
-        CatalogEntity::Playlist => {
-            crate::modules::playlists::PlaylistRepository::new(st.pg.clone())
-                .upsert_from_sc(value, observation)
-                .await?;
-        }
-        CatalogEntity::Profile | CatalogEntity::WebProfiles => {
-            return Err(AppError::bad_request("Unsupported entity"));
-        }
-    }
-    Ok(())
 }
 
 async fn enqueue_stale(

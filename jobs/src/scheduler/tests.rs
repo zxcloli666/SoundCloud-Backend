@@ -422,3 +422,16 @@ async fn configured_schedule_owns_its_enabled_state(pool: PgPool) -> anyhow::Res
     assert!(!enabled);
     Ok(())
 }
+
+#[test]
+fn the_search_lexicon_is_refreshed_once_a_day() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SearchTermsRefresh)
+        .expect("search terms schedule");
+
+    assert_eq!(schedule.interval_seconds, 24 * 60 * 60);
+    assert_eq!(schedule.priority, -10);
+    assert_eq!(schedule.max_attempts, 2);
+    assert_eq!(schedule.initial_delay_seconds, 24 * 60 * 60);
+}

@@ -256,11 +256,10 @@ impl IndexingHandler {
     }
 
     fn storage_redirect_url(&self, sc_track_id: &str) -> JobResult<String> {
-        append_path(
-            self.storage_url.clone(),
-            &["redirect", &format!("soundcloud_tracks_{sc_track_id}.m4a")],
-        )
-        .map(Into::into)
+        let key = catalog_ingest::track_object_key(sc_track_id).ok_or_else(|| {
+            JobError::permanent(anyhow::anyhow!("indexing has an invalid track id"))
+        })?;
+        append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
     }
 }
 
@@ -315,6 +314,7 @@ mod tests {
                  index_state varchar(16) NOT NULL,
                  index_priority smallint NOT NULL DEFAULT 0,
                  needs_duration_resolve boolean NOT NULL DEFAULT false,
+                 pipeline_held boolean NOT NULL DEFAULT false,
                  s3_verified_at timestamptz,
                  indexed_at timestamptz,
                  created_at timestamptz NOT NULL DEFAULT now() - interval '1 hour',
@@ -407,6 +407,21 @@ mod tests {
 
         assert!(stuck(&pool).await?.is_empty());
         assert!(in_flight(&pool).await?);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_track_held_until_it_is_opened_is_never_reaped(pool: PgPool) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::query("UPDATE tracks SET pipeline_held = true WHERE sc_track_id = '42'")
+            .execute(&pool)
+            .await?;
+        assert!(stuck(&pool).await?.is_empty());
+
+        sqlx::query("UPDATE tracks SET pipeline_held = false WHERE sc_track_id = '42'")
+            .execute(&pool)
+            .await?;
+        assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
         Ok(())
     }
 

@@ -42,12 +42,45 @@ pub struct ScTrackFields {
 }
 
 impl ScTrackFields {
+    pub(crate) fn row(&self) -> Value {
+        serde_json::json!({
+            "sc_track_id": self.sc_track_id,
+            "urn": self.urn,
+            "title": self.title,
+            "title_normalized": self.title_normalized,
+            "description": self.description,
+            "genre": self.genre,
+            "tags": self.tags,
+            "duration_ms": self.duration_ms,
+            "artwork_url": self.artwork_url,
+            "permalink_url": self.permalink_url,
+            "waveform_url": self.waveform_url,
+            "language": self.language,
+            "isrc": self.isrc,
+            "metadata_artist": self.metadata_artist,
+            "sharing": self.sharing,
+            "sc_created_at": self.sc_created_at,
+            "sc_last_modified": self.sc_last_modified,
+            "release_year": self.release_year,
+            "release_date": self.release_date,
+            "uploader_sc_user_id": self.uploader_sc_user_id,
+            "uploader_urn": self.uploader_urn,
+            "uploader_username": self.uploader_username,
+            "uploader_avatar_url": self.uploader_avatar_url,
+            "play_count_sc": self.play_count_sc,
+            "likes_count_sc": self.likes_count_sc,
+            "reposts_count_sc": self.reposts_count_sc,
+            "comments_count_sc": self.comments_count_sc,
+            "needs_duration_resolve": self.needs_duration_resolve,
+            "is_cover": self.is_cover,
+            "sc_metadata": self.sc_metadata,
+        })
+    }
+
     pub fn from_sc(payload: &Value) -> Option<Self> {
-        let urn = payload.get("urn").and_then(|v| v.as_str())?.to_string();
-        if urn.is_empty() {
-            return None;
-        }
-        let sc_track_id = crate::sc_ids::extract_sc_id(&urn).to_string();
+        let entity = crate::sc_ids::payload_ref(crate::EntityKind::Track, payload)?;
+        let urn = entity.urn();
+        let sc_track_id = entity.sc_id();
 
         let raw_title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
         if raw_title.is_empty() {
@@ -88,18 +121,9 @@ impl ScTrackFields {
         let (release_year, release_date) = release_date::extract(payload);
 
         let user = payload.get("user");
-        let uploader_urn = user
-            .and_then(|u| u.get("urn"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let uploader_sc_user_id = uploader_urn
-            .as_deref()
-            .map(|u| crate::sc_ids::extract_sc_id(u).to_string())
-            .or_else(|| {
-                user.and_then(|u| u.get("id"))
-                    .and_then(|v| v.as_i64())
-                    .map(|i| i.to_string())
-            });
+        let uploader = user.and_then(crate::sc_ids::user_ref);
+        let uploader_urn = uploader.map(crate::EntityRef::urn);
+        let uploader_sc_user_id = uploader.map(crate::EntityRef::sc_id);
         let uploader_username = user
             .and_then(|u| u.get("username"))
             .and_then(|v| v.as_str())

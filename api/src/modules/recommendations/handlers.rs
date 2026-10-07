@@ -4,13 +4,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::common::query::parse_languages;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::recommendations::home_wave::HomeRequest;
-use crate::modules::recommendations::service::RecommendResult;
+use crate::modules::recommendations::projected;
 use crate::modules::recommendations::smart_wave::{
     self, SmartWaveRequest, SmartWaveResponse, SmartWaveSeed,
 };
@@ -78,6 +79,7 @@ async fn home(
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };
     let json = st.recommendations.home_wave_coalesced(req).await?;
+    let json = projected::clusters(&st.pg, &ctx.sc_user_id, &json).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
@@ -99,6 +101,12 @@ async fn similar(
 ) -> AppResult<Response> {
     let per_cluster = parse_limit(q.limit.as_deref(), 12).clamp(4, 24);
     let languages = parse_languages(q.languages.as_deref());
+    let Some(track_id) = crate::common::sc_ids::normalize_sc_track_id(&track_id) else {
+        return Ok(
+            Json(crate::modules::recommendations::clusters::ClusterBuilder::new().finish())
+                .into_response(),
+        );
+    };
     let json = st
         .recommendations
         .similar_wave_coalesced(
@@ -109,6 +117,7 @@ async fn similar(
             parse_flag(q.hide_listened.as_deref(), true),
         )
         .await?;
+    let json = projected::clusters(&st.pg, &ctx.sc_user_id, &json).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
@@ -136,6 +145,7 @@ async fn artist(
             parse_flag(q.hide_listened.as_deref(), true),
         )
         .await?;
+    let json = projected::clusters(&st.pg, &ctx.sc_user_id, &json).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
@@ -151,16 +161,18 @@ struct SearchQuery {
 
 async fn search(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(q): Query<SearchQuery>,
-) -> AppResult<Json<Vec<RecommendResult>>> {
+) -> AppResult<Json<Vec<Value>>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
     let out = st
         .recommendations
         .search_by_text(&q.q.unwrap_or_default(), limit, languages.as_deref())
         .await?;
-    Ok(Json(out.results))
+    Ok(Json(
+        projected::results(&st.pg, &ctx.sc_user_id, out.results).await?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,8 +221,19 @@ struct WaveQuery {
 
 #[derive(Debug, Serialize)]
 struct WavePayload {
-    tracks: Vec<RecommendResult>,
+    tracks: Vec<Value>,
     cursor: String,
+}
+
+async fn wave_payload(
+    st: &AppState,
+    sc_user_id: &str,
+    response: SmartWaveResponse,
+) -> AppResult<Json<WavePayload>> {
+    Ok(Json(WavePayload {
+        tracks: projected::results(&st.pg, sc_user_id, response.tracks).await?,
+        cursor: response.cursor,
+    }))
 }
 
 async fn wave_user(
@@ -234,8 +257,8 @@ async fn wave_user(
         seed: SmartWaveSeed::User,
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };
-    let SmartWaveResponse { tracks, cursor } = smart_wave::build(&st.recommendations, req).await?;
-    Ok(Json(WavePayload { tracks, cursor }))
+    let response = smart_wave::build(&st.recommendations, req).await?;
+    wave_payload(&st, &ctx.sc_user_id, response).await
 }
 
 async fn wave_track(
@@ -246,7 +269,9 @@ async fn wave_track(
 ) -> AppResult<Json<WavePayload>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
-    let Ok(seed) = seed_track_id.parse::<u64>() else {
+    let Some(seed) = crate::common::sc_ids::EntityRef::track(&seed_track_id)
+        .map(crate::common::sc_ids::EntityRef::id)
+    else {
         return Ok(Json(WavePayload {
             tracks: Vec::new(),
             cursor: String::new(),
@@ -260,8 +285,8 @@ async fn wave_track(
         seed: SmartWaveSeed::Track(seed),
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };
-    let SmartWaveResponse { tracks, cursor } = smart_wave::build(&st.recommendations, req).await?;
-    Ok(Json(WavePayload { tracks, cursor }))
+    let response = smart_wave::build(&st.recommendations, req).await?;
+    wave_payload(&st, &ctx.sc_user_id, response).await
 }
 
 async fn wave_artist(
@@ -285,8 +310,8 @@ async fn wave_artist(
         seed: SmartWaveSeed::Artist(artist_id, &top_tracks),
         hide_listened: parse_flag(q.hide_listened.as_deref(), true),
     };
-    let SmartWaveResponse { tracks, cursor } = smart_wave::build(&st.recommendations, req).await?;
-    Ok(Json(WavePayload { tracks, cursor }))
+    let response = smart_wave::build(&st.recommendations, req).await?;
+    wave_payload(&st, &ctx.sc_user_id, response).await
 }
 
 #[derive(Debug, Deserialize)]
