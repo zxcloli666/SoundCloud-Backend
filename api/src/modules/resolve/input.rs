@@ -65,6 +65,8 @@ fn invalid_payload() -> AppError {
     )
 }
 
+const SECRET_TOKEN: &str = "secret_token";
+
 pub(super) struct ResolveInput {
     pub upstream: String,
     pub entity: Option<EntityKey>,
@@ -94,7 +96,7 @@ impl ResolveInput {
             url.host_str(),
             Some("soundcloud.com" | "www.soundcloud.com" | "m.soundcloud.com")
         );
-        let short_link = matches!(url.host_str(), Some("on.soundcloud.com" | "snd.sc"));
+        let short_link = url.host_str() == Some("on.soundcloud.com");
         if !matches!(url.scheme(), "http" | "https")
             || (!main_host && !short_link)
             || !url.username().is_empty()
@@ -106,30 +108,49 @@ impl ResolveInput {
             ));
         }
         url.set_fragment(None);
-        let segments: Vec<_> = url.path_segments().into_iter().flatten().collect();
-        let secret_path = matches!(segments.as_slice(), [_, _, secret] if secret.starts_with("s-"))
-            || matches!(segments.as_slice(), [_, "sets", _, secret] if secret.starts_with("s-"));
-        let requires_upstream = secret_path
-            || url
-                .query_pairs()
-                .any(|(key, _)| key != "si" && !key.starts_with("utm_"));
-        let mut permalinks = Vec::new();
-        if !requires_upstream {
+        let kept: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key == SECRET_TOKEN)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        if kept.is_empty() {
             url.set_query(None);
-            if main_host {
-                let path = url.path().trim_end_matches('/').to_owned();
+        } else {
+            url.query_pairs_mut().clear().extend_pairs(&kept);
+        }
+        let mut segments: Vec<String> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let secret_at = secret_segment(&segments);
+        let requires_upstream = secret_at.is_some() || !kept.is_empty();
+        let mut permalinks = Vec::new();
+        if main_host {
+            for (index, segment) in segments.iter_mut().enumerate() {
+                if Some(index) != secret_at {
+                    *segment = segment.to_lowercase();
+                }
+            }
+            let path = format!("/{}", segments.join("/"));
+            if !requires_upstream {
                 for scheme in ["https", "http"] {
                     for host in ["soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"] {
                         permalinks.push(format!("{scheme}://{host}{path}"));
                         permalinks.push(format!("{scheme}://{host}{path}/"));
                     }
                 }
-                url.set_scheme("https")
-                    .map_err(|_| AppError::bad_request("Invalid URL scheme"))?;
-                url.set_host(Some("soundcloud.com"))
-                    .map_err(|_| AppError::bad_request("Invalid URL host"))?;
-                url.set_path(&path);
             }
+            url.set_scheme("https")
+                .map_err(|_| AppError::bad_request("Invalid URL scheme"))?;
+            url.set_host(Some("soundcloud.com"))
+                .map_err(|_| AppError::bad_request("Invalid URL host"))?;
+            url.set_path(&path);
+        } else {
+            url.set_scheme("https")
+                .map_err(|_| AppError::bad_request("Invalid URL scheme"))?;
         }
         Ok(Self {
             upstream: url.into(),
@@ -138,5 +159,17 @@ impl ResolveInput {
             requires_upstream,
             short_link,
         })
+    }
+}
+
+fn secret_segment(segments: &[String]) -> Option<usize> {
+    match segments {
+        [_, middle, secret] if !middle.eq_ignore_ascii_case("sets") && secret.starts_with("s-") => {
+            Some(2)
+        }
+        [_, sets, _, secret] if sets.eq_ignore_ascii_case("sets") && secret.starts_with("s-") => {
+            Some(3)
+        }
+        _ => None,
     }
 }
