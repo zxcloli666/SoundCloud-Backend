@@ -33,7 +33,7 @@ from worker.runtime.engine_client import (
     SlotUnavailable,
     next_message_id,
 )
-from worker.runtime.protocol import Call, Reply, SlotSpec
+from worker.runtime.protocol import Call, ErrorKind, Reply, SlotSpec
 from worker.runtime.supervisor import (
     LANE_GROUPS,
     STATE_BROKEN,
@@ -182,6 +182,20 @@ async def test_deadline_kill_is_planned_and_respawns_immediately() -> None:
         assert counters.value("slot_kills_deadline_total", slot="a") == 1
         assert counters.value("slot_crashes_total", slot="a") == 0
         assert supervisor.snapshot()["a"]["kills_deadline"] == 1
+    finally:
+        await supervisor.stop()
+
+
+async def test_an_expired_call_keeps_the_engine_and_its_loaded_models() -> None:
+    counters = Counters()
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))], counters=counters)
+    try:
+        before = supervisor.engines()
+        reply = await call_once(supervisor, "a", "expire")
+        assert reply.error_kind is ErrorKind.EXPIRED
+        assert supervisor.engines() == before
+        assert counters.value("slot_restarts_total", slot="a") == 0
+        assert (await call_once(supervisor, "a")).ok
     finally:
         await supervisor.stop()
 

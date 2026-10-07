@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -24,6 +25,7 @@ from worker.domain.lyrics import (
 )
 from worker.domain.lyrics import regions as region_tools
 from worker.domain.lyrics.align import RegionAligner
+from worker.domain.lyrics.pace import Pace
 from worker.domain.lyrics.placement import LineTiming, timings_from_words
 from worker.domain.lyrics.regions import Region
 from worker.domain.lyrics.tokens import TokenizedLine
@@ -43,6 +45,7 @@ LANE = "transcribe"
 SEPARATION_SAMPLE_RATE = 44_100
 SPEECH_SAMPLE_RATE = 16_000
 MIN_SPEECH_S = 5.0
+SEPARATION_SHARE = 0.5
 STRONG_LANGUAGE_PROB = 0.8
 RESCUE_SKIPS = frozenset(
     {Reason.NO_VOCAL_DETECTED, Reason.LYRICS_MISMATCH, Reason.UNSUPPORTED_LANGUAGE}
@@ -85,6 +88,7 @@ class TranscribeLane:
         self._sync = sync
         self._sync_version = sync_version
         self._counters = counters
+        self._separation_pace = Pace()
 
     async def process(self, request: Mapping[str, object], deadline: Deadline) -> Outcome:
         try:
@@ -229,22 +233,35 @@ class TranscribeLane:
             )
         if decode.rms_dbfs(decode.to_mono(pcm)) < self._audio.silence_dbfs:
             raise PermanentFailure(Reason.SILENT_AUDIO, "rms below floor")
-        stereo = decode.resample(decode.to_stereo(pcm), pcm.sample_rate, SEPARATION_SAMPLE_RATE)
-        mix = np.ascontiguousarray(stereo.T, dtype=np.float32)
+        mix = await asyncio.to_thread(separation_mix, pcm)
         deadline.check("separate")
         vocals, separated = await self._separate(mix, deadline)
-        mono = vocals.mean(axis=0, dtype=np.float32)
-        return decode.resample(mono, SEPARATION_SAMPLE_RATE, SPEECH_SAMPLE_RATE), separated
+        return await asyncio.to_thread(speech_mono, vocals), separated
 
     async def _separate(self, mix: Float32Array, deadline: Deadline) -> tuple[Float32Array, bool]:
+        audio_s = mix.shape[1] / SEPARATION_SAMPLE_RATE
+        budget = deadline.share(SEPARATION_SHARE)
+        pace = self._separation_pace
+        if not pace.fits(audio_s, budget.remaining()):
+            pace.skipped()
+            self._counters.inc("separation_skipped_total")
+            log.warning(
+                "separation would not fit its budget, aligning on the mix",
+                extra={"audio_s": round(audio_s, 1), "budget_s": round(budget.remaining(), 1)},
+            )
+            return mix, False
+        started = deadline.now()
         try:
-            vocals = await self._engines.separate(mix, deadline)
+            vocals = await self._engines.separate(mix, deadline, budget=budget)
         except (EngineUnavailable, PermanentFailure, TransientFailure) as error:
             if isinstance(error, TransientFailure) and error.reason is Reason.DEADLINE_EXCEEDED:
-                raise
+                if deadline.expired():
+                    raise
+                pace.missed(audio_s, deadline.now() - started)
             self._counters.inc("separation_fallback_total")
             log.warning("separation failed, aligning on the mix", extra={"error": repr(error)})
             return mix, False
+        pace.observe(audio_s, deadline.now() - started)
         if vocals.shape != mix.shape or not np.all(np.isfinite(vocals)):
             self._counters.inc("separation_fallback_total")
             log.warning(
@@ -428,6 +445,16 @@ class TranscribeLane:
         log.error("transcribe failed unexpectedly", extra={"lane": LANE}, exc_info=error)
         failure = TransientFailure(Reason.INTERNAL_ERROR, f"{type(error).__name__}: {error}")
         return failure.outcome(sync_version=self._sync_version)
+
+
+def separation_mix(pcm: decode.Pcm) -> Float32Array:
+    stereo = decode.resample(decode.to_stereo(pcm), pcm.sample_rate, SEPARATION_SAMPLE_RATE)
+    return np.ascontiguousarray(stereo.T, dtype=np.float32)
+
+
+def speech_mono(vocals: Float32Array) -> Float32Array:
+    mono = vocals.mean(axis=0, dtype=np.float32)
+    return decode.resample(mono, SEPARATION_SAMPLE_RATE, SPEECH_SAMPLE_RATE)
 
 
 def parse_request(request: Mapping[str, object]) -> Task:

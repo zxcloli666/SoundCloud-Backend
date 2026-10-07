@@ -15,6 +15,7 @@ from worker.runtime import allocator, devices, shm
 from worker.runtime.protocol import (
     BadInput,
     Call,
+    CallExpired,
     Command,
     CommandKind,
     ErrorKind,
@@ -235,6 +236,9 @@ class Engine:
             reply = Reply(call.id, arrays=refs, result=dict(result))
         except BadInput as error:
             reply = Reply(call.id, error_kind=ErrorKind.BAD_INPUT, error=error_text(error))
+        except CallExpired as error:
+            self._log.info("slot_call_expired", slot=call.slot, method=call.method)
+            reply = Reply(call.id, error_kind=ErrorKind.EXPIRED, error=error_text(error))
         except Exception as error:
             oom = allocator.is_out_of_memory(error)
             kind = ErrorKind.OOM if oom else ErrorKind.MODEL_ERROR

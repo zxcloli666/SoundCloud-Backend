@@ -300,7 +300,7 @@ async def test_engines_fake_is_deterministic_and_scriptable(tmp_path: Path) -> N
     assert await engines.generate("p", {}, 64, deadline) == '{"primary_artist": "x"}'
     engines.fail("separate", EngineUnavailable("sep", "broken"))
     with pytest.raises(EngineUnavailable):
-        await engines.separate(np.zeros((2, 10), dtype=np.float32), deadline)
+        await engines.separate(np.zeros((2, 10), dtype=np.float32), deadline, budget=deadline)
     assert [name for name, _ in engines.calls][-1] == "separate"
     expired = Deadline(at=0.0)
     with pytest.raises(TransientFailure):

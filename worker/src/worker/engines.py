@@ -43,6 +43,7 @@ from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
+STOP_AT = "stop_at"
 TASTE_SLOT = "train-taste"
 TEXT_BYTES_PER_TOKEN = 4
 
@@ -190,9 +191,11 @@ class RuntimeEngines:
         )
         return float32(arrays, "vectors", "mulan")
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array:
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Float32Array:
         arrays, _ = await self._slots.direct(
-            "sep", "separate", {"mix": mix_stereo_44k}, {}, deadline
+            "sep", "separate", {"mix": mix_stereo_44k}, {STOP_AT: budget.at}, deadline
         )
         return float32(arrays, "vocals", "sep")
 
@@ -433,6 +436,8 @@ def translated(slot: str, bad_input: Reason) -> Iterator[None]:
             raise PermanentFailure(bad_input, detail) from error
         if error.kind is ErrorKind.OOM:
             raise TransientFailure(Reason.OUT_OF_MEMORY, detail) from error
+        if error.kind is ErrorKind.EXPIRED:
+            raise TransientFailure(Reason.DEADLINE_EXCEEDED, detail) from error
         raise TransientFailure(Reason.INTERNAL_ERROR, detail) from error
     except DeadlineExceeded as error:
         raise TransientFailure(

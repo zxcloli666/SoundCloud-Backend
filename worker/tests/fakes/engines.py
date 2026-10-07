@@ -82,9 +82,11 @@ class FakeEngines:
             return forced
         return np.stack([unit_vector(f"mulan:{text}".encode(), MULAN_TEXT_DIM) for text in texts])
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array:
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Float32Array:
         deadline.check("separate")
-        forced = self._record("separate", mix=mix_stereo_44k)
+        forced = self._record("separate", mix=mix_stereo_44k, budget_s=budget.remaining())
         if forced is not None:
             return forced
         return mix_stereo_44k

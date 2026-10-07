@@ -12,10 +12,15 @@ class BadInput(Exception):
     pass
 
 
+class CallExpired(Exception):
+    pass
+
+
 class ErrorKind(StrEnum):
     OOM = "oom"
     BAD_INPUT = "bad_input"
     MODEL_ERROR = "model_error"
+    EXPIRED = "expired"
 
 
 class CommandKind(StrEnum):

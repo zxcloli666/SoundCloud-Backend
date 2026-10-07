@@ -80,7 +80,9 @@ class Engines(Protocol):
 
     async def embed_text_mulan(self, texts: Sequence[str], deadline: Deadline) -> Float32Array: ...
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array: ...
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Float32Array: ...
 
     async def vad(
         self,

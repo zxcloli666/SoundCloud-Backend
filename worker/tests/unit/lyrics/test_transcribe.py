@@ -16,7 +16,7 @@ from worker.domain.language import LanguageDetection
 from worker.domain.lyrics import anchors, rescue, transcribe
 from worker.domain.lyrics.draft import RegionDraft
 from worker.domain.lyrics.regions import Region
-from worker.domain.outcome import LeaseDropped, Reason, Status
+from worker.domain.outcome import LeaseDropped, Reason, Status, TransientFailure
 from worker.domain.ports import Alignment, Draft, EngineUnavailable, LanguageGuess, TokenSpan
 
 TEXT = "[Verse 1]\n" + "\n".join(RUSSIAN_LINES[:2]) + "\n(Chorus)\n" + "\n".join(RUSSIAN_LINES[2:])
@@ -207,6 +207,55 @@ async def test_separator_failure_falls_back_to_the_mix(harness: LaneHarness) -> 
     harness.engines.fail("separate", EngineUnavailable("sep", "restarting"))
     outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
     assert outcome.status is Status.OK, outcome.detail
+    assert harness.counters.value("separation_fallback_total") == 1
+
+
+async def test_separation_gets_half_of_the_remaining_deadline(harness: LaneHarness) -> None:
+    clock = FakeClock()
+    outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(600, clock.now))
+    assert outcome.status is Status.OK, outcome.detail
+    budgets = [kwargs["budget_s"] for name, kwargs in harness.engines.calls if name == "separate"]
+    assert budgets == [transcribe.SEPARATION_SHARE * 600]
+
+
+async def test_separation_stopped_at_its_budget_aligns_on_the_mix(harness: LaneHarness) -> None:
+    harness.engines.fail("separate", TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep stopped"))
+    outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60))
+    assert outcome.status is Status.OK, outcome.detail
+    assert harness.counters.value("separation_fallback_total") == 1
+
+
+async def test_lane_deadline_spent_in_separation_still_fails_transiently(
+    harness: LaneHarness,
+) -> None:
+    clock = FakeClock()
+
+    def spend_everything(**_: object) -> object:
+        clock.advance(61)
+        raise TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep killed=deadline")
+
+    harness.engines.overrides["separate"] = spend_everything
+    outcome = await harness.lane.process(harness.request(TEXT), Deadline.after(60, clock.now))
+    assert (outcome.status, outcome.reason) == (Status.FAILED, Reason.DEADLINE_EXCEEDED)
+    assert harness.counters.value("separation_fallback_total") == 0
+
+
+async def test_separation_too_slow_for_its_budget_is_skipped_next_time(
+    harness: LaneHarness,
+) -> None:
+    clock = FakeClock()
+
+    def stopped_at_budget(**kwargs: object) -> object:
+        clock.advance(float(str(kwargs["budget_s"])))
+        raise TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep stopped")
+
+    harness.engines.overrides["separate"] = stopped_at_budget
+    first = await harness.lane.process(harness.request(TEXT), Deadline.after(120, clock.now))
+    second = await harness.lane.process(harness.request(TEXT), Deadline.after(100, clock.now))
+
+    assert first.status is Status.OK and second.status is Status.OK, second.detail
+    assert [name for name, _ in harness.engines.calls].count("separate") == 1
+    assert harness.counters.value("separation_skipped_total") == 1
     assert harness.counters.value("separation_fallback_total") == 1
 
 
