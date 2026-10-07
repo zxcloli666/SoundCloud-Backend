@@ -182,7 +182,9 @@ async fn transcription_reaper_enqueues_only_current_never_dispatched_work(
 }
 
 #[sqlx::test(migrations = false)]
-async fn stale_transcription_is_quarantined_without_redispatch(pool: PgPool) -> anyhow::Result<()> {
+async fn stale_transcription_waits_for_a_reopen_without_redispatch(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     seed_stored_track(&pool, "42", 1).await?;
     sqlx::query(
@@ -222,14 +224,7 @@ async fn stale_transcription_is_quarantined_without_redispatch(pool: PgPool) -> 
     let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
         .fetch_one(&pool)
         .await?;
-    assert_eq!(
-        state,
-        (
-            "quarantined".to_owned(),
-            "quarantined".to_owned(),
-            Some("result_timeout".to_owned()),
-        )
-    );
+    assert_eq!(state, ("pending".to_owned(), "reopenable".to_owned(), None));
     assert_eq!(jobs, 0);
     let orphan = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT status, quarantine_reason
@@ -728,8 +723,67 @@ async fn a_pending_attempt_is_quarantined_only_after_the_lane_result_window(
     let outside = wire_state(&pool, "42").await?;
     assert_eq!(inside.0, "pending");
     assert_eq!(
-        (outside.0, outside.4),
-        ("quarantined".to_owned(), Some("result_timeout".to_owned()))
+        (outside.0, outside.3, outside.4),
+        (
+            "reopenable".to_owned(),
+            Some("result_timeout".to_owned()),
+            None
+        )
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_timed_out_attempt_is_dispatched_again_on_a_later_round_without_using_a_reopen(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_stored_track(&pool, "42", 3).await?;
+    seed_lyrics(&pool, "42", "plain lyrics nobody aligned in time").await?;
+    sqlx::raw_sql(
+        "UPDATE tracks SET transcribe_state = 'pending';
+         INSERT INTO transcription_wire_state (
+             sc_track_id, status, upload_generation, attempt, reopen_count, dispatched_at
+         ) VALUES ('42', 'pending', 3, 2, 7, now() - interval '26 hours');",
+    )
+    .execute(&pool)
+    .await?;
+
+    reaper(&pool).reap_transcriptions(ROOM).await?;
+    let timed_out = wire_state(&pool, "42").await?;
+    let first_round = dispatched_generations(&pool).await?;
+    sqlx::query(
+        "UPDATE transcription_wire_state
+         SET completed_at = now() - interval '7 hours'
+         WHERE sc_track_id = '42'",
+    )
+    .execute(&pool)
+    .await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
+
+    let track_state: Option<String> =
+        sqlx::query_scalar("SELECT transcribe_state FROM tracks WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(
+        timed_out,
+        (
+            "reopenable".to_owned(),
+            2,
+            7,
+            Some("result_timeout".to_owned()),
+            None
+        )
+    );
+    assert!(first_round.is_empty());
+    assert_eq!(
+        wire_state(&pool, "42").await?,
+        ("pending".to_owned(), 3, 7, None, None)
+    );
+    assert_eq!(track_state.as_deref(), Some("pending"));
+    assert_eq!(
+        dispatched_generations(&pool).await?,
+        vec![("42".to_owned(), 3)]
     );
     Ok(())
 }

@@ -8,7 +8,7 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 135;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 136;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {

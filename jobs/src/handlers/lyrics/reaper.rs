@@ -47,7 +47,7 @@ impl LyricsReaper {
         let retry_days = i64::try_from(self.dispatch.lyrics_align_rejected_retry_days)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("rejected retry days overflow")))?;
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let stale = sqlx::query_file_scalar!(
+        let timed_out = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_stale_transcriptions.sql",
             QUARANTINE_BATCH,
             result_window
@@ -106,7 +106,13 @@ impl LyricsReaper {
         if enqueued > 0 || reopened > 0 {
             tracing::info!(enqueued, reopened, "lyrics transcription jobs enqueued");
         }
-        let quarantined = stale + orphaned + unreopenable;
+        if timed_out > 0 {
+            tracing::warn!(
+                timed_out,
+                "transcription attempts timed out and wait for a reopen"
+            );
+        }
+        let quarantined = orphaned + unreopenable;
         if quarantined > 0 {
             tracing::warn!(quarantined, "transcription attempts quarantined");
         }
