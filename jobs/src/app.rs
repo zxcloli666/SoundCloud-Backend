@@ -38,10 +38,25 @@ pub async fn run() -> anyhow::Result<()> {
         main_fast_pool = config.main_database.fast_pool.maximum,
         main_bulk_pool = config.main_database.bulk_pool.maximum,
         queue_pool = config.queue_pool.maximum,
+        maintenance_pool = config.maintenance_pool.maximum,
         ops_fast_pool = config.ops_database.fast_pool.maximum,
         ops_bulk_pool = config.ops_database.bulk_pool.maximum,
+        main_connections = config.main_database.fast_pool.maximum
+            + config.main_database.bulk_pool.maximum
+            + config.queue_pool.maximum
+            + config.maintenance_pool.maximum,
         "queue lanes and connection pools"
     );
+    for coverage in config.pool_coverage() {
+        info!(
+            pool = coverage.pool_key,
+            lane = coverage.lane_key,
+            connections = coverage.connections,
+            lane_slots = coverage.lane_slots,
+            slots_per_connection = coverage.lane_slots as f64 / f64::from(coverage.connections),
+            "pool covers its lane"
+        );
+    }
 
     let databases = Databases::connect(&config)
         .await
@@ -69,7 +84,7 @@ pub async fn run() -> anyhow::Result<()> {
     } = bus.provision(&config.nats).await?;
     let taste_results = bus.taste_results(&config.nats).await?;
     let taste = Arc::new(TasteHandler::new(
-        databases.main.bulk.clone(),
+        databases.maintenance.clone(),
         bus.clone(),
         qdrant.clone(),
         config.taste.clone(),

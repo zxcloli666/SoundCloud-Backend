@@ -9,9 +9,9 @@ use std::time::Duration;
 use backend_contracts::COLLAB_MAX_MIN_COUNT;
 use backend_contracts::worker_contract::WorkerLane;
 
-pub use database::{DatabaseConfig, PoolConfig, SessionLimits};
+pub use database::{DatabaseConfig, PoolConfig, PoolCoverage, SessionLimits};
 
-use database::queue_pool_from_env;
+use database::{maintenance_pool_from_env, queue_pool_from_env};
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 
@@ -40,6 +40,7 @@ pub struct JobsConfig {
     pub playlist_reconcile: PlaylistReconcileConfig,
     pub main_database: DatabaseConfig,
     pub queue_pool: PoolConfig,
+    pub maintenance_pool: PoolConfig,
     pub ops_database: DatabaseConfig,
     pub queue: QueueConfig,
     pub subscriptions: SubscriptionsConfig,
@@ -472,6 +473,7 @@ impl JobsConfig {
             playlist_reconcile: PlaylistReconcileConfig::from_env()?,
             main_database: DatabaseConfig::from_env("", true)?,
             queue_pool: queue_pool_from_env()?,
+            maintenance_pool: maintenance_pool_from_env()?,
             ops_database: DatabaseConfig::from_env("OPS_", false)?,
             queue,
             subscriptions: SubscriptionsConfig::from_env()?,
@@ -484,7 +486,39 @@ impl JobsConfig {
             )?),
         };
         config.validate_work_windows()?;
+        for coverage in config.pool_coverage() {
+            coverage.validate()?;
+        }
         Ok(config)
+    }
+
+    pub fn pool_coverage(&self) -> [PoolCoverage; 4] {
+        [
+            PoolCoverage {
+                pool_key: "PG_POOL_MAX",
+                lane_key: "JOBS_CORE_FAST",
+                connections: self.main_database.fast_pool.maximum,
+                lane_slots: self.queue.core_fast.concurrency,
+            },
+            PoolCoverage {
+                pool_key: "PG_BULK_POOL_MAX",
+                lane_key: "JOBS_CORE_BULK",
+                connections: self.main_database.bulk_pool.maximum,
+                lane_slots: self.queue.core_bulk.concurrency,
+            },
+            PoolCoverage {
+                pool_key: "PG_MAINTENANCE_POOL_MAX",
+                lane_key: "JOBS_MAINTENANCE",
+                connections: self.maintenance_pool.maximum,
+                lane_slots: self.queue.maintenance.concurrency,
+            },
+            PoolCoverage {
+                pool_key: "OPS_PG_POOL_MAX",
+                lane_key: "JOBS_OPS",
+                connections: self.ops_database.fast_pool.maximum,
+                lane_slots: self.queue.ops.concurrency,
+            },
+        ]
     }
 
     fn validate_work_windows(&self) -> Result<(), ConfigError> {

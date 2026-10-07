@@ -216,7 +216,7 @@ impl JobHandlers {
         ));
         Ok(Self {
             account_walk: AccountWalkHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 reader.clone(),
                 config.account_walk.clone(),
             ),
@@ -225,9 +225,9 @@ impl JobHandlers {
                 sources.musicbrainz.clone(),
                 config.admin_maintenance,
             ),
-            attribution: AttributionHandler::new(databases.main.bulk.clone()),
-            catalog: CatalogWorkHandler::new(databases.main.bulk.clone()),
-            catalog_credits: CatalogCreditHandler::new(databases.main.bulk.clone()),
+            attribution: AttributionHandler::new(databases.maintenance.clone()),
+            catalog: CatalogWorkHandler::new(databases.maintenance.clone()),
+            catalog_credits: CatalogCreditHandler::new(databases.maintenance.clone()),
             catalog_collection: catalog_collection::CatalogCollectionHandler::new(
                 databases.main.bulk.clone(),
                 reader.clone(),
@@ -239,7 +239,7 @@ impl JobHandlers {
                 config,
             )?,
             collab: CollabHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 bus.clone(),
                 qdrant.clone(),
                 config.collab.clone(),
@@ -253,16 +253,16 @@ impl JobHandlers {
                 config.crawl.clone(),
             ),
             discover: DiscoverHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.subscriptions_always_premium,
                 config.schedules.discover_interest_enabled,
                 config.schedules.discover_interest_shards,
                 config.schedules.discover_artist_plays_shards,
             ),
             enrich: EnrichHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 enrich::build_resolver_deps(
-                    databases.main.bulk.clone(),
+                    databases.maintenance.clone(),
                     bus.clone(),
                     &sources,
                     &config.enrich,
@@ -280,8 +280,7 @@ impl JobHandlers {
                 qdrant.clone(),
             )?,
             lyrics: LyricsHandler::new(
-                databases.main.fast.clone(),
-                databases.main.bulk.clone(),
+                databases,
                 sources.lyrics.clone(),
                 config,
                 bus.clone(),
@@ -290,18 +289,18 @@ impl JobHandlers {
             maintenance: MaintenanceHandler::new(databases.main.fast.clone()),
             oauth_apps: OAuthAppsRefreshHandler::new(databases.main.fast.clone(), &config.oauth)?,
             playlist_legacy: PlaylistLegacyHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.playlist_reconcile,
             ),
             playlist_observe: PlaylistObserveHandler::new(config, databases.main.bulk.clone())?,
-            quality: QualityHandler::new(databases.main.bulk.clone(), qdrant),
+            quality: QualityHandler::new(databases.maintenance.clone(), qdrant),
             recommendations: RecommendationHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.schedules.recommendation_wave_priority_shards,
             ),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
             subscriptions: SubscriptionSnapshotHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 &config.subscriptions,
             ),
             sync_queue: SyncQueueHandler::new(config, databases.main.fast.clone())?,

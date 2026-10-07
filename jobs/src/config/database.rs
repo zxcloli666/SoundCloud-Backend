@@ -89,7 +89,7 @@ impl DatabaseConfig {
             tls,
             fast_pool: PoolConfig {
                 minimum: env::parse(&key("PG_POOL_MIN"), "2")?,
-                maximum: env::parse(&key("PG_POOL_MAX"), "14")?,
+                maximum: env::parse(&key("PG_POOL_MAX"), "8")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_ACQUIRE_TIMEOUT_MS"),
                     2_000,
@@ -102,18 +102,70 @@ impl DatabaseConfig {
             },
             bulk_pool: PoolConfig {
                 minimum: env::parse(&key("PG_BULK_POOL_MIN"), "0")?,
-                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "4")?,
+                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "6")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_BULK_ACQUIRE_TIMEOUT_MS"),
-                    5_000,
+                    30_000,
                 )?),
-                session: SessionLimits {
-                    statement_timeout: Duration::from_secs(570),
-                    lock_timeout: Duration::from_secs(1),
-                    idle_transaction_timeout: Duration::from_secs(15),
-                },
+                session: long_statement_session(),
             },
         })
+    }
+}
+
+fn long_statement_session() -> SessionLimits {
+    SessionLimits {
+        statement_timeout: Duration::from_secs(570),
+        lock_timeout: Duration::from_secs(1),
+        idle_transaction_timeout: Duration::from_secs(15),
+    }
+}
+
+pub fn maintenance_pool_from_env() -> Result<PoolConfig, ConfigError> {
+    let pool = PoolConfig {
+        minimum: env::parse("PG_MAINTENANCE_POOL_MIN", "0")?,
+        maximum: env::parse("PG_MAINTENANCE_POOL_MAX", "4")?,
+        acquire_timeout: Duration::from_millis(env::positive_u64(
+            "PG_MAINTENANCE_ACQUIRE_TIMEOUT_MS",
+            30_000,
+        )?),
+        session: long_statement_session(),
+    };
+    if pool.maximum == 0 || pool.minimum > pool.maximum {
+        return Err(ConfigError::Invalid {
+            key: "PG_MAINTENANCE_POOL_MAX".to_owned(),
+            reason: "must be positive and not below PG_MAINTENANCE_POOL_MIN".to_owned(),
+        });
+    }
+    Ok(pool)
+}
+
+pub const LANE_SLOTS_PER_CONNECTION: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoolCoverage {
+    pub pool_key: &'static str,
+    pub lane_key: &'static str,
+    pub connections: u32,
+    pub lane_slots: usize,
+}
+
+impl PoolCoverage {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let covered = usize::try_from(self.connections)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(LANE_SLOTS_PER_CONNECTION);
+        if covered < self.lane_slots {
+            return Err(ConfigError::Invalid {
+                key: self.pool_key.to_owned(),
+                reason: format!(
+                    "{} connections cannot serve {} {} slots; keep at most \
+                     {LANE_SLOTS_PER_CONNECTION} slots per connection",
+                    self.connections, self.lane_slots, self.lane_key
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -252,6 +304,19 @@ mod tests {
     fn the_queue_pool_holds_a_claimer_per_lane_and_the_scheduler() {
         assert!(validate_queue_pool(&queue_pool(QUEUE_POOL_MINIMUM_CONNECTIONS - 1)).is_err());
         assert!(validate_queue_pool(&queue_pool(QUEUE_POOL_MINIMUM_CONNECTIONS)).is_ok());
+    }
+
+    #[test]
+    fn a_pool_must_not_be_far_smaller_than_the_lane_that_uses_it() {
+        let coverage = |connections, lane_slots| PoolCoverage {
+            pool_key: "PG_BULK_POOL_MAX",
+            lane_key: "JOBS_CORE_BULK",
+            connections,
+            lane_slots,
+        };
+        assert!(coverage(4, 16).validate().is_ok());
+        assert!(coverage(3, 16).validate().is_err());
+        assert!(coverage(0, 1).validate().is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub use pool::DatabaseError;
 pub struct Databases {
     pub main: DatabasePools,
     pub queue: PgPool,
+    pub maintenance: PgPool,
     pub ops: DatabasePools,
 }
 
@@ -26,16 +27,32 @@ impl Databases {
     pub async fn connect(config: &JobsConfig) -> Result<Self, DatabaseError> {
         let main_name = format!("scd-jobs:{}:main", config.instance_id);
         let queue_name = format!("scd-jobs:{}:main:queue", config.instance_id);
+        let maintenance_name = format!("scd-jobs:{}:main:maintenance", config.instance_id);
         let ops_name = format!("scd-jobs:{}:ops", config.instance_id);
         let main = DatabasePools::connect(&config.main_database, &main_name);
         let queue = pool::connect(&config.main_database, &config.queue_pool, &queue_name);
+        let maintenance = pool::connect(
+            &config.main_database,
+            &config.maintenance_pool,
+            &maintenance_name,
+        );
         let ops = DatabasePools::connect(&config.ops_database, &ops_name);
-        let (main, queue, ops) = tokio::try_join!(main, queue, ops)?;
-        Ok(Self { main, queue, ops })
+        let (main, queue, maintenance, ops) = tokio::try_join!(main, queue, maintenance, ops)?;
+        Ok(Self {
+            main,
+            queue,
+            maintenance,
+            ops,
+        })
     }
 
     pub async fn close(&self) {
-        tokio::join!(self.main.close(), self.queue.close(), self.ops.close());
+        tokio::join!(
+            self.main.close(),
+            self.queue.close(),
+            self.maintenance.close(),
+            self.ops.close()
+        );
     }
 }
 
