@@ -13,6 +13,7 @@ pub mod impressions;
 #[cfg(test)]
 pub(crate) mod live_fixture;
 pub mod mmr;
+pub(crate) mod projected;
 pub mod quality;
 pub mod related;
 pub mod rerank_multi;
