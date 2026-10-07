@@ -32,7 +32,14 @@ pub async fn want_track(
         catalog_ingest::bump_track_priority(pool, sc_track_id, priority).await?;
         return Ok(());
     }
-    enqueue_entity(pool, CatalogEntity::Track, sc_track_id, None).await
+    enqueue_entity(
+        pool,
+        CatalogEntity::Track,
+        sc_track_id,
+        None,
+        VIEWER_PRIORITY,
+    )
+    .await
 }
 
 pub async fn refresh_pending(
