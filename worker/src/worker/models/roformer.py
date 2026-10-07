@@ -75,9 +75,10 @@ class RoformerSeparator:
         accumulated = torch.zeros(padded.shape, dtype=torch.float32, device=self._device)
         weights = torch.zeros(padded.shape[1], dtype=torch.float32, device=self._device)
         starts = list(range(0, padded.shape[1], step))
+        began = time.monotonic()
         for first in range(0, len(starts), self._max_batch):
-            if stop_at is not None and time.monotonic() >= stop_at:
-                raise CallExpired(f"separation stopped after {first} of {len(starts)} chunks")
+            if stop_at is not None:
+                check_pace(began, first, len(starts), stop_at)
             batch_starts = starts[first : first + self._max_batch]
             chunks = torch.stack([self._chunk_at(padded, start) for start in batch_starts])
             estimated = self._forward(model, chunks)
@@ -109,6 +110,16 @@ class RoformerSeparator:
         if self._model is None:
             raise RuntimeError("roformer is not loaded")
         return self._model
+
+
+def check_pace(began: float, done: int, total: int, stop_at: float) -> None:
+    now = time.monotonic()
+    finish = now if done == 0 else began + (now - began) * total / done
+    if finish > stop_at:
+        raise CallExpired(
+            f"separation would end {finish - stop_at:.0f} s past its budget"
+            f" after {done} of {total} chunks"
+        )
 
 
 def hann(size: int, device: str) -> torch.Tensor:

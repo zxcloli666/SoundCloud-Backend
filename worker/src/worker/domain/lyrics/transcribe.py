@@ -251,13 +251,14 @@ class TranscribeLane:
             )
             return mix, False
         started = deadline.now()
+        budget_s = budget.remaining()
         try:
             vocals = await self._engines.separate(mix, deadline, budget=budget)
         except (EngineUnavailable, PermanentFailure, TransientFailure) as error:
             if isinstance(error, TransientFailure) and error.reason is Reason.DEADLINE_EXCEEDED:
                 if deadline.expired():
                     raise
-                pace.missed(audio_s, deadline.now() - started)
+                pace.missed(audio_s, budget_s)
             self._counters.inc("separation_fallback_total")
             log.warning("separation failed, aligning on the mix", extra={"error": repr(error)})
             return mix, False

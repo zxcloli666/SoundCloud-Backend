@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 SMOOTHING = 0.3
 SKIP_DECAY = 0.9
+MISS_MARGIN = 1.25
 
 
 @dataclass
@@ -20,8 +21,9 @@ class Pace:
             return
         self.seconds_per_audio_s += SMOOTHING * (rate - self.seconds_per_audio_s)
 
-    def missed(self, audio_s: float, elapsed_s: float) -> None:
-        self.seconds_per_audio_s = max(self.seconds_per_audio_s, elapsed_s / max(audio_s, 1e-3))
+    def missed(self, audio_s: float, budget_s: float) -> None:
+        floor = MISS_MARGIN * budget_s / max(audio_s, 1e-3)
+        self.seconds_per_audio_s = max(self.seconds_per_audio_s, floor)
 
     def skipped(self) -> None:
         self.seconds_per_audio_s *= SKIP_DECAY
