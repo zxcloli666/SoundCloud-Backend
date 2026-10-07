@@ -385,11 +385,15 @@ async fn a_stale_refresh_nobody_waits_on_stays_below_a_refresh_a_viewer_waits_on
 
     services
         .tracks
-        .get_by_id_with_fetch("17", "42", false, || async { Ok(remote_track()) })
+        .get_by_id_with_fetch(Uuid::nil(), "17", "42", false, || async {
+            Ok(remote_track())
+        })
         .await?;
     services
         .tracks
-        .get_by_id_with_fetch("18", "43", false, || async { Ok(remote_track()) })
+        .get_by_id_with_fetch(Uuid::nil(), "18", "43", false, || async {
+            Ok(remote_track())
+        })
         .await
         .unwrap_err();
 
@@ -515,7 +519,9 @@ async fn opening_a_public_playlist_parked_without_its_owner_wakes_its_observatio
 
     services
         .playlists
-        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
+            Ok(remote_playlist())
+        })
         .await?;
     let page = services.playlists.get_tracks("18", "42", 0, 50).await?;
 
@@ -528,7 +534,9 @@ async fn opening_a_public_playlist_parked_without_its_owner_wakes_its_observatio
     park_without_owner(&pool).await?;
     services
         .playlists
-        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .get_by_id_with_fetch(Uuid::nil(), "18", "42", false, || async {
+            Ok(remote_playlist())
+        })
         .await?;
 
     assert_eq!(
