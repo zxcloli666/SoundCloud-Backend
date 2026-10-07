@@ -121,6 +121,7 @@ pub async fn upsert_track_in(
             index_priority = LEAST(tracks.index_priority, EXCLUDED.index_priority),
             storage_priority = LEAST(tracks.storage_priority, EXCLUDED.storage_priority),
             is_cover = tracks.is_cover OR EXCLUDED.is_cover,
+            pipeline_held = false,
             sc_synced_at = now(),
             sc_observation = GREATEST(tracks.sc_observation, EXCLUDED.sc_observation),
             sc_desired = '{}',

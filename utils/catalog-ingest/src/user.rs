@@ -83,7 +83,7 @@ pub async fn upsert_profile_in(
     Ok(())
 }
 
-struct ScUserFields {
+pub(crate) struct ScUserFields {
     sc_user_id: String,
     urn: String,
     username: String,
@@ -110,7 +110,39 @@ struct ScUserFields {
 }
 
 impl ScUserFields {
-    fn from_sc(payload: &Value) -> Option<Self> {
+    pub(crate) fn sc_user_id(&self) -> &str {
+        &self.sc_user_id
+    }
+
+    pub(crate) fn row(&self) -> Value {
+        serde_json::json!({
+            "sc_user_id": self.sc_user_id,
+            "urn": self.urn,
+            "username": self.username,
+            "username_normalized": self.username_normalized,
+            "full_name": self.full_name,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "permalink": self.permalink,
+            "permalink_url": self.permalink_url,
+            "avatar_url": self.avatar_url,
+            "country": self.country,
+            "city": self.city,
+            "description": self.description,
+            "verified": self.verified,
+            "followers_count": self.followers_count,
+            "followings_count": self.followings_count,
+            "tracks_count": self.tracks_count,
+            "playlists_count": self.playlists_count,
+            "reposts_count": self.reposts_count,
+            "comments_count": self.comments_count,
+            "kind": self.kind,
+            "sc_created_at": self.sc_created_at,
+            "sc_last_modified": self.sc_last_modified,
+        })
+    }
+
+    pub(crate) fn from_sc(payload: &Value) -> Option<Self> {
         let entity = crate::sc_ids::payload_ref(crate::EntityKind::User, payload)?;
         let urn = entity.urn();
         let sc_user_id = entity.sc_id();

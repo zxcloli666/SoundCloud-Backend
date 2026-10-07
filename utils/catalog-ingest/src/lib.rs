@@ -1,3 +1,4 @@
+mod absent;
 mod observation;
 mod payload;
 mod playlist;
@@ -9,6 +10,9 @@ mod track_metadata;
 mod upsert;
 mod user;
 
+pub use absent::{
+    AbsentInserted, insert_absent_playlists, insert_absent_tracks, insert_absent_users,
+};
 pub use observation::Observation;
 pub use payload::ScTrackFields;
 pub use playlist::{upsert_playlist_from_sc, upsert_playlist_in};

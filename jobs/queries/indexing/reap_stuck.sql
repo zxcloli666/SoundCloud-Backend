@@ -2,6 +2,7 @@ SELECT track.sc_track_id
 FROM tracks AS track
 WHERE track.created_at < now() - INTERVAL '5 minutes'
   AND track.needs_duration_resolve = false
+  AND NOT track.pipeline_held
   AND (
     track.storage_state = 'pending'
     OR (

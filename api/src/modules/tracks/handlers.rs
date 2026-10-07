@@ -191,6 +191,9 @@ async fn proxy_stream(
     if q.secret_token.is_some() {
         ctx.access_token().await?;
     }
+    if let Some(sc_track_id) = crate::common::sc_ids::normalize_sc_track_id(&track_urn) {
+        st.tracks.opened(&sc_track_id).await;
+    }
     let high_quality = q.hq.as_deref() == Some("true");
     let ticket = st
         .config

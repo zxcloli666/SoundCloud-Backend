@@ -42,6 +42,41 @@ pub struct ScTrackFields {
 }
 
 impl ScTrackFields {
+    pub(crate) fn row(&self) -> Value {
+        serde_json::json!({
+            "sc_track_id": self.sc_track_id,
+            "urn": self.urn,
+            "title": self.title,
+            "title_normalized": self.title_normalized,
+            "description": self.description,
+            "genre": self.genre,
+            "tags": self.tags,
+            "duration_ms": self.duration_ms,
+            "artwork_url": self.artwork_url,
+            "permalink_url": self.permalink_url,
+            "waveform_url": self.waveform_url,
+            "language": self.language,
+            "isrc": self.isrc,
+            "metadata_artist": self.metadata_artist,
+            "sharing": self.sharing,
+            "sc_created_at": self.sc_created_at,
+            "sc_last_modified": self.sc_last_modified,
+            "release_year": self.release_year,
+            "release_date": self.release_date,
+            "uploader_sc_user_id": self.uploader_sc_user_id,
+            "uploader_urn": self.uploader_urn,
+            "uploader_username": self.uploader_username,
+            "uploader_avatar_url": self.uploader_avatar_url,
+            "play_count_sc": self.play_count_sc,
+            "likes_count_sc": self.likes_count_sc,
+            "reposts_count_sc": self.reposts_count_sc,
+            "comments_count_sc": self.comments_count_sc,
+            "needs_duration_resolve": self.needs_duration_resolve,
+            "is_cover": self.is_cover,
+            "sc_metadata": self.sc_metadata,
+        })
+    }
+
     pub fn from_sc(payload: &Value) -> Option<Self> {
         let entity = crate::sc_ids::payload_ref(crate::EntityKind::Track, payload)?;
         let urn = entity.urn();

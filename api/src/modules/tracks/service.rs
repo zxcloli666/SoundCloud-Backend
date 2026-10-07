@@ -116,6 +116,7 @@ impl TracksService {
             let _ = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
                 .execute(&self.pg)
                 .await;
+            self.opened(sc_track_id).await;
             if self.cold_refresh.is_track_stale(Some(row.sc_synced_at))
                 && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
                     &self.pg,
@@ -190,6 +191,15 @@ impl TracksService {
             .into_iter()
             .next()
             .ok_or_else(|| crate::error::AppError::not_found("Track not found"))
+    }
+
+    pub async fn opened(&self, sc_track_id: &str) {
+        let Some(indexing) = self.cold_refresh.indexing_for_ingest() else {
+            return;
+        };
+        if let Err(error) = indexing.release_held(sc_track_id).await {
+            tracing::warn!(track = sc_track_id, %error, "held pipeline release deferred");
+        }
     }
 
     pub async fn update(
