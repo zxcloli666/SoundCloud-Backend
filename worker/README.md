@@ -70,9 +70,9 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 
 `runtime.isolate_encode = true` (профиль `cpu`) поднимает движок `encode` с `text` и текстовой
 башней `mulan`; в `audio` остаётся только аудио-башня, копий нет. Аудио-проход поисковый запрос
-больше не задерживает. `text` один и для `encode`, и для `lyrics`: запрос идёт вне очереди, но ждёт
-текущий вызов `lyrics` (одна лирика, `slots.text.max_batch = 512`). `slots.text.replicas = 2`
-отдаёт `lyrics` вторую копию `text` (плюс ~3 ГБ) и убирает и это ожидание.
+больше не задерживает. `text` один и для `encode`, и для `lyrics`: запрос идёт вне очереди, а
+текущий вызов `lyrics` прерывается между слоями модели (сигнал `SIGUSR1` движку) и потом
+пересчитывается. `slots.text.replicas = 2` отдаёт `lyrics` вторую копию `text` (плюс ~3 ГБ).
 
 Потоки (`runtime.threads`, `WORKER__RUNTIME__THREADS`):
 

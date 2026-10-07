@@ -16,6 +16,7 @@ from worker.observability.logging import JsonLog
 from worker.runtime import shm
 from worker.runtime.clock import Clock
 from worker.runtime.protocol import (
+    PREEMPT_SIGNAL,
     Call,
     Command,
     CommandKind,
@@ -242,6 +243,14 @@ class EngineClient:
         if not isinstance(message, Reply):
             raise EngineCrashed(self.name, f"call answered with {type(message).__name__}")
         return message
+
+    def preempt(self) -> None:
+        if not self.alive:
+            return
+        try:
+            os.kill(self.pid, PREEMPT_SIGNAL)
+        except ProcessLookupError:
+            self._log.info("engine_preempt_already_gone", pid=self.pid)
 
     async def kill(self, cause: str) -> None:
         if self._process is None or self._dead:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -16,11 +17,32 @@ class CallExpired(Exception):
     pass
 
 
+class Preempted(Exception):
+    pass
+
+
+PREEMPT_SIGNAL = signal.SIGUSR1
+
+
+class Preemption:
+    def __init__(self) -> None:
+        self.armed = False
+        self.requested = False
+
+    def check(self) -> None:
+        if self.armed and self.requested:
+            raise Preempted("a priority call is waiting")
+
+
+PREEMPTION = Preemption()
+
+
 class ErrorKind(StrEnum):
     OOM = "oom"
     BAD_INPUT = "bad_input"
     MODEL_ERROR = "model_error"
     EXPIRED = "expired"
+    PREEMPTED = "preempted"
 
 
 class CommandKind(StrEnum):
@@ -58,6 +80,7 @@ class Call:
     arrays: Mapping[str, ArrayRef] = field(default_factory=dict)
     args: Mapping[str, object] = field(default_factory=dict)
     threads: int = 0
+    preemptible: bool = False
 
 
 @dataclass(frozen=True)

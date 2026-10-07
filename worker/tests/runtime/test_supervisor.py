@@ -200,6 +200,36 @@ async def test_an_expired_call_keeps_the_engine_and_its_loaded_models() -> None:
         await supervisor.stop()
 
 
+async def test_preemption_stops_a_preemptible_call_and_spares_the_engine() -> None:
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+    try:
+        before = supervisor.engines()
+        client = await supervisor.acquire("a", time.monotonic() + 5)
+        try:
+            for preemptible, expected in ((True, ErrorKind.PREEMPTED), (False, None)):
+                call = asyncio.create_task(
+                    client.call(
+                        Call(
+                            next_message_id(),
+                            "a",
+                            "layers",
+                            time.monotonic() + 30,
+                            args={"layers": 25},
+                            preemptible=preemptible,
+                        )
+                    )
+                )
+                await asyncio.sleep(0.2)
+                supervisor.preempt("a", client)
+                reply = await asyncio.wait_for(call, 5.0)
+                assert reply.error_kind is expected
+        finally:
+            supervisor.release(client)
+        assert supervisor.engines() == before
+    finally:
+        await supervisor.stop()
+
+
 async def test_ping_watchdog_replaces_unresponsive_engine() -> None:
     supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
     try:

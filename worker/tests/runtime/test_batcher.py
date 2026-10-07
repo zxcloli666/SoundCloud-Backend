@@ -55,6 +55,7 @@ class FakeEngine:
     alive: bool = True
     calls: list[Call] = field(default_factory=list)
     rows: list[int] = field(default_factory=list)
+    preempted: bool = False
 
     async def call(self, call: Call) -> Reply:
         self.calls.append(call)
@@ -64,8 +65,12 @@ class FakeEngine:
         if isinstance(hang, list) and any(hang):
             await asyncio.sleep(max(0.0, call.deadline_at - time.monotonic()))
             raise EngineKilled(self.name, CAUSE_DEADLINE)
-        if self.latency_s:
-            await asyncio.sleep(self.latency_s)
+        until = time.monotonic() + self.latency_s
+        while time.monotonic() < until:
+            if self.preempted and call.preemptible:
+                self.preempted = False
+                return Reply(call.id, error_kind=ErrorKind.PREEMPTED, error="preempted")
+            await asyncio.sleep(0.005)
         return self.behaviour(call, arrays)
 
 
@@ -75,6 +80,7 @@ class FakePool:
         self.state = state
         self.busy: set[str] = set()
         self.oom_reports: list[str] = []
+        self.preempted: list[str] = []
         self._changed = asyncio.Event()
 
     async def acquire(self, slot: str, deadline_at: float) -> FakeEngine:
@@ -99,6 +105,10 @@ class FakePool:
 
     def report_oom(self, slot: str, client: FakeEngine) -> None:
         self.oom_reports.append(client.name)
+
+    def preempt(self, slot: str, client: FakeEngine) -> None:
+        self.preempted.append(client.name)
+        client.preempted = True
 
 
 def batcher(pool: FakePool, max_batch: int = 8, max_wait_ms: int = 20) -> Batcher:
@@ -200,6 +210,44 @@ async def test_priority_rows_jump_the_audio_queue() -> None:
         first_encode = methods.index("encode")
         assert first_encode <= 2
         assert sum(1 for m in methods[first_encode:] if m == "audio") >= 1
+    finally:
+        await b.close()
+
+
+async def test_a_priority_row_preempts_the_bulk_call_and_the_bulk_rows_rerun() -> None:
+    engine = FakeEngine("e", latency_s=2.0)
+    pool = FakePool(engine)
+    b = batcher(pool, max_batch=1, max_wait_ms=0)
+    try:
+        bulk = asyncio.create_task(b.submit("lyrics", {"x": rows(1)}, {}, soon(20)))
+        await asyncio.sleep(0.1)
+        engine.latency_s = 0.02
+        started = time.monotonic()
+        await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        assert time.monotonic() - started < 0.5
+        outputs, _ = await bulk
+        assert np.array_equal(outputs["x"], rows(1) * 2)
+        assert pool.preempted == ["e"]
+        assert [(c.method, c.preemptible) for c in engine.calls] == [
+            ("lyrics", True),
+            ("encode", False),
+            ("lyrics", True),
+        ]
+    finally:
+        await b.close()
+
+
+async def test_priority_batches_are_never_preempted() -> None:
+    engine = FakeEngine("e", latency_s=0.2)
+    pool = FakePool(engine)
+    b = batcher(pool, max_batch=1, max_wait_ms=0)
+    try:
+        first = asyncio.create_task(b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True))
+        await asyncio.sleep(0.05)
+        await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        await first
+        assert pool.preempted == []
+        assert len(engine.calls) == 2
     finally:
         await b.close()
 

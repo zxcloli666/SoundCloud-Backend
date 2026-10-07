@@ -362,6 +362,10 @@ class Supervisor:
                 killed += 1
         return killed
 
+    def preempt(self, slot: str, client: EngineClient) -> None:
+        self._counters.inc("slot_preemptions_total", slot=slot)
+        client.preempt()
+
     def report_oom(self, slot: str, client: EngineClient) -> None:
         self._counters.inc("slot_oom_total", slot=slot)
         managed = next((m for m in self._by_slot.get(slot, []) if m.client is client), None)
@@ -780,3 +784,6 @@ class EnginePool:
 
     def report_oom(self, slot: str, client: EngineClient) -> None:
         self._supervisor.report_oom(slot, client)
+
+    def preempt(self, slot: str, client: EngineClient) -> None:
+        self._supervisor.preempt(slot, client)

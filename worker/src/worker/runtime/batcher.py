@@ -41,6 +41,8 @@ class EnginePool(Protocol):
 
     def report_oom(self, slot: str, client: EngineClient) -> None: ...
 
+    def preempt(self, slot: str, client: EngineClient) -> None: ...
+
 
 @dataclass(frozen=True)
 class Form:
@@ -135,6 +137,7 @@ class Batcher:
         self._solo_until = 0.0
         self._loop: asyncio.Task[None] | None = None
         self._inflight: set[asyncio.Task[None]] = set()
+        self._preemptible: dict[asyncio.Task[None], EngineClient] = {}
         self._closed = False
 
     @property
@@ -160,6 +163,8 @@ class Batcher:
             queue.append(Row(submission, index, row_costs[index], priority))
         if self._loop is None:
             self._loop = asyncio.create_task(self._run(), name=f"batcher:{self._slot}")
+        if priority:
+            self._preempt_bulk()
         self._wake.set()
         await submission.done
         return submission.assemble()
@@ -214,6 +219,19 @@ class Batcher:
             task = asyncio.create_task(self._execute(client, live))
             self._inflight.add(task)
             task.add_done_callback(self._inflight.discard)
+            if not any(row.priority for row in live):
+                self._preemptible[task] = client
+                task.add_done_callback(self._forget_preemptible)
+                if self._high:
+                    self._preempt_bulk()
+
+    def _preempt_bulk(self) -> None:
+        for client in self._preemptible.values():
+            self._pool.preempt(self._slot, client)
+        self._preemptible.clear()
+
+    def _forget_preemptible(self, task: asyncio.Task[None]) -> None:
+        self._preemptible.pop(task, None)
 
     def _peek(self) -> Row | None:
         for queue in (self._high, self._normal):
@@ -357,6 +375,10 @@ class Batcher:
             return
         assert reply.error_kind is not None
         message = reply.error or ""
+        if reply.error_kind is ErrorKind.PREEMPTED:
+            self._counters.inc("batch_preempted_total", slot=self._slot)
+            self._requeue(batch, front=True)
+            return
         if reply.error_kind is ErrorKind.OOM:
             self._pool.report_oom(self._slot, client)
             self._shrunk_by.add(client)
@@ -509,4 +531,5 @@ def build_call(call_id: int, slot: str, batch: list[Row], blocks: shm.SharedBloc
         deadline_at=min(row.deadline_at for row in batch),
         arrays=blocks.share(arrays),
         args=args,
+        preemptible=not any(row.priority for row in batch),
     )

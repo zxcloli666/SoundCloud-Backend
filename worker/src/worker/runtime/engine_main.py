@@ -13,6 +13,8 @@ from multiprocessing.connection import Connection
 from worker.observability.logging import JsonLog, error_text
 from worker.runtime import allocator, devices, shm
 from worker.runtime.protocol import (
+    PREEMPT_SIGNAL,
+    PREEMPTION,
     BadInput,
     Call,
     CallExpired,
@@ -21,6 +23,7 @@ from worker.runtime.protocol import (
     ErrorKind,
     ModelSlot,
     Pong,
+    Preempted,
     Reply,
     SlotSpec,
     SlotState,
@@ -55,6 +58,7 @@ def main(argv: list[str]) -> int:
         return EXIT_ORPHANED
     set_oom_score_adj(options.oom_score_adj, log)
     set_nice(options.nice, log)
+    signal.signal(PREEMPT_SIGNAL, request_preemption)
     set_parent_death_signal(log)
     conn = Connection(options.fd)
     specs = conn.recv()
@@ -89,6 +93,10 @@ def set_oom_score_adj(value: int, log: JsonLog) -> None:
             handle.write(str(value))
     except OSError as error:
         log.warning("engine_oom_score_adj_failed", value=value, error=str(error))
+
+
+def request_preemption(signum: int, frame: object) -> None:
+    PREEMPTION.requested = True
 
 
 def set_nice(value: int, log: JsonLog) -> None:
@@ -249,6 +257,8 @@ class Engine:
         assert model is not None
         self._apply_threads(call.threads)
         oom = False
+        PREEMPTION.requested = False
+        PREEMPTION.armed = call.preemptible
         try:
             arrays = shm.read_all(call.arrays)
             out_arrays, result = model.invoke(call.method, arrays, dict(call.args))
@@ -260,6 +270,8 @@ class Engine:
         except CallExpired as error:
             self._log.info("slot_call_expired", slot=call.slot, method=call.method)
             reply = Reply(call.id, error_kind=ErrorKind.EXPIRED, error=error_text(error))
+        except Preempted as error:
+            reply = Reply(call.id, error_kind=ErrorKind.PREEMPTED, error=error_text(error))
         except Exception as error:
             oom = allocator.is_out_of_memory(error)
             kind = ErrorKind.OOM if oom else ErrorKind.MODEL_ERROR
@@ -268,6 +280,7 @@ class Engine:
             )
             reply = Reply(call.id, error_kind=kind, error=error_text(error))
         finally:
+            PREEMPTION.armed = False
             slot.calls += 1
             if oom or self._options.release_after_call:
                 self._release()
