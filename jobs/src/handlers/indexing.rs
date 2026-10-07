@@ -256,11 +256,10 @@ impl IndexingHandler {
     }
 
     fn storage_redirect_url(&self, sc_track_id: &str) -> JobResult<String> {
-        append_path(
-            self.storage_url.clone(),
-            &["redirect", &format!("soundcloud_tracks_{sc_track_id}.m4a")],
-        )
-        .map(Into::into)
+        let key = catalog_ingest::track_object_key(sc_track_id).ok_or_else(|| {
+            JobError::permanent(anyhow::anyhow!("indexing has an invalid track id"))
+        })?;
+        append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
     }
 }
 

@@ -333,7 +333,8 @@ fn validate_upload(payload: StorageTrackUploaded) -> anyhow::Result<UploadedAudi
 
 fn canonical_storage_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result<String> {
     let mut url = storage_url.clone();
-    let filename = format!("soundcloud_tracks_{sc_track_id}.m4a");
+    let filename = catalog_ingest::track_object_key(sc_track_id)
+        .ok_or_else(|| anyhow::anyhow!("storage upload has an invalid track id"))?;
     let mut path = url
         .path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?;

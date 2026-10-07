@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::response::Response;
 use bytes::Bytes;
+use entity_ref::{EntityKind, EntityRef};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tracing::{info, warn};
@@ -46,20 +47,23 @@ impl StorageClient {
         !self.base_url.is_empty() && !self.auth_token.is_empty()
     }
 
-    pub fn track_filename(track_urn: &str) -> String {
-        track_urn.replace(':', "_")
+    pub fn track_filename(track_urn: &str) -> Option<String> {
+        is_canonical_track_urn(track_urn)
+            .then(|| EntityRef::parse_urn(track_urn))
+            .flatten()
+            .map(EntityRef::storage_name)
     }
 
-    pub fn track_path(track_urn: &str) -> String {
-        format!("{}.m4a", Self::track_filename(track_urn))
+    pub fn track_path(track_urn: &str) -> Option<String> {
+        Self::track_filename(track_urn).map(|filename| format!("{filename}.m4a"))
     }
 
-    pub fn internal_url(&self, track_urn: &str) -> String {
-        format!("{}/{}", self.base_url, Self::track_path(track_urn))
+    pub fn internal_url(&self, track_urn: &str) -> Option<String> {
+        Self::track_path(track_urn).map(|path| format!("{}/{path}", self.base_url))
     }
 
-    pub fn public_track_url(&self, track_urn: &str) -> String {
-        format!("{}/{}", self.public_url, Self::track_path(track_urn))
+    pub fn public_track_url(&self, track_urn: &str) -> Option<String> {
+        Self::track_path(track_urn).map(|path| format!("{}/{path}", self.public_url))
     }
 
     fn is_temporarily_unavailable(&self) -> bool {
@@ -72,13 +76,13 @@ impl StorageClient {
             return None;
         }
 
+        let verify_url = self.internal_url(track_urn)?;
         let cached = self.pg.find_cached_track(track_urn).await.ok()??;
-        let verify_url = self.internal_url(track_urn);
 
         match self.verify_url(&verify_url).await {
             VerifyResult::Ok => {
                 let _ = self.pg.update_last_accessed(&cached.id).await;
-                Some(self.public_track_url(track_urn))
+                self.public_track_url(track_urn)
             }
             VerifyResult::Missing => {
                 let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
@@ -93,13 +97,9 @@ impl StorageClient {
             return None;
         }
 
+        let internal_url = self.internal_url(track_urn)?;
         let cached = self.pg.find_cached_track(track_urn).await.ok()??;
-        let response = match self
-            .passthrough
-            .get(self.internal_url(track_urn))
-            .send()
-            .await
-        {
+        let response = match self.passthrough.get(internal_url).send().await {
             Ok(response) if response.status().is_success() => response,
             Ok(response)
                 if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
@@ -140,10 +140,14 @@ impl StorageClient {
         data: Bytes,
         quality: &'static str,
     ) {
-        if !is_canonical_track_urn(&track_urn) {
+        let (Some(filename), Some(verify_target), Some(cdn_path)) = (
+            Self::track_filename(&track_urn),
+            self.internal_url(&track_urn),
+            Self::track_path(&track_urn),
+        ) else {
             warn!("[storage] refusing upload for non-canonical urn: {track_urn:?}");
             return;
-        }
+        };
         if !self.enabled() || self.is_temporarily_unavailable() {
             return;
         }
@@ -152,14 +156,10 @@ impl StorageClient {
         let upload_url = self.upload_url.clone();
         let auth_token = self.auth_token.clone();
         let pg = self.pg.clone();
-        let filename = Self::track_filename(&track_urn);
         let consec = self.consecutive_unavailable.clone();
         let until = self.unavailable_until.clone();
-        let verify_target = self.internal_url(&track_urn);
 
         tokio::spawn(async move {
-            let cdn_path = Self::track_path(&track_urn);
-
             let id = match pg.insert_cdn_track(&track_urn, &cdn_path, "pending").await {
                 Ok(id) => id,
                 Err(e) => {
@@ -217,7 +217,10 @@ impl StorageClient {
     }
 
     pub async fn delete_file(&self, track_urn: &str) -> Result<(), wreq::Error> {
-        let filename = Self::track_filename(track_urn);
+        let Some(filename) = Self::track_filename(track_urn) else {
+            warn!("[storage] refusing delete for non-canonical urn: {track_urn:?}");
+            return Ok(());
+        };
         let url = format!("{}/files/{}", self.base_url, filename);
         self.client
             .delete(&url)
@@ -377,9 +380,11 @@ pub(crate) async fn upload_to_storage(
 }
 
 pub fn is_canonical_track_urn(track_urn: &str) -> bool {
-    track_urn
-        .strip_prefix("soundcloud:tracks:")
-        .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+    entity_ref::is_canonical_urn(EntityKind::Track, track_urn)
+}
+
+pub fn canonical_track_urn(input: &str) -> Option<String> {
+    entity_ref::track_urn(input)
 }
 
 fn now_ms() -> u64 {
@@ -391,23 +396,49 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{StorageClient, is_canonical_track_urn};
+    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn};
 
     #[test]
     fn canonical_urn_maps_to_canonical_filename() {
         assert!(is_canonical_track_urn("soundcloud:tracks:12345"));
         assert_eq!(
-            StorageClient::track_filename("soundcloud:tracks:12345"),
-            "soundcloud_tracks_12345"
+            StorageClient::track_filename("soundcloud:tracks:12345").as_deref(),
+            Some("soundcloud_tracks_12345")
+        );
+        assert_eq!(
+            StorageClient::track_path("soundcloud:tracks:12345").as_deref(),
+            Some("soundcloud_tracks_12345.m4a")
         );
     }
 
     #[test]
     fn rejects_bare_and_foreign_urns() {
-        assert!(!is_canonical_track_urn("12345"));
-        assert!(!is_canonical_track_urn("soundcloud:users:12345"));
-        assert!(!is_canonical_track_urn("soundcloud:tracks:"));
-        assert!(!is_canonical_track_urn("soundcloud:tracks:abc"));
-        assert!(!is_canonical_track_urn(""));
+        for input in [
+            "12345",
+            "soundcloud:users:12345",
+            "soundcloud:tracks:",
+            "soundcloud:tracks:abc",
+            "soundcloud:tracks:012345",
+            "soundcloud_tracks_12345",
+            "",
+        ] {
+            assert!(!is_canonical_track_urn(input), "{input:?}");
+            assert_eq!(StorageClient::track_filename(input), None, "{input:?}");
+            assert_eq!(StorageClient::track_path(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn a_bare_id_is_canonicalized_before_it_can_name_an_object() {
+        assert_eq!(
+            canonical_track_urn("12345").as_deref(),
+            Some("soundcloud:tracks:12345")
+        );
+        assert_eq!(
+            canonical_track_urn("soundcloud:tracks:12345").as_deref(),
+            Some("soundcloud:tracks:12345")
+        );
+        assert_eq!(canonical_track_urn("soundcloud:users:12345"), None);
+        assert_eq!(canonical_track_urn("012345"), None);
     }
 }

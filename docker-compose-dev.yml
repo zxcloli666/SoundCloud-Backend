@@ -195,6 +195,7 @@ services:
         decrypt: ./utils/decrypt
         decrypt-client: ./utils/decrypt-client
         stream-ticket: ./utils/stream-ticket
+        entity-ref: ./utils/entity-ref
     restart: unless-stopped
     stop_grace_period: 3s
     ports:
@@ -230,6 +231,7 @@ services:
       additional_contexts:
         tls-common: ./utils/tls-common
         sc-fingerprint: ./utils/sc-fingerprint
+        entity-ref: ./utils/entity-ref
     restart: unless-stopped
     stop_grace_period: 3s
     ports:

@@ -90,15 +90,16 @@ pub fn key_for(filename: &str) -> String {
 /// else. The `/upload` boundary rejects non-canonical names so a bare
 /// `<id>.m4a` can never land in storage again.
 pub fn canonical_track_filename(name: &str) -> Option<String> {
-    let stem = name.strip_suffix(".m4a").unwrap_or(name);
-    if let Some(id) = stem.strip_prefix("soundcloud_tracks_") {
-        return is_sc_id(id).then(|| stem.to_string());
-    }
-    is_sc_id(stem).then(|| format!("soundcloud_tracks_{stem}"))
+    track_of_filename(name).map(entity_ref::EntityRef::storage_name)
 }
 
-fn is_sc_id(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+pub fn track_of_filename(name: &str) -> Option<entity_ref::EntityRef> {
+    let stem = name.strip_suffix(".m4a").unwrap_or(name);
+    let id = stem.strip_prefix("soundcloud_tracks_").unwrap_or(stem);
+    if !id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    entity_ref::EntityRef::track(id)
 }
 
 pub fn content_type_for(key: &str) -> &'static str {
@@ -119,8 +120,14 @@ mod tests {
 
     #[test]
     fn accepts_and_keeps_canonical() {
-        assert_eq!(canon("soundcloud_tracks_12345").unwrap(), "soundcloud_tracks_12345");
-        assert_eq!(canon("soundcloud_tracks_12345.m4a").unwrap(), "soundcloud_tracks_12345");
+        assert_eq!(
+            canon("soundcloud_tracks_12345").unwrap(),
+            "soundcloud_tracks_12345"
+        );
+        assert_eq!(
+            canon("soundcloud_tracks_12345.m4a").unwrap(),
+            "soundcloud_tracks_12345"
+        );
     }
 
     #[test]
@@ -131,6 +138,11 @@ mod tests {
 
     #[test]
     fn rejects_non_canonical() {
+        assert!(canon("soundcloud_tracks_012345").is_none());
+        assert!(canon("soundcloud_tracks_0").is_none());
+        assert!(canon("soundcloud_users_12345").is_none());
+        assert!(canon("soundcloud_tracks_ 12345").is_none());
+        assert!(canon(" 12345").is_none());
         assert!(canon("soundcloud_tracks_abc").is_none());
         assert!(canon("remix_12345").is_none());
         assert!(canon("soundcloud_tracks_").is_none());

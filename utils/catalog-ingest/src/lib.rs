@@ -14,7 +14,8 @@ pub use payload::ScTrackFields;
 pub use playlist::{upsert_playlist_from_sc, upsert_playlist_in};
 pub use playlist_metadata::PlaylistUpdate;
 pub use sc_ids::{
-    EntityKind, EntityRef, extract_sc_id, normalize_sc_track_id, user_id_variants, user_urn,
+    EntityKind, EntityRef, extract_sc_id, normalize_sc_track_id, track_object_key,
+    user_id_variants, user_urn,
 };
 pub use sc_payload::parse_dt;
 pub use track_metadata::TrackUpdate;

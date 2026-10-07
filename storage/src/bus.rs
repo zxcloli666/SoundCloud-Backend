@@ -136,10 +136,28 @@ fn split_creds(url: &str) -> (String, Option<String>, Option<String>) {
 /// `soundcloud_tracks_{id}` → `Some("{id}")`. Returns None for non-numeric tails
 /// (we only emit events for canonical SC track URNs).
 pub fn sc_track_id_from_filename(filename: &str) -> Option<String> {
-    let last = filename.rsplit('_').next().unwrap_or(filename);
-    if !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) {
-        Some(last.to_string())
-    } else {
-        None
+    let track = crate::backend::track_of_filename(filename)?;
+    (track.storage_name() == filename).then(|| track.sc_id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sc_track_id_from_filename;
+
+    #[test]
+    fn only_a_canonical_track_object_names_a_track_event() {
+        assert_eq!(
+            sc_track_id_from_filename("soundcloud_tracks_42").as_deref(),
+            Some("42")
+        );
+        for filename in [
+            "42",
+            "soundcloud_users_42",
+            "remix_42",
+            "soundcloud_tracks_042",
+            "soundcloud_tracks_",
+        ] {
+            assert_eq!(sc_track_id_from_filename(filename), None, "{filename}");
+        }
     }
 }

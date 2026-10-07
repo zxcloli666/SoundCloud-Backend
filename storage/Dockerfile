@@ -5,6 +5,7 @@ RUN apt-get update \
 
 COPY --from=tls-common . /build/utils/tls-common
 COPY --from=sc-fingerprint . /build/utils/sc-fingerprint
+COPY --from=entity-ref . /build/utils/entity-ref
 
 WORKDIR /build/storage
 COPY Cargo.toml Cargo.lock ./

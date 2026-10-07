@@ -33,6 +33,7 @@ call-relay = { path = "../utils/call/relay" }
 call-lua-macros = { path = "../utils/call/lua-macros" }
 decrypt = { path = "../utils/decrypt" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
+entity-ref = { version = "0.1.0", path = "../utils/entity-ref" }
 once_cell = "1"
 rand = "0.8"
 subtle = "2"

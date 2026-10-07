@@ -1,4 +1,4 @@
-pub use entity_ref::{EntityKind, EntityRef};
+pub use entity_ref::{EntityKind, EntityRef, track_object_key};
 
 pub fn normalize_sc_track_id(input: &str) -> Option<String> {
     entity_ref::sc_track_id(input)

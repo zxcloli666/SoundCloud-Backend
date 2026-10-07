@@ -85,6 +85,10 @@ impl EntityRef {
     pub fn storage_name(self) -> String {
         self.urn().replace(':', "_")
     }
+
+    pub fn object_key(self) -> String {
+        format!("{}.m4a", self.storage_name())
+    }
 }
 
 impl fmt::Display for EntityRef {
@@ -99,6 +103,10 @@ pub fn track_urn(input: &str) -> Option<String> {
 
 pub fn playlist_urn(input: &str) -> Option<String> {
     EntityRef::playlist(input).map(EntityRef::urn)
+}
+
+pub fn track_object_key(input: &str) -> Option<String> {
+    EntityRef::track(input).map(EntityRef::object_key)
 }
 
 pub fn sc_track_id(input: &str) -> Option<String> {
@@ -192,6 +200,15 @@ mod tests {
                 .storage_name(),
             "soundcloud_tracks_12345"
         );
+        assert_eq!(
+            track_object_key("12345").as_deref(),
+            Some("soundcloud_tracks_12345.m4a")
+        );
+        assert_eq!(
+            track_object_key("soundcloud:tracks:12345").as_deref(),
+            Some("soundcloud_tracks_12345.m4a")
+        );
+        assert_eq!(track_object_key("soundcloud:users:12345"), None);
         assert!(is_canonical_urn(
             EntityKind::Track,
             "soundcloud:tracks:12345"

@@ -176,7 +176,8 @@ fn validate(payload: StoredAudioDispatchPayload) -> anyhow::Result<StoredAudioDi
 
 fn audio_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result<String> {
     let mut url = storage_url.clone();
-    let filename = format!("soundcloud_tracks_{sc_track_id}.m4a");
+    let filename = catalog_ingest::track_object_key(sc_track_id)
+        .ok_or_else(|| anyhow::anyhow!("transcription dispatch has an invalid track id"))?;
     url.path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?
         .extend(["redirect", filename.as_str()]);

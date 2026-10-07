@@ -27,6 +27,7 @@ subtle = "2"
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
 wreq = { version = "5", features = ["json", "stream", "multipart"] }
 tls-common = { path = "../utils/tls-common" }
+entity-ref = { version = "0.1.0", path = "../utils/entity-ref" }
 
 [profile.release]
 lto = true
