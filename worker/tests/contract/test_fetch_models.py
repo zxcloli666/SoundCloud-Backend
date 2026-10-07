@@ -36,7 +36,7 @@ class FakeHub:
         self.downloads: list[tuple[str, str]] = []
 
     def model_info(self, repo: str, revision: str) -> SimpleNamespace:
-        return SimpleNamespace(sha=self.main_sha)
+        return SimpleNamespace(id=repo, sha=self.main_sha)
 
     def list_repo_files(self, repo: str, revision: str) -> list[str]:
         return self.files
