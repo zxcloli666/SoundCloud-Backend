@@ -83,10 +83,7 @@ async fn seed(pool: &PgPool, songs: &[Song]) -> anyhow::Result<()> {
 }
 
 async fn refresh(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::query("REFRESH MATERIALIZED VIEW search_terms")
-        .execute(pool)
-        .await?;
-    Ok(())
+    super::lexicon_refresh::refresh(pool).await
 }
 
 fn ids(page: &[Value]) -> Vec<i64> {

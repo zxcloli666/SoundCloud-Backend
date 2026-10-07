@@ -80,10 +80,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query("UPDATE tracks SET deleted_at = now() WHERE sc_track_id = '4'")
         .execute(pool)
         .await?;
-    sqlx::query("REFRESH MATERIALIZED VIEW search_terms")
-        .execute(pool)
-        .await?;
-    Ok(())
+    super::lexicon_refresh::refresh(pool).await
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -147,12 +144,14 @@ async fn a_common_chorus_over_long_lyrics_stays_fast(pool: PgPool) -> anyhow::Re
                                         ELSE 'we keep on dancing through the neon night ' || k || ' baby ' || n END, E'\\n')
                  FROM generate_series(1, 150) k),
                 'lrclib', 'lrclib'
-         FROM generate_series(1, 400) n;
-         REFRESH MATERIALIZED VIEW search_terms;
-         ANALYZE tracks, lyrics_cache, search_terms;",
+         FROM generate_series(1, 400) n",
     )
     .execute(&pool)
     .await?;
+    super::lexicon_refresh::refresh(&pool).await?;
+    sqlx::raw_sql("ANALYZE tracks, lyrics_cache, search_terms")
+        .execute(&pool)
+        .await?;
     let search = service(&pool)?;
     for page in [0, 1] {
         let started = std::time::Instant::now();

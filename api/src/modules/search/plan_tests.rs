@@ -27,12 +27,14 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          SELECT 'record ' || n, 'record ' || n, 'test', 'album', 3 FROM generate_series(1, 5000) n;
          INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source)
          SELECT n::text, 'line one ' || n || E'\\nforever ' || (n % 100) || E' heart\\nwe are', 'lrclib', 'lrclib'
-         FROM generate_series(1, 20000) n;
-         REFRESH MATERIALIZED VIEW search_terms;
-         ANALYZE tracks, users, playlists, artists, albums, lyrics_cache, search_terms;",
+         FROM generate_series(1, 20000) n",
     )
     .execute(pool)
     .await?;
+    super::lexicon_refresh::refresh(pool).await?;
+    sqlx::raw_sql("ANALYZE tracks, users, playlists, artists, albums, lyrics_cache, search_terms")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -224,11 +226,11 @@ async fn short_unknown_tokens_skip_the_fuzzy_arm(pool: PgPool) -> anyhow::Result
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist, uploader_username,
                              uploader_sc_user_id, duration_ms, play_count_sc, sharing)
          SELECT n::text, 'soundcloud:tracks:' || n, 'love song', 'love song', 'band', 'band', '1', 1000, n, 'public'
-         FROM generate_series(1, 3) n;
-         REFRESH MATERIALIZED VIEW search_terms;",
+         FROM generate_series(1, 3) n",
     )
     .execute(&pool)
     .await?;
+    super::lexicon_refresh::refresh(&pool).await?;
     let mut tx = configured(&pool).await?;
     let rows = sqlx::query_file_as!(
         TermRow,

@@ -348,10 +348,7 @@ pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<(
         .execute(pool)
         .await?;
     }
-    sqlx::query("REFRESH MATERIALIZED VIEW search_terms")
-        .execute(pool)
-        .await?;
-    Ok(())
+    crate::modules::search::lexicon_refresh::refresh(pool).await
 }
 
 pub(super) fn urns(body: &Value) -> Vec<String> {

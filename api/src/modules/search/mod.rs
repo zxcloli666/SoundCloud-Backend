@@ -13,6 +13,9 @@ mod catalog_tests;
 mod failure_tests;
 
 #[cfg(test)]
+pub(crate) mod lexicon_refresh;
+
+#[cfg(test)]
 mod lyrics_tests;
 
 #[cfg(test)]
