@@ -57,8 +57,8 @@ impl TrackUpload {
             .await
             .map_err(|error| ScError::invalid(format!("upload spool: {error}")))?;
         let body = Body::wrap_stream(ReaderStream::new(file));
-        let part = Part::stream_with_length(body, self.asset.len)
-            .file_name(self.asset.file_name.clone());
+        let part =
+            Part::stream_with_length(body, self.asset.len).file_name(self.asset.file_name.clone());
         Ok(form.part("track[asset_data]", part))
     }
 }
@@ -114,9 +114,7 @@ impl ScClient {
                 return Attempt::Unsent(ScError::unreachable(error.without_url().to_string()));
             }
             Err(error) => {
-                return Attempt::Done(Err(ScError::unreachable(
-                    error.without_url().to_string(),
-                )));
+                return Attempt::Done(Err(ScError::unreachable(error.without_url().to_string())));
             }
         };
         let status = response.status();
