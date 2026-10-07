@@ -73,7 +73,8 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::albums::router())
         .merge(modules::discover::router())
         .merge(modules::discover::admin::router())
-        .merge(modules::search::router());
+        .merge(modules::search::router())
+        .merge(modules::rooms::router());
 
     #[cfg(feature = "profiling")]
     let router = router.merge(crate::profiling::router());

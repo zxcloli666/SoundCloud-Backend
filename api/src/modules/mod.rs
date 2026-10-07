@@ -20,6 +20,7 @@ pub mod oauth_apps;
 pub mod playlists;
 pub mod recommendations;
 pub mod resolve;
+pub mod rooms;
 pub mod search;
 pub mod soundcloud_search;
 pub mod subscriptions;

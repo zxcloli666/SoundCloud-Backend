@@ -253,6 +253,10 @@ async fn main() {
 
     events.install_dislikes(dislikes.clone());
 
+    let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
+    room_hub.spawn_bridge(shutdown.clone());
+    let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
+
     let port = config.port;
     let state = AppState {
         config: config.clone(),
@@ -287,6 +291,7 @@ async fn main() {
         recommendations,
         discover,
         sync_queue: sync_queue.clone(),
+        rooms,
     };
 
     let app = router::build(state);
