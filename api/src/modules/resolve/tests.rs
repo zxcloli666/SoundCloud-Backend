@@ -192,6 +192,27 @@ fn resolve_input_accepts_a_link_pasted_without_a_scheme() -> anyhow::Result<()> 
     Ok(())
 }
 
+#[test]
+fn resolve_input_refuses_soundcloud_pages_that_are_not_entities() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/discover",
+        "https://soundcloud.com/Discover/sets/charts-top:all-music",
+        "https://soundcloud.com/search?q=x",
+        "https://soundcloud.com/you/likes",
+        "soundcloud.com/stream",
+        "https://m.soundcloud.com/charts/top",
+        "https://soundcloud.com/terms-of-use",
+        "https://soundcloud.com/",
+    ] {
+        let refused = ResolveInput::parse(raw)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("{raw} must be refused"))?;
+        assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND, "{raw}");
+    }
+    assert!(ResolveInput::parse("https://soundcloud.com/discovery-artist/song").is_ok());
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(

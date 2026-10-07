@@ -66,6 +66,26 @@ fn invalid_payload() -> AppError {
 }
 
 const SECRET_TOKEN: &str = "secret_token";
+const NON_ENTITY_PATHS: &[&str] = &[
+    "discover",
+    "search",
+    "you",
+    "stream",
+    "upload",
+    "charts",
+    "pages",
+    "settings",
+    "notifications",
+    "messages",
+    "terms-of-use",
+    "tags",
+    "people",
+    "signin",
+    "logout",
+    "jobs",
+    "imprint",
+    "mobile",
+];
 const SCHEMELESS_HOSTS: &[&str] = &[
     "soundcloud.com/",
     "www.soundcloud.com/",
@@ -131,6 +151,16 @@ impl ResolveInput {
             .filter(|segment| !segment.is_empty())
             .map(str::to_owned)
             .collect();
+        if main_host {
+            if segments
+                .first()
+                .is_none_or(|first| NON_ENTITY_PATHS.contains(&first.to_lowercase().as_str()))
+            {
+                return Err(AppError::not_found(
+                    "Not a SoundCloud track, playlist or profile link",
+                ));
+            }
+        }
         let secret_at = secret_segment(&segments);
         let requires_upstream = secret_at.is_some() || !kept.is_empty();
         let mut permalinks = Vec::new();
