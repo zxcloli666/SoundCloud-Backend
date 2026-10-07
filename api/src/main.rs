@@ -254,7 +254,6 @@ async fn main() {
     events.install_dislikes(dislikes.clone());
 
     let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
-    room_hub.spawn_bridge(shutdown.clone());
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
     let port = config.port;

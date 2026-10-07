@@ -4,7 +4,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::bus::nats::NatsService;
@@ -24,8 +23,19 @@ impl RoomHub {
         Arc::new(Self { tx, nats })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<String> {
-        self.tx.subscribe()
+    pub async fn listen(&self) -> RoomChanges {
+        let local = self.tx.subscribe();
+        let remote = match &self.nats {
+            Some(nats) => match nats.subscribe(ROOMS_SUBJECT).await {
+                Ok(subscriber) => Some(subscriber),
+                Err(error) => {
+                    warn!(%error, "room fan-out is local only");
+                    None
+                }
+            },
+            None => None,
+        };
+        RoomChanges { local, remote }
     }
 
     pub async fn announce(&self, code: &str) {
@@ -38,31 +48,41 @@ impl RoomHub {
             Err(_) => warn!("room change fan-out timed out"),
         }
     }
+}
 
-    pub fn spawn_bridge(self: &Arc<Self>, shutdown: CancellationToken) {
-        let Some(nats) = self.nats.clone() else {
-            return;
+pub struct RoomChanges {
+    local: broadcast::Receiver<String>,
+    remote: Option<async_nats::Subscriber>,
+}
+
+async fn remote_change(remote: &mut Option<async_nats::Subscriber>, code: &str) {
+    loop {
+        let Some(subscriber) = remote.as_mut() else {
+            return std::future::pending().await;
         };
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let mut subscriber = match nats.subscribe(ROOMS_SUBJECT).await {
-                Ok(subscriber) => subscriber,
-                Err(error) => {
-                    warn!(%error, "room fan-out is local only");
-                    return;
-                }
-            };
-            loop {
-                tokio::select! {
-                    () = shutdown.cancelled() => break,
-                    message = subscriber.next() => {
-                        let Some(message) = message else { break };
-                        if let Ok(code) = std::str::from_utf8(&message.payload) {
-                            let _ = tx.send(code.to_owned());
-                        }
+        match subscriber.next().await {
+            Some(message) if message.payload.as_ref() == code.as_bytes() => return,
+            Some(_) => {}
+            None => *remote = None,
+        }
+    }
+}
+
+impl RoomChanges {
+    pub async fn changed(&mut self, code: &str) {
+        let Self { local, remote } = self;
+        loop {
+            tokio::select! {
+                () = remote_change(remote, code) => return,
+                received = local.recv() => match received {
+                    Ok(changed) if changed == code => return,
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => return,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return remote_change(remote, code).await;
                     }
-                }
+                },
             }
-        });
+        }
     }
 }

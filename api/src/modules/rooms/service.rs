@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use deadpool_redis::Pool;
 use serde::Serialize;
-use tokio::sync::broadcast;
 use tokio::time::Instant;
 
 use crate::error::{AppError, AppResult};
@@ -35,17 +34,6 @@ fn now_ms() -> i64 {
 
 fn not_member() -> AppError {
     AppError::not_found("You are not in this room")
-}
-
-async fn changed(changes: &mut broadcast::Receiver<String>, code: &str) {
-    loop {
-        match changes.recv().await {
-            Ok(changed) if changed == code => return,
-            Ok(_) => {}
-            Err(broadcast::error::RecvError::Lagged(_)) => return,
-            Err(broadcast::error::RecvError::Closed) => std::future::pending::<()>().await,
-        }
-    }
 }
 
 impl RoomsService {
@@ -95,7 +83,7 @@ impl RoomsService {
         since: Option<u64>,
         hold: Duration,
     ) -> AppResult<RoomView> {
-        let mut changes = self.hub.subscribe();
+        let mut changes = self.hub.listen().await;
         self.store.touch(code, user_id, now_ms()).await?;
         if let Some(since) = since {
             let deadline = Instant::now() + hold;
@@ -111,7 +99,7 @@ impl RoomsService {
                 }
                 let pause = RECHECK_EVERY.min(deadline - now);
                 tokio::select! {
-                    () = changed(&mut changes, code) => {}
+                    () = changes.changed(code) => {}
                     () = tokio::time::sleep(pause) => {}
                 }
             }
