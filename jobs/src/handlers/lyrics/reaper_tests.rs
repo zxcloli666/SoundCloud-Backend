@@ -91,6 +91,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              result_consumer varchar(96),
              result_lease_id uuid,
              result_lease_expires_at timestamptz,
+             reopen_count integer NOT NULL DEFAULT 0,
              updated_at timestamptz NOT NULL DEFAULT now()
          );",
     )
@@ -338,6 +339,58 @@ async fn stale_embedding_requests_time_out_and_go_back_to_the_backlog(
         .await?;
     assert_eq!(cache_state.as_deref(), Some("queued"));
     assert_eq!(jobs, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn lyrics_that_keep_timing_out_are_parked_after_the_reopen_cap(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_stored_track(&pool, "42", 1).await?;
+    seed_lyrics(&pool, "42", "lyrics that never come back from the worker").await?;
+    for reopens in [MAX_EMBEDDING_REOPENS - 1, MAX_EMBEDDING_REOPENS] {
+        sqlx::query(
+            "UPDATE lyrics_cache SET embedding_state = 'dispatched' WHERE sc_track_id = '42'",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("DELETE FROM background_jobs")
+            .execute(&pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO lyrics_embedding_wire_state (
+                 sc_track_id, status, first_publish_attempt_at,
+                 lyrics_created_at, lyrics_content_generation, reopen_count
+             )
+             SELECT sc_track_id, 'pending', now() - interval '49 hours',
+                    created_at, content_generation, $1
+             FROM lyrics_cache WHERE sc_track_id = '42'
+             ON CONFLICT (sc_track_id) DO UPDATE
+             SET status = 'pending',
+                 completed_at = NULL,
+                 quarantine_reason = NULL,
+                 reopen_count = EXCLUDED.reopen_count",
+        )
+        .bind(reopens)
+        .execute(&pool)
+        .await?;
+
+        reaper(&pool).reap_embeddings(ROOM).await?;
+
+        let cache_state: Option<String> =
+            sqlx::query_scalar("SELECT embedding_state FROM lyrics_cache WHERE sc_track_id = '42'")
+                .fetch_one(&pool)
+                .await?;
+        let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
+            .fetch_one(&pool)
+            .await?;
+        if reopens < MAX_EMBEDDING_REOPENS {
+            assert_eq!((cache_state.as_deref(), jobs), (Some("queued"), 1));
+        } else {
+            assert_eq!((cache_state.as_deref(), jobs), (Some("quarantined"), 0));
+        }
+    }
     Ok(())
 }
 
