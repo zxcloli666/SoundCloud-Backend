@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::cache::ListPageResult;
 use crate::common::cache_helper::cached_or_fetch;
 use crate::common::pagination::PaginationQuery;
-use crate::common::sc_ids::extract_sc_id;
+use crate::common::sc_ids::{EntityKind, EntityRef};
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::cold_refresh::collection::CollectionPage;
@@ -71,6 +71,7 @@ async fn get_by_id(
     ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let user_urn = user_param(&user_urn)?.urn();
     Ok(Json(st.users.get_by_id(ctx.session_id, &user_urn).await?))
 }
 
@@ -81,6 +82,7 @@ async fn get_followers(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
+    let user_urn = user_param(&user_urn)?.urn();
     Ok(Json(st.users.get_followers(&user_urn, page, limit).await?))
 }
 
@@ -91,7 +93,7 @@ async fn get_followings(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let target = extract_sc_id(&user_urn);
+    let target = &user_param(&user_urn)?.sc_id();
     Ok(Json(
         st.users
             .get_followings(&ctx.sc_user_id, target, page, limit)
@@ -104,6 +106,8 @@ async fn get_is_following(
     ctx: SessionCtx,
     Path((user_urn, following_urn)): Path<(String, String)>,
 ) -> AppResult<Json<bool>> {
+    let user_urn = user_param(&user_urn)?.urn();
+    let following_urn = user_param(&following_urn)?.urn();
     Ok(Json(
         st.users
             .get_is_following(&ctx.sc_user_id, &user_urn, &following_urn)
@@ -118,7 +122,7 @@ async fn get_tracks(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let target = extract_sc_id(&user_urn);
+    let target = &user_param(&user_urn)?.sc_id();
     let mut result = st
         .users
         .get_owned_tracks(&ctx.sc_user_id, target, page, limit)
@@ -134,7 +138,7 @@ async fn get_playlists(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let target = extract_sc_id(&user_urn);
+    let target = &user_param(&user_urn)?.sc_id();
     Ok(Json(
         st.users
             .get_owned_playlists(&ctx.sc_user_id, target, page, limit)
@@ -149,7 +153,7 @@ async fn get_liked_tracks(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let target = extract_sc_id(&user_urn);
+    let target = &user_param(&user_urn)?.sc_id();
     let mut result = st
         .users
         .get_liked_tracks(&ctx.sc_user_id, target, page, limit)
@@ -165,7 +169,7 @@ async fn get_liked_playlists(
     Query(p): Query<PaginationQuery>,
 ) -> AppResult<Json<CollectionPage>> {
     let (page, limit) = p.resolved();
-    let target = extract_sc_id(&user_urn);
+    let target = &user_param(&user_urn)?.sc_id();
     Ok(Json(
         st.users
             .get_liked_playlists(&ctx.sc_user_id, target, page, limit)
@@ -178,6 +182,7 @@ async fn get_subscription(
     _ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Response> {
+    let user_urn = user_param(&user_urn)?.urn();
     let url = format!("/users/{user_urn}/subscription");
     cached_or_fetch(
         &st,
@@ -200,5 +205,10 @@ async fn get_web_profiles(
     _ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let user_urn = user_param(&user_urn)?.urn();
     Ok(Json(st.users.get_web_profiles(&user_urn).await?))
+}
+
+fn user_param(raw: &str) -> AppResult<EntityRef> {
+    crate::common::sc_ids::require_ref(EntityKind::User, raw)
 }

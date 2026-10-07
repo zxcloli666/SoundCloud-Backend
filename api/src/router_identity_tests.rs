@@ -286,3 +286,21 @@ async fn a_like_body_never_becomes_catalog_data(pool: PgPool) -> anyhow::Result<
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_user_path_of_another_kind_is_refused_before_any_lookup(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    for uri in [
+        "/users/soundcloud:tracks:5",
+        "/users/soundcloud:playlists:5/tracks",
+        "/users/5/followings/soundcloud:tracks:6",
+        "/users/05/web-profiles",
+    ] {
+        let (status, body) = get(&app, session, uri).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+    }
+    Ok(())
+}
