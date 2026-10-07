@@ -59,6 +59,14 @@ impl NatsService {
             .map_err(|error| AppError::internal(format!("nats subscribe {subject}: {error}")))
     }
 
+    pub async fn publish_core(&self, subject: &str, payload: Bytes) -> AppResult<()> {
+        self.js
+            .client()
+            .publish(subject.to_owned(), payload)
+            .await
+            .map_err(|error| AppError::internal(format!("nats publish {subject}: {error}")))
+    }
+
     pub async fn publish_dedup<P>(
         &self,
         subject: &str,
