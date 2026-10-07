@@ -66,6 +66,44 @@ fn invalid_payload() -> AppError {
 }
 
 const SECRET_TOKEN: &str = "secret_token";
+const NON_ENTITY_PATHS: &[&str] = &[
+    "discover",
+    "search",
+    "you",
+    "stream",
+    "upload",
+    "charts",
+    "pages",
+    "settings",
+    "notifications",
+    "messages",
+    "terms-of-use",
+    "tags",
+    "people",
+    "signin",
+    "logout",
+    "jobs",
+    "imprint",
+    "mobile",
+];
+const PROFILE_SUBPAGES: &[&str] = &[
+    "tracks",
+    "popular-tracks",
+    "albums",
+    "sets",
+    "reposts",
+    "likes",
+    "followers",
+    "following",
+    "comments",
+    "spotlight",
+];
+const SCHEMELESS_HOSTS: &[&str] = &[
+    "soundcloud.com/",
+    "www.soundcloud.com/",
+    "m.soundcloud.com/",
+    "on.soundcloud.com/",
+];
 
 pub(super) struct ResolveInput {
     pub upstream: String,
@@ -90,8 +128,8 @@ impl ResolveInput {
                 short_link: false,
             });
         }
-        let mut url =
-            Url::parse(raw).map_err(|_| AppError::bad_request("Invalid SoundCloud URL"))?;
+        let mut url = Url::parse(&with_scheme(raw))
+            .map_err(|_| AppError::bad_request("Invalid SoundCloud URL"))?;
         let main_host = matches!(
             url.host_str(),
             Some("soundcloud.com" | "www.soundcloud.com" | "m.soundcloud.com")
@@ -125,6 +163,21 @@ impl ResolveInput {
             .filter(|segment| !segment.is_empty())
             .map(str::to_owned)
             .collect();
+        if main_host {
+            if segments
+                .first()
+                .is_none_or(|first| NON_ENTITY_PATHS.contains(&first.to_lowercase().as_str()))
+            {
+                return Err(AppError::not_found(
+                    "Not a SoundCloud track, playlist or profile link",
+                ));
+            }
+            if let [_, subpage] = segments.as_slice()
+                && PROFILE_SUBPAGES.contains(&subpage.to_lowercase().as_str())
+            {
+                segments.truncate(1);
+            }
+        }
         let secret_at = secret_segment(&segments);
         let requires_upstream = secret_at.is_some() || !kept.is_empty();
         let mut permalinks = Vec::new();
@@ -169,6 +222,14 @@ impl ResolveInput {
         }
         Ok(input)
     }
+}
+
+fn with_scheme(raw: &str) -> std::borrow::Cow<'_, str> {
+    let lower = raw.to_ascii_lowercase();
+    if !raw.contains("://") && SCHEMELESS_HOSTS.iter().any(|host| lower.starts_with(host)) {
+        return format!("https://{raw}").into();
+    }
+    raw.into()
 }
 
 fn secret_segment(segments: &[String]) -> Option<usize> {

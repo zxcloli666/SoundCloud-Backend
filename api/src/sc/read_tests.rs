@@ -460,3 +460,55 @@ async fn a_rejected_query_reports_the_soundcloud_status(pool: PgPool) -> anyhow:
     ));
     Ok(())
 }
+
+const APIV1: &str = "http://127.0.0.1:2";
+
+async fn every_entity_read(read: &ScReadService) -> Vec<Result<Value, crate::error::AppError>> {
+    vec![
+        read.resolve(TokenKind::PublicPool, "https://soundcloud.com/discover")
+            .await,
+        read.track_by_id(TokenKind::PublicPool, "42").await,
+        read.user_by_id(TokenKind::PublicPool, "42").await,
+        read.playlist_meta(TokenKind::PublicPool, "42").await,
+    ]
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_apiv2_not_found_is_the_answer_and_skips_apiv1(pool: PgPool) -> anyhow::Result<()> {
+    for status in [404, 410] {
+        let relay = SearchRelay::new(None, status, json!({"error": "gone"}));
+        let read = search_service(&pool, relay.clone())?;
+
+        for result in every_entity_read(&read).await {
+            let failure = result.expect_err("SoundCloud said the entity is missing");
+            assert!(
+                matches!(failure, crate::error::AppError::ScApi { status: s, .. } if s == status),
+                "saw {failure}"
+            );
+            assert_eq!(failure.status().as_u16(), status);
+        }
+        assert!(
+            relay
+                .fetched_urls()
+                .iter()
+                .all(|url| !url.starts_with(APIV1)),
+            "an authoritative miss never reaches the apiv1 token tier"
+        );
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_apiv2_server_error_still_falls_back_to_apiv1(pool: PgPool) -> anyhow::Result<()> {
+    let relay = SearchRelay::new(None, 503, json!({"error": "busy"}));
+    let read = search_service(&pool, relay.clone())?;
+
+    for result in every_entity_read(&read).await {
+        let failure = result.expect_err("no token tier can answer in this test");
+        assert!(
+            !matches!(failure, crate::error::AppError::ScApi { status: 503, .. }),
+            "the apiv1 tier must have the last word, saw {failure}"
+        );
+    }
+    Ok(())
+}

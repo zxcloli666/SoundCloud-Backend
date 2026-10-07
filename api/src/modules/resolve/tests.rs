@@ -161,6 +161,99 @@ fn resolve_input_asks_soundcloud_with_the_canonical_link() -> anyhow::Result<()>
     Ok(())
 }
 
+#[test]
+fn resolve_input_accepts_a_link_pasted_without_a_scheme() -> anyhow::Result<()> {
+    for raw in [
+        "soundcloud.com/Artist/Song",
+        "www.soundcloud.com/artist/song?si=abc",
+        "M.SoundCloud.com/artist/song/",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(
+            input.upstream, "https://soundcloud.com/artist/song",
+            "{raw}"
+        );
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist/song".into())
+        );
+    }
+    let short = ResolveInput::parse("on.soundcloud.com/AbCd")?;
+    assert!(short.short_link);
+    assert_eq!(short.upstream, "https://on.soundcloud.com/AbCd");
+    for raw in [
+        "example.com/soundcloud.com/a/b",
+        "notsoundcloud.com/a/b",
+        "soundcloud.com",
+    ] {
+        assert!(ResolveInput::parse(raw).is_err(), "{raw}");
+    }
+    Ok(())
+}
+
+#[test]
+fn resolve_input_refuses_soundcloud_pages_that_are_not_entities() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/discover",
+        "https://soundcloud.com/Discover/sets/charts-top:all-music",
+        "https://soundcloud.com/search?q=x",
+        "https://soundcloud.com/you/likes",
+        "soundcloud.com/stream",
+        "https://m.soundcloud.com/charts/top",
+        "https://soundcloud.com/terms-of-use",
+        "https://soundcloud.com/",
+    ] {
+        let refused = ResolveInput::parse(raw)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("{raw} must be refused"))?;
+        assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND, "{raw}");
+    }
+    assert!(ResolveInput::parse("https://soundcloud.com/discovery-artist/song").is_ok());
+    Ok(())
+}
+
+#[test]
+fn resolve_input_reads_a_profile_subpage_as_the_profile() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/artist/tracks",
+        "https://soundcloud.com/Artist/Popular-Tracks/",
+        "https://m.soundcloud.com/artist/likes?si=abc",
+        "soundcloud.com/artist/reposts",
+        "https://soundcloud.com/artist/albums",
+        "https://soundcloud.com/artist/sets",
+        "https://soundcloud.com/artist/followers",
+        "https://soundcloud.com/artist/following",
+        "https://soundcloud.com/artist/comments",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(input.upstream, "https://soundcloud.com/artist", "{raw}");
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist".into()),
+            "{raw}"
+        );
+    }
+    for (raw, upstream) in [
+        (
+            "https://soundcloud.com/artist/sets/tracks",
+            "https://soundcloud.com/artist/sets/tracks",
+        ),
+        (
+            "https://soundcloud.com/artist/sets/mix",
+            "https://soundcloud.com/artist/sets/mix",
+        ),
+        (
+            "https://soundcloud.com/artist/tracks/s-secret",
+            "https://soundcloud.com/artist/tracks/s-secret",
+        ),
+    ] {
+        assert_eq!(ResolveInput::parse(raw)?.upstream, upstream, "{raw}");
+    }
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
