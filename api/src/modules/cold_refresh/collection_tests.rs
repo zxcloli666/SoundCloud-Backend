@@ -132,3 +132,34 @@ async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
     assert_eq!(generation, 1);
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install(&pool).await?;
+    ensure(&pool, CatalogCollection::LikedTracks, "42", false, 600).await?;
+    ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    let priorities: Vec<(String, i16)> =
+        sqlx::query_as("SELECT dedup_key, priority FROM background_jobs ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        priorities,
+        [
+            ("liked-tracks:42:owner".into(), 20),
+            ("liked-tracks:42:public".into(), 15)
+        ]
+    );
+    sqlx::query("UPDATE background_jobs SET priority = 5")
+        .execute(&pool)
+        .await?;
+    ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    let owner: (i16, i64) = sqlx::query_as(
+        "SELECT priority, generation FROM background_jobs WHERE dedup_key = 'liked-tracks:42:owner'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(owner, (20, 1));
+    Ok(())
+}

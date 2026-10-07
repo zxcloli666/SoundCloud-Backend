@@ -28,6 +28,7 @@ SET baseline_generation = baseline_generation + 1,
         THEN remote_applied_at
     END,
     next_reconcile_at = clock_timestamp() + CASE
+        WHEN $5 = 'clean' AND $12 = 'public' THEN interval '1 hour'
         WHEN $5 = 'clean' THEN interval '5 minutes'
         WHEN $6 = 'catalog_incomplete' THEN make_interval(
             secs => least(

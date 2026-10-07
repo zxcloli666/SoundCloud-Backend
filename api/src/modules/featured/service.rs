@@ -28,7 +28,14 @@ async fn enqueue_featured(
             "scUrn must be a canonical SoundCloud URN matching type",
         ));
     }
-    crate::modules::cold_refresh::entity::enqueue_entity_in(connection, entity, urn, None).await
+    crate::modules::cold_refresh::entity::enqueue_entity_in(
+        connection,
+        entity,
+        urn,
+        None,
+        crate::modules::cold_refresh::BACKGROUND_PRIORITY,
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

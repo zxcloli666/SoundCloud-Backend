@@ -354,6 +354,46 @@ async fn pending_jobs(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     Ok(rows.into_iter().map(|row| row.0).collect())
 }
 
+async fn job_priority(pool: &PgPool, dedup_key: &str) -> anyhow::Result<i16> {
+    Ok(sqlx::query_scalar(
+        "SELECT priority FROM background_jobs WHERE kind = 'catalog.refresh' AND dedup_key = $1",
+    )
+    .bind(dedup_key)
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stale_refresh_nobody_waits_on_stays_below_a_refresh_a_viewer_waits_on(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_private(&pool).await?;
+    sqlx::query("UPDATE tracks SET sc_synced_at = now() - interval '1 day'")
+        .execute(&pool)
+        .await?;
+    let services = services(&pool).await?;
+
+    services
+        .tracks
+        .get_by_id_with_fetch("17", "42", false, || async { Ok(remote_track()) })
+        .await?;
+    services
+        .tracks
+        .get_by_id_with_fetch("18", "43", false, || async { Ok(remote_track()) })
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        job_priority(&pool, "track:42:17").await?,
+        crate::modules::cold_refresh::BACKGROUND_PRIORITY
+    );
+    assert_eq!(
+        job_priority(&pool, "track:43:public").await?,
+        crate::modules::cold_refresh::VIEWER_PRIORITY
+    );
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn an_unknown_track_is_queued_for_refresh_instead_of_fetched_in_the_request(
     pool: PgPool,
@@ -401,6 +441,145 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
         pending_jobs(&pool).await?,
         vec!["playlist:42:public".to_owned()]
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error.public_code(), "playlist_refresh_pending");
+    assert_eq!(
+        pending_jobs(&pool).await?,
+        vec!["playlist:42:public".to_owned()]
+    );
+    Ok(())
+}
+
+async fn park_without_owner(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE playlist_membership_state
+         SET sync_status = 'auth_required',
+             next_reconcile_at = now() + interval '17 hours',
+             reconcile_failure_streak = 9",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn membership_state(pool: &PgPool) -> anyhow::Result<(String, bool, i32)> {
+    Ok(sqlx::query_as(
+        "SELECT sync_status,
+                next_reconcile_at < now() + interval '1 minute',
+                reconcile_failure_streak
+         FROM playlist_membership_state",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn opening_a_public_playlist_parked_without_its_owner_wakes_its_observation(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query("INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, sharing)
+        VALUES ('42', 'soundcloud:playlists:42', 'Stranger mix', 'stranger mix', '17', 'public')")
+        .execute(&pool).await?;
+    sqlx::query(
+        "INSERT INTO playlist_membership_state (playlist_urn) VALUES ('soundcloud:playlists:42')",
+    )
+    .execute(&pool)
+    .await?;
+    park_without_owner(&pool).await?;
+    let services = services(&pool).await?;
+
+    services
+        .playlists
+        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .await?;
+    let page = services.playlists.get_tracks("18", "42", 0, 50).await?;
+
+    assert_eq!(page.sync.status, "retry_wait");
+    assert_eq!(
+        membership_state(&pool).await?,
+        ("retry_wait".to_owned(), true, 0)
+    );
+
+    park_without_owner(&pool).await?;
+    services
+        .playlists
+        .get_by_id_with_fetch("18", "42", false, || async { Ok(remote_playlist()) })
+        .await?;
+
+    assert_eq!(
+        membership_state(&pool).await?,
+        ("auth_required".to_owned(), false, 9)
+    );
+    Ok(())
+}
+
+async fn record_refusal(pool: &PgPool, dedup_key: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation,
+             attempts, max_attempts, last_error, created_at
+         ) VALUES ($1, 'catalog.refresh', 'core_fast', $2, '{}', 15, 1,
+                   1, 8, 'SoundCloud answered 404', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dedup_key)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_playlist_the_public_reader_refused_is_loaded_as_the_viewer(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+    record_refusal(&pool, "playlist:42:public").await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.public_code(), "playlist_refresh_pending");
+    assert_eq!(
+        pending_jobs(&pool).await?,
+        vec!["playlist:42:18".to_owned()]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_forever(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let services = services(&pool).await?;
+    record_refusal(&pool, "playlist:42:public").await?;
+    record_refusal(&pool, "playlist:42:18").await?;
+
+    let error = services
+        .playlists
+        .get_tracks("18", "42", 0, 50)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+    assert!(pending_jobs(&pool).await?.is_empty());
     Ok(())
 }
 

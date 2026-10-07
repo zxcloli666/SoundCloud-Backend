@@ -11,14 +11,16 @@ async fn collection_last_allowed_page_does_not_advertise_an_unreachable_next_pag
     pool: PgPool,
 ) -> anyhow::Result<()> {
     sqlx::raw_sql("INSERT INTO users (sc_user_id, urn, username, username_normalized)
-        SELECT n::text, 'soundcloud:users:' || n, 'Follower', 'follower' FROM generate_series(1, 102) n;
+        SELECT n::text, 'soundcloud:users:' || n, 'Follower', 'follower' FROM generate_series(1, 50001) n;
         INSERT INTO user_followers (user_id, target_user_urn)
-        SELECT '42', 'soundcloud:users:' || n FROM generate_series(1, 102) n;")
+        SELECT '42', 'soundcloud:users:' || n FROM generate_series(1, 50001) n;")
         .execute(&pool).await?;
-    let penultimate = read_collection_page(&pool, &FOLLOWERS, "42", 99, 1, true).await?;
+    let past_the_old_cap = read_collection_page(&pool, &FOLLOWERS, "42", 100, 30, true).await?;
+    assert!(past_the_old_cap.has_more);
+    let penultimate = read_collection_page(&pool, &FOLLOWERS, "42", 248, 200, true).await?;
     assert!(penultimate.has_more);
-    let last = read_collection_page(&pool, &FOLLOWERS, "42", 100, 1, true).await?;
-    assert_eq!(last.collection.len(), 1);
+    let last = read_collection_page(&pool, &FOLLOWERS, "42", 249, 200, true).await?;
+    assert_eq!(last.collection.len(), 200);
     assert!(!last.has_more);
     Ok(())
 }

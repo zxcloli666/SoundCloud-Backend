@@ -311,7 +311,9 @@ async fn transactional_enqueue_rolls_back_with_its_caller(pool: PgPool) -> anyho
 }
 
 #[sqlx::test(migrations = false)]
-async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Result<()> {
+async fn enqueue_if_absent_keeps_an_existing_job_and_only_raises_its_priority(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
     let mut existing = new_job(
@@ -331,6 +333,8 @@ async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Re
         .enqueue_in_if_absent(&mut transaction, &replacement)
         .await?;
     transaction.commit().await?;
+    let lower = new_job(JobKind::LyricsEmbed, Some("42"), 1, 8, Utc::now());
+    repository.enqueue_if_absent(&lower).await?;
 
     let state = sqlx::query_as::<_, (Uuid, serde_json::Value, i16, i64, i32, i16)>(
         "SELECT id, payload, priority, generation, attempts, max_attempts
@@ -341,7 +345,7 @@ async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Re
     .await?;
     assert_eq!(
         state,
-        (existing.id, json!({ "value": "existing" }), 3, 1, 0, 5,)
+        (existing.id, json!({ "value": "existing" }), 10, 1, 0, 5,)
     );
     Ok(())
 }

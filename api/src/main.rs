@@ -97,6 +97,9 @@ async fn main() {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before API");
+    let recommendations_pg = db::connect_recommendations(&config)
+        .await
+        .expect("Failed to connect to PostgreSQL for recommendations");
     info!("PostgreSQL connected");
 
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
@@ -188,7 +191,7 @@ async fn main() {
     let collab_vector = CollabVectorService::new(qdrant.clone());
     let recommendations = RecommendationsService::new(
         qdrant.clone(),
-        pg.clone(),
+        recommendations_pg,
         nats.clone(),
         redis_pool.clone(),
         worker.clone(),

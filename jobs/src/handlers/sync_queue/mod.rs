@@ -25,11 +25,12 @@ use self::repository::{FinalizeError, SyncQueueRepository};
 use self::storage::TrackStorage;
 
 pub(super) use self::client::TokenRefreshClient;
-pub(super) use self::connection::{ConnectionError, ConnectionManager};
+pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
 
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
+const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
 const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
 
@@ -85,19 +86,28 @@ impl SyncQueueHandler {
         let mut executions = stream::iter(mutations)
             .map(|mutation| self.execute(mutation))
             .buffer_unordered(self.concurrency);
+        let mut handled = 0;
         let mut infrastructure_error = None;
         while let Some(result) = executions.next().await {
-            if let Err(error) = result {
-                infrastructure_error.get_or_insert(error);
+            match result {
+                Ok(()) => handled += 1,
+                Err(error) => {
+                    warn!(error = %error, "sync mutation failed");
+                    infrastructure_error.get_or_insert(error);
+                }
             }
         }
-        infrastructure_error.map_or(Ok(claimed), |error| Err(JobError::retryable(error)))
+        match infrastructure_error {
+            Some(error) if handled == 0 => Err(JobError::retryable(error)),
+            _ => Ok(claimed),
+        }
     }
 
     async fn execute(&self, mutation: ClaimedMutation) -> Result<(), anyhow::Error> {
         if let Err(error) = self.storage.evict_private(&mutation).await {
-            self.repository.release(&mutation).await?;
-            return Err(error);
+            self.postpone_after_failure(&mutation, &error.to_string())
+                .await?;
+            return Ok(());
         }
         if mutation.has_remote_result() {
             return self.finalize(&mutation).await;
@@ -193,10 +203,28 @@ impl SyncQueueHandler {
                 Ok(())
             }
             Err(error) => {
-                self.repository.release(mutation).await?;
-                Err(error.into())
+                self.postpone_after_failure(mutation, &error.to_string())
+                    .await?;
+                Ok(())
             }
         }
+    }
+
+    async fn postpone_after_failure(
+        &self,
+        mutation: &ClaimedMutation,
+        message: &str,
+    ) -> Result<(), sqlx::Error> {
+        warn!(
+            action = %mutation.action_type,
+            target = %mutation.target_urn,
+            error = message,
+            "sync action postponed"
+        );
+        self.repository
+            .postpone(mutation, message, INFRASTRUCTURE_RETRY_SECONDS)
+            .await?;
+        Ok(())
     }
 
     async fn record_connection_failure(

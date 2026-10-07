@@ -320,13 +320,27 @@ mod tests {
             "title": "Mine",
             "user": {"id": 17, "urn": "soundcloud:users:17", "username": "me"},
             "created_at": "2026-09-24T10:00:00Z",
-            "tracks": [{"urn": "soundcloud:tracks:7"}, {"id": 8}, {"id": 9}]
+            "tracks": [{"urn": "soundcloud:tracks:7"}, {"id": 8}, {"id": 9}, {"id": 7}]
         });
         for _ in 0..2 {
             let mut tx = pool.begin().await?;
             finalize_create(&mut tx, mutation, "17", &created).await?;
             tx.commit().await?;
         }
+        let projection: Vec<(i32, String)> = sqlx::query_as(
+            "SELECT position, sc_track_id FROM playlist_track_projection
+             WHERE playlist_urn = 'soundcloud:playlists:55' ORDER BY position",
+        )
+        .fetch_all(&pool)
+        .await?;
+        assert_eq!(
+            projection,
+            [
+                (0, "7".to_owned()),
+                (1, "8".to_owned()),
+                (2, "9".to_owned())
+            ]
+        );
         assert_eq!(
             playlist_adds(&pool).await?,
             [

@@ -17,4 +17,7 @@ INSERT INTO background_jobs (
 SELECT accepted.id, $2, $3, $4, $5, $6, $7, $8
 FROM accepted
 ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL
-DO NOTHING
+DO UPDATE SET
+    priority = EXCLUDED.priority,
+    updated_at = now()
+WHERE background_jobs.priority < EXCLUDED.priority

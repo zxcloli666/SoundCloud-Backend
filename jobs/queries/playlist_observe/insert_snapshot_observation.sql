@@ -8,7 +8,8 @@ INSERT INTO playlist_remote_observations (
     declared_track_count,
     observed_track_count,
     sc_last_modified,
-    observed_at
+    observed_at,
+    error_kind
 )
-VALUES ($1, $2, 'owner', 'complete', true, true, $3, $3, $4, $5)
+VALUES ($1, $2, $3, $4, true, true, $5, $6, $7, $8, $9)
 RETURNING id

@@ -116,6 +116,7 @@ impl TracksService {
                     backend_contracts::CatalogEntity::Track,
                     track_urn,
                     (row.sharing != "public").then_some(sc_user_id),
+                    crate::modules::cold_refresh::BACKGROUND_PRIORITY,
                 )
                 .await
             {

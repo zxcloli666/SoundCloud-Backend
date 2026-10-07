@@ -7,7 +7,6 @@ use sqlx::PgPool;
 use std::time::Duration;
 
 pub(super) struct CatalogRemote {
-    pool: PgPool,
     owner: PlaylistReadClient,
     connections: ConnectionManager,
     tokens: TokenRefreshClient,
@@ -16,20 +15,17 @@ pub(super) struct CatalogRemote {
 impl CatalogRemote {
     pub(super) fn new(pool: PgPool, config: &JobsConfig) -> Result<Self, crate::ClientBuildError> {
         Ok(Self {
-            connections: ConnectionManager::new(pool.clone()),
-            pool,
+            connections: ConnectionManager::new(pool),
             owner: PlaylistReadClient::new(&config.sync_queue)?,
             tokens: TokenRefreshClient::new(&config.oauth)?,
         })
     }
     pub(super) async fn public_get(&self, path: &str) -> JobResult<Value> {
-        let candidates = sqlx::query_file!(
-            "../api/queries/oauth_apps/token_service/reload_snapshot.sql",
-            chrono::Utc::now() + chrono::Duration::seconds(30)
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        let candidates = self
+            .connections
+            .app_tokens()
+            .await
+            .map_err(connection_error)?;
         let mut failure = postpone(
             60,
             anyhow::anyhow!("Public SoundCloud tokens are not ready"),
@@ -47,17 +43,13 @@ impl CatalogRemote {
                 );
                 continue;
             }
-            match self.owner.get_path(path, &candidate.access_token).await {
+            match self.owner.get_path(path, &candidate.value).await {
                 Ok(response) => return Ok(response.value),
                 Err(error) if error.is_unauthorized() => {
-                    sqlx::query_file!(
-                        "../api/queries/oauth_apps/token_service/reject_generation.sql",
-                        candidate.oauth_app_id,
-                        candidate.generation
-                    )
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(JobError::retryable)?;
+                    self.connections
+                        .reject_app_token(&candidate)
+                        .await
+                        .map_err(connection_error)?;
                     failure = postpone(60, error);
                 }
                 Err(error) => {

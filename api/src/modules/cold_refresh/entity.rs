@@ -5,43 +5,69 @@ use uuid::Uuid;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
+use super::VIEWER_PRIORITY;
+
 pub async fn enqueue_entity(
     pool: &PgPool,
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    priority: i16,
 ) -> AppResult<()> {
     let mut connection = pool.acquire().await?;
-    enqueue_entity_in(&mut connection, entity, urn, owner_id).await
+    enqueue_entity_in(&mut connection, entity, urn, owner_id, priority).await
 }
 
 pub async fn refresh_pending(
     pool: &PgPool,
     entity: CatalogEntity,
     urn: &str,
-    owner_id: Option<&str>,
+    viewer: Option<&str>,
     code: &'static str,
     message: &'static str,
 ) -> AppError {
-    if let Err(error) = enqueue_entity(pool, entity, urn, owner_id).await {
-        return error;
+    for owner_id in [None].into_iter().chain(viewer.map(Some)) {
+        let payload = CatalogRefreshPayload {
+            entity,
+            sc_id: extract_sc_id(urn).to_owned(),
+            owner_id: owner_id.map(extract_sc_id).map(str::to_owned),
+        };
+        let dedup_key = payload.dedup_key();
+        match sqlx::query_file_scalar!(
+            "queries/cold_refresh/entity_recently_unavailable.sql",
+            &dedup_key
+        )
+        .fetch_one(pool)
+        .await
+        {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => return error.into(),
+        }
+        if let Err(error) = enqueue_entity(pool, entity, urn, owner_id, VIEWER_PRIORITY).await {
+            return error;
+        }
+        let retry_after =
+            sqlx::query_file_scalar!("queries/cold_refresh/entity_retry_after.sql", dedup_key)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(5);
+        return AppError::coded(axum::http::StatusCode::SERVICE_UNAVAILABLE, code, message)
+            .with_retry_after(retry_after);
     }
-    let payload = CatalogRefreshPayload {
-        entity,
-        sc_id: extract_sc_id(urn).to_owned(),
-        owner_id: owner_id.map(extract_sc_id).map(str::to_owned),
-    };
-    let retry_after = sqlx::query_file_scalar!(
-        "queries/cold_refresh/entity_retry_after.sql",
-        payload.dedup_key()
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(5);
-    AppError::coded(axum::http::StatusCode::SERVICE_UNAVAILABLE, code, message)
-        .with_retry_after(retry_after)
+    not_found(entity)
+}
+
+fn not_found(entity: CatalogEntity) -> AppError {
+    AppError::not_found(match entity {
+        CatalogEntity::Track => "Track not found",
+        CatalogEntity::Playlist => "Playlist not found",
+        CatalogEntity::User | CatalogEntity::Profile | CatalogEntity::WebProfiles => {
+            "User not found"
+        }
+    })
 }
 
 pub async fn enqueue_entity_in(
@@ -49,6 +75,7 @@ pub async fn enqueue_entity_in(
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    priority: i16,
 ) -> AppResult<()> {
     let payload = CatalogRefreshPayload {
         entity,
@@ -68,7 +95,8 @@ pub async fn enqueue_entity_in(
         kind.as_str(),
         kind.lane().as_str(),
         dedup_key,
-        body
+        body,
+        priority
     )
     .execute(connection)
     .await?;
