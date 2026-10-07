@@ -72,7 +72,7 @@ pub async fn download(
         Ok(r) => r,
         Err(_) => {
             warn!("[download] {urn_for_log} → deadline {DOWNLOAD_DEADLINE:?} exceeded");
-            Err(AppError::NoStream)
+            Err(AppError::Timeout)
         }
     }
 }

@@ -29,6 +29,24 @@ podman compose -f docker-compose-dev.yml up -d
 Порты: API `3000`, jobs health `3001`, streaming `8080`, storage `3002`, postgres `5432`, redis `6379`,
 qdrant `6333/6334`, nats `4222/8222`.
 
+## Клиентский контракт стриминга (v9)
+
+Для сторонних клиентов (например, `okeydw/SoundCloud-Android`):
+
+- Сессия передаётся только заголовком `x-session-id`. Параметр `?session_id=` с v9 не читают ни API, ни
+  streaming.
+- Аудио открывается по тикету. `GET {API}/tracks/{urn}/stream` с заголовком `x-session-id` проверяет доступ
+  (удалён, приватный, премиум) и отвечает `307` на `{STREAMING}/stream/{urn}?ticket=…`. Без тикета
+  `/stream` отвечает `401`. `API` — `https://api.scnative.space` (премиум: `https://api-star.scnative.space`).
+- Тикет живёт 120 с, поэтому его берут заново на каждое открытие и повтор. URL с тикетом не кэшируют и не
+  отдают плееру для переоткрытия: плеер получает API-адрес и заголовок.
+- `hq=true` добавляют только премиум-пользователям: без премиума streaming отвечает на HQ `403`.
+- `/download/{urn}` на streaming принимает тот же заголовок `x-session-id` и отдаёт JSON со ссылками
+  SoundCloud. Качество, в котором `/stream` отдал трек, приходит в заголовке `x-audio-quality: hq|sq`, если
+  сервер его знает.
+- Если сервер не успел найти поток за свой дедлайн, `/stream` и `/download` отвечают `504`: трек стоит
+  повторить позже. `404 no stream available` значит, что потока у трека нет.
+
 ## CI
 
 - `ci.yml` — clippy/build бэкенда (sqlx online-check на поднятой Postgres), сборка образов
