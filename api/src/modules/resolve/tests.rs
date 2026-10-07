@@ -161,6 +161,37 @@ fn resolve_input_asks_soundcloud_with_the_canonical_link() -> anyhow::Result<()>
     Ok(())
 }
 
+#[test]
+fn resolve_input_accepts_a_link_pasted_without_a_scheme() -> anyhow::Result<()> {
+    for raw in [
+        "soundcloud.com/Artist/Song",
+        "www.soundcloud.com/artist/song?si=abc",
+        "M.SoundCloud.com/artist/song/",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(
+            input.upstream, "https://soundcloud.com/artist/song",
+            "{raw}"
+        );
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist/song".into())
+        );
+    }
+    let short = ResolveInput::parse("on.soundcloud.com/AbCd")?;
+    assert!(short.short_link);
+    assert_eq!(short.upstream, "https://on.soundcloud.com/AbCd");
+    for raw in [
+        "example.com/soundcloud.com/a/b",
+        "notsoundcloud.com/a/b",
+        "soundcloud.com",
+    ] {
+        assert!(ResolveInput::parse(raw).is_err(), "{raw}");
+    }
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(

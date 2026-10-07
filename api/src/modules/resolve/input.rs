@@ -66,6 +66,12 @@ fn invalid_payload() -> AppError {
 }
 
 const SECRET_TOKEN: &str = "secret_token";
+const SCHEMELESS_HOSTS: &[&str] = &[
+    "soundcloud.com/",
+    "www.soundcloud.com/",
+    "m.soundcloud.com/",
+    "on.soundcloud.com/",
+];
 
 pub(super) struct ResolveInput {
     pub upstream: String,
@@ -90,8 +96,8 @@ impl ResolveInput {
                 short_link: false,
             });
         }
-        let mut url =
-            Url::parse(raw).map_err(|_| AppError::bad_request("Invalid SoundCloud URL"))?;
+        let mut url = Url::parse(&with_scheme(raw))
+            .map_err(|_| AppError::bad_request("Invalid SoundCloud URL"))?;
         let main_host = matches!(
             url.host_str(),
             Some("soundcloud.com" | "www.soundcloud.com" | "m.soundcloud.com")
@@ -169,6 +175,14 @@ impl ResolveInput {
         }
         Ok(input)
     }
+}
+
+fn with_scheme(raw: &str) -> std::borrow::Cow<'_, str> {
+    let lower = raw.to_ascii_lowercase();
+    if !raw.contains("://") && SCHEMELESS_HOSTS.iter().any(|host| lower.starts_with(host)) {
+        return format!("https://{raw}").into();
+    }
+    raw.into()
 }
 
 fn secret_segment(segments: &[String]) -> Option<usize> {
