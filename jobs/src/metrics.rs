@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use backend_contracts::pipeline::WORKER_STREAMS;
 use backend_contracts::reasons::WorkerStatus;
@@ -56,6 +56,8 @@ const POOL_WAIT_BUCKETS: &[f64] = &[
 const DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 600.0];
 
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+const KIND_SNAPSHOT_TTL: Duration = Duration::from_secs(45);
 
 pub fn init() {
     if HANDLE.get().is_some() {
@@ -379,6 +381,10 @@ pub async fn render(pool: &PgPool) -> Option<String> {
 }
 
 async fn record_kind_depths(pool: &PgPool) {
+    let mut snapshot_at = KIND_SNAPSHOT_AT.lock().await;
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < KIND_SNAPSHOT_TTL) {
+        return;
+    }
     let rows = match sqlx::query_file!("queries/queue/metrics_kinds.sql")
         .fetch_all(pool)
         .await
@@ -389,6 +395,7 @@ async fn record_kind_depths(pool: &PgPool) {
             return;
         }
     };
+    *snapshot_at = Some(Instant::now());
     for kind in JobKind::ALL {
         let row = rows.iter().find(|row| row.kind == kind.as_str());
         let lane = kind.lane().as_str();
