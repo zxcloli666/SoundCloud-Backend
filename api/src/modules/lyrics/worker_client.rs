@@ -27,7 +27,7 @@ pub const MAX_ENCODE_TEXT_CHARS: usize = MAX_ENCODE_TEXT_BYTES as usize / 4;
 
 const VEC_CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 const ENCODE_DEDUP_WINDOW_SECS: u64 = 15 * 60;
-const ENCODE_CLAIM_SECS: u64 = 60;
+const ENCODE_CLAIM_SECS: u64 = ENCODE_DEDUP_WINDOW_SECS;
 const FAILURE_ANSWER_SECS: i64 = 60;
 const ENCODE_WAIT: Duration = Duration::from_secs(10);
 const CACHE_RECHECK: Duration = Duration::from_millis(500);
@@ -1134,13 +1134,17 @@ mod tests {
         );
 
         assert_eq!(guard(&stores.published).len(), 2);
-        assert_eq!(ENCODE_CLAIM_SECS, 60);
+        assert_eq!(ENCODE_CLAIM_SECS, ENCODE_DEDUP_WINDOW_SECS);
         assert_ne!(
-            message_id(&MULAN, &hash, 0, claim_round(1_000)),
-            message_id(&MULAN, &hash, 0, claim_round(1_060)),
+            message_id(&MULAN, &hash, 0, claim_round(900)),
+            message_id(&MULAN, &hash, 0, claim_round(1_800)),
             "a republish after the claim expired must not be swallowed by the stream's dedup window"
         );
-        assert_eq!(claim_round(1_000), claim_round(1_019));
+        assert_eq!(
+            message_id(&MULAN, &hash, 0, claim_round(900)),
+            message_id(&MULAN, &hash, 0, claim_round(1_799)),
+            "a query waiting for a worker is published once per dedup window, not once a minute"
+        );
     }
 
     async fn answer_after(source: &FakeSource, after: Duration, payload: Vec<u8>) {
