@@ -186,6 +186,7 @@ pub(crate) struct SearchRelay {
     lua_calls: AtomicUsize,
     fetched: std::sync::Mutex<Vec<String>>,
     stalled: bool,
+    redirect: Option<String>,
 }
 
 impl SearchRelay {
@@ -202,6 +203,20 @@ impl SearchRelay {
             lua_calls: AtomicUsize::new(0),
             fetched: std::sync::Mutex::default(),
             stalled: false,
+            redirect: None,
+        })
+    }
+
+    pub(crate) fn redirecting(lua: LuaAnswer, location: &str) -> Arc<Self> {
+        Arc::new(Self {
+            lua,
+            proxy_status: 500,
+            proxy_body: Value::Null,
+            lua_inputs: std::sync::Mutex::default(),
+            lua_calls: AtomicUsize::new(0),
+            fetched: std::sync::Mutex::default(),
+            stalled: false,
+            redirect: Some(location.to_owned()),
         })
     }
 
@@ -214,11 +229,16 @@ impl SearchRelay {
             lua_calls: AtomicUsize::new(0),
             fetched: std::sync::Mutex::default(),
             stalled: true,
+            redirect: None,
         })
     }
 
     pub(crate) fn lua_inputs(&self) -> Vec<Value> {
         self.lua_inputs.lock().unwrap().clone()
+    }
+
+    pub(crate) fn fetched_urls(&self) -> Vec<String> {
+        self.fetched.lock().unwrap().clone()
     }
 
     pub(crate) fn lua_calls(&self) -> usize {
@@ -249,6 +269,23 @@ impl RelayTransport for SearchRelay {
         self.fetched.lock().unwrap().push(request.url.clone());
         if self.stalled {
             return Box::pin(std::future::pending());
+        }
+        if let Some(location) = self
+            .redirect
+            .as_ref()
+            .filter(|_| request.url.starts_with("https://on.soundcloud.com/"))
+        {
+            let headers =
+                std::collections::HashMap::from([("Location".to_owned(), location.clone())]);
+            return Box::pin(async move {
+                Ok(call_relay::Response {
+                    status: 302,
+                    headers,
+                    body: Bytes::new(),
+                    source_tier: call_relay::Tier::Direct,
+                    client_id: None,
+                })
+            });
         }
         let (status, body) = if request.url.starts_with(HOME) {
             (

@@ -308,6 +308,86 @@ impl ScClient {
             .await
     }
 
+    pub async fn redirect_location(&self, url: &str) -> ScResult<String> {
+        let proxy_set = !self.inner.proxy_url.is_empty();
+        let relay_set = self.inner.relay.is_some();
+        let chain: &[Channel] = if self.inner.proxy_fallback || (!proxy_set && !relay_set) {
+            &[Channel::Direct, Channel::Proxy, Channel::Relay]
+        } else {
+            &[Channel::Relay, Channel::Proxy]
+        };
+        let mut last: Option<ScError> = None;
+        for channel in chain {
+            let found = match channel {
+                Channel::Direct => self.location_direct(url, false).await,
+                Channel::Proxy if proxy_set => self.location_direct(url, true).await,
+                Channel::Relay if relay_set => self.location_relay(url).await,
+                Channel::Proxy | Channel::Relay => continue,
+            };
+            match found {
+                Ok(location) => return Ok(location),
+                Err(error @ ScError::Api { status: 404, .. }) => return Err(error),
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.unwrap_or_else(|| ScError::invalid("no channels available")))
+    }
+
+    async fn location_direct(&self, target_url: &str, via_proxy: bool) -> ScResult<String> {
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
+        let url = if via_proxy {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(target_url);
+            headers.insert(
+                HeaderName::from_static("x-target"),
+                HeaderValue::from_str(&encoded)
+                    .map_err(|e| ScError::invalid(format!("bad x-target: {e}")))?,
+            );
+            self.inner.proxy_url.clone()
+        } else {
+            target_url.to_owned()
+        };
+        let response = self
+            .inner
+            .http
+            .get(&url)
+            .headers(headers)
+            .redirect(wreq::redirect::Policy::none())
+            .send()
+            .await
+            .map_err(|e| ScError::Unreachable(e.without_url().to_string()))?;
+        let location = response
+            .headers()
+            .get(wreq::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        redirect_target(response.status().as_u16(), location)
+    }
+
+    async fn location_relay(&self, target_url: &str) -> ScResult<String> {
+        let relay = self
+            .inner
+            .relay
+            .as_ref()
+            .ok_or_else(|| ScError::invalid("relay not configured"))?;
+        let request = RelayRequest {
+            url: target_url.to_owned(),
+            method: Method::GET.as_str().to_owned(),
+            headers: HashMap::from([(USER_AGENT.as_str().to_owned(), SC_WEB_UA.to_owned())]),
+            body: Bytes::new(),
+        };
+        let response = relay
+            .fetch(&request)
+            .await
+            .map_err(|e| ScError::Unreachable(e.to_string()))?;
+        let location = response
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(wreq::header::LOCATION.as_str()))
+            .map(|(_, value)| value.clone());
+        redirect_target(response.status, location)
+    }
+
     pub async fn resolve_track_via_relay(&self, url: &str) -> crate::RelayRead<Value> {
         let Ok(inputs) = serde_json::to_vec(&serde_json::json!({ "url": url })) else {
             return crate::RelayRead::Unavailable;
@@ -849,6 +929,16 @@ async fn collect_capped(response: wreq::Response, max_bytes: usize) -> ScResult<
         bytes.extend_from_slice(&chunk);
     }
     Ok(Bytes::from(bytes))
+}
+
+fn redirect_target(status: u16, location: Option<String>) -> ScResult<String> {
+    match (status, location) {
+        (300..=399, Some(location)) => Ok(location),
+        (404 | 410, _) => Err(api_error(404, &[], None)),
+        (status, _) => Err(ScError::Unreachable(format!(
+            "short link answered {status} without a redirect"
+        ))),
+    }
 }
 
 fn api_error(status: u16, bytes: &[u8], retry_after_sec: Option<i64>) -> ScError {

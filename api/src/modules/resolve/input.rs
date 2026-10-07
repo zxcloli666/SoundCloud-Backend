@@ -160,6 +160,15 @@ impl ResolveInput {
             short_link,
         })
     }
+
+    pub fn expanded(location: &str) -> AppResult<Self> {
+        let missing = || AppError::not_found("Short link does not lead to SoundCloud");
+        let input = Self::parse(location).map_err(|_| missing())?;
+        if input.short_link || input.entity.is_some() {
+            return Err(missing());
+        }
+        Ok(input)
+    }
 }
 
 fn secret_segment(segments: &[String]) -> Option<usize> {

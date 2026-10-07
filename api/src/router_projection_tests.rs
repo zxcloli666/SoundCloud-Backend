@@ -200,3 +200,96 @@ async fn soundcloud_playlist_and_user_hits_come_back_as_the_local_projection(
     assert_eq!(body["has_more"], true);
     Ok(())
 }
+
+async fn resolve(
+    app: &axum::Router,
+    session: uuid::Uuid,
+    url: &str,
+) -> anyhow::Result<(StatusCode, Value)> {
+    let uri = format!(
+        "/resolve?url={}",
+        url::form_urlencoded::byte_serialize(url.as_bytes()).collect::<String>()
+    );
+    let response = tower::ServiceExt::oneshot(
+        app.clone(),
+        axum::http::Request::builder()
+            .uri(uri)
+            .header("x-session-id", session.to_string())
+            .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                40000,
+            ))))
+            .body(axum::body::Body::empty())?,
+    )
+    .await?;
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024).await?;
+    Ok((status, serde_json::from_slice(&body).unwrap_or(Value::Null)))
+}
+
+async fn seed_local_track(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing, permalink_url)
+         VALUES ('42', 'soundcloud:tracks:42', 'Local', 'local', 1000, 'public', 'https://soundcloud.com/Artist/Song')",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_short_link_is_expanded_once_and_resolved_like_its_target(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_local_track(&pool).await?;
+    let short = format!(
+        "https://on.soundcloud.com/{}",
+        uuid::Uuid::now_v7().simple()
+    );
+    let relay = SearchRelay::redirecting(
+        Box::new(|_| None),
+        "https://soundcloud.com/artist/song?si=abc&utm_source=tumblr&utm_medium=text",
+    );
+    let app = crate::router::build(state(&pool, relay.clone(), &redis_url()).await?);
+    let session = session(&pool).await?;
+
+    for _ in 0..2 {
+        let (status, body) = resolve(&app, session, &format!("{short}?si=xyz")).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["urn"], "soundcloud:tracks:42");
+    }
+    let expansions = relay
+        .fetched_urls()
+        .into_iter()
+        .filter(|url| url.starts_with("https://on.soundcloud.com/"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        expansions,
+        vec![short],
+        "expanded once, then from the cache"
+    );
+    assert_eq!(
+        relay.lua_calls(),
+        0,
+        "SoundCloud is never asked to resolve a short link"
+    );
+
+    let elsewhere =
+        SearchRelay::redirecting(Box::new(|_| None), "https://evil.example/artist/song");
+    let app = crate::router::build(state(&pool, elsewhere, &redis_url()).await?);
+    let (status, body) = resolve(
+        &app,
+        session,
+        &format!(
+            "https://on.soundcloud.com/{}",
+            uuid::Uuid::now_v7().simple()
+        ),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body) = resolve(&app, session, "https://snd.sc/abc").await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    Ok(())
+}

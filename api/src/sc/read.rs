@@ -16,6 +16,7 @@ const CALL_BUDGET: Duration = Duration::from_secs(20);
 const SEARCH_CHUNK: i64 = 20;
 const SEARCH_RELAY_WAIT: Duration = Duration::from_secs(3);
 const SEARCH_BUDGET: Duration = Duration::from_secs(8);
+const SHORT_LINK_BUDGET: Duration = Duration::from_secs(5);
 
 pub struct ScReadService {
     sc: ScClient,
@@ -64,6 +65,13 @@ impl ScReadService {
             ),
             strategy: FetchStrategy::from_env(),
         })
+    }
+
+    pub async fn short_link_target(&self, url: &str) -> AppResult<String> {
+        tokio::time::timeout(SHORT_LINK_BUDGET, self.sc.redirect_location(url))
+            .await
+            .map_err(|_| AppError::ScUnreachable("short link expansion timed out".into()))?
+            .map_err(AppError::from)
     }
 
     pub async fn resolve(&self, kind: TokenKind, url: &str) -> AppResult<Value> {

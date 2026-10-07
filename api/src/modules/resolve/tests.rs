@@ -142,6 +142,22 @@ fn resolve_input_asks_soundcloud_with_the_canonical_link() -> anyhow::Result<()>
         "https://on.soundcloud.com/AbCd"
     );
     assert!(ResolveInput::parse("https://snd.sc/abc").is_err());
+    let expanded = ResolveInput::expanded(
+        "https://soundcloud.com/lagolago/kuskus-at-lago-lago-2022?si=abc&utm_source=tumblr",
+    )?;
+    assert_eq!(
+        expanded.upstream,
+        "https://soundcloud.com/lagolago/kuskus-at-lago-lago-2022"
+    );
+    assert!(!expanded.short_link && !expanded.requires_upstream);
+    for location in [
+        "https://on.soundcloud.com/AbCd",
+        "https://evil.example/lagolago/kuskus",
+        "soundcloud:tracks:1",
+        "/relative",
+    ] {
+        assert!(ResolveInput::expanded(location).is_err(), "{location}");
+    }
     Ok(())
 }
 
