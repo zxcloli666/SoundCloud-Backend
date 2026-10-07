@@ -161,7 +161,8 @@ def planned_nice(plan: EnginePlan) -> int:
 
 
 def fair_share(budget: int, active: int) -> int:
-    return max(1, budget // max(1, active))
+    engines = max(1, active)
+    return max(1, (2 * budget + engines) // (2 * engines))
 
 
 def on_gpu(device: str) -> bool:

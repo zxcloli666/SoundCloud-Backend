@@ -38,7 +38,8 @@ def plans_of(*plans: EnginePlan) -> list[EnginePlan]:
 def test_the_budget_leaves_a_core_for_the_node_and_reserves_up_to_four_threads() -> None:
     assert [cpu_budget(cpus) for cpus in (1, 2, 4, 8, 32)] == [1, 2, 3, 7, 31]
     assert [reserved_threads(cpus) for cpus in (1, 2, 4, 8, 32)] == [1, 1, 2, 4, 4]
-    assert [fair_share(7, active) for active in (0, 1, 2, 3, 8)] == [7, 7, 3, 2, 1]
+    assert [fair_share(7, active) for active in (0, 1, 2, 3, 8)] == [7, 7, 4, 2, 1]
+    assert [fair_share(3, active) for active in (1, 2, 3)] == [3, 2, 1]
 
 
 def test_bulk_engines_share_the_budget_and_inline_tools_take_one_thread() -> None:
