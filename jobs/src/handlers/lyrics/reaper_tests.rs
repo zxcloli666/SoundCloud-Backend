@@ -343,13 +343,11 @@ async fn stale_embedding_requests_time_out_and_go_back_to_the_backlog(
 }
 
 #[sqlx::test(migrations = false)]
-async fn lyrics_that_keep_timing_out_are_parked_after_the_reopen_cap(
-    pool: PgPool,
-) -> anyhow::Result<()> {
+async fn lyrics_that_keep_timing_out_stay_dispatchable(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     seed_stored_track(&pool, "42", 1).await?;
     seed_lyrics(&pool, "42", "lyrics that never come back from the worker").await?;
-    for reopens in [MAX_EMBEDDING_REOPENS - 1, MAX_EMBEDDING_REOPENS] {
+    for reopens in 3..7 {
         sqlx::query(
             "UPDATE lyrics_cache SET embedding_state = 'dispatched' WHERE sc_track_id = '42'",
         )
@@ -385,11 +383,7 @@ async fn lyrics_that_keep_timing_out_are_parked_after_the_reopen_cap(
         let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
             .fetch_one(&pool)
             .await?;
-        if reopens < MAX_EMBEDDING_REOPENS {
-            assert_eq!((cache_state.as_deref(), jobs), (Some("queued"), 1));
-        } else {
-            assert_eq!((cache_state.as_deref(), jobs), (Some("quarantined"), 0));
-        }
+        assert_eq!((cache_state.as_deref(), jobs), (Some("queued"), 1));
     }
     Ok(())
 }

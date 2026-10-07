@@ -12,7 +12,6 @@ use crate::config::WorkerDispatchConfig;
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
 use super::embedding_queue;
-use super::embedding_result::MAX_EMBEDDING_REOPENS;
 use crate::handlers::worker_backlog::unclaimed_room;
 
 const QUARANTINE_BATCH: i64 = 50;
@@ -121,8 +120,7 @@ impl LyricsReaper {
         let stale = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_stale_embeddings.sql",
             QUARANTINE_BATCH,
-            result_window,
-            MAX_EMBEDDING_REOPENS
+            result_window
         )
         .fetch_one(&mut *transaction)
         .await

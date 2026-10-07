@@ -22,7 +22,7 @@ use super::text::{embedding_text, wire_language};
 use super::vectors::LyricsVectorStore;
 
 const RESULT_CLAIM_SECONDS: i64 = 30;
-pub(super) const MAX_EMBEDDING_REOPENS: i32 = 3;
+const MAX_EMBEDDING_REOPENS: i32 = 3;
 
 pub struct EmbeddingResultHandler {
     pool: PgPool,

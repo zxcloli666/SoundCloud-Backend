@@ -22,7 +22,6 @@ WITH candidates AS MATERIALIZED (
     LIMIT $1
 ), locked_wire AS MATERIALIZED (
     SELECT wire.sc_track_id,
-           wire.reopen_count,
            candidates.current
     FROM lyrics_embedding_wire_state AS wire
     JOIN candidates
@@ -43,15 +42,10 @@ WITH candidates AS MATERIALIZED (
     FROM locked_wire
     WHERE wire.sc_track_id = locked_wire.sc_track_id
     RETURNING wire.sc_track_id,
-              locked_wire.reopen_count,
               locked_wire.current
 ), released AS (
     UPDATE lyrics_cache AS lyrics
-    SET embedding_state = CASE
-            WHEN quarantined.current AND quarantined.reopen_count >= $3::integer
-                THEN 'quarantined'
-            ELSE NULL
-        END
+    SET embedding_state = NULL
     FROM quarantined
     WHERE lyrics.sc_track_id = quarantined.sc_track_id
       AND lyrics.embedding_state IN ('pending', 'dispatched')

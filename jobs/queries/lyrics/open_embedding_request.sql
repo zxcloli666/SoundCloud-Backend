@@ -38,9 +38,13 @@ WITH lyrics AS MATERIALIZED (
     SET status = 'pending',
         lyrics_created_at = EXCLUDED.lyrics_created_at,
         reopen_count = CASE
+            WHEN lyrics_embedding_wire_state.lyrics_content_generation
+                 IS DISTINCT FROM EXCLUDED.lyrics_content_generation
+                THEN 0
+            WHEN lyrics_embedding_wire_state.status = 'quarantined'
+                 AND lyrics_embedding_wire_state.quarantine_reason = 'result_timeout'
+                THEN lyrics_embedding_wire_state.reopen_count
             WHEN lyrics_embedding_wire_state.status IN ('reopenable', 'quarantined')
-                 AND lyrics_embedding_wire_state.lyrics_content_generation
-                     = EXCLUDED.lyrics_content_generation
                 THEN lyrics_embedding_wire_state.reopen_count + 1
             ELSE 0
         END,

@@ -157,3 +157,31 @@ async fn reopening_a_request_replaces_it_and_counts_the_reopen(pool: PgPool) -> 
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn reopening_a_timed_out_request_does_not_count_the_reopen(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_lyrics(&pool, Some("first line\nsecond line"), None).await?;
+    published(&pool).await?;
+    sqlx::raw_sql(
+        "UPDATE lyrics_embedding_wire_state
+         SET status = 'quarantined', completed_at = now(),
+             quarantine_reason = 'result_timeout', reopen_count = 3
+         WHERE sc_track_id = '42';
+         UPDATE lyrics_cache SET embedding_state = 'queued' WHERE sc_track_id = '42';",
+    )
+    .execute(&pool)
+    .await?;
+
+    let reopened = published(&pool).await?;
+
+    let wire = sqlx::query_as::<_, (String, String, i32)>(
+        "SELECT status, request_message_id, reopen_count
+         FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(wire, ("pending".to_owned(), reopened.request_id.clone(), 3));
+    Ok(())
+}
