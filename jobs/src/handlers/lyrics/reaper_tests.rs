@@ -2,17 +2,13 @@ use serde_json::Value;
 
 use super::*;
 
-fn switches(enabled: bool) -> WorkerDispatchConfig {
-    WorkerDispatchConfig {
-        embed_lyrics: enabled,
-        index_audio: false,
-        transcribe: enabled,
-        lyrics_align_rejected_retry_days: 30,
-    }
-}
-
 fn reaper(pool: &PgPool) -> LyricsReaper {
-    LyricsReaper::new(pool.clone(), switches(true))
+    LyricsReaper::new(
+        pool.clone(),
+        WorkerDispatchConfig {
+            lyrics_align_rejected_retry_days: 30,
+        },
+    )
 }
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -270,7 +266,7 @@ async fn old_orphaned_lyrics_are_quarantined_without_gpu_work(pool: PgPool) -> a
 }
 
 #[sqlx::test(migrations = false)]
-async fn stale_embedding_requests_are_quarantined_without_redispatch(
+async fn stale_embedding_requests_time_out_and_go_back_to_the_backlog(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
@@ -330,8 +326,8 @@ async fn stale_embedding_requests_are_quarantined_without_redispatch(
     let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
         .fetch_one(&pool)
         .await?;
-    assert_eq!(cache_state.as_deref(), Some("quarantined"));
-    assert_eq!(jobs, 0);
+    assert_eq!(cache_state.as_deref(), Some("queued"));
+    assert_eq!(jobs, 1);
     Ok(())
 }
 
@@ -614,43 +610,6 @@ async fn wire_state(
     .bind(id)
     .fetch_one(pool)
     .await?)
-}
-
-#[sqlx::test(migrations = false)]
-async fn switched_off_dispatch_enqueues_nothing_but_still_quarantines(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    seed_stored_track(&pool, "41", 1).await?;
-    seed_lyrics(
-        &pool,
-        "41",
-        "plain lyrics waiting for alignment and embedding",
-    )
-    .await?;
-    seed_stored_track(&pool, "42", 1).await?;
-    seed_lyrics(&pool, "42", "plain lyrics of an interrupted alignment").await?;
-    seed_wire(&pool, "42", "reopenable", 1, 7).await?;
-    sqlx::query(
-        "INSERT INTO transcription_wire_state (
-             sc_track_id, status, upload_generation, dispatched_at
-         ) VALUES ('43', 'pending', 1, now() - interval '26 hours')",
-    )
-    .execute(&pool)
-    .await?;
-
-    let reaper = LyricsReaper::new(pool.clone(), switches(false));
-    reaper.reap_transcriptions().await?;
-    reaper.reap_embeddings().await?;
-
-    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
-        .fetch_one(&pool)
-        .await?;
-    let orphan = wire_state(&pool, "43").await?;
-    assert_eq!(jobs, 0);
-    assert_eq!(wire_state(&pool, "42").await?.0, "reopenable");
-    assert_eq!(orphan.0, "quarantined");
-    Ok(())
 }
 
 #[sqlx::test(migrations = false)]

@@ -273,8 +273,7 @@ impl JobHandlers {
                 &config.sync_queue.storage_url,
                 bus.clone(),
                 qdrant.clone(),
-            )?
-            .with_audio_dispatch(config.worker_dispatch.index_audio),
+            )?,
             lyrics: LyricsHandler::new(
                 databases.main.fast.clone(),
                 databases.main.bulk.clone(),

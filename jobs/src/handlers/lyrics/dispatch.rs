@@ -21,7 +21,6 @@ pub struct TranscriptionDispatcher {
     pool: PgPool,
     bus: Bus,
     storage_url: Url,
-    enabled: bool,
 }
 
 struct TranscriptionDispatch {
@@ -31,24 +30,15 @@ struct TranscriptionDispatch {
 }
 
 impl TranscriptionDispatcher {
-    pub fn new(pool: PgPool, bus: Bus, storage_url: Url, enabled: bool) -> Self {
+    pub fn new(pool: PgPool, bus: Bus, storage_url: Url) -> Self {
         Self {
             pool,
             bus,
             storage_url,
-            enabled,
         }
     }
 
     pub async fn dispatch_transcription(&self, payload: StoredAudioDispatchPayload) -> JobResult {
-        if !self.enabled {
-            tracing::debug!(
-                track = %payload.sc_track_id,
-                generation = payload.uploaded_generation,
-                "transcription dispatch is switched off"
-            );
-            return Ok(());
-        }
         let Some(request) = prepare(&self.pool, &self.storage_url, payload).await? else {
             return Ok(());
         };

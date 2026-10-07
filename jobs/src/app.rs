@@ -28,14 +28,6 @@ use crate::supervisor::Supervisor;
 pub async fn run() -> anyhow::Result<()> {
     let config = JobsConfig::from_env().context("jobs configuration is invalid")?;
     info!(instance_id = %config.instance_id, "jobs starting");
-    info!(
-        embed_lyrics = config.worker_dispatch.embed_lyrics,
-        index_audio = config.worker_dispatch.index_audio,
-        transcribe = config.worker_dispatch.transcribe,
-        taste = config.taste.dispatch,
-        lyrics_align_rejected_retry_days = config.worker_dispatch.lyrics_align_rejected_retry_days,
-        "worker dispatch switches"
-    );
 
     let databases = Databases::connect(&config)
         .await

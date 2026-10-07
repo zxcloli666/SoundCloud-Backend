@@ -6,8 +6,7 @@ WHERE track.created_at < now() - INTERVAL '5 minutes'
   AND (
     track.storage_state = 'pending'
     OR (
-      $4::boolean
-      AND track.index_state = 'pending'
+      track.index_state = 'pending'
       AND track.storage_state = 'ok'
       AND track.s3_verified_at IS NOT NULL
       AND NOT EXISTS (

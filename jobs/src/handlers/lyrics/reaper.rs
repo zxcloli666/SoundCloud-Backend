@@ -75,34 +75,32 @@ impl LyricsReaper {
 
         let mut reopened = 0usize;
         let mut enqueued = 0usize;
-        if self.dispatch.transcribe {
-            let reopen = sqlx::query_file_as!(
-                TranscriptionCandidate,
-                "queries/lyrics/reopen_transcriptions.sql",
-                REOPEN_COOLDOWN_SECONDS,
-                MAX_TRANSCRIPTION_REOPENS,
-                retry_days,
-                REOPEN_BATCH
-            )
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-            for candidate in reopen {
-                enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
-                reopened += 1;
-            }
-            let align = sqlx::query_file_as!(
-                TranscriptionCandidate,
-                "queries/lyrics/reap_transcriptions_align.sql",
-                ALIGN_BATCH
-            )
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-            for candidate in align {
-                enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
-                enqueued += 1;
-            }
+        let reopen = sqlx::query_file_as!(
+            TranscriptionCandidate,
+            "queries/lyrics/reopen_transcriptions.sql",
+            REOPEN_COOLDOWN_SECONDS,
+            MAX_TRANSCRIPTION_REOPENS,
+            retry_days,
+            REOPEN_BATCH
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        for candidate in reopen {
+            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+            reopened += 1;
+        }
+        let align = sqlx::query_file_as!(
+            TranscriptionCandidate,
+            "queries/lyrics/reap_transcriptions_align.sql",
+            ALIGN_BATCH
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        for candidate in align {
+            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+            enqueued += 1;
         }
         transaction.commit().await.map_err(JobError::retryable)?;
         if enqueued > 0 || reopened > 0 {
@@ -143,18 +141,14 @@ impl LyricsReaper {
         .map_err(JobError::retryable)?;
 
         let mut enqueued = 0usize;
-        if self.dispatch.embed_lyrics {
-            let candidates =
-                sqlx::query_file_scalar!("queries/lyrics/reap_embeddings.sql", EMBEDDING_BATCH)
-                    .fetch_all(&mut *transaction)
-                    .await
-                    .map_err(JobError::retryable)?;
-            for sc_track_id in candidates {
-                if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id)
-                    .await?
-                {
-                    enqueued += 1;
-                }
+        let candidates =
+            sqlx::query_file_scalar!("queries/lyrics/reap_embeddings.sql", EMBEDDING_BATCH)
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(JobError::retryable)?;
+        for sc_track_id in candidates {
+            if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id).await? {
+                enqueued += 1;
             }
         }
         transaction.commit().await.map_err(JobError::retryable)?;

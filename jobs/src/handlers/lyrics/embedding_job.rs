@@ -16,7 +16,6 @@ use super::text::{embedding_text, wire_language};
 pub struct LyricsEmbeddingJob {
     pool: PgPool,
     bus: Bus,
-    enabled: bool,
 }
 
 struct EmbeddingCandidate {
@@ -38,17 +37,12 @@ enum Step {
 }
 
 impl LyricsEmbeddingJob {
-    pub fn new(pool: PgPool, bus: Bus, enabled: bool) -> Self {
-        Self { pool, bus, enabled }
+    pub fn new(pool: PgPool, bus: Bus) -> Self {
+        Self { pool, bus }
     }
 
     pub async fn run(&self, payload: LyricsEmbedPayload) -> JobResult {
         let sc_track_id = canonical_track_id(&payload.sc_track_id).map_err(JobError::permanent)?;
-        if !self.enabled {
-            release(&self.pool, &sc_track_id).await?;
-            tracing::debug!(track = %sc_track_id, "lyrics embedding dispatch is switched off");
-            return Ok(());
-        }
         match prepare(&self.pool, &sc_track_id).await? {
             Step::Nothing => Ok(()),
             Step::Acknowledge(request_id) => {
@@ -168,14 +162,6 @@ async fn acknowledge(pool: &PgPool, sc_track_id: &str, request_id: &str) -> JobR
     .execute(pool)
     .await
     .map_err(JobError::retryable)?;
-    Ok(())
-}
-
-async fn release(pool: &PgPool, sc_track_id: &str) -> JobResult {
-    sqlx::query_file!("queries/lyrics/release_embedding.sql", sc_track_id)
-        .execute(pool)
-        .await
-        .map_err(JobError::retryable)?;
     Ok(())
 }
 

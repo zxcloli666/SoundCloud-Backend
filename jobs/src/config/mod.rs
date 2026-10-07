@@ -166,18 +166,12 @@ impl PlaylistReconcileConfig {
 
 #[derive(Clone, Copy, Debug)]
 pub struct WorkerDispatchConfig {
-    pub embed_lyrics: bool,
-    pub index_audio: bool,
-    pub transcribe: bool,
     pub lyrics_align_rejected_retry_days: u64,
 }
 
 impl WorkerDispatchConfig {
     fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
-            embed_lyrics: env::boolean("EMBED_LYRICS_DISPATCH", false)?,
-            index_audio: env::boolean("INDEX_AUDIO_DISPATCH", false)?,
-            transcribe: env::boolean("TRANSCRIBE_DISPATCH", false)?,
             lyrics_align_rejected_retry_days: env::positive_u64(
                 "LYRICS_ALIGN_REJECTED_RETRY_DAYS",
                 30,
@@ -186,17 +180,14 @@ impl WorkerDispatchConfig {
     }
 
     pub fn required_worker_lanes(&self) -> Vec<WorkerLane> {
-        let switched = [
-            (self.index_audio, WorkerLane::Audio),
-            (self.embed_lyrics, WorkerLane::Lyrics),
-            (self.transcribe, WorkerLane::Transcribe),
+        vec![
+            WorkerLane::Encode,
+            WorkerLane::Ai,
+            WorkerLane::Collab,
+            WorkerLane::Audio,
+            WorkerLane::Lyrics,
+            WorkerLane::Transcribe,
         ]
-        .into_iter()
-        .filter_map(|(enabled, lane)| enabled.then_some(lane));
-        [WorkerLane::Encode, WorkerLane::Ai, WorkerLane::Collab]
-            .into_iter()
-            .chain(switched)
-            .collect()
     }
 }
 
@@ -310,7 +301,6 @@ pub struct CollabConfig {
 
 #[derive(Clone, Debug)]
 pub struct TasteConfig {
-    pub dispatch: bool,
     pub export_interval: Duration,
     pub refresh_interval: Duration,
     pub history_days: u32,
@@ -326,7 +316,6 @@ pub struct TasteConfig {
 impl TasteConfig {
     fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
-            dispatch: env::boolean("TASTE_DISPATCH", false)?,
             export_interval: Duration::from_secs(env::positive_u64(
                 "TASTE_EXPORT_INTERVAL_S",
                 86_400,
@@ -1136,20 +1125,10 @@ mod tests {
     }
 
     #[test]
-    fn health_waits_only_for_worker_lanes_jobs_actually_feeds() {
-        let mut dispatch = WorkerDispatchConfig {
-            embed_lyrics: false,
-            index_audio: false,
-            transcribe: false,
+    fn health_waits_for_every_worker_lane_jobs_feeds() {
+        let dispatch = WorkerDispatchConfig {
             lyrics_align_rejected_retry_days: 30,
         };
-        assert_eq!(
-            dispatch.required_worker_lanes(),
-            [WorkerLane::Encode, WorkerLane::Ai, WorkerLane::Collab]
-        );
-
-        dispatch.index_audio = true;
-        dispatch.transcribe = true;
         assert_eq!(
             dispatch.required_worker_lanes(),
             [
@@ -1157,6 +1136,7 @@ mod tests {
                 WorkerLane::Ai,
                 WorkerLane::Collab,
                 WorkerLane::Audio,
+                WorkerLane::Lyrics,
                 WorkerLane::Transcribe,
             ]
         );

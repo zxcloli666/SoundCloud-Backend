@@ -50,7 +50,6 @@ pub struct IndexingHandler {
     storage_events: StorageEventHandler,
     storage_uploads: StorageUploadHandler,
     storage_url: Url,
-    audio_dispatch: bool,
 }
 
 impl IndexingHandler {
@@ -78,13 +77,7 @@ impl IndexingHandler {
                 duration_config.max_track_duration_ms,
             ),
             storage_url: storage_url.clone(),
-            audio_dispatch: false,
         })
-    }
-
-    pub fn with_audio_dispatch(mut self, enabled: bool) -> Self {
-        self.audio_dispatch = enabled;
-        self
     }
 
     pub async fn resolve_durations(&self) -> JobResult {
@@ -119,14 +112,6 @@ impl IndexingHandler {
         &self,
         payload: backend_contracts::StoredAudioDispatchPayload,
     ) -> JobResult {
-        if !self.audio_dispatch {
-            tracing::debug!(
-                track = %payload.sc_track_id,
-                generation = payload.uploaded_generation,
-                "audio index dispatch is switched off"
-            );
-            return Ok(());
-        }
         self.storage_uploads.dispatch_audio(payload).await
     }
 
@@ -173,9 +158,6 @@ impl IndexingHandler {
     }
 
     async fn reopen_dispatches(&self) -> JobResult {
-        if !self.audio_dispatch {
-            return Ok(());
-        }
         self.storage_uploads
             .reopen_audio_dispatches(
                 REOPEN_BATCH,
@@ -190,8 +172,7 @@ impl IndexingHandler {
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,
             AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS,
-            self.audio_dispatch
+            REAP_RETRY_COOLDOWN_SECONDS
         )
         .fetch_all(&self.pool)
         .await
@@ -228,7 +209,6 @@ impl IndexingHandler {
             || row.storage_state == "too_long"
             || row.needs_duration_resolve
             || row.index_in_flight
-            || (row.storage_state == "ok" && !self.audio_dispatch)
         {
             return Ok(false);
         }
@@ -346,16 +326,11 @@ mod tests {
     }
 
     async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
-        stuck_while(pool, true).await
-    }
-
-    async fn stuck_while(pool: &PgPool, audio_dispatch: bool) -> anyhow::Result<Vec<String>> {
         Ok(sqlx::query_file_scalar!(
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,
             AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS,
-            audio_dispatch
+            REAP_RETRY_COOLDOWN_SECONDS
         )
         .fetch_all(pool)
         .await?)
@@ -532,21 +507,6 @@ mod tests {
 
         assert!(settled_current.is_empty());
         assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
-        Ok(())
-    }
-
-    #[sqlx::test(migrations = false)]
-    async fn a_switched_off_dispatch_leaves_stored_tracks_alone_but_still_fetches_storage(
-        pool: PgPool,
-    ) -> anyhow::Result<()> {
-        install_schema(&pool).await?;
-
-        assert!(stuck_while(&pool, false).await?.is_empty());
-
-        sqlx::query("UPDATE tracks SET storage_state = 'pending'")
-            .execute(&pool)
-            .await?;
-        assert_eq!(stuck_while(&pool, false).await?, vec!["42".to_owned()]);
         Ok(())
     }
 

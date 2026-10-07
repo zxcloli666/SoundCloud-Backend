@@ -65,7 +65,6 @@ impl TasteHandler {
     pub async fn run(self: Arc<Self>, cancellation: CancellationToken) -> anyhow::Result<()> {
         metrics::register_series_that_start_at_zero();
         info!(
-            dispatch = self.config.dispatch,
             export_interval_s = self.config.export_interval.as_secs(),
             refresh_interval_s = self.config.refresh_interval.as_secs(),
             "taste schedule started"
@@ -77,9 +76,7 @@ impl TasteHandler {
                 () = cancellation.cancelled() => return Ok(()),
                 _ = ticker.tick() => {}
             }
-            if self.config.dispatch
-                && let Err(error) = self.export_when_due().await
-            {
+            if let Err(error) = self.export_when_due().await {
                 warn!(%error, "taste export failed; it is retried later");
             }
             if let Err(error) = self.refresh_when_due().await {

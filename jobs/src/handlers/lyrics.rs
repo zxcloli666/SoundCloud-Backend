@@ -48,11 +48,7 @@ impl LyricsHandler {
     ) -> Self {
         let dispatch = config.worker_dispatch;
         Self {
-            embedding_job: LyricsEmbeddingJob::new(
-                fast_pool.clone(),
-                bus.clone(),
-                dispatch.embed_lyrics,
-            ),
+            embedding_job: LyricsEmbeddingJob::new(fast_pool.clone(), bus.clone()),
             embedding_results: EmbeddingResultHandler::new(fast_pool.clone(), Arc::new(qdrant)),
             lookup: LyricsLookupHandler::new(bulk_pool.clone(), sources, config.lyrics.clone()),
             reaper: LyricsReaper::new(bulk_pool, dispatch),
@@ -60,7 +56,6 @@ impl LyricsHandler {
                 fast_pool.clone(),
                 bus,
                 config.sync_queue.storage_url.clone(),
-                dispatch.transcribe,
             ),
             transcription_results: TranscriptionResultHandler::new(fast_pool),
         }

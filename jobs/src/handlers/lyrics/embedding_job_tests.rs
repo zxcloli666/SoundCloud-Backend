@@ -2,7 +2,7 @@ use backend_contracts::pipeline::LyricsEmbeddingRequest;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use super::{Step, acknowledge, prepare, release};
+use super::{Step, acknowledge, prepare};
 
 async fn seed_lyrics(
     pool: &PgPool,
@@ -155,28 +155,5 @@ async fn reopening_a_request_replaces_it_and_counts_the_reopen(pool: PgPool) -> 
         wire,
         ("pending".to_owned(), second.request_id.clone(), 1, None)
     );
-    Ok(())
-}
-
-#[sqlx::test(migrations = "../api/migrations")]
-async fn switched_off_dispatch_returns_only_queued_rows_to_the_reaper(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    seed_lyrics(&pool, Some("first line\nsecond line"), None).await?;
-    release(&pool, "42")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let released = cache_state(&pool).await?;
-    sqlx::query("UPDATE lyrics_cache SET embedding_state = 'queued' WHERE sc_track_id = '42'")
-        .execute(&pool)
-        .await?;
-    published(&pool).await?;
-
-    release(&pool, "42")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-
-    assert_eq!(released, None);
-    assert_eq!(cache_state(&pool).await?.as_deref(), Some("pending"));
     Ok(())
 }
