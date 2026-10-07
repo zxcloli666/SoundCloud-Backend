@@ -18,6 +18,7 @@ SELECT accepted.id, $2, $3, $4, $5, $6, $7, $8
 FROM accepted
 ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL
 DO UPDATE SET
+    lane = EXCLUDED.lane,
     payload = EXCLUDED.payload,
     priority = GREATEST(background_jobs.priority, EXCLUDED.priority),
     generation = background_jobs.generation + 1,
