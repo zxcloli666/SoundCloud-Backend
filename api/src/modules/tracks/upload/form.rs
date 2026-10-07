@@ -156,7 +156,10 @@ async fn spool_asset(mut field: Field<'_>) -> AppResult<(Spool, UploadAsset)> {
 }
 
 async fn read_artwork(field: Field<'_>) -> AppResult<UploadImage> {
-    let mime = field.content_type().unwrap_or_default().to_ascii_lowercase();
+    let mime = field
+        .content_type()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let extension = ARTWORK_TYPES
         .iter()
         .find(|(kind, _)| *kind == mime)
