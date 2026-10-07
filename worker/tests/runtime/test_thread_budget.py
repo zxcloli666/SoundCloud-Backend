@@ -104,7 +104,7 @@ async def test_busy_engines_split_the_budget_and_an_idle_one_takes_it_all() -> N
         await supervisor.stop()
 
 
-async def test_encode_holds_its_threads_and_lyrics_on_its_engine_take_a_bulk_share() -> None:
+async def test_encode_queries_keep_their_threads_and_lyrics_take_a_bulk_share() -> None:
     supervisor = await started_supervisor(
         plans_of(
             EnginePlan("audio", (fake_spec("a"),)),
@@ -115,7 +115,7 @@ async def test_encode_holds_its_threads_and_lyrics_on_its_engine_take_a_bulk_sha
     try:
         query = await supervisor.acquire("text", time.monotonic() + 5, reserved=True)
         audio = await supervisor.acquire("a", time.monotonic() + 5)
-        assert (query.call_threads, audio.call_threads) == (4, 2)
+        assert (query.call_threads, audio.call_threads) == (4, 6)
         supervisor.release(query)
         supervisor.release(audio)
         query = await supervisor.acquire("text", time.monotonic() + 5, priority=True)

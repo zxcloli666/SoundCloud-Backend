@@ -203,7 +203,7 @@ class Supervisor:
             for slot in managed.plan.slot_names:
                 self._by_slot.setdefault(slot, []).append(managed)
         self._leased: set[EngineClient] = set()
-        self._threads_in_use: dict[EngineClient, int] = {}
+        self._leased_threads: dict[EngineClient, int] = {}
         self._reserved_leases: set[EngineClient] = set()
         self._retiring: set[EngineClient] = set()
         self._changed = asyncio.Event()
@@ -336,7 +336,7 @@ class Supervisor:
                 if await self._lease(client, slot, deadline_at):
                     urgent = reserved or priority
                     client.call_threads = self._call_threads(managed.plan, urgent)
-                    self._threads_in_use[client] = client.call_threads
+                    self._leased_threads[client] = client.call_threads
                     if urgent and managed.plan.reserved:
                         self._reserved_leases.add(client)
                     return client
@@ -351,7 +351,7 @@ class Supervisor:
 
     def release(self, client: EngineClient) -> None:
         self._leased.discard(client)
-        self._threads_in_use.pop(client, None)
+        self._leased_threads.pop(client, None)
         self._reserved_leases.discard(client)
         self._notify()
 
@@ -413,13 +413,9 @@ class Supervisor:
             return plan.threads
         if self._policy.threads or not self._policy.cpu_budget:
             return self._policy.threads
-        fixed = {m.client for m in self._engines if m.plan.inline}
-        shared = [client for client in self._threads_in_use if client not in fixed]
-        held = sum(
-            self._threads_in_use[client] for client in shared if client in self._reserved_leases
-        )
-        bulk = 1 + sum(1 for client in shared if client not in self._reserved_leases)
-        return fair_share(max(1, self._policy.cpu_budget - held), bulk)
+        fixed = {m.client for m in self._engines if m.plan.inline} | self._reserved_leases
+        bulk = 1 + sum(1 for client in self._leased_threads if client not in fixed)
+        return fair_share(self._policy.cpu_budget, bulk)
 
     def _spawn_threads(self, plan: EnginePlan) -> int:
         return self._fixed_threads(plan) or self._policy.cpu_budget
