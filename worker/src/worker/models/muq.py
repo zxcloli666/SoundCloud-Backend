@@ -46,12 +46,20 @@ class MuqSlot:
         self._model = None
 
     def _embed(self, windows: np.ndarray) -> np.ndarray:
+        step = 1 if self._device.type == "cpu" else len(windows)
+        parts = [
+            self._embed_pass(windows[start : start + step])
+            for start in range(0, len(windows), step)
+        ]
+        return np.ascontiguousarray(np.concatenate(parts), dtype=np.float32)
+
+    def _embed_pass(self, windows: np.ndarray) -> np.ndarray:
         batch = torch.from_numpy(windows).to(self._device, self._dtype)
         with torch.inference_mode():
             hidden = self._model(batch, output_hidden_states=True).hidden_states[1:]
             pooled = torch.stack([layer.float().mean(dim=1) for layer in hidden]).mean(dim=0)
             vectors = torch.nn.functional.normalize(pooled, dim=-1)
-        return np.ascontiguousarray(vectors.cpu().numpy(), dtype=np.float32)
+        return vectors.cpu().numpy()
 
 
 def checked_windows(windows: np.ndarray | None) -> np.ndarray:
