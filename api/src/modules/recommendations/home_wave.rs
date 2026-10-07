@@ -217,20 +217,6 @@ impl RecommendationsService {
                 .collect(),
         );
 
-        if seeds.is_empty() {
-            let pool = self
-                .cold_start_pool(languages, per_cluster * 4)
-                .await
-                .unwrap_or_default();
-            builder.push(
-                "discover",
-                pool.into_iter()
-                    .filter(|id| !builder.taken().contains(id))
-                    .take(per_cluster)
-                    .collect(),
-            );
-        }
-
         let taste_version = taste_pool.as_ref().map(|pool| pool.version.clone());
         if let Some(pool) = taste_pool {
             let taste_results = self
@@ -283,6 +269,20 @@ impl RecommendationsService {
             .filter(|id| !id.is_empty())
             .collect();
         builder.push_observed("deep_cuts", deep_ids, &deep_results);
+
+        if seeds.is_empty() || builder.all_track_ids().is_empty() {
+            let pool = self
+                .cold_start_pool(languages, per_cluster * 4)
+                .await
+                .unwrap_or_default();
+            builder.push(
+                "discover",
+                pool.into_iter()
+                    .filter(|id| !builder.taken().contains(id))
+                    .take(per_cluster)
+                    .collect(),
+            );
+        }
 
         self.apply_quality_filter(&mut builder).await;
 
