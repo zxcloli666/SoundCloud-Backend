@@ -1211,6 +1211,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "entity-ref"
+version = "0.1.0"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3005,6 +3009,7 @@ dependencies = [
  "aws-smithy-types",
  "axum",
  "bytes",
+ "entity-ref",
  "futures",
  "jsonwebtoken",
  "sc-fingerprint",
