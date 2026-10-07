@@ -69,3 +69,27 @@ fn the_budget_is_the_one_the_router_is_built_with() {
          payload or large enough to be worth a denial of service"
     );
 }
+
+#[tokio::test]
+async fn a_route_with_its_own_budget_reads_past_the_global_one() {
+    let wide = Router::new()
+        .route(
+            "/wide",
+            post(|body: axum::body::Bytes| async move { body.len().to_string() }),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES * 8));
+    let status = Router::new()
+        .merge(wide)
+        .layer(body_limit())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/wide")
+                .body(Body::from(vec![b'x'; MAX_BODY_BYTES * 4]))
+                .expect("a probe request is well formed"),
+        )
+        .await
+        .expect("the router answers every request")
+        .status();
+    assert_eq!(status, StatusCode::OK);
+}

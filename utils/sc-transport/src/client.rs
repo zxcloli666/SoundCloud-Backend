@@ -187,6 +187,26 @@ impl ScClient {
         AUTH_BASE
     }
 
+    #[cfg(feature = "upload")]
+    pub(crate) fn http(&self) -> &Client {
+        &self.inner.http
+    }
+
+    #[cfg(feature = "upload")]
+    pub(crate) fn api_base(&self) -> &str {
+        &self.inner.api_base
+    }
+
+    #[cfg(feature = "upload")]
+    pub(crate) fn upload_proxy(&self) -> Option<&str> {
+        Some(self.inner.proxy_url.as_str()).filter(|url| !url.is_empty())
+    }
+
+    #[cfg(feature = "upload")]
+    pub(crate) fn proxy_fallback(&self) -> bool {
+        self.inner.proxy_fallback
+    }
+
     pub fn has_relay(&self) -> bool {
         self.inner.relay.is_some()
     }
@@ -908,7 +928,7 @@ impl ScClient {
     }
 }
 
-async fn collect_capped(response: wreq::Response, max_bytes: usize) -> ScResult<Bytes> {
+pub(crate) async fn collect_capped(response: wreq::Response, max_bytes: usize) -> ScResult<Bytes> {
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes as u64)
@@ -941,7 +961,7 @@ fn redirect_target(status: u16, location: Option<String>) -> ScResult<String> {
     }
 }
 
-fn api_error(status: u16, bytes: &[u8], retry_after_sec: Option<i64>) -> ScError {
+pub(crate) fn api_error(status: u16, bytes: &[u8], retry_after_sec: Option<i64>) -> ScError {
     let body = if bytes.is_empty() {
         Value::Null
     } else {
@@ -955,7 +975,7 @@ fn api_error(status: u16, bytes: &[u8], retry_after_sec: Option<i64>) -> ScError
     }
 }
 
-fn parse_retry_after(value: &str) -> Option<i64> {
+pub(crate) fn parse_retry_after(value: &str) -> Option<i64> {
     if let Ok(seconds) = value.trim().parse::<i64>() {
         return Some(seconds.max(1));
     }
@@ -976,7 +996,7 @@ pub(crate) fn extract_anon_client_id(html: &str) -> Option<String> {
         .map(|id| id.as_str().to_owned())
 }
 
-fn auth_headers(access_token: &str, with_content_type: bool) -> HeaderMap {
+pub(crate) fn auth_headers(access_token: &str, with_content_type: bool) -> HeaderMap {
     let mut h = HeaderMap::new();
     if let Ok(v) = HeaderValue::from_str(&format!("OAuth {access_token}")) {
         h.insert(AUTHORIZATION, v);

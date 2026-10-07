@@ -23,6 +23,7 @@ pub struct TracksService {
     tokens: Arc<TokenProvider>,
     miss: Arc<CatalogMiss>,
     mutations: super::mutations::TrackMutations,
+    uploads: super::upload::UploadGate,
 }
 
 pub(crate) struct TracksServiceDependencies {
@@ -53,6 +54,7 @@ impl TracksService {
             tokens,
             miss,
             mutations,
+            uploads: super::upload::UploadGate::new(),
         })
     }
 
@@ -229,6 +231,14 @@ impl TracksService {
 
     pub async fn delete(&self, sc_user_id: &str, track_urn: &str) -> AppResult<Value> {
         self.mutations.delete(sc_user_id, track_urn).await
+    }
+
+    pub(super) fn sc(&self) -> &ScClient {
+        &self.sc
+    }
+
+    pub(super) fn uploads(&self) -> &super::upload::UploadGate {
+        &self.uploads
     }
 
     pub async fn ensure_read_access(
