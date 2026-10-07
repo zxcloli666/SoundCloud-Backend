@@ -108,6 +108,7 @@ LLM_CALLS_PER_REQUEST = 2
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0
+THROUGHPUT_LOG_S = 60.0
 OUTBOX_FLUSH_S = 10.0
 LANE_TASK_PREFIX = "lane:"
 GPU_PROBE_INTERVAL_S = 15.0
@@ -494,6 +495,7 @@ class Node:
     def start_background(self) -> None:
         tasks: list[tuple[str, Awaitable[None]]] = [
             ("gate", self.gate()),
+            ("throughput", self.throughput()),
             ("status", self.status.run()),
             ("health", self.health.run(self.health_snapshot, self.health_stop)),
             ("gpu", self.gpu.run()),
@@ -619,6 +621,21 @@ class Node:
             for name, served in self.lanes.items():
                 self.gate_lane(name, served.watch)
             await self.clock.sleep(GATE_INTERVAL_S)
+
+    async def throughput(self) -> None:
+        while True:
+            await self.clock.sleep(THROUGHPUT_LOG_S)
+            self.log_throughput()
+
+    def log_throughput(self) -> None:
+        for name, served in self.lanes.items():
+            self.log.info(
+                "lane_throughput",
+                lane=name,
+                inflight=served.runner.inflight,
+                capacity=served.runner.capacity,
+                **served.runner.throughput(),
+            )
 
     def gate_lane(self, name: str, watch: ConsumerWatch) -> None:
         reserved = name == ENCODE_LANE and bool(self.priority_batchers)

@@ -48,6 +48,8 @@ DEGRADED_PROBE_S = 60.0
 DRAIN_NAK_DELAY_S = 5.0
 ABORT_SETTLE_S = 10.0
 INVALID_BODY_BYTES = 4096
+THROUGHPUT_WINDOW_S = 600.0
+LANE_DONE = "lane_done"
 OPTIONAL_RESULT_FIELDS = ("words",)
 ENVELOPE_FIELDS = frozenset({"status", "reason", "detail", "producer"})
 DEFS_REF = "#/$defs/"
@@ -163,6 +165,17 @@ class LaneRunner:
             },
             "naks": self._counters.value("naks_total", lane=self.lane.name),
             "last_error": self.watch.last_error,
+            **self.throughput(),
+        }
+
+    def throughput(self) -> dict[str, object]:
+        task_ms = self._counters.latency("task_ms", lane=self.lane.name)
+        return {
+            "per_hour": self._counters.per_hour(
+                LANE_DONE, self._clock.now(), THROUGHPUT_WINDOW_S, lane=self.lane.name
+            ),
+            "task_p50_ms": task_ms["p50"],
+            "task_p95_ms": task_ms["p95"],
         }
 
     async def _fetch(self, batch: int) -> list[Msg]:
@@ -381,6 +394,7 @@ class QueueHandler:
         await lease.ack()
         lease.settle(Settled.PUBLISHED)
         self._counters.inc("done_total", lane=self.lane.name, status=outcome.status.value)
+        self._counters.mark(LANE_DONE, self._clock.now(), lane=self.lane.name)
         duration_ms = round((self._clock.now() - started) * 1000, 1)
         self._counters.observe("task_ms", duration_ms, lane=self.lane.name)
         log.info(
