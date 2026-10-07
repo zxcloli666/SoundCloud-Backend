@@ -201,6 +201,23 @@ async fn soundcloud_playlist_and_user_hits_come_back_as_the_local_projection(
     Ok(())
 }
 
+fn resolved_playlist(inputs: &Value) -> Option<Value> {
+    inputs.get("url")?;
+    Some(json!({
+        "ok": true,
+        "track": {
+            "kind": "playlist",
+            "id": 950,
+            "urn": "soundcloud:playlists:950",
+            "title": "Fresh mix",
+            "track_count": 4,
+            "sharing": "public",
+            "permalink_url": "https://soundcloud.com/owner/sets/fresh-mix",
+            "user": {"kind": "user", "id": 77, "urn": "soundcloud:users:77", "username": "owner"},
+        },
+    }))
+}
+
 async fn resolve(
     app: &axum::Router,
     session: uuid::Uuid,
@@ -234,6 +251,60 @@ async fn seed_local_track(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_pasted_link_resolves_locally_and_its_new_playlist_waits_for_membership(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_local_track(&pool).await?;
+    let relay = SearchRelay::answering(Box::new(resolved_playlist), 500, json!({}));
+    let app = crate::router::build(state(&pool, relay.clone(), &redis_url()).await?);
+    let session = session(&pool).await?;
+
+    let (status, body) = resolve(
+        &app,
+        session,
+        "https://m.soundcloud.com/ARTIST/song/?in=artist/sets/mix&t=42",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["urn"], "soundcloud:tracks:42");
+    assert_eq!(
+        relay.lua_calls(),
+        0,
+        "a catalog track never reaches SoundCloud"
+    );
+
+    let (status, body) = resolve(
+        &app,
+        session,
+        "https://soundcloud.com/owner/sets/fresh-mix?si=abc",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["urn"], "soundcloud:playlists:950");
+    assert_eq!(
+        relay.lua_inputs()[0]["url"],
+        "https://soundcloud.com/owner/sets/fresh-mix"
+    );
+
+    let (status, body) = get(&app, session, "/playlists/soundcloud:playlists:950/tracks").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["sync"]["status"], "unhydrated");
+    assert_eq!(body["collection"], json!([]));
+    let due: bool = sqlx::query_scalar(
+        "SELECT next_reconcile_at <= clock_timestamp() + interval '1 minute'
+         FROM playlist_membership_state WHERE playlist_urn = 'soundcloud:playlists:950'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(
+        due,
+        "opening a resolved playlist schedules its membership fetch"
+    );
     Ok(())
 }
 
