@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use sqlx::PgPool;
 use sqlx::types::Uuid;
 
+use crate::common::sc_ids::{EntityKind, EntityRef, require_ref};
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -22,6 +23,8 @@ pub struct ListeningHistory {
     pub duration: i32,
     #[serde(serialize_with = "ts_iso")]
     pub played_at: NaiveDateTime,
+    #[serde(rename = "trackUrn")]
+    pub track_urn: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,12 +57,14 @@ impl HistoryService {
     }
 
     pub async fn record(&self, sc_user_id: &str, data: &RecordHistoryDto) -> AppResult<()> {
+        let track = require_ref(EntityKind::Track, &data.sc_track_id)?;
+        let track_urn = track.urn();
         let cutoff = chrono::Utc::now().naive_utc() - Duration::seconds(60);
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
         let recent = sqlx::query_file_scalar!(
             "queries/history/service/find_recent_play.sql",
             &variants,
-            &data.sc_track_id,
+            &[track_urn.clone(), track.sc_id()],
             cutoff
         )
         .fetch_optional(&self.pg)
@@ -73,7 +78,7 @@ impl HistoryService {
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(sc_user_id)
-        .bind(&data.sc_track_id)
+        .bind(&track_urn)
         .bind(&data.title)
         .bind(&data.artist_name)
         .bind(&data.artist_urn)
@@ -91,7 +96,7 @@ impl HistoryService {
         offset: i64,
     ) -> AppResult<HistoryPage> {
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let collection: Vec<ListeningHistory> = sqlx::query_file_as!(
+        let mut collection: Vec<ListeningHistory> = sqlx::query_file_as!(
             ListeningHistory,
             "queries/history/service/find_all_by_user.sql",
             &variants,
@@ -100,6 +105,9 @@ impl HistoryService {
         )
         .fetch_all(&self.pg)
         .await?;
+        for entry in &mut collection {
+            entry.track_urn = EntityRef::track(&entry.sc_track_id).map(EntityRef::urn);
+        }
         let total =
             sqlx::query_file_scalar!("queries/history/service/count_by_user.sql", &variants)
                 .fetch_one(&self.pg)

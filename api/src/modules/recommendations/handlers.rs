@@ -99,6 +99,12 @@ async fn similar(
 ) -> AppResult<Response> {
     let per_cluster = parse_limit(q.limit.as_deref(), 12).clamp(4, 24);
     let languages = parse_languages(q.languages.as_deref());
+    let Some(track_id) = crate::common::sc_ids::normalize_sc_track_id(&track_id) else {
+        return Ok(
+            Json(crate::modules::recommendations::clusters::ClusterBuilder::new().finish())
+                .into_response(),
+        );
+    };
     let json = st
         .recommendations
         .similar_wave_coalesced(
@@ -246,7 +252,9 @@ async fn wave_track(
 ) -> AppResult<Json<WavePayload>> {
     let limit = parse_limit(q.limit.as_deref(), 20).clamp(4, 40);
     let languages = parse_languages(q.languages.as_deref());
-    let Ok(seed) = seed_track_id.parse::<u64>() else {
+    let Some(seed) = crate::common::sc_ids::EntityRef::track(&seed_track_id)
+        .map(crate::common::sc_ids::EntityRef::id)
+    else {
         return Ok(Json(WavePayload {
             tracks: Vec::new(),
             cursor: String::new(),

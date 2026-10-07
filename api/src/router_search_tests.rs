@@ -22,9 +22,9 @@ use crate::sc::read_tests::SearchRelay;
 use crate::sc::{ScClient, ScReadService};
 use crate::state::AppState;
 
-const LISTENER: &str = "17";
+pub(super) const LISTENER: &str = "17";
 
-fn redis_url() -> String {
+pub(super) fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
@@ -108,7 +108,11 @@ fn config(redis: &str) -> AppConfig {
     }
 }
 
-async fn state(pg: &PgPool, relay: Arc<SearchRelay>, redis: &str) -> anyhow::Result<AppState> {
+pub(super) async fn state(
+    pg: &PgPool,
+    relay: Arc<SearchRelay>,
+    redis: &str,
+) -> anyhow::Result<AppState> {
     let config = Arc::new(config(redis));
     let pg = pg.clone();
     let redis_pool = deadpool_redis::Config::from_url(redis)
@@ -265,7 +269,7 @@ async fn state(pg: &PgPool, relay: Arc<SearchRelay>, redis: &str) -> anyhow::Res
     })
 }
 
-async fn session(pool: &PgPool) -> anyhow::Result<Uuid> {
+pub(super) async fn session(pool: &PgPool) -> anyhow::Result<Uuid> {
     let connection = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO soundcloud_connections
@@ -285,7 +289,11 @@ async fn session(pool: &PgPool) -> anyhow::Result<Uuid> {
     Ok(session)
 }
 
-async fn get(app: &axum::Router, session: Uuid, uri: &str) -> anyhow::Result<(StatusCode, Value)> {
+pub(super) async fn get(
+    app: &axum::Router,
+    session: Uuid,
+    uri: &str,
+) -> anyhow::Result<(StatusCode, Value)> {
     let response = app
         .clone()
         .oneshot(
@@ -300,7 +308,7 @@ async fn get(app: &axum::Router, session: Uuid, uri: &str) -> anyhow::Result<(St
     Ok((status, serde_json::from_slice(&body).unwrap_or(Value::Null)))
 }
 
-fn soundcloud_hits() -> Arc<SearchRelay> {
+pub(super) fn soundcloud_hits() -> Arc<SearchRelay> {
     SearchRelay::answering(
         Box::new(|inputs| {
             let kind = match inputs["type"].as_str() {
@@ -326,13 +334,13 @@ fn soundcloud_hits() -> Arc<SearchRelay> {
     )
 }
 
-async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {
+pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {
     Ok(crate::router::build(
         state(pool, soundcloud_hits(), redis).await?,
     ))
 }
 
-async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
+pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
     for id in ids {
         sqlx::query(
             "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist,
@@ -350,7 +358,7 @@ async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn urns(body: &Value) -> Vec<String> {
+pub(super) fn urns(body: &Value) -> Vec<String> {
     body["collection"]
         .as_array()
         .map(|items| {

@@ -184,6 +184,7 @@ async fn proxy_stream(
     Path(track_urn): Path<String>,
     Query(q): Query<StreamProxyQuery>,
 ) -> AppResult<Response> {
+    let track_urn = crate::modules::tracks::mutations::target_urn(&track_urn)?;
     st.tracks
         .ensure_read_access(&ctx.sc_user_id, &track_urn, q.secret_token.is_some())
         .await?;
