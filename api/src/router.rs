@@ -63,6 +63,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::auras::router())
         .merge(modules::likes::router())
         .merge(modules::dislikes::router())
+        .merge(modules::blocked_artists::router())
         .merge(modules::featured::router())
         .merge(modules::lyrics::router())
         .merge(modules::collab::router())

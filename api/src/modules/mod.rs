@@ -2,6 +2,7 @@ pub mod albums;
 pub mod artists;
 pub mod auras;
 pub mod auth;
+pub mod blocked_artists;
 pub mod centroids;
 pub mod cold_refresh;
 pub mod collab;
