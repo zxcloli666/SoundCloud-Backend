@@ -60,6 +60,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
     sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0083_admin_maintenance_runs.sql"
     ))
     .execute(pool)

@@ -2,11 +2,16 @@ use serde_json::Value;
 
 use super::*;
 
+const ROOM: i64 = 500;
+
 fn reaper(pool: &PgPool) -> LyricsReaper {
     LyricsReaper::new(
         pool.clone(),
         WorkerDispatchConfig {
             lyrics_align_rejected_retry_days: 30,
+            audio_backlog: 256,
+            lyrics_backlog: 2_048,
+            transcribe_backlog: 16,
         },
     )
 }
@@ -14,6 +19,11 @@ fn reaper(pool: &PgPool) -> LyricsReaper {
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0057_background_jobs.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
     ))
     .execute(pool)
     .await?;
@@ -153,8 +163,8 @@ async fn transcription_reaper_enqueues_only_current_never_dispatched_work(
     .await?;
 
     let reaper = reaper(&pool);
-    reaper.reap_transcriptions().await?;
-    reaper.reap_transcriptions().await?;
+    reaper.reap_transcriptions(ROOM).await?;
+    reaper.reap_transcriptions(ROOM).await?;
 
     let jobs = sqlx::query_as::<_, (String, i64, Value)>(
         "SELECT dedup_key, generation, payload
@@ -198,7 +208,7 @@ async fn stale_transcription_is_quarantined_without_redispatch(pool: PgPool) -> 
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     let state = sqlx::query_as::<_, (String, String, Option<String>)>(
         "SELECT track.transcribe_state, wire.status, wire.quarantine_reason
@@ -251,7 +261,7 @@ async fn old_orphaned_lyrics_are_quarantined_without_gpu_work(pool: PgPool) -> a
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
 
     let state: Option<String> =
         sqlx::query_scalar("SELECT embedding_state FROM lyrics_cache WHERE sc_track_id = '42'")
@@ -295,7 +305,7 @@ async fn stale_embedding_requests_time_out_and_go_back_to_the_backlog(
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
 
     let states = sqlx::query_as::<_, (String, String, Option<String>)>(
         "SELECT wire.sc_track_id, wire.status, wire.quarantine_reason
@@ -357,7 +367,7 @@ async fn a_request_outlived_by_replaced_lyrics_times_out_and_the_new_lyrics_are_
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
 
     let wire = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT status, quarantine_reason FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
@@ -415,7 +425,7 @@ async fn embedding_reaper_waits_for_active_result_claim(pool: PgPool) -> anyhow:
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
     let active: String = sqlx::query_scalar(
         "SELECT status FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
     )
@@ -428,7 +438,7 @@ async fn embedding_reaper_waits_for_active_result_claim(pool: PgPool) -> anyhow:
     )
     .execute(&pool)
     .await?;
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
     let recently_released: String = sqlx::query_scalar(
         "SELECT status FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
     )
@@ -441,7 +451,7 @@ async fn embedding_reaper_waits_for_active_result_claim(pool: PgPool) -> anyhow:
     )
     .execute(&pool)
     .await?;
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
     let expired = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT status, result_lease_id
          FROM lyrics_embedding_wire_state
@@ -472,10 +482,10 @@ async fn embedding_reaper_records_one_shot_state_before_enqueue(
     let first = reaper(&pool);
     let second = reaper(&pool);
     let (first_result, second_result) =
-        tokio::join!(first.reap_embeddings(), second.reap_embeddings(),);
+        tokio::join!(first.reap_embeddings(ROOM), second.reap_embeddings(ROOM));
     first_result?;
     second_result?;
-    first.reap_embeddings().await?;
+    first.reap_embeddings(ROOM).await?;
 
     let state = sqlx::query_as::<_, (String, i64, i32)>(
         "SELECT lyrics.embedding_state, job.generation, job.attempts
@@ -537,7 +547,7 @@ async fn embedding_reaper_skips_short_terminal_and_already_queued_rows(
     };
     queue.enqueue(&existing).await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
 
     let jobs = sqlx::query_as::<_, (String, Value, i64)>(
         "SELECT dedup_key, payload, generation
@@ -547,6 +557,40 @@ async fn embedding_reaper_skips_short_terminal_and_already_queued_rows(
     .fetch_all(&pool)
     .await?;
     assert_eq!(jobs, vec![("43".to_owned(), existing.payload, 1)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn embedding_reaper_fills_only_the_room_the_worker_backlog_leaves(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42", "43", "44"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+
+    reaper(&pool).reap_embeddings(0).await?;
+    let untouched: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+    reaper(&pool).reap_embeddings(2).await?;
+    let first_round: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+    reaper(&pool).reap_embeddings(3).await?;
+    let second_round: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(untouched, 0);
+    assert_eq!(first_round, 2);
+    assert_eq!(second_round, 3);
     Ok(())
 }
 
@@ -631,7 +675,7 @@ async fn a_pending_attempt_is_quarantined_only_after_the_lane_result_window(
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     let inside = wire_state(&pool, "41").await?;
     let outside = wire_state(&pool, "42").await?;
@@ -661,7 +705,7 @@ async fn a_reopenable_attempt_is_dispatched_again_after_the_cooldown(
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     let track_state: Option<String> =
         sqlx::query_scalar("SELECT transcribe_state FROM tracks WHERE sc_track_id = '41'")
@@ -695,7 +739,7 @@ async fn a_reopenable_attempt_that_cannot_run_again_is_quarantined(
         .execute(&pool)
         .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     let exhausted = wire_state(&pool, "41").await?;
     let superseded = wire_state(&pool, "42").await?;
@@ -741,7 +785,7 @@ async fn rejected_attempts_are_reevaluated_for_a_newer_sync_version_or_after_the
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     assert_eq!(
         dispatched_generations(&pool).await?,
@@ -780,7 +824,7 @@ async fn a_transcription_superseded_by_a_new_upload_is_dispatched_for_it(
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
 
     assert_eq!(
         dispatched_generations(&pool).await?,
@@ -815,18 +859,18 @@ async fn a_rejection_under_an_older_build_is_reopened_once_per_newest_version(
              completed_at = now() - interval '7 hours'
          WHERE sc_track_id = '41'";
 
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
     let first = wire_state(&pool, "41").await?;
     sqlx::query(rejected_again).execute(&pool).await?;
     sqlx::query("DELETE FROM background_jobs")
         .execute(&pool)
         .await?;
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
     let second = wire_state(&pool, "41").await?;
     sqlx::query("INSERT INTO transcription_sync_versions (sync_version) VALUES ('newer')")
         .execute(&pool)
         .await?;
-    reaper(&pool).reap_transcriptions().await?;
+    reaper(&pool).reap_transcriptions(ROOM).await?;
     let third = wire_state(&pool, "41").await?;
 
     assert_eq!((first.0.as_str(), first.1), ("pending", 3));
@@ -855,7 +899,7 @@ async fn changed_lyrics_after_a_finished_embedding_are_embedded_again(
     .execute(&pool)
     .await?;
 
-    reaper(&pool).reap_embeddings().await?;
+    reaper(&pool).reap_embeddings(ROOM).await?;
 
     let queued: Vec<String> = sqlx::query_scalar(
         "SELECT dedup_key FROM background_jobs WHERE kind = 'lyrics.embed' ORDER BY dedup_key",

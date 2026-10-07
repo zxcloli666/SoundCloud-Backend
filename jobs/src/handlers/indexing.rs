@@ -28,10 +28,11 @@ use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;
 use self::storage_events::StorageEventHandler;
 use self::storage_uploaded::StorageUploadHandler;
+use super::worker_backlog::{WorkerBacklog, unclaimed_room};
 
 const REAP_BATCH: i64 = 50;
+const SETTLE_BATCH: i64 = 50;
 const FAILED_RETRY_BATCH: i64 = 10;
-const REOPEN_BATCH: i64 = 50;
 const MAX_ATTEMPTS: i16 = 8;
 const MAX_DISPATCH_ATTEMPTS: i32 = MAX_ATTEMPTS as i32;
 const AUDIO_INDEX_QUARANTINE_SECONDS: i64 = match AUDIO_LANE.quarantine_after_s() {
@@ -50,6 +51,13 @@ pub struct IndexingHandler {
     storage_events: StorageEventHandler,
     storage_uploads: StorageUploadHandler,
     storage_url: Url,
+    backlog: WorkerBacklog,
+    audio_backlog: i64,
+}
+
+struct AudioBackfill {
+    sc_track_id: String,
+    uploaded_generation: i64,
 }
 
 impl IndexingHandler {
@@ -58,6 +66,7 @@ impl IndexingHandler {
         config: &IndexingConfig,
         duration_config: &DurationConfig,
         storage_url: &Url,
+        audio_backlog: i64,
         bus: Bus,
         qdrant: QdrantProvisioner,
     ) -> Result<Self, crate::ClientBuildError> {
@@ -72,11 +81,13 @@ impl IndexingHandler {
             storage_events: StorageEventHandler::new(pool.clone()),
             storage_uploads: StorageUploadHandler::new(
                 pool.clone(),
-                bus,
+                bus.clone(),
                 storage_url.clone(),
                 duration_config.max_track_duration_ms,
             ),
             storage_url: storage_url.clone(),
+            backlog: WorkerBacklog::new(bus),
+            audio_backlog,
         })
     }
 
@@ -133,15 +144,62 @@ impl IndexingHandler {
 
     pub async fn reap(&self) -> JobResult {
         let settled = self.settle_unreopenable_dispatches().await;
-        let reopened = self.reopen_dispatches().await;
+        let room = self.backlog.room(&AUDIO_LANE, self.audio_backlog).await;
+        let dispatched = self.top_up_audio_backlog(room).await;
         let requeued = self.requeue_stuck().await;
-        settled.and(reopened).and(requeued)
+        settled.and(dispatched).and(requeued)
+    }
+
+    async fn top_up_audio_backlog(&self, room: i64) -> JobResult {
+        let room = unclaimed_room(&self.pool, JobKind::DispatchAudioIndex.as_str(), room).await?;
+        if room == 0 {
+            return Ok(());
+        }
+        let reopened = self.reopen_dispatches(room).await?;
+        let backfilled = self
+            .backfill_dispatches(room.saturating_sub(reopened))
+            .await?;
+        if reopened > 0 || backfilled > 0 {
+            tracing::info!(reopened, backfilled, "audio index backlog topped up");
+        }
+        Ok(())
+    }
+
+    async fn backfill_dispatches(&self, room: i64) -> JobResult<i64> {
+        if room == 0 {
+            return Ok(0);
+        }
+        let candidates = sqlx::query_file_as!(
+            AudioBackfill,
+            "queries/indexing/backfill_audio.sql",
+            room,
+            AUDIO_INDEX_QUARANTINE_SECONDS,
+            REAP_RETRY_COOLDOWN_SECONDS
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(JobError::retryable)?;
+        let mut dispatched = 0;
+        let mut first_failure = None;
+        for candidate in candidates {
+            let payload = backend_contracts::StoredAudioDispatchPayload {
+                sc_track_id: candidate.sc_track_id,
+                uploaded_generation: candidate.uploaded_generation,
+            };
+            match self.storage_uploads.dispatch_audio(payload).await {
+                Ok(()) => dispatched += 1,
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        first_failure.map_or(Ok(dispatched), Err)
     }
 
     async fn settle_unreopenable_dispatches(&self) -> JobResult {
         let quarantined = sqlx::query_file_scalar!(
             "queries/indexing/settle_unreopenable_dispatches.sql",
-            REOPEN_BATCH,
+            SETTLE_BATCH,
             REAP_RETRY_COOLDOWN_SECONDS,
             MAX_DISPATCH_ATTEMPTS
         )
@@ -157,13 +215,9 @@ impl IndexingHandler {
         Ok(())
     }
 
-    async fn reopen_dispatches(&self) -> JobResult {
+    async fn reopen_dispatches(&self, room: i64) -> JobResult<i64> {
         self.storage_uploads
-            .reopen_audio_dispatches(
-                REOPEN_BATCH,
-                REAP_RETRY_COOLDOWN_SECONDS,
-                MAX_DISPATCH_ATTEMPTS,
-            )
+            .reopen_audio_dispatches(room, REAP_RETRY_COOLDOWN_SECONDS, MAX_DISPATCH_ATTEMPTS)
             .await
     }
 
@@ -325,7 +379,7 @@ mod tests {
         test_schema::install_audio_index_wire_state(pool).await
     }
 
-    async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    async fn requeued(pool: &PgPool) -> anyhow::Result<Vec<String>> {
         Ok(sqlx::query_file_scalar!(
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,
@@ -334,6 +388,29 @@ mod tests {
         )
         .fetch_all(pool)
         .await?)
+    }
+
+    async fn backfilled(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+        Ok(sqlx::query_file_as!(
+            AudioBackfill,
+            "queries/indexing/backfill_audio.sql",
+            REAP_BATCH,
+            AUDIO_INDEX_QUARANTINE_SECONDS,
+            REAP_RETRY_COOLDOWN_SECONDS
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|candidate| candidate.sc_track_id)
+        .collect())
+    }
+
+    async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+        let mut tracks = requeued(pool).await?;
+        tracks.extend(backfilled(pool).await?);
+        tracks.sort();
+        tracks.dedup();
+        Ok(tracks)
     }
 
     async fn in_flight(pool: &PgPool) -> anyhow::Result<bool> {
@@ -547,6 +624,39 @@ mod tests {
             .await?;
 
         assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn an_announced_upload_is_dispatched_directly_and_an_unannounced_one_through_storage(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        assert!(requeued(&pool).await?.is_empty());
+        assert_eq!(backfilled(&pool).await?, vec!["42".to_owned()]);
+
+        sqlx::query("DELETE FROM storage_event_state")
+            .execute(&pool)
+            .await?;
+
+        assert_eq!(requeued(&pool).await?, vec!["42".to_owned()]);
+        assert!(backfilled(&pool).await?.is_empty());
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_queued_audio_dispatch_keeps_the_track_out_of_the_backfill(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::query(
+            "INSERT INTO background_jobs (id, kind, dedup_key)
+             VALUES (gen_random_uuid(), 'indexing.dispatch_audio', '42')",
+        )
+        .execute(&pool)
+        .await?;
+
+        assert!(stuck(&pool).await?.is_empty());
         Ok(())
     }
 

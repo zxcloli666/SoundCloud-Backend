@@ -11,12 +11,8 @@ WHERE track.created_at < now() - INTERVAL '5 minutes'
       AND track.s3_verified_at IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
-          FROM audio_index_wire_state AS settled
-          JOIN storage_event_state AS storage
-            ON storage.sc_track_id = settled.sc_track_id
-           AND storage.uploaded_generation = settled.upload_generation
-          WHERE settled.sc_track_id = track.sc_track_id
-            AND settled.status IN ('terminal', 'reopenable')
+          FROM storage_event_state AS announced
+          WHERE announced.sc_track_id = track.sc_track_id
       )
     )
   )

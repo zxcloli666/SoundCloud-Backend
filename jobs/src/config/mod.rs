@@ -10,6 +10,8 @@ use backend_contracts::COLLAB_MAX_MIN_COUNT;
 use backend_contracts::worker_contract::WorkerLane;
 
 pub use database::{DatabaseConfig, PoolConfig, SessionLimits};
+
+use database::queue_pool_from_env;
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 
@@ -37,6 +39,7 @@ pub struct JobsConfig {
     pub admin_maintenance: AdminMaintenanceConfig,
     pub playlist_reconcile: PlaylistReconcileConfig,
     pub main_database: DatabaseConfig,
+    pub queue_pool: PoolConfig,
     pub ops_database: DatabaseConfig,
     pub queue: QueueConfig,
     pub subscriptions: SubscriptionsConfig,
@@ -167,6 +170,9 @@ impl PlaylistReconcileConfig {
 #[derive(Clone, Copy, Debug)]
 pub struct WorkerDispatchConfig {
     pub lyrics_align_rejected_retry_days: u64,
+    pub audio_backlog: i64,
+    pub lyrics_backlog: i64,
+    pub transcribe_backlog: i64,
 }
 
 impl WorkerDispatchConfig {
@@ -176,6 +182,9 @@ impl WorkerDispatchConfig {
                 "LYRICS_ALIGN_REJECTED_RETRY_DAYS",
                 30,
             )?,
+            audio_backlog: worker_backlog("INDEX_AUDIO_BACKLOG", 256)?,
+            lyrics_backlog: worker_backlog("EMBED_LYRICS_BACKLOG", 2_048)?,
+            transcribe_backlog: worker_backlog("TRANSCRIBE_BACKLOG", 16)?,
         })
     }
 
@@ -256,6 +265,7 @@ impl EnrichConfig {
 pub struct QueueConfig {
     pub core_fast: QueueLaneConfig,
     pub core_bulk: QueueLaneConfig,
+    pub maintenance: QueueLaneConfig,
     pub ops: QueueLaneConfig,
     pub poll_interval: Duration,
     pub lease_duration: Duration,
@@ -341,6 +351,22 @@ impl TasteConfig {
     }
 }
 
+const MAX_WORKER_BACKLOG: u64 = 10_000;
+
+fn worker_backlog(key: &str, default: u64) -> Result<i64, ConfigError> {
+    let value = env::positive_u64(key, default)?;
+    if value > MAX_WORKER_BACKLOG {
+        return Err(ConfigError::Invalid {
+            key: key.to_owned(),
+            reason: format!("must not exceed {MAX_WORKER_BACKLOG}"),
+        });
+    }
+    i64::try_from(value).map_err(|_| ConfigError::Invalid {
+        key: key.to_owned(),
+        reason: "must fit a signed 64-bit integer".to_owned(),
+    })
+}
+
 fn positive(key: &str, value: u32) -> Result<u32, ConfigError> {
     if value == 0 {
         return Err(ConfigError::Invalid {
@@ -412,9 +438,10 @@ impl JobsConfig {
             };
 
         let queue = QueueConfig {
-            core_fast: QueueLaneConfig::from_env("JOBS_CORE_FAST", 4)?,
-            core_bulk: QueueLaneConfig::from_env("JOBS_CORE_BULK", 2)?,
-            ops: QueueLaneConfig::from_env("JOBS_OPS", 4)?,
+            core_fast: QueueLaneConfig::from_env("JOBS_CORE_FAST", 8)?,
+            core_bulk: QueueLaneConfig::from_env("JOBS_CORE_BULK", 16)?,
+            maintenance: QueueLaneConfig::from_env("JOBS_MAINTENANCE", 8)?,
+            ops: QueueLaneConfig::from_env("JOBS_OPS", 8)?,
             poll_interval: Duration::from_millis(env::positive_u64("JOBS_POLL_INTERVAL_MS", 250)?),
             lease_duration: Duration::from_secs(env::positive_u64("JOBS_LEASE_SECONDS", 300)?),
             heartbeat_interval: Duration::from_secs(env::positive_u64(
@@ -444,6 +471,7 @@ impl JobsConfig {
             admin_maintenance: AdminMaintenanceConfig::from_env()?,
             playlist_reconcile: PlaylistReconcileConfig::from_env()?,
             main_database: DatabaseConfig::from_env("", true)?,
+            queue_pool: queue_pool_from_env()?,
             ops_database: DatabaseConfig::from_env("OPS_", false)?,
             queue,
             subscriptions: SubscriptionsConfig::from_env()?,
@@ -928,6 +956,7 @@ impl QueueConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         self.core_fast.validate("JOBS_CORE_FAST")?;
         self.core_bulk.validate("JOBS_CORE_BULK")?;
+        self.maintenance.validate("JOBS_MAINTENANCE")?;
         self.ops.validate("JOBS_OPS")?;
 
         let lease_renews_safely = self
@@ -981,6 +1010,7 @@ mod tests {
         QueueConfig {
             core_fast: lane.clone(),
             core_bulk: lane.clone(),
+            maintenance: lane.clone(),
             ops: lane,
             poll_interval: Duration::from_millis(100),
             lease_duration: Duration::from_secs(30),
@@ -1128,6 +1158,9 @@ mod tests {
     fn health_waits_for_every_worker_lane_jobs_feeds() {
         let dispatch = WorkerDispatchConfig {
             lyrics_align_rejected_retry_days: 30,
+            audio_backlog: 256,
+            lyrics_backlog: 2_048,
+            transcribe_backlog: 16,
         };
         assert_eq!(
             dispatch.required_worker_lanes(),

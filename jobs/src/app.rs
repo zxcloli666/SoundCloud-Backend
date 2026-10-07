@@ -19,7 +19,9 @@ use crate::bus::{Bus, BusConsumers};
 use crate::config::JobsConfig;
 use crate::db::Databases;
 use crate::handlers::taste::{TasteHandler, TasteResult};
-use crate::handlers::{CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, OPS_KINDS, accepts_ingress};
+use crate::handlers::{
+    CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
+};
 use crate::health::HealthState;
 use crate::queue::{JobError, JobRepository, NewJob, QueueError, QueueWorker, recover_exhausted};
 use crate::scheduler::Scheduler;
@@ -28,6 +30,18 @@ use crate::supervisor::Supervisor;
 pub async fn run() -> anyhow::Result<()> {
     let config = JobsConfig::from_env().context("jobs configuration is invalid")?;
     info!(instance_id = %config.instance_id, "jobs starting");
+    info!(
+        core_fast = config.queue.core_fast.concurrency,
+        core_bulk = config.queue.core_bulk.concurrency,
+        maintenance = config.queue.maintenance.concurrency,
+        ops = config.queue.ops.concurrency,
+        main_fast_pool = config.main_database.fast_pool.maximum,
+        main_bulk_pool = config.main_database.bulk_pool.maximum,
+        queue_pool = config.queue_pool.maximum,
+        ops_fast_pool = config.ops_database.fast_pool.maximum,
+        ops_bulk_pool = config.ops_database.bulk_pool.maximum,
+        "queue lanes and connection pools"
+    );
 
     let databases = Databases::connect(&config)
         .await
@@ -76,26 +90,30 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("jobs bootstrap failed")?;
 
-    let scheduler = Scheduler::configured(databases.main.fast.clone(), &config.schedules);
+    let scheduler = Scheduler::configured(databases.queue.clone(), &config.schedules);
     scheduler
         .register()
         .await
         .context("jobs schedules could not be registered")?;
 
     let core_fast_repository = JobRepository::new(
-        databases.main.fast.clone(),
+        databases.queue.clone(),
         format!("{}:core-fast", config.instance_id),
     );
     let core_bulk_repository = JobRepository::new(
-        databases.main.fast.clone(),
+        databases.queue.clone(),
         format!("{}:core-bulk", config.instance_id),
     );
+    let maintenance_repository = JobRepository::new(
+        databases.queue.clone(),
+        format!("{}:maintenance", config.instance_id),
+    );
     let ops_repository = JobRepository::new(
-        databases.main.fast.clone(),
+        databases.queue.clone(),
         format!("{}:ops", config.instance_id),
     );
     let ingress_repository = JobRepository::new(
-        databases.main.fast.clone(),
+        databases.queue.clone(),
         format!("{}:ingress", config.instance_id),
     );
     let core_fast_worker = QueueWorker::new(
@@ -111,6 +129,13 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.clone(),
         config.queue.core_bulk.clone(),
         CORE_BULK_KINDS,
+    );
+    let maintenance_worker = QueueWorker::new(
+        maintenance_repository,
+        handlers.clone(),
+        config.queue.clone(),
+        config.queue.maintenance.clone(),
+        MAINTENANCE_KINDS,
     );
     let ops_worker = QueueWorker::new(
         ops_repository,
@@ -256,6 +281,10 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn(
         "core bulk worker",
         core_bulk_worker.run(cancellation.clone()),
+    );
+    supervisor.spawn(
+        "maintenance worker",
+        maintenance_worker.run(cancellation.clone()),
     );
     supervisor.spawn("ops worker", ops_worker.run(cancellation.clone()));
 

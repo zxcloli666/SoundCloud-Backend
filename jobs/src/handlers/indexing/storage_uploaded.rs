@@ -121,7 +121,7 @@ impl StorageUploadHandler {
         batch: i64,
         cooldown_seconds: i64,
         max_attempts: i32,
-    ) -> JobResult {
+    ) -> JobResult<i64> {
         let reopened = sqlx::query_file_as!(
             AudioDispatch,
             "queries/indexing/reopen_dispatches.sql",
@@ -134,6 +134,7 @@ impl StorageUploadHandler {
         .map_err(JobError::retryable)?;
 
         let mut first_failure = None;
+        let count = i64::try_from(reopened.len()).unwrap_or(i64::MAX);
         for dispatch in reopened {
             tracing::info!(
                 track = %dispatch.sc_track_id,
@@ -145,7 +146,7 @@ impl StorageUploadHandler {
                 first_failure.get_or_insert(error);
             }
         }
-        first_failure.map_or(Ok(()), Err)
+        first_failure.map_or(Ok(count), Err)
     }
 
     async fn publish_audio_index(&self, dispatch: &AudioDispatch) -> JobResult {

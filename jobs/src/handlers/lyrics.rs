@@ -12,12 +12,13 @@ pub(super) mod wake;
 use std::sync::Arc;
 
 use backend_contracts::pipeline::{LyricsEmbeddingResult, TranscriptionResult};
+use backend_contracts::worker_contract::{LYRICS_LANE, TRANSCRIBE_LANE};
 use backend_contracts::{LyricsEmbedPayload, LyricsLookupPayload, StoredAudioDispatchPayload};
 use catalog_sources::LyricsSources;
 use sqlx::PgPool;
 
 use crate::bus::{Bus, DeliveryContext};
-use crate::config::JobsConfig;
+use crate::config::{JobsConfig, WorkerDispatchConfig};
 use crate::qdrant::QdrantProvisioner;
 use crate::queue::{JobResult, LeasedJob};
 
@@ -27,12 +28,15 @@ use self::embedding_result::EmbeddingResultHandler;
 use self::lookup::LyricsLookupHandler;
 use self::reaper::LyricsReaper;
 use self::transcription::TranscriptionResultHandler;
+use super::worker_backlog::WorkerBacklog;
 
 pub struct LyricsHandler {
     embedding_job: LyricsEmbeddingJob,
     embedding_results: EmbeddingResultHandler,
     lookup: LyricsLookupHandler,
     reaper: LyricsReaper,
+    backlog: WorkerBacklog,
+    dispatch: WorkerDispatchConfig,
     transcription_dispatcher: TranscriptionDispatcher,
     transcription_results: TranscriptionResultHandler,
 }
@@ -52,6 +56,8 @@ impl LyricsHandler {
             embedding_results: EmbeddingResultHandler::new(fast_pool.clone(), Arc::new(qdrant)),
             lookup: LyricsLookupHandler::new(bulk_pool.clone(), sources, config.lyrics.clone()),
             reaper: LyricsReaper::new(bulk_pool, dispatch),
+            backlog: WorkerBacklog::new(bus.clone()),
+            dispatch,
             transcription_dispatcher: TranscriptionDispatcher::new(
                 fast_pool.clone(),
                 bus,
@@ -108,10 +114,18 @@ impl LyricsHandler {
     }
 
     pub async fn reap_transcriptions(&self) -> JobResult {
-        self.reaper.reap_transcriptions().await
+        let room = self
+            .backlog
+            .room(&TRANSCRIBE_LANE, self.dispatch.transcribe_backlog)
+            .await;
+        self.reaper.reap_transcriptions(room).await
     }
 
     pub async fn reap_embeddings(&self) -> JobResult {
-        self.reaper.reap_embeddings().await
+        let room = self
+            .backlog
+            .room(&LYRICS_LANE, self.dispatch.lyrics_backlog)
+            .await;
+        self.reaper.reap_embeddings(room).await
     }
 }

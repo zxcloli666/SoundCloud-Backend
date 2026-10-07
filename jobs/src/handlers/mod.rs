@@ -37,6 +37,7 @@ mod sync_queue;
 pub(crate) mod taste;
 mod telemetry;
 mod wanted;
+mod worker_backlog;
 
 use std::sync::Arc;
 
@@ -85,6 +86,7 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::CleanupJobReceipts,
     JobKind::DispatchAudioIndex,
     JobKind::DispatchTranscription,
+    JobKind::LyricsEmbed,
     JobKind::OAuthAppsRefresh,
     JobKind::SyncQueueFlush,
     JobKind::SyncQueueHeal,
@@ -93,29 +95,31 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
 pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
     JobKind::AdminMusicBrainzNames,
-    JobKind::ArtistAttributionRevalidate,
-    JobKind::CatalogCreditReview,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
+    JobKind::CrawlArtist,
+    JobKind::IndexTrack,
+    JobKind::LyricsLookup,
+    JobKind::PlaylistObserveShadow,
+];
+
+pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
+    JobKind::ArtistAttributionRevalidate,
+    JobKind::CatalogCreditReview,
     JobKind::CatalogWorkReconcile,
     JobKind::CollabBootstrap,
     JobKind::CollabTrain,
-    JobKind::CrawlArtist,
     JobKind::DiscoverAccounts,
     JobKind::DiscoverAggregates,
     JobKind::DiscoverCatalogGenius,
     JobKind::DiscoverCatalogMusicBrainz,
     JobKind::DiscoverInterest,
     JobKind::EnrichTracks,
-    JobKind::IndexTrack,
     JobKind::IndexingReap,
-    JobKind::LyricsEmbed,
-    JobKind::LyricsLookup,
     JobKind::LyricsLookupSweep,
     JobKind::LyricsReapEmbeddings,
     JobKind::LyricsReapTranscriptions,
     JobKind::PlaylistLegacyDrain,
-    JobKind::PlaylistObserveShadow,
     JobKind::PlaylistReconcileSweep,
     JobKind::RecommendationColike,
     JobKind::RecommendationQualityBackfill,
@@ -271,6 +275,7 @@ impl JobHandlers {
                 &config.indexing,
                 &config.durations,
                 &config.sync_queue.storage_url,
+                config.worker_dispatch.audio_backlog,
                 bus.clone(),
                 qdrant.clone(),
             )?,
@@ -599,10 +604,15 @@ mod kind_tests {
     #[test]
     fn every_job_kind_belongs_to_exactly_one_lane() {
         for kind in JobKind::ALL {
-            let count = [CORE_FAST_KINDS, CORE_BULK_KINDS, OPS_KINDS]
-                .into_iter()
-                .filter(|kinds| kinds.contains(kind))
-                .count();
+            let count = [
+                CORE_FAST_KINDS,
+                CORE_BULK_KINDS,
+                MAINTENANCE_KINDS,
+                OPS_KINDS,
+            ]
+            .into_iter()
+            .filter(|kinds| kinds.contains(kind))
+            .count();
             assert_eq!(count, 1, "{} belongs to {count} executable lanes", kind);
             assert_eq!(kind.lane().as_str(), lane_of(*kind));
         }
@@ -613,6 +623,8 @@ mod kind_tests {
             "core_fast"
         } else if CORE_BULK_KINDS.contains(&kind) {
             "core_bulk"
+        } else if MAINTENANCE_KINDS.contains(&kind) {
+            "maintenance"
         } else {
             "ops"
         }

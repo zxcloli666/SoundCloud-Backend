@@ -89,7 +89,7 @@ impl DatabaseConfig {
             tls,
             fast_pool: PoolConfig {
                 minimum: env::parse(&key("PG_POOL_MIN"), "2")?,
-                maximum: env::parse(&key("PG_POOL_MAX"), "8")?,
+                maximum: env::parse(&key("PG_POOL_MAX"), "14")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_ACQUIRE_TIMEOUT_MS"),
                     2_000,
@@ -102,7 +102,7 @@ impl DatabaseConfig {
             },
             bulk_pool: PoolConfig {
                 minimum: env::parse(&key("PG_BULK_POOL_MIN"), "0")?,
-                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "2")?,
+                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "4")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_BULK_ACQUIRE_TIMEOUT_MS"),
                     5_000,
@@ -115,6 +115,44 @@ impl DatabaseConfig {
             },
         })
     }
+}
+
+pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 5;
+
+pub fn queue_pool_from_env() -> Result<PoolConfig, ConfigError> {
+    let pool = PoolConfig {
+        minimum: env::parse("PG_QUEUE_POOL_MIN", "1")?,
+        maximum: env::parse("PG_QUEUE_POOL_MAX", "6")?,
+        acquire_timeout: Duration::from_millis(env::positive_u64(
+            "PG_QUEUE_ACQUIRE_TIMEOUT_MS",
+            5_000,
+        )?),
+        session: SessionLimits {
+            statement_timeout: Duration::from_secs(15),
+            lock_timeout: Duration::from_secs(1),
+            idle_transaction_timeout: Duration::from_secs(15),
+        },
+    };
+    validate_queue_pool(&pool)?;
+    Ok(pool)
+}
+
+fn validate_queue_pool(pool: &PoolConfig) -> Result<(), ConfigError> {
+    if pool.maximum < QUEUE_POOL_MINIMUM_CONNECTIONS {
+        return Err(ConfigError::Invalid {
+            key: "PG_QUEUE_POOL_MAX".to_owned(),
+            reason: format!(
+                "must be at least {QUEUE_POOL_MINIMUM_CONNECTIONS}: one claimer per queue lane and the scheduler"
+            ),
+        });
+    }
+    if pool.minimum > pool.maximum {
+        return Err(ConfigError::Invalid {
+            key: "PG_QUEUE_POOL_MIN".to_owned(),
+            reason: "must not exceed PG_QUEUE_POOL_MAX".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 impl TlsConfig {
@@ -196,6 +234,25 @@ fn redact_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queue_pool(maximum: u32) -> PoolConfig {
+        PoolConfig {
+            minimum: 1,
+            maximum,
+            acquire_timeout: Duration::from_secs(5),
+            session: SessionLimits {
+                statement_timeout: Duration::from_secs(15),
+                lock_timeout: Duration::from_secs(1),
+                idle_transaction_timeout: Duration::from_secs(15),
+            },
+        }
+    }
+
+    #[test]
+    fn the_queue_pool_holds_a_claimer_per_lane_and_the_scheduler() {
+        assert!(validate_queue_pool(&queue_pool(QUEUE_POOL_MINIMUM_CONNECTIONS - 1)).is_err());
+        assert!(validate_queue_pool(&queue_pool(QUEUE_POOL_MINIMUM_CONNECTIONS)).is_ok());
+    }
 
     #[test]
     fn database_url_redacts_password() {

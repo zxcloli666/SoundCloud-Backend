@@ -10,6 +10,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -85,19 +90,19 @@ fn discover_interest_preserves_previous_cadence() {
 }
 
 #[test]
-fn indexing_reap_preserves_previous_cadence() {
+fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
     let schedule = SCHEDULES
         .iter()
         .find(|schedule| schedule.kind == JobKind::IndexingReap)
         .expect("indexing reap schedule");
 
-    assert_eq!(schedule.interval_seconds, 5 * 60);
+    assert_eq!(schedule.interval_seconds, 60);
     assert_eq!(schedule.priority, 5);
     assert_eq!(schedule.max_attempts, 8);
 }
 
 #[test]
-fn lyrics_reapers_preserve_the_previous_cadence() {
+fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()
         .filter(|schedule| {
@@ -120,8 +125,8 @@ fn lyrics_reapers_preserve_the_previous_cadence() {
     assert_eq!(
         schedules,
         vec![
-            (JobKind::LyricsReapEmbeddings, 10 * 60, 5, 8, 10 * 60),
-            (JobKind::LyricsReapTranscriptions, 10 * 60, 5, 8, 10 * 60,),
+            (JobKind::LyricsReapEmbeddings, 60, 5, 8, 60),
+            (JobKind::LyricsReapTranscriptions, 2 * 60, 5, 8, 2 * 60),
         ]
     );
 }

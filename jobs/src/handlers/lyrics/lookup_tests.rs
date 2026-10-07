@@ -69,6 +69,11 @@ async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use backend_contracts::JobLane;
 use backend_contracts::pipeline::WORKER_STREAMS;
 use backend_contracts::reasons::WorkerStatus;
 use backend_contracts::worker_contract::{WORKER_LANES, WorkerLane};
+use backend_contracts::{JobKind, JobLane};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
@@ -13,6 +13,9 @@ const JOB_TOTAL: &str = "jobs_executions_total";
 const QUEUE_DEPTH: &str = "jobs_queue_depth";
 const QUEUE_OLDEST_DUE: &str = "jobs_queue_oldest_due_seconds";
 const QUEUE_DEAD_LETTERS: &str = "jobs_queue_dead_letters";
+const QUEUE_KIND_DEPTH: &str = "jobs_queue_kind_depth";
+const QUEUE_KIND_OLDEST_DUE: &str = "jobs_queue_kind_oldest_due_seconds";
+const QUEUE_KIND_OLDEST_AGE: &str = "jobs_queue_kind_oldest_age_seconds";
 const POOL_CONNECTIONS: &str = "jobs_pg_pool_connections";
 const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
@@ -343,7 +346,7 @@ pub async fn sample_pool_wait(pool: &PgPool) {
 pub async fn render(pool: &PgPool) -> Option<String> {
     let handle = HANDLE.get()?;
     sample_pool_wait(pool).await;
-    let lanes: Vec<String> = [JobLane::CoreFast, JobLane::CoreBulk, JobLane::Ops]
+    let lanes: Vec<String> = JobLane::ALL
         .iter()
         .map(|lane| lane.as_str().to_owned())
         .collect();
@@ -371,7 +374,44 @@ pub async fn render(pool: &PgPool) -> Option<String> {
         }
         Err(error) => tracing::warn!(%error, "queue metrics snapshot failed"),
     }
+    record_kind_depths(pool).await;
     Some(handle.render())
+}
+
+async fn record_kind_depths(pool: &PgPool) {
+    let rows = match sqlx::query_file!("queries/queue/metrics_kinds.sql")
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "queue kind metrics snapshot failed");
+            return;
+        }
+    };
+    for kind in JobKind::ALL {
+        let row = rows.iter().find(|row| row.kind == kind.as_str());
+        let lane = kind.lane().as_str();
+        let name = kind.as_str();
+        let (pending, due, leased, oldest_due, oldest_age) =
+            row.map_or((0, 0, 0, 0.0, 0.0), |row| {
+                (
+                    row.pending,
+                    row.due,
+                    row.leased,
+                    row.oldest_due_seconds,
+                    row.oldest_age_seconds,
+                )
+            });
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "pending")
+            .set(pending as f64);
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "due")
+            .set(due as f64);
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "leased")
+            .set(leased as f64);
+        metrics::gauge!(QUEUE_KIND_OLDEST_DUE, "lane" => lane, "kind" => name).set(oldest_due);
+        metrics::gauge!(QUEUE_KIND_OLDEST_AGE, "lane" => lane, "kind" => name).set(oldest_age);
+    }
 }
 
 #[cfg(test)]
