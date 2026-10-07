@@ -9,6 +9,7 @@ use super::payload;
 
 const MAX_IMPRESSIONS: usize = 2_048;
 const MAX_FEATURES: usize = 512;
+const IMPRESSION_WAIT_MINUTES: i64 = 10;
 
 pub struct TelemetryHandler {
     impressions: PgPool,
@@ -110,11 +111,18 @@ impl TelemetryHandler {
         .fetch_one(&self.hard_negatives)
         .await
         .map_err(JobError::retryable)?;
-        if !result.recorded {
+        if result.recorded {
+            return Ok(());
+        }
+        if impression_may_still_arrive(detected_at, Utc::now()) {
             return Err(JobError::retryable(anyhow::anyhow!(
                 "matching recommendation impression is not available yet"
             )));
         }
+        tracing::debug!(
+            event_id = %event.event_id,
+            "skip without a prior recommendation impression is not a hard negative"
+        );
         Ok(())
     }
 }
@@ -151,6 +159,10 @@ fn validate_hard_negative(event: &HardNegative) -> JobResult {
         return invalid("hard negative payload is invalid");
     }
     Ok(())
+}
+
+fn impression_may_still_arrive(detected_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now - detected_at < chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES)
 }
 
 fn timestamp(milliseconds: i64) -> JobResult<DateTime<Utc>> {
@@ -269,5 +281,42 @@ mod tests {
         .await?;
         assert_eq!(score, Some(0.4));
         Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_skip_never_recommended_finishes_quietly_after_the_wait(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        let handler = TelemetryHandler::new(pool.clone(), pool.clone());
+        let detected_at = Utc::now() - chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES + 1);
+        let job = hard_negative_job(HardNegative {
+            event_id: Uuid::now_v7(),
+            user_id: "user".to_owned(),
+            track_id: "track".to_owned(),
+            position_pct: 0.1,
+            created_at_unix_ms: detected_at.timestamp_millis(),
+        });
+
+        handler.record_hard_negative(&job).await?;
+
+        let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM rec_hard_negatives")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(recorded, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn the_impression_wait_is_minutes_not_hours() {
+        let detected_at = Utc::now();
+        assert!(impression_may_still_arrive(
+            detected_at,
+            detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES - 1)
+        ));
+        assert!(!impression_may_still_arrive(
+            detected_at,
+            detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES)
+        ));
     }
 }
