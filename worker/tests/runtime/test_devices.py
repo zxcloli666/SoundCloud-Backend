@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from worker.runtime import allocator, devices
+from worker.runtime.engine_client import Launch
 from worker.runtime.engine_main import Options, parse
 
 TORCH_SCRIPT = """
@@ -44,10 +45,16 @@ def test_out_of_memory_detection(error: BaseException, expected: bool) -> None:
 
 
 def test_engine_argv_round_trips() -> None:
-    argv = ["--fd", "7", "--owner", "42", "--onednn", "off", "--threads", "3"]
+    argv = ["--fd", "7", "--owner", "42", "--onednn", "off", "--threads", "3", "--nice", "10"]
     options = parse([*argv, "--release-after-call", "on"])
     assert options == Options(
-        fd=7, owner=42, onednn=False, threads=3, release_after_call=True, oom_score_adj=900
+        fd=7,
+        owner=42,
+        onednn=False,
+        threads=3,
+        nice=10,
+        release_after_call=True,
+        oom_score_adj=900,
     )
 
 
@@ -58,3 +65,9 @@ def test_configure_disables_onednn_and_sets_threads_in_a_fresh_process() -> None
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["False", "2", "cpu"]
+
+
+def test_launch_hands_threads_and_niceness_to_the_engine() -> None:
+    argv = Launch(threads=6, nice=10).argv(7)
+    options = parse(argv[argv.index("--fd") :])
+    assert (options.threads, options.nice) == (6, 10)

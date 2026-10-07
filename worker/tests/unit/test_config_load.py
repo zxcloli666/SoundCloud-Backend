@@ -155,6 +155,8 @@ def test_env_overrides_are_coerced_by_field_type(base_env: dict[str, str]) -> No
         ("WORKER__RUNTIME__IDLE_UNLOAD_S", "1.5", "expected an integer"),
         ("WORKER__SYNC__WINDOW_PAD_S", "wide", "expected a number"),
         ("WORKER__LANES__ENABLED", "audio, lyrics", "expected a TOML value"),
+        ("WORKER__RUNTIME__THREADS", "many", "expected a number"),
+        ("WORKER__RUNTIME__THREADS", "-1", "runtime.threads must be >= 0"),
     ],
 )
 def test_bad_env_values_are_start_errors(
@@ -162,6 +164,11 @@ def test_bad_env_values_are_start_errors(
 ) -> None:
     with pytest.raises(s.SettingsError, match=message):
         s.load(CONFIG_DIR, {**base_env, name: value})
+
+
+def test_runtime_threads_come_from_the_environment(base_env: dict[str, str]) -> None:
+    assert s.load(CONFIG_DIR, base_env).runtime.threads == 0
+    assert s.load(CONFIG_DIR, {**base_env, "WORKER__RUNTIME__THREADS": "6"}).runtime.threads == 6
 
 
 def test_unknown_key_is_a_start_error(base_env: dict[str, str], config_copy: Path) -> None:

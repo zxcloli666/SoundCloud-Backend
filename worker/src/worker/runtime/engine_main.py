@@ -37,6 +37,7 @@ class Options:
     owner: int
     onednn: bool
     threads: int
+    nice: int
     release_after_call: bool
     oom_score_adj: int
 
@@ -53,6 +54,7 @@ def main(argv: list[str]) -> int:
         log.error("engine_orphaned_at_start", owner=options.owner, parent=parent)
         return EXIT_ORPHANED
     set_oom_score_adj(options.oom_score_adj, log)
+    set_nice(options.nice, log)
     set_parent_death_signal(log)
     conn = Connection(options.fd)
     specs = conn.recv()
@@ -66,6 +68,7 @@ def parse(argv: list[str]) -> Options:
     parser.add_argument("--owner", type=int, required=True)
     parser.add_argument("--onednn", choices=("on", "off"), default="on")
     parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--nice", type=int, default=0)
     parser.add_argument("--release-after-call", choices=("on", "off"), default="on")
     parser.add_argument("--oom-score-adj", type=int, default=900)
     parsed = parser.parse_args(argv)
@@ -74,6 +77,7 @@ def parse(argv: list[str]) -> Options:
         owner=parsed.owner,
         onednn=parsed.onednn == "on",
         threads=parsed.threads,
+        nice=parsed.nice,
         release_after_call=parsed.release_after_call == "on",
         oom_score_adj=parsed.oom_score_adj,
     )
@@ -85,6 +89,15 @@ def set_oom_score_adj(value: int, log: JsonLog) -> None:
             handle.write(str(value))
     except OSError as error:
         log.warning("engine_oom_score_adj_failed", value=value, error=str(error))
+
+
+def set_nice(value: int, log: JsonLog) -> None:
+    if value <= 0:
+        return
+    try:
+        os.nice(value)
+    except OSError as error:
+        log.warning("engine_nice_failed", value=value, error=str(error))
 
 
 def set_parent_death_signal(log: JsonLog) -> None:
@@ -122,6 +135,7 @@ class Engine:
         self._options = options
         self._log = log
         self._torch_configured = False
+        self._threads = options.threads
 
     def serve(self, conn: Connection) -> int:
         while True:
@@ -218,6 +232,12 @@ class Engine:
         if self._torch_configured:
             allocator.release()
 
+    def _apply_threads(self, threads: int) -> None:
+        if threads < 1 or threads == self._threads or not self._torch_configured:
+            return
+        devices.set_threads(threads)
+        self._threads = threads
+
     def _execute(self, call: Call) -> Reply:
         started = time.perf_counter()
         slot = self._slots.get(call.slot)
@@ -227,6 +247,7 @@ class Engine:
             )
         model = self._load(call.slot).model
         assert model is not None
+        self._apply_threads(call.threads)
         oom = False
         try:
             arrays = shm.read_all(call.arrays)

@@ -79,6 +79,7 @@ class Launch:
     python: str = sys.executable
     onednn: bool = True
     threads: int = 0
+    nice: int = 0
     release_after_call: bool = True
     oom_score_adj: int = 900
     env: Mapping[str, str] = field(default_factory=dict)
@@ -96,6 +97,8 @@ class Launch:
             flag(self.onednn),
             "--threads",
             str(self.threads),
+            "--nice",
+            str(self.nice),
             "--release-after-call",
             flag(self.release_after_call),
             "--oom-score-adj",
@@ -141,6 +144,7 @@ class EngineClient:
         self._states = {spec.name: SlotState(spec.name, False, 0, 0, 0) for spec in self.specs}
         self._last_call_at = {spec.name: clock.now() for spec in self.specs}
         self._calls = 0
+        self.call_threads = 0
 
     @property
     def pid(self) -> int:
@@ -222,6 +226,8 @@ class EngineClient:
         self._ensure_running()
         if call.deadline_at <= self._clock.now():
             raise DeadlineExceeded(f"{call.slot} call")
+        if self.call_threads:
+            call = replace(call, threads=self.call_threads)
         future = self._register(call.id)
         self._call_slots[call.id] = call.slot
         self._last_call_at[call.slot] = self._clock.now()

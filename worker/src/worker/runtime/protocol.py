@@ -57,6 +57,7 @@ class Call:
     deadline_at: float
     arrays: Mapping[str, ArrayRef] = field(default_factory=dict)
     args: Mapping[str, object] = field(default_factory=dict)
+    threads: int = 0
 
 
 @dataclass(frozen=True)

@@ -6,8 +6,34 @@ mode = "lane"
 device = "cpu"
 idle_unload_s = 0
 onednn = false
+allow_slow_lanes = true
+isolate_encode = true
 
 [lanes]
-enabled = ["lyrics", "encode", "collab", "ai"]
-capacity = { audio = 1, lyrics = 1, transcribe = 1, encode = 1, collab = 1, ai = 16 }
-required = { audio = false, lyrics = true, transcribe = false, encode = true, collab = true, ai = true }
+enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
+capacity = { audio = 4, lyrics = 8, transcribe = 2, encode = 16, collab = 1, taste = 1, ai = 16 }
+required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true }
+
+[slots.muq]
+max_batch = 3
+
+[slots.mulan]
+max_batch = 3
+
+[slots.text]
+max_batch = 512
+max_wait_ms = 20
+
+[slots.sep]
+replicas = 1
+max_batch = 1
+
+[slots.asr]
+replicas = 1
+max_batch = 4
+
+[slots.align]
+replicas = 1
+
+[slots.mms]
+replicas = 1

@@ -59,9 +59,11 @@ class EngineSlots:
         batchers: Mapping[str, Batcher],
         max_batch: Mapping[str, int],
         before_queue: Callable[[], None],
+        priority_batchers: Mapping[str, Batcher] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._batchers = batchers
+        self._priority_batchers = priority_batchers or {}
         self._max_batch = max_batch
         self._before_queue = before_queue
         self._orphans: set[asyncio.Task[Result]] = set()
@@ -81,7 +83,7 @@ class EngineSlots:
         costs: Sequence[int] | None = None,
         priority: bool = False,
     ) -> Result:
-        batcher = self._batchers.get(slot)
+        batcher = (priority and self._priority_batchers.get(slot)) or self._batchers.get(slot)
         if batcher is None:
             raise EngineUnavailable(slot, "unknown")
         self._before_queue()
