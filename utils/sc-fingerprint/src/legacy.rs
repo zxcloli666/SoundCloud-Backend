@@ -97,9 +97,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_families_keep_the_upstream_priority() {
-        assert_eq!(headers_priority("safari_26", None), None);
-        assert_eq!(headers_priority("okhttp_4.12", None), None);
+    fn every_advertised_profile_gets_a_headers_priority() {
+        for profile in crate::supported_profiles() {
+            assert!(priority_of(profile).is_some(), "{profile}");
+        }
     }
 
     #[test]

@@ -23,6 +23,53 @@ pub enum Error {
     },
 }
 
+const NAMES: &[&str] = &[
+    "chrome_100",
+    "chrome_101",
+    "chrome_104",
+    "chrome_105",
+    "chrome_106",
+    "chrome_107",
+    "chrome_108",
+    "chrome_109",
+    "chrome_110",
+    "chrome_114",
+    "chrome_116",
+    "chrome_117",
+    "chrome_118",
+    "chrome_119",
+    "chrome_120",
+    "chrome_123",
+    "chrome_124",
+    "chrome_126",
+    "chrome_127",
+    "chrome_128",
+    "chrome_129",
+    "chrome_130",
+    "chrome_131",
+    "chrome_132",
+    "chrome_133",
+    "chrome_134",
+    "chrome_135",
+    "chrome_136",
+    "chrome_137",
+    "edge_101",
+    "edge_122",
+    "edge_127",
+    "edge_131",
+    "edge_134",
+    "firefox_109",
+    "firefox_117",
+    "firefox_128",
+    "firefox_133",
+    "firefox_135",
+    "firefox_136",
+    "firefox_139",
+    "safari_16",
+    "safari_18",
+    "okhttp_5",
+];
+
 static CLIENTS: Lazy<DashMap<String, Arc<wreq::Client>>> = Lazy::new(DashMap::new);
 
 pub fn default_profile() -> String {
@@ -37,56 +84,13 @@ pub fn is_supported(profile: &str) -> bool {
 }
 
 pub fn supported_profiles() -> Vec<&'static str> {
-    const NAMES: &[&str] = &[
-        "chrome_100",
-        "chrome_101",
-        "chrome_104",
-        "chrome_105",
-        "chrome_106",
-        "chrome_107",
-        "chrome_108",
-        "chrome_109",
-        "chrome_110",
-        "chrome_114",
-        "chrome_116",
-        "chrome_117",
-        "chrome_118",
-        "chrome_119",
-        "chrome_120",
-        "chrome_123",
-        "chrome_124",
-        "chrome_126",
-        "chrome_127",
-        "chrome_128",
-        "chrome_129",
-        "chrome_130",
-        "chrome_131",
-        "chrome_132",
-        "chrome_133",
-        "chrome_134",
-        "chrome_135",
-        "chrome_136",
-        "chrome_137",
-        "edge_101",
-        "edge_122",
-        "edge_127",
-        "edge_131",
-        "edge_134",
-        "firefox_109",
-        "firefox_117",
-        "firefox_128",
-        "firefox_133",
-        "firefox_135",
-        "firefox_136",
-        "firefox_139",
-        "safari_16",
-        "safari_18",
-        "okhttp_5",
-    ];
     NAMES.iter().copied().filter(|n| is_supported(n)).collect()
 }
 
 fn parse(profile: &str) -> Option<Profile> {
+    if !NAMES.contains(&profile) {
+        return None;
+    }
     serde_json::from_value(serde_json::Value::String(profile.to_string())).ok()
 }
 
@@ -187,6 +191,19 @@ mod tests {
         assert!(names.len() > 30);
         for name in names {
             assert!(parse(name).is_some(), "профиль {name} не разбирается");
+        }
+    }
+
+    #[test]
+    fn names_outside_the_advertised_list_fall_back() {
+        for name in [
+            "safari_17.0",
+            "safari_ios_18.1.1",
+            "okhttp_4.12",
+            "okhttp_3.9",
+        ] {
+            assert!(!is_supported(name), "{name}");
+            assert_eq!(emulation(Some(name)).0, DEFAULT_PROFILE, "{name}");
         }
     }
 }
