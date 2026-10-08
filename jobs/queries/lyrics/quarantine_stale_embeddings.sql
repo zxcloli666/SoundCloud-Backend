@@ -45,10 +45,7 @@ WITH candidates AS MATERIALIZED (
               locked_wire.current
 ), released AS (
     UPDATE lyrics_cache AS lyrics
-    SET embedding_state = CASE
-            WHEN quarantined.current THEN 'quarantined'
-            ELSE NULL
-        END
+    SET embedding_state = NULL
     FROM quarantined
     WHERE lyrics.sc_track_id = quarantined.sc_track_id
       AND lyrics.embedding_state IN ('pending', 'dispatched')

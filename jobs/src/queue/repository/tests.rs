@@ -15,6 +15,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -287,6 +292,51 @@ async fn enqueue_is_idempotent_by_command_id_and_coalesces_by_key(
     );
     assert_eq!(accepted, 2);
     assert_eq!(live, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_job_queued_in_a_stale_lane_moves_to_its_kind_lane_on_the_next_enqueue(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    for kind in [JobKind::CollabTrain, JobKind::DiscoverAggregates] {
+        sqlx::query(
+            "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+             VALUES (gen_random_uuid(), $1, 'core_bulk', 'stale', '{}'::jsonb)",
+        )
+        .bind(kind.as_str())
+        .execute(&pool)
+        .await?;
+    }
+
+    repository
+        .enqueue(&new_job(
+            JobKind::CollabTrain,
+            Some("stale"),
+            0,
+            4,
+            Utc::now(),
+        ))
+        .await?;
+    repository
+        .enqueue_if_absent(&new_job(
+            JobKind::DiscoverAggregates,
+            Some("stale"),
+            0,
+            4,
+            Utc::now(),
+        ))
+        .await?;
+
+    let lanes: Vec<String> = sqlx::query_scalar("SELECT lane FROM background_jobs ORDER BY kind")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(
+        lanes,
+        vec!["maintenance".to_owned(), "maintenance".to_owned()]
+    );
     Ok(())
 }
 

@@ -20,7 +20,13 @@ WITH newest AS MATERIALIZED (
       AND NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
       AND NULLIF(btrim(lyrics.synced_lrc), '') IS NULL
       AND (
-          (wire.status = 'reopenable' AND wire.reopen_count < $2::integer)
+          (
+              wire.status = 'reopenable'
+              AND (
+                  wire.reopen_count < $2::integer
+                  OR wire.reason = 'result_timeout'
+              )
+          )
           OR (
               wire.status = 'rejected'
               AND (
@@ -41,7 +47,12 @@ WITH newest AS MATERIALIZED (
     SET status = 'pending',
         attempt = wire.attempt + 1,
         reopen_count = wire.reopen_count
-            + CASE WHEN wire.status = 'reopenable' THEN 1 ELSE 0 END,
+            + CASE
+                WHEN wire.status = 'reopenable'
+                     AND wire.reason IS DISTINCT FROM 'result_timeout'
+                    THEN 1
+                ELSE 0
+            END,
         reopened_for_sync_version = CASE
             WHEN wire.status = 'rejected' THEN (SELECT sync_version FROM newest)
             ELSE wire.reopened_for_sync_version

@@ -16,24 +16,16 @@ WITH candidates AS MATERIALIZED (
       ON candidates.sc_track_id = wire.sc_track_id
     WHERE wire.status = 'pending'
     FOR UPDATE OF wire
-), quarantined AS (
+), released AS (
     UPDATE transcription_wire_state AS wire
-    SET status = 'quarantined',
+    SET status = 'reopenable',
+        reason = 'result_timeout',
+        quarantine_reason = NULL,
         completed_at = now(),
-        quarantine_reason = 'result_timeout',
         updated_at = now()
     FROM locked_wire
     WHERE wire.sc_track_id = locked_wire.sc_track_id
     RETURNING wire.sc_track_id
-), updated AS (
-    UPDATE tracks AS track
-    SET transcribe_state = 'quarantined',
-        transcribe_at = now(),
-        updated_at = now()
-    FROM quarantined
-    WHERE track.sc_track_id = quarantined.sc_track_id
-      AND track.transcribe_state = 'pending'
-    RETURNING track.sc_track_id
 )
-SELECT count(*)::bigint AS "quarantined!"
-FROM updated
+SELECT count(*)::bigint AS "released!"
+FROM released

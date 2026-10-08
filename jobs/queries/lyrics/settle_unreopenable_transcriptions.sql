@@ -1,7 +1,9 @@
 WITH candidates AS MATERIALIZED (
     SELECT wire.sc_track_id,
            CASE
-               WHEN wire.reopen_count >= $2::integer THEN 'reopen_attempts_exhausted'
+               WHEN wire.reopen_count >= $2::integer
+                    AND wire.reason IS DISTINCT FROM 'result_timeout'
+                   THEN 'reopen_attempts_exhausted'
                ELSE 'reopen_superseded'
            END AS quarantine_reason
     FROM transcription_wire_state AS wire
@@ -14,7 +16,10 @@ WITH candidates AS MATERIALIZED (
     WHERE wire.status = 'reopenable'
       AND wire.completed_at < now() - $1::bigint * interval '1 second'
       AND (
-          wire.reopen_count >= $2::integer
+          (
+              wire.reopen_count >= $2::integer
+              AND wire.reason IS DISTINCT FROM 'result_timeout'
+          )
           OR track.sc_track_id IS NULL
           OR event.uploaded_generation IS DISTINCT FROM wire.upload_generation
           OR track.storage_state <> 'ok'

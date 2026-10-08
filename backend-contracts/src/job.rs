@@ -7,14 +7,18 @@ use serde::{Deserialize, Serialize};
 pub enum JobLane {
     CoreFast,
     CoreBulk,
+    Maintenance,
     Ops,
 }
 
 impl JobLane {
+    pub const ALL: [Self; 4] = [Self::CoreFast, Self::CoreBulk, Self::Maintenance, Self::Ops];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CoreFast => "core_fast",
             Self::CoreBulk => "core_bulk",
+            Self::Maintenance => "maintenance",
             Self::Ops => "ops",
         }
     }
@@ -227,35 +231,27 @@ impl JobKind {
             | Self::CleanupJobReceipts
             | Self::DispatchAudioIndex
             | Self::DispatchTranscription
+            | Self::LyricsEmbed
             | Self::OAuthAppsRefresh
             | Self::SyncQueueFlush
             | Self::SyncQueueHeal => JobLane::CoreFast,
             Self::RecordHardNegative | Self::SearchTermsRefresh => JobLane::Ops,
-            Self::AdminCatalogRenormalize
-            | Self::AdminMusicBrainzNames
-            | Self::ArtistAttributionRevalidate
+            Self::ArtistAttributionRevalidate
             | Self::CatalogCreditReview
-            | Self::CatalogRefresh
-            | Self::CatalogCollection
             | Self::CatalogWorkReconcile
             | Self::CollabBootstrap
             | Self::CollabTrain
-            | Self::CrawlArtist
             | Self::DiscoverAccounts
             | Self::DiscoverAggregates
             | Self::DiscoverCatalogGenius
             | Self::DiscoverCatalogMusicBrainz
             | Self::DiscoverInterest
             | Self::EnrichTracks
-            | Self::IndexTrack
             | Self::IndexingReap
-            | Self::LyricsEmbed
-            | Self::LyricsLookup
             | Self::LyricsLookupSweep
             | Self::LyricsReapEmbeddings
             | Self::LyricsReapTranscriptions
             | Self::PlaylistLegacyDrain
-            | Self::PlaylistObserveShadow
             | Self::PlaylistReconcileSweep
             | Self::RecommendationColike
             | Self::RecommendationQualityBackfill
@@ -263,7 +259,15 @@ impl JobKind {
             | Self::RecommendationWavePriority
             | Self::ResolveDurations
             | Self::ResolveWantedTracks
-            | Self::SubscriptionsSnapshot => JobLane::CoreBulk,
+            | Self::SubscriptionsSnapshot => JobLane::Maintenance,
+            Self::AdminCatalogRenormalize
+            | Self::AdminMusicBrainzNames
+            | Self::CatalogRefresh
+            | Self::CatalogCollection
+            | Self::CrawlArtist
+            | Self::IndexTrack
+            | Self::LyricsLookup
+            | Self::PlaylistObserveShadow => JobLane::CoreBulk,
         }
     }
 }
@@ -418,8 +422,13 @@ mod tests {
         assert_eq!(JobKind::AuthCleanupLoginRequests.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DispatchAudioIndex.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DispatchTranscription.lane(), JobLane::CoreFast);
-        assert_eq!(JobKind::LyricsEmbed.lane(), JobLane::CoreBulk);
-        assert_eq!(JobKind::DiscoverAggregates.lane(), JobLane::CoreBulk);
+        assert_eq!(JobKind::LyricsEmbed.lane(), JobLane::CoreFast);
+        assert_eq!(JobKind::DiscoverAggregates.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::IndexingReap.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);
+        assert_eq!(JobKind::IndexTrack.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::PlaylistObserveShadow.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::RecordHardNegative.lane(), JobLane::Ops);
         assert_eq!(JobKind::SearchTermsRefresh.lane(), JobLane::Ops);

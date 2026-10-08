@@ -37,6 +37,7 @@ mod sync_queue;
 pub(crate) mod taste;
 mod telemetry;
 mod wanted;
+mod worker_backlog;
 
 use std::sync::Arc;
 
@@ -85,6 +86,7 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::CleanupJobReceipts,
     JobKind::DispatchAudioIndex,
     JobKind::DispatchTranscription,
+    JobKind::LyricsEmbed,
     JobKind::OAuthAppsRefresh,
     JobKind::SyncQueueFlush,
     JobKind::SyncQueueHeal,
@@ -93,29 +95,31 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
 pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
     JobKind::AdminMusicBrainzNames,
-    JobKind::ArtistAttributionRevalidate,
-    JobKind::CatalogCreditReview,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
+    JobKind::CrawlArtist,
+    JobKind::IndexTrack,
+    JobKind::LyricsLookup,
+    JobKind::PlaylistObserveShadow,
+];
+
+pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
+    JobKind::ArtistAttributionRevalidate,
+    JobKind::CatalogCreditReview,
     JobKind::CatalogWorkReconcile,
     JobKind::CollabBootstrap,
     JobKind::CollabTrain,
-    JobKind::CrawlArtist,
     JobKind::DiscoverAccounts,
     JobKind::DiscoverAggregates,
     JobKind::DiscoverCatalogGenius,
     JobKind::DiscoverCatalogMusicBrainz,
     JobKind::DiscoverInterest,
     JobKind::EnrichTracks,
-    JobKind::IndexTrack,
     JobKind::IndexingReap,
-    JobKind::LyricsEmbed,
-    JobKind::LyricsLookup,
     JobKind::LyricsLookupSweep,
     JobKind::LyricsReapEmbeddings,
     JobKind::LyricsReapTranscriptions,
     JobKind::PlaylistLegacyDrain,
-    JobKind::PlaylistObserveShadow,
     JobKind::PlaylistReconcileSweep,
     JobKind::RecommendationColike,
     JobKind::RecommendationQualityBackfill,
@@ -212,7 +216,7 @@ impl JobHandlers {
         ));
         Ok(Self {
             account_walk: AccountWalkHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 reader.clone(),
                 config.account_walk.clone(),
             ),
@@ -221,9 +225,9 @@ impl JobHandlers {
                 sources.musicbrainz.clone(),
                 config.admin_maintenance,
             ),
-            attribution: AttributionHandler::new(databases.main.bulk.clone()),
-            catalog: CatalogWorkHandler::new(databases.main.bulk.clone()),
-            catalog_credits: CatalogCreditHandler::new(databases.main.bulk.clone()),
+            attribution: AttributionHandler::new(databases.maintenance.clone()),
+            catalog: CatalogWorkHandler::new(databases.maintenance.clone()),
+            catalog_credits: CatalogCreditHandler::new(databases.maintenance.clone()),
             catalog_collection: catalog_collection::CatalogCollectionHandler::new(
                 databases.main.bulk.clone(),
                 reader.clone(),
@@ -235,7 +239,7 @@ impl JobHandlers {
                 config,
             )?,
             collab: CollabHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 bus.clone(),
                 qdrant.clone(),
                 config.collab.clone(),
@@ -249,16 +253,16 @@ impl JobHandlers {
                 config.crawl.clone(),
             ),
             discover: DiscoverHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.subscriptions_always_premium,
                 config.schedules.discover_interest_enabled,
                 config.schedules.discover_interest_shards,
                 config.schedules.discover_artist_plays_shards,
             ),
             enrich: EnrichHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 enrich::build_resolver_deps(
-                    databases.main.bulk.clone(),
+                    databases.maintenance.clone(),
                     bus.clone(),
                     &sources,
                     &config.enrich,
@@ -271,13 +275,12 @@ impl JobHandlers {
                 &config.indexing,
                 &config.durations,
                 &config.sync_queue.storage_url,
+                config.worker_dispatch.audio_backlog,
                 bus.clone(),
                 qdrant.clone(),
-            )?
-            .with_audio_dispatch(config.worker_dispatch.index_audio),
+            )?,
             lyrics: LyricsHandler::new(
-                databases.main.fast.clone(),
-                databases.main.bulk.clone(),
+                databases,
                 sources.lyrics.clone(),
                 config,
                 bus.clone(),
@@ -286,18 +289,18 @@ impl JobHandlers {
             maintenance: MaintenanceHandler::new(databases.main.fast.clone()),
             oauth_apps: OAuthAppsRefreshHandler::new(databases.main.fast.clone(), &config.oauth)?,
             playlist_legacy: PlaylistLegacyHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.playlist_reconcile,
             ),
             playlist_observe: PlaylistObserveHandler::new(config, databases.main.bulk.clone())?,
-            quality: QualityHandler::new(databases.main.bulk.clone(), qdrant),
+            quality: QualityHandler::new(databases.maintenance.clone(), qdrant),
             recommendations: RecommendationHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 config.schedules.recommendation_wave_priority_shards,
             ),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
             subscriptions: SubscriptionSnapshotHandler::new(
-                databases.main.bulk.clone(),
+                databases.maintenance.clone(),
                 &config.subscriptions,
             ),
             sync_queue: SyncQueueHandler::new(config, databases.main.fast.clone())?,
@@ -600,10 +603,15 @@ mod kind_tests {
     #[test]
     fn every_job_kind_belongs_to_exactly_one_lane() {
         for kind in JobKind::ALL {
-            let count = [CORE_FAST_KINDS, CORE_BULK_KINDS, OPS_KINDS]
-                .into_iter()
-                .filter(|kinds| kinds.contains(kind))
-                .count();
+            let count = [
+                CORE_FAST_KINDS,
+                CORE_BULK_KINDS,
+                MAINTENANCE_KINDS,
+                OPS_KINDS,
+            ]
+            .into_iter()
+            .filter(|kinds| kinds.contains(kind))
+            .count();
             assert_eq!(count, 1, "{} belongs to {count} executable lanes", kind);
             assert_eq!(kind.lane().as_str(), lane_of(*kind));
         }
@@ -614,6 +622,8 @@ mod kind_tests {
             "core_fast"
         } else if CORE_BULK_KINDS.contains(&kind) {
             "core_bulk"
+        } else if MAINTENANCE_KINDS.contains(&kind) {
+            "maintenance"
         } else {
             "ops"
         }

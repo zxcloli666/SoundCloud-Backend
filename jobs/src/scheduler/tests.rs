@@ -10,6 +10,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -85,19 +90,19 @@ fn discover_interest_preserves_previous_cadence() {
 }
 
 #[test]
-fn indexing_reap_preserves_previous_cadence() {
+fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
     let schedule = SCHEDULES
         .iter()
         .find(|schedule| schedule.kind == JobKind::IndexingReap)
         .expect("indexing reap schedule");
 
-    assert_eq!(schedule.interval_seconds, 5 * 60);
+    assert_eq!(schedule.interval_seconds, 60);
     assert_eq!(schedule.priority, 5);
     assert_eq!(schedule.max_attempts, 8);
 }
 
 #[test]
-fn lyrics_reapers_preserve_the_previous_cadence() {
+fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()
         .filter(|schedule| {
@@ -120,8 +125,8 @@ fn lyrics_reapers_preserve_the_previous_cadence() {
     assert_eq!(
         schedules,
         vec![
-            (JobKind::LyricsReapEmbeddings, 10 * 60, 5, 8, 10 * 60),
-            (JobKind::LyricsReapTranscriptions, 10 * 60, 5, 8, 10 * 60,),
+            (JobKind::LyricsReapEmbeddings, 60, 5, 8, 60),
+            (JobKind::LyricsReapTranscriptions, 2 * 60, 5, 8, 2 * 60),
         ]
     );
 }
@@ -345,6 +350,67 @@ async fn schedule_tick_preserves_pending_retry_state(pool: PgPool) -> anyhow::Re
         after,
         (state.0, 2, state.1, Some("temporary failure".to_owned()))
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_moves_idle_jobs_left_in_a_stale_lane(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES
+             (gen_random_uuid(), 'collab.train', 'core_bulk', 'schedule', '{}'::jsonb,
+              NULL, NULL, NULL, NULL),
+             (gen_random_uuid(), 'discover.aggregates', 'core_bulk', 'schedule', '{}'::jsonb,
+              gen_random_uuid(), 1, 'old-binary', now() + interval '1 minute'),
+             (gen_random_uuid(), 'external.kind', 'core_bulk', 'schedule', '{}'::jsonb,
+              NULL, NULL, NULL, NULL)",
+    )
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let lanes = sqlx::query_as::<_, (String, String)>(
+        "SELECT kind, lane FROM background_jobs ORDER BY kind",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        lanes,
+        vec![
+            ("collab.train".to_owned(), "maintenance".to_owned()),
+            ("discover.aggregates".to_owned(), "core_bulk".to_owned()),
+            ("external.kind".to_owned(), "core_bulk".to_owned()),
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_due_schedule_repairs_the_lane_of_its_idle_job(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let scheduler = Scheduler::new(pool.clone());
+    scheduler.register().await?;
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+         VALUES (gen_random_uuid(), 'indexing.reap', 'core_bulk', 'schedule', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("UPDATE background_schedules SET next_run_at = now() WHERE kind = 'indexing.reap'")
+        .execute(&pool)
+        .await?;
+
+    scheduler.enqueue_due().await?;
+
+    let lane: String =
+        sqlx::query_scalar("SELECT lane FROM background_jobs WHERE kind = 'indexing.reap'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(lane, "maintenance");
     Ok(())
 }
 

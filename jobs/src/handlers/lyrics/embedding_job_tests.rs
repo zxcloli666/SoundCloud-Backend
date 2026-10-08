@@ -2,7 +2,7 @@ use backend_contracts::pipeline::LyricsEmbeddingRequest;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use super::{Step, acknowledge, prepare, release};
+use super::{Step, acknowledge, prepare};
 
 async fn seed_lyrics(
     pool: &PgPool,
@@ -159,24 +159,29 @@ async fn reopening_a_request_replaces_it_and_counts_the_reopen(pool: PgPool) -> 
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
-async fn switched_off_dispatch_returns_only_queued_rows_to_the_reaper(
+async fn reopening_a_timed_out_request_does_not_count_the_reopen(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed_lyrics(&pool, Some("first line\nsecond line"), None).await?;
-    release(&pool, "42")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let released = cache_state(&pool).await?;
-    sqlx::query("UPDATE lyrics_cache SET embedding_state = 'queued' WHERE sc_track_id = '42'")
-        .execute(&pool)
-        .await?;
     published(&pool).await?;
+    sqlx::raw_sql(
+        "UPDATE lyrics_embedding_wire_state
+         SET status = 'quarantined', completed_at = now(),
+             quarantine_reason = 'result_timeout', reopen_count = 3
+         WHERE sc_track_id = '42';
+         UPDATE lyrics_cache SET embedding_state = 'queued' WHERE sc_track_id = '42';",
+    )
+    .execute(&pool)
+    .await?;
 
-    release(&pool, "42")
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let reopened = published(&pool).await?;
 
-    assert_eq!(released, None);
-    assert_eq!(cache_state(&pool).await?.as_deref(), Some("pending"));
+    let wire = sqlx::query_as::<_, (String, String, i32)>(
+        "SELECT status, request_message_id, reopen_count
+         FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(wire, ("pending".to_owned(), reopened.request_id.clone(), 3));
     Ok(())
 }

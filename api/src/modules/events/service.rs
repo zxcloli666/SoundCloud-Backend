@@ -22,7 +22,7 @@ const DISLIKE_WEIGHT: f64 = -1.0;
 
 const USER_LOCK_CAPACITY: u64 = 16_384;
 const USER_LOCK_TTL: Duration = Duration::from_secs(5 * 60);
-const HARD_NEGATIVE_MAX_ATTEMPTS: i16 = 300;
+const HARD_NEGATIVE_MAX_ATTEMPTS: i16 = 16;
 
 const POSITIVE_EVENTS: &[&str] = &["like", "playlist_add"];
 const COLLAB_TRIGGER_EVENTS: &[&str] = &["like", "playlist_add", "full_play", "skip"];
