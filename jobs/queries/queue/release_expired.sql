@@ -5,13 +5,13 @@ WITH expired AS (
       AND lease_id IS NOT NULL
       AND lease_expires_at <= now()
       AND kind = ANY($2::text[])
-      AND lane = $3
     ORDER BY lease_expires_at, created_at, id
     FOR UPDATE SKIP LOCKED
     LIMIT $1
 )
 UPDATE background_jobs AS job
-SET lease_id = NULL,
+SET lane = $3,
+    lease_id = NULL,
     lease_generation = NULL,
     leased_by = NULL,
     lease_expires_at = NULL,

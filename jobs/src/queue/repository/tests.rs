@@ -553,6 +553,79 @@ async fn expired_lease_is_released_before_reclaim(pool: PgPool) -> anyhow::Resul
 }
 
 #[sqlx::test(migrations = false)]
+async fn an_expired_lease_left_in_a_stale_lane_is_released_into_its_kind_lane(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, attempts, max_attempts,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES (
+             gen_random_uuid(), 'lyrics.embed', 'core_bulk', '42', '{}'::jsonb, 1, 8,
+             gen_random_uuid(), 1, 'jobs-old', now() - interval '1 second'
+         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    let claimed = repository
+        .claim(
+            &[JobKind::LyricsEmbed],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let lane: String = sqlx::query_scalar("SELECT lane FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(
+        claimed.iter().map(|job| job.attempts).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(lane, "core_fast");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_live_lease_in_a_stale_lane_is_left_to_its_holder(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, attempts, max_attempts,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES (
+             gen_random_uuid(), 'lyrics.embed', 'core_bulk', '42', '{}'::jsonb, 1, 8,
+             gen_random_uuid(), 1, 'jobs-old', now() + interval '1 minute'
+         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    let claimed = repository
+        .claim(
+            &[JobKind::LyricsEmbed],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let (lane, leased_by): (String, Option<String>) =
+        sqlx::query_as("SELECT lane, leased_by FROM background_jobs")
+            .fetch_one(&pool)
+            .await?;
+
+    assert!(claimed.is_empty());
+    assert_eq!(lane, "core_bulk");
+    assert_eq!(leased_by.as_deref(), Some("jobs-old"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn exhausted_recovery_is_bounded_and_skips_locked_jobs(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
