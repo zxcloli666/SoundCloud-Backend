@@ -36,7 +36,7 @@ from worker.domain.outcome import (
     Reason,
     TransientFailure,
 )
-from worker.domain.ports import Engines, EngineUnavailable, Float32Array
+from worker.domain.ports import Engines, EngineUnavailable, Float32Array, SeparationExpired
 from worker.domain.workspace import Workspace
 from worker.observability.counters import Counters
 from worker.settings import AudioSection, SyncSection
@@ -250,19 +250,19 @@ class TranscribeLane:
                 extra={"audio_s": round(audio_s, 1), "budget_s": round(budget.remaining(), 1)},
             )
             return mix, False
-        started = deadline.now()
-        budget_s = budget.remaining()
         try:
-            vocals = await self._engines.separate(mix, deadline, budget=budget)
+            separation = await self._engines.separate(mix, deadline, budget=budget)
         except (EngineUnavailable, PermanentFailure, TransientFailure) as error:
             if isinstance(error, TransientFailure) and error.reason is Reason.DEADLINE_EXCEEDED:
                 if deadline.expired():
                     raise
-                pace.missed(audio_s, budget_s)
+                if isinstance(error, SeparationExpired) and error.chunks > 0:
+                    pace.missed(audio_s, error.budget_s)
             self._counters.inc("separation_fallback_total")
             log.warning("separation failed, aligning on the mix", extra={"error": repr(error)})
             return mix, False
-        pace.observe(audio_s, deadline.now() - started)
+        pace.observe(audio_s, separation.seconds)
+        vocals = separation.vocals
         if vocals.shape != mix.shape or not np.all(np.isfinite(vocals)):
             self._counters.inc("separation_fallback_total")
             log.warning(

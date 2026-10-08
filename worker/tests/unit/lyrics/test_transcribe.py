@@ -17,7 +17,15 @@ from worker.domain.lyrics import anchors, rescue, transcribe
 from worker.domain.lyrics.draft import RegionDraft
 from worker.domain.lyrics.regions import Region
 from worker.domain.outcome import LeaseDropped, Reason, Status, TransientFailure
-from worker.domain.ports import Alignment, Draft, EngineUnavailable, LanguageGuess, TokenSpan
+from worker.domain.ports import (
+    Alignment,
+    Draft,
+    EngineUnavailable,
+    LanguageGuess,
+    Separation,
+    SeparationExpired,
+    TokenSpan,
+)
 
 TEXT = "[Verse 1]\n" + "\n".join(RUSSIAN_LINES[:2]) + "\n(Chorus)\n" + "\n".join(RUSSIAN_LINES[2:])
 UKRAINIAN = "\n".join(
@@ -246,8 +254,9 @@ async def test_separation_too_slow_for_its_budget_is_skipped_next_time(
     clock = FakeClock()
 
     def stopped_at_budget(**kwargs: object) -> object:
-        clock.advance(float(str(kwargs["budget_s"])))
-        raise TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep stopped")
+        budget_s = float(str(kwargs["budget_s"]))
+        clock.advance(budget_s)
+        raise SeparationExpired("slot=sep stopped", chunks=3, budget_s=budget_s)
 
     harness.engines.overrides["separate"] = stopped_at_budget
     first = await harness.lane.process(harness.request(TEXT), Deadline.after(120, clock.now))
@@ -257,6 +266,46 @@ async def test_separation_too_slow_for_its_budget_is_skipped_next_time(
     assert [name for name, _ in harness.engines.calls].count("separate") == 1
     assert harness.counters.value("separation_skipped_total") == 1
     assert harness.counters.value("separation_fallback_total") == 1
+
+
+async def test_separation_that_never_started_does_not_teach_the_pace(
+    harness: LaneHarness,
+) -> None:
+    clock = FakeClock()
+
+    def waited_out_the_budget(**kwargs: object) -> object:
+        budget_s = float(str(kwargs["budget_s"]))
+        clock.advance(budget_s)
+        raise SeparationExpired("slot=sep after 0 of 9 chunks", chunks=0, budget_s=0.0)
+
+    harness.engines.overrides["separate"] = waited_out_the_budget
+    first = await harness.lane.process(harness.request(TEXT), Deadline.after(120, clock.now))
+    second = await harness.lane.process(harness.request(TEXT), Deadline.after(100, clock.now))
+
+    assert first.status is Status.OK and second.status is Status.OK, second.detail
+    assert [name for name, _ in harness.engines.calls].count("separate") == 2
+    assert harness.counters.value("separation_skipped_total") == 0
+
+
+async def test_separation_pace_counts_engine_time_and_not_the_wait_for_the_engine(
+    harness: LaneHarness,
+) -> None:
+    clock = FakeClock()
+    waits = [50.0, 0.0]
+
+    def queued_then_fast(**kwargs: object) -> object:
+        mix = kwargs["mix"]
+        assert isinstance(mix, np.ndarray)
+        clock.advance(waits.pop(0))
+        return Separation(mix, 0.5)
+
+    harness.engines.overrides["separate"] = queued_then_fast
+    first = await harness.lane.process(harness.request(TEXT), Deadline.after(120, clock.now))
+    second = await harness.lane.process(harness.request(TEXT), Deadline.after(20, clock.now))
+
+    assert first.status is Status.OK and second.status is Status.OK, second.detail
+    assert [name for name, _ in harness.engines.calls].count("separate") == 2
+    assert harness.counters.value("separation_skipped_total") == 0
 
 
 async def test_words_are_withheld_when_too_many_collapse(harness: LaneHarness) -> None:

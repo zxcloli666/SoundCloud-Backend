@@ -16,6 +16,9 @@ CHANNELS = 2
 OVERLAP = 2
 WARMUP_S = 2.0
 STOP_AT = "stop_at"
+CHUNKS = "chunks"
+BUDGET_S = "budget_s"
+SECONDS = "seconds"
 
 
 class RoformerSeparator:
@@ -58,7 +61,9 @@ class RoformerSeparator:
         if stop_at is not None and (isinstance(stop_at, bool) or not isinstance(stop_at, float)):
             raise BadInput("stop_at must be a monotonic time in seconds")
         audio = torch.from_numpy(np.ascontiguousarray(mix, dtype=np.float32))
-        return {"vocals": self._demix(audio, stop_at)}, {}
+        began = time.monotonic()
+        vocals = self._demix(audio, stop_at)
+        return {"vocals": vocals}, {SECONDS: time.monotonic() - began}
 
     def unload(self) -> None:
         self._model = None
@@ -118,7 +123,8 @@ def check_pace(began: float, done: int, total: int, stop_at: float) -> None:
     if finish > stop_at:
         raise CallExpired(
             f"separation would end {finish - stop_at:.0f} s past its budget"
-            f" after {done} of {total} chunks"
+            f" after {done} of {total} chunks",
+            {CHUNKS: done, BUDGET_S: stop_at - began},
         )
 
 

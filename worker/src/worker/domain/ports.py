@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worker.domain.deadline import Deadline
+from worker.domain.outcome import Reason, TransientFailure
 
 Float32Array = NDArray[np.float32]
 Int16Array = NDArray[np.int16]
@@ -22,6 +23,19 @@ class EngineUnavailable(Exception):
         super().__init__(f"slot {slot} is {state}")
         self.slot = slot
         self.state = state
+
+
+class SeparationExpired(TransientFailure):
+    def __init__(self, detail: str, *, chunks: int, budget_s: float) -> None:
+        super().__init__(Reason.DEADLINE_EXCEEDED, detail)
+        self.chunks = chunks
+        self.budget_s = budget_s
+
+
+@dataclass(frozen=True)
+class Separation:
+    vocals: Float32Array
+    seconds: float
 
 
 @dataclass(frozen=True)
@@ -82,7 +96,7 @@ class Engines(Protocol):
 
     async def separate(
         self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
-    ) -> Float32Array: ...
+    ) -> Separation: ...
 
     async def vad(
         self,

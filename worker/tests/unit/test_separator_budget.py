@@ -4,8 +4,11 @@ import time
 
 import pytest
 
+from worker.domain.outcome import Reason, TransientFailure
+from worker.engines import separation_expired
 from worker.models.roformer import check_pace
-from worker.runtime.protocol import CallExpired
+from worker.runtime.engine_client import EngineError, EngineKilled
+from worker.runtime.protocol import CallExpired, ErrorKind
 
 
 def test_the_first_chunk_runs_while_the_budget_lasts() -> None:
@@ -24,3 +27,30 @@ def test_a_projected_finish_past_the_budget_stops_after_the_first_chunks() -> No
 def test_a_pace_that_fits_keeps_separating() -> None:
     now = time.monotonic()
     check_pace(now - 20.0, 10, 30, now + 100.0)
+
+
+def test_an_expiry_reports_its_progress_and_the_engine_budget() -> None:
+    now = time.monotonic()
+    with pytest.raises(CallExpired) as raised:
+        check_pace(now - 20.0, 2, 30, now + 100.0)
+    assert raised.value.details["chunks"] == 2
+    assert raised.value.details["budget_s"] == pytest.approx(120.0, abs=1.0)
+
+
+def test_an_expired_separation_call_keeps_its_progress_for_the_domain() -> None:
+    cause = EngineError(ErrorKind.EXPIRED, "after 0 of 9 chunks", {"chunks": 0, "budget_s": 0.0})
+    failure = TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep after 0 of 9 chunks")
+    failure.__cause__ = cause
+    expired = separation_expired(failure)
+    assert expired is not None
+    assert (expired.chunks, expired.budget_s, expired.reason) == (
+        0,
+        0.0,
+        Reason.DEADLINE_EXCEEDED,
+    )
+
+
+def test_a_killed_separation_call_is_not_an_expiry() -> None:
+    failure = TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep killed=deadline")
+    failure.__cause__ = EngineKilled("sep", "deadline")
+    assert separation_expired(failure) is None

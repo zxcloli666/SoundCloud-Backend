@@ -21,6 +21,8 @@ from worker.domain.ports import (
     Float32Array,
     Int16Array,
     LanguageGuess,
+    Separation,
+    SeparationExpired,
     Span,
     TextKind,
     TokenSpan,
@@ -44,6 +46,9 @@ from worker.runtime.supervisor import Supervisor
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
 STOP_AT = "stop_at"
+CHUNKS = "chunks"
+BUDGET_S = "budget_s"
+SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
 TEXT_BYTES_PER_TOKEN = 4
 
@@ -195,11 +200,21 @@ class RuntimeEngines:
 
     async def separate(
         self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
-    ) -> Float32Array:
-        arrays, _ = await self._slots.direct(
-            "sep", "separate", {"mix": mix_stereo_44k}, {STOP_AT: budget.at}, deadline
+    ) -> Separation:
+        try:
+            arrays, result = await self._slots.direct(
+                "sep", "separate", {"mix": mix_stereo_44k}, {STOP_AT: budget.at}, deadline
+            )
+        except TransientFailure as failure:
+            expired = separation_expired(failure)
+            if expired is None:
+                raise
+            raise expired from failure
+        seconds = result.get(SECONDS)
+        return Separation(
+            float32(arrays, "vocals", "sep"),
+            float(seconds) if isinstance(seconds, int | float) else 0.0,
         )
-        return float32(arrays, "vocals", "sep")
 
     async def vad(
         self,
@@ -426,6 +441,19 @@ class RuntimeEngines:
         if len(rows) != len(clips):
             raise invalid("asr", f"{len(rows)} drafts for {len(clips)} clips")
         return [draft(row) for row in rows]
+
+
+def separation_expired(failure: TransientFailure) -> SeparationExpired | None:
+    cause = failure.__cause__
+    if not isinstance(cause, EngineError) or cause.kind is not ErrorKind.EXPIRED:
+        return None
+    chunks = cause.details.get(CHUNKS)
+    budget_s = cause.details.get(BUDGET_S)
+    return SeparationExpired(
+        failure.detail or cause.message,
+        chunks=chunks if isinstance(chunks, int) else 0,
+        budget_s=float(budget_s) if isinstance(budget_s, int | float) else 0.0,
+    )
 
 
 @contextmanager
