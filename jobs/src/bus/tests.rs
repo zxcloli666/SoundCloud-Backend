@@ -608,6 +608,11 @@ async fn job_ingress_persists_in_the_canonical_queue(pool: PgPool) -> anyhow::Re
     ))
     .execute(&pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(&pool)
+    .await?;
     let config = NatsConfig {
         url: std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned()),
         job_ingress_concurrency: 1,
@@ -699,7 +704,7 @@ async fn job_ingress_persists_in_the_canonical_queue(pool: PgPool) -> anyhow::Re
 
     assert_eq!(
         row,
-        ("discover.aggregates".to_owned(), "core_bulk".to_owned())
+        ("discover.aggregates".to_owned(), "maintenance".to_owned())
     );
     cancellation.cancel();
     tokio::time::timeout(Duration::from_secs(5), task).await???;

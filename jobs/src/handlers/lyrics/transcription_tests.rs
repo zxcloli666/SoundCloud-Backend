@@ -38,6 +38,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              result_published_at timestamptz,
              attempt bigint NOT NULL DEFAULT 1,
              reopen_count integer NOT NULL DEFAULT 0,
+             result_timeouts integer NOT NULL DEFAULT 0,
              result_rank smallint,
              reason varchar(32),
              sync_version varchar(128),

@@ -22,10 +22,17 @@ WITH candidates AS MATERIALIZED (
         reason = 'result_timeout',
         quarantine_reason = NULL,
         completed_at = now(),
+        result_timeouts = wire.result_timeouts + 1,
         updated_at = now()
     FROM locked_wire
     WHERE wire.sc_track_id = locked_wire.sc_track_id
-    RETURNING wire.sc_track_id
+    RETURNING wire.sc_track_id,
+              wire.result_timeouts
 )
-SELECT count(*)::bigint AS "released!"
+SELECT count(*)::bigint AS "released!",
+       COALESCE(
+           array_agg(sc_track_id ORDER BY sc_track_id)
+               FILTER (WHERE result_timeouts >= $3::integer),
+           ARRAY[]::text[]
+       ) AS "repeated!"
 FROM released

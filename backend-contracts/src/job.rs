@@ -107,6 +107,7 @@ pub enum JobKind {
     EnrichTracks,
     IndexTrack,
     IndexingReap,
+    IndexingRequeueStuck,
     LyricsEmbed,
     LyricsLookup,
     LyricsLookupSweep,
@@ -125,6 +126,7 @@ pub enum JobKind {
     ResolveWantedTracks,
     SearchTermsRefresh,
     SubscriptionsSnapshot,
+    SweepHardNegatives,
     SyncQueueFlush,
     SyncQueueHeal,
 }
@@ -154,6 +156,7 @@ impl JobKind {
         Self::EnrichTracks,
         Self::IndexTrack,
         Self::IndexingReap,
+        Self::IndexingRequeueStuck,
         Self::LyricsEmbed,
         Self::LyricsLookup,
         Self::LyricsLookupSweep,
@@ -172,6 +175,7 @@ impl JobKind {
         Self::ResolveWantedTracks,
         Self::SearchTermsRefresh,
         Self::SubscriptionsSnapshot,
+        Self::SweepHardNegatives,
         Self::SyncQueueFlush,
         Self::SyncQueueHeal,
     ];
@@ -201,6 +205,7 @@ impl JobKind {
             Self::EnrichTracks => "enrich.tracks",
             Self::IndexTrack => "indexing.track",
             Self::IndexingReap => "indexing.reap",
+            Self::IndexingRequeueStuck => "indexing.requeue_stuck",
             Self::LyricsEmbed => "lyrics.embed",
             Self::LyricsLookup => "lyrics.lookup",
             Self::LyricsLookupSweep => "lyrics.lookup_sweep",
@@ -219,6 +224,7 @@ impl JobKind {
             Self::ResolveWantedTracks => "enrich.resolve_wanted",
             Self::SearchTermsRefresh => "search.refresh_terms",
             Self::SubscriptionsSnapshot => "subscriptions.snapshot",
+            Self::SweepHardNegatives => "telemetry.sweep_hard_negatives",
             Self::SyncQueueFlush => "sync_queue.flush",
             Self::SyncQueueHeal => "sync_queue.heal",
         }
@@ -235,7 +241,9 @@ impl JobKind {
             | Self::OAuthAppsRefresh
             | Self::SyncQueueFlush
             | Self::SyncQueueHeal => JobLane::CoreFast,
-            Self::RecordHardNegative | Self::SearchTermsRefresh => JobLane::Ops,
+            Self::RecordHardNegative | Self::SearchTermsRefresh | Self::SweepHardNegatives => {
+                JobLane::Ops
+            }
             Self::ArtistAttributionRevalidate
             | Self::CatalogCreditReview
             | Self::CatalogWorkReconcile
@@ -248,6 +256,7 @@ impl JobKind {
             | Self::DiscoverInterest
             | Self::EnrichTracks
             | Self::IndexingReap
+            | Self::IndexingRequeueStuck
             | Self::LyricsLookupSweep
             | Self::LyricsReapEmbeddings
             | Self::LyricsReapTranscriptions
@@ -306,6 +315,7 @@ impl FromStr for JobKind {
             "enrich.tracks" => Self::EnrichTracks,
             "indexing.track" => Self::IndexTrack,
             "indexing.reap" => Self::IndexingReap,
+            "indexing.requeue_stuck" => Self::IndexingRequeueStuck,
             "lyrics.embed" => Self::LyricsEmbed,
             "lyrics.lookup" => Self::LyricsLookup,
             "lyrics.lookup_sweep" => Self::LyricsLookupSweep,
@@ -324,6 +334,7 @@ impl FromStr for JobKind {
             "enrich.resolve_wanted" => Self::ResolveWantedTracks,
             "search.refresh_terms" => Self::SearchTermsRefresh,
             "subscriptions.snapshot" => Self::SubscriptionsSnapshot,
+            "telemetry.sweep_hard_negatives" => Self::SweepHardNegatives,
             "sync_queue.flush" => Self::SyncQueueFlush,
             "sync_queue.heal" => Self::SyncQueueHeal,
             _ => return Err(UnknownJobKind(value.to_owned())),
@@ -414,7 +425,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 43);
+        assert_eq!(kinds.len(), 45);
     }
 
     #[test]
@@ -425,6 +436,7 @@ mod tests {
         assert_eq!(JobKind::LyricsEmbed.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DiscoverAggregates.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::IndexingReap.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::IndexingRequeueStuck.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);
@@ -432,6 +444,7 @@ mod tests {
         assert_eq!(JobKind::PlaylistObserveShadow.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::RecordHardNegative.lane(), JobLane::Ops);
         assert_eq!(JobKind::SearchTermsRefresh.lane(), JobLane::Ops);
+        assert_eq!(JobKind::SweepHardNegatives.lane(), JobLane::Ops);
     }
 
     #[test]

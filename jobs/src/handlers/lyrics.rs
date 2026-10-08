@@ -60,11 +60,11 @@ impl LyricsHandler {
                 config.lyrics.clone(),
             ),
             sweep: LyricsLookupHandler::new(
-                databases.maintenance.clone(),
+                databases.main.bulk.clone(),
                 sources,
                 config.lyrics.clone(),
             ),
-            reaper: LyricsReaper::new(databases.maintenance.clone(), dispatch),
+            reaper: LyricsReaper::new(fast_pool.clone(), dispatch),
             backlog: WorkerBacklog::new(bus.clone()),
             dispatch,
             transcription_dispatcher: TranscriptionDispatcher::new(
@@ -77,8 +77,12 @@ impl LyricsHandler {
     }
 
     pub async fn dispatch_transcription(&self, payload: StoredAudioDispatchPayload) -> JobResult {
+        let room = self
+            .backlog
+            .room(&TRANSCRIBE_LANE, self.dispatch.transcribe_backlog)
+            .await;
         self.transcription_dispatcher
-            .dispatch_transcription(payload)
+            .dispatch_transcription(payload, room)
             .await
     }
 

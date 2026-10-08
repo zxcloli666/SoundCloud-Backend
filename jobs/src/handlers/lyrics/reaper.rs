@@ -2,7 +2,9 @@
 #[path = "reaper_tests.rs"]
 mod tests;
 
-use backend_contracts::worker_contract::{LYRICS_LANE, TRANSCRIBE_LANE, WorkerLaneSpec};
+use backend_contracts::worker_contract::{
+    LYRICS_LANE, TRANSCRIBE_LANE, WorkerLane, WorkerLaneSpec,
+};
 use backend_contracts::{JobKind, StoredAudioDispatchPayload, Versioned};
 use chrono::Utc;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -19,6 +21,7 @@ const TRANSCRIPTION_PRIORITY: i16 = 10;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 const MAX_TRANSCRIPTION_REOPENS: i32 = 7;
+const REPEATED_RESULT_TIMEOUTS: i32 = 3;
 
 pub struct LyricsReaper {
     pool: PgPool,
@@ -47,10 +50,11 @@ impl LyricsReaper {
         let retry_days = i64::try_from(self.dispatch.lyrics_align_rejected_retry_days)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("rejected retry days overflow")))?;
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let timed_out = sqlx::query_file_scalar!(
+        let timed_out = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_transcriptions.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            REPEATED_RESULT_TIMEOUTS
         )
         .fetch_one(&mut *transaction)
         .await
@@ -106,12 +110,11 @@ impl LyricsReaper {
         if enqueued > 0 || reopened > 0 {
             tracing::info!(enqueued, reopened, "lyrics transcription jobs enqueued");
         }
-        if timed_out > 0 {
-            tracing::warn!(
-                timed_out,
-                "transcription attempts timed out and wait for a reopen"
-            );
-        }
+        report_result_timeouts(
+            WorkerLane::Transcribe,
+            timed_out.released,
+            &timed_out.repeated,
+        );
         let quarantined = orphaned + unreopenable;
         if quarantined > 0 {
             tracing::warn!(quarantined, "transcription attempts quarantined");
@@ -123,10 +126,11 @@ impl LyricsReaper {
         let room = unclaimed_room(&self.pool, JobKind::LyricsEmbed.as_str(), room).await?;
         let result_window = result_window(&LYRICS_LANE)?;
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let stale = sqlx::query_file_scalar!(
+        let stale = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_embeddings.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            REPEATED_RESULT_TIMEOUTS
         )
         .fetch_one(&mut *transaction)
         .await
@@ -161,11 +165,35 @@ impl LyricsReaper {
         if enqueued > 0 {
             tracing::info!(enqueued, "lyrics embedding jobs enqueued");
         }
-        let quarantined = stale + orphaned_requests + orphaned_lyrics;
+        report_result_timeouts(WorkerLane::Lyrics, stale.timed_out, &stale.repeated);
+        let quarantined = stale.quarantined - stale.timed_out + orphaned_requests + orphaned_lyrics;
         if quarantined > 0 {
             tracing::warn!(quarantined, "stale lyrics embeddings quarantined");
         }
         Ok(())
+    }
+}
+
+fn report_result_timeouts(lane: WorkerLane, timed_out: i64, repeated: &[String]) {
+    crate::metrics::record_worker_result_timeouts(
+        lane,
+        u64::try_from(timed_out).unwrap_or(0),
+        u64::try_from(repeated.len()).unwrap_or(u64::MAX),
+    );
+    if timed_out > 0 {
+        tracing::warn!(
+            lane = lane.as_str(),
+            timed_out,
+            "worker attempts passed their result window and go back to dispatch"
+        );
+    }
+    if !repeated.is_empty() {
+        tracing::warn!(
+            lane = lane.as_str(),
+            tracks = ?repeated,
+            result_timeouts_at_least = REPEATED_RESULT_TIMEOUTS,
+            "worker attempts keep passing their result window; a task may stop the worker before it answers"
+        );
     }
 }
 

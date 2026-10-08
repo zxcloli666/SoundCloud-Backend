@@ -496,27 +496,32 @@ impl JobsConfig {
         [
             PoolCoverage {
                 pool_key: "PG_POOL_MAX",
-                lane_key: "JOBS_CORE_FAST",
+                lane_keys: "JOBS_CORE_FAST+JOBS_CORE_BULK",
                 connections: self.main_database.fast_pool.maximum,
-                lane_slots: self.queue.core_fast.concurrency,
+                lane_slots: self.queue.core_fast.concurrency + self.queue.core_bulk.concurrency,
+                also_serves: "indexing.track, indexing.reap, lyrics reapers, worker result and \
+                              storage consumers, catalog reader, hard negative sweep reads, metrics",
             },
             PoolCoverage {
                 pool_key: "PG_BULK_POOL_MAX",
-                lane_key: "JOBS_CORE_BULK",
+                lane_keys: "JOBS_CORE_BULK",
                 connections: self.main_database.bulk_pool.maximum,
                 lane_slots: self.queue.core_bulk.concurrency,
+                also_serves: "lyrics lookups and the lookup sweep, search terms refresh",
             },
             PoolCoverage {
                 pool_key: "PG_MAINTENANCE_POOL_MAX",
-                lane_key: "JOBS_MAINTENANCE",
+                lane_keys: "JOBS_MAINTENANCE",
                 connections: self.maintenance_pool.maximum,
                 lane_slots: self.queue.maintenance.concurrency,
+                also_serves: "taste schedule and results, collab results, enrich resolver",
             },
             PoolCoverage {
                 pool_key: "OPS_PG_POOL_MAX",
-                lane_key: "JOBS_OPS",
+                lane_keys: "JOBS_OPS",
                 connections: self.ops_database.fast_pool.maximum,
                 lane_slots: self.queue.ops.concurrency,
+                also_serves: "hard negative sweep writes",
             },
         ]
     }

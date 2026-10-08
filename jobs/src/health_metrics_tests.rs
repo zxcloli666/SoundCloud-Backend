@@ -3,6 +3,13 @@ use uuid::Uuid;
 
 use super::HealthState;
 
+fn metered(name: &'static str, pool: &PgPool) -> crate::metrics::MeteredPool {
+    crate::metrics::MeteredPool {
+        name,
+        pool: pool.clone(),
+    }
+}
+
 async fn enqueue(pool: &PgPool, lane: &str, leased: bool, attempts: i32) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO background_jobs (
@@ -45,7 +52,7 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
     .execute(&pool)
     .await?;
 
-    let Some(body) = crate::metrics::render(&pool).await else {
+    let Some(body) = crate::metrics::render(&pool, &[]).await else {
         return Ok(());
     };
 
@@ -60,15 +67,22 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
 #[sqlx::test(migrations = "../api/migrations")]
 async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> anyhow::Result<()> {
     crate::metrics::init();
+    let metered = [metered("queue", &pool), metered("maintenance", &pool)];
 
-    let Some(body) = crate::metrics::render(&pool).await else {
+    let Some(body) = crate::metrics::render(&pool, &metered).await else {
         return Ok(());
     };
 
-    assert!(body.contains("jobs_pg_pool_connections{state=\"open\"}"));
-    assert!(body.contains("jobs_pg_pool_wait_last_seconds"));
+    for name in ["queue", "maintenance"] {
+        assert!(body.contains(&format!(
+            "jobs_pg_pool_connections{{pool=\"{name}\",state=\"open\"}}"
+        )));
+        assert!(body.contains(&format!(
+            "jobs_pg_pool_wait_last_seconds{{pool=\"{name}\"}}"
+        )));
+    }
     assert!(
-        body.contains("jobs_pg_pool_wait_seconds_bucket{outcome=\"ok\""),
+        body.contains("jobs_pg_pool_wait_seconds_bucket{pool=\"queue\",outcome=\"ok\""),
         "a healthy pool must report a measured wait, not an empty histogram"
     );
     Ok(())
@@ -81,14 +95,15 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     crate::metrics::init();
     pool.close().await;
 
-    crate::metrics::sample_pool_wait(&pool).await;
-    let Some(body) = crate::metrics::render(&pool).await else {
+    crate::metrics::sample_pool_wait(&metered("closed", &pool)).await;
+    let Some(body) = crate::metrics::render(&pool, &[]).await else {
         return Ok(());
     };
 
     assert!(
-        body.contains("jobs_pg_pool_wait_seconds_bucket{outcome=\"error\"")
-            || body.contains("jobs_pg_pool_wait_seconds_bucket{outcome=\"timeout\""),
+        body.contains("jobs_pg_pool_wait_seconds_bucket{pool=\"closed\",outcome=\"error\"")
+            || body
+                .contains("jobs_pg_pool_wait_seconds_bucket{pool=\"closed\",outcome=\"timeout\""),
         "a pool that refuses a connection must not read as a healthy wait"
     );
     Ok(())
@@ -103,7 +118,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
         std::time::Duration::from_millis(1),
     );
 
-    let Some(body) = crate::metrics::render(&pool).await else {
+    let Some(body) = crate::metrics::render(&pool, &[metered("main_fast", &pool)]).await else {
         return Ok(());
     };
 
@@ -160,7 +175,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
 async fn an_empty_queue_still_reports_every_lane(pool: PgPool) -> anyhow::Result<()> {
     crate::metrics::init();
 
-    let Some(body) = crate::metrics::render(&pool).await else {
+    let Some(body) = crate::metrics::render(&pool, &[]).await else {
         return Ok(());
     };
 

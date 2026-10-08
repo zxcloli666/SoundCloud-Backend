@@ -119,3 +119,39 @@ async fn qdrant_tls_client_starts_once_the_crypto_provider_is_installed() -> any
     assert!(qdrant.provision().await.is_err());
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn an_invalid_audio_backfill_index_fails_the_indexing_schema_check(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "CREATE TABLE tracks (sc_track_id text NOT NULL);
+         CREATE INDEX tracks_indexing_stuck_idx ON tracks (sc_track_id);
+         CREATE INDEX tracks_storage_failed_retry_idx ON tracks (sc_track_id);
+         INSERT INTO tracks (sc_track_id) VALUES ('42'), ('42');",
+    )
+    .execute(&pool)
+    .await?;
+    let missing = indexing_schema_ready(&pool).await?;
+
+    let failed_build = sqlx::raw_sql(
+        "CREATE UNIQUE INDEX CONCURRENTLY tracks_audio_backfill_idx ON tracks (sc_track_id)",
+    )
+    .execute(&pool)
+    .await;
+    let invalid = indexing_schema_ready(&pool).await?;
+
+    sqlx::raw_sql("DROP INDEX CONCURRENTLY tracks_audio_backfill_idx")
+        .execute(&pool)
+        .await?;
+    sqlx::raw_sql("CREATE INDEX CONCURRENTLY tracks_audio_backfill_idx ON tracks (sc_track_id)")
+        .execute(&pool)
+        .await?;
+    let rebuilt = indexing_schema_ready(&pool).await?;
+
+    assert!(!missing);
+    assert!(failed_build.is_err());
+    assert!(!invalid);
+    assert!(rebuilt);
+    Ok(())
+}

@@ -32,16 +32,7 @@ pub(super) async fn process_job(
         }
     };
 
-    crate::metrics::record_execution(
-        job.kind.as_str(),
-        match &result {
-            Ok(()) => crate::metrics::Outcome::Ok,
-            Err(error) if cancelled_by_timeout(error) => crate::metrics::Outcome::Timeout,
-            Err(error) if error.is_retryable() => crate::metrics::Outcome::Retryable,
-            Err(_) => crate::metrics::Outcome::Terminal,
-        },
-        started.elapsed(),
-    );
+    crate::metrics::record_execution(job.kind.as_str(), outcome(&result), started.elapsed());
 
     match result {
         Ok(()) => {
@@ -60,6 +51,16 @@ pub(super) async fn process_job(
     }
 
     Ok(())
+}
+
+fn outcome(result: &JobResult) -> crate::metrics::Outcome {
+    match result {
+        Ok(()) => crate::metrics::Outcome::Ok,
+        Err(error) if cancelled_by_timeout(error) => crate::metrics::Outcome::Timeout,
+        Err(JobError::Postponed { .. }) => crate::metrics::Outcome::Postponed,
+        Err(error) if error.is_retryable() => crate::metrics::Outcome::Retryable,
+        Err(_) => crate::metrics::Outcome::Terminal,
+    }
 }
 
 fn cancelled_by_timeout(error: &JobError) -> bool {
@@ -177,6 +178,22 @@ mod timeout_tests {
             "a cancelled bulk statement must be visible as a timeout, not a generic retry"
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_postponed_job_is_not_counted_as_a_terminal_failure() {
+        let postponed = JobError::postponed(
+            Duration::from_secs(60),
+            anyhow::anyhow!("impression is not recorded yet"),
+        );
+
+        assert_eq!(outcome(&Err(postponed)), crate::metrics::Outcome::Postponed);
+        assert_eq!(
+            outcome(&Err(JobError::permanent(anyhow::anyhow!(
+                "invalid payload"
+            )))),
+            crate::metrics::Outcome::Terminal
+        );
     }
 
     #[test]

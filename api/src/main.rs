@@ -174,12 +174,7 @@ async fn main() {
         redis_pool.clone(),
         &config.collab_trigger,
     );
-    let events = EventsService::new(
-        pg.clone(),
-        background_jobs.clone(),
-        indexing_jobs.clone(),
-        collab_jobs.clone(),
-    );
+    let events = EventsService::new(pg.clone(), indexing_jobs.clone(), collab_jobs.clone());
     let subscriptions = SubscriptionsService::new(pg.clone(), config.subscriptions.always_premium);
     let auras = AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());

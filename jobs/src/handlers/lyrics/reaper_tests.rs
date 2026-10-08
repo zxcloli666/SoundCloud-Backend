@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::queue::ClaimOrder;
+
 use super::*;
 
 const ROOM: i64 = 500;
@@ -57,6 +59,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              result_published_at timestamptz,
              attempt bigint NOT NULL DEFAULT 1,
              reopen_count integer NOT NULL DEFAULT 0,
+             result_timeouts integer NOT NULL DEFAULT 0,
              result_rank smallint,
              reason varchar(32),
              sync_version varchar(128),
@@ -92,6 +95,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              result_lease_id uuid,
              result_lease_expires_at timestamptz,
              reopen_count integer NOT NULL DEFAULT 0,
+             result_timeouts integer NOT NULL DEFAULT 0,
              updated_at timestamptz NOT NULL DEFAULT now()
          );",
     )
@@ -380,6 +384,12 @@ async fn lyrics_that_keep_timing_out_stay_dispatchable(pool: PgPool) -> anyhow::
             .await?;
         assert_eq!((cache_state.as_deref(), jobs), (Some("queued"), 1));
     }
+    let timeouts: i32 = sqlx::query_scalar(
+        "SELECT result_timeouts FROM lyrics_embedding_wire_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(timeouts, 4);
     Ok(())
 }
 
@@ -603,6 +613,50 @@ async fn embedding_reaper_skips_short_terminal_and_already_queued_rows(
 }
 
 #[sqlx::test(migrations = false)]
+async fn embedding_backfill_waits_behind_a_later_user_write_back(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42", "43"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    reaper(&pool).reap_embeddings(ROOM).await?;
+    let queue = JobRepository::new(pool.clone(), "test".to_owned());
+    queue
+        .enqueue(&NewJob {
+            id: Uuid::now_v7(),
+            kind: JobKind::SyncQueueFlush,
+            dedup_key: Some("user".to_owned()),
+            payload: serde_json::json!({}),
+            priority: 10,
+            max_attempts: 8,
+            available_at: Utc::now(),
+        })
+        .await?;
+
+    let claimed = queue
+        .claim(
+            &[JobKind::LyricsEmbed, JobKind::SyncQueueFlush],
+            ClaimOrder::Priority,
+            1,
+            std::time::Duration::from_secs(60),
+        )
+        .await?;
+
+    assert_eq!(
+        claimed.iter().map(|job| job.kind).collect::<Vec<_>>(),
+        vec![JobKind::SyncQueueFlush]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn embedding_reaper_fills_only_the_room_the_worker_backlog_leaves(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -785,6 +839,38 @@ async fn a_timed_out_attempt_is_dispatched_again_on_a_later_round_without_using_
         dispatched_generations(&pool).await?,
         vec![("42".to_owned(), 3)]
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn every_result_timeout_of_a_transcription_is_counted(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_stored_track(&pool, "42", 3).await?;
+    sqlx::raw_sql(
+        "UPDATE tracks SET transcribe_state = 'pending';
+         INSERT INTO transcription_wire_state (sc_track_id, status, upload_generation)
+         VALUES ('42', 'pending', 3);",
+    )
+    .execute(&pool)
+    .await?;
+
+    for _ in 0..REPEATED_RESULT_TIMEOUTS {
+        sqlx::query(
+            "UPDATE transcription_wire_state
+             SET status = 'pending', reason = NULL, dispatched_at = now() - interval '26 hours'
+             WHERE sc_track_id = '42'",
+        )
+        .execute(&pool)
+        .await?;
+        reaper(&pool).reap_transcriptions(0).await?;
+    }
+
+    let timeouts: i32 = sqlx::query_scalar(
+        "SELECT result_timeouts FROM transcription_wire_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(timeouts, REPEATED_RESULT_TIMEOUTS);
     Ok(())
 }
 

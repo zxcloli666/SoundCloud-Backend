@@ -102,6 +102,30 @@ fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
 }
 
 #[test]
+fn stuck_storage_tracks_are_requeued_at_the_five_minute_cadence() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::IndexingRequeueStuck)
+        .expect("indexing requeue schedule");
+
+    assert_eq!(schedule.interval_seconds, 5 * 60);
+    assert_eq!(schedule.priority, 5);
+    assert_eq!(schedule.max_attempts, 8);
+}
+
+#[test]
+fn the_hard_negative_sweep_runs_ahead_of_the_queued_hard_negative_backlog() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SweepHardNegatives)
+        .expect("hard negative sweep schedule");
+
+    assert_eq!(schedule.interval_seconds, 60);
+    assert!(schedule.priority > 0);
+    assert_eq!(schedule.kind.lane(), JobKind::RecordHardNegative.lane());
+}
+
+#[test]
 fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()
@@ -386,6 +410,49 @@ async fn registration_moves_idle_jobs_left_in_a_stale_lane(pool: PgPool) -> anyh
             ("external.kind".to_owned(), "core_bulk".to_owned()),
         ]
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_realigns_stale_lanes_in_bounded_batches(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let stale = REALIGN_BATCH * 2 + 5;
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, payload)
+         SELECT gen_random_uuid(), 'collab.train', 'core_bulk', '{}'::jsonb
+         FROM generate_series(1, $1::bigint)",
+    )
+    .bind(i64::try_from(stale)?)
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let lanes = sqlx::query_as::<_, (String, i64)>(
+        "SELECT lane, count(*) FROM background_jobs GROUP BY lane",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        lanes,
+        vec![("maintenance".to_owned(), i64::try_from(stale)?)]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_succeeds_when_the_lane_realignment_fails(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query("ALTER TABLE background_jobs RENAME TO unavailable_jobs")
+        .execute(&pool)
+        .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let registered: i64 = sqlx::query_scalar("SELECT count(*) FROM background_schedules")
+        .fetch_one(&pool)
+        .await?;
+    assert!(registered > 0);
     Ok(())
 }
 

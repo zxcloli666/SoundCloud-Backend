@@ -11,6 +11,8 @@ use crate::health::HealthState;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const CLAIM_BATCH: i64 = 32;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+const REALIGN_BATCH: u64 = 1_000;
+const REALIGN_MAX_BATCHES: usize = 100;
 
 const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::ArtistAttributionRevalidate, 5 * 60, -10, 4).delayed(),
@@ -29,6 +31,7 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::DiscoverInterest, 60 * 60, -10, 4),
     Schedule::new(JobKind::EnrichTracks, 30, 0, 8),
     Schedule::new(JobKind::IndexingReap, 60, 5, 8),
+    Schedule::new(JobKind::IndexingRequeueStuck, 5 * 60, 5, 8),
     Schedule::new(JobKind::LyricsReapEmbeddings, 60, 5, 8).delayed(),
     Schedule::new(JobKind::LyricsReapTranscriptions, 2 * 60, 5, 8).delayed(),
     Schedule::new(JobKind::LyricsLookupSweep, 60, -10, 4).delayed(),
@@ -42,6 +45,7 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::RecommendationWavePriority, 60 * 60, -5, 4),
     Schedule::new(JobKind::SearchTermsRefresh, 24 * 60 * 60, -10, 2).delayed(),
     Schedule::new(JobKind::SubscriptionsSnapshot, 5 * 60, -5, 8),
+    Schedule::new(JobKind::SweepHardNegatives, 60, 5, 8),
     Schedule::new(JobKind::SyncQueueFlush, 60, 10, 8),
     Schedule::new(JobKind::SyncQueueHeal, 5 * 60, 0, 8),
 ];
@@ -160,7 +164,13 @@ impl Scheduler {
             .await?;
         }
         transaction.commit().await?;
-        self.realign_lanes().await
+        if let Err(error) = self.realign_lanes().await {
+            tracing::warn!(
+                %error,
+                "queued jobs left in a stale lane wait for their next enqueue to move"
+            );
+        }
+        Ok(())
     }
 
     async fn realign_lanes(&self) -> Result<(), SchedulerError> {
@@ -168,10 +178,19 @@ impl Scheduler {
             .iter()
             .map(|kind| (kind.as_str().to_owned(), kind.lane().as_str().to_owned()))
             .unzip();
-        let moved = sqlx::query_file!("queries/scheduler/realign_lanes.sql", &kinds, &lanes)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+        let batch = i64::try_from(REALIGN_BATCH).unwrap_or(i64::MAX);
+        let mut moved = 0;
+        for _ in 0..REALIGN_MAX_BATCHES {
+            let realigned =
+                sqlx::query_file!("queries/scheduler/realign_lanes.sql", &kinds, &lanes, batch)
+                    .execute(&self.pool)
+                    .await?
+                    .rows_affected();
+            moved += realigned;
+            if realigned < REALIGN_BATCH {
+                break;
+            }
+        }
         if moved > 0 {
             tracing::warn!(moved, "queued jobs moved to the lane their kind runs in");
         }

@@ -50,11 +50,12 @@ pub async fn run() -> anyhow::Result<()> {
     for coverage in config.pool_coverage() {
         info!(
             pool = coverage.pool_key,
-            lane = coverage.lane_key,
+            lanes = coverage.lane_keys,
             connections = coverage.connections,
             lane_slots = coverage.lane_slots,
             slots_per_connection = coverage.lane_slots as f64 / f64::from(coverage.connections),
-            "pool covers its lane"
+            also_serves = coverage.also_serves,
+            "pool covers its lanes"
         );
     }
 
@@ -163,6 +164,12 @@ pub async fn run() -> anyhow::Result<()> {
     crate::metrics::init();
     let health = HealthState::new()
         .with_metrics_pool(databases.main.fast.clone())
+        .meter_pool("main_fast", databases.main.fast.clone())
+        .meter_pool("main_bulk", databases.main.bulk.clone())
+        .meter_pool("queue", databases.queue.clone())
+        .meter_pool("maintenance", databases.maintenance.clone())
+        .meter_pool("ops_fast", databases.ops.fast.clone())
+        .meter_pool("ops_bulk", databases.ops.bulk.clone())
         .require_worker_lanes(&config.worker_dispatch.required_worker_lanes());
     let mut supervisor = Supervisor::new(cancellation.clone(), config.shutdown_grace);
 
@@ -355,6 +362,21 @@ fn queue_delivery_error(error: QueueError) -> JobError {
         QueueError::Database(error) => JobError::retryable(error),
         error => JobError::permanent(error),
     }
+}
+
+async fn indexing_schema_ready(pool: &sqlx::PgPool) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('tracks_indexing_stuck_idx') IS NOT NULL
+             AND to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL
+             AND EXISTS (
+                 SELECT 1
+                 FROM pg_index
+                 WHERE indexrelid = to_regclass('tracks_audio_backfill_idx')
+                   AND indisvalid AND indisready
+             )",
+    )
+    .fetch_one(pool)
+    .await
 }
 
 async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
@@ -555,16 +577,12 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         discover_interest_ready,
         "discover interest schema is incomplete; apply migration 0065"
     );
-    let indexing_ready = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('tracks_indexing_stuck_idx') IS NOT NULL
-             AND to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL",
-    )
-    .fetch_one(&databases.main.fast)
-    .await
-    .context("indexing jobs schema validation failed")?;
+    let indexing_ready = indexing_schema_ready(&databases.main.fast)
+        .await
+        .context("indexing jobs schema validation failed")?;
     ensure!(
         indexing_ready,
-        "indexing jobs schema is incomplete; apply migration 0071"
+        "indexing jobs schema is incomplete; apply migrations 0071 and 0135, and drop an invalid tracks_audio_backfill_idx with DROP INDEX CONCURRENTLY before rerunning migrate core"
     );
     let duration_resolver_ready = sqlx::query_scalar::<_, bool>(
         "SELECT (SELECT count(*) = 2
@@ -839,6 +857,15 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
     ensure!(
         ops_columns_ready && ops_indexes_ready,
         "ops telemetry schema is incomplete"
+    );
+    let hard_negative_sweep_ready =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('rec_hard_negative_sweep') IS NOT NULL")
+            .fetch_one(&databases.ops.fast)
+            .await
+            .context("ops hard negative sweep validation failed")?;
+    ensure!(
+        hard_negative_sweep_ready,
+        "ops hard negative sweep state is missing; apply ops migration 9011"
     );
     Ok(())
 }

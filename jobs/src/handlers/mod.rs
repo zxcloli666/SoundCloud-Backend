@@ -116,6 +116,7 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::DiscoverInterest,
     JobKind::EnrichTracks,
     JobKind::IndexingReap,
+    JobKind::IndexingRequeueStuck,
     JobKind::LyricsLookupSweep,
     JobKind::LyricsReapEmbeddings,
     JobKind::LyricsReapTranscriptions,
@@ -130,8 +131,11 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::SubscriptionsSnapshot,
 ];
 
-pub(crate) const OPS_KINDS: &[JobKind] =
-    &[JobKind::RecordHardNegative, JobKind::SearchTermsRefresh];
+pub(crate) const OPS_KINDS: &[JobKind] = &[
+    JobKind::RecordHardNegative,
+    JobKind::SearchTermsRefresh,
+    JobKind::SweepHardNegatives,
+];
 
 pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
     matches!(
@@ -307,6 +311,7 @@ impl JobHandlers {
             telemetry: TelemetryHandler::new(
                 databases.ops.bulk.clone(),
                 databases.ops.fast.clone(),
+                databases.main.fast.clone(),
             ),
             wanted,
         })
@@ -522,6 +527,10 @@ impl JobHandlers {
                 empty_payload(job)?;
                 self.indexing.reap().await
             }
+            JobKind::IndexingRequeueStuck => {
+                empty_payload(job)?;
+                self.indexing.requeue_stuck().await
+            }
             JobKind::LyricsEmbed => {
                 let payload = payload::<backend_contracts::LyricsEmbedPayload>(job)?;
                 self.lyrics.embed(payload).await
@@ -570,6 +579,10 @@ impl JobHandlers {
             JobKind::SubscriptionsSnapshot => {
                 empty_payload(job)?;
                 self.subscriptions.export().await
+            }
+            JobKind::SweepHardNegatives => {
+                empty_payload(job)?;
+                self.telemetry.sweep_hard_negatives().await
             }
             JobKind::SyncQueueFlush => {
                 let payload = payload::<SyncQueueFlushPayload>(job)?;

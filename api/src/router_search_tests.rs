@@ -148,7 +148,6 @@ pub(super) async fn state(
     );
     let events = crate::modules::events::EventsService::new(
         pg.clone(),
-        background_jobs.clone(),
         indexing_jobs.clone(),
         collab_jobs.clone(),
     );

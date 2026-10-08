@@ -38,6 +38,8 @@ const WORKER_CONSUMER_RECREATED: &str = "jobs_worker_consumer_recreated_total";
 const WORKER_STREAM_FILL: &str = "jobs_worker_stream_fill_ratio";
 const WORKER_LOST: &str = "jobs_worker_lost_total";
 const WORKER_INVALID: &str = "jobs_worker_invalid_total";
+const WORKER_RESULT_TIMEOUTS: &str = "jobs_worker_result_timeouts_total";
+const WORKER_RESULT_TIMEOUTS_REPEATED: &str = "jobs_worker_result_timeouts_repeated_total";
 
 pub const WORKER_LANE_STATES: [&str; 6] = [
     "serving",
@@ -98,6 +100,8 @@ fn register_series_that_start_at_zero() {
         metrics::gauge!(WORKER_CONSUMER_WAITING, "durable" => spec.durable).set(0.0);
         metrics::counter!(WORKER_CONSUMER_RECREATED, "lane" => lane).increment(0);
         metrics::counter!(WORKER_INVALID, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane).increment(0);
         for status in WorkerStatus::ALL {
             metrics::counter!(WORKER_LANE_DONE, "lane" => lane, "status" => status.as_str())
                 .increment(0);
@@ -125,6 +129,7 @@ pub fn record_execution(kind: &'static str, outcome: Outcome, elapsed: Duration)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
+    Postponed,
     Retryable,
     Terminal,
     Timeout,
@@ -134,6 +139,7 @@ impl Outcome {
     fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
+            Self::Postponed => "postponed",
             Self::Retryable => "retryable",
             Self::Terminal => "terminal",
             Self::Timeout => "timeout",
@@ -198,6 +204,11 @@ impl WorkerLostOutcome {
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {
     metrics::counter!(WORKER_LOST, "lane" => lane.as_str(), "outcome" => outcome.as_str())
         .increment(1);
+}
+
+pub fn record_worker_result_timeouts(lane: WorkerLane, timed_out: u64, repeated: u64) {
+    metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane.as_str()).increment(timed_out);
+    metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane.as_str()).increment(repeated);
 }
 
 pub fn record_worker_consumer_recreated(lane: WorkerLane) {
@@ -323,12 +334,20 @@ fn label(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
-pub async fn sample_pool_wait(pool: &PgPool) {
+#[derive(Clone)]
+pub struct MeteredPool {
+    pub name: &'static str,
+    pub pool: PgPool,
+}
+
+pub async fn sample_pool_wait(metered: &MeteredPool) {
+    let MeteredPool { name, pool } = metered;
     let size = f64::from(pool.size());
     let idle = pool.num_idle() as f64;
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "open").set(size);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "idle").set(idle);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "busy").set((size - idle).max(0.0));
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "open").set(size);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "idle").set(idle);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "busy")
+        .set((size - idle).max(0.0));
 
     let started = std::time::Instant::now();
     let outcome: &'static str = match tokio::time::timeout(POOL_PROBE_TIMEOUT, pool.acquire()).await
@@ -341,13 +360,13 @@ pub async fn sample_pool_wait(pool: &PgPool) {
         Err(_) => "timeout",
     };
     let waited = started.elapsed().as_secs_f64();
-    metrics::histogram!(POOL_WAIT, "outcome" => outcome).record(waited);
-    metrics::gauge!(POOL_WAIT_LAST).set(waited);
+    metrics::histogram!(POOL_WAIT, "pool" => *name, "outcome" => outcome).record(waited);
+    metrics::gauge!(POOL_WAIT_LAST, "pool" => *name).set(waited);
 }
 
-pub async fn render(pool: &PgPool) -> Option<String> {
+pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     let handle = HANDLE.get()?;
-    sample_pool_wait(pool).await;
+    futures::future::join_all(metered.iter().map(sample_pool_wait)).await;
     let lanes: Vec<String> = JobLane::ALL
         .iter()
         .map(|lane| lane.as_str().to_owned())

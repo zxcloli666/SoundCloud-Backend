@@ -261,17 +261,17 @@ groups:
           severity: warning
           service: jobs
         annotations:
-          summary: "Background work is waiting for a PostgreSQL connection"
+          summary: "Background work is waiting for a PostgreSQL connection from pool {{ $labels.pool }}"
           description: "The soak run measures a wait below a millisecond under a full queue, so a sustained 50ms means the pool is the bottleneck. Background work holds no connection across network calls, so this points at pool size or at a query holding one too long."
 
       - alert: JobsPoolProbeFailing
-        expr: sum(rate(jobs_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
+        expr: sum by (pool) (rate(jobs_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
         for: 5m
         labels:
           severity: critical
           service: jobs
         annotations:
-          summary: "The background pool cannot hand out a connection"
+          summary: "Background pool {{ $labels.pool }} cannot hand out a connection"
           description: "Outcome error or timeout on the probe taken at every scrape."
 
       - alert: JobsStatementTimeouts
@@ -366,6 +366,16 @@ groups:
         annotations:
           summary: "jobs could not settle a task of lane {{ $labels.lane }} that ran out of deliveries"
           description: "The advisory reaper left the task in its stream. Quarantine after quarantine_after_s is the remaining safety net."
+
+      - alert: WorkerTaskKeepsTimingOut
+        expr: increase(jobs_worker_result_timeouts_repeated_total[6h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "A {{ $labels.lane }} task passed its result window three or more times"
+          description: "Every result window without an answer sends the task to the worker again. While the lane is served, a task that keeps timing out most likely stops the worker before it answers; the jobs log names the tracks."
 
       - alert: WorkerInvalidTasks
         expr: increase(jobs_worker_invalid_total[1h]) > 0

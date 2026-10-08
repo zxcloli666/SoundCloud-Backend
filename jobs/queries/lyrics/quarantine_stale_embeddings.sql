@@ -38,10 +38,13 @@ WITH candidates AS MATERIALIZED (
         END,
         result_lease_id = NULL,
         result_lease_expires_at = NULL,
+        result_timeouts = wire.result_timeouts
+            + CASE WHEN locked_wire.current THEN 1 ELSE 0 END,
         updated_at = now()
     FROM locked_wire
     WHERE wire.sc_track_id = locked_wire.sc_track_id
     RETURNING wire.sc_track_id,
+              wire.result_timeouts,
               locked_wire.current
 ), released AS (
     UPDATE lyrics_cache AS lyrics
@@ -51,5 +54,11 @@ WITH candidates AS MATERIALIZED (
       AND lyrics.embedding_state IN ('pending', 'dispatched')
     RETURNING lyrics.sc_track_id
 )
-SELECT count(*)::bigint AS "quarantined!"
+SELECT count(*)::bigint AS "quarantined!",
+       count(*) FILTER (WHERE current)::bigint AS "timed_out!",
+       COALESCE(
+           array_agg(sc_track_id ORDER BY sc_track_id)
+               FILTER (WHERE current AND result_timeouts >= $3::integer),
+           ARRAY[]::text[]
+       ) AS "repeated!"
 FROM quarantined

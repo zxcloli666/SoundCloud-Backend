@@ -38,7 +38,20 @@ impl TranscriptionDispatcher {
         }
     }
 
-    pub async fn dispatch_transcription(&self, payload: StoredAudioDispatchPayload) -> JobResult {
+    pub async fn dispatch_transcription(
+        &self,
+        payload: StoredAudioDispatchPayload,
+        room: i64,
+    ) -> JobResult {
+        let payload = validate(payload).map_err(JobError::permanent)?;
+        if waits_for_room(&self.pool, &payload, room).await? {
+            tracing::debug!(
+                track = %payload.sc_track_id,
+                generation = payload.uploaded_generation,
+                "transcription stream is at its backlog; the reaper dispatches this upload later"
+            );
+            return Ok(());
+        }
         let Some(request) = prepare(&self.pool, &self.storage_url, payload).await? else {
             return Ok(());
         };
@@ -58,6 +71,25 @@ impl TranscriptionDispatcher {
         );
         Ok(())
     }
+}
+
+async fn waits_for_room(
+    pool: &PgPool,
+    payload: &StoredAudioDispatchPayload,
+    room: i64,
+) -> JobResult<bool> {
+    if room > 0 {
+        return Ok(false);
+    }
+    let claimed = sqlx::query_file_scalar!(
+        "queries/lyrics/transcription_claimed.sql",
+        &payload.sc_track_id,
+        payload.uploaded_generation
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(JobError::retryable)?;
+    Ok(!claimed)
 }
 
 async fn prepare(
