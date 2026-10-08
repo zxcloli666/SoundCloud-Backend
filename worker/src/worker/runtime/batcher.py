@@ -28,8 +28,11 @@ from worker.runtime.protocol import Arrays, Call, ErrorKind, Reply
 
 SOLO_AFTER_RESTART_S = 60.0
 OOM_SHRINK = 0.75
+PACE_SMOOTHING = 0.3
+SHED_BELOW = 0.5
 STAGE_QUEUE = "queue"
 STAGE_CALL = "engine call"
+STAGE_PROJECTED = "projected call"
 
 RowResult = tuple[dict[str, np.ndarray], dict[str, object], Mapping[str, object]]
 
@@ -140,11 +143,16 @@ class Batcher:
         self._loop: asyncio.Task[None] | None = None
         self._inflight: set[asyncio.Task[None]] = set()
         self._preemptible: dict[asyncio.Task[None], EngineClient] = {}
+        self._seconds_per_cost = 0.0
         self._closed = False
 
     @property
     def limit(self) -> int:
         return self._limit
+
+    @property
+    def seconds_per_cost(self) -> float:
+        return self._seconds_per_cost
 
     async def submit(
         self,
@@ -299,9 +307,18 @@ class Batcher:
                 self._settle(row)
             elif row.deadline_at <= now:
                 self._settle(row, error=DeadlineExceeded(STAGE_QUEUE))
+            elif self._cannot_finish(row, now):
+                self._counters.inc("batch_rows_shed_total", slot=self._slot)
+                self._settle(row, error=DeadlineExceeded(STAGE_PROJECTED))
             else:
                 live.append(row)
         return live
+
+    def _cannot_finish(self, row: Row, now: float) -> bool:
+        if row.priority:
+            return False
+        projected = row.cost * self._seconds_per_cost
+        return row.deadline_at - now < SHED_BELOW * projected
 
     async def _acquire(self, batch: list[Row]) -> EngineClient | None:
         earliest = min(row.deadline_at for row in batch)
@@ -375,6 +392,7 @@ class Batcher:
 
     def _after_reply(self, client: EngineClient, batch: list[Row], reply: Reply) -> None:
         if reply.ok:
+            self._learn_pace(batch, reply)
             self._distribute(client, batch, reply)
             return
         assert reply.error_kind is not None
@@ -382,6 +400,9 @@ class Batcher:
         if reply.error_kind is ErrorKind.PREEMPTED:
             self._counters.inc("batch_preempted_total", slot=self._slot)
             self._requeue(batch, front=True)
+            return
+        if reply.error_kind is ErrorKind.EXPIRED:
+            self._after_expiry(batch, message)
             return
         if reply.error_kind is ErrorKind.OOM:
             self._pool.report_oom(self._slot, client)
@@ -403,6 +424,25 @@ class Batcher:
         error = EngineError(reply.error_kind, message)
         for row in batch:
             self._settle(row, error=error)
+
+    def _after_expiry(self, batch: list[Row], message: str) -> None:
+        self._counters.inc("batch_expired_total", slot=self._slot)
+        cutoff = min(row.deadline_at for row in batch)
+        late = [row for row in batch if row.deadline_at <= cutoff]
+        for row in late:
+            self._settle(row, error=DeadlineExceeded(STAGE_CALL))
+        self._requeue([row for row in batch if row.deadline_at > cutoff], front=True)
+        self._log.warning("batch_expired", rows=len(batch), late=len(late), error=message)
+
+    def _learn_pace(self, batch: list[Row], reply: Reply) -> None:
+        cost = sum(row.cost for row in batch)
+        if any(row.priority for row in batch) or 2 * cost < self._max_batch:
+            return
+        rate = reply.duration_ms / 1000.0 / cost
+        if self._seconds_per_cost == 0.0:
+            self._seconds_per_cost = rate
+            return
+        self._seconds_per_cost += PACE_SMOOTHING * (rate - self._seconds_per_cost)
 
     def _distribute(self, client: EngineClient, batch: list[Row], reply: Reply) -> None:
         try:

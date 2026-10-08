@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import importlib
+import math
 import os
 import signal
 import sys
@@ -13,8 +14,9 @@ from multiprocessing.connection import Connection
 from worker.observability.logging import JsonLog, error_text
 from worker.runtime import allocator, devices, shm
 from worker.runtime.protocol import (
+    CALL_GUARD,
+    EXPIRY_MARGIN_S,
     PREEMPT_SIGNAL,
-    PREEMPTION,
     BadInput,
     Call,
     CallExpired,
@@ -96,7 +98,7 @@ def set_oom_score_adj(value: int, log: JsonLog) -> None:
 
 
 def request_preemption(signum: int, frame: object) -> None:
-    PREEMPTION.requested = True
+    CALL_GUARD.requested = True
 
 
 def set_nice(value: int, log: JsonLog) -> None:
@@ -257,8 +259,9 @@ class Engine:
         assert model is not None
         self._apply_threads(call.threads)
         oom = False
-        PREEMPTION.requested = False
-        PREEMPTION.armed = call.preemptible
+        CALL_GUARD.requested = False
+        CALL_GUARD.armed = call.preemptible
+        CALL_GUARD.expires_at = call.deadline_at - EXPIRY_MARGIN_S
         try:
             arrays = shm.read_all(call.arrays)
             out_arrays, result = model.invoke(call.method, arrays, dict(call.args))
@@ -269,7 +272,12 @@ class Engine:
             reply = Reply(call.id, error_kind=ErrorKind.BAD_INPUT, error=error_text(error))
         except CallExpired as error:
             self._log.info("slot_call_expired", slot=call.slot, method=call.method)
-            reply = Reply(call.id, error_kind=ErrorKind.EXPIRED, error=error_text(error))
+            reply = Reply(
+                call.id,
+                result=error.details,
+                error_kind=ErrorKind.EXPIRED,
+                error=error_text(error),
+            )
         except Preempted as error:
             reply = Reply(call.id, error_kind=ErrorKind.PREEMPTED, error=error_text(error))
         except Exception as error:
@@ -280,7 +288,8 @@ class Engine:
             )
             reply = Reply(call.id, error_kind=kind, error=error_text(error))
         finally:
-            PREEMPTION.armed = False
+            CALL_GUARD.armed = False
+            CALL_GUARD.expires_at = math.inf
             slot.calls += 1
             if oom or self._options.release_after_call:
                 self._release()

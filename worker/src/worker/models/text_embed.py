@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
-from worker.runtime.protocol import PREEMPTION, Arrays, BadInput, SlotSpec
+from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, SlotSpec
 
 MAX_TOKENS = 8192
 PREEMPTABLE_LAYER = "DecoderLayer"
@@ -33,7 +33,7 @@ class TextEmbedSlot:
         model.requires_grad_(False)
         for module in model.modules():
             if type(module).__name__.endswith(PREEMPTABLE_LAYER):
-                module.register_forward_pre_hook(preemption_point)
+                module.register_forward_pre_hook(checkpoint)
         self._model = model.eval()
 
     def warmup(self) -> None:
@@ -70,8 +70,8 @@ class TextEmbedSlot:
         self._model = None
 
 
-def preemption_point(*_: object) -> None:
-    PREEMPTION.check()
+def checkpoint(*_: object) -> None:
+    CALL_GUARD.check()
 
 
 def token_counts(

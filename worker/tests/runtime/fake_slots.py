@@ -8,7 +8,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from worker.runtime.protocol import PREEMPTION, Arrays, BadInput, CallExpired, SlotSpec
+from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, CallExpired, SlotSpec
 
 
 class Fake:
@@ -52,7 +52,7 @@ class Fake:
             raise CallExpired("stopped between chunks")
         if method == "layers":
             for _ in range(int(str(args.get("layers", 100)))):
-                PREEMPTION.check()
+                CALL_GUARD.check()
                 time.sleep(0.02)
         if method == "threads":
             import torch

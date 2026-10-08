@@ -34,6 +34,8 @@ CAUSE_PING = "ping"
 CAUSE_RECYCLE = "recycle"
 CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
+COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan"})
+COOPERATIVE_GRACE_S = 15.0
 MESSAGE_IDS = count(1)
 
 
@@ -56,10 +58,13 @@ class EngineCrashed(Exception):
 
 
 class EngineError(Exception):
-    def __init__(self, kind: ErrorKind, message: str) -> None:
+    def __init__(
+        self, kind: ErrorKind, message: str, details: Mapping[str, object] | None = None
+    ) -> None:
         super().__init__(f"{kind}: {message}")
         self.kind = kind
         self.message = message
+        self.details = dict(details or {})
 
 
 class DeadlineExceeded(Exception):
@@ -338,7 +343,8 @@ class EngineClient:
         self._counters.observe("slot_call_ms", reply.duration_ms, slot=slot)
 
     async def _watch(self, call: Call) -> None:
-        await self._clock.sleep(max(0.0, call.deadline_at - self._clock.now()))
+        grace = COOPERATIVE_GRACE_S if call.slot in COOPERATIVE_SLOTS else 0.0
+        await self._clock.sleep(max(0.0, call.deadline_at + grace - self._clock.now()))
         if call.id in self._pending:
             self._log.warning(
                 "engine_call_deadline", call=call.id, slot=call.slot, method=call.method

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import signal
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -14,7 +16,9 @@ class BadInput(Exception):
 
 
 class CallExpired(Exception):
-    pass
+    def __init__(self, message: str, details: Mapping[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
 
 
 class Preempted(Exception):
@@ -22,19 +26,23 @@ class Preempted(Exception):
 
 
 PREEMPT_SIGNAL = signal.SIGUSR1
+EXPIRY_MARGIN_S = 1.0
 
 
-class Preemption:
+class CallGuard:
     def __init__(self) -> None:
         self.armed = False
         self.requested = False
+        self.expires_at = math.inf
 
     def check(self) -> None:
         if self.armed and self.requested:
             raise Preempted("a priority call is waiting")
+        if time.monotonic() >= self.expires_at:
+            raise CallExpired("the call would outrun its deadline")
 
 
-PREEMPTION = Preemption()
+CALL_GUARD = CallGuard()
 
 
 class ErrorKind(StrEnum):

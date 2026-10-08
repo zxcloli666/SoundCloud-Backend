@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pytest
@@ -12,7 +12,7 @@ import pytest
 from tests.runtime.support import quiet_log
 from worker.observability.counters import Counters
 from worker.runtime import shm
-from worker.runtime.batcher import Batcher, prepare
+from worker.runtime.batcher import STAGE_CALL, STAGE_PROJECTED, Batcher, prepare
 from worker.runtime.engine_client import (
     CAUSE_DEADLINE,
     DeadlineExceeded,
@@ -446,5 +446,60 @@ async def test_engine_restart_restores_the_batch_limit_shrunk_by_oom() -> None:
         await b.submit("m", {"x": rows(4)}, {}, soon())
         assert b.limit == 4
         assert fresh.rows == [4]
+    finally:
+        await b.close()
+
+
+def slow(seconds_per_row: float) -> Behaviour:
+    def behaviour(call: Call, arrays: dict[str, np.ndarray]) -> Reply:
+        reply = echo(call, arrays)
+        rows = next(iter(arrays.values())).shape[0]
+        return replace(reply, duration_ms=seconds_per_row * rows * 1000.0)
+
+    return behaviour
+
+
+async def test_bulk_rows_that_cannot_finish_in_time_are_shed_before_the_call() -> None:
+    engine = FakeEngine("e", slow(1.0))
+    counters = Counters()
+    b = Batcher("fake", 4, 0, FakePool(engine), counters, log=quiet_log())
+    try:
+        await b.submit("m", {"x": rows(4)}, {}, soon())
+        assert b.seconds_per_cost == pytest.approx(1.0)
+        with pytest.raises(DeadlineExceeded) as raised:
+            await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[20])
+        assert raised.value.stage == STAGE_PROJECTED
+        assert engine.rows == [4]
+        assert counters.value("batch_rows_shed_total", slot="fake") == 1
+        await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[20], priority=True)
+        await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[8])
+        assert engine.rows == [4, 1, 1]
+    finally:
+        await b.close()
+
+
+async def test_an_expired_call_fails_its_earliest_rows_and_reruns_the_rest() -> None:
+    expired: list[int] = []
+
+    def expire_once(call: Call, arrays: dict[str, np.ndarray]) -> Reply:
+        if not expired:
+            expired.append(call.id)
+            return Reply(call.id, error_kind=ErrorKind.EXPIRED, error="outran its deadline")
+        return echo(call, arrays)
+
+    engine = FakeEngine("e", expire_once)
+    counters = Counters()
+    b = Batcher("fake", 8, 30, FakePool(engine), counters, log=quiet_log())
+    try:
+        early, late = await asyncio.gather(
+            b.submit("m", {"x": rows(1)}, {}, soon(2.0)),
+            b.submit("m", {"x": rows(1, 10)}, {}, soon(5.0)),
+            return_exceptions=True,
+        )
+        assert isinstance(early, DeadlineExceeded) and early.stage == STAGE_CALL
+        assert not isinstance(late, BaseException)
+        np.testing.assert_array_equal(late[0]["x"], rows(1, 10) * 2)
+        assert engine.rows == [2, 1]
+        assert counters.value("batch_expired_total", slot="fake") == 1
     finally:
         await b.close()

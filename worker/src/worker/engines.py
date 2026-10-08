@@ -133,7 +133,7 @@ class EngineSlots:
         if reply.error_kind is not None:
             if reply.error_kind is ErrorKind.OOM:
                 self._supervisor.report_oom(slot, client)
-            raise EngineError(reply.error_kind, reply.error or "")
+            raise EngineError(reply.error_kind, reply.error or "", reply.result)
         try:
             outputs = shm.take_all(reply.arrays)
         except OSError as error:
