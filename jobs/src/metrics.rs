@@ -38,6 +38,8 @@ const WORKER_CONSUMER_RECREATED: &str = "jobs_worker_consumer_recreated_total";
 const WORKER_STREAM_FILL: &str = "jobs_worker_stream_fill_ratio";
 const WORKER_LOST: &str = "jobs_worker_lost_total";
 const WORKER_INVALID: &str = "jobs_worker_invalid_total";
+const WORKER_RESULT_TIMEOUTS: &str = "jobs_worker_result_timeouts_total";
+const WORKER_RESULT_TIMEOUTS_REPEATED: &str = "jobs_worker_result_timeouts_repeated_total";
 
 pub const WORKER_LANE_STATES: [&str; 6] = [
     "serving",
@@ -98,6 +100,8 @@ fn register_series_that_start_at_zero() {
         metrics::gauge!(WORKER_CONSUMER_WAITING, "durable" => spec.durable).set(0.0);
         metrics::counter!(WORKER_CONSUMER_RECREATED, "lane" => lane).increment(0);
         metrics::counter!(WORKER_INVALID, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane).increment(0);
         for status in WorkerStatus::ALL {
             metrics::counter!(WORKER_LANE_DONE, "lane" => lane, "status" => status.as_str())
                 .increment(0);
@@ -198,6 +202,11 @@ impl WorkerLostOutcome {
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {
     metrics::counter!(WORKER_LOST, "lane" => lane.as_str(), "outcome" => outcome.as_str())
         .increment(1);
+}
+
+pub fn record_worker_result_timeouts(lane: WorkerLane, timed_out: u64, repeated: u64) {
+    metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane.as_str()).increment(timed_out);
+    metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane.as_str()).increment(repeated);
 }
 
 pub fn record_worker_consumer_recreated(lane: WorkerLane) {
