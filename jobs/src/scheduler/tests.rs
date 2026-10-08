@@ -390,6 +390,49 @@ async fn registration_moves_idle_jobs_left_in_a_stale_lane(pool: PgPool) -> anyh
 }
 
 #[sqlx::test(migrations = false)]
+async fn registration_realigns_stale_lanes_in_bounded_batches(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let stale = REALIGN_BATCH * 2 + 5;
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, payload)
+         SELECT gen_random_uuid(), 'collab.train', 'core_bulk', '{}'::jsonb
+         FROM generate_series(1, $1::bigint)",
+    )
+    .bind(i64::try_from(stale)?)
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let lanes = sqlx::query_as::<_, (String, i64)>(
+        "SELECT lane, count(*) FROM background_jobs GROUP BY lane",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        lanes,
+        vec![("maintenance".to_owned(), i64::try_from(stale)?)]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_succeeds_when_the_lane_realignment_fails(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query("ALTER TABLE background_jobs RENAME TO unavailable_jobs")
+        .execute(&pool)
+        .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let registered: i64 = sqlx::query_scalar("SELECT count(*) FROM background_schedules")
+        .fetch_one(&pool)
+        .await?;
+    assert!(registered > 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_due_schedule_repairs_the_lane_of_its_idle_job(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let scheduler = Scheduler::new(pool.clone());
