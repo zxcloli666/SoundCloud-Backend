@@ -833,10 +833,13 @@ name = "sc-fingerprint"
 version = "0.1.0"
 dependencies = [
  "dashmap",
+ "futures-util",
+ "http",
  "once_cell",
  "serde_json",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "wreq",
  "wreq-util",
