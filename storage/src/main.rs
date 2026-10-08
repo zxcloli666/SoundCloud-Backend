@@ -156,6 +156,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(routes::health::health))
+        .route("/probe", get(routes::probe::probe))
         .route(
             "/upload",
             post(routes::upload::upload).layer(DefaultBodyLimit::disable()),
