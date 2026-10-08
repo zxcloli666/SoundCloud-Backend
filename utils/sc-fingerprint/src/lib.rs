@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
+use wreq::IntoEmulation;
+use wreq_util::Profile;
 
 pub use wreq;
-pub use wreq_util::Emulation;
 
 pub const DEFAULT_PROFILE: &str = "chrome_137";
 
@@ -83,19 +84,19 @@ pub fn supported_profiles() -> Vec<&'static str> {
     NAMES.iter().copied().filter(|n| is_supported(n)).collect()
 }
 
-fn parse(profile: &str) -> Option<Emulation> {
+fn parse(profile: &str) -> Option<Profile> {
     serde_json::from_value(serde_json::Value::String(profile.to_string())).ok()
 }
 
-pub fn emulation(profile: Option<&str>) -> (String, Emulation) {
+fn resolve(profile: Option<&str>) -> (String, Profile) {
     let requested = profile
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(str::to_string)
         .unwrap_or_else(default_profile);
 
-    if let Some(e) = parse(&requested) {
-        return (requested, e);
+    if let Some(p) = parse(&requested) {
+        return (requested, p);
     }
 
     tracing::warn!(
@@ -104,8 +105,13 @@ pub fn emulation(profile: Option<&str>) -> (String, Emulation) {
         "неизвестный профиль отпечатка, беру запасной"
     );
     let fallback = DEFAULT_PROFILE.to_string();
-    let e = parse(&fallback).expect("встроенный профиль по умолчанию должен разбираться");
-    (fallback, e)
+    let p = parse(&fallback).expect("встроенный профиль по умолчанию должен разбираться");
+    (fallback, p)
+}
+
+pub fn emulation(profile: Option<&str>) -> (String, wreq::Emulation) {
+    let (name, profile) = resolve(profile);
+    (name, profile.into_emulation())
 }
 
 pub fn builder(profile: Option<&str>) -> wreq::ClientBuilder {
