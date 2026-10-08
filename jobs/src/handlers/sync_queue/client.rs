@@ -5,10 +5,11 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
+use url::Url;
 use wreq::header::{
     ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER,
 };
-use wreq::{Client, Method, StatusCode, Url};
+use wreq::{Client, Method, StatusCode};
 
 use crate::config::{OAuthConfig, SyncQueueConfig};
 
@@ -103,11 +104,11 @@ impl SoundCloudClient {
             .join(path.trim_start_matches('/'))
             .map_err(|_| SoundCloudError::InvalidTokenResponse)?;
         let mut request = match &self.proxy_url {
-            Some(proxy) => self.http.request(method, proxy.clone()).header(
+            Some(proxy) => self.http.request(method, proxy.as_str()).header(
                 "x-target",
                 base64::engine::general_purpose::STANDARD.encode(target.as_str()),
             ),
-            None => self.http.request(method, target),
+            None => self.http.request(method, target.as_str()),
         }
         .header(
             AUTHORIZATION,
@@ -152,7 +153,7 @@ impl TokenRefreshClient {
     ) -> Result<RefreshedToken, SoundCloudError> {
         let response = self
             .http
-            .post(self.token_url.clone())
+            .post(self.token_url.as_str())
             .header(ACCEPT, "application/json; charset=utf-8")
             .form(&[
                 ("grant_type", "refresh_token"),

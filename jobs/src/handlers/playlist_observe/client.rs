@@ -4,8 +4,9 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde_json::Value;
+use url::Url;
 use wreq::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, HeaderValue, RETRY_AFTER};
-use wreq::{Client, StatusCode, Url};
+use wreq::{Client, StatusCode};
 
 use crate::config::SyncQueueConfig;
 
@@ -94,11 +95,11 @@ impl PlaylistReadClient {
         access_token: &str,
     ) -> Result<PlaylistReadResponse, PlaylistReadError> {
         let request = match &self.proxy_url {
-            Some(proxy) => self.http.get(proxy.clone()).header(
+            Some(proxy) => self.http.get(proxy.as_str()).header(
                 "x-target",
                 base64::engine::general_purpose::STANDARD.encode(target.as_str()),
             ),
-            None => self.http.get(target),
+            None => self.http.get(target.as_str()),
         }
         .header(
             AUTHORIZATION,
