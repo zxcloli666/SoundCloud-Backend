@@ -5,6 +5,8 @@ use once_cell::sync::Lazy;
 use wreq::IntoEmulation;
 use wreq_util::Profile;
 
+mod legacy;
+
 pub use wreq;
 
 pub const DEFAULT_PROFILE: &str = "chrome_137";
@@ -111,7 +113,9 @@ fn resolve(profile: Option<&str>) -> (String, Profile) {
 
 pub fn emulation(profile: Option<&str>) -> (String, wreq::Emulation) {
     let (name, profile) = resolve(profile);
-    (name, profile.into_emulation())
+    let mut emulation = profile.into_emulation();
+    legacy::restore(&name, &mut emulation);
+    (name, emulation)
 }
 
 pub fn builder(profile: Option<&str>) -> wreq::ClientBuilder {
