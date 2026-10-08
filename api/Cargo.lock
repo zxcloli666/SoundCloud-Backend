@@ -3557,9 +3557,12 @@ name = "sc-fingerprint"
 version = "0.1.0"
 dependencies = [
  "dashmap 6.2.1",
+ "futures-util",
+ "http",
  "once_cell",
  "serde_json",
  "thiserror 2.0.18",
+ "tower 0.5.3",
  "tracing",
  "wreq",
  "wreq-util",
