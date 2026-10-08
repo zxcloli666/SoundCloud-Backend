@@ -68,9 +68,6 @@ class OneEnginePool:
     def report_oom(self, slot: str, client: KillableEngine) -> None:
         return None
 
-    def preempt(self, slot: str, client: KillableEngine) -> None:
-        return None
-
 
 class FakeSupervisor:
     def __init__(self, engine: KillableEngine | None = None) -> None:

@@ -29,6 +29,7 @@ from worker.runtime.protocol import (
     Reply,
     SlotSpec,
     SlotState,
+    Started,
 )
 
 EXIT_LOAD_FAILED = 3
@@ -163,7 +164,7 @@ class Engine:
                         return 0
                     conn.send(self._handle(message))
                 elif isinstance(message, Call):
-                    conn.send(self._execute(message))
+                    conn.send(self._execute(message, conn))
                 else:
                     self._log.error("engine_unknown_message", kind=type(message).__name__)
             except LoadFailed as failed:
@@ -258,7 +259,7 @@ class Engine:
         devices.set_threads(threads)
         self._threads = threads
 
-    def _execute(self, call: Call) -> Reply:
+    def _execute(self, call: Call, conn: Connection) -> Reply:
         started = time.perf_counter()
         slot = self._slots.get(call.slot)
         if slot is None:
@@ -272,6 +273,8 @@ class Engine:
         CALL_GUARD.requested = False
         CALL_GUARD.armed = call.preemptible
         CALL_GUARD.expires_at = call.deadline_at - EXPIRY_MARGIN_S
+        if call.preemptible:
+            conn.send(Started(call.id))
         try:
             arrays = shm.read_all(call.arrays)
             out_arrays, result = model.invoke(call.method, arrays, dict(call.args))

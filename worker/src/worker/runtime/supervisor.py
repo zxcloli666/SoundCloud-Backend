@@ -207,6 +207,8 @@ class Supervisor:
         self._leased: set[EngineClient] = set()
         self._leased_threads: dict[EngineClient, int] = {}
         self._reserved_leases: set[EngineClient] = set()
+        self._bulk_leases: dict[EngineClient, str] = {}
+        self._urgent_waiters: dict[str, int] = {}
         self._bulk_released_at: dict[str, float] = {}
         self._retiring: set[EngineClient] = set()
         self._changed = asyncio.Event()
@@ -337,28 +339,34 @@ class Supervisor:
         hosts = self._hosts(slot, reserved)
         if not hosts:
             raise SlotUnavailable(slot, "unknown")
-        while True:
-            idle = self._idle_engines(hosts)
-            if idle:
-                managed = next((m for m in idle if m.client and m.client.loaded(slot)), idle[0])
-                client = managed.client
-                assert client is not None
-                self._leased.add(client)
-                if await self._lease(client, slot, deadline_at):
-                    urgent = reserved or priority
-                    client.call_threads = self._call_threads(managed.plan, urgent)
-                    self._leased_threads[client] = client.call_threads
-                    if urgent and managed.plan.reserved:
-                        self._reserved_leases.add(client)
-                    return client
-                continue
-            for state in (STATE_BROKEN, STATE_STOPPED):
-                if all(m.state == state for m in hosts):
-                    raise SlotUnavailable(slot, state)
-            remaining = deadline_at - self._clock.now()
-            if remaining <= 0:
-                raise DeadlineExceeded(f"acquire {slot}")
-            await self._wait_change(remaining)
+        urgent = reserved or priority
+        waiting = False
+        try:
+            while True:
+                idle = self._idle_engines(hosts)
+                if not urgent:
+                    idle = [m for m in idle if not self._urgent_waiters.get(m.plan.name)]
+                if idle:
+                    client = await self._lease_one(idle, slot, deadline_at, urgent)
+                    if client is not None:
+                        return client
+                    continue
+                for state in (STATE_BROKEN, STATE_STOPPED):
+                    if all(m.state == state for m in hosts):
+                        raise SlotUnavailable(slot, state)
+                remaining = deadline_at - self._clock.now()
+                if remaining <= 0:
+                    raise DeadlineExceeded(f"acquire {slot}")
+                if urgent:
+                    if not waiting:
+                        waiting = True
+                        self._count_urgent(hosts, 1)
+                    self._preempt_bulk(hosts)
+                await self._wait_change(remaining)
+        finally:
+            if waiting:
+                self._count_urgent(hosts, -1)
+                self._notify()
 
     def release(self, client: EngineClient) -> None:
         if client in self._leased_threads and not self._fixed_share(client):
@@ -366,7 +374,41 @@ class Supervisor:
         self._leased.discard(client)
         self._leased_threads.pop(client, None)
         self._reserved_leases.discard(client)
+        self._bulk_leases.pop(client, None)
+        client.clear_preemption()
         self._notify()
+
+    async def _lease_one(
+        self, idle: list[Managed], slot: str, deadline_at: float, urgent: bool
+    ) -> EngineClient | None:
+        managed = next((m for m in idle if m.client and m.client.loaded(slot)), idle[0])
+        client = managed.client
+        assert client is not None
+        self._leased.add(client)
+        if not await self._lease(client, slot, deadline_at):
+            return None
+        client.call_threads = self._call_threads(managed.plan, urgent)
+        self._leased_threads[client] = client.call_threads
+        if urgent and managed.plan.reserved:
+            self._reserved_leases.add(client)
+        if not urgent:
+            self._bulk_leases[client] = slot
+        return client
+
+    def _count_urgent(self, hosts: list[Managed], step: int) -> None:
+        for managed in hosts:
+            name = managed.plan.name
+            self._urgent_waiters[name] = self._urgent_waiters.get(name, 0) + step
+            if self._urgent_waiters[name] <= 0:
+                del self._urgent_waiters[name]
+
+    def _preempt_bulk(self, hosts: list[Managed]) -> None:
+        for managed in hosts:
+            client = managed.client
+            if client is None or client not in self._bulk_leases:
+                continue
+            if client.preempt():
+                self._counters.inc("slot_preemptions_total", slot=self._bulk_leases[client])
 
     async def kill(self, slot: str, cause: str) -> int:
         killed = 0
@@ -375,10 +417,6 @@ class Supervisor:
                 await managed.client.kill(cause)
                 killed += 1
         return killed
-
-    def preempt(self, slot: str, client: EngineClient) -> None:
-        self._counters.inc("slot_preemptions_total", slot=slot)
-        client.preempt()
 
     def report_oom(self, slot: str, client: EngineClient) -> None:
         self._counters.inc("slot_oom_total", slot=slot)
@@ -809,6 +847,3 @@ class EnginePool:
 
     def report_oom(self, slot: str, client: EngineClient) -> None:
         self._supervisor.report_oom(slot, client)
-
-    def preempt(self, slot: str, client: EngineClient) -> None:
-        self._supervisor.preempt(slot, client)

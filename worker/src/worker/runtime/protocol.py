@@ -113,6 +113,11 @@ class Reply:
 
 
 @dataclass(frozen=True)
+class Started:
+    id: int
+
+
+@dataclass(frozen=True)
 class SlotState:
     slot: str
     loaded: bool

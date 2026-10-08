@@ -200,32 +200,87 @@ async def test_an_expired_call_keeps_the_engine_and_its_loaded_models() -> None:
         await supervisor.stop()
 
 
-async def test_preemption_stops_a_preemptible_call_and_spares_the_engine() -> None:
-    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+def long_call(preemptible: bool) -> Call:
+    return Call(
+        next_message_id(),
+        "a",
+        "layers",
+        time.monotonic() + 30,
+        args={"layers": 150},
+        preemptible=preemptible,
+    )
+
+
+async def call_and_release(supervisor: Supervisor, client: EngineClient, call: Call) -> Reply:
+    try:
+        return await client.call(call)
+    finally:
+        supervisor.release(client)
+
+
+@pytest.mark.parametrize(("preemptible", "expected"), [(True, ErrorKind.PREEMPTED), (False, None)])
+async def test_an_urgent_acquire_preempts_the_bulk_call_and_spares_the_engine(
+    preemptible: bool, expected: ErrorKind | None
+) -> None:
+    counters = Counters()
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))], counters=counters)
     try:
         before = supervisor.engines()
-        client = await supervisor.acquire("a", time.monotonic() + 5)
-        try:
-            for preemptible, expected in ((True, ErrorKind.PREEMPTED), (False, None)):
-                call = asyncio.create_task(
-                    client.call(
-                        Call(
-                            next_message_id(),
-                            "a",
-                            "layers",
-                            time.monotonic() + 30,
-                            args={"layers": 25},
-                            preemptible=preemptible,
-                        )
-                    )
-                )
-                await asyncio.sleep(0.2)
-                supervisor.preempt("a", client)
-                reply = await asyncio.wait_for(call, 5.0)
-                assert reply.error_kind is expected
-        finally:
-            supervisor.release(client)
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        call = asyncio.create_task(call_and_release(supervisor, bulk, long_call(preemptible)))
+        await asyncio.sleep(0.3)
+        started = time.monotonic()
+        urgent = await supervisor.acquire("a", time.monotonic() + 10, priority=True)
+        waited = time.monotonic() - started
+        supervisor.release(urgent)
+        reply = await call
+        assert reply.error_kind is expected
+        assert (waited < 1.0) is preemptible
+        assert counters.value("slot_preemptions_total", slot="a") == 1
         assert supervisor.engines() == before
+    finally:
+        await supervisor.stop()
+
+
+async def test_a_preemption_requested_before_the_call_stops_it_at_once() -> None:
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+    try:
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        urgent = asyncio.create_task(supervisor.acquire("a", time.monotonic() + 10, priority=True))
+        await asyncio.sleep(0.1)
+        started = time.monotonic()
+        reply = await call_and_release(supervisor, bulk, long_call(True))
+        assert reply.error_kind is ErrorKind.PREEMPTED
+        assert time.monotonic() - started < 0.5
+        supervisor.release(await asyncio.wait_for(urgent, 5.0))
+        follow_up = await supervisor.acquire("a", time.monotonic() + 5)
+        try:
+            assert (await follow_up.call(long_call(True))).ok
+        finally:
+            supervisor.release(follow_up)
+    finally:
+        await supervisor.stop()
+
+
+async def test_bulk_acquires_yield_to_a_waiting_urgent_one() -> None:
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+    try:
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        call = asyncio.create_task(call_and_release(supervisor, bulk, long_call(False)))
+        await asyncio.sleep(0.1)
+        order: list[str] = []
+
+        async def take(name: str, priority: bool) -> None:
+            client = await supervisor.acquire("a", time.monotonic() + 10, priority=priority)
+            order.append(name)
+            await asyncio.sleep(0.05)
+            supervisor.release(client)
+
+        waiting_bulk = asyncio.create_task(take("bulk", False))
+        await asyncio.sleep(0.05)
+        waiting_urgent = asyncio.create_task(take("urgent", True))
+        await asyncio.gather(call, waiting_bulk, waiting_urgent)
+        assert order == ["urgent", "bulk"]
     finally:
         await supervisor.stop()
 

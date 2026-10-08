@@ -25,6 +25,7 @@ from worker.runtime.protocol import (
     Reply,
     SlotSpec,
     SlotState,
+    Started,
 )
 
 ENGINE_MODULE = "worker.runtime.engine_main"
@@ -150,6 +151,9 @@ class EngineClient:
         self._states = {spec.name: SlotState(spec.name, False, 0, 0, 0) for spec in self.specs}
         self._last_call_at = {spec.name: clock.now() for spec in self.specs}
         self._calls = 0
+        self._preemptible: set[int] = set()
+        self._running = 0
+        self._preempt_wanted = False
         self.call_threads = 0
 
     @property
@@ -242,16 +246,21 @@ class EngineClient:
         self._ensure_running()
         if call.deadline_at <= self._clock.now():
             raise DeadlineExceeded(f"{call.slot} call")
+        if call.preemptible and self._preempt_wanted:
+            return Reply(call.id, error_kind=ErrorKind.PREEMPTED, error="preempted before start")
         if self.call_threads:
             call = replace(call, threads=self.call_threads)
         future = self._register(call.id)
         self._call_slots[call.id] = call.slot
+        if call.preemptible:
+            self._preemptible.add(call.id)
         self._last_call_at[call.slot] = self._clock.now()
         try:
             self._send(call)
         except BaseException:
             self._pending.pop(call.id, None)
             self._call_slots.pop(call.id, None)
+            self._preemptible.discard(call.id)
             raise
         self._watchers[call.id] = asyncio.create_task(self._watch(call), name=f"watch:{call.id}")
         message = await future
@@ -259,8 +268,18 @@ class EngineClient:
             raise EngineCrashed(self.name, f"call answered with {type(message).__name__}")
         return message
 
-    def preempt(self) -> None:
-        if not self.alive:
+    def preempt(self) -> bool:
+        if self._preempt_wanted:
+            return False
+        self._preempt_wanted = True
+        self._signal_running()
+        return True
+
+    def clear_preemption(self) -> None:
+        self._preempt_wanted = False
+
+    def _signal_running(self) -> None:
+        if not self._preempt_wanted or self._running not in self._preemptible or not self.alive:
             return
         try:
             os.kill(self.pid, PREEMPT_SIGNAL)
@@ -334,6 +353,10 @@ class EngineClient:
         if not isinstance(message_id, int):
             self._log.error("engine_bad_message", kind=type(message).__name__)
             return
+        if isinstance(message, Started):
+            self._running = message.id
+            self._signal_running()
+            return
         if isinstance(message, Pong):
             for state in message.slots:
                 self._states[state.slot] = state
@@ -347,6 +370,9 @@ class EngineClient:
             future.set_result(message)
 
     def _record_reply(self, reply: Reply) -> None:
+        self._preemptible.discard(reply.id)
+        if self._running == reply.id:
+            self._running = 0
         slot = self._call_slots.pop(reply.id, "")
         self._calls += 1
         self._counters.inc("slot_calls_total", slot=slot)
@@ -407,6 +433,8 @@ class EngineClient:
                 future.set_exception(error)
         self._pending.clear()
         self._call_slots.clear()
+        self._preemptible.clear()
+        self._running = 0
         for watcher in self._watchers.values():
             watcher.cancel()
         self._watchers.clear()
