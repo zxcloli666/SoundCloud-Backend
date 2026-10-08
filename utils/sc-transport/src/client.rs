@@ -375,7 +375,7 @@ impl ScClient {
             .redirect(wreq::redirect::Policy::none())
             .send()
             .await
-            .map_err(|e| ScError::Unreachable(e.without_url().to_string()))?;
+            .map_err(|e| ScError::Unreachable(e.without_uri().to_string()))?;
         let location = response
             .headers()
             .get(wreq::header::LOCATION)
@@ -876,7 +876,7 @@ impl ScClient {
         let resp = builder
             .send()
             .await
-            .map_err(|e| ScError::Unreachable(e.without_url().to_string()))?;
+            .map_err(|e| ScError::Unreachable(e.without_uri().to_string()))?;
 
         let status = resp.status();
         let retry_after_sec = resp
@@ -913,7 +913,7 @@ impl ScClient {
         let response = builder
             .send()
             .await
-            .map_err(|error| ScError::Unreachable(error.without_url().to_string()))?;
+            .map_err(|error| ScError::Unreachable(error.without_uri().to_string()))?;
         let status = response.status();
         let retry_after_sec = response
             .headers()
@@ -940,7 +940,7 @@ pub(crate) async fn collect_capped(response: wreq::Response, max_bytes: usize) -
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| ScError::Unreachable(error.without_url().to_string()))?;
+        let chunk = chunk.map_err(|error| ScError::Unreachable(error.without_uri().to_string()))?;
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             return Err(ScError::Unreachable(
                 "SoundCloud response exceeded the size limit".to_owned(),
