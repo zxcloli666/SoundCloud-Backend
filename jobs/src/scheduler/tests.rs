@@ -114,6 +114,18 @@ fn stuck_storage_tracks_are_requeued_at_the_five_minute_cadence() {
 }
 
 #[test]
+fn the_hard_negative_sweep_runs_ahead_of_the_queued_hard_negative_backlog() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SweepHardNegatives)
+        .expect("hard negative sweep schedule");
+
+    assert_eq!(schedule.interval_seconds, 60);
+    assert!(schedule.priority > 0);
+    assert_eq!(schedule.kind.lane(), JobKind::RecordHardNegative.lane());
+}
+
+#[test]
 fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()
