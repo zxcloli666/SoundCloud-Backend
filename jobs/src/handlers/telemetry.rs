@@ -114,10 +114,11 @@ impl TelemetryHandler {
         if result.recorded {
             return Ok(());
         }
-        if impression_may_still_arrive(detected_at, Utc::now()) {
-            return Err(JobError::retryable(anyhow::anyhow!(
-                "matching recommendation impression is not available yet"
-            )));
+        if let Some(wait) = impression_wait_left(detected_at, Utc::now()) {
+            return Err(JobError::postponed(
+                wait,
+                anyhow::anyhow!("matching recommendation impression is not available yet"),
+            ));
         }
         tracing::debug!(
             event_id = %event.event_id,
@@ -161,8 +162,14 @@ fn validate_hard_negative(event: &HardNegative) -> JobResult {
     Ok(())
 }
 
-fn impression_may_still_arrive(detected_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    now - detected_at < chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES)
+fn impression_wait_left(
+    detected_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<std::time::Duration> {
+    (detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES) - now)
+        .to_std()
+        .ok()
+        .filter(|left| !left.is_zero())
 }
 
 fn timestamp(milliseconds: i64) -> JobResult<DateTime<Utc>> {
@@ -249,7 +256,7 @@ mod tests {
         let job = hard_negative_job(event.clone());
 
         let missing = handler.record_hard_negative(&job).await.unwrap_err();
-        assert!(missing.is_retryable());
+        assert!(matches!(missing, JobError::Postponed { .. }));
 
         sqlx::query(
             "INSERT INTO rec_impressions (
@@ -260,7 +267,7 @@ mod tests {
         .execute(&pool)
         .await?;
         let future_only = handler.record_hard_negative(&job).await.unwrap_err();
-        assert!(future_only.is_retryable());
+        assert!(matches!(future_only, JobError::Postponed { .. }));
 
         sqlx::query(
             "INSERT INTO rec_impressions (
@@ -307,16 +314,52 @@ mod tests {
         Ok(())
     }
 
+    #[sqlx::test(migrations = false)]
+    async fn a_fresh_miss_is_postponed_to_the_end_of_the_window(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        let handler = TelemetryHandler::new(pool.clone(), pool.clone());
+        let detected_at = Utc::now() - chrono::Duration::minutes(3);
+        let job = hard_negative_job(HardNegative {
+            event_id: Uuid::now_v7(),
+            user_id: "user".to_owned(),
+            track_id: "track".to_owned(),
+            position_pct: 0.1,
+            created_at_unix_ms: detected_at.timestamp_millis(),
+        });
+
+        let failure = handler.record_hard_negative(&job).await.unwrap_err();
+
+        let JobError::Postponed { delay, .. } = failure else {
+            panic!("a fresh miss must wait without spending an attempt, got {failure:?}");
+        };
+        let left = chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES - 3);
+        assert!(delay <= left.to_std()?);
+        assert!(delay >= (left - chrono::Duration::seconds(5)).to_std()?);
+        Ok(())
+    }
+
     #[test]
     fn the_impression_wait_is_minutes_not_hours() {
         let detected_at = Utc::now();
-        assert!(impression_may_still_arrive(
-            detected_at,
-            detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES - 1)
-        ));
-        assert!(!impression_may_still_arrive(
-            detected_at,
-            detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES)
-        ));
+        assert_eq!(
+            impression_wait_left(
+                detected_at,
+                detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES - 1)
+            ),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            impression_wait_left(
+                detected_at,
+                detected_at + chrono::Duration::minutes(IMPRESSION_WAIT_MINUTES)
+            ),
+            None
+        );
+        assert_eq!(
+            impression_wait_left(detected_at, detected_at + chrono::Duration::hours(1)),
+            None
+        );
     }
 }
