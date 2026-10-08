@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SMOOTHING = 0.3
-SKIP_DECAY = 0.9
+SKIP_DECAY = 0.95
 MISS_MARGIN = 1.25
 
 
@@ -21,7 +21,9 @@ class Pace:
             return
         self.seconds_per_audio_s += SMOOTHING * (rate - self.seconds_per_audio_s)
 
-    def missed(self, audio_s: float, budget_s: float) -> None:
+    def missed(self, audio_s: float, budget_s: float, projected_s: float) -> None:
+        if projected_s > 0.0:
+            self.observe(audio_s, projected_s)
         floor = MISS_MARGIN * budget_s / max(audio_s, 1e-3)
         self.seconds_per_audio_s = max(self.seconds_per_audio_s, floor)
 

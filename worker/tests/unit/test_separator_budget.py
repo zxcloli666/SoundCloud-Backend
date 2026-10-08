@@ -34,6 +34,8 @@ def test_an_expiry_reports_its_progress_and_the_engine_budget() -> None:
     with pytest.raises(CallExpired) as raised:
         check_pace(now - 20.0, 2, 30, now + 100.0)
     assert raised.value.details["chunks"] == 2
+    assert raised.value.details["total_chunks"] == 30
+    assert raised.value.details["elapsed_s"] == pytest.approx(20.0, abs=1.0)
     assert raised.value.details["budget_s"] == pytest.approx(120.0, abs=1.0)
 
 
@@ -48,6 +50,16 @@ def test_an_expired_separation_call_keeps_its_progress_for_the_domain() -> None:
         0.0,
         Reason.DEADLINE_EXCEEDED,
     )
+
+
+def test_a_partial_separation_projects_the_full_run_from_its_chunks() -> None:
+    details = {"chunks": 3, "total_chunks": 30, "elapsed_s": 45.0, "budget_s": 300.0}
+    failure = TransientFailure(Reason.DEADLINE_EXCEEDED, "slot=sep after 3 of 30 chunks")
+    failure.__cause__ = EngineError(ErrorKind.EXPIRED, "after 3 of 30 chunks", details)
+    expired = separation_expired(failure)
+    assert expired is not None
+    assert (expired.total_chunks, expired.elapsed_s) == (30, 45.0)
+    assert expired.projected_s == 450.0
 
 
 def test_a_killed_separation_call_is_not_an_expiry() -> None:

@@ -48,6 +48,8 @@ BATCHED_SLOTS = ("muq", "mulan", "text")
 STOP_AT = "stop_at"
 CHUNKS = "chunks"
 BUDGET_S = "budget_s"
+TOTAL_CHUNKS = "total_chunks"
+ELAPSED_S = "elapsed_s"
 SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
 TEXT_BYTES_PER_TOKEN = 4
@@ -448,12 +450,18 @@ def separation_expired(failure: TransientFailure) -> SeparationExpired | None:
     if not isinstance(cause, EngineError) or cause.kind is not ErrorKind.EXPIRED:
         return None
     chunks = cause.details.get(CHUNKS)
-    budget_s = cause.details.get(BUDGET_S)
+    total = cause.details.get(TOTAL_CHUNKS)
     return SeparationExpired(
         failure.detail or cause.message,
         chunks=chunks if isinstance(chunks, int) else 0,
-        budget_s=float(budget_s) if isinstance(budget_s, int | float) else 0.0,
+        budget_s=seconds_of(cause.details.get(BUDGET_S)),
+        total_chunks=total if isinstance(total, int) else 0,
+        elapsed_s=seconds_of(cause.details.get(ELAPSED_S)),
     )
+
+
+def seconds_of(value: object) -> float:
+    return float(value) if isinstance(value, int | float) else 0.0
 
 
 @contextmanager

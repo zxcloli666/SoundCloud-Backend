@@ -257,7 +257,7 @@ class TranscribeLane:
                 if deadline.expired():
                     raise
                 if isinstance(error, SeparationExpired) and error.chunks > 0:
-                    pace.missed(audio_s, error.budget_s)
+                    pace.missed(audio_s, error.budget_s, error.projected_s)
             self._counters.inc("separation_fallback_total")
             log.warning("separation failed, aligning on the mix", extra={"error": repr(error)})
             return mix, False

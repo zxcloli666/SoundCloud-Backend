@@ -26,10 +26,26 @@ class EngineUnavailable(Exception):
 
 
 class SeparationExpired(TransientFailure):
-    def __init__(self, detail: str, *, chunks: int, budget_s: float) -> None:
+    def __init__(
+        self,
+        detail: str,
+        *,
+        chunks: int,
+        budget_s: float,
+        total_chunks: int = 0,
+        elapsed_s: float = 0.0,
+    ) -> None:
         super().__init__(Reason.DEADLINE_EXCEEDED, detail)
         self.chunks = chunks
         self.budget_s = budget_s
+        self.total_chunks = total_chunks
+        self.elapsed_s = elapsed_s
+
+    @property
+    def projected_s(self) -> float:
+        if self.chunks <= 0 or self.total_chunks < self.chunks:
+            return 0.0
+        return self.elapsed_s * self.total_chunks / self.chunks
 
 
 @dataclass(frozen=True)

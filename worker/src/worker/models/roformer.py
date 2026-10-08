@@ -18,6 +18,8 @@ WARMUP_S = 2.0
 STOP_AT = "stop_at"
 CHUNKS = "chunks"
 BUDGET_S = "budget_s"
+TOTAL_CHUNKS = "total_chunks"
+ELAPSED_S = "elapsed_s"
 SECONDS = "seconds"
 
 
@@ -124,7 +126,12 @@ def check_pace(began: float, done: int, total: int, stop_at: float) -> None:
         raise CallExpired(
             f"separation would end {finish - stop_at:.0f} s past its budget"
             f" after {done} of {total} chunks",
-            {CHUNKS: done, BUDGET_S: stop_at - began},
+            {
+                CHUNKS: done,
+                TOTAL_CHUNKS: total,
+                ELAPSED_S: now - began,
+                BUDGET_S: stop_at - began,
+            },
         )
 
 
