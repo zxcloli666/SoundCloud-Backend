@@ -129,6 +129,7 @@ pub fn record_execution(kind: &'static str, outcome: Outcome, elapsed: Duration)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
+    Postponed,
     Retryable,
     Terminal,
     Timeout,
@@ -138,6 +139,7 @@ impl Outcome {
     fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
+            Self::Postponed => "postponed",
             Self::Retryable => "retryable",
             Self::Terminal => "terminal",
             Self::Timeout => "timeout",
