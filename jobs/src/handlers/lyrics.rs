@@ -77,8 +77,12 @@ impl LyricsHandler {
     }
 
     pub async fn dispatch_transcription(&self, payload: StoredAudioDispatchPayload) -> JobResult {
+        let room = self
+            .backlog
+            .room(&TRANSCRIBE_LANE, self.dispatch.transcribe_backlog)
+            .await;
         self.transcription_dispatcher
-            .dispatch_transcription(payload)
+            .dispatch_transcription(payload, room)
             .await
     }
 
