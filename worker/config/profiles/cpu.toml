@@ -11,7 +11,7 @@ isolate_encode = true
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]
-capacity = { audio = 4, lyrics = 8, transcribe = 2, encode = 16, collab = 1, taste = 1, ai = 16 }
+capacity = { audio = 2, lyrics = 8, transcribe = 2, encode = 16, collab = 1, taste = 1, ai = 16 }
 required = { audio = true, lyrics = true, transcribe = true, encode = true, collab = true, taste = true, ai = true }
 
 [slots.muq]

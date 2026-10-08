@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from worker.models import muq_compat
-from worker.models.muq import SAMPLE_RATE, WARMUP_WINDOW_S, checked_windows, frozen
+from worker.models.muq import SAMPLE_RATE, WARMUP_WINDOW_S, checked_windows, frozen, windowed
 from worker.runtime.protocol import Arrays, BadInput, SlotSpec
 
 EMBED_AUDIO = "embed_audio"
@@ -59,8 +59,7 @@ class MulanSlot:
             raise RuntimeError(f"mulan {method} tower is not loaded in this engine")
         if method == EMBED_AUDIO:
             windows = checked_windows(arrays.get("windows"))
-            batch = torch.from_numpy(windows).to(self._device, self._dtype)
-            return {"vectors": self._vectors(wavs=batch)}, {}
+            return {"vectors": windowed(windows, self._device, self._audio_pass)}, {}
         if method == EMBED_TEXT:
             texts = self._checked_texts(args.get("texts"))
             return {"vectors": self._vectors(texts=texts)}, {}
@@ -68,6 +67,10 @@ class MulanSlot:
 
     def unload(self) -> None:
         self._model = None
+
+    def _audio_pass(self, windows: np.ndarray) -> np.ndarray:
+        batch = torch.from_numpy(windows).to(self._device, self._dtype)
+        return self._vectors(wavs=batch)
 
     def _vectors(self, **inputs: object) -> np.ndarray:
         with torch.inference_mode():

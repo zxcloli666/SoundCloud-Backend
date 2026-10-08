@@ -59,7 +59,7 @@ correlation-ключей и окон (`deadline_s`, `ack_wait_s`, `max_deliver`,
 | `gpu-24` | `slot` | audio 16, lyrics 32, transcribe 4, encode 32, collab 1, taste 1, ai 64 | 2/2/2/1 | доверенный хост, 24 ГБ |
 | `gpu-24-lane` | `lane` | как `gpu-24` | 2/2/2/1 | резерв `gpu-24`, если исполнитель в режиме `slot` не помещается в RAM |
 | `gpu-48` | `slot` | audio 32, lyrics 64, transcribe 8, encode 64, collab 1, taste 1, ai 64 | 4/4/4/4 | 48 ГБ; локальный LLM запасным провайдером |
-| `cpu` | `lane` | audio 4, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
+| `cpu` | `lane` | audio 2, lyrics 8, transcribe 2, encode 16, collab 1, taste 1, ai 16 | 1/1/1/1 | доверенный хост без GPU, oneDNN выключен |
 
 ### Процессы и потоки
 

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
 import torch
 
 from worker.models import muq_compat
-from worker.runtime.protocol import Arrays, BadInput, SlotSpec
+from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, SlotSpec
 
 SAMPLE_RATE = 24_000
 MIN_WINDOW_S = 1.0
@@ -46,12 +46,7 @@ class MuqSlot:
         self._model = None
 
     def _embed(self, windows: np.ndarray) -> np.ndarray:
-        step = 1 if self._device.type == "cpu" else len(windows)
-        parts = [
-            self._embed_pass(windows[start : start + step])
-            for start in range(0, len(windows), step)
-        ]
-        return np.ascontiguousarray(np.concatenate(parts), dtype=np.float32)
+        return windowed(windows, self._device, self._embed_pass)
 
     def _embed_pass(self, windows: np.ndarray) -> np.ndarray:
         batch = torch.from_numpy(windows).to(self._device, self._dtype)
@@ -60,6 +55,17 @@ class MuqSlot:
             pooled = torch.stack([layer.float().mean(dim=1) for layer in hidden]).mean(dim=0)
             vectors = torch.nn.functional.normalize(pooled, dim=-1)
         return vectors.cpu().numpy()
+
+
+def windowed(
+    windows: np.ndarray, device: torch.device, embed: Callable[[np.ndarray], np.ndarray]
+) -> np.ndarray:
+    step = 1 if device.type == "cpu" else len(windows)
+    parts: list[np.ndarray] = []
+    for start in range(0, len(windows), step):
+        CALL_GUARD.check()
+        parts.append(embed(windows[start : start + step]))
+    return np.ascontiguousarray(np.concatenate(parts), dtype=np.float32)
 
 
 def checked_windows(windows: np.ndarray | None) -> np.ndarray:

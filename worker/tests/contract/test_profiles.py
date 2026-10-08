@@ -64,7 +64,7 @@ DESIGN = {
         "lane",
         "trusted",
         {
-            "audio": 4,
+            "audio": 2,
             "lyrics": 8,
             "transcribe": 2,
             "encode": 16,
