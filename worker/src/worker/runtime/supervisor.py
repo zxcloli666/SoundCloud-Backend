@@ -32,6 +32,10 @@ LANE_GROUPS: Mapping[str, tuple[str, ...]] = {
     "audio": ("muq", "mulan", "text"),
     "sync": ("sep", "asr", "align", "mms"),
 }
+CPU_LANE_GROUPS: Mapping[str, tuple[str, ...]] = {
+    "audio": ("muq", "mulan"),
+    "sync": ("asr", "align", "mms"),
+}
 
 STATE_LOADING = "loading"
 STATE_READY = "ready"
@@ -41,22 +45,35 @@ STATE_UNLOADED = "unloaded"
 STATE_STOPPED = "stopped"
 PLANNED_CAUSES = frozenset({CAUSE_DEADLINE, CAUSE_PING, CAUSE_RECYCLE, CAUSE_STOP})
 GPU_DEVICES = frozenset({"auto", "cuda"})
+INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
+BULK_NICE = 10
+RESERVED_THREADS_MAX = 4
 
 
 @dataclass(frozen=True)
 class EnginePlan:
     name: str
     slots: tuple[SlotSpec, ...]
+    reserved: bool = False
+    threads: int = 0
+    nice: int = 0
 
     @property
     def slot_names(self) -> tuple[str, ...]:
         return tuple(spec.name for spec in self.slots)
+
+    @property
+    def inline(self) -> bool:
+        return set(self.slot_names) <= INLINE_SLOTS
 
 
 @dataclass(frozen=True)
 class RuntimePolicy:
     onednn: bool = True
     threads: int = 0
+    cpu_budget: int = 0
+    share_window_s: float = 30.0
+    serial_loads: bool = False
     release_after_call: bool = True
     recycle_after_calls: int = 10000
     recycle_gap_mib: int = 1024
@@ -111,6 +128,44 @@ def replica_name(base: str, index: int, total: int) -> str:
     return base if total == 1 else f"{base}#{index}"
 
 
+def available_cpus() -> int:
+    return max(1, len(os.sched_getaffinity(0)))
+
+
+def cpu_budget(cpus: int) -> int:
+    return cpus - 1 if cpus > 2 else cpus
+
+
+def reserved_threads(cpus: int) -> int:
+    return max(1, min(RESERVED_THREADS_MAX, cpus // 2))
+
+
+def budget_plans(plans: Iterable[EnginePlan], cpus: int) -> tuple[EnginePlan, ...]:
+    return tuple(
+        replace(plan, threads=planned_threads(plan, cpus), nice=planned_nice(plan))
+        for plan in plans
+    )
+
+
+def planned_threads(plan: EnginePlan, cpus: int) -> int:
+    if plan.inline:
+        return 1
+    if plan.reserved:
+        return reserved_threads(cpus)
+    return 0
+
+
+def planned_nice(plan: EnginePlan) -> int:
+    if plan.reserved or plan.inline:
+        return 0
+    return BULK_NICE
+
+
+def fair_share(budget: int, active: int) -> int:
+    engines = max(1, active)
+    return max(1, (2 * budget + engines) // (2 * engines))
+
+
 def on_gpu(device: str) -> bool:
     return device in GPU_DEVICES
 
@@ -150,11 +205,17 @@ class Supervisor:
             for slot in managed.plan.slot_names:
                 self._by_slot.setdefault(slot, []).append(managed)
         self._leased: set[EngineClient] = set()
+        self._leased_threads: dict[EngineClient, int] = {}
+        self._reserved_leases: set[EngineClient] = set()
+        self._bulk_leases: dict[EngineClient, str] = {}
+        self._urgent_waiters: dict[str, int] = {}
+        self._bulk_released_at: dict[str, float] = {}
         self._retiring: set[EngineClient] = set()
         self._changed = asyncio.Event()
         self._housekeeper: asyncio.Task[None] | None = None
         self._side_tasks: set[asyncio.Task[None]] = set()
         self._stopping = False
+        self._loads = asyncio.Semaphore(1 if policy.serial_loads else len(self._engines) or 1)
 
     @property
     def slots(self) -> tuple[str, ...]:
@@ -162,17 +223,19 @@ class Supervisor:
 
     async def start(self) -> None:
         swept = shm.sweep_dead_owners()
-        threads = self._policy.threads or max(
-            1, (os.cpu_count() or 1) // max(1, len(self._engines))
-        )
         self._launch = replace(
             self._launch,
-            threads=threads,
             onednn=self._policy.onednn,
             release_after_call=self._policy.release_after_call,
         )
         self._log.info(
-            "supervisor_start", engines=len(self._engines), threads=threads, shm_swept=swept
+            "supervisor_start",
+            engines=len(self._engines),
+            cpu_budget=self._policy.cpu_budget,
+            threads={m.plan.name: self.threads_label(m.plan) for m in self._engines},
+            nice={m.plan.name: m.plan.nice for m in self._engines},
+            reserved=[m.plan.name for m in self._engines if m.plan.reserved],
+            shm_swept=swept,
         )
         for managed in self._engines:
             managed.task = asyncio.create_task(
@@ -203,8 +266,8 @@ class Supervisor:
         self._notify()
         self._log.info("supervisor_stopped", shm_swept=swept)
 
-    def slot_state(self, slot: str) -> str:
-        hosts = self._by_slot.get(slot, [])
+    def slot_state(self, slot: str, *, reserved: bool = False) -> str:
+        hosts = self._hosts(slot, reserved)
         if not hosts:
             return "unknown"
         ready = [m.client for m in hosts if m.state == STATE_READY and m.client is not None]
@@ -239,11 +302,19 @@ class Supervisor:
                 "crashes": self._counters.value("slot_crashes_total", slot=slot),
                 "oom": self._counters.value("slot_oom_total", slot=slot),
                 "reserved_gap_mib": max(gaps, default=0),
+                "rss_mib": max(
+                    (m.client.rss_mib() for m in hosts if m.client is not None), default=0
+                ),
                 "calls": self._counters.value("slot_calls_total", slot=slot),
                 "p50_ms": quantiles["p50"],
                 "p95_ms": quantiles["p95"],
             }
         return report
+
+    def memory(self) -> dict[str, int]:
+        return {
+            m.plan.name: m.client.rss_mib() if m.client is not None else 0 for m in self._engines
+        }
 
     def engines(self) -> list[tuple[str, int, str]]:
         return [
@@ -251,29 +322,93 @@ class Supervisor:
             for m in self._engines
         ]
 
-    async def acquire(self, slot: str, deadline_at: float) -> EngineClient:
-        hosts = self._by_slot.get(slot)
+    def threads_label(self, plan: EnginePlan) -> str:
+        fixed = self._fixed_threads(plan)
+        if fixed:
+            return str(fixed)
+        if self._policy.cpu_budget:
+            return f"shared:{self._policy.cpu_budget}"
+        return "default"
+
+    def pool(self, *, reserved: bool) -> EnginePool:
+        return EnginePool(self, reserved)
+
+    async def acquire(
+        self, slot: str, deadline_at: float, *, reserved: bool = False, priority: bool = False
+    ) -> EngineClient:
+        hosts = self._hosts(slot, reserved)
         if not hosts:
             raise SlotUnavailable(slot, "unknown")
-        while True:
-            idle = self._idle_clients(hosts)
-            if idle:
-                client = next((c for c in idle if c.loaded(slot)), idle[0])
-                self._leased.add(client)
-                if await self._lease(client, slot, deadline_at):
-                    return client
-                continue
-            for state in (STATE_BROKEN, STATE_STOPPED):
-                if all(m.state == state for m in hosts):
-                    raise SlotUnavailable(slot, state)
-            remaining = deadline_at - self._clock.now()
-            if remaining <= 0:
-                raise DeadlineExceeded(f"acquire {slot}")
-            await self._wait_change(remaining)
+        urgent = reserved or priority
+        waiting = False
+        try:
+            while True:
+                idle = self._idle_engines(hosts)
+                if not urgent:
+                    idle = [m for m in idle if not self._urgent_waiters.get(m.plan.name)]
+                if idle:
+                    client = await self._lease_one(idle, slot, deadline_at, urgent)
+                    if client is not None:
+                        return client
+                    continue
+                for state in (STATE_BROKEN, STATE_STOPPED):
+                    if all(m.state == state for m in hosts):
+                        raise SlotUnavailable(slot, state)
+                remaining = deadline_at - self._clock.now()
+                if remaining <= 0:
+                    raise DeadlineExceeded(f"acquire {slot}")
+                if urgent:
+                    if not waiting:
+                        waiting = True
+                        self._count_urgent(hosts, 1)
+                    self._preempt_bulk(hosts)
+                await self._wait_change(remaining)
+        finally:
+            if waiting:
+                self._count_urgent(hosts, -1)
+                self._notify()
 
     def release(self, client: EngineClient) -> None:
+        if client in self._leased_threads and not self._fixed_share(client):
+            self._bulk_released_at[client.name] = self._clock.now()
         self._leased.discard(client)
+        self._leased_threads.pop(client, None)
+        self._reserved_leases.discard(client)
+        self._bulk_leases.pop(client, None)
+        client.clear_preemption()
         self._notify()
+
+    async def _lease_one(
+        self, idle: list[Managed], slot: str, deadline_at: float, urgent: bool
+    ) -> EngineClient | None:
+        managed = next((m for m in idle if m.client and m.client.loaded(slot)), idle[0])
+        client = managed.client
+        assert client is not None
+        self._leased.add(client)
+        if not await self._lease(client, slot, deadline_at):
+            return None
+        client.call_threads = self._call_threads(managed.plan, urgent)
+        self._leased_threads[client] = client.call_threads
+        if urgent and managed.plan.reserved:
+            self._reserved_leases.add(client)
+        if not urgent:
+            self._bulk_leases[client] = slot
+        return client
+
+    def _count_urgent(self, hosts: list[Managed], step: int) -> None:
+        for managed in hosts:
+            name = managed.plan.name
+            self._urgent_waiters[name] = self._urgent_waiters.get(name, 0) + step
+            if self._urgent_waiters[name] <= 0:
+                del self._urgent_waiters[name]
+
+    def _preempt_bulk(self, hosts: list[Managed]) -> None:
+        for managed in hosts:
+            client = managed.client
+            if client is None or client not in self._bulk_leases:
+                continue
+            if client.preempt():
+                self._counters.inc("slot_preemptions_total", slot=self._bulk_leases[client])
 
     async def kill(self, slot: str, cause: str) -> int:
         killed = 0
@@ -309,12 +444,43 @@ class Supervisor:
         managed = [m.client for m in self._engines if m.client is not None]
         return [client for client in (*managed, *self._retiring) if client.alive]
 
-    def _idle_clients(self, hosts: list[Managed]) -> list[EngineClient]:
+    def _hosts(self, slot: str, reserved: bool) -> list[Managed]:
+        hosts = self._by_slot.get(slot, [])
+        matching = [m for m in hosts if m.plan.reserved == reserved]
+        return matching or hosts
+
+    def _idle_engines(self, hosts: list[Managed]) -> list[Managed]:
         return [
-            m.client
+            m
             for m in hosts
             if m.state == STATE_READY and m.client is not None and self._is_idle(m.client)
         ]
+
+    def _fixed_threads(self, plan: EnginePlan) -> int:
+        return plan.threads or self._policy.threads
+
+    def _call_threads(self, plan: EnginePlan, urgent: bool) -> int:
+        if plan.inline or (urgent and plan.reserved):
+            return plan.threads
+        if self._policy.threads or not self._policy.cpu_budget:
+            return self._policy.threads
+        now = self._clock.now()
+        working = {
+            name
+            for name, released_at in self._bulk_released_at.items()
+            if now - released_at < self._policy.share_window_s
+        }
+        working.update(c.name for c in self._leased_threads if not self._fixed_share(c))
+        working.add(plan.name)
+        return fair_share(self._policy.cpu_budget, len(working))
+
+    def _fixed_share(self, client: EngineClient) -> bool:
+        if client in self._reserved_leases:
+            return True
+        return any(m.plan.inline and m.client is client for m in self._engines)
+
+    def _spawn_threads(self, plan: EnginePlan) -> int:
+        return self._fixed_threads(plan) or self._policy.cpu_budget
 
     async def _lease(self, client: EngineClient, slot: str, deadline_at: float) -> bool:
         ready = client.loaded(slot) or await self._load_within(client, slot, deadline_at)
@@ -374,10 +540,11 @@ class Supervisor:
             await self._after_death(managed, exited)
 
     def _new_client(self, managed: Managed) -> EngineClient:
+        plan = managed.plan
         return EngineClient(
-            managed.plan.name,
-            managed.plan.slots,
-            self._launch,
+            plan.name,
+            plan.slots,
+            replace(self._launch, threads=self._spawn_threads(plan), nice=plan.nice),
             self._counters,
             self._clock,
             self._log,
@@ -391,12 +558,15 @@ class Supervisor:
         managed.recycle_wanted = False
 
     async def _bring_up(self, client: EngineClient) -> None:
-        await client.spawn()
-        for spec in client.specs:
-            state = await client.load(spec.name, self._policy.load_timeout_s)
-            if not state.loaded:
-                raise EngineCrashed(client.name, f"slot {spec.name} reported unloaded after load")
-        self._log.info("engine_ready", engine=client.name, pid=client.pid)
+        async with self._loads:
+            await client.spawn()
+            for spec in client.specs:
+                state = await client.load(spec.name, self._policy.load_timeout_s)
+                if not state.loaded:
+                    raise EngineCrashed(
+                        client.name, f"slot {spec.name} reported unloaded after load"
+                    )
+        self._log.info("engine_ready", engine=client.name, pid=client.pid, rss_mib=client.rss_mib())
 
     async def _await_current_exit(self, managed: Managed) -> EngineClient:
         while True:
@@ -658,3 +828,22 @@ class Supervisor:
         _, pending = await asyncio.wait({waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
+
+
+class EnginePool:
+    def __init__(self, supervisor: Supervisor, reserved: bool) -> None:
+        self._supervisor = supervisor
+        self._reserved = reserved
+
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> EngineClient:
+        return await self._supervisor.acquire(
+            slot, deadline_at, reserved=self._reserved, priority=priority
+        )
+
+    def release(self, client: EngineClient) -> None:
+        self._supervisor.release(client)
+
+    def report_oom(self, slot: str, client: EngineClient) -> None:
+        self._supervisor.report_oom(slot, client)

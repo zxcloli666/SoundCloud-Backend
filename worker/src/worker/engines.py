@@ -21,6 +21,8 @@ from worker.domain.ports import (
     Float32Array,
     Int16Array,
     LanguageGuess,
+    Separation,
+    SeparationExpired,
     Span,
     TextKind,
     TokenSpan,
@@ -43,6 +45,12 @@ from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
+STOP_AT = "stop_at"
+CHUNKS = "chunks"
+BUDGET_S = "budget_s"
+TOTAL_CHUNKS = "total_chunks"
+ELAPSED_S = "elapsed_s"
+SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
 TEXT_BYTES_PER_TOKEN = 4
 
@@ -58,9 +66,11 @@ class EngineSlots:
         batchers: Mapping[str, Batcher],
         max_batch: Mapping[str, int],
         before_queue: Callable[[], None],
+        priority_batchers: Mapping[str, Batcher] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._batchers = batchers
+        self._priority_batchers = priority_batchers or {}
         self._max_batch = max_batch
         self._before_queue = before_queue
         self._orphans: set[asyncio.Task[Result]] = set()
@@ -80,7 +90,7 @@ class EngineSlots:
         costs: Sequence[int] | None = None,
         priority: bool = False,
     ) -> Result:
-        batcher = self._batchers.get(slot)
+        batcher = (priority and self._priority_batchers.get(slot)) or self._batchers.get(slot)
         if batcher is None:
             raise EngineUnavailable(slot, "unknown")
         self._before_queue()
@@ -130,7 +140,7 @@ class EngineSlots:
         if reply.error_kind is not None:
             if reply.error_kind is ErrorKind.OOM:
                 self._supervisor.report_oom(slot, client)
-            raise EngineError(reply.error_kind, reply.error or "")
+            raise EngineError(reply.error_kind, reply.error or "", reply.result)
         try:
             outputs = shm.take_all(reply.arrays)
         except OSError as error:
@@ -190,11 +200,23 @@ class RuntimeEngines:
         )
         return float32(arrays, "vectors", "mulan")
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array:
-        arrays, _ = await self._slots.direct(
-            "sep", "separate", {"mix": mix_stereo_44k}, {}, deadline
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Separation:
+        try:
+            arrays, result = await self._slots.direct(
+                "sep", "separate", {"mix": mix_stereo_44k}, {STOP_AT: budget.at}, deadline
+            )
+        except TransientFailure as failure:
+            expired = separation_expired(failure)
+            if expired is None:
+                raise
+            raise expired from failure
+        seconds = result.get(SECONDS)
+        return Separation(
+            float32(arrays, "vocals", "sep"),
+            float(seconds) if isinstance(seconds, int | float) else 0.0,
         )
-        return float32(arrays, "vocals", "sep")
 
     async def vad(
         self,
@@ -423,6 +445,25 @@ class RuntimeEngines:
         return [draft(row) for row in rows]
 
 
+def separation_expired(failure: TransientFailure) -> SeparationExpired | None:
+    cause = failure.__cause__
+    if not isinstance(cause, EngineError) or cause.kind is not ErrorKind.EXPIRED:
+        return None
+    chunks = cause.details.get(CHUNKS)
+    total = cause.details.get(TOTAL_CHUNKS)
+    return SeparationExpired(
+        failure.detail or cause.message,
+        chunks=chunks if isinstance(chunks, int) else 0,
+        budget_s=seconds_of(cause.details.get(BUDGET_S)),
+        total_chunks=total if isinstance(total, int) else 0,
+        elapsed_s=seconds_of(cause.details.get(ELAPSED_S)),
+    )
+
+
+def seconds_of(value: object) -> float:
+    return float(value) if isinstance(value, int | float) else 0.0
+
+
 @contextmanager
 def translated(slot: str, bad_input: Reason) -> Iterator[None]:
     try:
@@ -433,6 +474,8 @@ def translated(slot: str, bad_input: Reason) -> Iterator[None]:
             raise PermanentFailure(bad_input, detail) from error
         if error.kind is ErrorKind.OOM:
             raise TransientFailure(Reason.OUT_OF_MEMORY, detail) from error
+        if error.kind is ErrorKind.EXPIRED:
+            raise TransientFailure(Reason.DEADLINE_EXCEEDED, detail) from error
         raise TransientFailure(Reason.INTERNAL_ERROR, detail) from error
     except DeadlineExceeded as error:
         raise TransientFailure(

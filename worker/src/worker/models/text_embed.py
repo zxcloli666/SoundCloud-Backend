@@ -7,9 +7,10 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
-from worker.runtime.protocol import Arrays, BadInput, SlotSpec
+from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, SlotSpec
 
 MAX_TOKENS = 8192
+PREEMPTABLE_LAYER = "DecoderLayer"
 EMBED = "embed"
 PROMPTS: Mapping[str, str | None] = {"document": None, "query": "query"}
 WARMUP_TEXTS = ("warm up the lyrics encoder", "прогрев модели текстов")
@@ -30,6 +31,9 @@ class TextEmbedSlot:
         )
         model.max_seq_length = MAX_TOKENS
         model.requires_grad_(False)
+        for module in model.modules():
+            if type(module).__name__.endswith(PREEMPTABLE_LAYER):
+                module.register_forward_pre_hook(checkpoint)
         self._model = model.eval()
 
     def warmup(self) -> None:
@@ -64,6 +68,10 @@ class TextEmbedSlot:
 
     def unload(self) -> None:
         self._model = None
+
+
+def checkpoint(*_: object) -> None:
+    CALL_GUARD.check()
 
 
 def token_counts(

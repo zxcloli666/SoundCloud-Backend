@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from worker.domain.deadline import Deadline
+from worker.domain.outcome import Reason, TransientFailure
 
 Float32Array = NDArray[np.float32]
 Int16Array = NDArray[np.int16]
@@ -22,6 +23,35 @@ class EngineUnavailable(Exception):
         super().__init__(f"slot {slot} is {state}")
         self.slot = slot
         self.state = state
+
+
+class SeparationExpired(TransientFailure):
+    def __init__(
+        self,
+        detail: str,
+        *,
+        chunks: int,
+        budget_s: float,
+        total_chunks: int = 0,
+        elapsed_s: float = 0.0,
+    ) -> None:
+        super().__init__(Reason.DEADLINE_EXCEEDED, detail)
+        self.chunks = chunks
+        self.budget_s = budget_s
+        self.total_chunks = total_chunks
+        self.elapsed_s = elapsed_s
+
+    @property
+    def projected_s(self) -> float:
+        if self.chunks <= 0 or self.total_chunks < self.chunks:
+            return 0.0
+        return self.elapsed_s * self.total_chunks / self.chunks
+
+
+@dataclass(frozen=True)
+class Separation:
+    vocals: Float32Array
+    seconds: float
 
 
 @dataclass(frozen=True)
@@ -80,7 +110,9 @@ class Engines(Protocol):
 
     async def embed_text_mulan(self, texts: Sequence[str], deadline: Deadline) -> Float32Array: ...
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array: ...
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Separation: ...
 
     async def vad(
         self,

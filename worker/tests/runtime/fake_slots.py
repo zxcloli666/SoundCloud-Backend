@@ -8,7 +8,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from worker.runtime.protocol import Arrays, BadInput, SlotSpec
+from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, CallExpired, SlotSpec
 
 
 class Fake:
@@ -48,6 +48,16 @@ class Fake:
             leave_orphan(str(args["pid_file"]))
         if method == "bad":
             raise BadInput("bad row")
+        if method == "expire":
+            raise CallExpired("stopped between chunks")
+        if method == "layers":
+            for _ in range(int(str(args.get("layers", 100)))):
+                CALL_GUARD.check()
+                time.sleep(0.02)
+        if method == "threads":
+            import torch
+
+            return {}, {"threads": torch.get_num_threads(), "nice": os.nice(0)}
         if method == "boom":
             raise ValueError("model exploded")
         if method == "oom" and rows > int(str(args.get("fits", 1))):

@@ -88,7 +88,9 @@ async def test_health_requests_are_answered_on_trusted_nodes(
     await subscription.callback(request)
     subject, body, _ = harness.bus.core_published[-1]
     assert subject == "_INBOX.ops.1"
-    assert json.loads(body)["lanes"]["audio"]["inflight"] == 0
+    lane = json.loads(body)["lanes"]["audio"]
+    assert lane["inflight"] == 0
+    assert (lane["per_hour"], lane["task_p50_ms"], lane["task_p95_ms"]) == (0.0, 0.0, 0.0)
 
 
 async def test_public_nodes_do_not_subscribe_to_health(

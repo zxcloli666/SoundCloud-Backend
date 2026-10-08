@@ -53,6 +53,9 @@ class Deadline:
     def minus(self, seconds: float) -> Deadline:
         return Deadline(self.at - seconds, self.now)
 
+    def share(self, fraction: float) -> Deadline:
+        return Deadline(self.now() + self.remaining() * fraction, self.now)
+
     def check(self, stage: str) -> None:
         if self.expired():
             raise TransientFailure(Reason.DEADLINE_EXCEEDED, f"stage={stage}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -9,11 +10,17 @@ import yaml
 from mel_band_roformer import ensure_model_assets, get_model_from_config
 from ml_collections import ConfigDict
 
-from worker.runtime.protocol import Arrays, BadInput, SlotSpec
+from worker.runtime.protocol import Arrays, BadInput, CallExpired, SlotSpec
 
 CHANNELS = 2
 OVERLAP = 2
 WARMUP_S = 2.0
+STOP_AT = "stop_at"
+CHUNKS = "chunks"
+BUDGET_S = "budget_s"
+TOTAL_CHUNKS = "total_chunks"
+ELAPSED_S = "elapsed_s"
+SECONDS = "seconds"
 
 
 class RoformerSeparator:
@@ -52,13 +59,18 @@ class RoformerSeparator:
         mix = arrays.get("mix")
         if mix is None or mix.ndim != 2 or mix.shape[0] != CHANNELS or mix.shape[1] < 1:
             raise BadInput("mix must be a [2, n] float32 array")
-        vocals = self._demix(torch.from_numpy(np.ascontiguousarray(mix, dtype=np.float32)))
-        return {"vocals": vocals}, {}
+        stop_at = args.get(STOP_AT)
+        if stop_at is not None and (isinstance(stop_at, bool) or not isinstance(stop_at, float)):
+            raise BadInput("stop_at must be a monotonic time in seconds")
+        audio = torch.from_numpy(np.ascontiguousarray(mix, dtype=np.float32))
+        began = time.monotonic()
+        vocals = self._demix(audio, stop_at)
+        return {"vocals": vocals}, {SECONDS: time.monotonic() - began}
 
     def unload(self) -> None:
         self._model = None
 
-    def _demix(self, mix: torch.Tensor) -> np.ndarray:
+    def _demix(self, mix: torch.Tensor, stop_at: float | None) -> np.ndarray:
         model = self._require_model()
         step = self._chunk // OVERLAP
         border = self._chunk - step
@@ -70,7 +82,10 @@ class RoformerSeparator:
         accumulated = torch.zeros(padded.shape, dtype=torch.float32, device=self._device)
         weights = torch.zeros(padded.shape[1], dtype=torch.float32, device=self._device)
         starts = list(range(0, padded.shape[1], step))
+        began = time.monotonic()
         for first in range(0, len(starts), self._max_batch):
+            if stop_at is not None:
+                check_pace(began, first, len(starts), stop_at)
             batch_starts = starts[first : first + self._max_batch]
             chunks = torch.stack([self._chunk_at(padded, start) for start in batch_starts])
             estimated = self._forward(model, chunks)
@@ -102,6 +117,22 @@ class RoformerSeparator:
         if self._model is None:
             raise RuntimeError("roformer is not loaded")
         return self._model
+
+
+def check_pace(began: float, done: int, total: int, stop_at: float) -> None:
+    now = time.monotonic()
+    finish = now if done == 0 else began + (now - began) * total / done
+    if finish > stop_at:
+        raise CallExpired(
+            f"separation would end {finish - stop_at:.0f} s past its budget"
+            f" after {done} of {total} chunks",
+            {
+                CHUNKS: done,
+                TOTAL_CHUNKS: total,
+                ELAPSED_S: now - began,
+                BUDGET_S: stop_at - began,
+            },
+        )
 
 
 def hann(size: int, device: str) -> torch.Tensor:

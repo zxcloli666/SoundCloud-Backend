@@ -60,7 +60,20 @@ DESIGN = {
         dict.fromkeys(SYNC_X2, 4),
         local_llm=True,
     ),
-    "cpu": Profile("lane", "trusted", {"lyrics": 1, "encode": 1, "collab": 1, "ai": 16}, {}),
+    "cpu": Profile(
+        "lane",
+        "trusted",
+        {
+            "audio": 2,
+            "lyrics": 8,
+            "transcribe": 2,
+            "encode": 16,
+            "collab": 1,
+            "taste": 1,
+            "ai": 16,
+        },
+        dict.fromkeys(SYNC_X2, 1),
+    ),
 }
 
 
@@ -152,12 +165,20 @@ def test_slot_mode_gpu_profiles_use_batches_that_fit_the_card(name: str) -> None
     assert batches == SLOT_MODE_MAX_BATCH
 
 
-def test_cpu_profile_turns_onednn_off_and_skips_slow_lanes() -> None:
+def test_cpu_profile_serves_every_lane_with_one_copy_of_each_model() -> None:
     settings = load("cpu")
     assert settings.runtime.device == "cpu"
     assert settings.runtime.onednn is False
-    assert settings.runtime.allow_slow_lanes is False
-    assert not {"audio", "transcribe"} & set(settings.lanes.enabled)
+    assert settings.runtime.allow_slow_lanes is True
+    assert settings.runtime.isolate_encode is True
+    assert set(settings.lanes.enabled) == set(s.LANES)
+    assert all(settings.slots[slot].replicas == 1 for slot in SYNC_X2)
+    assert all(settings.lanes.capacity[lane] > 1 for lane in ("audio", "lyrics", "transcribe"))
+
+
+def test_only_the_cpu_profile_isolates_encode() -> None:
+    for name in DESIGN:
+        assert load(name).runtime.isolate_encode is (name == "cpu"), name
 
 
 def test_only_the_48_gigabyte_profile_loads_the_local_llm() -> None:

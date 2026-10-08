@@ -28,14 +28,21 @@ from worker.runtime.protocol import Arrays, Call, ErrorKind, Reply
 
 SOLO_AFTER_RESTART_S = 60.0
 OOM_SHRINK = 0.75
+PACE_SMOOTHING = 0.3
+SHED_BELOW = 0.5
+MAX_PREEMPTIONS = 4
+PREEMPT_SLACK = 2.0
 STAGE_QUEUE = "queue"
 STAGE_CALL = "engine call"
+STAGE_PROJECTED = "projected call"
 
 RowResult = tuple[dict[str, np.ndarray], dict[str, object], Mapping[str, object]]
 
 
 class EnginePool(Protocol):
-    async def acquire(self, slot: str, deadline_at: float) -> EngineClient: ...
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> EngineClient: ...
 
     def release(self, client: EngineClient) -> None: ...
 
@@ -89,6 +96,7 @@ class Row:
     solo: bool = False
     isolate: bool = False
     cap: int = 0
+    preemptions: int = 0
     settled: bool = False
 
     @property
@@ -135,11 +143,17 @@ class Batcher:
         self._solo_until = 0.0
         self._loop: asyncio.Task[None] | None = None
         self._inflight: set[asyncio.Task[None]] = set()
+        self._priority_arrived = asyncio.Event()
+        self._seconds_per_cost = 0.0
         self._closed = False
 
     @property
     def limit(self) -> int:
         return self._limit
+
+    @property
+    def seconds_per_cost(self) -> float:
+        return self._seconds_per_cost
 
     async def submit(
         self,
@@ -160,6 +174,8 @@ class Batcher:
             queue.append(Row(submission, index, row_costs[index], priority))
         if self._loop is None:
             self._loop = asyncio.create_task(self._run(), name=f"batcher:{self._slot}")
+        if priority:
+            self._priority_arrived.set()
         self._wake.set()
         await submission.done
         return submission.assemble()
@@ -279,14 +295,28 @@ class Batcher:
                 self._settle(row)
             elif row.deadline_at <= now:
                 self._settle(row, error=DeadlineExceeded(STAGE_QUEUE))
+            elif self._cannot_finish(row, now):
+                self._counters.inc("batch_rows_shed_total", slot=self._slot)
+                self._settle(row, error=DeadlineExceeded(STAGE_PROJECTED))
             else:
                 live.append(row)
         return live
 
+    def _cannot_finish(self, row: Row, now: float) -> bool:
+        if row.priority:
+            return False
+        projected = row.cost * self._seconds_per_cost
+        return row.deadline_at - now < SHED_BELOW * projected
+
     async def _acquire(self, batch: list[Row]) -> EngineClient | None:
         earliest = min(row.deadline_at for row in batch)
+        priority = any(row.priority for row in batch)
+        client: EngineClient | None
         try:
-            client = await self._pool.acquire(self._slot, earliest)
+            if priority:
+                client = await self._pool.acquire(self._slot, earliest, priority=True)
+            else:
+                client = await self._acquire_bulk(earliest)
         except SlotUnavailable as error:
             for row in batch:
                 self._settle(row, error=error)
@@ -294,19 +324,39 @@ class Batcher:
         except DeadlineExceeded:
             self._requeue(self._expire(batch), front=True)
             return None
+        if client is None:
+            self._requeue(batch, front=True)
+            return None
         live = self._expire(batch)
-        if len(live) != len(batch):
+        if len(live) != len(batch) or (not priority and self._high):
             self._pool.release(client)
             self._requeue(live, front=True)
             return None
         return client
+
+    async def _acquire_bulk(self, deadline_at: float) -> EngineClient | None:
+        self._priority_arrived.clear()
+        if self._high:
+            return None
+        acquiring = asyncio.ensure_future(self._pool.acquire(self._slot, deadline_at))
+        arrived = asyncio.ensure_future(self._priority_arrived.wait())
+        try:
+            await asyncio.wait({acquiring, arrived}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            arrived.cancel()
+            if not acquiring.done():
+                acquiring.cancel()
+                await asyncio.gather(acquiring, return_exceptions=True)
+        if acquiring.cancelled():
+            return None
+        return acquiring.result()
 
     async def _execute(self, client: EngineClient, batch: list[Row]) -> None:
         call_id = next_message_id()
         blocks = shm.SharedBlocks(os.getpid(), client.pid, call_id, "in")
         self._counters.observe("slot_batch_rows", len(batch), slot=self._slot)
         try:
-            call = build_call(call_id, self._slot, batch, blocks)
+            call = build_call(call_id, self._slot, batch, blocks, self._preemptible(batch))
             reply = await client.call(call)
         except EngineKilled as killed:
             self._after_kill(batch, killed)
@@ -329,6 +379,14 @@ class Batcher:
             blocks.release()
             self._pool.release(client)
         self._after_reply(client, batch, reply)
+
+    def _preemptible(self, batch: list[Row]) -> bool:
+        if any(row.priority or row.preemptions >= MAX_PREEMPTIONS for row in batch):
+            return False
+        if not any(row.preemptions for row in batch):
+            return True
+        needed = PREEMPT_SLACK * self._seconds_per_cost * sum(row.cost for row in batch)
+        return min(row.deadline_at for row in batch) - self._clock.now() > needed
 
     def _after_kill(self, batch: list[Row], killed: EngineKilled) -> None:
         now = self._clock.now()
@@ -353,10 +411,20 @@ class Batcher:
 
     def _after_reply(self, client: EngineClient, batch: list[Row], reply: Reply) -> None:
         if reply.ok:
+            self._learn_pace(batch, reply)
             self._distribute(client, batch, reply)
             return
         assert reply.error_kind is not None
         message = reply.error or ""
+        if reply.error_kind is ErrorKind.PREEMPTED:
+            self._counters.inc("batch_preempted_total", slot=self._slot)
+            for row in batch:
+                row.preemptions += 1
+            self._requeue(batch, front=True)
+            return
+        if reply.error_kind is ErrorKind.EXPIRED:
+            self._after_expiry(batch, message)
+            return
         if reply.error_kind is ErrorKind.OOM:
             self._pool.report_oom(self._slot, client)
             self._shrunk_by.add(client)
@@ -377,6 +445,25 @@ class Batcher:
         error = EngineError(reply.error_kind, message)
         for row in batch:
             self._settle(row, error=error)
+
+    def _after_expiry(self, batch: list[Row], message: str) -> None:
+        self._counters.inc("batch_expired_total", slot=self._slot)
+        cutoff = min(row.deadline_at for row in batch)
+        late = [row for row in batch if row.deadline_at <= cutoff]
+        for row in late:
+            self._settle(row, error=DeadlineExceeded(STAGE_CALL))
+        self._requeue([row for row in batch if row.deadline_at > cutoff], front=True)
+        self._log.warning("batch_expired", rows=len(batch), late=len(late), error=message)
+
+    def _learn_pace(self, batch: list[Row], reply: Reply) -> None:
+        cost = sum(row.cost for row in batch)
+        if any(row.priority for row in batch) or 2 * cost < self._max_batch:
+            return
+        rate = reply.duration_ms / 1000.0 / cost
+        if self._seconds_per_cost == 0.0:
+            self._seconds_per_cost = rate
+            return
+        self._seconds_per_cost += PACE_SMOOTHING * (rate - self._seconds_per_cost)
 
     def _distribute(self, client: EngineClient, batch: list[Row], reply: Reply) -> None:
         try:
@@ -432,6 +519,13 @@ class Batcher:
         elif error is not None and submission.error is None:
             submission.error = error
         submission.remaining -= 1
+        if isinstance(error, DeadlineExceeded) and row.preemptions:
+            self._counters.inc("batch_rows_expired_after_preemption_total", slot=self._slot)
+            self._log.warning(
+                "batch_row_expired_after_preemption",
+                preemptions=row.preemptions,
+                stage=error.stage,
+            )
         if submission.remaining > 0 or submission.done.done():
             return
         if submission.error is not None:
@@ -494,7 +588,9 @@ def normalize_costs(costs: Sequence[int] | None, rows: int) -> list[int]:
     return [max(1, int(cost)) for cost in costs]
 
 
-def build_call(call_id: int, slot: str, batch: list[Row], blocks: shm.SharedBlocks) -> Call:
+def build_call(
+    call_id: int, slot: str, batch: list[Row], blocks: shm.SharedBlocks, preemptible: bool
+) -> Call:
     head = batch[0].submission
     arrays = {
         key: np.concatenate([row.arrays()[key] for row in batch], axis=0) for key in head.arrays
@@ -509,4 +605,5 @@ def build_call(call_id: int, slot: str, batch: list[Row], blocks: shm.SharedBloc
         deadline_at=min(row.deadline_at for row in batch),
         arrays=blocks.share(arrays),
         args=args,
+        preemptible=preemptible,
     )

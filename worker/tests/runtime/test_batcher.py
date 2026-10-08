@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pytest
@@ -12,7 +12,14 @@ import pytest
 from tests.runtime.support import quiet_log
 from worker.observability.counters import Counters
 from worker.runtime import shm
-from worker.runtime.batcher import Batcher, prepare
+from worker.runtime.batcher import (
+    MAX_PREEMPTIONS,
+    STAGE_CALL,
+    STAGE_PROJECTED,
+    STAGE_QUEUE,
+    Batcher,
+    prepare,
+)
 from worker.runtime.engine_client import (
     CAUSE_DEADLINE,
     DeadlineExceeded,
@@ -55,6 +62,7 @@ class FakeEngine:
     alive: bool = True
     calls: list[Call] = field(default_factory=list)
     rows: list[int] = field(default_factory=list)
+    preempted: bool = False
 
     async def call(self, call: Call) -> Reply:
         self.calls.append(call)
@@ -64,8 +72,12 @@ class FakeEngine:
         if isinstance(hang, list) and any(hang):
             await asyncio.sleep(max(0.0, call.deadline_at - time.monotonic()))
             raise EngineKilled(self.name, CAUSE_DEADLINE)
-        if self.latency_s:
-            await asyncio.sleep(self.latency_s)
+        until = time.monotonic() + self.latency_s
+        while time.monotonic() < until:
+            if self.preempted and call.preemptible:
+                self.preempted = False
+                return Reply(call.id, error_kind=ErrorKind.PREEMPTED, error="preempted")
+            await asyncio.sleep(0.005)
         return self.behaviour(call, arrays)
 
 
@@ -74,31 +86,58 @@ class FakePool:
         self.engines = list(engines)
         self.state = state
         self.busy: set[str] = set()
+        self.bulk: set[str] = set()
+        self.urgent = 0
         self.oom_reports: list[str] = []
+        self.preempted: list[str] = []
         self._changed = asyncio.Event()
 
-    async def acquire(self, slot: str, deadline_at: float) -> FakeEngine:
-        while True:
-            if self.state != "ready":
-                raise SlotUnavailable(slot, self.state)
-            for engine in self.engines:
-                if engine.name not in self.busy:
-                    self.busy.add(engine.name)
-                    return engine
-            remaining = deadline_at - time.monotonic()
-            if remaining <= 0:
-                raise DeadlineExceeded("acquire")
-            waiter = asyncio.create_task(self._changed.wait())
-            await asyncio.wait({waiter}, timeout=remaining)
-            waiter.cancel()
+    async def acquire(self, slot: str, deadline_at: float, *, priority: bool = False) -> FakeEngine:
+        waiting = False
+        try:
+            while True:
+                if self.state != "ready":
+                    raise SlotUnavailable(slot, self.state)
+                for engine in self.engines:
+                    if engine.name not in self.busy and (priority or not self.urgent):
+                        self.busy.add(engine.name)
+                        if not priority:
+                            self.bulk.add(engine.name)
+                        return engine
+                remaining = deadline_at - time.monotonic()
+                if remaining <= 0:
+                    raise DeadlineExceeded("acquire")
+                if priority:
+                    if not waiting:
+                        waiting = True
+                        self.urgent += 1
+                    self._preempt_bulk()
+                waiter = asyncio.create_task(self._changed.wait())
+                await asyncio.wait({waiter}, timeout=remaining)
+                waiter.cancel()
+        finally:
+            if waiting:
+                self.urgent -= 1
+                self._notify()
 
     def release(self, engine: FakeEngine) -> None:
         self.busy.discard(engine.name)
-        self._changed.set()
-        self._changed = asyncio.Event()
+        self.bulk.discard(engine.name)
+        engine.preempted = False
+        self._notify()
 
     def report_oom(self, slot: str, client: FakeEngine) -> None:
         self.oom_reports.append(client.name)
+
+    def _preempt_bulk(self) -> None:
+        for engine in self.engines:
+            if engine.name in self.bulk and not engine.preempted:
+                self.preempted.append(engine.name)
+                engine.preempted = True
+
+    def _notify(self) -> None:
+        self._changed.set()
+        self._changed = asyncio.Event()
 
 
 def batcher(pool: FakePool, max_batch: int = 8, max_wait_ms: int = 20) -> Batcher:
@@ -200,6 +239,77 @@ async def test_priority_rows_jump_the_audio_queue() -> None:
         first_encode = methods.index("encode")
         assert first_encode <= 2
         assert sum(1 for m in methods[first_encode:] if m == "audio") >= 1
+    finally:
+        await b.close()
+
+
+async def test_a_priority_row_preempts_the_bulk_call_and_the_bulk_rows_rerun() -> None:
+    engine = FakeEngine("e", latency_s=2.0)
+    pool = FakePool(engine)
+    b = batcher(pool, max_batch=1, max_wait_ms=0)
+    try:
+        bulk = asyncio.create_task(b.submit("lyrics", {"x": rows(1)}, {}, soon(20)))
+        await asyncio.sleep(0.1)
+        engine.latency_s = 0.02
+        started = time.monotonic()
+        await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        assert time.monotonic() - started < 0.5
+        outputs, _ = await bulk
+        assert np.array_equal(outputs["x"], rows(1) * 2)
+        assert pool.preempted == ["e"]
+        assert [(c.method, c.preemptible) for c in engine.calls] == [
+            ("lyrics", True),
+            ("encode", False),
+            ("lyrics", True),
+        ]
+    finally:
+        await b.close()
+
+
+async def test_a_bulk_row_stops_being_preempted_after_the_cap() -> None:
+    engine = FakeEngine("e", latency_s=0.4)
+    pool = FakePool(engine)
+    b = batcher(pool, max_batch=1, max_wait_ms=0)
+    try:
+        bulk = asyncio.create_task(b.submit("lyrics", {"x": rows(1)}, {}, soon(30)))
+        for _ in range(MAX_PREEMPTIONS + 1):
+            await asyncio.sleep(0.1)
+            await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        await bulk
+        lyrics = [c.preemptible for c in engine.calls if c.method == "lyrics"]
+        assert lyrics == [True] * MAX_PREEMPTIONS + [False]
+    finally:
+        await b.close()
+
+
+async def test_a_row_that_expires_after_preemption_is_counted() -> None:
+    engine = FakeEngine("e", latency_s=0.6)
+    pool = FakePool(engine)
+    counters = Counters()
+    b = Batcher("fake", 1, 0, pool, counters, log=quiet_log())
+    try:
+        bulk = asyncio.create_task(b.submit("lyrics", {"x": rows(1)}, {}, soon(0.5)))
+        await asyncio.sleep(0.1)
+        await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        with pytest.raises(DeadlineExceeded) as raised:
+            await bulk
+        assert raised.value.stage == STAGE_QUEUE
+        assert counters.value("batch_rows_expired_after_preemption_total", slot="fake") == 1
+    finally:
+        await b.close()
+
+
+async def test_priority_batches_are_never_preempted() -> None:
+    engine = FakeEngine("e", latency_s=0.2)
+    pool = FakePool(engine)
+    b = batcher(pool, max_batch=1, max_wait_ms=0)
+    try:
+        first = asyncio.create_task(b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True))
+        await asyncio.sleep(0.05)
+        await b.submit("encode", {"x": rows(1)}, {}, soon(20), priority=True)
+        await first
+        assert pool.preempted == []
+        assert len(engine.calls) == 2
     finally:
         await b.close()
 
@@ -398,5 +508,60 @@ async def test_engine_restart_restores_the_batch_limit_shrunk_by_oom() -> None:
         await b.submit("m", {"x": rows(4)}, {}, soon())
         assert b.limit == 4
         assert fresh.rows == [4]
+    finally:
+        await b.close()
+
+
+def slow(seconds_per_row: float) -> Behaviour:
+    def behaviour(call: Call, arrays: dict[str, np.ndarray]) -> Reply:
+        reply = echo(call, arrays)
+        rows = next(iter(arrays.values())).shape[0]
+        return replace(reply, duration_ms=seconds_per_row * rows * 1000.0)
+
+    return behaviour
+
+
+async def test_bulk_rows_that_cannot_finish_in_time_are_shed_before_the_call() -> None:
+    engine = FakeEngine("e", slow(1.0))
+    counters = Counters()
+    b = Batcher("fake", 4, 0, FakePool(engine), counters, log=quiet_log())
+    try:
+        await b.submit("m", {"x": rows(4)}, {}, soon())
+        assert b.seconds_per_cost == pytest.approx(1.0)
+        with pytest.raises(DeadlineExceeded) as raised:
+            await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[20])
+        assert raised.value.stage == STAGE_PROJECTED
+        assert engine.rows == [4]
+        assert counters.value("batch_rows_shed_total", slot="fake") == 1
+        await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[20], priority=True)
+        await b.submit("m", {"x": rows(1)}, {}, soon(5.0), costs=[8])
+        assert engine.rows == [4, 1, 1]
+    finally:
+        await b.close()
+
+
+async def test_an_expired_call_fails_its_earliest_rows_and_reruns_the_rest() -> None:
+    expired: list[int] = []
+
+    def expire_once(call: Call, arrays: dict[str, np.ndarray]) -> Reply:
+        if not expired:
+            expired.append(call.id)
+            return Reply(call.id, error_kind=ErrorKind.EXPIRED, error="outran its deadline")
+        return echo(call, arrays)
+
+    engine = FakeEngine("e", expire_once)
+    counters = Counters()
+    b = Batcher("fake", 8, 30, FakePool(engine), counters, log=quiet_log())
+    try:
+        early, late = await asyncio.gather(
+            b.submit("m", {"x": rows(1)}, {}, soon(2.0)),
+            b.submit("m", {"x": rows(1, 10)}, {}, soon(5.0)),
+            return_exceptions=True,
+        )
+        assert isinstance(early, DeadlineExceeded) and early.stage == STAGE_CALL
+        assert not isinstance(late, BaseException)
+        np.testing.assert_array_equal(late[0]["x"], rows(1, 10) * 2)
+        assert engine.rows == [2, 1]
+        assert counters.value("batch_expired_total", slot="fake") == 1
     finally:
         await b.close()

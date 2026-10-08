@@ -12,7 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from tests.conftest import CONFIG_DIR
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from tests.fakes.clock import FakeClock
 from worker import app, health
 from worker import settings as settings_module
@@ -57,7 +57,9 @@ class OneEnginePool:
     def __init__(self, engine: KillableEngine) -> None:
         self.engine = engine
 
-    async def acquire(self, slot: str, deadline_at: float) -> KillableEngine:
+    async def acquire(
+        self, slot: str, deadline_at: float, *, priority: bool = False
+    ) -> KillableEngine:
         return self.engine
 
     def release(self, client: KillableEngine) -> None:
@@ -76,7 +78,7 @@ class FakeSupervisor:
         if self.engine is not None:
             self.engine.killed.set()
 
-    def slot_state(self, slot: str) -> str:
+    def slot_state(self, slot: str, *, reserved: bool = False) -> str:
         return self.states.get(slot, STATE_READY)
 
 
@@ -220,3 +222,76 @@ async def test_llm_calls_do_not_queue_behind_downloads_or_peak_hedging(node: Nod
                 response.release()
     finally:
         await server.close()
+
+
+def cpu_blueprint(
+    base_env: dict[str, str], contract: Contract, tmp_path: Path, **overrides: str
+) -> Blueprint:
+    env = {
+        **base_env,
+        settings_module.PROFILE_ENV: "cpu",
+        FASTTEXT_HOME_ENV: str(tmp_path / "fasttext"),
+        **overrides,
+    }
+    return Blueprint.of(settings_module.load(CONFIG_DIR, env), contract, env, cpus=8)
+
+
+def test_cpu_profile_runs_encode_in_its_own_engine_and_lanes_in_parallel_processes(
+    base_env: dict[str, str], contract: Contract, tmp_path: Path
+) -> None:
+    blueprint = cpu_blueprint(base_env, contract, tmp_path)
+    plans = {plan.name: plan for plan in blueprint.plans}
+
+    assert {name: plan.slot_names for name, plan in plans.items()} == {
+        "audio": ("muq", "mulan"),
+        "sync": ("asr", "align", "mms"),
+        "sep": ("sep",),
+        "train-collab": ("train-collab",),
+        "train-taste": ("train-taste",),
+        "encode": ("text", "mulan"),
+        "cpu-tools": ("vad", "lid", "fingerprint"),
+    }
+    assert [name for name, plan in plans.items() if plan.reserved] == ["encode"]
+    assert {name: plan.threads for name, plan in plans.items() if plan.threads} == {
+        "encode": 4,
+        "cpu-tools": 1,
+    }
+    towers = {
+        name: spec.options.get("towers")
+        for name, plan in plans.items()
+        for spec in plan.slots
+        if spec.name == "mulan"
+    }
+    assert towers == {"audio": "audio", "encode": "text"}
+    assert (blueprint.policy.cpu_budget, blueprint.policy.threads) == (7, 0)
+    assert blueprint.policy.serial_loads is True
+    assert blueprint.plans[0].name == "encode"
+
+
+def test_a_second_text_replica_takes_lyrics_off_the_encode_engine(
+    base_env: dict[str, str], contract: Contract, tmp_path: Path
+) -> None:
+    blueprint = cpu_blueprint(base_env, contract, tmp_path, WORKER__SLOTS__TEXT__REPLICAS="2")
+    hosts = {plan.name: plan.reserved for plan in blueprint.plans if "text" in plan.slot_names}
+    assert hosts == {"text": False, "encode": True}
+    assert {spec.name for spec in app.split_slots(blueprint.plans)} == {"text", "mulan"}
+
+
+def test_runtime_threads_from_the_environment_fix_the_bulk_engines(
+    base_env: dict[str, str], contract: Contract, tmp_path: Path
+) -> None:
+    blueprint = cpu_blueprint(base_env, contract, tmp_path, WORKER__RUNTIME__THREADS="6")
+    assert blueprint.policy.threads == 6
+
+
+def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_path: Path) -> None:
+    env = {**BASE_ENV, settings_module.PROFILE_ENV: "gpu-24", FASTTEXT_HOME_ENV: str(tmp_path)}
+    blueprint = Blueprint.of(settings_module.load(CONFIG_DIR, env), contract, env, cpus=8)
+    assert not any(plan.reserved for plan in blueprint.plans)
+    assert blueprint.policy.serial_loads is False
+    assert all("towers" not in spec.options for spec in blueprint.specs.values())
+
+
+def test_the_node_routes_encode_through_priority_batchers(node: Node) -> None:
+    assert set(node.priority_batchers) == {"mulan"}
+    assert set(node.batchers) >= {"muq", "mulan", "text"}

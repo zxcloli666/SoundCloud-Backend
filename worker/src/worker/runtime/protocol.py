@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+import signal
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -12,10 +15,42 @@ class BadInput(Exception):
     pass
 
 
+class CallExpired(Exception):
+    def __init__(self, message: str, details: Mapping[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
+class Preempted(Exception):
+    pass
+
+
+PREEMPT_SIGNAL = signal.SIGUSR1
+EXPIRY_MARGIN_S = 1.0
+
+
+class CallGuard:
+    def __init__(self) -> None:
+        self.armed = False
+        self.requested = False
+        self.expires_at = math.inf
+
+    def check(self) -> None:
+        if self.armed and self.requested:
+            raise Preempted("a priority call is waiting")
+        if time.monotonic() >= self.expires_at:
+            raise CallExpired("the call would outrun its deadline")
+
+
+CALL_GUARD = CallGuard()
+
+
 class ErrorKind(StrEnum):
     OOM = "oom"
     BAD_INPUT = "bad_input"
     MODEL_ERROR = "model_error"
+    EXPIRED = "expired"
+    PREEMPTED = "preempted"
 
 
 class CommandKind(StrEnum):
@@ -52,6 +87,8 @@ class Call:
     deadline_at: float
     arrays: Mapping[str, ArrayRef] = field(default_factory=dict)
     args: Mapping[str, object] = field(default_factory=dict)
+    threads: int = 0
+    preemptible: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +110,11 @@ class Reply:
     @property
     def ok(self) -> bool:
         return self.error_kind is None
+
+
+@dataclass(frozen=True)
+class Started:
+    id: int
 
 
 @dataclass(frozen=True)

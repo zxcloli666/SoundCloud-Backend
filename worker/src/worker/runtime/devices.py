@@ -24,3 +24,9 @@ def configure(onednn: bool, threads: int) -> None:
     mkldnn.enabled = onednn
     if threads > 0:
         torch.set_num_threads(threads)
+
+
+def set_threads(threads: int) -> None:
+    import torch
+
+    torch.set_num_threads(threads)
