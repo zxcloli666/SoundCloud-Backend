@@ -18,6 +18,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::bus::Bus;
 use crate::db::Databases;
+use crate::metrics::MeteredPool;
 use crate::qdrant::QdrantProvisioner;
 
 #[path = "handlers/worker_status.rs"]
@@ -33,6 +34,7 @@ const SCHEDULER_STALE_AFTER: Duration = Duration::from_secs(15);
 pub struct HealthState {
     inner: Arc<HealthInner>,
     metrics_pool: Option<PgPool>,
+    metered_pools: Vec<MeteredPool>,
     workers: WorkerStatusBoard,
 }
 
@@ -52,6 +54,11 @@ impl HealthState {
         self
     }
 
+    pub fn meter_pool(mut self, name: &'static str, pool: PgPool) -> Self {
+        self.metered_pools.push(MeteredPool { name, pool });
+        self
+    }
+
     pub fn require_worker_lanes(self, lanes: &[WorkerLane]) -> Self {
         self.workers.require_lanes(lanes);
         self
@@ -60,6 +67,7 @@ impl HealthState {
     pub fn new() -> Self {
         Self {
             metrics_pool: None,
+            metered_pools: Vec::new(),
             workers: WorkerStatusBoard::new(),
             inner: Arc::new(HealthInner {
                 live: AtomicBool::new(true),
@@ -218,7 +226,7 @@ async fn metrics(State(state): State<HealthState>) -> axum::response::Response {
     let Some(pool) = state.metrics_pool.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "metrics pool is not wired").into_response();
     };
-    match crate::metrics::render(pool).await {
+    match crate::metrics::render(pool, &state.metered_pools).await {
         Some(body) => (
             [(
                 axum::http::header::CONTENT_TYPE,

@@ -164,6 +164,12 @@ pub async fn run() -> anyhow::Result<()> {
     crate::metrics::init();
     let health = HealthState::new()
         .with_metrics_pool(databases.main.fast.clone())
+        .meter_pool("main_fast", databases.main.fast.clone())
+        .meter_pool("main_bulk", databases.main.bulk.clone())
+        .meter_pool("queue", databases.queue.clone())
+        .meter_pool("maintenance", databases.maintenance.clone())
+        .meter_pool("ops_fast", databases.ops.fast.clone())
+        .meter_pool("ops_bulk", databases.ops.bulk.clone())
         .require_worker_lanes(&config.worker_dispatch.required_worker_lanes());
     let mut supervisor = Supervisor::new(cancellation.clone(), config.shutdown_grace);
 

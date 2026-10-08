@@ -261,17 +261,17 @@ groups:
           severity: warning
           service: jobs
         annotations:
-          summary: "Background work is waiting for a PostgreSQL connection"
+          summary: "Background work is waiting for a PostgreSQL connection from pool {{ $labels.pool }}"
           description: "The soak run measures a wait below a millisecond under a full queue, so a sustained 50ms means the pool is the bottleneck. Background work holds no connection across network calls, so this points at pool size or at a query holding one too long."
 
       - alert: JobsPoolProbeFailing
-        expr: sum(rate(jobs_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
+        expr: sum by (pool) (rate(jobs_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
         for: 5m
         labels:
           severity: critical
           service: jobs
         annotations:
-          summary: "The background pool cannot hand out a connection"
+          summary: "Background pool {{ $labels.pool }} cannot hand out a connection"
           description: "Outcome error or timeout on the probe taken at every scrape."
 
       - alert: JobsStatementTimeouts

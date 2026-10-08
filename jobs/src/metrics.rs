@@ -334,12 +334,20 @@ fn label(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
-pub async fn sample_pool_wait(pool: &PgPool) {
+#[derive(Clone)]
+pub struct MeteredPool {
+    pub name: &'static str,
+    pub pool: PgPool,
+}
+
+pub async fn sample_pool_wait(metered: &MeteredPool) {
+    let MeteredPool { name, pool } = metered;
     let size = f64::from(pool.size());
     let idle = pool.num_idle() as f64;
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "open").set(size);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "idle").set(idle);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "busy").set((size - idle).max(0.0));
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "open").set(size);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "idle").set(idle);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "busy")
+        .set((size - idle).max(0.0));
 
     let started = std::time::Instant::now();
     let outcome: &'static str = match tokio::time::timeout(POOL_PROBE_TIMEOUT, pool.acquire()).await
@@ -352,13 +360,13 @@ pub async fn sample_pool_wait(pool: &PgPool) {
         Err(_) => "timeout",
     };
     let waited = started.elapsed().as_secs_f64();
-    metrics::histogram!(POOL_WAIT, "outcome" => outcome).record(waited);
-    metrics::gauge!(POOL_WAIT_LAST).set(waited);
+    metrics::histogram!(POOL_WAIT, "pool" => *name, "outcome" => outcome).record(waited);
+    metrics::gauge!(POOL_WAIT_LAST, "pool" => *name).set(waited);
 }
 
-pub async fn render(pool: &PgPool) -> Option<String> {
+pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     let handle = HANDLE.get()?;
-    sample_pool_wait(pool).await;
+    futures::future::join_all(metered.iter().map(sample_pool_wait)).await;
     let lanes: Vec<String> = JobLane::ALL
         .iter()
         .map(|lane| lane.as_str().to_owned())
