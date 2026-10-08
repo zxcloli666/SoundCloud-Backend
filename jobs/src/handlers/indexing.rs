@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod backfill_live_tests;
 mod client;
 mod duration;
 mod public_client;
@@ -159,6 +161,7 @@ impl IndexingHandler {
     pub async fn reap(&self) -> JobResult {
         let settled = self.settle_unreopenable_dispatches().await;
         let room = self.backlog.room(&AUDIO_LANE, self.audio_backlog).await;
+        let room = self.backlog.less_unaccepted_uploads(room).await;
         let dispatched = self.top_up_audio_backlog(room).await;
         let requeued = self.requeue_stuck().await;
         settled.and(dispatched).and(requeued)
@@ -202,8 +205,12 @@ impl IndexingHandler {
         let mut first_failure = None;
         for candidate in candidates {
             let Some(uploaded_generation) = candidate.uploaded_generation else {
-                self.enqueue(candidate.sc_track_id).await?;
-                backfill.announced += 1;
+                match self.announce_stored(&candidate.sc_track_id).await {
+                    Ok(()) => backfill.announced += 1,
+                    Err(error) => {
+                        first_failure.get_or_insert(error);
+                    }
+                }
                 continue;
             };
             let payload = backend_contracts::StoredAudioDispatchPayload {
@@ -295,17 +302,28 @@ impl IndexingHandler {
     }
 
     async fn finish_cached(&self, sc_track_id: &str) -> JobResult {
-        let storage_url = self.storage_redirect_url(sc_track_id)?;
         self.bus
-            .publish(
+            .publish(STORAGE_TRACK_UPLOADED, &self.stored_upload(sc_track_id)?)
+            .await
+            .map_err(JobError::retryable)
+    }
+
+    async fn announce_stored(&self, sc_track_id: &str) -> JobResult {
+        self.bus
+            .publish_dedup(
                 STORAGE_TRACK_UPLOADED,
-                &json!({
-                    "sc_track_id": sc_track_id,
-                    "storage_url": storage_url,
-                }),
+                &self.stored_upload(sc_track_id)?,
+                &stored_upload_message_id(sc_track_id),
             )
             .await
             .map_err(JobError::retryable)
+    }
+
+    fn stored_upload(&self, sc_track_id: &str) -> JobResult<serde_json::Value> {
+        Ok(json!({
+            "sc_track_id": sc_track_id,
+            "storage_url": self.storage_redirect_url(sc_track_id)?,
+        }))
     }
 
     async fn enqueue(&self, sc_track_id: String) -> JobResult {
@@ -319,6 +337,10 @@ impl IndexingHandler {
         })?;
         append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
     }
+}
+
+fn stored_upload_message_id(sc_track_id: &str) -> String {
+    format!("stored-audio:{sc_track_id}")
 }
 
 fn new_index_job(sc_track_id: String) -> JobResult<NewJob> {

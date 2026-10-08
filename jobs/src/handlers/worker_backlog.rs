@@ -27,6 +27,22 @@ impl WorkerBacklog {
             }
         }
     }
+
+    pub async fn less_unaccepted_uploads(&self, room: i64) -> i64 {
+        if room <= 0 {
+            return 0;
+        }
+        match self.bus.unaccepted_storage_uploads().await {
+            Ok(unaccepted) => self::room(room, unaccepted),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "storage uploads awaiting acceptance are unknown; nothing new is dispatched this round"
+                );
+                0
+            }
+        }
+    }
 }
 
 pub fn room(target: i64, pending: u64) -> i64 {

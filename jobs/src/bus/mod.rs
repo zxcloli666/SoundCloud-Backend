@@ -347,6 +347,22 @@ impl Bus {
         .await
     }
 
+    pub async fn unaccepted_storage_uploads(&self) -> anyhow::Result<u64> {
+        let stream = self
+            .jetstream
+            .get_stream(STORAGE_EVENTS_STREAM.name)
+            .await
+            .context("NATS storage event stream could not be loaded")?;
+        let info = stream
+            .consumer_info(STORAGE_UPLOAD_CONSUMER)
+            .await
+            .with_context(|| {
+                format!("NATS consumer {STORAGE_UPLOAD_CONSUMER} could not be read")
+            })?;
+        let in_flight = u64::try_from(info.num_ack_pending).unwrap_or(u64::MAX);
+        Ok(info.num_pending.saturating_add(in_flight))
+    }
+
     pub async fn is_available(&self) -> bool {
         if !self.topology.intact.load(Ordering::Relaxed) {
             return false;
