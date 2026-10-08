@@ -50,11 +50,12 @@ pub async fn run() -> anyhow::Result<()> {
     for coverage in config.pool_coverage() {
         info!(
             pool = coverage.pool_key,
-            lane = coverage.lane_key,
+            lanes = coverage.lane_keys,
             connections = coverage.connections,
             lane_slots = coverage.lane_slots,
             slots_per_connection = coverage.lane_slots as f64 / f64::from(coverage.connections),
-            "pool covers its lane"
+            also_serves = coverage.also_serves,
+            "pool covers its lanes"
         );
     }
 

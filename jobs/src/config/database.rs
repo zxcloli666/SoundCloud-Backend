@@ -89,7 +89,7 @@ impl DatabaseConfig {
             tls,
             fast_pool: PoolConfig {
                 minimum: env::parse(&key("PG_POOL_MIN"), "2")?,
-                maximum: env::parse(&key("PG_POOL_MAX"), "8")?,
+                maximum: env::parse(&key("PG_POOL_MAX"), "11")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_ACQUIRE_TIMEOUT_MS"),
                     2_000,
@@ -102,7 +102,7 @@ impl DatabaseConfig {
             },
             bulk_pool: PoolConfig {
                 minimum: env::parse(&key("PG_BULK_POOL_MIN"), "0")?,
-                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "6")?,
+                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "4")?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_BULK_ACQUIRE_TIMEOUT_MS"),
                     30_000,
@@ -145,9 +145,10 @@ pub const LANE_SLOTS_PER_CONNECTION: usize = 4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PoolCoverage {
     pub pool_key: &'static str,
-    pub lane_key: &'static str,
+    pub lane_keys: &'static str,
     pub connections: u32,
     pub lane_slots: usize,
+    pub also_serves: &'static str,
 }
 
 impl PoolCoverage {
@@ -161,7 +162,7 @@ impl PoolCoverage {
                 reason: format!(
                     "{} connections cannot serve {} {} slots; keep at most \
                      {LANE_SLOTS_PER_CONNECTION} slots per connection",
-                    self.connections, self.lane_slots, self.lane_key
+                    self.connections, self.lane_slots, self.lane_keys
                 ),
             });
         }
@@ -174,7 +175,7 @@ pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 5;
 pub fn queue_pool_from_env() -> Result<PoolConfig, ConfigError> {
     let pool = PoolConfig {
         minimum: env::parse("PG_QUEUE_POOL_MIN", "1")?,
-        maximum: env::parse("PG_QUEUE_POOL_MAX", "6")?,
+        maximum: env::parse("PG_QUEUE_POOL_MAX", "5")?,
         acquire_timeout: Duration::from_millis(env::positive_u64(
             "PG_QUEUE_ACQUIRE_TIMEOUT_MS",
             5_000,
@@ -310,9 +311,10 @@ mod tests {
     fn a_pool_must_not_be_far_smaller_than_the_lane_that_uses_it() {
         let coverage = |connections, lane_slots| PoolCoverage {
             pool_key: "PG_BULK_POOL_MAX",
-            lane_key: "JOBS_CORE_BULK",
+            lane_keys: "JOBS_CORE_BULK",
             connections,
             lane_slots,
+            also_serves: "lyrics lookups",
         };
         assert!(coverage(4, 16).validate().is_ok());
         assert!(coverage(3, 16).validate().is_err());

@@ -60,11 +60,11 @@ impl LyricsHandler {
                 config.lyrics.clone(),
             ),
             sweep: LyricsLookupHandler::new(
-                databases.maintenance.clone(),
+                databases.main.bulk.clone(),
                 sources,
                 config.lyrics.clone(),
             ),
-            reaper: LyricsReaper::new(databases.maintenance.clone(), dispatch),
+            reaper: LyricsReaper::new(fast_pool.clone(), dispatch),
             backlog: WorkerBacklog::new(bus.clone()),
             dispatch,
             transcription_dispatcher: TranscriptionDispatcher::new(
