@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::queue::ClaimOrder;
+
 use super::*;
 
 const ROOM: i64 = 500;
@@ -599,6 +601,50 @@ async fn embedding_reaper_skips_short_terminal_and_already_queued_rows(
     .fetch_all(&pool)
     .await?;
     assert_eq!(jobs, vec![("43".to_owned(), existing.payload, 1)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn embedding_backfill_waits_behind_a_later_user_write_back(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42", "43"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    reaper(&pool).reap_embeddings(ROOM).await?;
+    let queue = JobRepository::new(pool.clone(), "test".to_owned());
+    queue
+        .enqueue(&NewJob {
+            id: Uuid::now_v7(),
+            kind: JobKind::SyncQueueFlush,
+            dedup_key: Some("user".to_owned()),
+            payload: serde_json::json!({}),
+            priority: 10,
+            max_attempts: 8,
+            available_at: Utc::now(),
+        })
+        .await?;
+
+    let claimed = queue
+        .claim(
+            &[JobKind::LyricsEmbed, JobKind::SyncQueueFlush],
+            ClaimOrder::Priority,
+            1,
+            std::time::Duration::from_secs(60),
+        )
+        .await?;
+
+    assert_eq!(
+        claimed.iter().map(|job| job.kind).collect::<Vec<_>>(),
+        vec![JobKind::SyncQueueFlush]
+    );
     Ok(())
 }
 
