@@ -300,11 +300,19 @@ class Supervisor:
                 "crashes": self._counters.value("slot_crashes_total", slot=slot),
                 "oom": self._counters.value("slot_oom_total", slot=slot),
                 "reserved_gap_mib": max(gaps, default=0),
+                "rss_mib": max(
+                    (m.client.rss_mib() for m in hosts if m.client is not None), default=0
+                ),
                 "calls": self._counters.value("slot_calls_total", slot=slot),
                 "p50_ms": quantiles["p50"],
                 "p95_ms": quantiles["p95"],
             }
         return report
+
+    def memory(self) -> dict[str, int]:
+        return {
+            m.plan.name: m.client.rss_mib() if m.client is not None else 0 for m in self._engines
+        }
 
     def engines(self) -> list[tuple[str, int, str]]:
         return [
@@ -520,7 +528,7 @@ class Supervisor:
                     raise EngineCrashed(
                         client.name, f"slot {spec.name} reported unloaded after load"
                     )
-        self._log.info("engine_ready", engine=client.name, pid=client.pid)
+        self._log.info("engine_ready", engine=client.name, pid=client.pid, rss_mib=client.rss_mib())
 
     async def _await_current_exit(self, managed: Managed) -> EngineClient:
         while True:

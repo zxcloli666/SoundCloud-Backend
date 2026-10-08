@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from multiprocessing.connection import Connection
 
 from worker.observability.logging import JsonLog, error_text
-from worker.runtime import allocator, devices, shm
+from worker.runtime import allocator, devices, memory, shm
 from worker.runtime.protocol import (
     CALL_GUARD,
     EXPIRY_MARGIN_S,
@@ -200,7 +200,7 @@ class Engine:
             self._log.exception("slot_load_failed", error, slot=name, loader=spec.loader)
             raise LoadFailed(f"{name}: {error_text(error)}") from error
         slot.model = model
-        self._release()
+        self._release(collect=True)
         self._log.info(
             "slot_loaded",
             slot=name,
@@ -208,6 +208,7 @@ class Engine:
             revision=spec.revision[:8],
             device=spec.device,
             seconds=round(time.perf_counter() - started, 2),
+            rss_mib=self._rss_mib(),
         )
         return slot
 
@@ -220,8 +221,8 @@ class Engine:
         except Exception as error:
             self._log.exception("slot_unload_failed", error, slot=name)
         slot.model = None
-        self._release()
-        self._log.info("slot_unloaded", slot=name)
+        self._release(collect=True)
+        self._log.info("slot_unloaded", slot=name, rss_mib=self._rss_mib())
 
     def _unload_all(self) -> None:
         for name in self._slots:
@@ -238,9 +239,18 @@ class Engine:
             return spec
         return replace(spec, device=devices.resolve(spec.device))
 
-    def _release(self) -> None:
+    def _release(self, *, collect: bool = False) -> None:
         if self._torch_configured:
             allocator.release()
+        if not memory.trim(collect=collect):
+            self._log.warning("engine_malloc_trim_unavailable")
+
+    def _rss_mib(self) -> int:
+        try:
+            return memory.rss_mib()
+        except OSError as error:
+            self._log.warning("engine_rss_unreadable", error=str(error))
+            return 0
 
     def _apply_threads(self, threads: int) -> None:
         if threads < 1 or threads == self._threads or not self._torch_configured:

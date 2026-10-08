@@ -13,7 +13,7 @@ from multiprocessing.connection import Connection
 
 from worker.observability.counters import Counters
 from worker.observability.logging import JsonLog
-from worker.runtime import shm
+from worker.runtime import memory, shm
 from worker.runtime.clock import Clock
 from worker.runtime.protocol import (
     PREEMPT_SIGNAL,
@@ -179,6 +179,16 @@ class EngineClient:
     @property
     def slot_states(self) -> Mapping[str, SlotState]:
         return self._states
+
+    def rss_mib(self) -> int:
+        if not self.alive:
+            return 0
+        try:
+            return memory.rss_mib(self.pid)
+        except (OSError, ValueError) as error:
+            self._counters.inc("engine_rss_unreadable_total", engine=self.name)
+            self._log.warning("engine_rss_unreadable", pid=self.pid, error=str(error))
+            return 0
 
     def loaded(self, slot: str) -> bool:
         return self._states[slot].loaded

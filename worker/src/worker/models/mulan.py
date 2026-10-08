@@ -9,6 +9,8 @@ import torch
 
 from worker.models import muq_compat
 from worker.models.muq import SAMPLE_RATE, WARMUP_WINDOW_S, checked_windows, frozen, windowed
+from worker.observability.logging import JsonLog
+from worker.runtime import memory
 from worker.runtime.protocol import Arrays, BadInput, SlotSpec
 
 EMBED_AUDIO = "embed_audio"
@@ -29,6 +31,7 @@ class MulanSlot:
         self._device = torch.device("cpu")
         self._dtype = torch.float32
         self._methods = TOWER_METHODS["both"]
+        self._log = JsonLog(component="mulan")
 
     def load(self, spec: SlotSpec) -> None:
         towers = str(spec.options.get(TOWERS, "both"))
@@ -41,7 +44,15 @@ class MulanSlot:
         model = muq.MuQMuLan.from_pretrained(spec.model, revision=spec.revision)
         dropped = DROPPED_TOWER.get(towers)
         if dropped is not None:
+            before_mib = memory.rss_mib()
             setattr(model.mulan_module, dropped, None)
+            memory.trim()
+            self._log.info(
+                "mulan_tower_dropped",
+                tower=dropped,
+                rss_before_mib=before_mib,
+                rss_after_mib=memory.rss_mib(),
+            )
         self._methods = TOWER_METHODS[towers]
         self._model = frozen(model, self._dtype).to(self._device)
 

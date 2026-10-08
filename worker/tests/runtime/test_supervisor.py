@@ -368,12 +368,27 @@ async def test_snapshot_lists_every_slot() -> None:
             "crashes",
             "oom",
             "reserved_gap_mib",
+            "rss_mib",
             "calls",
             "p50_ms",
             "p95_ms",
         }
+        assert report["rss_mib"] > 0
     finally:
         await supervisor.stop()
+
+
+async def test_engine_memory_is_reported_per_engine_and_zero_once_stopped() -> None:
+    supervisor = await started_supervisor(
+        [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
+    )
+    try:
+        memory = supervisor.memory()
+        assert set(memory) == {"a", "b"}
+        assert all(rss > 0 for rss in memory.values())
+    finally:
+        await supervisor.stop()
+    assert supervisor.memory() == {"a": 0, "b": 0}
 
 
 async def test_idle_unload_timeout_kills_the_stuck_engine() -> None:
