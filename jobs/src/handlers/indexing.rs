@@ -129,6 +129,14 @@ impl IndexingHandler {
         &self,
         payload: backend_contracts::StoredAudioDispatchPayload,
     ) -> JobResult {
+        if self.backlog.room(&AUDIO_LANE, self.audio_backlog).await == 0 {
+            tracing::debug!(
+                track = %payload.sc_track_id,
+                generation = payload.uploaded_generation,
+                "audio index stream is at its backlog; the reaper dispatches this upload later"
+            );
+            return Ok(());
+        }
         self.storage_uploads.dispatch_audio(payload).await
     }
 

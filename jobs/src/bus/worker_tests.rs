@@ -132,6 +132,38 @@ async fn worker_consumers_are_created_updated_and_recreated_to_the_contract() ->
 }
 
 #[tokio::test]
+#[ignore = "requires a local JetStream server"]
+async fn worker_pending_counts_tasks_no_worker_has_taken() -> anyhow::Result<()> {
+    let bus = live_bus("worker-pending-test").await?;
+    let suffix = Uuid::now_v7().simple().to_string();
+    let stream_spec = scratch_stream("WORKER_PENDING", &suffix);
+    let spec = WorkerLaneSpec {
+        stream: stream_spec,
+        durable: leak(format!("audio-pending-{suffix}")),
+        filter_subject: leak(format!("test.worker_pending.{suffix}.new")),
+        ..AUDIO_LANE
+    };
+    bus.ensure_stream(pipeline_stream_config(&stream_spec))
+        .await?;
+    bus.ensure_worker_consumer(&spec).await?;
+    assert_eq!(bus.worker_pending(&spec).await?, 0);
+
+    for task in 0..3 {
+        bus.jetstream
+            .publish(
+                spec.filter_subject.to_owned(),
+                format!("task-{task}").into(),
+            )
+            .await?
+            .await?;
+    }
+
+    assert_eq!(bus.worker_pending(&spec).await?, 3);
+    bus.jetstream.delete_stream(stream_spec.name).await?;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires a disposable JetStream server: it provisions the real stream names"]
 async fn provision_builds_every_contract_stream_and_worker_consumer() -> anyhow::Result<()> {
     let bus = live_bus("provision-test").await?;
