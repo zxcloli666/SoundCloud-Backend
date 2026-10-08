@@ -24,7 +24,7 @@ tracing = "0.1"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
-wreq = { version = "5", features = ["json", "stream", "gzip", "brotli"] }
+wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 
 [dev-dependencies]
 axum = "0.8"
