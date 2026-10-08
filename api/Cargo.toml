@@ -14,7 +14,7 @@ futures = "0.3"
 
 catalog-match = { path = "../utils/catalog-match" }
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
-wreq = { version = "5", features = ["json", "stream", "gzip", "brotli"] }
+wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
