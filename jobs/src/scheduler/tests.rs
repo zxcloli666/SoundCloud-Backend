@@ -102,6 +102,18 @@ fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
 }
 
 #[test]
+fn stuck_storage_tracks_are_requeued_at_the_five_minute_cadence() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::IndexingRequeueStuck)
+        .expect("indexing requeue schedule");
+
+    assert_eq!(schedule.interval_seconds, 5 * 60);
+    assert_eq!(schedule.priority, 5);
+    assert_eq!(schedule.max_attempts, 8);
+}
+
+#[test]
 fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()

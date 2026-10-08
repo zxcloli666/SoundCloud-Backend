@@ -31,6 +31,7 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::DiscoverInterest, 60 * 60, -10, 4),
     Schedule::new(JobKind::EnrichTracks, 30, 0, 8),
     Schedule::new(JobKind::IndexingReap, 60, 5, 8),
+    Schedule::new(JobKind::IndexingRequeueStuck, 5 * 60, 5, 8),
     Schedule::new(JobKind::LyricsReapEmbeddings, 60, 5, 8).delayed(),
     Schedule::new(JobKind::LyricsReapTranscriptions, 2 * 60, 5, 8).delayed(),
     Schedule::new(JobKind::LyricsLookupSweep, 60, -10, 4).delayed(),

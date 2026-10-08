@@ -163,8 +163,7 @@ impl IndexingHandler {
         let room = self.backlog.room(&AUDIO_LANE, self.audio_backlog).await;
         let room = self.backlog.less_unaccepted_uploads(room).await;
         let dispatched = self.top_up_audio_backlog(room).await;
-        let requeued = self.requeue_stuck().await;
-        settled.and(dispatched).and(requeued)
+        settled.and(dispatched)
     }
 
     async fn top_up_audio_backlog(&self, room: i64) -> JobResult {
@@ -252,7 +251,7 @@ impl IndexingHandler {
             .await
     }
 
-    async fn requeue_stuck(&self) -> JobResult {
+    pub async fn requeue_stuck(&self) -> JobResult {
         let stuck = sqlx::query_file_scalar!(
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,

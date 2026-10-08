@@ -107,6 +107,7 @@ pub enum JobKind {
     EnrichTracks,
     IndexTrack,
     IndexingReap,
+    IndexingRequeueStuck,
     LyricsEmbed,
     LyricsLookup,
     LyricsLookupSweep,
@@ -155,6 +156,7 @@ impl JobKind {
         Self::EnrichTracks,
         Self::IndexTrack,
         Self::IndexingReap,
+        Self::IndexingRequeueStuck,
         Self::LyricsEmbed,
         Self::LyricsLookup,
         Self::LyricsLookupSweep,
@@ -203,6 +205,7 @@ impl JobKind {
             Self::EnrichTracks => "enrich.tracks",
             Self::IndexTrack => "indexing.track",
             Self::IndexingReap => "indexing.reap",
+            Self::IndexingRequeueStuck => "indexing.requeue_stuck",
             Self::LyricsEmbed => "lyrics.embed",
             Self::LyricsLookup => "lyrics.lookup",
             Self::LyricsLookupSweep => "lyrics.lookup_sweep",
@@ -253,6 +256,7 @@ impl JobKind {
             | Self::DiscoverInterest
             | Self::EnrichTracks
             | Self::IndexingReap
+            | Self::IndexingRequeueStuck
             | Self::LyricsLookupSweep
             | Self::LyricsReapEmbeddings
             | Self::LyricsReapTranscriptions
@@ -311,6 +315,7 @@ impl FromStr for JobKind {
             "enrich.tracks" => Self::EnrichTracks,
             "indexing.track" => Self::IndexTrack,
             "indexing.reap" => Self::IndexingReap,
+            "indexing.requeue_stuck" => Self::IndexingRequeueStuck,
             "lyrics.embed" => Self::LyricsEmbed,
             "lyrics.lookup" => Self::LyricsLookup,
             "lyrics.lookup_sweep" => Self::LyricsLookupSweep,
@@ -420,7 +425,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 44);
+        assert_eq!(kinds.len(), 45);
     }
 
     #[test]
@@ -431,6 +436,7 @@ mod tests {
         assert_eq!(JobKind::LyricsEmbed.lane(), JobLane::CoreFast);
         assert_eq!(JobKind::DiscoverAggregates.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::IndexingReap.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::IndexingRequeueStuck.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);

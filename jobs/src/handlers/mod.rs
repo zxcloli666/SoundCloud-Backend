@@ -116,6 +116,7 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::DiscoverInterest,
     JobKind::EnrichTracks,
     JobKind::IndexingReap,
+    JobKind::IndexingRequeueStuck,
     JobKind::LyricsLookupSweep,
     JobKind::LyricsReapEmbeddings,
     JobKind::LyricsReapTranscriptions,
@@ -525,6 +526,10 @@ impl JobHandlers {
             JobKind::IndexingReap => {
                 empty_payload(job)?;
                 self.indexing.reap().await
+            }
+            JobKind::IndexingRequeueStuck => {
+                empty_payload(job)?;
+                self.indexing.requeue_stuck().await
             }
             JobKind::LyricsEmbed => {
                 let payload = payload::<backend_contracts::LyricsEmbedPayload>(job)?;
