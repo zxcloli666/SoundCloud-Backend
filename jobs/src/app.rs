@@ -840,6 +840,15 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         ops_columns_ready && ops_indexes_ready,
         "ops telemetry schema is incomplete"
     );
+    let hard_negative_sweep_ready =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('rec_hard_negative_sweep') IS NOT NULL")
+            .fetch_one(&databases.ops.fast)
+            .await
+            .context("ops hard negative sweep validation failed")?;
+    ensure!(
+        hard_negative_sweep_ready,
+        "ops hard negative sweep state is missing; apply ops migration 9011"
+    );
     Ok(())
 }
 

@@ -19,7 +19,6 @@ pub use indexing::IndexingJobs;
 const DEFAULT_MAX_ATTEMPTS: i16 = 8;
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
 const OPPORTUNISTIC_PUBLISH_TIMEOUT: Duration = Duration::from_millis(150);
-const TELEMETRY_PUBLISH_TIMEOUT: Duration = Duration::from_millis(150);
 
 pub struct BackgroundJobs {
     nats: Arc<NatsService>,
@@ -43,10 +42,6 @@ impl BackgroundJobs {
 
     pub async fn enqueue(&self, job: &BackgroundJob) -> AppResult<Uuid> {
         self.publish(job, PUBLISH_TIMEOUT).await
-    }
-
-    pub async fn enqueue_telemetry(&self, job: &BackgroundJob) -> AppResult<Uuid> {
-        self.publish(job, TELEMETRY_PUBLISH_TIMEOUT).await
     }
 
     pub async fn enqueue_opportunistic(&self, job: &BackgroundJob) -> bool {
@@ -74,13 +69,6 @@ impl BackgroundJobs {
 }
 
 impl BackgroundJob {
-    pub fn unique<T>(kind: JobKind, payload: T) -> AppResult<Self>
-    where
-        T: Serialize,
-    {
-        Self::new(kind, None, payload)
-    }
-
     pub fn coalescing<T>(kind: JobKind, dedup_key: impl Into<String>, payload: T) -> AppResult<Self>
     where
         T: Serialize,
@@ -155,7 +143,8 @@ mod tests {
 
     #[test]
     fn payload_is_versioned_at_the_boundary() {
-        let job = BackgroundJob::unique(JobKind::DiscoverAggregates, EmptyPayload {});
+        let job =
+            BackgroundJob::coalescing(JobKind::DiscoverAggregates, "summary", EmptyPayload {});
 
         assert!(matches!(
             job,
@@ -166,8 +155,9 @@ mod tests {
 
     #[test]
     fn invalid_attempt_limit_is_rejected() {
-        let job = BackgroundJob::unique(JobKind::DiscoverAggregates, EmptyPayload {})
-            .and_then(|job| job.with_max_attempts(0));
+        let job =
+            BackgroundJob::coalescing(JobKind::DiscoverAggregates, "summary", EmptyPayload {})
+                .and_then(|job| job.with_max_attempts(0));
 
         assert!(job.is_err());
     }

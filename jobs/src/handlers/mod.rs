@@ -130,8 +130,11 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::SubscriptionsSnapshot,
 ];
 
-pub(crate) const OPS_KINDS: &[JobKind] =
-    &[JobKind::RecordHardNegative, JobKind::SearchTermsRefresh];
+pub(crate) const OPS_KINDS: &[JobKind] = &[
+    JobKind::RecordHardNegative,
+    JobKind::SearchTermsRefresh,
+    JobKind::SweepHardNegatives,
+];
 
 pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
     matches!(
@@ -307,6 +310,7 @@ impl JobHandlers {
             telemetry: TelemetryHandler::new(
                 databases.ops.bulk.clone(),
                 databases.ops.fast.clone(),
+                databases.main.fast.clone(),
             ),
             wanted,
         })
@@ -570,6 +574,10 @@ impl JobHandlers {
             JobKind::SubscriptionsSnapshot => {
                 empty_payload(job)?;
                 self.subscriptions.export().await
+            }
+            JobKind::SweepHardNegatives => {
+                empty_payload(job)?;
+                self.telemetry.sweep_hard_negatives().await
             }
             JobKind::SyncQueueFlush => {
                 let payload = payload::<SyncQueueFlushPayload>(job)?;
