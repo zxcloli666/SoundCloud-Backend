@@ -358,6 +358,21 @@ fn queue_delivery_error(error: QueueError) -> JobError {
     }
 }
 
+async fn indexing_schema_ready(pool: &sqlx::PgPool) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('tracks_indexing_stuck_idx') IS NOT NULL
+             AND to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL
+             AND EXISTS (
+                 SELECT 1
+                 FROM pg_index
+                 WHERE indexrelid = to_regclass('tracks_audio_backfill_idx')
+                   AND indisvalid AND indisready
+             )",
+    )
+    .fetch_one(pool)
+    .await
+}
+
 async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
     let core_ready = sqlx::query_scalar::<_, bool>(
         "SELECT to_regclass('background_jobs') IS NOT NULL
@@ -556,16 +571,12 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         discover_interest_ready,
         "discover interest schema is incomplete; apply migration 0065"
     );
-    let indexing_ready = sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('tracks_indexing_stuck_idx') IS NOT NULL
-             AND to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL",
-    )
-    .fetch_one(&databases.main.fast)
-    .await
-    .context("indexing jobs schema validation failed")?;
+    let indexing_ready = indexing_schema_ready(&databases.main.fast)
+        .await
+        .context("indexing jobs schema validation failed")?;
     ensure!(
         indexing_ready,
-        "indexing jobs schema is incomplete; apply migration 0071"
+        "indexing jobs schema is incomplete; apply migrations 0071 and 0135, and drop an invalid tracks_audio_backfill_idx with DROP INDEX CONCURRENTLY before rerunning migrate core"
     );
     let duration_resolver_ready = sqlx::query_scalar::<_, bool>(
         "SELECT (SELECT count(*) = 2
