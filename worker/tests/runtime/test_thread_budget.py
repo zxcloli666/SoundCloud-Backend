@@ -27,7 +27,7 @@ from worker.runtime.supervisor import (
     reserved_threads,
 )
 
-SHARED = replace(TEST_POLICY, threads=0, cpu_budget=6)
+SHARED = replace(TEST_POLICY, threads=0, cpu_budget=6, share_window_s=0.0)
 PROMPT_S = 1.0
 
 
@@ -98,6 +98,24 @@ async def test_busy_engines_split_the_budget_and_an_idle_one_takes_it_all() -> N
         assert second.call_threads == 3
         supervisor.release(first)
         supervisor.release(second)
+        alone = await supervisor.acquire("b", time.monotonic() + 5)
+        assert alone.call_threads == 6
+        supervisor.release(alone)
+    finally:
+        await supervisor.stop()
+
+
+async def test_an_engine_that_just_had_work_keeps_its_share_until_the_window_passes() -> None:
+    policy = replace(SHARED, share_window_s=0.5)
+    supervisor = await started_supervisor(
+        plans_of(EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))), policy
+    )
+    try:
+        supervisor.release(await supervisor.acquire("a", time.monotonic() + 5))
+        separation = await supervisor.acquire("b", time.monotonic() + 5)
+        assert separation.call_threads == 3
+        supervisor.release(separation)
+        await asyncio.sleep(0.6)
         alone = await supervisor.acquire("b", time.monotonic() + 5)
         assert alone.call_threads == 6
         supervisor.release(alone)

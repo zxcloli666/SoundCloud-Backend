@@ -72,6 +72,7 @@ class RuntimePolicy:
     onednn: bool = True
     threads: int = 0
     cpu_budget: int = 0
+    share_window_s: float = 30.0
     serial_loads: bool = False
     release_after_call: bool = True
     recycle_after_calls: int = 10000
@@ -206,6 +207,7 @@ class Supervisor:
         self._leased: set[EngineClient] = set()
         self._leased_threads: dict[EngineClient, int] = {}
         self._reserved_leases: set[EngineClient] = set()
+        self._bulk_released_at: dict[str, float] = {}
         self._retiring: set[EngineClient] = set()
         self._changed = asyncio.Event()
         self._housekeeper: asyncio.Task[None] | None = None
@@ -351,6 +353,8 @@ class Supervisor:
             await self._wait_change(remaining)
 
     def release(self, client: EngineClient) -> None:
+        if client in self._leased_threads and not self._fixed_share(client):
+            self._bulk_released_at[client.name] = self._clock.now()
         self._leased.discard(client)
         self._leased_threads.pop(client, None)
         self._reserved_leases.discard(client)
@@ -414,9 +418,20 @@ class Supervisor:
             return plan.threads
         if self._policy.threads or not self._policy.cpu_budget:
             return self._policy.threads
-        fixed = {m.client for m in self._engines if m.plan.inline} | self._reserved_leases
-        bulk = 1 + sum(1 for client in self._leased_threads if client not in fixed)
-        return fair_share(self._policy.cpu_budget, bulk)
+        now = self._clock.now()
+        working = {
+            name
+            for name, released_at in self._bulk_released_at.items()
+            if now - released_at < self._policy.share_window_s
+        }
+        working.update(c.name for c in self._leased_threads if not self._fixed_share(c))
+        working.add(plan.name)
+        return fair_share(self._policy.cpu_budget, len(working))
+
+    def _fixed_share(self, client: EngineClient) -> bool:
+        if client in self._reserved_leases:
+            return True
+        return any(m.plan.inline and m.client is client for m in self._engines)
 
     def _spawn_threads(self, plan: EnginePlan) -> int:
         return self._fixed_threads(plan) or self._policy.cpu_budget
