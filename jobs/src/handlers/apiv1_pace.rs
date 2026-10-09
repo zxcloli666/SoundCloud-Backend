@@ -1,10 +1,9 @@
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-const START_RATE: f64 = 4.0;
+const START_RATE: f64 = 2.0;
 const MIN_RATE: f64 = 0.5;
-const MAX_RATE: f64 = 12.0;
-const WRITE_SHARE: f64 = 0.6;
+const MAX_RATE: f64 = 6.0;
 const LIMIT_PAUSE: Duration = Duration::from_secs(20);
 const CALM_BEFORE_RAISE: Duration = Duration::from_secs(60);
 const RAISE_EVERY: Duration = Duration::from_secs(30);
@@ -17,8 +16,7 @@ pub enum Use {
 
 struct Pace {
     rate: f64,
-    next_read: Instant,
-    next_write: Instant,
+    next: Instant,
     paused_until: Instant,
     limited_at: Option<Instant>,
     raised_at: Instant,
@@ -28,27 +26,16 @@ impl Pace {
     fn new(now: Instant) -> Self {
         Self {
             rate: START_RATE,
-            next_read: now,
-            next_write: now,
+            next: now,
             paused_until: now,
             limited_at: None,
             raised_at: now,
         }
     }
 
-    fn reserve(&mut self, usage: Use, now: Instant) -> Duration {
-        let share = match usage {
-            Use::Read => 1.0 - WRITE_SHARE,
-            Use::Write => WRITE_SHARE,
-        };
-        let interval = Duration::from_secs_f64(1.0 / (self.rate * share));
-        let earliest = now.max(self.paused_until);
-        let next = match usage {
-            Use::Read => &mut self.next_read,
-            Use::Write => &mut self.next_write,
-        };
-        let slot = (*next).max(earliest);
-        *next = slot + interval;
+    fn reserve(&mut self, now: Instant) -> Duration {
+        let slot = self.next.max(now).max(self.paused_until);
+        self.next = slot + Duration::from_secs_f64(1.0 / self.rate);
         slot.saturating_duration_since(now)
     }
 
@@ -75,33 +62,39 @@ impl Pace {
     }
 }
 
-fn pace() -> &'static Mutex<Pace> {
-    static PACE: OnceLock<Mutex<Pace>> = OnceLock::new();
-    PACE.get_or_init(|| Mutex::new(Pace::new(Instant::now())))
+fn pace(usage: Use) -> &'static Mutex<Pace> {
+    static READS: OnceLock<Mutex<Pace>> = OnceLock::new();
+    static WRITES: OnceLock<Mutex<Pace>> = OnceLock::new();
+    let pace = match usage {
+        Use::Read => &READS,
+        Use::Write => &WRITES,
+    };
+    pace.get_or_init(|| Mutex::new(Pace::new(Instant::now())))
 }
 
 pub async fn wait_for_turn(usage: Use) {
     if cfg!(test) {
         return;
     }
-    let wait = pace()
+    let wait = pace(usage)
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .reserve(usage, Instant::now());
+        .reserve(Instant::now());
     if !wait.is_zero() {
         tokio::time::sleep(wait).await;
     }
 }
 
-pub fn record(rate_limited: bool) {
+pub fn record(usage: Use, rate_limited: bool) {
     if cfg!(test) {
         return;
     }
-    let mut pace = pace().lock().unwrap_or_else(PoisonError::into_inner);
+    let mut pace = pace(usage).lock().unwrap_or_else(PoisonError::into_inner);
     let now = Instant::now();
     if rate_limited {
         pace.limited(now);
         tracing::warn!(
+            ?usage,
             rate = pace.rate,
             "soundcloud api rate limit hit, slowing down"
         );
@@ -115,17 +108,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_and_reads_are_spaced_by_their_own_share_of_the_rate() {
+    fn requests_are_spaced_by_the_current_rate() {
         let now = Instant::now();
         let mut pace = Pace::new(now);
 
-        assert_eq!(pace.reserve(Use::Write, now), Duration::ZERO);
-        assert_eq!(pace.reserve(Use::Read, now), Duration::ZERO);
-        let second_write = pace.reserve(Use::Write, now);
-        let second_read = pace.reserve(Use::Read, now);
+        assert_eq!(pace.reserve(now), Duration::ZERO);
+        let second = pace.reserve(now);
 
-        assert!(second_write < second_read);
-        assert!((second_write.as_secs_f64() - 1.0 / (START_RATE * WRITE_SHARE)).abs() < 0.001);
+        assert!((second.as_secs_f64() - 1.0 / START_RATE).abs() < 0.001);
     }
 
     #[test]
@@ -137,7 +127,7 @@ mod tests {
         pace.limited(now + Duration::from_secs(1));
 
         assert!((pace.rate - START_RATE / 2.0).abs() < f64::EPSILON);
-        assert!(pace.reserve(Use::Write, now + Duration::from_secs(1)) >= Duration::from_secs(19));
+        assert!(pace.reserve(now + Duration::from_secs(1)) >= Duration::from_secs(19));
     }
 
     #[test]

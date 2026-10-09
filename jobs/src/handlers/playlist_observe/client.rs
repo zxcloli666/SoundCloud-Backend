@@ -112,7 +112,10 @@ impl PlaylistReadClient {
         apiv1_pace::wait_for_turn(apiv1_pace::Use::Read).await;
         let response = request.send().await?;
         let status = response.status();
-        apiv1_pace::record(status == StatusCode::TOO_MANY_REQUESTS);
+        apiv1_pace::record(
+            apiv1_pace::Use::Read,
+            status == StatusCode::TOO_MANY_REQUESTS,
+        );
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if !status.is_success() {

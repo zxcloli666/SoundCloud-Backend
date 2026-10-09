@@ -104,19 +104,32 @@ impl SoundCloudClient {
             .api_url
             .join(path.trim_start_matches('/'))
             .map_err(|_| SoundCloudError::InvalidTokenResponse)?;
+        apiv1_pace::wait_for_turn(apiv1_pace::Use::Write).await;
+        let result = self.send_routed(method, &target, access_token, body).await;
+        apiv1_pace::record(
+            apiv1_pace::Use::Write,
+            result.as_ref().is_err_and(SoundCloudError::is_rate_limited),
+        );
+        result
+    }
+
+    async fn send_routed(
+        &self,
+        method: Method,
+        target: &Url,
+        access_token: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, SoundCloudError> {
         let Some(proxy) = &self.proxy_url else {
-            return self
-                .send_to(method, &target, None, access_token, body)
-                .await;
+            return self.send_to(method, target, None, access_token, body).await;
         };
         match self
-            .send_to(method.clone(), &target, Some(proxy), access_token, body)
+            .send_to(method.clone(), target, Some(proxy), access_token, body)
             .await
         {
             Err(error) if retries_direct(&method, &error) => {
                 tracing::debug!(%error, "proxied write failed, sending it directly");
-                self.send_to(method, &target, None, access_token, body)
-                    .await
+                self.send_to(method, target, None, access_token, body).await
             }
             result => result,
         }
@@ -149,10 +162,8 @@ impl SoundCloudClient {
                 .header(CONTENT_TYPE, "application/json; charset=utf-8")
                 .json(body);
         }
-        apiv1_pace::wait_for_turn(apiv1_pace::Use::Write).await;
         let response = request.send().await?;
         let status = response.status();
-        apiv1_pace::record(status == StatusCode::TOO_MANY_REQUESTS);
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if !status.is_success() {
