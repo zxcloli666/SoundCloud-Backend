@@ -32,6 +32,7 @@ pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManage
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
+const WRITE_PAUSE_SECONDS: i64 = 30;
 const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
 const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
@@ -218,9 +219,7 @@ impl SyncQueueHandler {
         if !error.is_rate_limited() {
             return;
         }
-        let seconds = error
-            .retry_after_seconds()
-            .unwrap_or(RATE_LIMIT_RETRY_SECONDS);
+        let seconds = error.retry_after_seconds().unwrap_or(WRITE_PAUSE_SECONDS);
         warn!(
             %oauth_app_id,
             seconds,

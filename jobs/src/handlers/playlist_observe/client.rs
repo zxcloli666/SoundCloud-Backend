@@ -9,6 +9,7 @@ use wreq::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, HeaderValue, RETRY_AF
 use wreq::{Client, StatusCode};
 
 use crate::config::SyncQueueConfig;
+use crate::handlers::apiv1_pace;
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS: i64 = 24 * 60 * 60;
@@ -108,8 +109,10 @@ impl PlaylistReadClient {
         )
         .header(ACCEPT, "application/json; charset=utf-8")
         .header(ACCEPT_ENCODING, "identity");
+        apiv1_pace::wait_for_turn(apiv1_pace::Use::Read).await;
         let response = request.send().await?;
         let status = response.status();
+        apiv1_pace::record(status == StatusCode::TOO_MANY_REQUESTS);
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if !status.is_success() {

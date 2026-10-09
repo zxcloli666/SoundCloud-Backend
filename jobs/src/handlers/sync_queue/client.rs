@@ -12,6 +12,7 @@ use wreq::header::{
 use wreq::{Client, Method, StatusCode};
 
 use crate::config::{OAuthConfig, SyncQueueConfig};
+use crate::handlers::apiv1_pace;
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -148,8 +149,10 @@ impl SoundCloudClient {
                 .header(CONTENT_TYPE, "application/json; charset=utf-8")
                 .json(body);
         }
+        apiv1_pace::wait_for_turn(apiv1_pace::Use::Write).await;
         let response = request.send().await?;
         let status = response.status();
+        apiv1_pace::record(status == StatusCode::TOO_MANY_REQUESTS);
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if !status.is_success() {
