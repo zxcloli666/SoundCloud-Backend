@@ -48,14 +48,18 @@ pub struct SyncQueueHandler {
 }
 
 impl SyncQueueHandler {
-    pub fn new(config: &JobsConfig, pool: sqlx::PgPool) -> Result<Self, crate::ClientBuildError> {
+    pub fn new(
+        config: &JobsConfig,
+        pool: sqlx::PgPool,
+        relay: Option<Arc<call_relay::Client>>,
+    ) -> Result<Self, crate::ClientBuildError> {
         Ok(Self {
             repository: Arc::new(SyncQueueRepository::new(
                 pool.clone(),
                 config.sync_queue.lease_duration,
             )),
             connections: Arc::new(ConnectionManager::new(pool)),
-            client: Arc::new(SoundCloudClient::new(&config.sync_queue)?),
+            client: Arc::new(SoundCloudClient::new(&config.sync_queue)?.with_relay(relay)),
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
             write_pauses: WritePauses::default(),
