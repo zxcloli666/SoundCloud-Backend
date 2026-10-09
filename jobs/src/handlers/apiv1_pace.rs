@@ -66,8 +66,8 @@ fn pace(usage: Use) -> &'static Mutex<Pace> {
     static READS: OnceLock<Mutex<Pace>> = OnceLock::new();
     static WRITES: OnceLock<Mutex<Pace>> = OnceLock::new();
     match usage {
-        Use::Read => READS.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 0.5, 1.0))),
-        Use::Write => WRITES.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 1.0, 2.0))),
+        Use::Read => READS.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 2.0, 8.0))),
+        Use::Write => WRITES.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 1.0, 4.0))),
     }
 }
 

@@ -276,6 +276,17 @@ impl SoundCloudError {
             && (oauth_error(body, "invalid_client") || oauth_error(body, "unauthorized_client"))
     }
 
+    pub fn is_subscription_required(&self) -> bool {
+        let Self::Api { status, body, .. } = self else {
+            return false;
+        };
+        *status == StatusCode::FORBIDDEN
+            && body
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("subscription is required"))
+    }
+
     pub fn is_banned(&self) -> bool {
         let Self::Api { status, body, .. } = self else {
             return false;
@@ -371,6 +382,21 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_subscription_is_told_apart_from_other_refusals() {
+        let subscription = SoundCloudError::Api {
+            status: StatusCode::FORBIDDEN,
+            body: serde_json::json!({
+                "code": 403,
+                "message": "An active Artist Pro subscription is required for this action"
+            }),
+            retry_after_seconds: None,
+        };
+
+        assert!(subscription.is_subscription_required());
+        assert!(!refused(StatusCode::FORBIDDEN).is_subscription_required());
+    }
 
     fn refused(status: StatusCode) -> SoundCloudError {
         SoundCloudError::Api {
