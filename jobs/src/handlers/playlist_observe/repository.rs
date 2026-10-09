@@ -352,7 +352,16 @@ impl PlaylistObserveRepository {
         }
         let pending_operations =
             locked.last_operation_sequence > locked.committed_operation_sequence;
-        let outcome = if pending_operations && catalog_complete && !is_legacy {
+        let outcome = if pending_operations && catalog_complete && is_legacy {
+            self.adopt_local_over_legacy(
+                &mut transaction,
+                capture,
+                &locked,
+                &local_track_ids,
+                snapshot,
+            )
+            .await?
+        } else if pending_operations && catalog_complete {
             self.reduce_pending_operations(&mut transaction, capture, &locked, snapshot)
                 .await?
         } else {
@@ -493,6 +502,73 @@ impl PlaylistObserveRepository {
         .execute(&mut **transaction)
         .await?;
         Ok(())
+    }
+
+    async fn adopt_local_over_legacy(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        capture: &ObservationCapture,
+        locked: &LockedRunRow,
+        local_track_ids: &[String],
+        snapshot: &PlaylistSnapshot,
+    ) -> Result<Reconciliation, RepositoryError> {
+        let pending = sqlx::query_file_as!(
+            PendingOperationRow,
+            "queries/playlist_observe/load_pending_operations.sql",
+            &capture.playlist_urn,
+            capture.through_operation_sequence
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
+        let mut settled: HashSet<&str> = local_track_ids.iter().map(String::as_str).collect();
+        settled.extend(
+            pending
+                .iter()
+                .filter(|operation| operation.kind == "remove")
+                .filter_map(|operation| operation.track_id.as_deref()),
+        );
+        let mut candidate = local_track_ids.to_vec();
+        candidate.extend(
+            snapshot
+                .track_ids
+                .iter()
+                .filter(|track_id| !settled.contains(track_id.as_str()))
+                .cloned(),
+        );
+        let candidate_fingerprint = membership_fingerprint(&candidate);
+        if !schedule_missing_tracks(transaction, &candidate).await? {
+            return Ok(Reconciliation {
+                run_decision: "incomplete",
+                state_status: "conflict",
+                conflict_code: Some("catalog_incomplete"),
+                reason: Some(
+                    "the local playlist still contains a track without a durable catalog row"
+                        .to_owned(),
+                ),
+                projection: None,
+                candidate_fingerprint: Some(candidate_fingerprint),
+                committed_through_sequence: locked.committed_operation_sequence,
+                operations: Vec::new(),
+            });
+        }
+        sqlx::query_file!(
+            "queries/playlist_observe/abandon_legacy_intents.sql",
+            &capture.playlist_urn
+        )
+        .execute(&mut **transaction)
+        .await?;
+        Ok(Reconciliation {
+            run_decision: "shadow_ready",
+            state_status: "shadow_ready",
+            conflict_code: None,
+            reason: Some(
+                "the edited local playlist replaced its unresolved legacy intents".to_owned(),
+            ),
+            projection: Some(candidate),
+            candidate_fingerprint: Some(candidate_fingerprint),
+            committed_through_sequence: locked.committed_operation_sequence,
+            operations: Vec::new(),
+        })
     }
 
     async fn reduce_pending_operations(

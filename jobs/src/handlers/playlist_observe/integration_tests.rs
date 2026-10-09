@@ -858,6 +858,50 @@ async fn a_shadow_ready_candidate_is_offered_to_soundcloud_only_when_remote_appl
     Ok(())
 }
 
+#[sqlx::test(migrations = false)]
+async fn an_edited_legacy_playlist_keeps_its_local_tracks_and_is_sent_to_soundcloud(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    ensure_catalog(&pool, &["1", "2", "5", "7", "9"]).await?;
+    let observation_id = seed_reconcilable_playlist(&pool, &["1", "2", "5", "9"]).await?;
+    sqlx::query(
+        "INSERT INTO playlist_legacy_membership_intents (
+             archive_id, source, playlist_urn,
+             legacy_desired_revision, legacy_synced_revision, classification
+         ) VALUES ($1, 'revision', $2, 2, 1, 'membership_diverged')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(RECONCILABLE)
+    .execute(&pool)
+    .await?;
+    journal_operation(&pool, observation_id, 1, "remove", Some("2"), None, None).await?;
+    sqlx::query(
+        "DELETE FROM playlist_track_projection WHERE playlist_urn = $1 AND sc_track_id = '2'",
+    )
+    .bind(RECONCILABLE)
+    .execute(&pool)
+    .await?;
+
+    reduce_with(&pool, &snapshot_of(&["1", "2", "7"]), true).await?;
+
+    let candidate = vec!["1", "5", "9", "7"];
+    assert_eq!(projection_of(&pool).await?, candidate);
+    assert_eq!(membership_of(&pool).await?.0, "shadow_ready");
+    let pushed = membership_mutations(&pool).await?;
+    assert_eq!(pushed.len(), 1);
+    assert_eq!(pushed[0].1["tracks"], json!(candidate));
+    let open_intents: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM playlist_legacy_membership_intents
+         WHERE playlist_urn = $1 AND resolved_at IS NULL",
+    )
+    .bind(RECONCILABLE)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(open_intents, 0);
+    Ok(())
+}
+
 fn failed_read(state_status: &'static str) -> super::repository::FailureObservation {
     super::repository::FailureObservation {
         outcome: "rate_limited",
