@@ -437,9 +437,9 @@ fn app_wide_retry_seconds(error: &SoundCloudError, transient_seconds: i64) -> Op
     }
     match error {
         SoundCloudError::Api { status, .. } if status.is_server_error() => Some(transient_seconds),
-        SoundCloudError::Transport(_)
-        | SoundCloudError::Relay(_)
-        | SoundCloudError::ResponseTooLarge => Some(transient_seconds),
+        SoundCloudError::Transport(_) | SoundCloudError::ResponseTooLarge => {
+            Some(transient_seconds)
+        }
         SoundCloudError::InvalidTokenResponse => None,
         SoundCloudError::Api { .. } => None,
     }

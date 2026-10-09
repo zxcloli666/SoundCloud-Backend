@@ -206,7 +206,6 @@ impl JobHandlers {
             api_base: None,
             home_base: None,
         })?;
-        let sync_relay = relay.clone();
         let sc = match relay.clone() {
             Some(relay) => sc.with_relay(relay),
             None => sc,
@@ -308,7 +307,7 @@ impl JobHandlers {
                 databases.maintenance.clone(),
                 &config.subscriptions,
             ),
-            sync_queue: SyncQueueHandler::new(config, databases.main.fast.clone(), sync_relay)?,
+            sync_queue: SyncQueueHandler::new(config, databases.main.fast.clone())?,
             telemetry: TelemetryHandler::new(
                 databases.ops.bulk.clone(),
                 databases.ops.fast.clone(),

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
@@ -21,7 +19,6 @@ pub struct SoundCloudClient {
     http: Client,
     api_url: Url,
     proxy_url: Option<Url>,
-    relay: Option<Arc<call_relay::Client>>,
 }
 
 pub struct TokenRefreshClient {
@@ -40,9 +37,6 @@ pub enum SoundCloudError {
         body: Value,
         retry_after_seconds: Option<i64>,
     },
-
-    #[error("SoundCloud relay request failed: {0}")]
-    Relay(String),
 
     #[error("SoundCloud response exceeded the size limit")]
     ResponseTooLarge,
@@ -72,13 +66,7 @@ impl SoundCloudClient {
             http: build_http_client()?,
             api_url: sync.api_url.clone(),
             proxy_url: sync.proxy_url.clone(),
-            relay: None,
         })
-    }
-
-    pub fn with_relay(mut self, relay: Option<Arc<call_relay::Client>>) -> Self {
-        self.relay = relay;
-        self
     }
 
     pub async fn post(
@@ -115,18 +103,33 @@ impl SoundCloudClient {
             .api_url
             .join(path.trim_start_matches('/'))
             .map_err(|_| SoundCloudError::InvalidTokenResponse)?;
-        if let Some(relay) = &self.relay {
-            match relay_request(relay, &method, &target, access_token, body).await {
-                Ok(response) => return relay_answer(response),
-                Err(error) if method == Method::POST => {
-                    return Err(SoundCloudError::Relay(error.to_string()));
-                }
-                Err(error) => {
-                    tracing::debug!(%error, "relay write failed, falling back to the proxy");
-                }
+        let Some(proxy) = &self.proxy_url else {
+            return self
+                .send_to(method, &target, None, access_token, body)
+                .await;
+        };
+        match self
+            .send_to(method.clone(), &target, Some(proxy), access_token, body)
+            .await
+        {
+            Err(error) if retries_direct(&method, &error) => {
+                tracing::debug!(%error, "proxied write failed, sending it directly");
+                self.send_to(method, &target, None, access_token, body)
+                    .await
             }
+            result => result,
         }
-        let mut request = match &self.proxy_url {
+    }
+
+    async fn send_to(
+        &self,
+        method: Method,
+        target: &Url,
+        proxy: Option<&Url>,
+        access_token: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, SoundCloudError> {
+        let mut request = match proxy {
             Some(proxy) => self.http.request(method, proxy.as_str()).header(
                 "x-target",
                 base64::engine::general_purpose::STANDARD.encode(target.as_str()),
@@ -157,6 +160,20 @@ impl SoundCloudClient {
         }
         Ok(serde_json::from_slice(&body)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned())))
+    }
+}
+
+fn retries_direct(method: &Method, error: &SoundCloudError) -> bool {
+    if error.is_rate_limited() {
+        return true;
+    }
+    if *method == Method::POST {
+        return false;
+    }
+    match error {
+        SoundCloudError::Transport(_) => true,
+        SoundCloudError::Api { status, .. } => status.is_server_error(),
+        SoundCloudError::ResponseTooLarge | SoundCloudError::InvalidTokenResponse => false,
     }
 }
 
@@ -293,70 +310,6 @@ async fn read_body(response: wreq::Response) -> Result<Vec<u8>, SoundCloudError>
     Ok(bytes)
 }
 
-async fn relay_request(
-    relay: &call_relay::Client,
-    method: &Method,
-    target: &Url,
-    access_token: &str,
-    body: Option<&Value>,
-) -> Result<call_relay::Response, call_relay::Error> {
-    let mut headers = HashMap::from([
-        (
-            AUTHORIZATION.as_str().to_owned(),
-            format!("OAuth {access_token}"),
-        ),
-        (
-            ACCEPT.as_str().to_owned(),
-            "application/json; charset=utf-8".to_owned(),
-        ),
-        (ACCEPT_ENCODING.as_str().to_owned(), "identity".to_owned()),
-    ]);
-    let body = match body {
-        Some(body) => {
-            headers.insert(
-                CONTENT_TYPE.as_str().to_owned(),
-                "application/json; charset=utf-8".to_owned(),
-            );
-            body.to_string().into_bytes()
-        }
-        None => Vec::new(),
-    };
-    relay
-        .fetch(&call_relay::Request {
-            url: target.to_string(),
-            method: method.as_str().to_owned(),
-            headers,
-            body: body.into(),
-        })
-        .await
-}
-
-fn relay_answer(response: call_relay::Response) -> Result<Value, SoundCloudError> {
-    if response.body.len() > MAX_RESPONSE_BYTES {
-        return Err(SoundCloudError::ResponseTooLarge);
-    }
-    let status =
-        StatusCode::from_u16(response.status).map_err(|_| SoundCloudError::InvalidTokenResponse)?;
-    if !status.is_success() {
-        let retry_after_seconds = response
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(RETRY_AFTER.as_str()))
-            .and_then(|(_, value)| value.trim().parse::<i64>().ok())
-            .map(|seconds| seconds.max(1));
-        return Err(api_error(
-            status,
-            response.body.to_vec(),
-            retry_after_seconds,
-        ));
-    }
-    if response.body.is_empty() {
-        return Ok(Value::Null);
-    }
-    Ok(serde_json::from_slice(&response.body)
-        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&response.body).into_owned())))
-}
-
 fn api_error(
     status: StatusCode,
     body: Vec<u8>,
@@ -404,6 +357,34 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refused(status: StatusCode) -> SoundCloudError {
+        SoundCloudError::Api {
+            status,
+            body: Value::Null,
+            retry_after_seconds: None,
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_proxy_sends_every_write_directly() {
+        let limited = refused(StatusCode::TOO_MANY_REQUESTS);
+
+        assert!(retries_direct(&Method::PUT, &limited));
+        assert!(retries_direct(&Method::POST, &limited));
+    }
+
+    #[test]
+    fn a_failed_proxy_never_repeats_a_create_and_never_hides_a_refusal() {
+        let unavailable = refused(StatusCode::BAD_GATEWAY);
+
+        assert!(retries_direct(&Method::DELETE, &unavailable));
+        assert!(!retries_direct(&Method::POST, &unavailable));
+        assert!(!retries_direct(
+            &Method::PUT,
+            &refused(StatusCode::FORBIDDEN)
+        ));
+    }
 
     #[test]
     fn invalid_grant_requires_an_explicit_oauth_error() {
