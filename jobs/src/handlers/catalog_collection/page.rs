@@ -42,9 +42,6 @@ pub(super) fn parse(
         Some(Value::String(next)) => Some(cursor(payload, next, apiv2)?),
         Some(_) => return Err(malformed("collection cursor is malformed")),
     };
-    if collection.is_empty() && next.is_some() {
-        return Err(malformed("empty collection page has a continuation"));
-    }
     if payload.collection.item() == backend_contracts::CollectionItem::Comment {
         let mut items = Vec::with_capacity(collection.len());
         for item in collection {
@@ -189,14 +186,11 @@ fn comment(payload: &CatalogCollectionPayload, item: &Value) -> JobResult<Value>
         return Err(malformed("comment belongs to another track"));
     }
     let position = match comment.get("timestamp") {
-        None | Some(Value::Null) => None,
-        Some(Value::Number(number)) => Some(
-            number
-                .as_i64()
-                .filter(|value| *value >= 0)
-                .ok_or_else(|| malformed("comment position is invalid"))?,
-        ),
-        Some(_) => return Err(malformed("comment position is invalid")),
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value.trunc() as i64))
+            .filter(|value| *value >= 0),
+        _ => None,
     };
     let created_at = match comment.get("created_at") {
         None | Some(Value::Null) => None,
@@ -356,6 +350,21 @@ mod tests {
                 true
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_empty_page_with_a_continuation_points_to_the_next_page() {
+        let page = parse(
+            &payload(),
+            json!({"collection": [], "next_href": "https://api-v2.soundcloud.com/users/42/track_likes?offset=100"}),
+            true,
+        )
+        .unwrap();
+        assert!(page.items.is_empty());
+        assert_eq!(
+            page.next.as_deref(),
+            Some("v2:/users/42/track_likes?offset=100")
         );
     }
 

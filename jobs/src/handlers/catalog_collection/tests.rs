@@ -835,7 +835,6 @@ async fn a_malformed_comment_page_cannot_certify_a_snapshot(pool: PgPool) -> any
         json!({"collection": [{"id": 7, "body": "  ", "user": author}]}),
         json!({"collection": [{"id": 7, "body": "hi", "user": {"id": 5}}]}),
         json!({"collection": [{"id": 7, "body": "hi", "user": author, "track_id": 43}]}),
-        json!({"collection": [{"id": 7, "body": "hi", "user": author, "timestamp": -5}]}),
         json!({"collection": [{"id": 7, "body": "hi", "user": author, "created_at": "yesterday"}]}),
     ] {
         assert!(
@@ -850,6 +849,54 @@ async fn a_malformed_comment_page_cannot_certify_a_snapshot(pool: PgPool) -> any
     )?;
     assert_eq!(ok.items[0]["id"], "7");
     assert_eq!(ok.items[0]["track_id"], "42");
+    for (timestamp, position) in [
+        (json!(-5), Value::Null),
+        (json!(1500.7), json!(1500)),
+        (json!("12"), Value::Null),
+    ] {
+        let parsed = page::parse(
+            &payload,
+            json!({"collection": [{"id": 7, "body": "hi", "user": author, "timestamp": timestamp}]}),
+            true,
+        )?;
+        assert_eq!(parsed.items[0]["timestamp"], position);
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_empty_page_with_a_continuation_moves_on_without_completing(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, payload, writer) = setup(&pool).await?;
+    let first = state::begin(&pool, &job, &payload).await?.unwrap();
+    let cursor = "v1:/me/likes/tracks?offset=100";
+    writer
+        .persist(
+            &job,
+            &payload,
+            &first,
+            page(&[], Some(cursor)),
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    let resumed = state::begin(&pool, &job, &payload).await?.unwrap();
+    assert!(!resumed.complete);
+    assert_eq!(resumed.next_cursor.as_deref(), Some(cursor));
+    writer
+        .persist(
+            &job,
+            &payload,
+            &resumed,
+            page(&[1], None),
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    let liked: Vec<String> =
+        sqlx::query_scalar("SELECT sc_track_id FROM user_likes_tracks WHERE user_id = '42'")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(liked, ["1"]);
     Ok(())
 }
 
