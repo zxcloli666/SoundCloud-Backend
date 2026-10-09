@@ -1,9 +1,7 @@
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-const START_RATE: f64 = 2.0;
-const MIN_RATE: f64 = 0.5;
-const MAX_RATE: f64 = 6.0;
+const MIN_RATE: f64 = 0.2;
 const LIMIT_PAUSE: Duration = Duration::from_secs(20);
 const CALM_BEFORE_RAISE: Duration = Duration::from_secs(60);
 const RAISE_EVERY: Duration = Duration::from_secs(30);
@@ -16,6 +14,7 @@ pub enum Use {
 
 struct Pace {
     rate: f64,
+    ceiling: f64,
     next: Instant,
     paused_until: Instant,
     limited_at: Option<Instant>,
@@ -23,9 +22,10 @@ struct Pace {
 }
 
 impl Pace {
-    fn new(now: Instant) -> Self {
+    fn new(now: Instant, start: f64, ceiling: f64) -> Self {
         Self {
-            rate: START_RATE,
+            rate: start,
+            ceiling,
             next: now,
             paused_until: now,
             limited_at: None,
@@ -56,7 +56,7 @@ impl Pace {
             .limited_at
             .is_none_or(|at| now.saturating_duration_since(at) >= CALM_BEFORE_RAISE);
         if calm && now.saturating_duration_since(self.raised_at) >= RAISE_EVERY {
-            self.rate = (self.rate * 1.15).min(MAX_RATE);
+            self.rate = (self.rate * 1.15).min(self.ceiling);
             self.raised_at = now;
         }
     }
@@ -65,11 +65,10 @@ impl Pace {
 fn pace(usage: Use) -> &'static Mutex<Pace> {
     static READS: OnceLock<Mutex<Pace>> = OnceLock::new();
     static WRITES: OnceLock<Mutex<Pace>> = OnceLock::new();
-    let pace = match usage {
-        Use::Read => &READS,
-        Use::Write => &WRITES,
-    };
-    pace.get_or_init(|| Mutex::new(Pace::new(Instant::now())))
+    match usage {
+        Use::Read => READS.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 0.5, 1.0))),
+        Use::Write => WRITES.get_or_init(|| Mutex::new(Pace::new(Instant::now(), 1.0, 2.0))),
+    }
 }
 
 pub async fn wait_for_turn(usage: Use) {
@@ -89,17 +88,18 @@ pub fn record(usage: Use, rate_limited: bool) {
     if cfg!(test) {
         return;
     }
-    let mut pace = pace(usage).lock().unwrap_or_else(PoisonError::into_inner);
     let now = Instant::now();
-    if rate_limited {
+    if !rate_limited {
+        pace(usage)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .succeeded(now);
+        return;
+    }
+    for shared in [Use::Read, Use::Write] {
+        let mut pace = pace(shared).lock().unwrap_or_else(PoisonError::into_inner);
         pace.limited(now);
-        tracing::warn!(
-            ?usage,
-            rate = pace.rate,
-            "soundcloud api rate limit hit, slowing down"
-        );
-    } else {
-        pace.succeeded(now);
+        tracing::warn!(hit_by = ?usage, slowed = ?shared, rate = pace.rate, "soundcloud api rate limit hit, slowing down");
     }
 }
 
@@ -107,33 +107,36 @@ pub fn record(usage: Use, rate_limited: bool) {
 mod tests {
     use super::*;
 
+    const START: f64 = 2.0;
+    const CEILING: f64 = 6.0;
+
     #[test]
     fn requests_are_spaced_by_the_current_rate() {
         let now = Instant::now();
-        let mut pace = Pace::new(now);
+        let mut pace = Pace::new(now, START, CEILING);
 
         assert_eq!(pace.reserve(now), Duration::ZERO);
         let second = pace.reserve(now);
 
-        assert!((second.as_secs_f64() - 1.0 / START_RATE).abs() < 0.001);
+        assert!((second.as_secs_f64() - 1.0 / START).abs() < 0.001);
     }
 
     #[test]
     fn a_rate_limit_halves_the_rate_once_and_holds_everything_back() {
         let now = Instant::now();
-        let mut pace = Pace::new(now);
+        let mut pace = Pace::new(now, START, CEILING);
 
         pace.limited(now);
         pace.limited(now + Duration::from_secs(1));
 
-        assert!((pace.rate - START_RATE / 2.0).abs() < f64::EPSILON);
+        assert!((pace.rate - START / 2.0).abs() < f64::EPSILON);
         assert!(pace.reserve(now + Duration::from_secs(1)) >= Duration::from_secs(19));
     }
 
     #[test]
     fn the_rate_climbs_back_only_after_a_calm_minute() {
         let now = Instant::now();
-        let mut pace = Pace::new(now);
+        let mut pace = Pace::new(now, START, CEILING);
         pace.limited(now);
         let slowed = pace.rate;
 
