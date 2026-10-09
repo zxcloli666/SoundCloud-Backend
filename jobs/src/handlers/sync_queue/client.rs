@@ -233,6 +233,13 @@ impl SoundCloudError {
             })
     }
 
+    pub fn response_excerpt(&self) -> String {
+        match self {
+            Self::Api { body, .. } => body.to_string().chars().take(400).collect(),
+            _ => String::new(),
+        }
+    }
+
     pub fn retry_after_seconds(&self) -> Option<i64> {
         match self {
             Self::Api {

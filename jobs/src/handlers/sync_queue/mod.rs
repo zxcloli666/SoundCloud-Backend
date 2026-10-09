@@ -272,6 +272,12 @@ impl SyncQueueHandler {
                     .await?;
             }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
+                warn!(
+                    action = %mutation.action_type,
+                    retry_after_seconds = ?error.retry_after_seconds(),
+                    response = %error.response_excerpt(),
+                    "soundcloud rate-limited a write"
+                );
                 self.repository
                     .postpone(
                         mutation,
