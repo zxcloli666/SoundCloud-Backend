@@ -9,6 +9,8 @@ use crate::background_jobs::{BackgroundJob, BackgroundJobs};
 use crate::error::AppResult;
 use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
+const EDIT_PRIORITY: i16 = 30;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistMembershipStatus {
@@ -102,14 +104,18 @@ impl PlaylistMembership {
         let Ok(Some(claimed_until)) = claim else {
             return;
         };
-        if self.enqueue_observation(playlist_urn).await {
+        if self.enqueue(playlist_urn, VIEWER_PRIORITY).await {
             return;
         }
 
         let _ = release_observation_enqueue(&self.pool, playlist_urn, claimed_until).await;
     }
 
-    pub async fn enqueue_observation(&self, playlist_urn: &str) -> bool {
+    pub async fn enqueue_edit_observation(&self, playlist_urn: &str) -> bool {
+        self.enqueue(playlist_urn, EDIT_PRIORITY).await
+    }
+
+    async fn enqueue(&self, playlist_urn: &str, priority: i16) -> bool {
         let job = BackgroundJob::coalescing(
             JobKind::PlaylistObserveShadow,
             playlist_urn,
@@ -117,7 +123,7 @@ impl PlaylistMembership {
                 playlist_urn: playlist_urn.to_owned(),
             },
         )
-        .map(|job| job.if_absent().with_priority(VIEWER_PRIORITY));
+        .map(|job| job.if_absent().with_priority(priority));
         match job {
             Ok(job) => self.jobs.enqueue_opportunistic(&job).await,
             Err(_) => false,

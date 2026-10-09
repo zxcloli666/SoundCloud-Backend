@@ -310,7 +310,7 @@ impl PlaylistsService {
             .as_ref()
             .is_some_and(|journal| journal.appended > 0)
         {
-            self.membership.enqueue_observation(playlist_urn).await;
+            self.membership.enqueue_edit_observation(playlist_urn).await;
         }
         let mut response = json!({
             "status": if outcome.metadata_queued { "queued" } else { "ok" },
@@ -350,7 +350,7 @@ impl PlaylistsService {
         {
             Ok(outcome) => {
                 if outcome.appended > 0 {
-                    self.membership.enqueue_observation(playlist_urn).await;
+                    self.membership.enqueue_edit_observation(playlist_urn).await;
                 }
                 Ok(outcome)
             }
