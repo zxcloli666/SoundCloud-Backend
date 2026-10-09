@@ -25,6 +25,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          CREATE INDEX sync_queue_pickup_idx ON sync_queue (next_run_at, locked_at);
          CREATE UNIQUE INDEX sync_queue_target_uq
              ON sync_queue (user_id, action_type, target_urn);
+         CREATE TABLE soundcloud_connections (
+             soundcloud_user_id text NOT NULL,
+             expires_at timestamptz NOT NULL,
+             retry_at timestamptz
+         );
          CREATE TABLE user_likes_tracks (
              user_id text NOT NULL,
              sc_track_id text NOT NULL,
@@ -111,6 +116,41 @@ async fn later_intent_waits_behind_a_head_in_backoff(pool: PgPool) -> anyhow::Re
     let claimed = repository.claim(2).await?;
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].action_type, "like_track");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_user_with_a_valid_token_is_served_ahead_of_an_older_backlog(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, next_run_at) VALUES
+             ('1', 'like_track', 'old', now() - interval '2 days'),
+             ('2', 'like_track', 'cooling', now() - interval '1 day'),
+             ('3', 'like_track', 'fresh', now())",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO soundcloud_connections (soundcloud_user_id, expires_at, retry_at) VALUES
+             ('1', now() - interval '1 hour', NULL),
+             ('2', now() + interval '1 hour', now() + interval '5 minutes'),
+             ('3', now() + interval '1 hour', NULL)",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = repository(pool);
+
+    let claimed = repository.claim(2).await?;
+
+    let targets: Vec<&str> = claimed
+        .iter()
+        .map(|mutation| mutation.target_urn.as_str())
+        .collect();
+    assert_eq!(claimed.len(), 2);
+    assert!(targets.contains(&"fresh"));
+    assert!(targets.contains(&"old"));
     Ok(())
 }
 
