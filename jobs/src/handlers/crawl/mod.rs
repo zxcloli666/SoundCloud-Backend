@@ -146,32 +146,36 @@ impl CrawlHandler {
             while running.len() < self.config.genius_concurrency
                 && let Some(artist) = queue.next()
             {
-                running.push(async move {
-                    let result = identity::resolve_genius_id(
-                        &self.pool,
-                        &self.genius,
-                        artist.id,
-                        &artist.name,
-                        self.config.recrawl_days as f64,
-                    )
-                    .await;
-                    (artist.id, result)
-                });
+                running.push(self.settle_identity(artist.id, artist.name));
             }
-            let Some((artist_id, result)) = running.next().await else {
+            let Some(found) = running.next().await else {
                 break;
             };
-            match result {
-                Ok(true) => matched += 1,
-                Ok(false) => {}
-                Err(error) => {
-                    warn!(artist = %artist_id, %error, "genius identity lookup failed");
-                    self.defer_identity(artist_id).await;
-                }
+            if found {
+                matched += 1;
             }
         }
         info!(examined, matched, "verified artists looked up on genius");
         Ok(())
+    }
+
+    async fn settle_identity(&self, artist_id: Uuid, name: String) -> bool {
+        let result = identity::resolve_genius_id(
+            &self.pool,
+            &self.genius,
+            artist_id,
+            &name,
+            self.config.recrawl_days as f64,
+        )
+        .await;
+        match result {
+            Ok(found) => found,
+            Err(error) => {
+                warn!(artist = %artist_id, %error, "genius identity lookup failed");
+                self.defer_identity(artist_id).await;
+                false
+            }
+        }
     }
 
     async fn defer_identity(&self, artist_id: Uuid) {
