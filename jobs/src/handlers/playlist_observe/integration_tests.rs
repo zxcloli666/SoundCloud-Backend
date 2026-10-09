@@ -277,6 +277,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0139_playlist_operations_without_baseline.sql"
+    ))
+    .execute(pool)
+    .await?;
     sqlx::raw_sql(
         "CREATE TABLE oauth_apps (
              id uuid PRIMARY KEY,
@@ -850,6 +855,92 @@ async fn a_shadow_ready_candidate_is_offered_to_soundcloud_only_when_remote_appl
             })
         )]
     );
+    Ok(())
+}
+
+fn failed_read(state_status: &'static str) -> super::repository::FailureObservation {
+    super::repository::FailureObservation {
+        outcome: "rate_limited",
+        run_decision: "retry_wait",
+        state_status,
+        conflict_code: None,
+        retry_at: Some(chrono::Utc::now()),
+        error_kind: "soundcloud_rate_limited".to_owned(),
+        observed_at: chrono::Utc::now(),
+    }
+}
+
+async fn fail_read(
+    pool: &PgPool,
+    membership_remote_apply: bool,
+    state_status: &'static str,
+) -> anyhow::Result<()> {
+    let repository = PlaylistObserveRepository::new(pool.clone(), membership_remote_apply);
+    let urn = super::urn::PlaylistUrn::parse(RECONCILABLE)?;
+    let captured = repository.capture(&urn, Uuid::now_v7(), 1).await?;
+    let capture = captured.capture.ok_or_else(|| anyhow::anyhow!("capture"))?;
+    repository
+        .persist_failure(&capture, &failed_read(state_status))
+        .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_read_sends_the_local_playlist_to_soundcloud_when_edits_are_pending(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_rebased_playlist(&pool).await?;
+
+    fail_read(&pool, false, "retry_wait").await?;
+    assert!(membership_mutations(&pool).await?.is_empty());
+    fail_read(&pool, true, "auth_required").await?;
+    assert!(membership_mutations(&pool).await?.is_empty());
+
+    fail_read(&pool, true, "retry_wait").await?;
+
+    let local = vec!["1", "2", "9"];
+    let fingerprint = hex_of(&super::fingerprint::membership_fingerprint(
+        &local.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>(),
+    ));
+    assert_eq!(
+        membership_mutations(&pool).await?,
+        vec![(
+            RECONCILABLE_OWNER.to_owned(),
+            json!({
+                "tracks": local,
+                "fingerprint": fingerprint,
+                "reconcile_generation": 3
+            })
+        )]
+    );
+    assert_eq!(projection_of(&pool).await?, vec!["1", "2", "9"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_read_sends_nothing_without_pending_edits_or_a_first_observation(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    ensure_catalog(&pool, &["1", "2"]).await?;
+    seed_reconcilable_playlist(&pool, &["1", "2"]).await?;
+
+    fail_read(&pool, true, "retry_wait").await?;
+    assert!(membership_mutations(&pool).await?.is_empty());
+
+    sqlx::query(
+        "UPDATE playlist_membership_state
+         SET baseline_generation = 0,
+             baseline_observation_id = NULL,
+             last_operation_sequence = 1
+         WHERE playlist_urn = $1",
+    )
+    .bind(RECONCILABLE)
+    .execute(&pool)
+    .await?;
+    fail_read(&pool, true, "retry_wait").await?;
+    assert!(membership_mutations(&pool).await?.is_empty());
     Ok(())
 }
 

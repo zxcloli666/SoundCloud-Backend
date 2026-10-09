@@ -467,6 +467,34 @@ impl PlaylistObserveRepository {
         Ok(())
     }
 
+    async fn enqueue_local_membership_apply(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        capture: &ObservationCapture,
+    ) -> Result<(), RepositoryError> {
+        if !self.membership_remote_apply {
+            return Ok(());
+        }
+        let local_track_ids = sqlx::query_file_scalar!(
+            "queries/playlist_observe/load_projection.sql",
+            &capture.playlist_urn
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
+        let fingerprint = membership_fingerprint(&local_track_ids);
+        sqlx::query_file!(
+            "queries/playlist_observe/enqueue_local_membership_apply.sql",
+            &capture.playlist_urn,
+            &capture.owner_id,
+            &local_track_ids,
+            fingerprint.as_slice(),
+            capture.reconcile_generation
+        )
+        .execute(&mut **transaction)
+        .await?;
+        Ok(())
+    }
+
     async fn reduce_pending_operations(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -570,6 +598,10 @@ impl PlaylistObserveRepository {
         .await?;
         if state_updated.rows_affected() != 1 {
             return Err(RepositoryError::InconsistentSnapshot);
+        }
+        if failure.state_status == "retry_wait" {
+            self.enqueue_local_membership_apply(&mut transaction, capture)
+                .await?;
         }
         let run_updated = sqlx::query_file!(
             "queries/playlist_observe/complete_run.sql",

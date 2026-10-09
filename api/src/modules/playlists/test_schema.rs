@@ -87,6 +87,11 @@ pub async fn install(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0139_playlist_operations_without_baseline.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

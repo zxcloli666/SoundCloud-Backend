@@ -92,9 +92,6 @@ impl PlaylistMutations {
                 Ok(outcome) => Some(outcome),
                 Err(error) => {
                     tx.rollback().await?;
-                    if error.public_code() == super::journal::AWAITING_BASELINE {
-                        self.request_baseline(user, &target).await?;
-                    }
                     return Err(error);
                 }
             },
@@ -119,28 +116,6 @@ impl PlaylistMutations {
             metadata_queued: metadata.is_some(),
             journal,
         })
-    }
-
-    async fn request_baseline(&self, user: &str, target: &str) -> AppResult<()> {
-        let mut tx = self.begin(target).await?;
-        sqlx::query_file_scalar!("queries/playlists/service/lock_membership.sql", target)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let owns = sqlx::query_file_scalar!(
-            "queries/playlists/assert_owner.sql",
-            extract_sc_id(user),
-            target,
-            &crate::common::sc_ids::user_id_variants(user)
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if owns {
-            sqlx::query_file!("queries/playlists/mark_reconcile_due.sql", target)
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
-        Ok(())
     }
 
     pub(super) async fn delete(&self, user: &str, target: &str) -> AppResult<Value> {

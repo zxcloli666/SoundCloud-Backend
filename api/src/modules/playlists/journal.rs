@@ -7,12 +7,9 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::playlists::edit::{self, MembershipRequest, Operation, TrackEdit};
 
-pub const AWAITING_BASELINE: &str = "playlist_awaiting_baseline";
-pub const LEGACY_RECONCILIATION_PENDING: &str = "playlist_legacy_reconciliation_pending";
 pub const REVISION_CONFLICT: &str = "playlist_revision_conflict";
 pub const UNKNOWN_TRACK: &str = "playlist_track_not_in_catalog";
 
-const BASELINE_RETRY_SECONDS: i64 = 5;
 const RECONCILE_DEBOUNCE_SECONDS: i64 = 30;
 
 struct MembershipStateRow {
@@ -20,8 +17,6 @@ struct MembershipStateRow {
     baseline_observation_id: Option<Uuid>,
     projection_revision: i64,
     last_operation_sequence: i64,
-    sync_status: String,
-    has_legacy_intents: bool,
 }
 
 #[derive(Debug)]
@@ -56,12 +51,7 @@ impl PlaylistJournal {
                 idempotency_key,
             )
             .await;
-        if result.is_ok()
-            || result
-                .as_ref()
-                .err()
-                .is_some_and(|error| error.public_code() == AWAITING_BASELINE)
-        {
+        if result.is_ok() {
             transaction.commit().await?;
         }
         result
@@ -75,17 +65,20 @@ impl PlaylistJournal {
         request: MembershipRequest,
         idempotency_key: Uuid,
     ) -> AppResult<JournalOutcome> {
+        sqlx::query_file!(
+            "queries/playlists/ensure_membership_tracked.sql",
+            playlist_urn
+        )
+        .execute(&mut **transaction)
+        .await?;
         let state = sqlx::query_file_as!(
             MembershipStateRow,
             "queries/playlists/lock_membership_state.sql",
             playlist_urn
         )
         .fetch_optional(&mut **transaction)
-        .await?;
-
-        let Some(state) = state else {
-            return Err(awaiting_baseline());
-        };
+        .await?
+        .ok_or_else(|| AppError::not_found("Playlist not found"))?;
         let owns = sqlx::query_file_scalar!(
             "queries/playlists/assert_owner.sql",
             actor_sc_user_id,
@@ -96,22 +89,6 @@ impl PlaylistJournal {
         .await?;
         if !owns {
             return Err(AppError::not_found("Playlist not found"));
-        }
-        let Some(base_observation_id) = state
-            .baseline_observation_id
-            .filter(|_| state.baseline_generation > 0 && state.sync_status != "unhydrated")
-        else {
-            sqlx::query_file!("queries/playlists/mark_reconcile_due.sql", playlist_urn)
-                .execute(&mut **transaction)
-                .await?;
-            return Err(awaiting_baseline());
-        };
-        if state.has_legacy_intents || state.sync_status == "legacy_review" {
-            return Err(AppError::coded(
-                StatusCode::CONFLICT,
-                LEGACY_RECONCILIATION_PENDING,
-                "playlist membership is waiting for legacy reconciliation",
-            ));
         }
         let replayed = sqlx::query_file_scalar!(
             "queries/playlists/count_replayed_operations.sql",
@@ -170,7 +147,7 @@ impl PlaylistJournal {
                 keys[index],
                 &operation.fingerprint(),
                 state.baseline_generation,
-                base_observation_id,
+                state.baseline_observation_id,
                 expected_revision,
                 operation.kind(),
                 operation.track_id(),
@@ -359,13 +336,4 @@ fn operation_keys(idempotency_key: Uuid, count: usize) -> Vec<Uuid> {
 
 fn operation_key(idempotency_key: Uuid, index: usize) -> Uuid {
     Uuid::new_v5(&idempotency_key, &(index as u64).to_be_bytes())
-}
-
-fn awaiting_baseline() -> AppError {
-    AppError::coded(
-        StatusCode::CONFLICT,
-        AWAITING_BASELINE,
-        "playlist membership is waiting for its first SoundCloud observation",
-    )
-    .with_retry_after(BASELINE_RETRY_SECONDS)
 }

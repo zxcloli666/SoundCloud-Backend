@@ -2,10 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::edit::{EditBody, MembershipRequest, MoveBody, TrackEdit};
-use super::journal::{
-    AWAITING_BASELINE, LEGACY_RECONCILIATION_PENDING, PlaylistJournal, REVISION_CONFLICT,
-    UNKNOWN_TRACK,
-};
+use super::journal::{PlaylistJournal, REVISION_CONFLICT, UNKNOWN_TRACK};
 use super::test_schema;
 
 const PLAYLIST: &str = "soundcloud:playlists:42";
@@ -439,7 +436,9 @@ async fn a_stale_client_revision_is_rejected(pool: PgPool) -> anyhow::Result<()>
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_playlist_without_a_baseline_refuses_and_becomes_due(pool: PgPool) -> anyhow::Result<()> {
+async fn a_playlist_without_a_baseline_accepts_the_edit_and_becomes_due(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     sqlx::query(
@@ -455,30 +454,62 @@ async fn a_playlist_without_a_baseline_refuses_and_becomes_due(pool: PgPool) -> 
     .await?;
     let journal = PlaylistJournal::new(pool.clone());
 
-    let error = journal
+    let outcome = journal
         .append(
             PLAYLIST,
             OWNER,
             body(serde_json::json!({ "remove": "soundcloud:tracks:1" })),
             Uuid::now_v7(),
         )
-        .await
-        .expect_err("missing baseline");
+        .await?;
 
-    assert!(error.to_string().contains(AWAITING_BASELINE));
-    let due: bool = sqlx::query_scalar(
-        "SELECT next_reconcile_at <= clock_timestamp()
-         FROM playlist_membership_state WHERE playlist_urn = $1",
+    assert_eq!(outcome.appended, 1);
+    assert_eq!(projection(&pool).await?, vec!["2"]);
+    assert_eq!(state(&pool).await?.3, "pending".to_owned());
+    let (generation, observation, due_soon): (i64, Option<Uuid>, bool) = sqlx::query_as(
+        "SELECT operation.base_baseline_generation,
+                operation.base_observation_id,
+                state.next_reconcile_at <= clock_timestamp() + interval '1 minute'
+         FROM playlist_membership_operations AS operation
+         JOIN playlist_membership_state AS state USING (playlist_urn)
+         WHERE operation.playlist_urn = $1",
     )
     .bind(PLAYLIST)
     .fetch_one(&pool)
     .await?;
-    assert!(due);
+    assert_eq!((generation, observation), (0, None));
+    assert!(due_soon);
     Ok(())
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_playlist_with_unresolved_legacy_intent_refuses(pool: PgPool) -> anyhow::Result<()> {
+async fn a_playlist_without_membership_state_accepts_the_edit(pool: PgPool) -> anyhow::Result<()> {
+    test_schema::install(&pool).await?;
+    test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+    sqlx::query("DELETE FROM playlist_membership_state WHERE playlist_urn = $1")
+        .bind(PLAYLIST)
+        .execute(&pool)
+        .await?;
+    let journal = PlaylistJournal::new(pool.clone());
+
+    journal
+        .append(
+            PLAYLIST,
+            OWNER,
+            body(serde_json::json!({ "remove": "soundcloud:tracks:1" })),
+            Uuid::now_v7(),
+        )
+        .await?;
+
+    assert_eq!(projection(&pool).await?, vec!["2"]);
+    assert_eq!(state(&pool).await?.3, "pending".to_owned());
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_playlist_with_unresolved_legacy_intent_accepts_the_edit(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     sqlx::query(
@@ -493,18 +524,17 @@ async fn a_playlist_with_unresolved_legacy_intent_refuses(pool: PgPool) -> anyho
     .await?;
     let journal = PlaylistJournal::new(pool.clone());
 
-    let error = journal
+    journal
         .append(
             PLAYLIST,
             OWNER,
             body(serde_json::json!({ "remove": "soundcloud:tracks:1" })),
             Uuid::now_v7(),
         )
-        .await
-        .expect_err("legacy intent");
+        .await?;
 
-    assert!(error.to_string().contains(LEGACY_RECONCILIATION_PENDING));
-    assert_eq!(projection(&pool).await?, vec!["1", "2"]);
+    assert_eq!(projection(&pool).await?, vec!["2"]);
+    assert_eq!(journalled(&pool).await?.len(), 1);
     Ok(())
 }
 
@@ -585,66 +615,6 @@ fn a_move_body_type_is_reachable_from_the_module_surface() {
     };
 
     assert_eq!(moved.to, 0);
-}
-
-#[sqlx::test(migrations = false)]
-async fn abandoning_the_last_legacy_intent_unblocks_the_playlist(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
-    test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
-    let archive_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO playlist_legacy_membership_intents (
-             archive_id, source, playlist_urn,
-             legacy_desired_revision, legacy_synced_revision, classification
-         ) VALUES ($1, 'revision', $2, 2, 1, 'local_superset')",
-    )
-    .bind(archive_id)
-    .bind(PLAYLIST)
-    .execute(&pool)
-    .await?;
-    let journal = PlaylistJournal::new(pool.clone());
-    let blocked = journal
-        .append(
-            PLAYLIST,
-            OWNER,
-            body(serde_json::json!({ "remove": "soundcloud:tracks:1" })),
-            Uuid::now_v7(),
-        )
-        .await
-        .expect_err("legacy intent blocks the write");
-    assert!(blocked.to_string().contains(LEGACY_RECONCILIATION_PENDING));
-
-    let playlist_urn =
-        sqlx::query_file_scalar!("queries/admin/playlists/legacy_abandon.sql", archive_id)
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(playlist_urn, PLAYLIST);
-    let unblocked = sqlx::query_file!("queries/admin/playlists/legacy_wake.sql", PLAYLIST)
-        .execute(&pool)
-        .await?
-        .rows_affected();
-    assert_eq!(unblocked, 1);
-
-    journal
-        .append(
-            PLAYLIST,
-            OWNER,
-            body(serde_json::json!({ "remove": "soundcloud:tracks:1" })),
-            Uuid::now_v7(),
-        )
-        .await?;
-
-    assert_eq!(projection(&pool).await?, vec!["2"]);
-    let prior: Option<String> = sqlx::query_scalar(
-        "SELECT prior_classification FROM playlist_legacy_membership_intents WHERE archive_id = $1",
-    )
-    .bind(archive_id)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(prior.as_deref(), Some("local_superset"));
-    Ok(())
 }
 
 #[sqlx::test(migrations = false)]

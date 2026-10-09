@@ -116,37 +116,24 @@ async fn playlist_metadata_is_local_and_coalesces_without_soundcloud_or_a_member
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn missing_playlist_baseline_remains_due_after_rolling_back_a_mixed_update(
+async fn a_mixed_update_is_accepted_before_the_first_soundcloud_observation(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let service = setup(&pool).await?;
     sqlx::query(
-        "UPDATE playlist_membership_state SET next_reconcile_at = NULL WHERE playlist_urn = $1",
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+        VALUES ('1', 'soundcloud:tracks:1', 'Track', 'track', 120000)",
     )
-    .bind(PLAYLIST)
     .execute(&pool)
     .await?;
-    let error = service
+    service
         .update(
             "17",
             "42",
-            Some(&metadata(json!({"title": "Rejected"}))?),
+            Some(&metadata(json!({"title": "Accepted"}))?),
             addition(),
         )
-        .await
-        .err()
-        .ok_or_else(|| anyhow::anyhow!("missing baseline accepted"))?;
-    assert_eq!(
-        error.public_code(),
-        super::super::journal::AWAITING_BASELINE
-    );
-    let claimed = sqlx::query_file_scalar!("queries/playlists/claim_observe_enqueue.sql", PLAYLIST)
-        .fetch_optional(&pool)
         .await?;
-    assert!(
-        claimed.is_some(),
-        "baseline observation must remain eligible for scheduling"
-    );
     let result: (String, i64, i64) = sqlx::query_as(
         "SELECT title,
         (SELECT count(*) FROM sync_queue), (SELECT count(*) FROM playlist_membership_operations)
@@ -155,7 +142,7 @@ async fn missing_playlist_baseline_remains_due_after_rolling_back_a_mixed_update
     .bind(PLAYLIST)
     .fetch_one(&pool)
     .await?;
-    assert_eq!(result, ("Original".into(), 0, 0));
+    assert_eq!(result, ("Accepted".into(), 1, 1));
     Ok(())
 }
 
