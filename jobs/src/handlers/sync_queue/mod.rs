@@ -8,6 +8,7 @@ mod repository;
 mod storage;
 #[cfg(test)]
 mod track_tests;
+mod write_pause;
 
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
 use self::repository::{FinalizeError, SyncQueueRepository};
 use self::storage::TrackStorage;
+use self::write_pause::WritePauses;
 
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
@@ -40,6 +42,7 @@ pub struct SyncQueueHandler {
     client: Arc<SoundCloudClient>,
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
+    write_pauses: WritePauses,
     concurrency: usize,
     claim_batch: i64,
 }
@@ -55,6 +58,7 @@ impl SyncQueueHandler {
             client: Arc::new(SoundCloudClient::new(&config.sync_queue)?),
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
+            write_pauses: WritePauses::default(),
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
         })
@@ -133,6 +137,18 @@ impl SyncQueueHandler {
                 return Ok(());
             }
         };
+        if let Some(oauth_app_id) = token.oauth_app_id
+            && let Some(seconds) = self.write_pauses.remaining_seconds(oauth_app_id)
+        {
+            self.repository
+                .postpone_unattempted(
+                    &mutation,
+                    "SoundCloud writes are paused after a rate limit",
+                    seconds,
+                )
+                .await?;
+            return Ok(());
+        }
         if !self.repository.record_remote_attempt(&mutation).await? {
             self.repository.release(&mutation).await?;
             return Ok(());
@@ -168,12 +184,14 @@ impl SyncQueueHandler {
                             return Ok(());
                         }
                         Err(error) => {
+                            self.pause_writes_when_rate_limited(&error, refreshed.oauth_app_id);
                             self.record_action_failure(&mutation, &error).await?;
                             return Ok(());
                         }
                     }
                 }
                 Err(error) => {
+                    self.pause_writes_when_rate_limited(&error, token.oauth_app_id);
                     self.record_action_failure(&mutation, &error).await?;
                     return Ok(());
                 }
@@ -187,6 +205,29 @@ impl SyncQueueHandler {
             return Ok(());
         }
         self.finalize(&mutation).await
+    }
+
+    fn pause_writes_when_rate_limited(
+        &self,
+        error: &ActionError,
+        oauth_app_id: Option<uuid::Uuid>,
+    ) {
+        let (ActionError::SoundCloud(error), Some(oauth_app_id)) = (error, oauth_app_id) else {
+            return;
+        };
+        if !error.is_rate_limited() {
+            return;
+        }
+        let seconds = error
+            .retry_after_seconds()
+            .unwrap_or(RATE_LIMIT_RETRY_SECONDS);
+        warn!(
+            %oauth_app_id,
+            seconds,
+            response = %error.response_excerpt(),
+            "soundcloud rate-limited a write, pausing writes for the app"
+        );
+        self.write_pauses.pause(oauth_app_id, seconds);
     }
 
     async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), anyhow::Error> {
@@ -272,12 +313,6 @@ impl SyncQueueHandler {
                     .await?;
             }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
-                warn!(
-                    action = %mutation.action_type,
-                    retry_after_seconds = ?error.retry_after_seconds(),
-                    response = %error.response_excerpt(),
-                    "soundcloud rate-limited a write"
-                );
                 self.repository
                     .postpone(
                         mutation,
