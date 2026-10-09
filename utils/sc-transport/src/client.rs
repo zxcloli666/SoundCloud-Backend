@@ -754,19 +754,20 @@ impl ScClient {
         let relay_set = self.inner.relay.is_some();
         match (relay_set, proxy_set) {
             (true, true) => {
-                let m1 = method.clone();
-                let u1 = target_url.to_string();
-                let h1 = headers.clone();
-                let b1 = body.clone();
-                let relay_fut: std::pin::Pin<
-                    Box<dyn std::future::Future<Output = ScResult<Bytes>> + Send + '_>,
-                > = Box::pin(self.send_relay(m1, u1, h1, b1));
-                let proxy_fut: std::pin::Pin<
-                    Box<dyn std::future::Future<Output = ScResult<Bytes>> + Send + '_>,
-                > = Box::pin(self.send_proxy(method, target_url, headers, body));
-                match futures::future::select_ok(vec![relay_fut, proxy_fut]).await {
-                    Ok((b, _)) => Ok(b),
-                    Err(e) => Err(e),
+                let relayed = self
+                    .send_relay(
+                        method.clone(),
+                        target_url.to_string(),
+                        headers.clone(),
+                        body.clone(),
+                    )
+                    .await;
+                match relayed {
+                    Err(error) if !is_semantic_miss(&error) => {
+                        tracing::debug!(%error, "relay read failed, falling back to the proxy");
+                        self.send_proxy(method, target_url, headers, body).await
+                    }
+                    answered => answered,
                 }
             }
             (true, false) => {
@@ -949,6 +950,10 @@ pub(crate) async fn collect_capped(response: wreq::Response, max_bytes: usize) -
         bytes.extend_from_slice(&chunk);
     }
     Ok(Bytes::from(bytes))
+}
+
+fn is_semantic_miss(error: &ScError) -> bool {
+    matches!(error.status(), Some(404 | 410))
 }
 
 fn redirect_target(status: u16, location: Option<String>) -> ScResult<String> {
