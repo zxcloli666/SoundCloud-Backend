@@ -137,6 +137,21 @@ impl PlaylistObserveRepository {
         Ok(urns)
     }
 
+    pub async fn claim_edited(
+        &self,
+        batch: i64,
+        claim_seconds: i64,
+    ) -> Result<Vec<String>, RepositoryError> {
+        let urns = sqlx::query_file_scalar!(
+            "queries/playlist_observe/claim_edited_playlists.sql",
+            batch,
+            claim_seconds as f64
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(urns)
+    }
+
     pub async fn capture(
         &self,
         urn: &PlaylistUrn,

@@ -41,6 +41,7 @@ const FORBIDDEN_RETRY: Duration = Duration::from_secs(30 * 60);
 const MAX_REMOTE_RETRY: Duration = Duration::from_secs(24 * 60 * 60);
 const OBSERVE_MAX_ATTEMPTS: i16 = 8;
 const PUBLIC_TOKEN_ATTEMPTS: usize = 4;
+const EDITED_PRIORITY: i16 = 30;
 
 pub struct PlaylistObserveHandler {
     pool: PgPool,
@@ -69,6 +70,12 @@ impl PlaylistObserveHandler {
     }
 
     pub async fn sweep_due(&self) -> JobResult {
+        let edited = self
+            .repository
+            .claim_edited(self.reconcile.sweep_batch, self.reconcile.claim_seconds)
+            .await
+            .map_err(repository_job_error)?;
+        self.enqueue_observations(edited, EDITED_PRIORITY).await?;
         let due = self
             .repository
             .claim_due(
@@ -78,7 +85,11 @@ impl PlaylistObserveHandler {
             )
             .await
             .map_err(repository_job_error)?;
-        for playlist_urn in due {
+        self.enqueue_observations(due, 0).await
+    }
+
+    async fn enqueue_observations(&self, playlists: Vec<String>, priority: i16) -> JobResult {
+        for playlist_urn in playlists {
             let payload = serde_json::to_value(Versioned::V1(PlaylistObservePayload {
                 playlist_urn: playlist_urn.clone(),
             }))
@@ -88,7 +99,7 @@ impl PlaylistObserveHandler {
                 kind: JobKind::PlaylistObserveShadow,
                 dedup_key: Some(playlist_urn.clone()),
                 payload,
-                priority: 0,
+                priority,
                 max_attempts: OBSERVE_MAX_ATTEMPTS,
                 available_at: Utc::now(),
             };

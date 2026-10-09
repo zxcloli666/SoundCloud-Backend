@@ -902,6 +902,27 @@ async fn an_edited_legacy_playlist_keeps_its_local_tracks_and_is_sent_to_soundcl
     Ok(())
 }
 
+#[sqlx::test(migrations = false)]
+async fn the_sweep_claims_an_edited_playlist_once_it_is_due(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_rebased_playlist(&pool).await?;
+    let repository = PlaylistObserveRepository::new(pool.clone(), false);
+    sqlx::query(
+        "UPDATE playlist_membership_state SET next_reconcile_at = clock_timestamp()
+         WHERE playlist_urn = $1",
+    )
+    .bind(RECONCILABLE)
+    .execute(&pool)
+    .await?;
+
+    assert_eq!(
+        repository.claim_edited(16, 600).await?,
+        vec![RECONCILABLE.to_owned()]
+    );
+    assert!(repository.claim_edited(16, 600).await?.is_empty());
+    Ok(())
+}
+
 fn failed_read(state_status: &'static str) -> super::repository::FailureObservation {
     super::repository::FailureObservation {
         outcome: "rate_limited",
