@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM public.ecr.aws/docker/library/rust:1-bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -14,7 +14,7 @@ RUN mkdir src && echo "fn main(){}" > src/main.rs && cargo build --release && rm
 COPY src ./src
 RUN touch src/main.rs && cargo build --release
 
-FROM debian:bookworm-slim
+FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

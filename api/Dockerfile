@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM public.ecr.aws/docker/library/rust:1-bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler curl ca-certificates gnupg cmake clang libclang-dev pkg-config \
     && install -d /usr/share/postgresql-common/pgdg \
@@ -24,7 +24,7 @@ RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && { [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml; } \
     && DATABASE_URL="postgres://scd:dev@127.0.0.1:5432/scd" cargo build --release
 
-FROM debian:bookworm-slim AS runtime
+FROM public.ecr.aws/docker/library/debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \

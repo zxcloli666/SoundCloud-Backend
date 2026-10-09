@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM public.ecr.aws/docker/library/rust:1-bookworm AS builder
 
 COPY --from=tls-common . /build/utils/tls-common
 
@@ -12,7 +12,7 @@ ARG APP_VERSION
 RUN { [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml; } \
     && touch src/main.rs && cargo build --release
 
-FROM debian:bookworm-slim
+FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

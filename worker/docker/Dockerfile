@@ -2,7 +2,7 @@ ARG FLAVOR=cu126
 
 FROM ghcr.io/astral-sh/uv:0.12 AS uv
 
-FROM python:3.12-bookworm AS builder
+FROM public.ecr.aws/docker/library/python:3.12-bookworm AS builder
 ARG FLAVOR
 ENV FLAVOR=${FLAVOR} \
     UV_COMPILE_BYTECODE=1 \
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/uv uv-sync --no-install-project
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv uv-sync --no-editable
 
-FROM python:3.12-slim-bookworm
+FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 ARG FLAVOR
 ARG APP_VERSION=dev
 RUN apt-get update \
