@@ -111,7 +111,7 @@ async fn fetch_streams_direct_once(
     let resp = match tokio::time::timeout(FALLBACK_ATTEMPT_TIMEOUT, req).await {
         Ok(Ok(r)) => r,
         Ok(Err(error)) => {
-            return FetchOutcome::Retryable(format!("send: {}", error.without_url()));
+            return FetchOutcome::Retryable(format!("send: {}", error.without_uri()));
         }
         Err(_) => return FetchOutcome::Retryable("timeout".into()),
     };
@@ -124,7 +124,7 @@ async fn fetch_streams_direct_once(
                 Err(e) => return FetchOutcome::Retryable(format!("parse: {e}")),
             },
             Err(error) => {
-                return FetchOutcome::Retryable(format!("body: {}", error.without_url()));
+                return FetchOutcome::Retryable(format!("body: {}", error.without_uri()));
             }
         }
     }

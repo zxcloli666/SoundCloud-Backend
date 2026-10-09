@@ -110,7 +110,7 @@ impl CollabJobs {
                 self.recent_enqueue.insert((), ());
                 let _ =
                     self.event_count
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                             Some(count.saturating_sub(self.event_threshold))
                         });
                 info!(%job_id, "collab training queued from user activity");

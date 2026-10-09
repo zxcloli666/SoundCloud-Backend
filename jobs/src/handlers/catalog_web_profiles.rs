@@ -18,7 +18,7 @@ pub(super) fn validate(value: &Value) -> JobResult {
         let url = object
             .get("url")
             .and_then(Value::as_str)
-            .and_then(|url| wreq::Url::parse(url).ok())
+            .and_then(|url| url::Url::parse(url).ok())
             .ok_or_else(invalid)?;
         if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
             return Err(invalid());

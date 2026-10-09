@@ -1,7 +1,7 @@
 use backend_contracts::{CatalogCollection, CatalogCollectionPayload};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use wreq::Url;
+use url::Url;
 
 use crate::queue::{JobError, JobResult};
 

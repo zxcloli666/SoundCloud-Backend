@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio::time::timeout;
-use wreq::Url;
+use url::Url;
 
 use super::client::{PlaylistReadClient, PlaylistReadError};
 use super::model::{HydratedTrack, PlaylistSnapshot};

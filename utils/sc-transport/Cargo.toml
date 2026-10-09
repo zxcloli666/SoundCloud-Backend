@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
 tracing = "0.1"
 url = "2"
-wreq = { version = "5", features = ["json", "stream", "gzip", "brotli"] }
+wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 
 [features]
 upload = ["dep:tokio-util", "tokio/fs", "wreq/multipart"]

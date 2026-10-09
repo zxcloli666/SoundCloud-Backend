@@ -111,10 +111,10 @@ impl ScClient {
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) if error.is_connect() => {
-                return Attempt::Unsent(ScError::unreachable(error.without_url().to_string()));
+                return Attempt::Unsent(ScError::unreachable(error.without_uri().to_string()));
             }
             Err(error) => {
-                return Attempt::Done(Err(ScError::unreachable(error.without_url().to_string())));
+                return Attempt::Done(Err(ScError::unreachable(error.without_uri().to_string())));
             }
         };
         let status = response.status();

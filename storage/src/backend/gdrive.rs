@@ -285,7 +285,7 @@ impl GdriveBackend {
         }
         let resp = self
             .http
-            .get(url)
+            .get(url.as_str())
             .bearer_auth(&token)
             .send()
             .await
