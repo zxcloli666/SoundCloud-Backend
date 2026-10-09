@@ -102,7 +102,14 @@ impl PlaylistMembership {
         let Ok(Some(claimed_until)) = claim else {
             return;
         };
+        if self.enqueue_observation(playlist_urn).await {
+            return;
+        }
 
+        let _ = release_observation_enqueue(&self.pool, playlist_urn, claimed_until).await;
+    }
+
+    pub async fn enqueue_observation(&self, playlist_urn: &str) -> bool {
         let job = BackgroundJob::coalescing(
             JobKind::PlaylistObserveShadow,
             playlist_urn,
@@ -111,15 +118,10 @@ impl PlaylistMembership {
             },
         )
         .map(|job| job.if_absent().with_priority(VIEWER_PRIORITY));
-        let published = match job {
+        match job {
             Ok(job) => self.jobs.enqueue_opportunistic(&job).await,
             Err(_) => false,
-        };
-        if published {
-            return;
         }
-
-        let _ = release_observation_enqueue(&self.pool, playlist_urn, claimed_until).await;
     }
 }
 

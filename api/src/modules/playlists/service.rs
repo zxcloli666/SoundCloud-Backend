@@ -305,6 +305,13 @@ impl PlaylistsService {
             .mutations
             .update(sc_user_id, playlist_urn, metadata.as_ref(), membership)
             .await?;
+        if outcome
+            .journal
+            .as_ref()
+            .is_some_and(|journal| journal.appended > 0)
+        {
+            self.membership.enqueue_observation(playlist_urn).await;
+        }
         let mut response = json!({
             "status": if outcome.metadata_queued { "queued" } else { "ok" },
             "targetUrn": outcome.target_urn,
@@ -341,7 +348,12 @@ impl PlaylistsService {
             )
             .await
         {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) => {
+                if outcome.appended > 0 {
+                    self.membership.enqueue_observation(playlist_urn).await;
+                }
+                Ok(outcome)
+            }
             Err(error) => {
                 if error.public_code() == crate::modules::playlists::journal::UNKNOWN_TRACK
                     && let Some(track_id) = added_track
