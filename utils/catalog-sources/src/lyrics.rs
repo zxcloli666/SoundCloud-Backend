@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,6 +17,7 @@ const LOOKUP_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_CANDIDATES: usize = 24;
 const MAX_QUERIES: usize = 4;
 const MAX_LYRICS_BYTES: usize = 800 * 1024;
+const SYNCED_DURATION_TOLERANCE_SEC: i64 = 5;
 const LRCLIB_API: &str = "https://lrclib.net/api";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 const MUSIXMATCH_APP_ID: &str = "web-desktop-app-v1.0";
@@ -406,10 +408,12 @@ fn select_candidate(
     hints: &LyricsHints,
     candidates: Vec<LyricsCandidate>,
 ) -> Option<LyricsCandidate> {
-    let mut by_body: HashMap<String, LyricsCandidate> = HashMap::new();
+    let mut unique: Vec<LyricsCandidate> = Vec::new();
+    let mut by_body: HashMap<String, usize> = HashMap::new();
     for candidate in candidates
         .into_iter()
         .filter(|candidate| matches_hints(hints, candidate))
+        .filter_map(|candidate| fit_synced_to_recording(hints, candidate))
     {
         let body = candidate
             .plain_text
@@ -420,15 +424,44 @@ fn select_candidate(
             continue;
         }
         match by_body.get(&key) {
-            Some(existing) if candidate_quality(existing) >= candidate_quality(&candidate) => {}
-            _ => {
-                by_body.insert(key, candidate);
+            Some(&index) => {
+                if candidate_quality(hints, &candidate) > candidate_quality(hints, &unique[index]) {
+                    unique[index] = candidate;
+                }
+            }
+            None => {
+                by_body.insert(key, unique.len());
+                unique.push(candidate);
             }
         }
     }
-    let mut candidates: Vec<LyricsCandidate> = by_body.into_values().collect();
-    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate_rank(hints, candidate)));
-    candidates.into_iter().next()
+    unique.sort_by_key(|candidate| Reverse(candidate_rank(hints, candidate)));
+    unique.into_iter().next()
+}
+
+fn fit_synced_to_recording(
+    hints: &LyricsHints,
+    mut candidate: LyricsCandidate,
+) -> Option<LyricsCandidate> {
+    if candidate.synced_lrc.is_some() && !synced_fits_recording(hints, &candidate) {
+        candidate.synced_lrc = None;
+    }
+    (candidate.synced_lrc.is_some() || candidate.plain_text.is_some()).then_some(candidate)
+}
+
+fn synced_fits_recording(hints: &LyricsHints, candidate: &LyricsCandidate) -> bool {
+    let Some(title) = candidate.title.as_deref() else {
+        return false;
+    };
+    duration_gap(hints, candidate) <= SYNCED_DURATION_TOLERANCE_SEC
+        && title_forms(&hints.title).markers == title_forms(title).markers
+}
+
+fn duration_gap(hints: &LyricsHints, candidate: &LyricsCandidate) -> i64 {
+    match (hints.duration_sec, candidate.duration_sec) {
+        (Some(target), Some(duration)) if target > 0 && duration > 0 => (target - duration).abs(),
+        _ => i64::MAX,
+    }
 }
 
 fn matches_hints(hints: &LyricsHints, candidate: &LyricsCandidate) -> bool {
@@ -468,7 +501,7 @@ fn matches_hints(hints: &LyricsHints, candidate: &LyricsCandidate) -> bool {
 fn candidate_rank(
     hints: &LyricsHints,
     candidate: &LyricsCandidate,
-) -> (u8, u8, u16, u16, u8, usize) {
+) -> (u8, u8, u16, u16, Reverse<i64>, u8, usize) {
     let title_score = candidate
         .title
         .as_deref()
@@ -484,14 +517,19 @@ fn candidate_rank(
         u8::from(candidate.synced_lrc.is_some()),
         title_score,
         artist_score,
+        Reverse(duration_gap(hints, candidate)),
         source_rank(&candidate.source),
         usize::MAX.saturating_sub(candidate.query_index),
     )
 }
 
-fn candidate_quality(candidate: &LyricsCandidate) -> (u8, usize, u8) {
+fn candidate_quality(
+    hints: &LyricsHints,
+    candidate: &LyricsCandidate,
+) -> (u8, Reverse<i64>, usize, u8) {
     (
         u8::from(candidate.synced_lrc.is_some()),
+        Reverse(duration_gap(hints, candidate)),
         candidate
             .plain_text
             .as_deref()
@@ -1283,6 +1321,54 @@ mod tests {
 
         assert_eq!(selected.source, "lrclib");
         assert!(selected.synced_lrc.is_some());
+    }
+
+    fn synced_candidate(title: &str, duration_sec: i64, lrc: &str) -> LyricsCandidate {
+        LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: Some(lrc.to_owned()),
+            plain_text: Some(strip_lrc_timestamps(lrc)),
+            artist: Some("Eminem".to_owned()),
+            title: Some(title.to_owned()),
+            duration_sec: Some(duration_sec),
+            exact: false,
+            query_index: 1,
+        }
+    }
+
+    #[test]
+    fn synchronized_lyrics_of_another_recording_fall_back_to_plain_text() {
+        let lrc = "[00:01.00] A sufficiently long lyrics line for deterministic matching";
+
+        for candidate in [
+            synced_candidate("Lose Yourself (Sped Up)", 326, lrc),
+            synced_candidate("Lose Yourself", 300, lrc),
+        ] {
+            let selected = select_candidate(&hints(), vec![candidate]).unwrap();
+
+            assert!(selected.synced_lrc.is_none());
+            assert!(selected.plain_text.is_some());
+        }
+    }
+
+    #[test]
+    fn closest_duration_keeps_its_timing_among_identical_lyrics() {
+        let candidates = vec![
+            synced_candidate(
+                "Lose Yourself",
+                322,
+                "[00:09.00] A sufficiently long lyrics line for deterministic matching",
+            ),
+            synced_candidate(
+                "Lose Yourself",
+                326,
+                "[00:01.00] A sufficiently long lyrics line for deterministic matching",
+            ),
+        ];
+
+        let selected = select_candidate(&hints(), candidates).unwrap();
+
+        assert!(selected.synced_lrc.unwrap().starts_with("[00:01.00]"));
     }
 
     #[test]

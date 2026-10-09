@@ -1,17 +1,7 @@
+pub use entity_ref::{EntityKind, EntityRef, track_object_key};
+
 pub fn normalize_sc_track_id(input: &str) -> Option<String> {
-    if input.is_empty() {
-        return None;
-    }
-    let last = if input.contains(':') {
-        input.rsplit(':').next().unwrap_or("")
-    } else {
-        input
-    };
-    if !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()) {
-        Some(last.to_string())
-    } else {
-        None
-    }
+    entity_ref::sc_track_id(input)
 }
 
 pub fn extract_sc_id(urn: &str) -> &str {
@@ -40,4 +30,17 @@ pub fn user_id_variants(sc_user_id: &str) -> Vec<String> {
     }
     out.dedup();
     out
+}
+
+pub(crate) fn payload_ref(kind: EntityKind, payload: &serde_json::Value) -> Option<EntityRef> {
+    let parsed = EntityRef::parse_urn(payload.get("urn")?.as_str()?)?;
+    (parsed.kind() == kind).then_some(parsed)
+}
+
+pub(crate) fn user_ref(user: &serde_json::Value) -> Option<EntityRef> {
+    payload_ref(EntityKind::User, user).or_else(|| match user.get("id")? {
+        serde_json::Value::Number(id) => EntityRef::new(EntityKind::User, id.as_u64()?),
+        serde_json::Value::String(id) => EntityRef::user(id),
+        _ => None,
+    })
 }

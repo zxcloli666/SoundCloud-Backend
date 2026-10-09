@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use backend_contracts::CatalogEntity;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -10,11 +11,15 @@ use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
 use crate::modules::cold_refresh::collection::CollectionPage;
-use crate::modules::cold_refresh::{ColdRefreshService, PLAYLIST_REPOSTERS};
+use crate::modules::cold_refresh::entity::{enqueue_entity, refresh_pending};
+use crate::modules::cold_refresh::{
+    BACKGROUND_PRIORITY, ColdRefreshService, PLAYLIST_REPOSTERS, VIEWER_PRIORITY,
+};
 use crate::modules::playlists::edit::{MembershipRequest, TrackEdit};
 use crate::modules::playlists::journal::PlaylistJournal;
 use crate::modules::playlists::membership::PlaylistMembership;
 use crate::modules::playlists::{PlaylistMembershipStatus, PlaylistRepository};
+use crate::modules::resolve::{Adopted, CatalogMiss};
 use crate::modules::sync_queue::SyncQueueService;
 use crate::sc::ScClient;
 
@@ -26,6 +31,7 @@ pub struct PlaylistsService {
     sync_queue: Arc<SyncQueueService>,
     cold_refresh: Arc<ColdRefreshService>,
     tokens: Arc<TokenProvider>,
+    miss: Arc<CatalogMiss>,
     membership: PlaylistMembership,
     journal: PlaylistJournal,
     mutations: super::mutations::PlaylistMutations,
@@ -45,6 +51,7 @@ pub struct PlaylistsDeps {
     pub cold_refresh: Arc<ColdRefreshService>,
     pub tokens: Arc<TokenProvider>,
     pub background_jobs: Arc<crate::background_jobs::BackgroundJobs>,
+    pub miss: Arc<CatalogMiss>,
 }
 
 impl PlaylistsService {
@@ -59,13 +66,24 @@ impl PlaylistsService {
             sync_queue: deps.sync_queue,
             cold_refresh: deps.cold_refresh,
             tokens: deps.tokens,
+            miss: deps.miss,
             membership,
             journal,
             mutations,
         })
     }
 
-    pub async fn create(&self, sc_user_id: &str, body: &Value) -> AppResult<Value> {
+    pub async fn create(
+        &self,
+        session_id: Uuid,
+        sc_user_id: &str,
+        body: &Value,
+    ) -> AppResult<Value> {
+        if let Ok(Some(submitted)) = submitted_track_urns(body)
+            && let Ok(track_ids) = crate::modules::playlists::edit::track_ids_of(&submitted)
+        {
+            self.miss.tracks(session_id, &track_ids).await?;
+        }
         let nonce = format!("new:{}", Uuid::new_v4());
         self.sync_queue
             .enqueue(sc_user_id, "playlist_create", &nonce, Some(body))
@@ -85,7 +103,7 @@ impl PlaylistsService {
         params: &[(String, String)],
     ) -> AppResult<Value> {
         let has_secret = params.iter().any(|(key, _)| key == "secret_token");
-        self.get_by_id_with_fetch(sc_user_id, playlist_urn, has_secret, || async {
+        self.get_by_id_with_fetch(session_id, sc_user_id, playlist_urn, has_secret, || async {
             let chain = self.tokens.chain(TokenKind::UserFirst(session_id)).await?;
             let mut metadata_params: Vec<_> = params
                 .iter()
@@ -106,6 +124,7 @@ impl PlaylistsService {
 
     pub(crate) async fn get_by_id_with_fetch<F, Fut>(
         &self,
+        session_id: Uuid,
         sc_user_id: &str,
         playlist_urn: &str,
         has_secret: bool,
@@ -136,11 +155,12 @@ impl PlaylistsService {
         let (current, verified_secret) = if let Some(row) = local {
             let _ = repo.touch_last_read(playlist_urn).await;
             if self.cold_refresh.is_playlist_stale(Some(row.sc_synced_at))
-                && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
+                && let Err(error) = enqueue_entity(
                     &self.pg,
-                    backend_contracts::CatalogEntity::Playlist,
+                    CatalogEntity::Playlist,
                     playlist_urn,
                     (row.sharing != "public").then_some(sc_user_id),
+                    BACKGROUND_PRIORITY,
                 )
                 .await
             {
@@ -151,21 +171,36 @@ impl PlaylistsService {
             if known_locally {
                 return Err(AppError::not_found("Playlist not found"));
             }
-            return Err(crate::modules::cold_refresh::entity::refresh_pending(
-                &self.pg,
-                backend_contracts::CatalogEntity::Playlist,
-                playlist_urn,
-                None,
-                "playlist_refresh_pending",
-                "Playlist is being loaded",
-            )
-            .await);
+            match self
+                .miss
+                .playlist(session_id, extract_sc_id(playlist_urn))
+                .await
+            {
+                Adopted::Stored => {}
+                Adopted::Gone => return Err(AppError::not_found("Playlist not found")),
+                Adopted::Unavailable => {
+                    return Err(refresh_pending(
+                        &self.pg,
+                        CatalogEntity::Playlist,
+                        playlist_urn,
+                        Some(sc_user_id),
+                        "playlist_refresh_pending",
+                        "Playlist is being loaded",
+                    )
+                    .await);
+                }
+            }
+            let current = repo
+                .find_by_urn(playlist_urn)
+                .await?
+                .ok_or_else(|| AppError::not_found("Playlist not found"))?;
+            (current, false)
         } else {
             let observation = catalog_ingest::Observation::begin(&self.pg).await?;
             let fetched = fetch().await?;
             crate::common::sc_payload::validate_entity_identity(
                 &fetched,
-                backend_contracts::CatalogEntity::Playlist,
+                CatalogEntity::Playlist,
                 extract_sc_id(playlist_urn),
             )?;
             repo.upsert_from_sc(&fetched, observation).await?;
@@ -185,16 +220,19 @@ impl PlaylistsService {
 
     pub async fn edit_tracks(
         &self,
+        session_id: Uuid,
         sc_user_id: &str,
         playlist_urn: &str,
         request: MembershipRequest,
         idempotency_key: Uuid,
-        page: i64,
-        limit: i64,
+        (page, limit): (i64, i64),
     ) -> AppResult<PlaylistTracksPage> {
         let canonical = super::mutations::target_urn(playlist_urn)?;
         let playlist_urn = canonical.as_str();
         self.assert_owner(sc_user_id, playlist_urn).await?;
+        self.miss
+            .tracks(session_id, &request.edit.submitted_track_ids())
+            .await?;
         self.journal_or_wake(playlist_urn, sc_user_id, request, idempotency_key)
             .await?;
         let (page, sync) = tokio::try_join!(
@@ -209,6 +247,7 @@ impl PlaylistsService {
 
     pub async fn update(
         &self,
+        session_id: Uuid,
         sc_user_id: &str,
         playlist_urn: &str,
         body: &Value,
@@ -245,6 +284,8 @@ impl PlaylistsService {
         let membership = match submitted {
             Some(submitted) => {
                 let track_ids = crate::modules::playlists::edit::track_ids_of(&submitted)?;
+                self.assert_owner(sc_user_id, playlist_urn).await?;
+                self.miss.tracks(session_id, &track_ids).await?;
                 let edit = if replace {
                     TrackEdit::Replace { track_ids }
                 } else {
@@ -297,6 +338,10 @@ impl PlaylistsService {
         request: MembershipRequest,
         idempotency_key: Uuid,
     ) -> AppResult<crate::modules::playlists::journal::JournalOutcome> {
+        let added_track = match &request.edit {
+            TrackEdit::Add { track_id } => Some(track_id.clone()),
+            _ => None,
+        };
         match self
             .journal
             .append(
@@ -313,6 +358,19 @@ impl PlaylistsService {
                     self.membership
                         .enqueue_observation_if_due(playlist_urn)
                         .await;
+                }
+                if error.public_code() == crate::modules::playlists::journal::UNKNOWN_TRACK
+                    && let Some(track_id) = added_track
+                    && let Err(enqueue_error) = enqueue_entity(
+                        &self.pg,
+                        CatalogEntity::Track,
+                        &track_id,
+                        None,
+                        VIEWER_PRIORITY,
+                    )
+                    .await
+                {
+                    tracing::debug!(%enqueue_error, "unknown playlist track enqueue deferred");
                 }
                 Err(error)
             }
@@ -410,11 +468,19 @@ impl PlaylistsService {
             Ok(())
         };
 
-        let playlist_row = repo
-            .find_by_urn(playlist_urn)
-            .await?
-            .ok_or_else(|| AppError::not_found("Playlist not found"))?;
+        let Some(playlist_row) = repo.find_by_urn(playlist_urn).await? else {
+            return Err(refresh_pending(
+                &self.pg,
+                CatalogEntity::Playlist,
+                playlist_urn,
+                Some(sc_user_id),
+                "playlist_refresh_pending",
+                "Playlist is being loaded",
+            )
+            .await);
+        };
         guard_private(&playlist_row)?;
+        self.membership.track_if_untracked(playlist_urn).await?;
         let can_see_private = playlist_row.sharing != "public"
             || playlist_row.owner_sc_user_id.as_deref() == Some(viewer);
 

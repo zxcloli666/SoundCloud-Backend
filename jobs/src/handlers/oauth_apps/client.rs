@@ -57,7 +57,7 @@ impl Rejection {
 
 pub struct OAuthTokenClient {
     http: Client,
-    token_url: wreq::Url,
+    token_url: url::Url,
 }
 
 impl OAuthTokenClient {
@@ -73,7 +73,7 @@ impl OAuthTokenClient {
     }
 
     pub async fn refresh(&self, app: &ClaimedApp, refresh_token: &str) -> TokenRequestOutcome {
-        self.send_refresh(self.http.post(self.token_url.clone()).form(&[
+        self.send_refresh(self.http.post(self.token_url.as_str()).form(&[
             ("grant_type", "refresh_token"),
             ("client_id", app.client_id.as_str()),
             ("client_secret", app.client_secret.as_str()),
@@ -85,7 +85,7 @@ impl OAuthTokenClient {
     pub async fn client_credentials(&self, app: &ClaimedApp) -> TokenRequestOutcome {
         self.send_client_credentials(
             self.http
-                .post(self.token_url.clone())
+                .post(self.token_url.as_str())
                 .basic_auth(&app.client_id, Some(&app.client_secret))
                 .form(&[("grant_type", "client_credentials")]),
         )

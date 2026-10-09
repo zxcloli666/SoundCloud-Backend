@@ -1,9 +1,10 @@
 use backend_contracts::reasons::WorkerStatus;
 use qdrant_client::qdrant::SearchPointsBuilder;
-use tracing::debug;
+use tracing::warn;
 
 use crate::error::AppResult;
 use crate::modules::lyrics::EncodeOutcome;
+use crate::modules::search::failure::vibe_unavailable;
 use crate::qdrant::collections;
 
 use super::service::util::{payload_to_map, point_id_to_value, value_to_u64};
@@ -34,15 +35,16 @@ fn query_vector(outcome: EncodeOutcome) -> Result<Vec<f32>, SearchTextResult> {
             preparing: true,
             ..SearchTextResult::default()
         }),
-        EncodeOutcome::Ready(_)
-        | EncodeOutcome::Declined {
-            status: WorkerStatus::Empty,
+        EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
             ..
-        } => Err(SearchTextResult::default()),
-        EncodeOutcome::Declined { .. } => Err(SearchTextResult {
+        } => Err(SearchTextResult {
             failed: true,
             ..SearchTextResult::default()
         }),
+        EncodeOutcome::Ready(_) | EncodeOutcome::Declined { .. } => {
+            Err(SearchTextResult::default())
+        }
     }
 }
 
@@ -73,11 +75,8 @@ impl RecommendationsService {
         let resp = match self.qdrant.raw().search_points(builder).await {
             Ok(r) => r,
             Err(e) => {
-                debug!(error = %e, "searchByText: qdrant search failed");
-                return Ok(SearchTextResult {
-                    failed: true,
-                    ..Default::default()
-                });
+                warn!(error = %e, "searchByText: qdrant search failed");
+                return Err(vibe_unavailable());
             }
         };
 
@@ -96,9 +95,11 @@ impl RecommendationsService {
             })
             .collect();
 
-        let public = self
-            .public_track_ids(&scored.iter().map(|c| c.id.to_string()).collect::<Vec<_>>())
-            .await;
+        let public = super::service::load_public_track_ids(
+            &self.pg,
+            &scored.iter().map(|c| c.id.to_string()).collect::<Vec<_>>(),
+        )
+        .await?;
         let scored: Vec<super::service::ScoredCandidate> = scored
             .into_iter()
             .filter(|c| public.contains(&c.id.to_string()))
@@ -150,6 +151,15 @@ mod tests {
             }),
             (false, false)
         );
+        for status in [WorkerStatus::Rejected, WorkerStatus::Missing] {
+            assert_eq!(
+                answer_to(EncodeOutcome::Declined {
+                    status,
+                    reason: None,
+                }),
+                (false, false)
+            );
+        }
         assert_eq!(answer_to(EncodeOutcome::Preparing), (true, false));
         assert_eq!(
             query_vector(EncodeOutcome::Ready(vec![0.5; 512])).expect("a vector"),

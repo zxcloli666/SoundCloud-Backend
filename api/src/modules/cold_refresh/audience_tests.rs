@@ -90,17 +90,17 @@ async fn the_last_allowed_audience_page_does_not_advertise_an_unreachable_next_p
     sqlx::raw_sql(
         "INSERT INTO users (sc_user_id, urn, username, username_normalized)
          SELECT n::text, 'soundcloud:users:' || n, 'User ' || n, 'user ' || n
-         FROM generate_series(1, 102) n;
+         FROM generate_series(1, 50001) n;
          INSERT INTO catalog_audience (subject_urn, relation, user_urn)
          SELECT 'soundcloud:tracks:42', 'track-reposters', 'soundcloud:users:' || n
-         FROM generate_series(1, 102) n;",
+         FROM generate_series(1, 50001) n;",
     )
     .execute(&pool)
     .await?;
-    let penultimate = read_audience_page(&pool, &TRACK_REPOSTERS, "42", 99, 1).await?;
+    let penultimate = read_audience_page(&pool, &TRACK_REPOSTERS, "42", 248, 200).await?;
     assert!(penultimate.has_more);
-    let last = read_audience_page(&pool, &TRACK_REPOSTERS, "42", 100, 1).await?;
-    assert_eq!(last.collection.len(), 1);
+    let last = read_audience_page(&pool, &TRACK_REPOSTERS, "42", 249, 200).await?;
+    assert_eq!(last.collection.len(), 200);
     assert!(!last.has_more);
     Ok(())
 }

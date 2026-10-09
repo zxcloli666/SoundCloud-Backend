@@ -7,17 +7,43 @@ use tracing::debug;
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
 use crate::sc::{EGRESS_APP, FetchStrategy, PgEgressHealth, hedge, race, within_budget};
-use sc_transport::{Apiv2Proxy, EGRESS_RELAY_LUA, EgressHealth, ScClient};
+use sc_transport::{
+    Apiv2Proxy, EGRESS_RELAY_LUA, EGRESS_RELAY_LUA_SEARCH, EgressHealth, ScClient, SearchType,
+};
 
 const HEDGE_DELAY: Duration = Duration::from_millis(700);
 const CALL_BUDGET: Duration = Duration::from_secs(20);
+const SEARCH_CHUNK: i64 = 20;
+const SEARCH_RELAY_WAIT: Duration = Duration::from_secs(3);
+const SEARCH_BUDGET: Duration = Duration::from_secs(8);
+const SHORT_LINK_BUDGET: Duration = Duration::from_secs(5);
 
 pub struct ScReadService {
     sc: ScClient,
     proxy: Apiv2Proxy,
     tokens: Arc<TokenProvider>,
     lua_health: EgressHealth,
+    search_health: EgressHealth,
     strategy: FetchStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScSearchPage {
+    pub items: Vec<Value>,
+    pub next_href: Option<String>,
+}
+
+impl ScSearchPage {
+    fn normalized(items: Vec<Value>, next_href: Option<String>) -> Self {
+        let items = items
+            .into_iter()
+            .map(|mut item| {
+                sc_transport::normalize_v2_to_v1(&mut item);
+                item
+            })
+            .collect();
+        Self { items, next_href }
+    }
 }
 
 impl ScReadService {
@@ -30,10 +56,22 @@ impl ScReadService {
             lua_health: EgressHealth::new(
                 EGRESS_RELAY_LUA,
                 EGRESS_APP,
+                Some(PgEgressHealth::new(pg.clone())),
+            ),
+            search_health: EgressHealth::new(
+                EGRESS_RELAY_LUA_SEARCH,
+                EGRESS_APP,
                 Some(PgEgressHealth::new(pg)),
             ),
             strategy: FetchStrategy::from_env(),
         })
+    }
+
+    pub async fn short_link_target(&self, url: &str) -> AppResult<String> {
+        tokio::time::timeout(SHORT_LINK_BUDGET, self.sc.redirect_location(url))
+            .await
+            .map_err(|_| AppError::ScUnreachable("short link expansion timed out".into()))?
+            .map_err(AppError::from)
     }
 
     pub async fn resolve(&self, kind: TokenKind, url: &str) -> AppResult<Value> {
@@ -104,6 +142,63 @@ impl ScReadService {
         .await
     }
 
+    pub async fn search(
+        &self,
+        ty: SearchType,
+        q: &str,
+        cursor: Option<&str>,
+    ) -> AppResult<ScSearchPage> {
+        within_budget(SEARCH_BUDGET, async {
+            if let Some(page) = self.search_lua(ty, q, cursor).await {
+                return Ok(page);
+            }
+            Self::timed("backup", "search", async {
+                let page = self.proxy.search_page(ty, q, cursor, SEARCH_CHUNK).await?;
+                Ok(ScSearchPage::normalized(page.items, page.next_href))
+            })
+            .await
+        })
+        .await
+    }
+
+    pub async fn search_cooldown(&self) -> Option<Duration> {
+        self.search_health.open_for().await
+    }
+
+    async fn search_lua(
+        &self,
+        ty: SearchType,
+        q: &str,
+        cursor: Option<&str>,
+    ) -> Option<ScSearchPage> {
+        if !self.sc.has_relay() || self.search_health.is_open().await {
+            return None;
+        }
+        let call = async {
+            match tokio::time::timeout(
+                SEARCH_RELAY_WAIT,
+                self.sc
+                    .search_via_relay(ty.as_str(), q, cursor, SEARCH_CHUNK),
+            )
+            .await
+            {
+                Ok(Some(page)) => Ok(page),
+                Ok(None) => Err(AppError::ScUnreachable("relay: no search result".into())),
+                Err(_) => Err(AppError::sc_deadline_exceeded()),
+            }
+        };
+        let answer = Self::timed("relay_lua", "search", call).await.ok();
+        self.search_health.record_answer(answer.is_some()).await;
+        let page = answer?;
+        let items = page.get("collection").and_then(Value::as_array)?.clone();
+        let next_href = page
+            .get("next_href")
+            .and_then(Value::as_str)
+            .filter(|href| !href.is_empty())
+            .map(str::to_owned);
+        Some(ScSearchPage::normalized(items, next_href))
+    }
+
     async fn run<T>(
         &self,
         lua: impl std::future::Future<Output = AppResult<T>>,
@@ -160,6 +255,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(e) => {
                 debug!(error = %e, "[read] apiv2-proxy resolve failed, apiv1 fallback");
                 let params = [("url".to_string(), url.to_string())];
@@ -174,6 +270,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => self.apiv1_get(kind, &format!("/tracks/{id}"), None).await,
         }
     }
@@ -184,6 +281,7 @@ impl ScReadService {
                 sc_transport::normalize_v2_to_v1(&mut v);
                 Ok(v)
             }
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => self.apiv1_get(kind, &format!("/users/{id}"), None).await,
         }
     }
@@ -191,6 +289,7 @@ impl ScReadService {
     async fn playlist_meta_chain(&self, kind: TokenKind, id: &str) -> AppResult<Value> {
         match self.proxy.playlist(id, false).await {
             Ok(v) => Ok(v),
+            Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => {
                 self.apiv1_get(kind, &format!("/playlists/{id}"), None)
                     .await
@@ -213,4 +312,14 @@ impl ScReadService {
         })
         .await
     }
+}
+
+fn authoritative_miss(error: &sc_transport::ScError) -> bool {
+    matches!(
+        error,
+        sc_transport::ScError::Api {
+            status: 404 | 410,
+            ..
+        }
+    )
 }

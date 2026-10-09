@@ -104,7 +104,10 @@ pub async fn transcode_upload(
         ));
     }
 
-    let filename = StorageClient::track_filename(&track_urn);
+    let filename = StorageClient::track_filename(&track_urn).ok_or((
+        StatusCode::BAD_REQUEST,
+        "track_urn must be a canonical soundcloud:tracks:<id> URN".to_owned(),
+    ))?;
     let storage_base = state.config.storage_url.trim_end_matches('/');
     let key = format!("{filename}.m4a");
     let head_url = format!("{storage_base}/{key}");

@@ -2,14 +2,16 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
-use super::semantic::{CacheHitPolicy, Cacheable, VibeSearchService, sc_id_of_track, sha_key};
-use crate::error::AppResult;
+use super::failure::vibe_unavailable;
+use super::semantic::{Cacheable, VibeSearchService, sc_id_of_track, sha_key};
+use crate::error::{AppError, AppResult};
 use crate::modules::enrich::dto as enrich_dto;
 
 const VIBE_RES_TTL_SECS: u64 = 90;
 
-const VIBE_MAX_LIMIT: usize = 40;
+const VIBE_MAX_LIMIT: usize = 48;
 const VIBE_DEFAULT_LIMIT: usize = 24;
 const TOP_GENRES: usize = 3;
 
@@ -27,52 +29,48 @@ pub struct VibeResponse {
 }
 
 impl VibeSearchService {
-    pub async fn vibe(
-        &self,
-        q: &str,
-        limit: Option<usize>,
-        languages: Option<&[String]>,
-    ) -> AppResult<VibeResponse> {
+    pub async fn vibe(&self, q: &str, limit: Option<usize>) -> AppResult<VibeResponse> {
         let Some(q_norm) = Self::normalize_query(q) else {
             return Ok(empty_vibe());
         };
         let limit = limit.unwrap_or(VIBE_DEFAULT_LIMIT).clamp(1, VIBE_MAX_LIMIT);
-        let lang_key = languages.map(|l| l.join(",")).unwrap_or_default();
-        let key = vibe_res_key(&q_norm, limit, &lang_key);
+        let key = vibe_res_key(&q_norm, limit);
 
-        self.cached_typed(
-            &key,
-            VIBE_RES_TTL_SECS,
-            CacheHitPolicy::Public(vibe_cache_track_ids),
-            || async {
-                let st = self
-                    .recommendations
-                    .search_by_text(&q_norm, limit, languages)
-                    .await?;
-                if st.preparing {
-                    return Ok(Cacheable::skip(preparing_vibe()));
-                }
-                if st.failed {
-                    return Ok(Cacheable::skip(empty_vibe()));
-                }
+        self.cached_typed(&key, VIBE_RES_TTL_SECS, vibe_cache_track_ids, || async {
+            let st = self
+                .recommendations
+                .search_by_text(&q_norm, limit, None)
+                .await?;
+            if st.preparing {
+                return Ok(Cacheable::skip(preparing_vibe()));
+            }
+            if st.failed {
+                return Err(vibe_unavailable());
+            }
 
-                let top_genres = top_genres_of(&st.results, TOP_GENRES);
-                let sc_ids: Vec<String> = st
-                    .results
-                    .iter()
-                    .map(|r| crate::modules::recommendations::value_id_to_string(&r.id))
-                    .collect();
-                let mut items = self.project_ordered(&sc_ids).await?;
-                enrich_dto::apply_to_tracks(&self.pg, &mut items).await?;
+            let top_genres = top_genres_of(&st.results, TOP_GENRES);
+            let sc_ids: Vec<String> = st
+                .results
+                .iter()
+                .map(|r| crate::modules::recommendations::value_id_to_string(&r.id))
+                .collect();
+            let mut items = self.project_ordered(&sc_ids).await?;
+            enrich_dto::apply_to_tracks(&self.pg, &mut items).await?;
 
-                Ok(Cacheable::keep(VibeResponse {
-                    items,
-                    atmosphere: Atmosphere { top_genres },
-                    status: "ready".into(),
-                }))
-            },
-        )
+            Ok(Cacheable::keep(VibeResponse {
+                items,
+                atmosphere: Atmosphere { top_genres },
+                status: "ready".into(),
+            }))
+        })
         .await
+        .map_err(|error| match error {
+            AppError::Coded { .. } => error,
+            other => {
+                warn!(error = %other, "vibe search failed");
+                vibe_unavailable()
+            }
+        })
     }
 }
 
@@ -111,8 +109,8 @@ fn top_genres_of(
     ranked.into_iter().take(n).map(|(g, _)| g).collect()
 }
 
-pub(super) fn vibe_res_key(q: &str, limit: usize, languages: &str) -> String {
-    sha_key("vibe:res:v2:", &[q, &limit.to_string(), languages])
+pub(super) fn vibe_res_key(q: &str, limit: usize) -> String {
+    sha_key("vibe:res:v3:", &[q, &limit.to_string()])
 }
 
 fn empty_vibe() -> VibeResponse {
@@ -205,5 +203,28 @@ mod tests {
             "blank and missing genres must not become entries, and equal counts keep arrival order"
         );
         assert!(top_genres_of(&items, 0).is_empty());
+    }
+
+    #[test]
+    fn a_vibe_page_holds_up_to_forty_eight_tracks() {
+        assert_eq!(VIBE_MAX_LIMIT, 48);
+        assert_eq!(VIBE_DEFAULT_LIMIT, 24);
+    }
+
+    #[test]
+    fn an_unavailable_vibe_search_is_a_retryable_coded_answer() {
+        let response = axum::response::IntoResponse::into_response(vibe_unavailable());
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "10");
+        assert!(matches!(
+            vibe_unavailable(),
+            AppError::Coded {
+                code: "vibe_unavailable",
+                ..
+            }
+        ));
     }
 }

@@ -15,6 +15,7 @@ from worker.domain.ports import (
     Float32Array,
     Int16Array,
     LanguageGuess,
+    Separation,
     Span,
     TextKind,
     TokenSpan,
@@ -82,12 +83,14 @@ class FakeEngines:
             return forced
         return np.stack([unit_vector(f"mulan:{text}".encode(), MULAN_TEXT_DIM) for text in texts])
 
-    async def separate(self, mix_stereo_44k: Float32Array, deadline: Deadline) -> Float32Array:
+    async def separate(
+        self, mix_stereo_44k: Float32Array, deadline: Deadline, *, budget: Deadline
+    ) -> Separation:
         deadline.check("separate")
-        forced = self._record("separate", mix=mix_stereo_44k)
+        forced = self._record("separate", mix=mix_stereo_44k, budget_s=budget.remaining())
         if forced is not None:
             return forced
-        return mix_stereo_44k
+        return Separation(mix_stereo_44k, 0.0)
 
     async def vad(
         self,

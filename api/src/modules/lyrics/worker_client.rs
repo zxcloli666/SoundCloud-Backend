@@ -27,6 +27,7 @@ pub const MAX_ENCODE_TEXT_CHARS: usize = MAX_ENCODE_TEXT_BYTES as usize / 4;
 
 const VEC_CACHE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 const ENCODE_DEDUP_WINDOW_SECS: u64 = 15 * 60;
+const ENCODE_CLAIM_SECS: u64 = ENCODE_DEDUP_WINDOW_SECS;
 const FAILURE_ANSWER_SECS: i64 = 60;
 const ENCODE_WAIT: Duration = Duration::from_secs(10);
 const CACHE_RECHECK: Duration = Duration::from_millis(500);
@@ -82,12 +83,6 @@ const MULAN: EncodeTarget = EncodeTarget {
     encoder: "OpenMuQ/MuQ-MuLan-large",
     prefix: "vibe:vec:mulan:v1:",
     collection: collections::QUERY_VEC_MULAN,
-};
-const LYRICS: EncodeTarget = EncodeTarget {
-    model: EncodeModel::Lyrics,
-    encoder: "Qwen/Qwen3-Embedding-0.6B",
-    prefix: "vibe:vec:lyrics:v2:",
-    collection: collections::QUERY_VEC_LYRICS,
 };
 
 struct EncodeKeys {
@@ -189,10 +184,6 @@ impl WorkerClient {
         Ok(encode(self, &MULAN, text).await)
     }
 
-    pub async fn encode_lyrics_text(&self, text: &str) -> AppResult<EncodeOutcome> {
-        Ok(encode(self, &LYRICS, text).await)
-    }
-
     async fn write(&self, key: &str, json: &str, ttl_secs: u64) {
         if let Err(error) = self
             .cache
@@ -244,7 +235,7 @@ impl EncodeStores for WorkerClient {
 
     async fn claim(&self, inflight_key: &str) -> bool {
         self.cache
-            .try_acquire_lock(inflight_key, ENCODE_DEDUP_WINDOW_SECS)
+            .try_acquire_lock(inflight_key, ENCODE_CLAIM_SECS)
             .await
             .unwrap_or(true)
     }
@@ -295,7 +286,10 @@ async fn encode<S: EncodeStores>(
     let attempt = EncodeFailure::next_attempt(failure.as_ref());
     let request = request_encoding(stores, target, &text, &hash, &keys, attempt).await;
     if request == Request::Unpublished {
-        return EncodeOutcome::Preparing;
+        return EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
+            reason: None,
+        };
     }
     if request == Request::HeldElsewhere
         && let Some(vector) = stored_vector(stores, target, &hash, &keys).await
@@ -355,7 +349,10 @@ async fn request_encoding<S: EncodeStores>(
         hash: hash.to_owned(),
     };
     match stores
-        .publish(&request, &message_id(target, hash, attempt))
+        .publish(
+            &request,
+            &message_id(target, hash, attempt, claim_round(unix_now())),
+        )
         .await
     {
         Ok(()) => Request::Published,
@@ -829,13 +826,17 @@ fn result_key(model: EncodeModel, hash: &str) -> String {
     format!("{}:{hash}", model.as_str())
 }
 
-fn message_id(target: &EncodeTarget, hash: &str, attempt: u32) -> String {
-    let first = result_key(target.model, hash);
+fn message_id(target: &EncodeTarget, hash: &str, attempt: u32, round: i64) -> String {
+    let first = format!("{}:{round}", result_key(target.model, hash));
     if attempt == 0 {
         first
     } else {
         format!("{first}:retry{attempt}")
     }
+}
+
+fn claim_round(now: i64) -> i64 {
+    now.div_euclid(ENCODE_CLAIM_SECS as i64)
 }
 
 fn unix_now() -> i64 {
@@ -917,8 +918,8 @@ mod tests {
     use crate::error::AppError;
     use serde_json::json;
 
-    const QWEN: &str = "Qwen/Qwen3-Embedding-0.6B@97b0c614";
-    const BGE_M3: &str = "BAAI/bge-m3@5617a9f6";
+    const MULAN_REF: &str = "OpenMuQ/MuQ-MuLan-large@2e01c796";
+    const CLAP_REF: &str = "laion/larger_clap_music@a0b9c3d1";
 
     fn producer(model: &str, reference: &str) -> serde_json::Value {
         json!({
@@ -937,32 +938,31 @@ mod tests {
         serde_json::to_vec(&message).expect("done.encode body")
     }
 
-    fn ok_lyrics_payload(hash: &str, reference: &str, dimensions: usize) -> Vec<u8> {
+    fn ok_payload(hash: &str, reference: &str, dimensions: usize) -> Vec<u8> {
         done(
-            &LYRICS,
+            &MULAN,
             hash,
             json!({
                 "status": "ok",
                 "vector": vec![0.03125_f32; dimensions],
-                "producer": producer("lyrics", reference)
+                "producer": producer("mulan", reference)
             }),
         )
     }
 
-    fn ok_lyrics(hash: &str, reference: &str, dimensions: usize) -> EncodeResult {
-        serde_json::from_slice(&ok_lyrics_payload(hash, reference, dimensions))
-            .expect("an encode result")
+    fn ok_result(hash: &str, reference: &str, dimensions: usize) -> EncodeResult {
+        serde_json::from_slice(&ok_payload(hash, reference, dimensions)).expect("an encode result")
     }
 
-    fn failed_lyrics(hash: &str) -> Vec<u8> {
+    fn failed_result(hash: &str) -> Vec<u8> {
         done(
-            &LYRICS,
+            &MULAN,
             hash,
             json!({
                 "status": "failed",
                 "reason": "deadline_exceeded",
                 "vector": null,
-                "producer": producer("lyrics", QWEN)
+                "producer": producer("mulan", MULAN_REF)
             }),
         )
     }
@@ -1041,7 +1041,14 @@ mod tests {
         }
 
         fn published(&self) -> Vec<String> {
-            guard(&self.published).clone()
+            guard(&self.published)
+                .iter()
+                .map(|id| {
+                    let mut parts: Vec<&str> = id.split(':').collect();
+                    parts.remove(2);
+                    parts.join(":")
+                })
+                .collect()
         }
 
         fn locked(&self, key: &str) -> bool {
@@ -1103,6 +1110,43 @@ mod tests {
         }
     }
 
+    fn unpublished() -> EncodeOutcome {
+        EncodeOutcome::Declined {
+            status: WorkerStatus::Failed,
+            reason: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_that_expired_is_published_again_under_a_new_round() {
+        let stores = FakeStores::default();
+        let hash = text_hash("rain");
+        let keys = EncodeKeys::new(&MULAN, &hash);
+
+        assert_eq!(
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Preparing
+        );
+        guard(&stores.locks).remove(&keys.inflight);
+        assert_eq!(
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Preparing
+        );
+
+        assert_eq!(guard(&stores.published).len(), 2);
+        assert_eq!(ENCODE_CLAIM_SECS, ENCODE_DEDUP_WINDOW_SECS);
+        assert_ne!(
+            message_id(&MULAN, &hash, 0, claim_round(900)),
+            message_id(&MULAN, &hash, 0, claim_round(1_800)),
+            "a republish after the claim expired must not be swallowed by the stream's dedup window"
+        );
+        assert_eq!(
+            message_id(&MULAN, &hash, 0, claim_round(900)),
+            message_id(&MULAN, &hash, 0, claim_round(1_799)),
+            "a query waiting for a worker is published once per dedup window, not once a minute"
+        );
+    }
+
     async fn answer_after(source: &FakeSource, after: Duration, payload: Vec<u8>) {
         tokio::time::sleep(after).await;
         source.send(payload);
@@ -1142,13 +1186,13 @@ mod tests {
     fn the_request_carries_the_hash_of_exactly_the_text_it_sends() {
         let text = encode_text(&"ночь ".repeat(60)).expect("query");
         let request = EncodeRequest {
-            model: LYRICS.model,
+            model: MULAN.model,
             text: text.clone(),
             hash: text_hash(&text),
         };
         let wire = serde_json::to_value(&request).expect("request");
 
-        assert_eq!(wire["model"], "lyrics");
+        assert_eq!(wire["model"], "mulan");
         assert_eq!(
             wire["hash"],
             hex::encode(Sha256::digest(
@@ -1162,22 +1206,20 @@ mod tests {
         let feed = board_only();
         let hash = text_hash("rain");
         let other = text_hash("snow");
-        let mut first = ResultWaiter::register(&feed, EncodeModel::Lyrics, &hash);
-        let mut second = ResultWaiter::register(&feed, EncodeModel::Lyrics, &hash);
-        let mut unrelated = ResultWaiter::register(&feed, EncodeModel::Lyrics, &other);
-        let mut mulan = ResultWaiter::register(&feed, EncodeModel::Mulan, &hash);
+        let mut first = ResultWaiter::register(&feed, EncodeModel::Mulan, &hash);
+        let mut second = ResultWaiter::register(&feed, EncodeModel::Mulan, &hash);
+        let mut unrelated = ResultWaiter::register(&feed, EncodeModel::Mulan, &other);
 
         assert_eq!(
-            feed.board.deliver(&ok_lyrics_payload(&hash, QWEN, 1024)),
+            feed.board.deliver(&ok_payload(&hash, MULAN_REF, 512)),
             Delivery::Delivered(2)
         );
         assert_eq!(first.result.try_recv().expect("first").hash, hash);
         assert_eq!(second.result.try_recv().expect("second").hash, hash);
         assert!(unrelated.result.try_recv().is_err());
-        assert!(mulan.result.try_recv().is_err());
-        assert!(!feed.board.awaits(&result_key(EncodeModel::Lyrics, &hash)));
+        assert!(!feed.board.awaits(&result_key(EncodeModel::Mulan, &hash)));
         assert_eq!(
-            feed.board.deliver(b"{\"model\":\"lyrics\"}"),
+            feed.board.deliver(b"{\"model\":\"mulan\"}"),
             Delivery::Unaddressed
         );
     }
@@ -1187,13 +1229,13 @@ mod tests {
         let feed = board_only();
         let hash = text_hash("rain");
         let heavy = done(
-            &LYRICS,
+            &MULAN,
             &hash,
             json!({ "status": "ok", "vector": "not a vector", "producer": {} }),
         );
 
         assert_eq!(feed.board.deliver(&heavy), Delivery::Unawaited);
-        let _waiter = ResultWaiter::register(&feed, EncodeModel::Lyrics, &hash);
+        let _waiter = ResultWaiter::register(&feed, EncodeModel::Mulan, &hash);
         assert_eq!(
             feed.board.deliver(&heavy),
             Delivery::Malformed,
@@ -1205,9 +1247,9 @@ mod tests {
     fn a_waiter_that_gives_up_leaves_nothing_on_the_board() {
         let feed = board_only();
         let hash = text_hash("rain");
-        let key = result_key(EncodeModel::Lyrics, &hash);
-        let staying = ResultWaiter::register(&feed, EncodeModel::Lyrics, &hash);
-        drop(ResultWaiter::register(&feed, EncodeModel::Lyrics, &hash));
+        let key = result_key(EncodeModel::Mulan, &hash);
+        let staying = ResultWaiter::register(&feed, EncodeModel::Mulan, &hash);
+        drop(ResultWaiter::register(&feed, EncodeModel::Mulan, &hash));
         assert!(feed.board.awaits(&key));
         drop(staying);
         assert!(!feed.board.awaits(&key));
@@ -1220,23 +1262,23 @@ mod tests {
         let snow = text_hash("snow");
 
         let (first, second, (), ()) = tokio::join!(
-            encode(&stores, &LYRICS, "rain"),
-            encode(&stores, &LYRICS, "snow"),
+            encode(&stores, &MULAN, "rain"),
+            encode(&stores, &MULAN, "snow"),
             answer_after(
                 &stores.source,
                 Duration::from_secs(1),
-                ok_lyrics_payload(&rain, QWEN, 1024)
+                ok_payload(&rain, MULAN_REF, 512)
             ),
             answer_after(
                 &stores.source,
                 Duration::from_secs(2),
-                ok_lyrics_payload(&snow, QWEN, 1024)
+                ok_payload(&snow, MULAN_REF, 512)
             ),
         );
 
-        assert!(matches!(first, EncodeOutcome::Ready(vector) if vector.len() == 1024));
+        assert!(matches!(first, EncodeOutcome::Ready(vector) if vector.len() == 512));
         assert!(
-            matches!(second, EncodeOutcome::Ready(vector) if vector.len() == 1024),
+            matches!(second, EncodeOutcome::Ready(vector) if vector.len() == 512),
             "the second waiter lost its result when the first one stopped reading"
         );
         assert_eq!(stores.source.opened.load(Ordering::SeqCst), 1);
@@ -1250,11 +1292,11 @@ mod tests {
     #[test]
     fn a_vector_from_the_expected_encoder_is_ready() {
         let hash = text_hash("rain");
-        let result = ok_lyrics(&hash, QWEN, 1024);
+        let result = ok_result(&hash, MULAN_REF, 512);
 
         assert!(matches!(
-            outcome_of(&LYRICS, result),
-            EncodeOutcome::Ready(vector) if vector.len() == 1024
+            outcome_of(&MULAN, result),
+            EncodeOutcome::Ready(vector) if vector.len() == 512
         ));
     }
 
@@ -1263,20 +1305,20 @@ mod tests {
         let hash = text_hash("rain");
 
         assert_eq!(
-            outcome_of(&LYRICS, ok_lyrics(&hash, BGE_M3, 1024)),
+            outcome_of(&MULAN, ok_result(&hash, CLAP_REF, 512)),
             EncodeOutcome::invalid_output(),
-            "bge-m3 answers in the same 1024 dimensions and a different space"
+            "clap answers in the same 512 dimensions and a different space"
         );
         assert_eq!(
-            outcome_of(&LYRICS, ok_lyrics(&hash, QWEN, 512)),
+            outcome_of(&MULAN, ok_result(&hash, MULAN_REF, 1024)),
             EncodeOutcome::invalid_output()
         );
-        let mut poisoned = ok_lyrics(&hash, QWEN, 1024);
+        let mut poisoned = ok_result(&hash, MULAN_REF, 512);
         if let Some(vector) = poisoned.vector.as_mut() {
             vector[7] = f32::NAN;
         }
         assert_eq!(
-            outcome_of(&LYRICS, poisoned),
+            outcome_of(&MULAN, poisoned),
             EncodeOutcome::invalid_output()
         );
     }
@@ -1285,13 +1327,13 @@ mod tests {
     fn a_refusal_carries_the_status_and_reason_the_worker_gave() {
         let hash = text_hash("...");
         let empty = done(
-            &LYRICS,
+            &MULAN,
             &hash,
             json!({
                 "status": "empty",
                 "reason": "empty_text",
                 "vector": null,
-                "producer": producer("lyrics", QWEN)
+                "producer": producer("mulan", MULAN_REF)
             }),
         );
         let failed = done(
@@ -1308,7 +1350,7 @@ mod tests {
 
         assert_eq!(
             outcome_of(
-                &LYRICS,
+                &MULAN,
                 serde_json::from_slice(&empty).expect("empty result")
             ),
             EncodeOutcome::empty_text()
@@ -1326,49 +1368,38 @@ mod tests {
     }
 
     #[test]
-    fn lyrics_vectors_live_under_a_prefix_no_bge_m3_vector_was_written_to() {
-        assert_eq!(LYRICS.prefix, "vibe:vec:lyrics:v2:");
-        assert_eq!(LYRICS.collection, collections::QUERY_VEC_LYRICS);
-        assert_eq!(MULAN.collection, collections::QUERY_VEC_MULAN);
-        assert_ne!(LYRICS.prefix, MULAN.prefix);
-    }
-
-    #[test]
     fn a_stored_vector_counts_only_when_its_point_names_the_expected_encoder() {
         let stored = |encoder: Option<&str>, dimensions: usize| StoredQueryVector {
             vector: vec![0.03125; dimensions],
             encoder: encoder.map(str::to_owned),
         };
 
-        assert!(holds_vector_of(&LYRICS, &stored(Some(QWEN), 1024)));
-        assert!(!holds_vector_of(&LYRICS, &stored(Some(BGE_M3), 1024)));
+        assert!(holds_vector_of(&MULAN, &stored(Some(MULAN_REF), 512)));
+        assert!(!holds_vector_of(&MULAN, &stored(Some(CLAP_REF), 512)));
         assert!(
-            !holds_vector_of(&LYRICS, &stored(None, 1024)),
+            !holds_vector_of(&MULAN, &stored(None, 512)),
             "a point that does not say who encoded it may be from any space"
         );
-        assert!(!holds_vector_of(&LYRICS, &stored(Some(QWEN), 512)));
+        assert!(!holds_vector_of(&MULAN, &stored(Some(MULAN_REF), 1024)));
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_point_written_from_another_encoder_is_never_served_or_cached() {
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
         let stores = FakeStores {
             publish_fails: true,
             ..FakeStores::default()
         };
-        stores.keep(&hash, Some(BGE_M3), 1024);
+        stores.keep(&hash, Some(CLAP_REF), 512);
 
-        assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Preparing
-        );
+        assert_eq!(encode(&stores, &MULAN, "rain").await, unpublished());
         assert!(!guard(&stores.cache).contains_key(&keys.cache));
 
-        stores.keep(&hash, Some(QWEN), 1024);
+        stores.keep(&hash, Some(MULAN_REF), 512);
         assert!(matches!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Ready(vector) if vector.len() == 1024
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Ready(vector) if vector.len() == 512
         ));
     }
 
@@ -1376,34 +1407,34 @@ mod tests {
     async fn a_failed_encoding_is_answered_at_once_afterwards_and_frees_its_lock() {
         let stores = FakeStores::default();
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
         let deadline_exceeded = EncodeOutcome::Declined {
             status: WorkerStatus::Failed,
             reason: Some(WorkerReason::DeadlineExceeded),
         };
 
         let (first, ()) = tokio::join!(
-            encode(&stores, &LYRICS, "rain"),
-            answer_after(&stores.source, Duration::from_secs(1), failed_lyrics(&hash)),
+            encode(&stores, &MULAN, "rain"),
+            answer_after(&stores.source, Duration::from_secs(1), failed_result(&hash)),
         );
         assert_eq!(first, deadline_exceeded);
         assert!(!stores.locked(&keys.inflight));
 
         let started = Instant::now();
-        assert_eq!(encode(&stores, &LYRICS, "rain").await, deadline_exceeded);
+        assert_eq!(encode(&stores, &MULAN, "rain").await, deadline_exceeded);
         assert!(
             started.elapsed() < CACHE_RECHECK,
             "a known failure waited {:?} for an answer that will never come",
             started.elapsed()
         );
-        assert_eq!(stores.published(), vec![format!("lyrics:{hash}")]);
+        assert_eq!(stores.published(), vec![format!("mulan:{hash}")]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_old_failure_is_retried_under_a_message_id_the_dedup_window_does_not_swallow() {
         let stores = FakeStores::default();
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
         guard(&stores.failures).insert(
             keys.failure.clone(),
             EncodeFailure {
@@ -1415,11 +1446,11 @@ mod tests {
         );
 
         assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
+            encode(&stores, &MULAN, "rain").await,
             EncodeOutcome::Preparing
         );
-        assert_eq!(stores.published(), vec![format!("lyrics:{hash}:retry1")]);
-        assert_eq!(message_id(&LYRICS, &hash, 0), format!("lyrics:{hash}"));
+        assert_eq!(stores.published(), vec![format!("mulan:{hash}:retry1")]);
+        assert_eq!(message_id(&MULAN, &hash, 0, 7), format!("mulan:{hash}:7"));
     }
 
     #[test]
@@ -1450,13 +1481,10 @@ mod tests {
             ..FakeStores::default()
         };
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
 
         let started = Instant::now();
-        assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Preparing
-        );
+        assert_eq!(encode(&stores, &MULAN, "rain").await, unpublished());
         assert!(
             started.elapsed() < CACHE_RECHECK,
             "an unpublished job was waited on for {:?}",
@@ -1472,17 +1500,17 @@ mod tests {
         for lands_after in [Duration::from_secs(3), Duration::from_millis(9_600)] {
             let stores = FakeStores::default();
             let hash = text_hash("rain");
-            let keys = EncodeKeys::new(&LYRICS, &hash);
+            let keys = EncodeKeys::new(&MULAN, &hash);
             guard(&stores.locks).insert(keys.inflight.clone());
             let land = async {
                 tokio::time::sleep(lands_after).await;
-                stores.keep(&hash, Some(QWEN), 1024);
+                stores.keep(&hash, Some(MULAN_REF), 512);
             };
 
-            let (outcome, ()) = tokio::join!(encode(&stores, &LYRICS, "rain"), land);
+            let (outcome, ()) = tokio::join!(encode(&stores, &MULAN, "rain"), land);
 
             assert!(
-                matches!(&outcome, EncodeOutcome::Ready(vector) if vector.len() == 1024),
+                matches!(&outcome, EncodeOutcome::Ready(vector) if vector.len() == 512),
                 "a vector stored after {lands_after:?} was missed: {outcome:?}"
             );
             assert!(stores.published().is_empty());
@@ -1494,18 +1522,18 @@ mod tests {
     async fn a_vector_that_arrives_in_time_frees_its_lock() {
         let stores = FakeStores::default();
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
 
         let (outcome, ()) = tokio::join!(
-            encode(&stores, &LYRICS, "rain"),
+            encode(&stores, &MULAN, "rain"),
             answer_after(
                 &stores.source,
                 Duration::from_secs(1),
-                ok_lyrics_payload(&hash, QWEN, 1024)
+                ok_payload(&hash, MULAN_REF, 512)
             ),
         );
 
-        assert!(matches!(outcome, EncodeOutcome::Ready(vector) if vector.len() == 1024));
+        assert!(matches!(outcome, EncodeOutcome::Ready(vector) if vector.len() == 512));
         assert!(!stores.locked(&keys.inflight));
         assert_eq!(stores.watched_late(), 0);
     }
@@ -1514,10 +1542,10 @@ mod tests {
     async fn a_vector_that_arrives_after_everyone_gave_up_is_served_from_the_cache() {
         let stores = FakeStores::default();
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
 
         assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
+            encode(&stores, &MULAN, "rain").await,
             EncodeOutcome::Preparing
         );
         assert_eq!(stores.watched_late(), 1);
@@ -1525,14 +1553,14 @@ mod tests {
         answer_after(
             &stores.source,
             Duration::from_secs(20),
-            ok_lyrics_payload(&hash, QWEN, 1024),
+            ok_payload(&hash, MULAN_REF, 512),
         )
         .await;
 
         let started = Instant::now();
         assert!(matches!(
-            encode(&stores, &LYRICS, "rain").await,
-            EncodeOutcome::Ready(vector) if vector.len() == 1024
+            encode(&stores, &MULAN, "rain").await,
+            EncodeOutcome::Ready(vector) if vector.len() == 512
         ));
         assert!(
             started.elapsed() < CACHE_RECHECK,
@@ -1540,7 +1568,7 @@ mod tests {
             started.elapsed()
         );
         assert!(!stores.locked(&keys.inflight));
-        assert_eq!(stores.published(), vec![format!("lyrics:{hash}")]);
+        assert_eq!(stores.published(), vec![format!("mulan:{hash}")]);
         assert_eq!(stores.watched_late(), 0);
         assert_eq!(stores.source.open_now(), 0);
     }
@@ -1549,25 +1577,25 @@ mod tests {
     async fn a_failure_that_arrives_after_everyone_gave_up_is_remembered_and_frees_the_lock() {
         let stores = FakeStores::default();
         let hash = text_hash("rain");
-        let keys = EncodeKeys::new(&LYRICS, &hash);
+        let keys = EncodeKeys::new(&MULAN, &hash);
         let deadline_exceeded = EncodeOutcome::Declined {
             status: WorkerStatus::Failed,
             reason: Some(WorkerReason::DeadlineExceeded),
         };
 
         assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
+            encode(&stores, &MULAN, "rain").await,
             EncodeOutcome::Preparing
         );
         answer_after(
             &stores.source,
             Duration::from_secs(30),
-            failed_lyrics(&hash),
+            failed_result(&hash),
         )
         .await;
         assert!(stores.locked(&keys.inflight));
         assert_eq!(
-            encode(&stores, &LYRICS, "snow").await,
+            encode(&stores, &MULAN, "snow").await,
             EncodeOutcome::Preparing,
             "a request for any other text settles what arrived late"
         );
@@ -1580,13 +1608,13 @@ mod tests {
             Some(0)
         );
         let started = Instant::now();
-        assert_eq!(encode(&stores, &LYRICS, "rain").await, deadline_exceeded);
+        assert_eq!(encode(&stores, &MULAN, "rain").await, deadline_exceeded);
         assert!(started.elapsed() < CACHE_RECHECK);
         assert_eq!(
             stores.published(),
             vec![
-                format!("lyrics:{hash}"),
-                format!("lyrics:{}", text_hash("snow"))
+                format!("mulan:{hash}"),
+                format!("mulan:{}", text_hash("snow"))
             ]
         );
     }
@@ -1597,7 +1625,7 @@ mod tests {
         let hash = text_hash("rain");
 
         assert_eq!(
-            encode(&stores, &LYRICS, "rain").await,
+            encode(&stores, &MULAN, "rain").await,
             EncodeOutcome::Preparing
         );
         tokio::time::sleep(LATE_RESULT_WAIT - Duration::from_secs(1)).await;
@@ -1608,13 +1636,13 @@ mod tests {
         answer_after(
             &stores.source,
             Duration::ZERO,
-            ok_lyrics_payload(&hash, QWEN, 1024),
+            ok_payload(&hash, MULAN_REF, 512),
         )
         .await;
         assert!(stores.results.late_results().is_empty());
         assert_eq!(stores.watched_late(), 0);
         assert_eq!(stores.source.open_now(), 0);
-        assert!(!guard(&stores.cache).contains_key(&EncodeKeys::new(&LYRICS, &hash).cache));
+        assert!(!guard(&stores.cache).contains_key(&EncodeKeys::new(&MULAN, &hash).cache));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1623,7 +1651,7 @@ mod tests {
 
         for _ in 0..2 {
             assert_eq!(
-                encode(&stores, &LYRICS, "rain").await,
+                encode(&stores, &MULAN, "rain").await,
                 EncodeOutcome::Preparing
             );
         }
@@ -1631,7 +1659,7 @@ mod tests {
 
         for index in 1..MAX_LATE_WATCHES {
             stores.results.watch_late(LateWatch {
-                target: &LYRICS,
+                target: &MULAN,
                 hash: text_hash(&format!("text {index}")),
                 attempt: 0,
                 until: Instant::now() + LATE_RESULT_WAIT,
@@ -1639,7 +1667,7 @@ mod tests {
         }
         assert_eq!(stores.watched_late(), MAX_LATE_WATCHES);
         assert_eq!(
-            encode(&stores, &LYRICS, "snow").await,
+            encode(&stores, &MULAN, "snow").await,
             EncodeOutcome::Preparing
         );
         assert_eq!(stores.watched_late(), MAX_LATE_WATCHES);
@@ -1648,7 +1676,7 @@ mod tests {
                 .results
                 .late()
                 .watched
-                .contains_key(&result_key(EncodeModel::Lyrics, &text_hash("snow")))
+                .contains_key(&result_key(EncodeModel::Mulan, &text_hash("snow")))
         );
     }
 }

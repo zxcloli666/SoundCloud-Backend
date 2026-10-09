@@ -1,4 +1,3 @@
-use anyhow::ensure;
 use backend_contracts::pipeline::StorageTrackRejected;
 use sqlx::PgPool;
 
@@ -90,31 +89,14 @@ impl StorageEventHandler {
 }
 
 fn validate(payload: StorageTrackRejected) -> anyhow::Result<RejectedTrack> {
-    let sc_track_id = normalize_track_id(&payload.sc_track_id)?;
-    let point_id = sc_track_id
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("storage rejection has an invalid track id"))?;
-    ensure!(
-        point_id > 0 && point_id.to_string() == sc_track_id,
-        "storage rejection has a non-canonical track id"
-    );
+    let sc_track_id = catalog_ingest::normalize_sc_track_id(&payload.sc_track_id)
+        .ok_or_else(|| anyhow::anyhow!("storage rejection has an invalid track id"))?;
     Ok(RejectedTrack {
-        sc_track_id: sc_track_id.to_owned(),
+        sc_track_id,
         reason: payload.reason.as_str(),
         actual_secs: payload.actual_secs.unwrap_or(0.0),
         expected_duration_ms: payload.expected_duration_ms,
     })
-}
-
-fn normalize_track_id(value: &str) -> anyhow::Result<&str> {
-    if let Some(track_id) = value.strip_prefix("soundcloud:tracks:") {
-        return Ok(track_id);
-    }
-    ensure!(
-        !value.contains(':'),
-        "storage rejection has an invalid track id"
-    );
-    Ok(value)
 }
 
 #[cfg(test)]

@@ -41,6 +41,12 @@ impl DislikesService {
                 status: "invalid".into(),
             });
         };
+        crate::modules::cold_refresh::entity::want_track(
+            &self.pg,
+            &id,
+            crate::modules::tracks::TrackPriority::Discovery,
+        )
+        .await?;
 
         let inserted: Option<(uuid::Uuid,)> = sqlx::query_as(
             "INSERT INTO disliked_tracks (sc_user_id, sc_track_id, track_data) \
@@ -131,7 +137,7 @@ impl DislikesService {
         };
 
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let rows: Vec<(Option<Value>, NaiveDateTime)> = if let Some(dt) = cursor_dt {
+        let rows: Vec<(String, Option<Value>, NaiveDateTime)> = if let Some(dt) = cursor_dt {
             sqlx::query_file!(
                 "queries/dislikes/service/find_all_after_cursor.sql",
                 &variants,
@@ -141,7 +147,7 @@ impl DislikesService {
             .fetch_all(&self.pg)
             .await?
             .into_iter()
-            .map(|r| (r.track_data, r.created_at))
+            .map(|r| (r.sc_track_id, r.track_data, r.created_at))
             .collect()
         } else {
             sqlx::query_file!(
@@ -152,15 +158,15 @@ impl DislikesService {
             .fetch_all(&self.pg)
             .await?
             .into_iter()
-            .map(|r| (r.track_data, r.created_at))
+            .map(|r| (r.sc_track_id, r.track_data, r.created_at))
             .collect()
         };
 
         let has_more = rows.len() as i64 > limit;
-        let slice: Vec<(Option<Value>, NaiveDateTime)> =
+        let slice: Vec<(String, Option<Value>, NaiveDateTime)> =
             rows.into_iter().take(limit as usize).collect();
         let next_href = if has_more {
-            slice.last().map(|(_, dt)| {
+            slice.last().map(|(_, _, dt)| {
                 let iso = DateTime::<Utc>::from_naive_utc_and_offset(*dt, Utc)
                     .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 format!("?limit={limit}&cursor={iso}")
@@ -168,12 +174,56 @@ impl DislikesService {
         } else {
             None
         };
-        let collection: Vec<Value> = slice.into_iter().filter_map(|(td, _)| td).collect();
+        let collection = self.project(sc_user_id, slice).await?;
         Ok(DislikesPage {
             collection,
             next_href,
         })
     }
+}
+
+impl DislikesService {
+    async fn project(
+        &self,
+        sc_user_id: &str,
+        rows: Vec<(String, Option<Value>, NaiveDateTime)>,
+    ) -> AppResult<Vec<Value>> {
+        let ids: Vec<String> = rows.iter().map(|(id, _, _)| id.clone()).collect();
+        let mut projected = crate::modules::tracks::project_many_public(&self.pg, &ids).await?;
+        let mut found: Vec<Value> = projected.iter_mut().filter_map(Option::take).collect();
+        crate::modules::enrich::dto::apply_to_tracks(&self.pg, &mut found).await?;
+        crate::modules::likes::cold::apply_user_favorite_flag(&self.pg, sc_user_id, &mut found)
+            .await?;
+        let mut found: std::collections::HashMap<String, Value> = found
+            .into_iter()
+            .filter_map(|track| {
+                let id = normalize_sc_track_id(track.get("urn")?.as_str()?)?;
+                Some((id, track))
+            })
+            .collect();
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, stored, _)| {
+                found.remove(&id).or_else(|| stored_fallback(&id, stored))
+            })
+            .collect())
+    }
+}
+
+fn stored_fallback(sc_track_id: &str, stored: Option<Value>) -> Option<Value> {
+    let entity = crate::common::sc_ids::EntityRef::track(sc_track_id)?;
+    let mut stored = stored.filter(|stored| {
+        stored
+            .get("urn")
+            .and_then(Value::as_str)
+            .and_then(crate::common::sc_ids::EntityRef::parse_urn)
+            == Some(entity)
+    })?;
+    let object = stored.as_object_mut()?;
+    object.insert("id".into(), serde_json::json!(entity.id()));
+    object.insert("urn".into(), Value::String(entity.urn()));
+    object.remove("_scd_meta");
+    Some(stored)
 }
 
 fn parse_cursor(s: &str) -> AppResult<NaiveDateTime> {

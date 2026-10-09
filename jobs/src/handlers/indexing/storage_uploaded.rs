@@ -121,7 +121,7 @@ impl StorageUploadHandler {
         batch: i64,
         cooldown_seconds: i64,
         max_attempts: i32,
-    ) -> JobResult {
+    ) -> JobResult<i64> {
         let reopened = sqlx::query_file_as!(
             AudioDispatch,
             "queries/indexing/reopen_dispatches.sql",
@@ -134,6 +134,7 @@ impl StorageUploadHandler {
         .map_err(JobError::retryable)?;
 
         let mut first_failure = None;
+        let count = i64::try_from(reopened.len()).unwrap_or(i64::MAX);
         for dispatch in reopened {
             tracing::info!(
                 track = %dispatch.sc_track_id,
@@ -145,7 +146,7 @@ impl StorageUploadHandler {
                 first_failure.get_or_insert(error);
             }
         }
-        first_failure.map_or(Ok(()), Err)
+        first_failure.map_or(Ok(count), Err)
     }
 
     async fn publish_audio_index(&self, dispatch: &AudioDispatch) -> JobResult {
@@ -333,7 +334,8 @@ fn validate_upload(payload: StorageTrackUploaded) -> anyhow::Result<UploadedAudi
 
 fn canonical_storage_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result<String> {
     let mut url = storage_url.clone();
-    let filename = format!("soundcloud_tracks_{sc_track_id}.m4a");
+    let filename = catalog_ingest::track_object_key(sc_track_id)
+        .ok_or_else(|| anyhow::anyhow!("storage upload has an invalid track id"))?;
     let mut path = url
         .path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?;
@@ -356,15 +358,8 @@ fn validate_dispatch(
 }
 
 fn normalize_track_id(value: &str) -> anyhow::Result<String> {
-    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-    let point_id = value
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("storage upload has an invalid track id"))?;
-    ensure!(
-        point_id > 0 && point_id.to_string() == value,
-        "storage upload has a non-canonical track id"
-    );
-    Ok(value.to_owned())
+    catalog_ingest::normalize_sc_track_id(value)
+        .ok_or_else(|| anyhow::anyhow!("storage upload has an invalid track id"))
 }
 
 fn validate_storage_url(value: &str) -> anyhow::Result<String> {

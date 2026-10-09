@@ -97,6 +97,9 @@ async fn main() {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before API");
+    let recommendations_pg = db::connect_recommendations(&config)
+        .await
+        .expect("Failed to connect to PostgreSQL for recommendations");
     info!("PostgreSQL connected");
 
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
@@ -171,12 +174,7 @@ async fn main() {
         redis_pool.clone(),
         &config.collab_trigger,
     );
-    let events = EventsService::new(
-        pg.clone(),
-        background_jobs.clone(),
-        indexing_jobs.clone(),
-        collab_jobs.clone(),
-    );
+    let events = EventsService::new(pg.clone(), indexing_jobs.clone(), collab_jobs.clone());
     let subscriptions = SubscriptionsService::new(pg.clone(), config.subscriptions.always_premium);
     let auras = AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
@@ -188,7 +186,7 @@ async fn main() {
     let collab_vector = CollabVectorService::new(qdrant.clone());
     let recommendations = RecommendationsService::new(
         qdrant.clone(),
-        pg.clone(),
+        recommendations_pg,
         nats.clone(),
         redis_pool.clone(),
         worker.clone(),
@@ -196,12 +194,26 @@ async fn main() {
         collab_vector.clone(),
         config.soundwave.clone(),
     );
+    let indexing = IndexingService::new(
+        pg.clone(),
+        background_jobs.clone(),
+        indexing_jobs,
+        config.max_track_duration_ms,
+    );
+    cold_refresh.install_indexing(indexing.clone());
+    let miss = crate::modules::resolve::CatalogMiss::new(
+        pg.clone(),
+        resolve.clone(),
+        indexing.clone(),
+        admission.clone(),
+    );
     let tracks = TracksService::new(crate::modules::tracks::TracksServiceDependencies {
         sc: sc.clone(),
         pg: pg.clone(),
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
+        miss: miss.clone(),
     });
     let playlists = PlaylistsService::new(PlaylistsDeps {
         sc: sc.clone(),
@@ -210,28 +222,21 @@ async fn main() {
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
         background_jobs: background_jobs.clone(),
+        miss: miss.clone(),
     });
-    let users = UsersService::new(pg.clone(), cold_refresh.clone());
+    let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
+    let soundcloud_search = crate::modules::soundcloud_search::SoundCloudSearch::new(
+        resolve.clone(),
+        cache.clone(),
+        admission.clone(),
+    );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
     let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
 
-    let indexing = IndexingService::new(
-        pg.clone(),
-        background_jobs.clone(),
-        indexing_jobs,
-        config.max_track_duration_ms,
-    );
-    cold_refresh.install_indexing(indexing.clone());
-
-    let likes = LikesService::new(
-        pg.clone(),
-        sync_queue.clone(),
-        indexing.clone(),
-        events.clone(),
-    );
+    let likes = LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
 
     let discover = DiscoverService::new(pg.clone(), cache.clone());
 
@@ -239,11 +244,12 @@ async fn main() {
         pg.clone(),
         cache.clone(),
         recommendations.clone(),
-        worker.clone(),
-        qdrant.clone(),
     );
 
     events.install_dislikes(dislikes.clone());
+
+    let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
+    let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
     let port = config.port;
     let state = AppState {
@@ -267,6 +273,8 @@ async fn main() {
         likes,
         resolve,
         search,
+        soundcloud_search,
+        miss,
         vibe,
         history,
         featured,
@@ -277,6 +285,7 @@ async fn main() {
         recommendations,
         discover,
         sync_queue: sync_queue.clone(),
+        rooms,
     };
 
     let app = router::build(state);

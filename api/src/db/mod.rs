@@ -8,7 +8,8 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 115;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 138;
+const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     let mut opts = PgConnectOptions::from_str(&cfg.url)?;
@@ -46,19 +47,41 @@ fn parse_ssl_mode(raw: &str) -> Result<PgSslMode, sqlx::Error> {
     })
 }
 
-async fn pool(cfg: &DatabaseCfg) -> Result<PgPool, sqlx::Error> {
+fn recommendations_share(pool_max: u32) -> u32 {
+    (pool_max / 4).max(1)
+}
+
+fn core_share(pool_max: u32) -> u32 {
+    pool_max
+        .saturating_sub(recommendations_share(pool_max))
+        .max(1)
+}
+
+async fn pool(
+    cfg: &DatabaseCfg,
+    max_connections: u32,
+    opts: PgConnectOptions,
+) -> Result<PgPool, sqlx::Error> {
     PgPoolOptions::new()
-        .max_connections(cfg.pool_max)
+        .max_connections(max_connections)
         .acquire_timeout(cfg.acquire_timeout)
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
         .test_before_acquire(true)
-        .connect_with(connect_opts(cfg)?)
+        .connect_with(opts)
         .await
 }
 
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
-    pool(&cfg.database).await
+    let db = &cfg.database;
+    pool(db, core_share(db.pool_max), connect_opts(db)?).await
+}
+
+pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
+    let db = &cfg.database;
+    let opts =
+        connect_opts(db)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]);
+    pool(db, recommendations_share(db.pool_max), opts).await
 }
 
 pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -110,6 +133,13 @@ mod tests {
             pool_max: 1,
             acquire_timeout: Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    fn recommendations_take_a_quarter_of_the_pool() {
+        assert_eq!((core_share(20), recommendations_share(20)), (15, 5));
+        assert_eq!((core_share(10), recommendations_share(10)), (8, 2));
+        assert_eq!((core_share(1), recommendations_share(1)), (1, 1));
     }
 
     #[test]

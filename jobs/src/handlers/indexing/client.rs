@@ -48,7 +48,7 @@ impl IndexingClient {
     pub async fn trigger(&self, sc_track_id: &str) -> JobResult<TriggerOutcome> {
         let response = self
             .client
-            .post(self.transcode_url(sc_track_id)?)
+            .post(self.transcode_url(sc_track_id)?.as_str())
             .bearer_auth(&self.internal_token)
             .json(&json!({}))
             .send()

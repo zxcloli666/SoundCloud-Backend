@@ -22,7 +22,10 @@ use crate::modules::me::MeService;
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::modules::playlists::PlaylistsService;
 use crate::modules::recommendations::RecommendationsService;
+use crate::modules::resolve::CatalogMiss;
+use crate::modules::rooms::RoomsService;
 use crate::modules::search::{SearchService, VibeSearchService};
+use crate::modules::soundcloud_search::SoundCloudSearch;
 use crate::modules::subscriptions::SubscriptionsService;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::tracks::TracksService;
@@ -51,6 +54,8 @@ pub struct AppState {
     pub likes: Arc<LikesService>,
     pub resolve: Arc<ScReadService>,
     pub search: Arc<SearchService>,
+    pub soundcloud_search: Arc<SoundCloudSearch>,
+    pub miss: Arc<CatalogMiss>,
     pub vibe: Arc<VibeSearchService>,
     pub history: Arc<HistoryService>,
     pub featured: Arc<FeaturedService>,
@@ -61,4 +66,5 @@ pub struct AppState {
     pub recommendations: Arc<RecommendationsService>,
     pub discover: Arc<DiscoverService>,
     pub sync_queue: Arc<SyncQueueService>,
+    pub rooms: Arc<RoomsService>,
 }

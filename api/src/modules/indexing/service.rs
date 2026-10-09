@@ -81,6 +81,22 @@ impl IndexingService {
         Ok(())
     }
 
+    pub async fn release_held(&self, sc_track_id: &str) -> AppResult<bool> {
+        let Some(duration_ms) =
+            sqlx::query_file_scalar!("queries/indexing/service/release_held.sql", sc_track_id)
+                .fetch_optional(&self.pg)
+                .await?
+        else {
+            return Ok(false);
+        };
+        if self.max_track_duration_ms > 0 && duration_ms > self.max_track_duration_ms {
+            self.tracks.mark_too_long(sc_track_id).await?;
+        } else {
+            self.kick_pipeline(sc_track_id).await;
+        }
+        Ok(true)
+    }
+
     async fn kick_pipeline(&self, sc_track_id: &str) {
         if let Err(error) = self.indexing_jobs.enqueue(sc_track_id).await {
             warn!(track = sc_track_id, %error, "indexing trigger enqueue failed");

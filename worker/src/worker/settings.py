@@ -100,6 +100,8 @@ class RuntimeSection:
     onednn: bool
     shutdown_grace_s: int
     allow_slow_lanes: bool
+    threads: int
+    isolate_encode: bool
 
 
 @dataclass(frozen=True)
@@ -544,6 +546,8 @@ def validate_runtime(settings: Settings) -> list[str]:
         problems.append("runtime.shutdown_grace_s must be > 0")
     if runtime.idle_unload_s < 0 or runtime.recycle_after_calls < 1 or runtime.recycle_gap_mib < 1:
         problems.append("runtime recycle/idle values out of range")
+    if runtime.threads < 0:
+        problems.append("runtime.threads must be >= 0")
     return problems
 
 
@@ -719,9 +723,9 @@ def model_ref(settings: Settings, slot: str) -> str:
     return f"{spec.model}@{spec.revision[:8]}" if spec.revision else spec.model
 
 
-def slots_for_lanes(settings: Settings) -> tuple[str, ...]:
+def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:
     wanted: list[str] = []
-    for lane in settings.lanes.enabled:
+    for lane in settings.lanes.enabled if lanes is None else lanes:
         for slot in lane_slots(settings, lane):
             if slot not in wanted:
                 wanted.append(slot)

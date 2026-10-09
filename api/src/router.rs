@@ -63,6 +63,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::auras::router())
         .merge(modules::likes::router())
         .merge(modules::dislikes::router())
+        .merge(modules::blocked_artists::router())
         .merge(modules::featured::router())
         .merge(modules::lyrics::router())
         .merge(modules::collab::router())
@@ -73,19 +74,21 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::albums::router())
         .merge(modules::discover::router())
         .merge(modules::discover::admin::router())
-        .merge(modules::search::router());
+        .merge(modules::search::router())
+        .merge(modules::rooms::router());
 
     #[cfg(feature = "profiling")]
     let router = router.merge(crate::profiling::router());
 
     router
-        .with_state(state)
-        .layer(body_limit())
-        .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+        .merge(modules::tracks::upload_router())
+        .with_state(state)
+        .layer(body_limit())
+        .layer(CompressionLayer::new())
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request| {
                 tracing::debug_span!(
@@ -186,6 +189,22 @@ mod router_body_tests;
 #[cfg(test)]
 #[path = "router_cache_tests.rs"]
 mod router_cache_tests;
+
+#[cfg(test)]
+#[path = "router_search_tests.rs"]
+mod router_search_tests;
+
+#[cfg(test)]
+#[path = "router_identity_tests.rs"]
+mod router_identity_tests;
+
+#[cfg(test)]
+#[path = "router_projection_tests.rs"]
+mod router_projection_tests;
+
+#[cfg(test)]
+#[path = "router_rooms_tests.rs"]
+mod router_rooms_tests;
 
 #[cfg(test)]
 mod tests {

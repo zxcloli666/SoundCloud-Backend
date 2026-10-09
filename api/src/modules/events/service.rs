@@ -1,15 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::{HardNegative, JobKind};
-use chrono::Utc;
 use mini_moka::sync::Cache;
 use sqlx::PgPool;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::background_jobs::{BackgroundJob, BackgroundJobs, CollabJobs, IndexingJobs};
+use crate::background_jobs::{CollabJobs, IndexingJobs};
 use crate::common::sc_ids::normalize_sc_track_id;
 use crate::error::{AppError, AppResult};
 use crate::modules::dislikes::DislikesService;
@@ -22,7 +20,6 @@ const DISLIKE_WEIGHT: f64 = -1.0;
 
 const USER_LOCK_CAPACITY: u64 = 16_384;
 const USER_LOCK_TTL: Duration = Duration::from_secs(5 * 60);
-const HARD_NEGATIVE_MAX_ATTEMPTS: i16 = 300;
 
 const POSITIVE_EVENTS: &[&str] = &["like", "playlist_add"];
 const COLLAB_TRIGGER_EVENTS: &[&str] = &["like", "playlist_add", "full_play", "skip"];
@@ -58,29 +55,8 @@ fn validate_position_pct(position_pct: Option<f32>) -> AppResult<()> {
     Ok(())
 }
 
-fn hard_negative_event(
-    event_id: Uuid,
-    sc_user_id: &str,
-    sc_track_id: &str,
-    event_type: &str,
-    position_pct: Option<f32>,
-    created_at_unix_ms: i64,
-) -> Option<HardNegative> {
-    match position_pct {
-        Some(position) if event_type == "skip" && position < 0.20 => Some(HardNegative {
-            event_id,
-            user_id: sc_user_id.to_owned(),
-            track_id: sc_track_id.to_owned(),
-            position_pct: position,
-            created_at_unix_ms,
-        }),
-        _ => None,
-    }
-}
-
 pub struct EventsService {
     pg: PgPool,
-    background_jobs: Arc<BackgroundJobs>,
     indexing_jobs: Arc<IndexingJobs>,
     collab_jobs: Arc<CollabJobs>,
     user_locks: Cache<String, Arc<AsyncMutex<()>>>,
@@ -90,13 +66,11 @@ pub struct EventsService {
 impl EventsService {
     pub fn new(
         pg: PgPool,
-        background_jobs: Arc<BackgroundJobs>,
         indexing_jobs: Arc<IndexingJobs>,
         collab_jobs: Arc<CollabJobs>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
-            background_jobs,
             indexing_jobs,
             collab_jobs,
             user_locks: Cache::builder()
@@ -162,20 +136,6 @@ impl EventsService {
         let user_guard = lock.lock().await;
 
         let event_id = Uuid::now_v7();
-        let hard_negative = hard_negative_event(
-            event_id,
-            sc_user_id,
-            &normalized,
-            event_type,
-            position_pct,
-            Utc::now().timestamp_millis(),
-        )
-        .map(|event| {
-            BackgroundJob::unique(JobKind::RecordHardNegative, event)?
-                .with_max_attempts(HARD_NEGATIVE_MAX_ATTEMPTS)
-        })
-        .transpose()?;
-
         let mut transaction = self.pg.begin().await?;
         match position_pct {
             Some(position) => {
@@ -207,12 +167,6 @@ impl EventsService {
         transaction.commit().await?;
         drop(user_guard);
 
-        if let Some(job) = &hard_negative
-            && let Err(error) = self.background_jobs.enqueue_telemetry(job).await
-        {
-            warn!(%error, event_id = %event_id, "hard negative telemetry publish failed");
-        }
-
         self.enqueue_indexing(&normalized).await;
 
         if COLLAB_TRIGGER_EVENTS.contains(&event_type) {
@@ -241,21 +195,5 @@ mod tests {
         assert!(
             validate_position_pct(Some(0.0)).is_ok() && validate_position_pct(Some(1.0)).is_ok()
         );
-    }
-
-    #[test]
-    fn early_skip_builds_hard_negative_from_the_same_event() {
-        let event_id = Uuid::now_v7();
-        let event = hard_negative_event(event_id, "user", "track", "skip", Some(0.1), 42);
-
-        assert!(matches!(
-            event,
-            Some(HardNegative {
-                event_id: actual_id,
-                position_pct: 0.1,
-                created_at_unix_ms: 42,
-                ..
-            }) if actual_id == event_id
-        ));
     }
 }

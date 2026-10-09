@@ -33,7 +33,7 @@ from worker.runtime.engine_client import (
     SlotUnavailable,
     next_message_id,
 )
-from worker.runtime.protocol import Call, Reply, SlotSpec
+from worker.runtime.protocol import Call, ErrorKind, Reply, SlotSpec
 from worker.runtime.supervisor import (
     LANE_GROUPS,
     STATE_BROKEN,
@@ -186,6 +186,105 @@ async def test_deadline_kill_is_planned_and_respawns_immediately() -> None:
         await supervisor.stop()
 
 
+async def test_an_expired_call_keeps_the_engine_and_its_loaded_models() -> None:
+    counters = Counters()
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))], counters=counters)
+    try:
+        before = supervisor.engines()
+        reply = await call_once(supervisor, "a", "expire")
+        assert reply.error_kind is ErrorKind.EXPIRED
+        assert supervisor.engines() == before
+        assert counters.value("slot_restarts_total", slot="a") == 0
+        assert (await call_once(supervisor, "a")).ok
+    finally:
+        await supervisor.stop()
+
+
+def long_call(preemptible: bool) -> Call:
+    return Call(
+        next_message_id(),
+        "a",
+        "layers",
+        time.monotonic() + 30,
+        args={"layers": 150},
+        preemptible=preemptible,
+    )
+
+
+async def call_and_release(supervisor: Supervisor, client: EngineClient, call: Call) -> Reply:
+    try:
+        return await client.call(call)
+    finally:
+        supervisor.release(client)
+
+
+@pytest.mark.parametrize(("preemptible", "expected"), [(True, ErrorKind.PREEMPTED), (False, None)])
+async def test_an_urgent_acquire_preempts_the_bulk_call_and_spares_the_engine(
+    preemptible: bool, expected: ErrorKind | None
+) -> None:
+    counters = Counters()
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))], counters=counters)
+    try:
+        before = supervisor.engines()
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        call = asyncio.create_task(call_and_release(supervisor, bulk, long_call(preemptible)))
+        await asyncio.sleep(0.3)
+        started = time.monotonic()
+        urgent = await supervisor.acquire("a", time.monotonic() + 10, priority=True)
+        waited = time.monotonic() - started
+        supervisor.release(urgent)
+        reply = await call
+        assert reply.error_kind is expected
+        assert (waited < 1.0) is preemptible
+        assert counters.value("slot_preemptions_total", slot="a") == 1
+        assert supervisor.engines() == before
+    finally:
+        await supervisor.stop()
+
+
+async def test_a_preemption_requested_before_the_call_stops_it_at_once() -> None:
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+    try:
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        urgent = asyncio.create_task(supervisor.acquire("a", time.monotonic() + 10, priority=True))
+        await asyncio.sleep(0.1)
+        started = time.monotonic()
+        reply = await call_and_release(supervisor, bulk, long_call(True))
+        assert reply.error_kind is ErrorKind.PREEMPTED
+        assert time.monotonic() - started < 0.5
+        supervisor.release(await asyncio.wait_for(urgent, 5.0))
+        follow_up = await supervisor.acquire("a", time.monotonic() + 5)
+        try:
+            assert (await follow_up.call(long_call(True))).ok
+        finally:
+            supervisor.release(follow_up)
+    finally:
+        await supervisor.stop()
+
+
+async def test_bulk_acquires_yield_to_a_waiting_urgent_one() -> None:
+    supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
+    try:
+        bulk = await supervisor.acquire("a", time.monotonic() + 5)
+        call = asyncio.create_task(call_and_release(supervisor, bulk, long_call(False)))
+        await asyncio.sleep(0.1)
+        order: list[str] = []
+
+        async def take(name: str, priority: bool) -> None:
+            client = await supervisor.acquire("a", time.monotonic() + 10, priority=priority)
+            order.append(name)
+            await asyncio.sleep(0.05)
+            supervisor.release(client)
+
+        waiting_bulk = asyncio.create_task(take("bulk", False))
+        await asyncio.sleep(0.05)
+        waiting_urgent = asyncio.create_task(take("urgent", True))
+        await asyncio.gather(call, waiting_bulk, waiting_urgent)
+        assert order == ["urgent", "bulk"]
+    finally:
+        await supervisor.stop()
+
+
 async def test_ping_watchdog_replaces_unresponsive_engine() -> None:
     supervisor = await started_supervisor([EnginePlan("a", (fake_spec("a"),))])
     try:
@@ -324,12 +423,27 @@ async def test_snapshot_lists_every_slot() -> None:
             "crashes",
             "oom",
             "reserved_gap_mib",
+            "rss_mib",
             "calls",
             "p50_ms",
             "p95_ms",
         }
+        assert report["rss_mib"] > 0
     finally:
         await supervisor.stop()
+
+
+async def test_engine_memory_is_reported_per_engine_and_zero_once_stopped() -> None:
+    supervisor = await started_supervisor(
+        [EnginePlan("a", (fake_spec("a"),)), EnginePlan("b", (fake_spec("b"),))]
+    )
+    try:
+        memory = supervisor.memory()
+        assert set(memory) == {"a", "b"}
+        assert all(rss > 0 for rss in memory.values())
+    finally:
+        await supervisor.stop()
+    assert supervisor.memory() == {"a": 0, "b": 0}
 
 
 async def test_idle_unload_timeout_kills_the_stuck_engine() -> None:

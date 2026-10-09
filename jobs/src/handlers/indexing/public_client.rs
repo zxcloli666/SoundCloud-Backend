@@ -5,8 +5,9 @@ use futures::StreamExt;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
+use url::Url;
 use wreq::header::{ACCEPT, ACCEPT_ENCODING, RETRY_AFTER, USER_AGENT};
-use wreq::{Client, Response, StatusCode, Url};
+use wreq::{Client, Response, StatusCode};
 
 use crate::config::DurationConfig;
 
@@ -258,7 +259,7 @@ impl PublicSoundCloudClient {
 
     async fn send_direct(&self, target: Url) -> Result<Response, PublicReadError> {
         self.pacer.wait().await;
-        Ok(self.request(self.http.get(target)).send().await?)
+        Ok(self.request(self.http.get(target.as_str())).send().await?)
     }
 
     async fn send_proxy(&self, target: Url) -> Result<Response, PublicReadError> {
@@ -268,7 +269,7 @@ impl PublicSoundCloudClient {
             .ok_or_else(|| PublicReadError::Rejected(StatusCode::INTERNAL_SERVER_ERROR))?;
         self.pacer.wait().await;
         Ok(self
-            .request(self.http.get(proxy).header(
+            .request(self.http.get(proxy.as_str()).header(
                 "x-target",
                 base64::engine::general_purpose::STANDARD.encode(target.as_str()),
             ))

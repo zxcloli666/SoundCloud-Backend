@@ -15,6 +15,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -291,6 +296,51 @@ async fn enqueue_is_idempotent_by_command_id_and_coalesces_by_key(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_job_queued_in_a_stale_lane_moves_to_its_kind_lane_on_the_next_enqueue(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    for kind in [JobKind::CollabTrain, JobKind::DiscoverAggregates] {
+        sqlx::query(
+            "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+             VALUES (gen_random_uuid(), $1, 'core_bulk', 'stale', '{}'::jsonb)",
+        )
+        .bind(kind.as_str())
+        .execute(&pool)
+        .await?;
+    }
+
+    repository
+        .enqueue(&new_job(
+            JobKind::CollabTrain,
+            Some("stale"),
+            0,
+            4,
+            Utc::now(),
+        ))
+        .await?;
+    repository
+        .enqueue_if_absent(&new_job(
+            JobKind::DiscoverAggregates,
+            Some("stale"),
+            0,
+            4,
+            Utc::now(),
+        ))
+        .await?;
+
+    let lanes: Vec<String> = sqlx::query_scalar("SELECT lane FROM background_jobs ORDER BY kind")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(
+        lanes,
+        vec!["maintenance".to_owned(), "maintenance".to_owned()]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn transactional_enqueue_rolls_back_with_its_caller(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
@@ -311,7 +361,9 @@ async fn transactional_enqueue_rolls_back_with_its_caller(pool: PgPool) -> anyho
 }
 
 #[sqlx::test(migrations = false)]
-async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Result<()> {
+async fn enqueue_if_absent_keeps_an_existing_job_and_only_raises_its_priority(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
     let mut existing = new_job(
@@ -331,6 +383,8 @@ async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Re
         .enqueue_in_if_absent(&mut transaction, &replacement)
         .await?;
     transaction.commit().await?;
+    let lower = new_job(JobKind::LyricsEmbed, Some("42"), 1, 8, Utc::now());
+    repository.enqueue_if_absent(&lower).await?;
 
     let state = sqlx::query_as::<_, (Uuid, serde_json::Value, i16, i64, i32, i16)>(
         "SELECT id, payload, priority, generation, attempts, max_attempts
@@ -341,7 +395,7 @@ async fn enqueue_if_absent_preserves_an_existing_job(pool: PgPool) -> anyhow::Re
     .await?;
     assert_eq!(
         state,
-        (existing.id, json!({ "value": "existing" }), 3, 1, 0, 5,)
+        (existing.id, json!({ "value": "existing" }), 10, 1, 0, 5,)
     );
     Ok(())
 }
@@ -495,6 +549,79 @@ async fn expired_lease_is_released_before_reclaim(pool: PgPool) -> anyhow::Resul
     assert_ne!(current.lease_id, stale.lease_id);
     assert_eq!(stale_completion, Completion::LostLease);
     assert!(current_heartbeat);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_expired_lease_left_in_a_stale_lane_is_released_into_its_kind_lane(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, attempts, max_attempts,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES (
+             gen_random_uuid(), 'lyrics.embed', 'core_bulk', '42', '{}'::jsonb, 1, 8,
+             gen_random_uuid(), 1, 'jobs-old', now() - interval '1 second'
+         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    let claimed = repository
+        .claim(
+            &[JobKind::LyricsEmbed],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let lane: String = sqlx::query_scalar("SELECT lane FROM background_jobs")
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(
+        claimed.iter().map(|job| job.attempts).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(lane, "core_fast");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_live_lease_in_a_stale_lane_is_left_to_its_holder(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "jobs-a".to_owned());
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, attempts, max_attempts,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES (
+             gen_random_uuid(), 'lyrics.embed', 'core_bulk', '42', '{}'::jsonb, 1, 8,
+             gen_random_uuid(), 1, 'jobs-old', now() + interval '1 minute'
+         )",
+    )
+    .execute(&pool)
+    .await?;
+
+    let claimed = repository
+        .claim(
+            &[JobKind::LyricsEmbed],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let (lane, leased_by): (String, Option<String>) =
+        sqlx::query_as("SELECT lane, leased_by FROM background_jobs")
+            .fetch_one(&pool)
+            .await?;
+
+    assert!(claimed.is_empty());
+    assert_eq!(lane, "core_bulk");
+    assert_eq!(leased_by.as_deref(), Some("jobs-old"));
     Ok(())
 }
 

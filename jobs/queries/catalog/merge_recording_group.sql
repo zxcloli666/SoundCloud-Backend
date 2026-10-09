@@ -1,7 +1,9 @@
 WITH members AS (SELECT track.id,
                         track.duration_ms,
+                        (track.sharing = 'public' AND track.deleted_at IS NULL) AS serving,
                         row_number() OVER (
-                            ORDER BY (track.storage_state = 'ok' AND track.s3_verified_at IS NOT NULL) DESC,
+                            ORDER BY (track.sharing = 'public' AND track.deleted_at IS NULL) DESC,
+                                (track.storage_state = 'ok' AND track.s3_verified_at IS NOT NULL) DESC,
                                 (track.index_state = 'ok') DESC,
                                 track.quality_score DESC NULLS LAST,
                                 track.play_count_sc DESC NULLS LAST,
@@ -12,14 +14,14 @@ WITH members AS (SELECT track.id,
                  WHERE track.primary_artist_id = $1
                    AND track.recording_key = $2
                    AND track.superseded_by IS NULL),
-     winner AS (SELECT id, duration_ms FROM members WHERE rank = 1),
+     winner AS (SELECT id, duration_ms FROM members WHERE rank = 1 AND serving),
      losers AS (SELECT members.id
                 FROM members,
                      winner
                 WHERE members.id <> winner.id
-                  AND (members.duration_ms IS NULL
-                    OR winner.duration_ms IS NULL
-                    OR abs(members.duration_ms - winner.duration_ms) <= 5000)),
+                  AND members.duration_ms IS NOT NULL
+                  AND winner.duration_ms IS NOT NULL
+                  AND abs(members.duration_ms - winner.duration_ms) <= 5000),
      grouped AS (
          UPDATE tracks
              SET canonical_track_id = coalesce(

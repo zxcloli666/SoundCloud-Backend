@@ -9,7 +9,7 @@ from worker.bus.consumers import served_lanes
 from worker.contract import Contract
 
 PROFILES = sorted(path.stem for path in (CONFIG_DIR / "profiles").glob("*.toml"))
-TASTE_PROFILES = {"gpu-24", "gpu-24-lane", "gpu-48"}
+TASTE_PROFILES = {"gpu-24", "gpu-24-lane", "gpu-48", "cpu"}
 
 
 def load(profile: str, **overrides: str) -> s.Settings:
@@ -17,7 +17,7 @@ def load(profile: str, **overrides: str) -> s.Settings:
 
 
 @pytest.mark.parametrize("profile", PROFILES)
-def test_taste_runs_only_on_the_trusted_gpu_hosts(profile: str) -> None:
+def test_taste_runs_only_on_the_trusted_hosts(profile: str) -> None:
     settings = load(profile)
 
     assert ("taste" in settings.lanes.enabled) is (profile in TASTE_PROFILES)

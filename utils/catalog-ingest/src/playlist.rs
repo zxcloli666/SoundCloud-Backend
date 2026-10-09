@@ -66,7 +66,7 @@ pub async fn upsert_playlist_in(
     Ok(row.map(|r| r.was_new).unwrap_or(false))
 }
 
-struct ScPlaylistFields {
+pub(crate) struct ScPlaylistFields {
     urn: String,
     sc_playlist_id: String,
     title: String,
@@ -94,12 +94,44 @@ struct ScPlaylistFields {
 }
 
 impl ScPlaylistFields {
-    fn from_sc(payload: &Value) -> Option<Self> {
-        let urn = payload.get("urn").and_then(|v| v.as_str())?.to_string();
-        if urn.is_empty() {
-            return None;
-        }
-        let sc_playlist_id = crate::sc_ids::extract_sc_id(&urn).to_string();
+    pub(crate) fn urn(&self) -> &str {
+        &self.urn
+    }
+
+    pub(crate) fn row(&self, payload: &Value) -> Value {
+        serde_json::json!({
+            "urn": self.urn,
+            "sc_playlist_id": self.sc_playlist_id,
+            "title": self.title,
+            "title_normalized": self.title_normalized,
+            "description": self.description,
+            "genre": self.genre,
+            "tags": self.tags,
+            "artwork_url": self.artwork_url,
+            "permalink_url": self.permalink_url,
+            "owner_sc_user_id": self.owner_sc_user_id,
+            "owner_urn": self.owner_urn,
+            "owner_username": self.owner_username,
+            "track_count": self.track_count,
+            "duration_ms": self.duration_ms,
+            "playlist_type": self.playlist_type,
+            "kind": self.kind,
+            "sharing": self.sharing,
+            "release_year": self.release_year,
+            "release_date": self.release_date,
+            "label_name": self.label_name,
+            "likes_count_sc": self.likes_count_sc,
+            "reposts_count_sc": self.reposts_count_sc,
+            "sc_created_at": self.sc_created_at,
+            "sc_last_modified": self.sc_last_modified,
+            "sc_metadata": crate::playlist_metadata::metadata_from_sc(payload),
+        })
+    }
+
+    pub(crate) fn from_sc(payload: &Value) -> Option<Self> {
+        let entity = crate::sc_ids::payload_ref(crate::EntityKind::Playlist, payload)?;
+        let urn = entity.urn();
+        let sc_playlist_id = entity.sc_id();
         let title = payload
             .get("title")
             .and_then(|v| v.as_str())
@@ -126,19 +158,9 @@ impl ScPlaylistFields {
         let permalink_url = string_field(payload, "permalink_url");
 
         let owner = payload.get("user");
-        let owner_urn = owner
-            .and_then(|u| u.get("urn"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let owner_sc_user_id = owner_urn
-            .as_deref()
-            .map(|u| crate::sc_ids::extract_sc_id(u).to_string())
-            .or_else(|| {
-                owner
-                    .and_then(|u| u.get("id"))
-                    .and_then(|v| v.as_i64())
-                    .map(|i| i.to_string())
-            });
+        let owner_ref = owner.and_then(crate::sc_ids::user_ref);
+        let owner_urn = owner_ref.map(crate::EntityRef::urn);
+        let owner_sc_user_id = owner_ref.map(crate::EntityRef::sc_id);
         let owner_username = owner
             .and_then(|u| u.get("username"))
             .and_then(|v| v.as_str())

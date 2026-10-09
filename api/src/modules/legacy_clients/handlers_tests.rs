@@ -46,6 +46,8 @@ fn admission() -> anyhow::Result<Arc<PublicAdmission>> {
             login: limit,
             link_create: limit,
             resolve: limit,
+            sc_search: limit,
+            catalog_miss: limit,
         },
     ))
 }

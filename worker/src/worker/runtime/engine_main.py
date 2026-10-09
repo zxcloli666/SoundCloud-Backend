@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import importlib
+import math
 import os
 import signal
 import sys
@@ -11,18 +12,24 @@ from dataclasses import dataclass, replace
 from multiprocessing.connection import Connection
 
 from worker.observability.logging import JsonLog, error_text
-from worker.runtime import allocator, devices, shm
+from worker.runtime import allocator, devices, memory, shm
 from worker.runtime.protocol import (
+    CALL_GUARD,
+    EXPIRY_MARGIN_S,
+    PREEMPT_SIGNAL,
     BadInput,
     Call,
+    CallExpired,
     Command,
     CommandKind,
     ErrorKind,
     ModelSlot,
     Pong,
+    Preempted,
     Reply,
     SlotSpec,
     SlotState,
+    Started,
 )
 
 EXIT_LOAD_FAILED = 3
@@ -36,6 +43,7 @@ class Options:
     owner: int
     onednn: bool
     threads: int
+    nice: int
     release_after_call: bool
     oom_score_adj: int
 
@@ -52,6 +60,8 @@ def main(argv: list[str]) -> int:
         log.error("engine_orphaned_at_start", owner=options.owner, parent=parent)
         return EXIT_ORPHANED
     set_oom_score_adj(options.oom_score_adj, log)
+    set_nice(options.nice, log)
+    signal.signal(PREEMPT_SIGNAL, request_preemption)
     set_parent_death_signal(log)
     conn = Connection(options.fd)
     specs = conn.recv()
@@ -65,6 +75,7 @@ def parse(argv: list[str]) -> Options:
     parser.add_argument("--owner", type=int, required=True)
     parser.add_argument("--onednn", choices=("on", "off"), default="on")
     parser.add_argument("--threads", type=int, default=0)
+    parser.add_argument("--nice", type=int, default=0)
     parser.add_argument("--release-after-call", choices=("on", "off"), default="on")
     parser.add_argument("--oom-score-adj", type=int, default=900)
     parsed = parser.parse_args(argv)
@@ -73,6 +84,7 @@ def parse(argv: list[str]) -> Options:
         owner=parsed.owner,
         onednn=parsed.onednn == "on",
         threads=parsed.threads,
+        nice=parsed.nice,
         release_after_call=parsed.release_after_call == "on",
         oom_score_adj=parsed.oom_score_adj,
     )
@@ -84,6 +96,19 @@ def set_oom_score_adj(value: int, log: JsonLog) -> None:
             handle.write(str(value))
     except OSError as error:
         log.warning("engine_oom_score_adj_failed", value=value, error=str(error))
+
+
+def request_preemption(signum: int, frame: object) -> None:
+    CALL_GUARD.requested = True
+
+
+def set_nice(value: int, log: JsonLog) -> None:
+    if value <= 0:
+        return
+    try:
+        os.nice(value)
+    except OSError as error:
+        log.warning("engine_nice_failed", value=value, error=str(error))
 
 
 def set_parent_death_signal(log: JsonLog) -> None:
@@ -121,6 +146,7 @@ class Engine:
         self._options = options
         self._log = log
         self._torch_configured = False
+        self._threads = options.threads
 
     def serve(self, conn: Connection) -> int:
         while True:
@@ -138,7 +164,7 @@ class Engine:
                         return 0
                     conn.send(self._handle(message))
                 elif isinstance(message, Call):
-                    conn.send(self._execute(message))
+                    conn.send(self._execute(message, conn))
                 else:
                     self._log.error("engine_unknown_message", kind=type(message).__name__)
             except LoadFailed as failed:
@@ -175,7 +201,7 @@ class Engine:
             self._log.exception("slot_load_failed", error, slot=name, loader=spec.loader)
             raise LoadFailed(f"{name}: {error_text(error)}") from error
         slot.model = model
-        self._release()
+        self._release(collect=True)
         self._log.info(
             "slot_loaded",
             slot=name,
@@ -183,6 +209,7 @@ class Engine:
             revision=spec.revision[:8],
             device=spec.device,
             seconds=round(time.perf_counter() - started, 2),
+            rss_mib=self._rss_mib(),
         )
         return slot
 
@@ -195,8 +222,8 @@ class Engine:
         except Exception as error:
             self._log.exception("slot_unload_failed", error, slot=name)
         slot.model = None
-        self._release()
-        self._log.info("slot_unloaded", slot=name)
+        self._release(collect=True)
+        self._log.info("slot_unloaded", slot=name, rss_mib=self._rss_mib())
 
     def _unload_all(self) -> None:
         for name in self._slots:
@@ -213,11 +240,26 @@ class Engine:
             return spec
         return replace(spec, device=devices.resolve(spec.device))
 
-    def _release(self) -> None:
+    def _release(self, *, collect: bool = False) -> None:
         if self._torch_configured:
             allocator.release()
+        if not memory.trim(collect=collect):
+            self._log.warning("engine_malloc_trim_unavailable")
 
-    def _execute(self, call: Call) -> Reply:
+    def _rss_mib(self) -> int:
+        try:
+            return memory.rss_mib()
+        except OSError as error:
+            self._log.warning("engine_rss_unreadable", error=str(error))
+            return 0
+
+    def _apply_threads(self, threads: int) -> None:
+        if threads < 1 or threads == self._threads or not self._torch_configured:
+            return
+        devices.set_threads(threads)
+        self._threads = threads
+
+    def _execute(self, call: Call, conn: Connection) -> Reply:
         started = time.perf_counter()
         slot = self._slots.get(call.slot)
         if slot is None:
@@ -226,7 +268,13 @@ class Engine:
             )
         model = self._load(call.slot).model
         assert model is not None
+        self._apply_threads(call.threads)
         oom = False
+        CALL_GUARD.requested = False
+        CALL_GUARD.armed = call.preemptible
+        CALL_GUARD.expires_at = call.deadline_at - EXPIRY_MARGIN_S
+        if call.preemptible:
+            conn.send(Started(call.id))
         try:
             arrays = shm.read_all(call.arrays)
             out_arrays, result = model.invoke(call.method, arrays, dict(call.args))
@@ -235,6 +283,16 @@ class Engine:
             reply = Reply(call.id, arrays=refs, result=dict(result))
         except BadInput as error:
             reply = Reply(call.id, error_kind=ErrorKind.BAD_INPUT, error=error_text(error))
+        except CallExpired as error:
+            self._log.info("slot_call_expired", slot=call.slot, method=call.method)
+            reply = Reply(
+                call.id,
+                result=error.details,
+                error_kind=ErrorKind.EXPIRED,
+                error=error_text(error),
+            )
+        except Preempted as error:
+            reply = Reply(call.id, error_kind=ErrorKind.PREEMPTED, error=error_text(error))
         except Exception as error:
             oom = allocator.is_out_of_memory(error)
             kind = ErrorKind.OOM if oom else ErrorKind.MODEL_ERROR
@@ -243,6 +301,8 @@ class Engine:
             )
             reply = Reply(call.id, error_kind=kind, error=error_text(error))
         finally:
+            CALL_GUARD.armed = False
+            CALL_GUARD.expires_at = math.inf
             slot.calls += 1
             if oom or self._options.release_after_call:
                 self._release()

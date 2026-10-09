@@ -13,6 +13,8 @@ use super::restricted::Transcoding;
 
 const FAILURE_THRESHOLD: u32 = 3;
 
+pub(crate) const PREVIEWS_ONLY: &str = "cookies: previews only";
+
 pub struct CookieStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
@@ -74,7 +76,11 @@ impl CookiesClient {
     ) -> Result<Option<CookieStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
-        let track = self.anon.get_track_by_id(track_id).await?;
+        let track = self
+            .anon
+            .get_track_by_id(track_id)
+            .await
+            .map_err(|err| format!("anon track lookup failed ({err})"))?;
         let permalink = match track.permalink_url {
             Some(ref p) => p.clone(),
             None => {
@@ -99,14 +105,11 @@ impl CookiesClient {
 
         let track_auth = sound.track_authorization.unwrap_or_default();
 
-        let full: Vec<&Transcoding> = transcodings
-            .iter()
-            .filter(|t| !t.snipped.unwrap_or(false) && !t.url.contains("/preview"))
-            .collect();
+        let full: Vec<&Transcoding> = transcodings.iter().filter(|t| is_full(t)).collect();
 
         if full.is_empty() {
             debug!("[cookies] no full transcodings for {track_id}");
-            return Ok(None);
+            return Err(PREVIEWS_ONLY.into());
         }
 
         let is_encrypted = |t: &&Transcoding| {
@@ -242,6 +245,9 @@ impl CookiesClient {
             Some(t) if !t.is_empty() => t,
             _ => return Ok(None),
         };
+        if !tcs.iter().any(is_full) {
+            return Err(PREVIEWS_ONLY.into());
+        }
         super::restricted::resolve(
             &self.client,
             &self.proxy_url,
@@ -367,6 +373,10 @@ impl CookiesClient {
             info!("[cookies] recovered after {prev} failures");
         }
     }
+}
+
+fn is_full(t: &Transcoding) -> bool {
+    !t.snipped.unwrap_or(false) && !t.url.contains("/preview")
 }
 
 fn extract_balanced_json(s: &str) -> Option<&str> {

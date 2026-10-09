@@ -12,6 +12,27 @@ pub struct PlaylistSnapshot {
     pub observed_at: DateTime<Utc>,
 }
 
+impl PlaylistSnapshot {
+    pub fn is_partial(&self) -> bool {
+        usize::try_from(self.track_count).is_ok_and(|declared| self.track_ids.len() < declared)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Authority {
+    Owner,
+    Public,
+}
+
+impl Authority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Public => "public",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HydratedTrack {
     pub sc_track_id: String,

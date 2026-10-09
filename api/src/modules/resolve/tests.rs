@@ -51,6 +51,248 @@ fn resolve_input_normalizes_public_links_without_reusing_secret_capabilities() -
     Ok(())
 }
 
+#[test]
+fn resolve_input_strips_every_param_but_the_secret_token() -> anyhow::Result<()> {
+    let public = ResolveInput::parse(
+        "https://soundcloud.com/artist/song?in=artist/sets/mix&t=1:23&ref=clipboard&si=abc",
+    )?;
+    assert!(!public.requires_upstream);
+    assert_eq!(public.upstream, "https://soundcloud.com/artist/song");
+    assert!(
+        public
+            .permalinks
+            .contains(&"https://soundcloud.com/artist/song".into())
+    );
+    let secret = ResolveInput::parse(
+        "https://soundcloud.com/artist/song?in=a/sets/b&secret_token=s-tok&t=5",
+    )?;
+    assert!(secret.requires_upstream);
+    assert!(secret.permalinks.is_empty());
+    assert_eq!(
+        secret.upstream,
+        "https://soundcloud.com/artist/song?secret_token=s-tok"
+    );
+    let short = ResolveInput::parse("https://on.soundcloud.com/AbCd?si=abc&utm_medium=text")?;
+    assert!(!short.requires_upstream);
+    assert_eq!(short.upstream, "https://on.soundcloud.com/AbCd");
+    Ok(())
+}
+
+#[test]
+fn resolve_input_tells_secret_paths_from_playlists_named_like_tokens() -> anyhow::Result<()> {
+    for (url, upstream) in [
+        (
+            "https://soundcloud.com/artist/song/s-SeCrEt/",
+            "https://soundcloud.com/artist/song/s-SeCrEt",
+        ),
+        (
+            "https://m.soundcloud.com/Artist/Song/s-SeCrEt?si=abc",
+            "https://soundcloud.com/artist/song/s-SeCrEt",
+        ),
+        (
+            "https://soundcloud.com/artist/Sets/Mix/s-SeCrEt/",
+            "https://soundcloud.com/artist/sets/mix/s-SeCrEt",
+        ),
+    ] {
+        let secret = ResolveInput::parse(url)?;
+        assert!(secret.requires_upstream, "{url}");
+        assert!(secret.permalinks.is_empty(), "{url}");
+        assert_eq!(secret.upstream, upstream);
+    }
+    for url in [
+        "https://soundcloud.com/artist/sets/s-mix",
+        "https://soundcloud.com/artist/sets/s-mix/",
+    ] {
+        let playlist = ResolveInput::parse(url)?;
+        assert!(!playlist.requires_upstream, "{url}");
+        assert_eq!(
+            playlist.upstream,
+            "https://soundcloud.com/artist/sets/s-mix"
+        );
+        assert!(
+            playlist
+                .permalinks
+                .contains(&"https://soundcloud.com/artist/sets/s-mix".into())
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn resolve_input_asks_soundcloud_with_the_canonical_link() -> anyhow::Result<()> {
+    for url in [
+        "https://m.soundcloud.com/OfficialMetallica/Nothing-Else-Matters-Live-12/",
+        "http://www.SoundCloud.com/officialmetallica/nothing-else-matters-live-12?t=10",
+        "https://soundcloud.com/officialmetallica/nothing-else-matters-live-12#t=1:00",
+    ] {
+        let input = ResolveInput::parse(url)?;
+        assert_eq!(
+            input.upstream, "https://soundcloud.com/officialmetallica/nothing-else-matters-live-12",
+            "{url}"
+        );
+    }
+    let token = ResolveInput::parse("https://SoundCloud.com/Artist/Song?secret_token=s-AbC")?;
+    assert_eq!(
+        token.upstream,
+        "https://soundcloud.com/artist/song?secret_token=s-AbC"
+    );
+    assert!(ResolveInput::parse("http://on.soundcloud.com/AbCd")?.short_link);
+    assert_eq!(
+        ResolveInput::parse("http://on.soundcloud.com/AbCd?si=1")?.upstream,
+        "https://on.soundcloud.com/AbCd"
+    );
+    assert!(ResolveInput::parse("https://snd.sc/abc").is_err());
+    let expanded = ResolveInput::expanded(
+        "https://soundcloud.com/lagolago/kuskus-at-lago-lago-2022?si=abc&utm_source=tumblr",
+    )?;
+    assert_eq!(
+        expanded.upstream,
+        "https://soundcloud.com/lagolago/kuskus-at-lago-lago-2022"
+    );
+    assert!(!expanded.short_link && !expanded.requires_upstream);
+    for location in [
+        "https://on.soundcloud.com/AbCd",
+        "https://evil.example/lagolago/kuskus",
+        "soundcloud:tracks:1",
+        "/relative",
+    ] {
+        assert!(ResolveInput::expanded(location).is_err(), "{location}");
+    }
+    Ok(())
+}
+
+#[test]
+fn resolve_input_accepts_a_link_pasted_without_a_scheme() -> anyhow::Result<()> {
+    for raw in [
+        "soundcloud.com/Artist/Song",
+        "www.soundcloud.com/artist/song?si=abc",
+        "M.SoundCloud.com/artist/song/",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(
+            input.upstream, "https://soundcloud.com/artist/song",
+            "{raw}"
+        );
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist/song".into())
+        );
+    }
+    let short = ResolveInput::parse("on.soundcloud.com/AbCd")?;
+    assert!(short.short_link);
+    assert_eq!(short.upstream, "https://on.soundcloud.com/AbCd");
+    for raw in [
+        "example.com/soundcloud.com/a/b",
+        "notsoundcloud.com/a/b",
+        "soundcloud.com",
+    ] {
+        assert!(ResolveInput::parse(raw).is_err(), "{raw}");
+    }
+    Ok(())
+}
+
+#[test]
+fn resolve_input_refuses_soundcloud_pages_that_are_not_entities() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/discover",
+        "https://soundcloud.com/Discover/sets/charts-top:all-music",
+        "https://soundcloud.com/search?q=x",
+        "https://soundcloud.com/you/likes",
+        "soundcloud.com/stream",
+        "https://m.soundcloud.com/charts/top",
+        "https://soundcloud.com/terms-of-use",
+        "https://soundcloud.com/",
+    ] {
+        let refused = ResolveInput::parse(raw)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("{raw} must be refused"))?;
+        assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND, "{raw}");
+    }
+    assert!(ResolveInput::parse("https://soundcloud.com/discovery-artist/song").is_ok());
+    Ok(())
+}
+
+#[test]
+fn resolve_input_reads_a_profile_subpage_as_the_profile() -> anyhow::Result<()> {
+    for raw in [
+        "https://soundcloud.com/artist/tracks",
+        "https://soundcloud.com/Artist/Popular-Tracks/",
+        "https://m.soundcloud.com/artist/likes?si=abc",
+        "soundcloud.com/artist/reposts",
+        "https://soundcloud.com/artist/albums",
+        "https://soundcloud.com/artist/sets",
+        "https://soundcloud.com/artist/followers",
+        "https://soundcloud.com/artist/following",
+        "https://soundcloud.com/artist/comments",
+    ] {
+        let input = ResolveInput::parse(raw)?;
+        assert_eq!(input.upstream, "https://soundcloud.com/artist", "{raw}");
+        assert!(
+            input
+                .permalinks
+                .contains(&"https://soundcloud.com/artist".into()),
+            "{raw}"
+        );
+    }
+    for (raw, upstream) in [
+        (
+            "https://soundcloud.com/artist/sets/tracks",
+            "https://soundcloud.com/artist/sets/tracks",
+        ),
+        (
+            "https://soundcloud.com/artist/sets/mix",
+            "https://soundcloud.com/artist/sets/mix",
+        ),
+        (
+            "https://soundcloud.com/artist/tracks/s-secret",
+            "https://soundcloud.com/artist/tracks/s-secret",
+        ),
+    ] {
+        assert_eq!(ResolveInput::parse(raw)?.upstream, upstream, "{raw}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO users (sc_user_id, urn, username, username_normalized, permalink_url)
+        VALUES ('17', 'soundcloud:users:17', 'Owner', 'owner', 'https://soundcloud.com/DJ-Artist')",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id, permalink_url)
+        VALUES ('42', 'soundcloud:tracks:42', 'Song', 'song', 120000, '17', 'https://soundcloud.com/DJ-Artist/Song-Name')")
+        .execute(&pool).await?;
+    sqlx::query("INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, permalink_url)
+        VALUES ('43', 'soundcloud:playlists:43', 'Mix', 'mix', '17', 'https://soundcloud.com/dj-artist/sets/s-mix/')")
+        .execute(&pool).await?;
+    for (url, urn) in [
+        (
+            "https://soundcloud.com/dj-artist/song-name?in=dj-artist/sets/s-mix&t=42",
+            "soundcloud:tracks:42",
+        ),
+        (
+            "https://M.SoundCloud.com/DJ-ARTIST/SONG-NAME/",
+            "soundcloud:tracks:42",
+        ),
+        (
+            "https://soundcloud.com/DJ-Artist/sets/S-Mix",
+            "soundcloud:playlists:43",
+        ),
+        ("http://www.soundcloud.com/dj-artist", "soundcloud:users:17"),
+    ] {
+        let input = ResolveInput::parse(url)?;
+        assert!(!input.requires_upstream, "{url}");
+        let key = repository::find(&pool, &input)
+            .await?
+            .expect("local permalink");
+        assert_eq!(key.urn(), urn, "{url}");
+    }
+    Ok(())
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn local_resolve_rechecks_visibility_for_an_existing_identity(
     pool: PgPool,

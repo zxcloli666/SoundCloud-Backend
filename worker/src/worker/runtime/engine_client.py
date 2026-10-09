@@ -13,9 +13,10 @@ from multiprocessing.connection import Connection
 
 from worker.observability.counters import Counters
 from worker.observability.logging import JsonLog
-from worker.runtime import shm
+from worker.runtime import memory, shm
 from worker.runtime.clock import Clock
 from worker.runtime.protocol import (
+    PREEMPT_SIGNAL,
     Call,
     Command,
     CommandKind,
@@ -24,6 +25,7 @@ from worker.runtime.protocol import (
     Reply,
     SlotSpec,
     SlotState,
+    Started,
 )
 
 ENGINE_MODULE = "worker.runtime.engine_main"
@@ -33,6 +35,8 @@ CAUSE_PING = "ping"
 CAUSE_RECYCLE = "recycle"
 CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
+COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan"})
+COOPERATIVE_GRACE_S = 15.0
 MESSAGE_IDS = count(1)
 
 
@@ -55,10 +59,13 @@ class EngineCrashed(Exception):
 
 
 class EngineError(Exception):
-    def __init__(self, kind: ErrorKind, message: str) -> None:
+    def __init__(
+        self, kind: ErrorKind, message: str, details: Mapping[str, object] | None = None
+    ) -> None:
         super().__init__(f"{kind}: {message}")
         self.kind = kind
         self.message = message
+        self.details = dict(details or {})
 
 
 class DeadlineExceeded(Exception):
@@ -79,6 +86,7 @@ class Launch:
     python: str = sys.executable
     onednn: bool = True
     threads: int = 0
+    nice: int = 0
     release_after_call: bool = True
     oom_score_adj: int = 900
     env: Mapping[str, str] = field(default_factory=dict)
@@ -96,6 +104,8 @@ class Launch:
             flag(self.onednn),
             "--threads",
             str(self.threads),
+            "--nice",
+            str(self.nice),
             "--release-after-call",
             flag(self.release_after_call),
             "--oom-score-adj",
@@ -141,6 +151,10 @@ class EngineClient:
         self._states = {spec.name: SlotState(spec.name, False, 0, 0, 0) for spec in self.specs}
         self._last_call_at = {spec.name: clock.now() for spec in self.specs}
         self._calls = 0
+        self._preemptible: set[int] = set()
+        self._running = 0
+        self._preempt_wanted = False
+        self.call_threads = 0
 
     @property
     def pid(self) -> int:
@@ -169,6 +183,16 @@ class EngineClient:
     @property
     def slot_states(self) -> Mapping[str, SlotState]:
         return self._states
+
+    def rss_mib(self) -> int:
+        if not self.alive:
+            return 0
+        try:
+            return memory.rss_mib(self.pid)
+        except (OSError, ValueError) as error:
+            self._counters.inc("engine_rss_unreadable_total", engine=self.name)
+            self._log.warning("engine_rss_unreadable", pid=self.pid, error=str(error))
+            return 0
 
     def loaded(self, slot: str) -> bool:
         return self._states[slot].loaded
@@ -222,20 +246,45 @@ class EngineClient:
         self._ensure_running()
         if call.deadline_at <= self._clock.now():
             raise DeadlineExceeded(f"{call.slot} call")
+        if call.preemptible and self._preempt_wanted:
+            return Reply(call.id, error_kind=ErrorKind.PREEMPTED, error="preempted before start")
+        if self.call_threads:
+            call = replace(call, threads=self.call_threads)
         future = self._register(call.id)
         self._call_slots[call.id] = call.slot
+        if call.preemptible:
+            self._preemptible.add(call.id)
         self._last_call_at[call.slot] = self._clock.now()
         try:
             self._send(call)
         except BaseException:
             self._pending.pop(call.id, None)
             self._call_slots.pop(call.id, None)
+            self._preemptible.discard(call.id)
             raise
         self._watchers[call.id] = asyncio.create_task(self._watch(call), name=f"watch:{call.id}")
         message = await future
         if not isinstance(message, Reply):
             raise EngineCrashed(self.name, f"call answered with {type(message).__name__}")
         return message
+
+    def preempt(self) -> bool:
+        if self._preempt_wanted:
+            return False
+        self._preempt_wanted = True
+        self._signal_running()
+        return True
+
+    def clear_preemption(self) -> None:
+        self._preempt_wanted = False
+
+    def _signal_running(self) -> None:
+        if not self._preempt_wanted or self._running not in self._preemptible or not self.alive:
+            return
+        try:
+            os.kill(self.pid, PREEMPT_SIGNAL)
+        except ProcessLookupError:
+            self._log.info("engine_preempt_already_gone", pid=self.pid)
 
     async def kill(self, cause: str) -> None:
         if self._process is None or self._dead:
@@ -304,6 +353,10 @@ class EngineClient:
         if not isinstance(message_id, int):
             self._log.error("engine_bad_message", kind=type(message).__name__)
             return
+        if isinstance(message, Started):
+            self._running = message.id
+            self._signal_running()
+            return
         if isinstance(message, Pong):
             for state in message.slots:
                 self._states[state.slot] = state
@@ -317,13 +370,17 @@ class EngineClient:
             future.set_result(message)
 
     def _record_reply(self, reply: Reply) -> None:
+        self._preemptible.discard(reply.id)
+        if self._running == reply.id:
+            self._running = 0
         slot = self._call_slots.pop(reply.id, "")
         self._calls += 1
         self._counters.inc("slot_calls_total", slot=slot)
         self._counters.observe("slot_call_ms", reply.duration_ms, slot=slot)
 
     async def _watch(self, call: Call) -> None:
-        await self._clock.sleep(max(0.0, call.deadline_at - self._clock.now()))
+        grace = COOPERATIVE_GRACE_S if call.slot in COOPERATIVE_SLOTS else 0.0
+        await self._clock.sleep(max(0.0, call.deadline_at + grace - self._clock.now()))
         if call.id in self._pending:
             self._log.warning(
                 "engine_call_deadline", call=call.id, slot=call.slot, method=call.method
@@ -376,6 +433,8 @@ class EngineClient:
                 future.set_exception(error)
         self._pending.clear()
         self._call_slots.clear()
+        self._preemptible.clear()
+        self._running = 0
         for watcher in self._watchers.values():
             watcher.cancel()
         self._watchers.clear()

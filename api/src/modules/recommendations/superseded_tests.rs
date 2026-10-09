@@ -7,6 +7,7 @@ const READS_HISTORY_NOT_CANDIDATES: &[&str] = &[
     "s3_verifier/select_verify_rows.sql",
     "service/enrichment/track_meta_by_ids.sql",
     "service/enrichment/filter_track_ids_by_language.sql",
+    "smart_wave/blocked/load_blocked_uploads.sql",
     "smart_wave/graph/load_disliked_artists.sql",
     "smart_wave/graph/load_track_seeds.sql",
     "smart_wave/graph/load_track_seeds_via_album.sql",

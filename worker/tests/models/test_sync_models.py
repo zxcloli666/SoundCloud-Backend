@@ -92,7 +92,7 @@ def test_roformer_separates_a_short_mix_within_budget(
     assert vocals.shape == mix.shape and vocals.dtype == np.float32
     assert np.all(np.isfinite(vocals))
     assert float(np.abs(vocals).mean()) < float(np.abs(mix).mean())
-    assert result == {}
+    assert set(result) == {"seconds"} and float(result["seconds"]) > 0
     with pytest.raises(BadInput):
         separator.invoke("separate", {"mix": mix[0]}, {})
     peak = torch.cuda.max_memory_reserved() / 2**20

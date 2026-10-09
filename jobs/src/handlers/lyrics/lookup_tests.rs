@@ -32,6 +32,7 @@ async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
             storage_state varchar(16) NOT NULL DEFAULT 'pending',
             index_state varchar(16) NOT NULL DEFAULT 'pending',
             needs_duration_resolve boolean NOT NULL DEFAULT false,
+            pipeline_held boolean NOT NULL DEFAULT false,
             transcribe_state varchar(16),
             created_at timestamptz NOT NULL DEFAULT now(),
             updated_at timestamptz NOT NULL DEFAULT now()
@@ -65,6 +66,11 @@ async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0057_background_jobs.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
     ))
     .execute(pool)
     .await?;

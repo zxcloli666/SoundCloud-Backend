@@ -47,4 +47,9 @@ SELECT commands.id,
        now()
 FROM commands
 JOIN accepted USING (id)
-ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING
+ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL
+DO UPDATE SET
+    lane = EXCLUDED.lane,
+    updated_at = now()
+WHERE background_jobs.lane <> EXCLUDED.lane
+  AND background_jobs.lease_id IS NULL

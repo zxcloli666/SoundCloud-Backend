@@ -1,10 +1,10 @@
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use backend_contracts::JobLane;
 use backend_contracts::pipeline::WORKER_STREAMS;
 use backend_contracts::reasons::WorkerStatus;
 use backend_contracts::worker_contract::{WORKER_LANES, WorkerLane};
+use backend_contracts::{JobKind, JobLane};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
@@ -13,6 +13,9 @@ const JOB_TOTAL: &str = "jobs_executions_total";
 const QUEUE_DEPTH: &str = "jobs_queue_depth";
 const QUEUE_OLDEST_DUE: &str = "jobs_queue_oldest_due_seconds";
 const QUEUE_DEAD_LETTERS: &str = "jobs_queue_dead_letters";
+const QUEUE_KIND_DEPTH: &str = "jobs_queue_kind_depth";
+const QUEUE_KIND_OLDEST_DUE: &str = "jobs_queue_kind_oldest_due_seconds";
+const QUEUE_KIND_OLDEST_AGE: &str = "jobs_queue_kind_oldest_age_seconds";
 const POOL_CONNECTIONS: &str = "jobs_pg_pool_connections";
 const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
@@ -35,6 +38,8 @@ const WORKER_CONSUMER_RECREATED: &str = "jobs_worker_consumer_recreated_total";
 const WORKER_STREAM_FILL: &str = "jobs_worker_stream_fill_ratio";
 const WORKER_LOST: &str = "jobs_worker_lost_total";
 const WORKER_INVALID: &str = "jobs_worker_invalid_total";
+const WORKER_RESULT_TIMEOUTS: &str = "jobs_worker_result_timeouts_total";
+const WORKER_RESULT_TIMEOUTS_REPEATED: &str = "jobs_worker_result_timeouts_repeated_total";
 
 pub const WORKER_LANE_STATES: [&str; 6] = [
     "serving",
@@ -53,6 +58,8 @@ const POOL_WAIT_BUCKETS: &[f64] = &[
 const DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 600.0];
 
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+const KIND_SNAPSHOT_TTL: Duration = Duration::from_secs(45);
 
 pub fn init() {
     if HANDLE.get().is_some() {
@@ -93,6 +100,8 @@ fn register_series_that_start_at_zero() {
         metrics::gauge!(WORKER_CONSUMER_WAITING, "durable" => spec.durable).set(0.0);
         metrics::counter!(WORKER_CONSUMER_RECREATED, "lane" => lane).increment(0);
         metrics::counter!(WORKER_INVALID, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane).increment(0);
+        metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane).increment(0);
         for status in WorkerStatus::ALL {
             metrics::counter!(WORKER_LANE_DONE, "lane" => lane, "status" => status.as_str())
                 .increment(0);
@@ -120,6 +129,7 @@ pub fn record_execution(kind: &'static str, outcome: Outcome, elapsed: Duration)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
+    Postponed,
     Retryable,
     Terminal,
     Timeout,
@@ -129,6 +139,7 @@ impl Outcome {
     fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
+            Self::Postponed => "postponed",
             Self::Retryable => "retryable",
             Self::Terminal => "terminal",
             Self::Timeout => "timeout",
@@ -193,6 +204,11 @@ impl WorkerLostOutcome {
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {
     metrics::counter!(WORKER_LOST, "lane" => lane.as_str(), "outcome" => outcome.as_str())
         .increment(1);
+}
+
+pub fn record_worker_result_timeouts(lane: WorkerLane, timed_out: u64, repeated: u64) {
+    metrics::counter!(WORKER_RESULT_TIMEOUTS, "lane" => lane.as_str()).increment(timed_out);
+    metrics::counter!(WORKER_RESULT_TIMEOUTS_REPEATED, "lane" => lane.as_str()).increment(repeated);
 }
 
 pub fn record_worker_consumer_recreated(lane: WorkerLane) {
@@ -318,12 +334,20 @@ fn label(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
-pub async fn sample_pool_wait(pool: &PgPool) {
+#[derive(Clone)]
+pub struct MeteredPool {
+    pub name: &'static str,
+    pub pool: PgPool,
+}
+
+pub async fn sample_pool_wait(metered: &MeteredPool) {
+    let MeteredPool { name, pool } = metered;
     let size = f64::from(pool.size());
     let idle = pool.num_idle() as f64;
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "open").set(size);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "idle").set(idle);
-    metrics::gauge!(POOL_CONNECTIONS, "state" => "busy").set((size - idle).max(0.0));
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "open").set(size);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "idle").set(idle);
+    metrics::gauge!(POOL_CONNECTIONS, "pool" => *name, "state" => "busy")
+        .set((size - idle).max(0.0));
 
     let started = std::time::Instant::now();
     let outcome: &'static str = match tokio::time::timeout(POOL_PROBE_TIMEOUT, pool.acquire()).await
@@ -336,14 +360,14 @@ pub async fn sample_pool_wait(pool: &PgPool) {
         Err(_) => "timeout",
     };
     let waited = started.elapsed().as_secs_f64();
-    metrics::histogram!(POOL_WAIT, "outcome" => outcome).record(waited);
-    metrics::gauge!(POOL_WAIT_LAST).set(waited);
+    metrics::histogram!(POOL_WAIT, "pool" => *name, "outcome" => outcome).record(waited);
+    metrics::gauge!(POOL_WAIT_LAST, "pool" => *name).set(waited);
 }
 
-pub async fn render(pool: &PgPool) -> Option<String> {
+pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     let handle = HANDLE.get()?;
-    sample_pool_wait(pool).await;
-    let lanes: Vec<String> = [JobLane::CoreFast, JobLane::CoreBulk, JobLane::Ops]
+    futures::future::join_all(metered.iter().map(sample_pool_wait)).await;
+    let lanes: Vec<String> = JobLane::ALL
         .iter()
         .map(|lane| lane.as_str().to_owned())
         .collect();
@@ -371,7 +395,49 @@ pub async fn render(pool: &PgPool) -> Option<String> {
         }
         Err(error) => tracing::warn!(%error, "queue metrics snapshot failed"),
     }
+    record_kind_depths(pool).await;
     Some(handle.render())
+}
+
+async fn record_kind_depths(pool: &PgPool) {
+    let mut snapshot_at = KIND_SNAPSHOT_AT.lock().await;
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < KIND_SNAPSHOT_TTL) {
+        return;
+    }
+    let rows = match sqlx::query_file!("queries/queue/metrics_kinds.sql")
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "queue kind metrics snapshot failed");
+            return;
+        }
+    };
+    *snapshot_at = Some(Instant::now());
+    for kind in JobKind::ALL {
+        let row = rows.iter().find(|row| row.kind == kind.as_str());
+        let lane = kind.lane().as_str();
+        let name = kind.as_str();
+        let (pending, due, leased, oldest_due, oldest_age) =
+            row.map_or((0, 0, 0, 0.0, 0.0), |row| {
+                (
+                    row.pending,
+                    row.due,
+                    row.leased,
+                    row.oldest_due_seconds,
+                    row.oldest_age_seconds,
+                )
+            });
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "pending")
+            .set(pending as f64);
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "due")
+            .set(due as f64);
+        metrics::gauge!(QUEUE_KIND_DEPTH, "lane" => lane, "kind" => name, "state" => "leased")
+            .set(leased as f64);
+        metrics::gauge!(QUEUE_KIND_OLDEST_DUE, "lane" => lane, "kind" => name).set(oldest_due);
+        metrics::gauge!(QUEUE_KIND_OLDEST_AGE, "lane" => lane, "kind" => name).set(oldest_age);
+    }
 }
 
 #[cfg(test)]

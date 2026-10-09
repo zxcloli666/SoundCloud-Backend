@@ -13,11 +13,13 @@ use super::mirror::{self, WantedMirror};
 const COUNTS_CACHE_TTL_SECONDS: u64 = 5;
 const REDIS_TIMEOUT: Duration = Duration::from_millis(150);
 
-#[derive(Debug, serde::Serialize, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncCounts {
     pub pending_count: i64,
     pub failed_count: i64,
+    pub delayed_count: i64,
+    pub retry_in_sec: Option<i64>,
 }
 
 pub struct SyncQueueService {
@@ -32,24 +34,23 @@ impl SyncQueueService {
 
     pub async fn status_for_user(&self, sc_user_id: &str) -> AppResult<SyncCounts> {
         let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
-        let key = format!("sync_queue:counts:{sc_user_id}");
+        let key = format!("sync_queue:status:{sc_user_id}");
         if let Some(counts) = self.cached_counts(&key).await {
-            return Ok(SyncCounts {
-                pending_count: counts.0,
-                failed_count: counts.1,
-            });
+            return Ok(counts);
         }
 
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
         let row = sqlx::query_file!("queries/sync_queue/service/pending_counts.sql", &variants)
             .fetch_one(&self.pg)
             .await?;
-        let counts = (row.pending, row.failed);
-        self.cache_counts(&key, counts).await;
-        Ok(SyncCounts {
-            pending_count: counts.0,
-            failed_count: counts.1,
-        })
+        let counts = SyncCounts {
+            pending_count: row.pending,
+            failed_count: row.failed,
+            delayed_count: row.delayed,
+            retry_in_sec: row.retry_in_sec,
+        };
+        self.cache_counts(&key, &counts).await;
+        Ok(counts)
     }
 
     pub async fn enqueue(
@@ -147,19 +148,21 @@ impl SyncQueueService {
         Ok(())
     }
 
-    async fn cached_counts(&self, key: &str) -> Option<(i64, i64)> {
+    async fn cached_counts(&self, key: &str) -> Option<SyncCounts> {
         tokio::time::timeout(REDIS_TIMEOUT, async {
             let mut connection = self.redis.get().await.ok()?;
             let value: String = connection.get(key).await.ok()?;
-            parse_counts(&value)
+            serde_json::from_str(&value).ok()
         })
         .await
         .ok()
         .flatten()
     }
 
-    async fn cache_counts(&self, key: &str, counts: (i64, i64)) {
-        let payload = format!("{}:{}", counts.0, counts.1);
+    async fn cache_counts(&self, key: &str, counts: &SyncCounts) {
+        let Ok(payload) = serde_json::to_string(counts) else {
+            return;
+        };
         let _ = tokio::time::timeout(REDIS_TIMEOUT, async {
             let mut connection = self.redis.get().await?;
             connection
@@ -197,11 +200,6 @@ fn canonical_target(action_type: &str, target: &str) -> String {
     }
 }
 
-fn parse_counts(value: &str) -> Option<(i64, i64)> {
-    let (pending, failed) = value.split_once(':')?;
-    Some((pending.parse().ok()?, failed.parse().ok()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,30 +228,78 @@ mod tests {
         let status = service.status_for_user("soundcloud:users:42").await?;
         assert_eq!(
             serde_json::to_value(&status)?,
-            serde_json::json!({"pendingCount": 1, "failedCount": 1})
+            serde_json::json!({
+                "pendingCount": 1,
+                "failedCount": 1,
+                "delayedCount": 0,
+                "retryInSec": null
+            })
         );
         assert_eq!(service.status_for_user("42").await?, status);
         assert_eq!(
             service.status_for_user("99").await?,
             SyncCounts {
                 pending_count: 1,
-                failed_count: 0
+                failed_count: 0,
+                delayed_count: 0,
+                retry_in_sec: None
             }
         );
         assert_eq!(
             service.status_for_user("100").await?,
             SyncCounts {
                 pending_count: 0,
-                failed_count: 0
+                failed_count: 0,
+                delayed_count: 0,
+                retry_in_sec: None
             }
         );
         Ok(())
     }
 
+    #[sqlx::test(migrations = "./migrations")]
+    async fn postponed_writes_report_when_soundcloud_will_be_retried(
+        pg: PgPool,
+    ) -> anyhow::Result<()> {
+        let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+        let service = SyncQueueService::new(pg.clone(), redis);
+        service.enqueue("7", "like_track", "1", None).await?;
+        service.enqueue("7", "like_track", "2", None).await?;
+        service.enqueue("7", "like_track", "3", None).await?;
+        sqlx::query(
+            "UPDATE sync_queue SET last_error = 'banned', next_run_at = now() + interval '20 minutes'
+             WHERE user_id = '7' AND target_urn LIKE '%:1'",
+        )
+        .execute(&pg)
+        .await?;
+        sqlx::query(
+            "UPDATE sync_queue SET retry_count = 1, last_error = 'boom', next_run_at = now() + interval '90 seconds'
+             WHERE user_id = '7' AND target_urn LIKE '%:2'",
+        )
+        .execute(&pg)
+        .await?;
+
+        let status = service.status_for_user("7").await?;
+
+        assert_eq!(status.pending_count, 2);
+        assert_eq!(status.failed_count, 1);
+        assert_eq!(status.delayed_count, 1);
+        assert!(matches!(status.retry_in_sec, Some(85..=90)));
+        Ok(())
+    }
+
     #[test]
-    fn cached_counts_require_both_numbers() {
-        assert_eq!(parse_counts("12:3"), Some((12, 3)));
-        assert_eq!(parse_counts("12"), None);
+    fn cached_status_round_trips_and_rejects_the_old_format() {
+        let counts = SyncCounts {
+            pending_count: 3,
+            failed_count: 1,
+            delayed_count: 2,
+            retry_in_sec: Some(600),
+        };
+        let cached = serde_json::to_string(&counts).unwrap();
+        assert_eq!(serde_json::from_str::<SyncCounts>(&cached).unwrap(), counts);
+        assert!(serde_json::from_str::<SyncCounts>("12:3").is_err());
     }
 
     #[test]

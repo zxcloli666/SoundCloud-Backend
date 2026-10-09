@@ -236,7 +236,7 @@ async fn http_get_bytes(
                             );
                             last_err = Some("invalid response body".into());
                         }
-                        Err(e) => last_err = Some(Box::new(e.without_url())),
+                        Err(e) => last_err = Some(Box::new(e.without_uri())),
                     }
                 } else if is_retryable_status(status) {
                     debug!(
@@ -248,7 +248,7 @@ async fn http_get_bytes(
                     return Err(format!("status {status}").into());
                 }
             }
-            Err(e) => last_err = Some(Box::new(e.without_url())),
+            Err(e) => last_err = Some(Box::new(e.without_uri())),
         }
         if attempt < MAX_RETRIES {
             tokio::time::sleep(Duration::from_millis(
@@ -458,7 +458,7 @@ async fn http_post_bytes(
                     match resp.bytes().await {
                         Ok(b) if validate(&b, &resp_headers) => return Ok((b, resp_headers)),
                         Ok(_) => last_err = Some("invalid response body".into()),
-                        Err(e) => last_err = Some(Box::new(e.without_url())),
+                        Err(e) => last_err = Some(Box::new(e.without_uri())),
                     }
                 } else if is_retryable_status(status) {
                     last_err = Some(format!("status {status}").into());
@@ -466,7 +466,7 @@ async fn http_post_bytes(
                     return Err(format!("status {status}").into());
                 }
             }
-            Err(e) => last_err = Some(Box::new(e.without_url())),
+            Err(e) => last_err = Some(Box::new(e.without_uri())),
         }
         if attempt < MAX_RETRIES {
             tokio::time::sleep(Duration::from_millis(

@@ -9,6 +9,7 @@ COPY --from=decrypt . /app/utils/decrypt
 COPY --from=decrypt-client . /app/utils/decrypt-client
 COPY --from=stream-ticket . /app/utils/stream-ticket
 COPY --from=sc-fingerprint . /app/utils/sc-fingerprint
+COPY --from=entity-ref . /app/utils/entity-ref
 
 WORKDIR /app/streaming
 

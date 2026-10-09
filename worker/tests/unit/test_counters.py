@@ -35,3 +35,20 @@ def test_quantiles_of_empty_window() -> None:
 
     assert quantiles(deque()) == {"p50": 0.0, "p95": 0.0, "n": 0}
     assert quantiles(deque([7.0])) == {"p50": 7.0, "p95": 7.0, "n": 1}
+
+
+def test_lane_throughput_counts_only_the_recent_window_per_hour() -> None:
+    counters = Counters()
+    for at in (10.0, 20.0, 30.0):
+        counters.mark("lane_done", at, lane="audio")
+    counters.mark("lane_done", -1_000.0, lane="audio")
+    assert counters.per_hour("lane_done", 40.0, 600.0, lane="audio") == 18.0
+    assert counters.per_hour("lane_done", 40.0, 600.0, lane="lyrics") == 0.0
+
+
+def test_latency_of_one_label_set() -> None:
+    counters = Counters()
+    for value in (5.0, 1.0, 9.0):
+        counters.observe("task_ms", value, lane="audio")
+    assert counters.latency("task_ms", lane="audio") == {"p50": 5.0, "p95": 5.0, "n": 3}
+    assert counters.latency("task_ms", lane="lyrics")["n"] == 0

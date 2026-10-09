@@ -2,7 +2,9 @@
 #[path = "reaper_tests.rs"]
 mod tests;
 
-use backend_contracts::worker_contract::{LYRICS_LANE, TRANSCRIBE_LANE, WorkerLaneSpec};
+use backend_contracts::worker_contract::{
+    LYRICS_LANE, TRANSCRIBE_LANE, WorkerLane, WorkerLaneSpec,
+};
 use backend_contracts::{JobKind, StoredAudioDispatchPayload, Versioned};
 use chrono::Utc;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -12,15 +14,14 @@ use crate::config::WorkerDispatchConfig;
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
 use super::embedding_queue;
+use crate::handlers::worker_backlog::unclaimed_room;
 
-const ALIGN_BATCH: i64 = 30;
-const REOPEN_BATCH: i64 = 30;
-const EMBEDDING_BATCH: i64 = 500;
 const QUARANTINE_BATCH: i64 = 50;
 const TRANSCRIPTION_PRIORITY: i16 = 10;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 const MAX_TRANSCRIPTION_REOPENS: i32 = 7;
+const REPEATED_RESULT_TIMEOUTS: i32 = 3;
 
 pub struct LyricsReaper {
     pool: PgPool,
@@ -42,15 +43,18 @@ impl LyricsReaper {
         }
     }
 
-    pub async fn reap_transcriptions(&self) -> JobResult {
+    pub async fn reap_transcriptions(&self, room: i64) -> JobResult {
+        let room =
+            unclaimed_room(&self.pool, JobKind::DispatchTranscription.as_str(), room).await?;
         let result_window = result_window(&TRANSCRIBE_LANE)?;
         let retry_days = i64::try_from(self.dispatch.lyrics_align_rejected_retry_days)
             .map_err(|_| JobError::permanent(anyhow::anyhow!("rejected retry days overflow")))?;
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let stale = sqlx::query_file_scalar!(
+        let timed_out = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_transcriptions.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            REPEATED_RESULT_TIMEOUTS
         )
         .fetch_one(&mut *transaction)
         .await
@@ -73,55 +77,60 @@ impl LyricsReaper {
         .await
         .map_err(JobError::retryable)?;
 
-        let mut reopened = 0usize;
-        let mut enqueued = 0usize;
-        if self.dispatch.transcribe {
-            let reopen = sqlx::query_file_as!(
-                TranscriptionCandidate,
-                "queries/lyrics/reopen_transcriptions.sql",
-                REOPEN_COOLDOWN_SECONDS,
-                MAX_TRANSCRIPTION_REOPENS,
-                retry_days,
-                REOPEN_BATCH
-            )
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-            for candidate in reopen {
-                enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
-                reopened += 1;
-            }
-            let align = sqlx::query_file_as!(
-                TranscriptionCandidate,
-                "queries/lyrics/reap_transcriptions_align.sql",
-                ALIGN_BATCH
-            )
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-            for candidate in align {
-                enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
-                enqueued += 1;
-            }
+        let mut reopened = 0i64;
+        let mut enqueued = 0i64;
+        let reopen = sqlx::query_file_as!(
+            TranscriptionCandidate,
+            "queries/lyrics/reopen_transcriptions.sql",
+            REOPEN_COOLDOWN_SECONDS,
+            MAX_TRANSCRIPTION_REOPENS,
+            retry_days,
+            room
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        for candidate in reopen {
+            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+            reopened += 1;
+        }
+        let align = sqlx::query_file_as!(
+            TranscriptionCandidate,
+            "queries/lyrics/reap_transcriptions_align.sql",
+            room.saturating_sub(reopened)
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        for candidate in align {
+            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+            enqueued += 1;
         }
         transaction.commit().await.map_err(JobError::retryable)?;
         if enqueued > 0 || reopened > 0 {
             tracing::info!(enqueued, reopened, "lyrics transcription jobs enqueued");
         }
-        let quarantined = stale + orphaned + unreopenable;
+        report_result_timeouts(
+            WorkerLane::Transcribe,
+            timed_out.released,
+            &timed_out.repeated,
+        );
+        let quarantined = orphaned + unreopenable;
         if quarantined > 0 {
             tracing::warn!(quarantined, "transcription attempts quarantined");
         }
         Ok(())
     }
 
-    pub async fn reap_embeddings(&self) -> JobResult {
+    pub async fn reap_embeddings(&self, room: i64) -> JobResult {
+        let room = unclaimed_room(&self.pool, JobKind::LyricsEmbed.as_str(), room).await?;
         let result_window = result_window(&LYRICS_LANE)?;
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let stale = sqlx::query_file_scalar!(
+        let stale = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_embeddings.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            REPEATED_RESULT_TIMEOUTS
         )
         .fetch_one(&mut *transaction)
         .await
@@ -142,30 +151,49 @@ impl LyricsReaper {
         .await
         .map_err(JobError::retryable)?;
 
-        let mut enqueued = 0usize;
-        if self.dispatch.embed_lyrics {
-            let candidates =
-                sqlx::query_file_scalar!("queries/lyrics/reap_embeddings.sql", EMBEDDING_BATCH)
-                    .fetch_all(&mut *transaction)
-                    .await
-                    .map_err(JobError::retryable)?;
-            for sc_track_id in candidates {
-                if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id)
-                    .await?
-                {
-                    enqueued += 1;
-                }
+        let mut enqueued = 0i64;
+        let candidates = sqlx::query_file_scalar!("queries/lyrics/reap_embeddings.sql", room)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
+        for sc_track_id in candidates {
+            if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id).await? {
+                enqueued += 1;
             }
         }
         transaction.commit().await.map_err(JobError::retryable)?;
         if enqueued > 0 {
             tracing::info!(enqueued, "lyrics embedding jobs enqueued");
         }
-        let quarantined = stale + orphaned_requests + orphaned_lyrics;
+        report_result_timeouts(WorkerLane::Lyrics, stale.timed_out, &stale.repeated);
+        let quarantined = stale.quarantined - stale.timed_out + orphaned_requests + orphaned_lyrics;
         if quarantined > 0 {
             tracing::warn!(quarantined, "stale lyrics embeddings quarantined");
         }
         Ok(())
+    }
+}
+
+fn report_result_timeouts(lane: WorkerLane, timed_out: i64, repeated: &[String]) {
+    crate::metrics::record_worker_result_timeouts(
+        lane,
+        u64::try_from(timed_out).unwrap_or(0),
+        u64::try_from(repeated.len()).unwrap_or(u64::MAX),
+    );
+    if timed_out > 0 {
+        tracing::warn!(
+            lane = lane.as_str(),
+            timed_out,
+            "worker attempts passed their result window and go back to dispatch"
+        );
+    }
+    if !repeated.is_empty() {
+        tracing::warn!(
+            lane = lane.as_str(),
+            tracks = ?repeated,
+            result_timeouts_at_least = REPEATED_RESULT_TIMEOUTS,
+            "worker attempts keep passing their result window; a task may stop the worker before it answers"
+        );
     }
 }
 

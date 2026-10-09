@@ -47,12 +47,17 @@ from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import Launch
 from worker.runtime.protocol import SlotSpec
 from worker.runtime.supervisor import (
+    CPU_LANE_GROUPS,
+    LANE_GROUPS,
     MODE_SLOT,
     STATE_BROKEN,
     STATE_LOADING,
     EnginePlan,
     RuntimePolicy,
     Supervisor,
+    available_cpus,
+    budget_plans,
+    cpu_budget,
     plan_engines,
 )
 from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError
@@ -93,11 +98,17 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
     "taste": {},
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
+ENCODE_LANE = "encode"
+ENCODE_ENGINE = "encode"
+MULAN = "mulan"
+TEXT_SLOT = "text"
+MULAN_TOWERS = "towers"
 AUDIO_FETCH_LANES = frozenset({"audio", "transcribe"})
 LLM_CALLS_PER_REQUEST = 2
 POOL_SPARE = 8
 EXIT_CRASHED = 1
 GATE_INTERVAL_S = 5.0
+THROUGHPUT_LOG_S = 60.0
 OUTBOX_FLUSH_S = 10.0
 LANE_TASK_PREFIX = "lane:"
 GPU_PROBE_INTERVAL_S = 15.0
@@ -145,22 +156,56 @@ class Blueprint:
     sync_version: str
 
     @classmethod
-    def of(cls, settings: Settings, contract: Contract, environ: Mapping[str, str]) -> Blueprint:
+    def of(
+        cls,
+        settings: Settings,
+        contract: Contract,
+        environ: Mapping[str, str],
+        cpus: int | None = None,
+    ) -> Blueprint:
         lanes = served_lanes(settings, contract)
         check_slow_lanes(settings)
+        runtime = settings.runtime
+        isolated = runtime.isolate_encode and ENCODE_LANE in settings.lanes.enabled
         wanted = settings_module.slots_for_lanes(settings)
-        specs = {name: slot_spec(settings, name) for name in wanted if name != CPU_TOOLS}
+        bulk = (
+            settings_module.slots_for_lanes(
+                settings, tuple(lane for lane in settings.lanes.enabled if lane != ENCODE_LANE)
+            )
+            if isolated
+            else wanted
+        )
+        specs = {
+            name: slot_spec(settings, name, "audio" if isolated else None)
+            for name in bulk
+            if name != CPU_TOOLS
+        }
         replicas = {name: settings.slots[name].replicas for name in specs}
-        plans = list(plan_engines(settings.runtime.mode, specs, replicas))
+        if isolated and TEXT_SLOT in specs:
+            replicas[TEXT_SLOT] -= 1
+            if replicas[TEXT_SLOT] < 1:
+                del specs[TEXT_SLOT], replicas[TEXT_SLOT]
+        groups = CPU_LANE_GROUPS if runtime.device == "cpu" else LANE_GROUPS
+        plans = list(plan_engines(runtime.mode, specs, replicas, groups))
+        if isolated:
+            encode = tuple(
+                slot_spec(settings, name, "text")
+                for name in settings_module.LANE_SLOTS[ENCODE_LANE]
+            )
+            plans.insert(0, EnginePlan(ENCODE_ENGINE, encode, reserved=True))
+            specs.update({spec.name: spec for spec in encode if spec.name not in specs})
         env: dict[str, str] = {}
         if CPU_TOOLS in wanted:
             tools = cpu_tool_specs(settings)
             plans.append(EnginePlan(CPU_TOOLS, tools))
             specs.update({spec.name: spec for spec in tools})
             env[FASTTEXT_HOME_ENV] = required_env(environ, FASTTEXT_HOME_ENV)
-        runtime = settings.runtime
+        cpus = cpus or available_cpus()
         policy = RuntimePolicy(
             onednn=runtime.onednn,
+            threads=runtime.threads,
+            cpu_budget=cpu_budget(cpus),
+            serial_loads=runtime.device == "cpu",
             release_after_call=runtime.release_after_call,
             recycle_after_calls=runtime.recycle_after_calls,
             recycle_gap_mib=runtime.recycle_gap_mib,
@@ -170,7 +215,7 @@ class Blueprint:
         )
         return cls(
             lanes=lanes,
-            plans=tuple(plans),
+            plans=budget_plans(plans, cpus),
             specs=specs,
             launch=Launch(env=env),
             policy=policy,
@@ -205,16 +250,34 @@ class Node:
         )
         self.batchers = {
             name: Batcher(
-                name, spec.max_batch, spec.max_wait_ms, self.supervisor, self.counters, log=json_log
+                name,
+                spec.max_batch,
+                spec.max_wait_ms,
+                self.supervisor.pool(reserved=False),
+                self.counters,
+                log=json_log,
             )
             for name, spec in blueprint.specs.items()
             if name in BATCHED_SLOTS
+        }
+        self.priority_batchers = {
+            spec.name: Batcher(
+                spec.name,
+                spec.max_batch,
+                spec.max_wait_ms,
+                self.supervisor.pool(reserved=True),
+                self.counters,
+                log=json_log,
+            )
+            for spec in split_slots(blueprint.plans)
+            if spec.name in BATCHED_SLOTS
         }
         self.slots = EngineSlots(
             self.supervisor,
             self.batchers,
             {name: spec.max_batch for name, spec in blueprint.specs.items()},
             drop_if_stale,
+            self.priority_batchers,
         )
         self.workspace = Workspace(Path(settings.worker.work_dir), self.counters)
         self.health = HealthFile(health_path)
@@ -432,6 +495,7 @@ class Node:
     def start_background(self) -> None:
         tasks: list[tuple[str, Awaitable[None]]] = [
             ("gate", self.gate()),
+            ("throughput", self.throughput()),
             ("status", self.status.run()),
             ("health", self.health.run(self.health_snapshot, self.health_stop)),
             ("gpu", self.gpu.run()),
@@ -540,10 +604,11 @@ class Node:
         await asyncio.gather(*self.background, return_exceptions=True)
         for served in self.lanes.values():
             await served.runner.cancel()
-        for batcher in self.batchers.values():
+        batchers = [*self.batchers.values(), *self.priority_batchers.values()]
+        for batcher in batchers:
             await batcher.stop_intake()
         await self.supervisor.stop()
-        for batcher in self.batchers.values():
+        for batcher in batchers:
             await batcher.close()
 
     async def close_connection(self) -> None:
@@ -557,8 +622,29 @@ class Node:
                 self.gate_lane(name, served.watch)
             await self.clock.sleep(GATE_INTERVAL_S)
 
+    async def throughput(self) -> None:
+        while True:
+            await self.clock.sleep(THROUGHPUT_LOG_S)
+            self.log_throughput()
+
+    def log_throughput(self) -> None:
+        for name, served in self.lanes.items():
+            self.log.info(
+                "lane_throughput",
+                lane=name,
+                inflight=served.runner.inflight,
+                capacity=served.runner.capacity,
+                **served.runner.throughput(),
+            )
+        engines = self.supervisor.memory()
+        self.log.info("engine_memory", total_mib=sum(engines.values()), rss_mib=engines)
+
     def gate_lane(self, name: str, watch: ConsumerWatch) -> None:
-        states = {slot: self.supervisor.slot_state(slot) for slot in LANE_GATES.get(name, ())}
+        reserved = name == ENCODE_LANE and bool(self.priority_batchers)
+        states = {
+            slot: self.supervisor.slot_state(slot, reserved=reserved)
+            for slot in LANE_GATES.get(name, ())
+        }
         loading = [slot for slot, state in states.items() if state == STATE_LOADING]
         broken = [slot for slot, state in states.items() if state == STATE_BROKEN]
         if watch.paused == bool(loading) and watch.engine_broken == bool(broken):
@@ -676,6 +762,12 @@ def watch_max_deliver(watch: ConsumerWatch) -> Callable[[], int]:
     return lambda: watch.max_deliver
 
 
+def split_slots(plans: Iterable[EnginePlan]) -> list[SlotSpec]:
+    planned = tuple(plans)
+    shared = {name for plan in planned if not plan.reserved for name in plan.slot_names}
+    return [spec for plan in planned if plan.reserved for spec in plan.slots if spec.name in shared]
+
+
 def check_slow_lanes(settings: Settings) -> None:
     runtime = settings.runtime
     slow = sorted(SLOW_LANES & set(settings.lanes.enabled))
@@ -683,7 +775,7 @@ def check_slow_lanes(settings: Settings) -> None:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
 
 
-def slot_spec(settings: Settings, name: str) -> SlotSpec:
+def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) -> SlotSpec:
     loader = SLOT_LOADERS.get(name)
     if loader is None:
         raise StartupError(f"slot {name} has no engine class")
@@ -691,6 +783,8 @@ def slot_spec(settings: Settings, name: str) -> SlotSpec:
     options: dict[str, object] = {}
     if name == settings_module.LOCAL_LLM_SLOT:
         options["quantize"] = settings.llm.local.quantize
+    if name == MULAN and mulan_towers is not None:
+        options[MULAN_TOWERS] = mulan_towers
     return SlotSpec(
         name=name,
         loader=loader,

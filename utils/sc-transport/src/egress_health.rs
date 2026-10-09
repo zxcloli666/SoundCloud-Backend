@@ -7,9 +7,10 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::RelayRead;
-use crate::channel_health::{COOLDOWN, ChannelHealth, Trip, now_ms};
+use crate::channel_health::{COOLDOWN, ChannelHealth, Trip, left_until, now_ms};
 
 pub const EGRESS_RELAY_LUA: &str = "relay_lua";
+pub const EGRESS_RELAY_LUA_SEARCH: &str = "relay_lua_search";
 pub const EGRESS_RELAY_RAW: &str = "relay_raw";
 
 const SHARED_REFRESH: Duration = Duration::from_secs(1);
@@ -70,6 +71,12 @@ impl EgressHealth {
         }
         self.refresh_shared().await;
         self.shared_is_open()
+    }
+
+    pub async fn open_for(&self) -> Option<Duration> {
+        self.refresh_shared().await;
+        let shared = left_until(self.shared_open_until_ms.load(Ordering::Acquire));
+        self.local.open_for().max(shared)
     }
 
     pub async fn observe<T>(&self, read: &RelayRead<T>) -> bool {
@@ -278,6 +285,28 @@ mod tests {
             health.is_open().await,
             "our own observation must not be overridden by a healthy shared state"
         );
+    }
+
+    #[tokio::test]
+    async fn an_open_channel_says_how_long_it_stays_shut() {
+        let cooling = health(Some(FakeStore::open_for(300)));
+        let left = cooling
+            .open_for()
+            .await
+            .expect("the shared channel is open");
+        assert!(left > Duration::from_secs(290) && left <= Duration::from_secs(300));
+
+        for _ in 0..4 {
+            cooling.local.record_ban();
+        }
+        let left = cooling.open_for().await.expect("still open");
+        assert!(
+            left > Duration::from_secs(290),
+            "a short local trip must not hide a longer shared cooldown, saw {left:?}"
+        );
+
+        let closed = health(Some(FakeStore::closed()));
+        assert_eq!(closed.open_for().await, None);
     }
 
     #[tokio::test]

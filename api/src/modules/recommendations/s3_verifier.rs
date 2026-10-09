@@ -111,7 +111,10 @@ impl S3VerifierService {
     }
 
     async fn probe(&self, sc_track_id: &str) -> bool {
-        let url = format!("{}/soundcloud_tracks_{sc_track_id}.m4a", self.storage_url);
+        let Some(key) = catalog_ingest::track_object_key(sc_track_id) else {
+            return false;
+        };
+        let url = format!("{}/{key}", self.storage_url);
         match self.http.head(&url).timeout(HEAD_TIMEOUT).send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();

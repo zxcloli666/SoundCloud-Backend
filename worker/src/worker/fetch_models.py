@@ -17,6 +17,7 @@ import httpx
 import orjson
 from huggingface_hub import HfApi, constants, snapshot_download
 from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.file_download import repo_folder_name
 
 from worker import settings as settings_module
 from worker.settings import Settings, SettingsError
@@ -222,18 +223,35 @@ def fetch(artifact: Artifact) -> None:
 
 
 def fetch_snapshot(snapshot: HubSnapshot, api: HfApi) -> None:
-    requested = snapshot.revision
+    repo, requested = snapshot.repo, snapshot.revision
     if snapshot.loaded_by_name:
-        requested = MAIN_BRANCH
-        head = api.model_info(snapshot.repo, revision=MAIN_BRANCH).sha
-        if head != snapshot.revision:
-            raise FetchError(f"{snapshot.repo}: main is at {head}, pinned {snapshot.revision}")
-    files = api.list_repo_files(snapshot.repo, revision=snapshot.revision)
-    path = Path(
-        snapshot_download(snapshot.repo, revision=requested, allow_patterns=chosen_files(files))
-    )
+        info = api.model_info(snapshot.repo, revision=MAIN_BRANCH)
+        if info.sha != snapshot.revision:
+            raise FetchError(f"{snapshot.repo}: main is at {info.sha}, pinned {snapshot.revision}")
+        repo, requested = info.id, MAIN_BRANCH
+    files = api.list_repo_files(repo, revision=snapshot.revision)
+    path = Path(snapshot_download(repo, revision=requested, allow_patterns=chosen_files(files)))
     if path.name != snapshot.revision:
         raise FetchError(f"{snapshot.repo}: got snapshot {path.name}, pinned {snapshot.revision}")
+    if repo != snapshot.repo:
+        link_renamed_snapshot(path, snapshot)
+
+
+def link_renamed_snapshot(canonical: Path, snapshot: HubSnapshot) -> None:
+    legacy = canonical.parents[2] / repo_folder_name(repo_id=snapshot.repo, repo_type="model")
+    target_dir = legacy / "snapshots" / snapshot.revision
+    for source in canonical.rglob("*"):
+        if source.is_dir():
+            continue
+        link = target_dir / source.relative_to(canonical)
+        if link.exists():
+            continue
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.unlink(missing_ok=True)
+        link.symlink_to(os.path.relpath(source.resolve(), link.parent))
+    refs = legacy / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    (refs / MAIN_BRANCH).write_text(snapshot.revision)
 
 
 def chosen_files(files: Sequence[str]) -> list[str]:

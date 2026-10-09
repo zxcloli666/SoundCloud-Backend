@@ -3,15 +3,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub(crate) fn parse_id_or_null(raw: &str) -> Option<u64> {
-    let s = raw.trim();
-    let last = match s.rsplit_once(':') {
-        Some((_, t)) => t,
-        None => s,
-    };
-    if !last.bytes().all(|b| b.is_ascii_digit()) || last.is_empty() {
-        return None;
-    }
-    last.parse::<u64>().ok()
+    crate::common::sc_ids::EntityRef::track(raw).map(crate::common::sc_ids::EntityRef::id)
 }
 
 pub(crate) use crate::common::sc_ids::user_id_variants;

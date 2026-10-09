@@ -2,6 +2,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::cache::ListPageResult;
+use crate::common::pagination::last_page;
 use crate::error::{AppError, AppResult};
 use crate::modules::users::project_to_sc_shape as project_user;
 
@@ -35,7 +36,7 @@ pub async fn read_audience_page(
             "Collection page size must be between 1 and 200",
         ));
     }
-    let page = page.clamp(0, 100);
+    let page = page.clamp(0, last_page(limit));
     let offset = page
         .checked_mul(limit)
         .ok_or_else(|| AppError::bad_request("Collection page is out of range"))?;
@@ -48,7 +49,7 @@ pub async fn read_audience_page(
     )
     .fetch_all(pg)
     .await?;
-    let has_more = page < 100 && keys.len() as i64 > limit;
+    let has_more = page < last_page(limit) && keys.len() as i64 > limit;
     let page_keys: Vec<String> = keys.into_iter().take(limit as usize).collect();
     Ok(ListPageResult {
         collection: project_users(pg, &page_keys).await?,
@@ -150,9 +151,9 @@ pub async fn read_collection_page(
     limit: i64,
     public_only: bool,
 ) -> AppResult<ListPageResult<Value>> {
-    let page = page.clamp(0, 100);
+    let page = page.clamp(0, last_page(limit));
     let keys = collection_page_keys(pg, coll, sc_user_id, page, limit, public_only).await?;
-    let has_more = page < 100 && keys.len() as i64 > limit;
+    let has_more = page < last_page(limit) && keys.len() as i64 > limit;
     let page_keys: Vec<String> = keys.into_iter().take(limit as usize).collect();
 
     let collection: Vec<Value> = match coll.entity_kind {

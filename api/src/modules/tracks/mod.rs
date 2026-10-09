@@ -13,6 +13,9 @@ pub use repository::{
 pub use service::TracksService;
 pub(crate) use service::TracksServiceDependencies;
 mod mutations;
+mod upload;
+
+pub use upload::router as upload_router;
 
 #[cfg(test)]
 mod detail_tests;

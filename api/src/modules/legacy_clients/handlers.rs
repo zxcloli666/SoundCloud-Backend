@@ -5,16 +5,18 @@ use axum::{Json, Router};
 use serde_json::Value;
 
 use crate::common::session::{RawSessionIdHeader, SessionCtx};
+use crate::common::uuid::parse_uuid;
 use crate::error::AppResult;
 use crate::modules::auth::handlers::required_session_id;
 use crate::state::AppState;
 
-use super::{profile, refresh};
+use super::{profile, refresh, status};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me/cold", get(cold_profile))
         .route("/auth/refresh", post(renew_session))
+        .route("/auth/status", get(auth_status))
 }
 
 async fn cold_profile(State(state): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
@@ -28,6 +30,17 @@ async fn renew_session(
 ) -> AppResult<Response> {
     let session_id = required_session_id(raw.as_deref())?;
     refresh::answer(session_id, state.auth.refresh_soundcloud(session_id).await)
+}
+
+#[tracing::instrument(skip_all)]
+async fn auth_status(
+    State(state): State<AppState>,
+    RawSessionIdHeader(raw): RawSessionIdHeader,
+) -> AppResult<Json<status::OldAuthStatus>> {
+    let session_id = raw.as_deref().and_then(parse_uuid);
+    Ok(Json(
+        status::read(&state.auth, &state.sync_queue, session_id).await?,
+    ))
 }
 
 #[cfg(test)]

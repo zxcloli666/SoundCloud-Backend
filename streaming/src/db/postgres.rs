@@ -56,6 +56,21 @@ const SESSION_QUERY: &str = r#"SELECT CASE
                             ON connection.id = session.soundcloud_connection_id
                         WHERE session.id = $1"#;
 
+pub struct TrackRecord {
+    pub is_public: bool,
+    pub storage_quality: Option<String>,
+}
+
+impl TrackRecord {
+    pub fn stored_quality(&self) -> Option<&'static str> {
+        match self.storage_quality.as_deref() {
+            Some("hq") => Some("hq"),
+            Some("sq") => Some("sq"),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CdnTrackRecord {
     pub id: String,
@@ -160,15 +175,18 @@ impl PgPool {
         }))
     }
 
-    pub async fn track_is_public(&self, track_urn: &str) -> Result<Option<bool>, PgError> {
+    pub async fn find_track(&self, track_urn: &str) -> Result<Option<TrackRecord>, PgError> {
         let client = self.connection().await?;
         let row = client
             .query_opt(
-                "SELECT sharing = 'public' FROM tracks WHERE urn = $1",
+                "SELECT sharing = 'public', storage_quality FROM tracks WHERE urn = $1",
                 &[&track_urn],
             )
             .await?;
-        Ok(row.map(|row| row.get(0)))
+        Ok(row.map(|row| TrackRecord {
+            is_public: row.get(0),
+            storage_quality: row.get(1),
+        }))
     }
 
     pub async fn find_cached_track(
@@ -401,7 +419,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use super::{SESSION_QUERY, pool_config, user_id_variants};
+    use super::{SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
 
     #[test]
     fn a_pool_that_cannot_serve_a_request_gives_up_instead_of_holding_it_forever() {
@@ -504,5 +522,17 @@ mod tests {
             vec!["12345", "soundcloud:users:12345"]
         );
         assert!(user_id_variants("   ").is_empty());
+    }
+
+    #[test]
+    fn only_a_known_storage_quality_is_reported_to_clients() {
+        let stored = |quality: Option<&str>| TrackRecord {
+            is_public: true,
+            storage_quality: quality.map(str::to_owned),
+        };
+        assert_eq!(stored(Some("hq")).stored_quality(), Some("hq"));
+        assert_eq!(stored(Some("sq")).stored_quality(), Some("sq"));
+        assert_eq!(stored(Some("lq")).stored_quality(), None);
+        assert_eq!(stored(None).stored_quality(), None);
     }
 }

@@ -2,7 +2,6 @@
 #[path = "embedding_job_tests.rs"]
 mod db_tests;
 
-use anyhow::ensure;
 use backend_contracts::LyricsEmbedPayload;
 use backend_contracts::pipeline::{EMBED_LYRICS, LyricsEmbeddingRequest, MAX_TEXT_BYTES};
 use sha2::{Digest, Sha256};
@@ -17,7 +16,6 @@ use super::text::{embedding_text, wire_language};
 pub struct LyricsEmbeddingJob {
     pool: PgPool,
     bus: Bus,
-    enabled: bool,
 }
 
 struct EmbeddingCandidate {
@@ -39,17 +37,12 @@ enum Step {
 }
 
 impl LyricsEmbeddingJob {
-    pub fn new(pool: PgPool, bus: Bus, enabled: bool) -> Self {
-        Self { pool, bus, enabled }
+    pub fn new(pool: PgPool, bus: Bus) -> Self {
+        Self { pool, bus }
     }
 
     pub async fn run(&self, payload: LyricsEmbedPayload) -> JobResult {
         let sc_track_id = canonical_track_id(&payload.sc_track_id).map_err(JobError::permanent)?;
-        if !self.enabled {
-            release(&self.pool, &sc_track_id).await?;
-            tracing::debug!(track = %sc_track_id, "lyrics embedding dispatch is switched off");
-            return Ok(());
-        }
         match prepare(&self.pool, &sc_track_id).await? {
             Step::Nothing => Ok(()),
             Step::Acknowledge(request_id) => {
@@ -172,28 +165,13 @@ async fn acknowledge(pool: &PgPool, sc_track_id: &str, request_id: &str) -> JobR
     Ok(())
 }
 
-async fn release(pool: &PgPool, sc_track_id: &str) -> JobResult {
-    sqlx::query_file!("queries/lyrics/release_embedding.sql", sc_track_id)
-        .execute(pool)
-        .await
-        .map_err(JobError::retryable)?;
-    Ok(())
-}
-
 fn message_id(request: &LyricsEmbeddingRequest) -> String {
     format!("embed:{}:{}", request.sc_track_id, request.request_id)
 }
 
 fn canonical_track_id(value: &str) -> anyhow::Result<String> {
-    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-    let id = value
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("lyrics embedding job has an invalid track id"))?;
-    ensure!(
-        id > 0 && id.to_string() == value,
-        "lyrics embedding job has a non-canonical track id"
-    );
-    Ok(value.to_owned())
+    catalog_ingest::normalize_sc_track_id(value)
+        .ok_or_else(|| anyhow::anyhow!("lyrics embedding job has an invalid track id"))
 }
 
 #[cfg(test)]

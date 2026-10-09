@@ -103,6 +103,7 @@ jobs:
               decrypt-client=utils/decrypt-client
               stream-ticket=utils/stream-ticket
               sc-fingerprint=utils/sc-fingerprint
+              entity-ref=utils/entity-ref
           - name: storage
             context: storage
             file: ""
@@ -112,6 +113,7 @@ jobs:
             build_contexts: |
               tls-common=utils/tls-common
               sc-fingerprint=utils/sc-fingerprint
+              entity-ref=utils/entity-ref
           - name: gateway
             context: gateway
             file: ""

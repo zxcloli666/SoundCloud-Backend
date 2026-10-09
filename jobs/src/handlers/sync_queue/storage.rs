@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use wreq::{Client, StatusCode, Url};
+use url::Url;
+use wreq::{Client, StatusCode};
 
 use crate::config::SyncQueueConfig;
 
@@ -39,7 +40,7 @@ impl TrackStorage {
             tokio::time::sleep(delay).await;
             match self
                 .client
-                .delete(url.clone())
+                .delete(url.as_str())
                 .bearer_auth(&self.token)
                 .send()
                 .await
@@ -61,7 +62,7 @@ impl TrackStorage {
                     );
                 }
                 Err(error) => {
-                    anyhow::bail!("track storage eviction failed: {}", error.without_url())
+                    anyhow::bail!("track storage eviction failed: {}", error.without_uri())
                 }
             }
         }
@@ -69,7 +70,9 @@ impl TrackStorage {
     }
 
     fn delete_url(&self, track_urn: &str) -> anyhow::Result<Url> {
-        let filename = track_urn.replace(':', "_");
+        let filename = catalog_ingest::EntityRef::track(track_urn)
+            .map(catalog_ingest::EntityRef::storage_name)
+            .ok_or_else(|| anyhow::anyhow!("track storage eviction has an invalid track"))?;
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("track storage URL cannot be a base URL"))?

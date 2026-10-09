@@ -6,10 +6,11 @@ use serde_json::Value;
 
 use crate::cache::ListPageResult;
 use crate::common::pagination::PaginationQuery;
-use crate::common::query::parse_languages;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
-use crate::modules::search::lyrics::{LyricsMode, LyricsSearchResponse};
+use crate::modules::likes::cold::apply_user_favorite_flag;
+use crate::modules::search::catalog::DEFAULT_LIMIT;
+use crate::modules::search::lyrics::LyricsSearchResponse;
 use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
 
@@ -30,8 +31,6 @@ struct VibeQuery {
     q: Option<String>,
     #[serde(default)]
     limit: Option<String>,
-    #[serde(default)]
-    languages: Option<String>,
 }
 
 async fn vibe(
@@ -40,20 +39,13 @@ async fn vibe(
     Query(q): Query<VibeQuery>,
 ) -> AppResult<Json<VibeResponse>> {
     let limit = q.limit.as_deref().and_then(|s| s.parse::<usize>().ok());
-    let languages = parse_languages(q.languages.as_deref());
-    Ok(Json(
-        st.vibe
-            .vibe(&q.q.unwrap_or_default(), limit, languages.as_deref())
-            .await?,
-    ))
+    Ok(Json(st.vibe.vibe(&q.q.unwrap_or_default(), limit).await?))
 }
 
 #[derive(Debug, Deserialize)]
 struct LyricsQuery {
     #[serde(default)]
     q: Option<String>,
-    #[serde(default)]
-    mode: Option<String>,
     #[serde(default)]
     page: Option<String>,
     #[serde(default)]
@@ -62,74 +54,108 @@ struct LyricsQuery {
 
 async fn lyrics(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(q): Query<LyricsQuery>,
 ) -> AppResult<Json<LyricsSearchResponse>> {
-    let mode = LyricsMode::parse(q.mode.as_deref());
     let page = q.page.as_deref().and_then(|s| s.parse::<i64>().ok());
     let limit = q.limit.as_deref().and_then(|s| s.parse::<i64>().ok());
-    Ok(Json(
-        st.vibe
-            .lyrics(&q.q.unwrap_or_default(), mode, page, limit)
-            .await?,
-    ))
+    let mut result = st
+        .search
+        .lyrics(&q.q.unwrap_or_default(), page, limit)
+        .await?;
+    let mut tracks: Vec<Value> = result
+        .collection
+        .iter_mut()
+        .map(|hit| hit.track.take())
+        .collect();
+    apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut tracks).await?;
+    for (hit, track) in result.collection.iter_mut().zip(tracks) {
+        hit.track = track;
+    }
+    Ok(Json(result))
+}
+
+fn catalog_page(p: &PaginationQuery) -> (i64, i64) {
+    (p.page(), p.limit.unwrap_or(DEFAULT_LIMIT))
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct CommonSearchQuery {
+struct CatalogQuery {
     #[serde(default)]
     q: Option<String>,
+    #[serde(default)]
+    user_urn: Option<String>,
 }
 
 async fn tracks(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<super::query::TrackSearchQuery>,
+    Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    Ok(Json(st.search.tracks(&q, page, limit).await?))
+    let (page, limit) = catalog_page(&p);
+    let query = q.q.unwrap_or_default();
+    let mut result = st
+        .search
+        .tracks(&query, q.user_urn.as_deref(), page, limit)
+        .await?;
+    apply_user_favorite_flag(&st.pg, &ctx.sc_user_id, &mut result.collection).await?;
+    Ok(Json(result))
 }
 
 async fn playlists(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<super::query::PlaylistSearchQuery>,
+    Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    Ok(Json(st.search.playlists(&q, page, limit).await?))
+    let (page, limit) = catalog_page(&p);
+    let query = q.q.unwrap_or_default();
+    Ok(Json(
+        st.search
+            .playlists(&query, q.user_urn.as_deref(), page, limit)
+            .await?,
+    ))
 }
 
 async fn users(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<CommonSearchQuery>,
+    Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    let query = q.q.unwrap_or_default();
-    Ok(Json(st.search.users(&query, None, page, limit).await?))
+    let (page, limit) = catalog_page(&p);
+    Ok(Json(
+        st.search
+            .users(&q.q.unwrap_or_default(), page, limit)
+            .await?,
+    ))
 }
 
 async fn artists(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<CommonSearchQuery>,
+    Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    let query = q.q.unwrap_or_default();
-    Ok(Json(st.search.artists(&query, page, limit).await?))
+    let (page, limit) = catalog_page(&p);
+    Ok(Json(
+        st.search
+            .artists(&q.q.unwrap_or_default(), page, limit)
+            .await?,
+    ))
 }
 
 async fn albums(
     State(st): State<AppState>,
     _ctx: SessionCtx,
     Query(p): Query<PaginationQuery>,
-    Query(q): Query<CommonSearchQuery>,
+    Query(q): Query<CatalogQuery>,
 ) -> AppResult<Json<ListPageResult<Value>>> {
-    let (page, limit) = p.resolved();
-    let query = q.q.unwrap_or_default();
-    Ok(Json(st.search.albums(&query, page, limit).await?))
+    let (page, limit) = catalog_page(&p);
+    Ok(Json(
+        st.search
+            .albums(&q.q.unwrap_or_default(), page, limit)
+            .await?,
+    ))
 }

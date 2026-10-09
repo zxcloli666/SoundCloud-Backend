@@ -67,6 +67,11 @@ WITH track AS MATERIALIZED (
                 THEN transcription_wire_state.reopen_count
             ELSE 0
         END,
+        result_timeouts = CASE
+            WHEN transcription_wire_state.upload_generation = EXCLUDED.upload_generation
+                THEN transcription_wire_state.result_timeouts
+            ELSE 0
+        END,
         dispatched_at = CASE
             WHEN transcription_wire_state.status = 'pending'
                 THEN transcription_wire_state.dispatched_at

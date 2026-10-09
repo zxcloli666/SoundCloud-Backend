@@ -18,7 +18,8 @@ WITH progress AS MATERIALIZED (
            track.release_date,
            track.sc_created_at,
            track.index_priority,
-           track.created_at
+           track.created_at,
+           track.pipeline_held
     FROM tracks AS track
     JOIN progress ON NOT progress.completed
     WHERE progress.cursor_id IS NULL OR track.id > progress.cursor_id
@@ -50,7 +51,8 @@ WITH progress AS MATERIALIZED (
            page.sc_created_at,
            page.created_at
     FROM page
-    WHERE NOT EXISTS (
+    WHERE NOT page.pipeline_held
+      AND NOT EXISTS (
         SELECT 1
         FROM lyrics_cache AS cache
         WHERE cache.sc_track_id = page.sc_track_id

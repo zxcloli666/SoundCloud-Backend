@@ -116,6 +116,19 @@ impl Bus {
         }
     }
 
+    pub async fn worker_pending(&self, spec: &WorkerLaneSpec) -> anyhow::Result<u64> {
+        let stream = self
+            .jetstream
+            .get_stream(spec.stream.name)
+            .await
+            .with_context(|| format!("NATS stream {} could not be loaded", spec.stream.name))?;
+        let info = stream
+            .consumer_info(spec.durable)
+            .await
+            .with_context(|| format!("NATS worker consumer {} could not be read", spec.durable))?;
+        Ok(info.num_pending)
+    }
+
     pub async fn worker_queue_snapshot(&self) -> WorkerQueueSnapshot {
         let mut snapshot = WorkerQueueSnapshot::default();
         for spec in &WORKER_STREAMS {

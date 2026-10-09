@@ -14,10 +14,16 @@ const READERS: &[&str] = &[
     "std::env::var",
     "schedule_interval(",
     "stream_bytes(",
+    "worker_backlog(",
 ];
 
 const DATABASE_PREFIXES: &[&str] = &["", "OPS_"];
-const LANE_PREFIXES: &[&str] = &["JOBS_CORE_FAST", "JOBS_CORE_BULK", "JOBS_OPS"];
+const LANE_PREFIXES: &[&str] = &[
+    "JOBS_CORE_FAST",
+    "JOBS_CORE_BULK",
+    "JOBS_MAINTENANCE",
+    "JOBS_OPS",
+];
 const LANE_SETTINGS: &[&str] = &["_CONCURRENCY", "_CLAIM_BATCH"];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

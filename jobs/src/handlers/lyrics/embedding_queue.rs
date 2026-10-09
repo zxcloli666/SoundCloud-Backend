@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
-const PRIORITY: i16 = 10;
+const PRIORITY: i16 = 0;
 const MAX_ATTEMPTS: i16 = 8;
 
 pub async fn enqueue_if_new(

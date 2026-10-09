@@ -1,3 +1,4 @@
+pub mod blocked;
 pub mod cursor;
 pub mod graph;
 pub mod rank;
@@ -131,6 +132,10 @@ pub async fn build(
         }
     }
 
+    let pooled: Vec<u64> = artist_of.keys().copied().collect();
+    let blocked =
+        blocked::blocked_uploads(&svc.pg, &user_id_variants(req.sc_user_id), &pooled).await;
+    artist_of.retain(|tid, _| !blocked.contains(tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
     let liked_ids: Vec<u64> = signals
         .fresh_likes

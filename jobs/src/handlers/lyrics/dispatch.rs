@@ -21,7 +21,6 @@ pub struct TranscriptionDispatcher {
     pool: PgPool,
     bus: Bus,
     storage_url: Url,
-    enabled: bool,
 }
 
 struct TranscriptionDispatch {
@@ -31,21 +30,25 @@ struct TranscriptionDispatch {
 }
 
 impl TranscriptionDispatcher {
-    pub fn new(pool: PgPool, bus: Bus, storage_url: Url, enabled: bool) -> Self {
+    pub fn new(pool: PgPool, bus: Bus, storage_url: Url) -> Self {
         Self {
             pool,
             bus,
             storage_url,
-            enabled,
         }
     }
 
-    pub async fn dispatch_transcription(&self, payload: StoredAudioDispatchPayload) -> JobResult {
-        if !self.enabled {
+    pub async fn dispatch_transcription(
+        &self,
+        payload: StoredAudioDispatchPayload,
+        room: i64,
+    ) -> JobResult {
+        let payload = validate(payload).map_err(JobError::permanent)?;
+        if waits_for_room(&self.pool, &payload, room).await? {
             tracing::debug!(
                 track = %payload.sc_track_id,
                 generation = payload.uploaded_generation,
-                "transcription dispatch is switched off"
+                "transcription stream is at its backlog; the reaper dispatches this upload later"
             );
             return Ok(());
         }
@@ -68,6 +71,25 @@ impl TranscriptionDispatcher {
         );
         Ok(())
     }
+}
+
+async fn waits_for_room(
+    pool: &PgPool,
+    payload: &StoredAudioDispatchPayload,
+    room: i64,
+) -> JobResult<bool> {
+    if room > 0 {
+        return Ok(false);
+    }
+    let claimed = sqlx::query_file_scalar!(
+        "queries/lyrics/transcription_claimed.sql",
+        &payload.sc_track_id,
+        payload.uploaded_generation
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(JobError::retryable)?;
+    Ok(!claimed)
 }
 
 async fn prepare(
@@ -176,7 +198,8 @@ fn validate(payload: StoredAudioDispatchPayload) -> anyhow::Result<StoredAudioDi
 
 fn audio_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result<String> {
     let mut url = storage_url.clone();
-    let filename = format!("soundcloud_tracks_{sc_track_id}.m4a");
+    let filename = catalog_ingest::track_object_key(sc_track_id)
+        .ok_or_else(|| anyhow::anyhow!("transcription dispatch has an invalid track id"))?;
     url.path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?
         .extend(["redirect", filename.as_str()]);

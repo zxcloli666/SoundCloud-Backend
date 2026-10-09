@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod backfill_live_tests;
 mod client;
 mod duration;
 mod public_client;
@@ -28,10 +30,11 @@ use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;
 use self::storage_events::StorageEventHandler;
 use self::storage_uploaded::StorageUploadHandler;
+use super::worker_backlog::{WorkerBacklog, unclaimed_room};
 
 const REAP_BATCH: i64 = 50;
+const SETTLE_BATCH: i64 = 50;
 const FAILED_RETRY_BATCH: i64 = 10;
-const REOPEN_BATCH: i64 = 50;
 const MAX_ATTEMPTS: i16 = 8;
 const MAX_DISPATCH_ATTEMPTS: i32 = MAX_ATTEMPTS as i32;
 const AUDIO_INDEX_QUARANTINE_SECONDS: i64 = match AUDIO_LANE.quarantine_after_s() {
@@ -50,7 +53,19 @@ pub struct IndexingHandler {
     storage_events: StorageEventHandler,
     storage_uploads: StorageUploadHandler,
     storage_url: Url,
-    audio_dispatch: bool,
+    backlog: WorkerBacklog,
+    audio_backlog: i64,
+}
+
+#[derive(Default)]
+struct Backfill {
+    dispatched: i64,
+    announced: i64,
+}
+
+struct AudioBackfill {
+    sc_track_id: String,
+    uploaded_generation: Option<i64>,
 }
 
 impl IndexingHandler {
@@ -59,6 +74,7 @@ impl IndexingHandler {
         config: &IndexingConfig,
         duration_config: &DurationConfig,
         storage_url: &Url,
+        audio_backlog: i64,
         bus: Bus,
         qdrant: QdrantProvisioner,
     ) -> Result<Self, crate::ClientBuildError> {
@@ -73,18 +89,14 @@ impl IndexingHandler {
             storage_events: StorageEventHandler::new(pool.clone()),
             storage_uploads: StorageUploadHandler::new(
                 pool.clone(),
-                bus,
+                bus.clone(),
                 storage_url.clone(),
                 duration_config.max_track_duration_ms,
             ),
             storage_url: storage_url.clone(),
-            audio_dispatch: false,
+            backlog: WorkerBacklog::new(bus),
+            audio_backlog,
         })
-    }
-
-    pub fn with_audio_dispatch(mut self, enabled: bool) -> Self {
-        self.audio_dispatch = enabled;
-        self
     }
 
     pub async fn resolve_durations(&self) -> JobResult {
@@ -119,11 +131,11 @@ impl IndexingHandler {
         &self,
         payload: backend_contracts::StoredAudioDispatchPayload,
     ) -> JobResult {
-        if !self.audio_dispatch {
+        if self.backlog.room(&AUDIO_LANE, self.audio_backlog).await == 0 {
             tracing::debug!(
                 track = %payload.sc_track_id,
                 generation = payload.uploaded_generation,
-                "audio index dispatch is switched off"
+                "audio index stream is at its backlog; the reaper dispatches this upload later"
             );
             return Ok(());
         }
@@ -148,15 +160,76 @@ impl IndexingHandler {
 
     pub async fn reap(&self) -> JobResult {
         let settled = self.settle_unreopenable_dispatches().await;
-        let reopened = self.reopen_dispatches().await;
-        let requeued = self.requeue_stuck().await;
-        settled.and(reopened).and(requeued)
+        let room = self.backlog.room(&AUDIO_LANE, self.audio_backlog).await;
+        let room = self.backlog.less_unaccepted_uploads(room).await;
+        let dispatched = self.top_up_audio_backlog(room).await;
+        settled.and(dispatched)
+    }
+
+    async fn top_up_audio_backlog(&self, room: i64) -> JobResult {
+        let room = unclaimed_room(&self.pool, JobKind::DispatchAudioIndex.as_str(), room).await?;
+        if room == 0 {
+            return Ok(());
+        }
+        let reopened = self.reopen_dispatches(room).await?;
+        let backfill = self
+            .backfill_dispatches(room.saturating_sub(reopened))
+            .await?;
+        if reopened > 0 || backfill.dispatched > 0 || backfill.announced > 0 {
+            tracing::info!(
+                reopened,
+                backfilled = backfill.dispatched,
+                announced_through_storage = backfill.announced,
+                "audio index backlog topped up"
+            );
+        }
+        Ok(())
+    }
+
+    async fn backfill_dispatches(&self, room: i64) -> JobResult<Backfill> {
+        let mut backfill = Backfill::default();
+        if room == 0 {
+            return Ok(backfill);
+        }
+        let candidates = sqlx::query_file_as!(
+            AudioBackfill,
+            "queries/indexing/backfill_audio.sql",
+            room,
+            AUDIO_INDEX_QUARANTINE_SECONDS,
+            REAP_RETRY_COOLDOWN_SECONDS
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(JobError::retryable)?;
+        let mut first_failure = None;
+        for candidate in candidates {
+            let Some(uploaded_generation) = candidate.uploaded_generation else {
+                match self.announce_stored(&candidate.sc_track_id).await {
+                    Ok(()) => backfill.announced += 1,
+                    Err(error) => {
+                        first_failure.get_or_insert(error);
+                    }
+                }
+                continue;
+            };
+            let payload = backend_contracts::StoredAudioDispatchPayload {
+                sc_track_id: candidate.sc_track_id,
+                uploaded_generation,
+            };
+            match self.storage_uploads.dispatch_audio(payload).await {
+                Ok(()) => backfill.dispatched += 1,
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                }
+            }
+        }
+        first_failure.map_or(Ok(backfill), Err)
     }
 
     async fn settle_unreopenable_dispatches(&self) -> JobResult {
         let quarantined = sqlx::query_file_scalar!(
             "queries/indexing/settle_unreopenable_dispatches.sql",
-            REOPEN_BATCH,
+            SETTLE_BATCH,
             REAP_RETRY_COOLDOWN_SECONDS,
             MAX_DISPATCH_ATTEMPTS
         )
@@ -172,26 +245,18 @@ impl IndexingHandler {
         Ok(())
     }
 
-    async fn reopen_dispatches(&self) -> JobResult {
-        if !self.audio_dispatch {
-            return Ok(());
-        }
+    async fn reopen_dispatches(&self, room: i64) -> JobResult<i64> {
         self.storage_uploads
-            .reopen_audio_dispatches(
-                REOPEN_BATCH,
-                REAP_RETRY_COOLDOWN_SECONDS,
-                MAX_DISPATCH_ATTEMPTS,
-            )
+            .reopen_audio_dispatches(room, REAP_RETRY_COOLDOWN_SECONDS, MAX_DISPATCH_ATTEMPTS)
             .await
     }
 
-    async fn requeue_stuck(&self) -> JobResult {
+    pub async fn requeue_stuck(&self) -> JobResult {
         let stuck = sqlx::query_file_scalar!(
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,
             AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS,
-            self.audio_dispatch
+            REAP_RETRY_COOLDOWN_SECONDS
         )
         .fetch_all(&self.pool)
         .await
@@ -228,7 +293,6 @@ impl IndexingHandler {
             || row.storage_state == "too_long"
             || row.needs_duration_resolve
             || row.index_in_flight
-            || (row.storage_state == "ok" && !self.audio_dispatch)
         {
             return Ok(false);
         }
@@ -237,17 +301,28 @@ impl IndexingHandler {
     }
 
     async fn finish_cached(&self, sc_track_id: &str) -> JobResult {
-        let storage_url = self.storage_redirect_url(sc_track_id)?;
         self.bus
-            .publish(
+            .publish(STORAGE_TRACK_UPLOADED, &self.stored_upload(sc_track_id)?)
+            .await
+            .map_err(JobError::retryable)
+    }
+
+    async fn announce_stored(&self, sc_track_id: &str) -> JobResult {
+        self.bus
+            .publish_dedup(
                 STORAGE_TRACK_UPLOADED,
-                &json!({
-                    "sc_track_id": sc_track_id,
-                    "storage_url": storage_url,
-                }),
+                &self.stored_upload(sc_track_id)?,
+                &stored_upload_message_id(sc_track_id),
             )
             .await
             .map_err(JobError::retryable)
+    }
+
+    fn stored_upload(&self, sc_track_id: &str) -> JobResult<serde_json::Value> {
+        Ok(json!({
+            "sc_track_id": sc_track_id,
+            "storage_url": self.storage_redirect_url(sc_track_id)?,
+        }))
     }
 
     async fn enqueue(&self, sc_track_id: String) -> JobResult {
@@ -256,12 +331,15 @@ impl IndexingHandler {
     }
 
     fn storage_redirect_url(&self, sc_track_id: &str) -> JobResult<String> {
-        append_path(
-            self.storage_url.clone(),
-            &["redirect", &format!("soundcloud_tracks_{sc_track_id}.m4a")],
-        )
-        .map(Into::into)
+        let key = catalog_ingest::track_object_key(sc_track_id).ok_or_else(|| {
+            JobError::permanent(anyhow::anyhow!("indexing has an invalid track id"))
+        })?;
+        append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
     }
+}
+
+fn stored_upload_message_id(sc_track_id: &str) -> String {
+    format!("stored-audio:{sc_track_id}")
 }
 
 fn new_index_job(sc_track_id: String) -> JobResult<NewJob> {
@@ -314,7 +392,9 @@ mod tests {
                  storage_state varchar(16) NOT NULL,
                  index_state varchar(16) NOT NULL,
                  index_priority smallint NOT NULL DEFAULT 0,
+                 storage_priority smallint NOT NULL DEFAULT 0,
                  needs_duration_resolve boolean NOT NULL DEFAULT false,
+                 pipeline_held boolean NOT NULL DEFAULT false,
                  s3_verified_at timestamptz,
                  indexed_at timestamptz,
                  created_at timestamptz NOT NULL DEFAULT now() - interval '1 hour',
@@ -345,20 +425,46 @@ mod tests {
         test_schema::install_audio_index_wire_state(pool).await
     }
 
-    async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
-        stuck_while(pool, true).await
-    }
-
-    async fn stuck_while(pool: &PgPool, audio_dispatch: bool) -> anyhow::Result<Vec<String>> {
+    async fn requeued(pool: &PgPool) -> anyhow::Result<Vec<String>> {
         Ok(sqlx::query_file_scalar!(
             "queries/indexing/reap_stuck.sql",
             REAP_BATCH,
             AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS,
-            audio_dispatch
+            REAP_RETRY_COOLDOWN_SECONDS
         )
         .fetch_all(pool)
         .await?)
+    }
+
+    async fn backfill_candidates(pool: &PgPool) -> anyhow::Result<Vec<(String, Option<i64>)>> {
+        Ok(sqlx::query_file_as!(
+            AudioBackfill,
+            "queries/indexing/backfill_audio.sql",
+            REAP_BATCH,
+            AUDIO_INDEX_QUARANTINE_SECONDS,
+            REAP_RETRY_COOLDOWN_SECONDS
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
+        .collect())
+    }
+
+    async fn backfilled(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+        Ok(backfill_candidates(pool)
+            .await?
+            .into_iter()
+            .map(|(sc_track_id, _)| sc_track_id)
+            .collect())
+    }
+
+    async fn stuck(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+        let mut tracks = requeued(pool).await?;
+        tracks.extend(backfilled(pool).await?);
+        tracks.sort();
+        tracks.dedup();
+        Ok(tracks)
     }
 
     async fn in_flight(pool: &PgPool) -> anyhow::Result<bool> {
@@ -407,6 +513,21 @@ mod tests {
 
         assert!(stuck(&pool).await?.is_empty());
         assert!(in_flight(&pool).await?);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_track_held_until_it_is_opened_is_never_reaped(pool: PgPool) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::query("UPDATE tracks SET pipeline_held = true WHERE sc_track_id = '42'")
+            .execute(&pool)
+            .await?;
+        assert!(stuck(&pool).await?.is_empty());
+
+        sqlx::query("UPDATE tracks SET pipeline_held = false WHERE sc_track_id = '42'")
+            .execute(&pool)
+            .await?;
+        assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
         Ok(())
     }
 
@@ -521,21 +642,6 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
-    async fn a_switched_off_dispatch_leaves_stored_tracks_alone_but_still_fetches_storage(
-        pool: PgPool,
-    ) -> anyhow::Result<()> {
-        install_schema(&pool).await?;
-
-        assert!(stuck_while(&pool, false).await?.is_empty());
-
-        sqlx::query("UPDATE tracks SET storage_state = 'pending'")
-            .execute(&pool)
-            .await?;
-        assert_eq!(stuck_while(&pool, false).await?, vec!["42".to_owned()]);
-        Ok(())
-    }
-
-    #[sqlx::test(migrations = false)]
     async fn a_track_the_reaper_already_handed_out_does_not_take_a_slot_again(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -572,6 +678,45 @@ mod tests {
             .await?;
 
         assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn an_announced_upload_is_dispatched_directly_and_an_unannounced_one_through_storage(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        assert!(requeued(&pool).await?.is_empty());
+        assert_eq!(
+            backfill_candidates(&pool).await?,
+            vec![("42".to_owned(), Some(1))]
+        );
+
+        sqlx::query("DELETE FROM storage_event_state")
+            .execute(&pool)
+            .await?;
+
+        assert!(requeued(&pool).await?.is_empty());
+        assert_eq!(
+            backfill_candidates(&pool).await?,
+            vec![("42".to_owned(), None)]
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_queued_audio_dispatch_keeps_the_track_out_of_the_backfill(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::query(
+            "INSERT INTO background_jobs (id, kind, dedup_key)
+             VALUES (gen_random_uuid(), 'indexing.dispatch_audio', '42')",
+        )
+        .execute(&pool)
+        .await?;
+
+        assert!(stuck(&pool).await?.is_empty());
         Ok(())
     }
 

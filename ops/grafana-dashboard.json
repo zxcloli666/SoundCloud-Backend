@@ -412,12 +412,12 @@
         {
           "refId": "C",
           "expr": "jobs_pg_pool_wait_last_seconds",
-          "legendFormat": "background last"
+          "legendFormat": "background {{pool}} last"
         },
         {
           "refId": "D",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(jobs_pg_pool_wait_seconds_bucket[5m])))",
-          "legendFormat": "background p99"
+          "expr": "histogram_quantile(0.99, sum by (pool, le) (rate(jobs_pg_pool_wait_seconds_bucket[5m])))",
+          "legendFormat": "background {{pool}} p99"
         }
       ]
     },
@@ -443,8 +443,8 @@
         },
         {
           "refId": "B",
-          "expr": "sum by (state) (jobs_pg_pool_connections)",
-          "legendFormat": "background {{state}}"
+          "expr": "sum by (pool, state) (jobs_pg_pool_connections)",
+          "legendFormat": "background {{pool}} {{state}}"
         }
       ]
     },

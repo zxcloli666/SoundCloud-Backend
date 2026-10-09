@@ -23,6 +23,8 @@ oom_unload = true
 onednn = true
 shutdown_grace_s = 60
 allow_slow_lanes = false
+threads = 0
+isolate_encode = false
 
 [lanes]
 enabled = ["audio", "lyrics", "transcribe", "encode", "collab", "taste", "ai"]

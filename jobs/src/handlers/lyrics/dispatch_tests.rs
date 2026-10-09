@@ -3,7 +3,7 @@ use backend_contracts::pipeline::TranscriptionRequest;
 use sqlx::PgPool;
 use url::Url;
 
-use super::{message_id, prepare};
+use super::{message_id, prepare, waits_for_room};
 
 async fn seed_stored_track(pool: &PgPool, generation: i64) -> anyhow::Result<()> {
     sqlx::query(
@@ -298,5 +298,71 @@ async fn a_new_upload_reclaims_a_transcription_its_predecessor_quarantined(
     );
     assert_eq!(wire(&pool).await?, ("pending".to_owned(), 2, 1, None));
     assert_eq!(track_state.as_deref(), Some("pending"));
+    Ok(())
+}
+
+fn payload(generation: i64) -> StoredAudioDispatchPayload {
+    StoredAudioDispatchPayload {
+        sc_track_id: "42".to_owned(),
+        uploaded_generation: generation,
+    }
+}
+
+async fn waits(pool: &PgPool, generation: i64, room: i64) -> anyhow::Result<bool> {
+    waits_for_room(pool, &payload(generation), room)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_upload_without_transcription_room_is_left_for_the_align_reaper(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_stored_track(&pool, 1).await?;
+    seed_lyrics(&pool, "only line").await?;
+    sqlx::raw_sql(
+        "UPDATE lyrics_cache SET created_at = created_at - interval '1 hour';
+         UPDATE storage_event_state SET updated_at = now() - interval '1 hour';",
+    )
+    .execute(&pool)
+    .await?;
+
+    let with_room = waits(&pool, 1, 1).await?;
+    let without_room = waits(&pool, 1, 0).await?;
+
+    let claimed: i64 = sqlx::query_scalar("SELECT count(*) FROM transcription_wire_state")
+        .fetch_one(&pool)
+        .await?;
+    let reaped = sqlx::query_file!("queries/lyrics/reap_transcriptions_align.sql", 10_i64)
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
+        .collect::<Vec<_>>();
+    assert!(!with_room);
+    assert!(without_room);
+    assert_eq!(claimed, 0);
+    assert_eq!(reaped, vec![("42".to_owned(), 1)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_attempt_already_claimed_for_the_generation_dispatches_without_room(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_stored_track(&pool, 1).await?;
+    seed_lyrics(&pool, "only line").await?;
+    let request = prepared(&pool, 1)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("dispatch was not prepared"))?;
+
+    let pending = waits(&pool, 1, 0).await?;
+    super::abandon(&pool, &request).await;
+    let unpublished = waits(&pool, 1, 0).await?;
+    let newer_generation = waits(&pool, 2, 0).await?;
+
+    assert!(!pending);
+    assert!(!unpublished);
+    assert!(newer_generation);
     Ok(())
 }

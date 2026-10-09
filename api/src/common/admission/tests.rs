@@ -96,7 +96,7 @@ async fn stalled_redis_is_bounded_and_fails_closed() -> anyhow::Result<()> {
 
     let started = Instant::now();
     let decision = limiter
-        .check(Endpoint::Login, "127.0.0.1:1234".parse()?)
+        .check(Endpoint::Login, identity("127.0.0.1:1234".parse()?))
         .await;
     stalled.abort();
 
@@ -114,19 +114,19 @@ async fn per_client_limit_is_shared_across_ports() -> anyhow::Result<()> {
     let other: SocketAddr = "192.0.2.8:1000".parse()?;
 
     assert_eq!(
-        limiter.check(Endpoint::Login, first).await,
+        limiter.check(Endpoint::Login, identity(first)).await,
         Decision::Allowed
     );
     assert_eq!(
-        limiter.check(Endpoint::Login, second).await,
+        limiter.check(Endpoint::Login, identity(second)).await,
         Decision::Allowed
     );
     assert!(matches!(
-        limiter.check(Endpoint::Login, first).await,
+        limiter.check(Endpoint::Login, identity(first)).await,
         Decision::Limited { .. }
     ));
     assert_eq!(
-        limiter.check(Endpoint::Login, other).await,
+        limiter.check(Endpoint::Login, identity(other)).await,
         Decision::Allowed
     );
     Ok(())
@@ -142,7 +142,7 @@ async fn concurrent_clients_cannot_exceed_the_global_limit() -> anyhow::Result<(
             limiter
                 .check(
                     Endpoint::Login,
-                    SocketAddr::from(([198, 51, 100, last_octet], 443)),
+                    identity(SocketAddr::from(([198, 51, 100, last_octet], 443))),
                 )
                 .await
         }
@@ -217,6 +217,8 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             login: limits(1, 2),
             link_create: limits(3, 4),
             resolve: limits(5, 6),
+            sc_search: limits(7, 8),
+            catalog_miss: limits(9, 10),
         },
         "test:public:admission:budgets",
     );
@@ -229,10 +231,15 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         "a link a listener pasted must not be able to spend the budget that lets them log in"
     );
 
+    assert_eq!(admission.limits(Endpoint::SoundCloudSearch).per_client, 7);
+    assert_eq!(admission.limits(Endpoint::CatalogMiss).per_client, 9);
+
     let keys = [
         Endpoint::Login.key(),
         Endpoint::LinkCreate.key(),
         Endpoint::Resolve.key(),
+        Endpoint::SoundCloudSearch.key(),
+        Endpoint::CatalogMiss.key(),
     ];
     assert_eq!(
         keys.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -277,6 +284,56 @@ fn every_open_entrance_that_costs_us_something_outside_is_metered() {
     }
 }
 
+fn identity(address: SocketAddr) -> String {
+    client_identity(address.ip())
+}
+
+#[test]
+fn a_session_bucket_is_keyed_by_a_digest_of_the_session() {
+    let session = uuid::Uuid::now_v7();
+    assert_eq!(session_identity(session), session_identity(session));
+    assert_ne!(
+        session_identity(session),
+        session_identity(uuid::Uuid::now_v7())
+    );
+    assert!(!session_identity(session).contains(&session.to_string()));
+}
+
+#[tokio::test]
+async fn a_busy_resolve_never_answers_like_a_session_problem() -> anyhow::Result<()> {
+    for kind in [
+        AdmissionRejection::Limited {
+            retry_after_seconds: 7,
+        },
+        AdmissionRejection::Unavailable,
+    ] {
+        let response = rejection(Endpoint::Resolve, kind);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let retry_after = response.headers()[RETRY_AFTER].to_str()?.to_owned();
+        let body = axum::body::to_bytes(response.into_body(), 4096).await?;
+        let body: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(body["code"], "resolve_busy");
+        let text = body.to_string().to_lowercase();
+        assert!(!text.contains("too many") && !text.contains("rate limit"));
+        assert_eq!(
+            retry_after,
+            if matches!(kind, AdmissionRejection::Unavailable) {
+                "1"
+            } else {
+                "7"
+            }
+        );
+    }
+    let login = rejection(
+        Endpoint::Login,
+        AdmissionRejection::Limited {
+            retry_after_seconds: 3,
+        },
+    );
+    assert_eq!(login.status(), StatusCode::TOO_MANY_REQUESTS);
+    Ok(())
+}
+
 fn limits(per_client: u32, global: u32) -> AdmissionLimitCfg {
     AdmissionLimitCfg { per_client, global }
 }
@@ -289,6 +346,8 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         login: limit,
         link_create: limit,
         resolve: limit,
+        sc_search: limit,
+        catalog_miss: limit,
     }
 }
 

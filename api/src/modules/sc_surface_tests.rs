@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const REACHES_SOUNDCLOUD: [&str; 10] = [
+const REACHES_SOUNDCLOUD: [&str; 13] = [
     "ScReadService",
     "ScClient",
     "api_get_value",
@@ -12,18 +12,32 @@ const REACHES_SOUNDCLOUD: [&str; 10] = [
     "st.sc.",
     "self.read.",
     "self.sc.",
+    "st.soundcloud_search",
+    "CatalogMiss",
+    "self.miss.",
 ];
 
-const ALLOWED: [(&str, &str); 5] = [
+const ALLOWED: [(&str, &str); 7] = [
     (
         "auth",
         "AUTH_CONTROL: login, token exchange, explicit refresh",
     ),
     (
         "tracks",
-        "USER_PRIVATE: secret_token detail and the stream token readiness check",
+        "USER_PRIVATE: secret_token detail and the stream token readiness check; USER_UPLOAD: an owner uploads a new track with their own token; RESOLVE_MISS: a track opened or added to a playlist before the catalog has it; SC_SEARCH: /tracks?q=",
     ),
-    ("playlists", "USER_PRIVATE: secret_token detail"),
+    (
+        "playlists",
+        "USER_PRIVATE: secret_token detail; RESOLVE_MISS: a public playlist opened before the catalog has it; SC_SEARCH: /playlists?q=",
+    ),
+    (
+        "soundcloud_search",
+        "SC_SEARCH: SoundCloud's own search pages for the SoundCloud mode",
+    ),
+    (
+        "users",
+        "RESOLVE_MISS: a public profile opened before the catalog has it; SC_SEARCH: /users?q=",
+    ),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
     (
         "admin",
@@ -104,7 +118,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 63] = [
+const CLASSIFIED_ROUTES: [&str; 75] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -168,6 +182,18 @@ const CLASSIFIED_ROUTES: [&str; 63] = [
     "/tracks/{track_urn}/reposters",
     "/tracks/{track_urn}/sharing",
     "/tracks/{track_urn}/stream",
+    "/tracks/upload",
+    "/users",
+    "/users/{user_urn}",
+    "/users/{user_urn}/followers",
+    "/users/{user_urn}/followings",
+    "/users/{user_urn}/followings/{following_urn}",
+    "/users/{user_urn}/likes/playlists",
+    "/users/{user_urn}/likes/tracks",
+    "/users/{user_urn}/playlists",
+    "/users/{user_urn}/subscription",
+    "/users/{user_urn}/tracks",
+    "/users/{user_urn}/web-profiles",
 ];
 
 fn routes_of_allowed_families() -> Vec<String> {
@@ -228,4 +254,20 @@ fn every_allowed_family_still_exists_and_still_needs_the_exception() {
             "{module} no longer reaches SoundCloud ({reason}); drop it from the allowed list"
         );
     }
+}
+
+#[test]
+fn the_catalog_and_vibe_modes_never_reach_soundcloud() {
+    assert!(
+        !ALLOWED.iter().any(|(module, _)| *module == "search"),
+        "the catalog, lyrics and vibe searches answer from our own catalog only"
+    );
+    let search: Vec<String> = serving_sources()
+        .into_iter()
+        .filter(|(path, body)| {
+            module_of(path) == "search" && REACHES_SOUNDCLOUD.iter().any(|m| body.contains(m))
+        })
+        .map(|(path, _)| path.display().to_string())
+        .collect();
+    assert!(search.is_empty(), "{search:#?}");
 }

@@ -10,6 +10,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
+    ))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -85,11 +90,23 @@ fn discover_interest_preserves_previous_cadence() {
 }
 
 #[test]
-fn indexing_reap_preserves_previous_cadence() {
+fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
     let schedule = SCHEDULES
         .iter()
         .find(|schedule| schedule.kind == JobKind::IndexingReap)
         .expect("indexing reap schedule");
+
+    assert_eq!(schedule.interval_seconds, 60);
+    assert_eq!(schedule.priority, 5);
+    assert_eq!(schedule.max_attempts, 8);
+}
+
+#[test]
+fn stuck_storage_tracks_are_requeued_at_the_five_minute_cadence() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::IndexingRequeueStuck)
+        .expect("indexing requeue schedule");
 
     assert_eq!(schedule.interval_seconds, 5 * 60);
     assert_eq!(schedule.priority, 5);
@@ -97,7 +114,19 @@ fn indexing_reap_preserves_previous_cadence() {
 }
 
 #[test]
-fn lyrics_reapers_preserve_the_previous_cadence() {
+fn the_hard_negative_sweep_runs_ahead_of_the_queued_hard_negative_backlog() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SweepHardNegatives)
+        .expect("hard negative sweep schedule");
+
+    assert_eq!(schedule.interval_seconds, 60);
+    assert!(schedule.priority > 0);
+    assert_eq!(schedule.kind.lane(), JobKind::RecordHardNegative.lane());
+}
+
+#[test]
+fn lyrics_reapers_top_up_the_worker_backlogs_often() {
     let schedules = SCHEDULES
         .iter()
         .filter(|schedule| {
@@ -120,8 +149,8 @@ fn lyrics_reapers_preserve_the_previous_cadence() {
     assert_eq!(
         schedules,
         vec![
-            (JobKind::LyricsReapEmbeddings, 10 * 60, 5, 8, 10 * 60),
-            (JobKind::LyricsReapTranscriptions, 10 * 60, 5, 8, 10 * 60,),
+            (JobKind::LyricsReapEmbeddings, 60, 5, 8, 60),
+            (JobKind::LyricsReapTranscriptions, 2 * 60, 5, 8, 2 * 60),
         ]
     );
 }
@@ -349,6 +378,110 @@ async fn schedule_tick_preserves_pending_retry_state(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrations = false)]
+async fn registration_moves_idle_jobs_left_in_a_stale_lane(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         ) VALUES
+             (gen_random_uuid(), 'collab.train', 'core_bulk', 'schedule', '{}'::jsonb,
+              NULL, NULL, NULL, NULL),
+             (gen_random_uuid(), 'discover.aggregates', 'core_bulk', 'schedule', '{}'::jsonb,
+              gen_random_uuid(), 1, 'old-binary', now() + interval '1 minute'),
+             (gen_random_uuid(), 'external.kind', 'core_bulk', 'schedule', '{}'::jsonb,
+              NULL, NULL, NULL, NULL)",
+    )
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let lanes = sqlx::query_as::<_, (String, String)>(
+        "SELECT kind, lane FROM background_jobs ORDER BY kind",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        lanes,
+        vec![
+            ("collab.train".to_owned(), "maintenance".to_owned()),
+            ("discover.aggregates".to_owned(), "core_bulk".to_owned()),
+            ("external.kind".to_owned(), "core_bulk".to_owned()),
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_realigns_stale_lanes_in_bounded_batches(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let stale = REALIGN_BATCH * 2 + 5;
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, payload)
+         SELECT gen_random_uuid(), 'collab.train', 'core_bulk', '{}'::jsonb
+         FROM generate_series(1, $1::bigint)",
+    )
+    .bind(i64::try_from(stale)?)
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let lanes = sqlx::query_as::<_, (String, i64)>(
+        "SELECT lane, count(*) FROM background_jobs GROUP BY lane",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        lanes,
+        vec![("maintenance".to_owned(), i64::try_from(stale)?)]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn registration_succeeds_when_the_lane_realignment_fails(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query("ALTER TABLE background_jobs RENAME TO unavailable_jobs")
+        .execute(&pool)
+        .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let registered: i64 = sqlx::query_scalar("SELECT count(*) FROM background_schedules")
+        .fetch_one(&pool)
+        .await?;
+    assert!(registered > 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_due_schedule_repairs_the_lane_of_its_idle_job(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let scheduler = Scheduler::new(pool.clone());
+    scheduler.register().await?;
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+         VALUES (gen_random_uuid(), 'indexing.reap', 'core_bulk', 'schedule', '{}'::jsonb)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("UPDATE background_schedules SET next_run_at = now() WHERE kind = 'indexing.reap'")
+        .execute(&pool)
+        .await?;
+
+    scheduler.enqueue_due().await?;
+
+    let lane: String =
+        sqlx::query_scalar("SELECT lane FROM background_jobs WHERE kind = 'indexing.reap'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(lane, "maintenance");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn registration_preserves_manual_and_unowned_schedules(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let scheduler = Scheduler::new(pool.clone());
@@ -421,4 +554,17 @@ async fn configured_schedule_owns_its_enabled_state(pool: PgPool) -> anyhow::Res
     .await?;
     assert!(!enabled);
     Ok(())
+}
+
+#[test]
+fn the_search_lexicon_is_refreshed_once_a_day() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SearchTermsRefresh)
+        .expect("search terms schedule");
+
+    assert_eq!(schedule.interval_seconds, 24 * 60 * 60);
+    assert_eq!(schedule.priority, -10);
+    assert_eq!(schedule.max_attempts, 2);
+    assert_eq!(schedule.initial_delay_seconds, 24 * 60 * 60);
 }

@@ -7,6 +7,7 @@ use sqlx::PgPool;
 
 use crate::background_jobs::{BackgroundJob, BackgroundJobs};
 use crate::error::AppResult;
+use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +87,16 @@ impl PlaylistMembership {
         Ok(membership_status(row))
     }
 
+    pub async fn track_if_untracked(&self, playlist_urn: &str) -> AppResult<()> {
+        sqlx::query_file!(
+            "queries/playlists/ensure_membership_tracked.sql",
+            playlist_urn
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn enqueue_observation_if_due(&self, playlist_urn: &str) {
         let claim = claim_observation_enqueue(&self.pool, playlist_urn).await;
         let Ok(Some(claimed_until)) = claim else {
@@ -99,7 +110,7 @@ impl PlaylistMembership {
                 playlist_urn: playlist_urn.to_owned(),
             },
         )
-        .map(BackgroundJob::if_absent);
+        .map(|job| job.if_absent().with_priority(VIEWER_PRIORITY));
         let published = match job {
             Ok(job) => self.jobs.enqueue_opportunistic(&job).await,
             Err(_) => false,

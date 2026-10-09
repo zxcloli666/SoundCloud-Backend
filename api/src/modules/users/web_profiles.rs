@@ -4,6 +4,7 @@ use sqlx::PgPool;
 
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
+use crate::modules::cold_refresh::BACKGROUND_PRIORITY;
 use crate::modules::cold_refresh::entity::enqueue_entity;
 
 pub(super) async fn read(pool: &PgPool, user_urn: &str) -> AppResult<Value> {
@@ -21,7 +22,8 @@ pub(super) async fn read(pool: &PgPool, user_urn: &str) -> AppResult<Value> {
         .fetch_optional(pool)
         .await?;
     if snapshot.as_ref().is_none_or(|row| !row.fresh) {
-        let enqueued = enqueue_entity(pool, payload.entity, user_urn, None).await;
+        let enqueued =
+            enqueue_entity(pool, payload.entity, user_urn, None, BACKGROUND_PRIORITY).await;
         if snapshot.is_none() {
             enqueued?;
         } else if let Err(error) = enqueued {

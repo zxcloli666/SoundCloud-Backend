@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 
@@ -59,7 +60,7 @@ class IndexAudioLane:
         loudness = decode.rms_dbfs(mono)
         if loudness < self._settings.silence_dbfs:
             return Outcome.of(Reason.SILENT_AUDIO, f"rms_dbfs={loudness:.1f}")
-        clips = embedding_clips(mono, pcm.sample_rate)
+        clips = await asyncio.to_thread(embedding_clips, mono, pcm.sample_rate)
         deadline.check("embed_audio")
         vectors = await self._engines.embed_audio(clips, deadline)
         mert = embedding.pooled(vectors.mert, MERT_DIM, "muq", self._counters)

@@ -78,7 +78,7 @@ pub async fn stream(
         Err(_) => {
             warn!("[stream] {urn_for_log} → deadline {STREAM_DEADLINE:?} exceeded");
             crate::metrics::record_source("none", "deadline");
-            AppError::NoStream.into_response()
+            AppError::Timeout.into_response()
         }
     }
 }
@@ -89,6 +89,7 @@ async fn stream_inner(
     headers: HeaderMap,
     Query(query): Query<StreamQuery>,
 ) -> Result<Response, AppError> {
+    let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let access = extract_stream_access(&state, &track_urn, &query)?;
     let session = state
         .pg
@@ -99,7 +100,9 @@ async fn stream_inner(
     let is_premium = check_is_premium(&state, &session).await;
     let hq = access.high_quality;
     let secret_token = access.secret_token.as_deref();
-    let is_public = state.pg.track_is_public(&track_urn).await?;
+    let track = state.pg.find_track(&track_urn).await?;
+    let is_public = track.as_ref().map(|track| track.is_public);
+    let stored_quality = track.as_ref().and_then(|track| track.stored_quality());
     let policy = TrackAccessPolicy::new(is_public, secret_token.is_some());
 
     if state.config.premium_only && !is_premium {
@@ -125,7 +128,7 @@ async fn stream_inner(
 
     if cacheable {
         if headers.contains_key("x-session-id") {
-            if let Some(response) = state.storage.try_proxy(&track_urn).await {
+            if let Some(response) = state.storage.try_proxy(&track_urn, stored_quality).await {
                 served(tag, &track_urn, "cdn_proxy");
                 return Ok(response);
             }
@@ -165,6 +168,10 @@ async fn stream_inner(
         }
         if let Some(r) = try_cookies(&state, &track_urn, tag, false).await {
             served(tag, &track_urn, "cookies_sq");
+            return respond_with_data(&state, &track_urn, r.0, r.1, "sq", cacheable);
+        }
+        if let Some(r) = try_relay_track(&state, &track_urn, "sq").await {
+            served(tag, &track_urn, "relay_track");
             return respond_with_data(&state, &track_urn, r.0, r.1, "sq", cacheable);
         }
     } else {
@@ -208,12 +215,12 @@ async fn stream_private(
         && let Some((data, content_type)) =
             try_session_oauth(state, access_token, track_urn, secret_token, true).await
     {
-        return data_response(data, content_type);
+        return data_response(data, content_type, "hq");
     }
     if let Some((data, content_type)) =
         try_session_oauth(state, access_token, track_urn, secret_token, false).await
     {
-        return data_response(data, content_type);
+        return data_response(data, content_type, "sq");
     }
 
     warn!("[stream] {track_urn} → private stream unavailable");
@@ -346,6 +353,7 @@ async fn try_restricted(
     cacheable: bool,
 ) -> Option<Response> {
     let src = restricted_source(state, track_urn, tag, hq_first).await?;
+    let quality = if src.is_hq { "hq" } else { "sq" };
 
     if let (Some(wvd_url), Some(wvd_token)) = (
         state.config.edge_wvd_url.as_deref(),
@@ -354,7 +362,6 @@ async fn try_restricted(
         crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
             .await
     {
-        let quality = if src.is_hq { "hq" } else { "sq" };
         let bytes = Bytes::from(audio);
         if cacheable && bytes.len() > 8192 {
             state.storage.upload_in_background_with_quality(
@@ -367,6 +374,7 @@ async fn try_restricted(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
+                .header("x-audio-quality", quality)
                 .body(Body::from(bytes))
                 .unwrap(),
         );
@@ -394,6 +402,7 @@ async fn try_restricted(
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
+                .header("x-audio-quality", quality)
                 .body(Body::from_stream(stream))
                 .unwrap(),
         );
@@ -403,7 +412,6 @@ async fn try_restricted(
     let acc_w = acc.clone();
     let storage = state.storage.clone();
     let urn = track_urn.to_string();
-    let quality = if src.is_hq { "hq" } else { "sq" };
     let teed = stream
         .map(move |chunk| {
             if let Ok(b) = &chunk {
@@ -423,6 +431,7 @@ async fn try_restricted(
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", src.content_type)
+            .header("x-audio-quality", quality)
             .body(Body::from_stream(teed))
             .unwrap(),
     )
@@ -476,14 +485,19 @@ fn respond_with_data(
         );
     }
 
-    data_response(data, content_type)
+    data_response(data, content_type, quality)
 }
 
-fn data_response(data: Bytes, content_type: &'static str) -> Result<Response, AppError> {
+fn data_response(
+    data: Bytes,
+    content_type: &'static str,
+    quality: &'static str,
+) -> Result<Response, AppError> {
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("content-type", content_type)
         .header("content-length", data.len().to_string())
+        .header("x-audio-quality", quality)
         .body(Body::from(data))
         .unwrap())
 }
@@ -569,6 +583,39 @@ mod tests {
                  ticket; reading `{taken_from_the_caller}` here lets a caller reach the audio \
                  while skipping that check entirely"
             );
+        }
+    }
+
+    #[test]
+    fn the_path_is_canonical_before_the_ticket_or_any_storage_key_sees_it() {
+        for (file, source, entrance) in [
+            (
+                "handler.rs",
+                include_str!("handler.rs"),
+                "async fn stream_inner(",
+            ),
+            (
+                "download.rs",
+                include_str!("download.rs"),
+                "async fn download_inner(",
+            ),
+        ] {
+            let body = source
+                .split_once(entrance)
+                .expect("the entrance is still here")
+                .1;
+            let canonical = body
+                .find("canonical_track_urn(&track_urn)")
+                .unwrap_or_else(|| panic!("{file} reads its track without canonicalizing it"));
+            for later in ["extract_stream_access", "collect_entries", "storage."] {
+                if let Some(at) = body.find(later) {
+                    assert!(
+                        canonical < at,
+                        "{file}: `{later}` runs before the path is canonical, so a bare id \
+                         could reach a ticket or an object key"
+                    );
+                }
+            }
         }
     }
 

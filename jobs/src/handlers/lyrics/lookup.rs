@@ -330,14 +330,8 @@ impl LyricsLookupHandler {
 }
 
 fn canonical_track_id(value: &str) -> anyhow::Result<String> {
-    let value = value.strip_prefix("soundcloud:tracks:").unwrap_or(value);
-    let id = value
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("lyrics lookup has an invalid track id"))?;
-    if id == 0 || id.to_string() != value {
-        anyhow::bail!("lyrics lookup has a non-canonical track id");
-    }
-    Ok(value.to_owned())
+    catalog_ingest::normalize_sc_track_id(value)
+        .ok_or_else(|| anyhow::anyhow!("lyrics lookup has an invalid track id"))
 }
 
 fn miss_delay_seconds(claim: &LookupClaim) -> i64 {

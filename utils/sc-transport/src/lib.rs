@@ -7,6 +7,8 @@ mod lua_methods;
 mod mapping;
 mod pagination;
 mod types;
+#[cfg(feature = "upload")]
+mod upload;
 
 #[derive(Clone, Debug)]
 pub struct ScConfig {
@@ -21,9 +23,12 @@ pub use bytes::Bytes;
 pub use channel_health::{ChannelHealth, Trip};
 pub use client::{OAuthCredentials, RelayTransport, ScClient};
 pub use egress_health::{
-    EGRESS_RELAY_LUA, EGRESS_RELAY_RAW, EgressFuture, EgressHealth, EgressHealthStore, EgressState,
+    EGRESS_RELAY_LUA, EGRESS_RELAY_LUA_SEARCH, EGRESS_RELAY_RAW, EgressFuture, EgressHealth,
+    EgressHealthStore, EgressState,
 };
 pub use error::{ScError, ScResult};
 pub use mapping::{PublicCollection, SearchType, normalize_v2_to_v1, unwrap_collection_items};
 pub use pagination::{Page, parse_list_cursor, parse_list_page};
 pub use types::*;
+#[cfg(feature = "upload")]
+pub use upload::{TrackUpload, UploadAsset, UploadImage};
