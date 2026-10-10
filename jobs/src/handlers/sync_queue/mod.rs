@@ -34,6 +34,7 @@ const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
 const WRITE_PAUSE_SECONDS: i64 = 30;
 const SUBSCRIPTION_RETRY_SECONDS: i64 = 6 * 60 * 60;
+const PAUSED_ACTION_RECHECK_SECONDS: i64 = 15 * 60;
 const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
 const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
@@ -146,7 +147,7 @@ impl SyncQueueHandler {
                 .postpone_unattempted(
                     &mutation,
                     "SoundCloud writes are paused for this application",
-                    seconds,
+                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
                 )
                 .await?;
             return Ok(());
@@ -313,7 +314,11 @@ impl SyncQueueHandler {
             }
             ActionError::SoundCloud(error) if error.is_subscription_required() => {
                 self.repository
-                    .postpone_unattempted(mutation, &error.to_string(), SUBSCRIPTION_RETRY_SECONDS)
+                    .postpone_unattempted(
+                        mutation,
+                        &error.to_string(),
+                        PAUSED_ACTION_RECHECK_SECONDS,
+                    )
                     .await?;
             }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
@@ -374,7 +379,11 @@ impl SyncQueueHandler {
             }
             ActionError::SoundCloud(error) if error.is_subscription_required() => {
                 self.repository
-                    .postpone_unattempted(mutation, &error.to_string(), SUBSCRIPTION_RETRY_SECONDS)
+                    .postpone_unattempted(
+                        mutation,
+                        &error.to_string(),
+                        PAUSED_ACTION_RECHECK_SECONDS,
+                    )
                     .await?;
             }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
