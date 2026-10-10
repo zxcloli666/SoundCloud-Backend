@@ -522,6 +522,26 @@ impl ScClient {
             .flatten()
     }
 
+    pub async fn user_collection_page_via_relay(
+        &self,
+        user_id: &str,
+        kind: &str,
+        url: &str,
+    ) -> Option<Value> {
+        let inputs = serde_json::to_vec(&serde_json::json!({
+            "user_id": user_id, "kind": kind, "cursor": url, "wrapped": true,
+        }))
+        .ok()?;
+        let v = self
+            .call_relay_method(
+                "sc.user_collection",
+                crate::lua_methods::USER_COLLECTION,
+                inputs,
+            )
+            .await?;
+        (v.get("ok").and_then(Value::as_bool) == Some(true)).then_some(v)
+    }
+
     async fn call_relay_method(
         &self,
         method_id: &'static str,
