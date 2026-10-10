@@ -108,7 +108,9 @@ impl SoundCloudClient {
         let result = self.send_routed(method, &target, access_token, body).await;
         apiv1_pace::record(
             apiv1_pace::Use::Write,
-            result.as_ref().is_err_and(SoundCloudError::is_rate_limited),
+            result
+                .as_ref()
+                .is_err_and(SoundCloudError::is_app_rate_limited),
         );
         result
     }
@@ -178,7 +180,7 @@ impl SoundCloudClient {
 }
 
 fn retries_direct(method: &Method, error: &SoundCloudError) -> bool {
-    if error.is_rate_limited() {
+    if error.is_app_rate_limited() {
         return true;
     }
     if *method == Method::POST {
@@ -266,6 +268,21 @@ impl SoundCloudError {
 
     pub fn is_rate_limited(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status == StatusCode::TOO_MANY_REQUESTS)
+    }
+
+    pub fn is_account_rate_limited(&self) -> bool {
+        let Self::Api { status, body, .. } = self else {
+            return false;
+        };
+        *status == StatusCode::TOO_MANY_REQUESTS
+            && body
+                .get("link")
+                .and_then(Value::as_str)
+                .is_some_and(|link| link.contains("rate-limits"))
+    }
+
+    pub fn is_app_rate_limited(&self) -> bool {
+        self.is_rate_limited() && !self.is_account_rate_limited()
     }
 
     pub fn is_app_credentials_error(&self) -> bool {
@@ -412,6 +429,30 @@ mod tests {
 
         assert!(retries_direct(&Method::PUT, &limited));
         assert!(retries_direct(&Method::POST, &limited));
+    }
+
+    #[test]
+    fn an_account_limit_is_told_apart_from_an_application_limit() {
+        let account = SoundCloudError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: serde_json::json!({
+                "code": 429,
+                "link": "https://developers.soundcloud.com/docs/api/rate-limits#errors",
+                "status": "429 - Too Many Requests"
+            }),
+            retry_after_seconds: None,
+        };
+        let application = SoundCloudError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: serde_json::json!({ "error": "Rate Limit Exceeded" }),
+            retry_after_seconds: None,
+        };
+
+        assert!(account.is_account_rate_limited());
+        assert!(!account.is_app_rate_limited());
+        assert!(!retries_direct(&Method::PUT, &account));
+        assert!(application.is_app_rate_limited());
+        assert!(!application.is_account_rate_limited());
     }
 
     #[test]

@@ -33,6 +33,7 @@ const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
 const WRITE_PAUSE_SECONDS: i64 = 30;
+const ACCOUNT_LIMIT_SECONDS: i64 = 30 * 60;
 const SUBSCRIPTION_RETRY_SECONDS: i64 = 6 * 60 * 60;
 const PAUSED_ACTION_RECHECK_SECONDS: i64 = 15 * 60;
 const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
@@ -45,7 +46,8 @@ pub struct SyncQueueHandler {
     client: Arc<SoundCloudClient>,
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
-    write_pauses: WritePauses,
+    write_pauses: WritePauses<uuid::Uuid>,
+    account_pauses: WritePauses<(String, String)>,
     concurrency: usize,
     claim_batch: i64,
 }
@@ -62,6 +64,7 @@ impl SyncQueueHandler {
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
             write_pauses: WritePauses::default(),
+            account_pauses: WritePauses::default(),
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
         })
@@ -141,7 +144,7 @@ impl SyncQueueHandler {
             }
         };
         if let Some(oauth_app_id) = token.oauth_app_id
-            && let Some(seconds) = self.write_pauses.remaining_seconds(oauth_app_id)
+            && let Some(seconds) = self.write_pauses.remaining_seconds(&oauth_app_id)
         {
             self.repository
                 .postpone_unattempted(
@@ -152,53 +155,67 @@ impl SyncQueueHandler {
                 .await?;
             return Ok(());
         }
+        if let Some(seconds) = self
+            .account_pauses
+            .remaining_seconds(&account_action(&mutation))
+        {
+            self.repository
+                .postpone_unattempted(
+                    &mutation,
+                    "SoundCloud limits this action for the account",
+                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                )
+                .await?;
+            return Ok(());
+        }
         if !self.repository.record_remote_attempt(&mutation).await? {
             self.repository.release(&mutation).await?;
             return Ok(());
         }
-        let remote_result =
-            match actions::execute_remote(&self.client, &mutation, &token.value).await {
-                Ok(result) => result,
-                Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                    let refreshed = match self
-                        .connections
-                        .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
-                        .await
-                    {
-                        Ok(token) => token,
-                        Err(error) => {
-                            self.record_connection_failure(&mutation, &error).await?;
-                            return Ok(());
-                        }
-                    };
-                    match actions::execute_remote(&self.client, &mutation, &refreshed.value).await {
-                        Ok(result) => result,
-                        Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                            self.connections
-                                .reject_for_later(&mutation.user_id, &refreshed.value)
-                                .await?;
-                            self.repository
-                                .postpone_unattempted(
-                                    &mutation,
-                                    "SoundCloud rejected the refreshed access token",
-                                    RATE_LIMIT_RETRY_SECONDS,
-                                )
-                                .await?;
-                            return Ok(());
-                        }
-                        Err(error) => {
-                            self.pause_writes_when_refused(&error, refreshed.oauth_app_id);
-                            self.record_action_failure(&mutation, &error).await?;
-                            return Ok(());
-                        }
+        let remote_result = match actions::execute_remote(&self.client, &mutation, &token.value)
+            .await
+        {
+            Ok(result) => result,
+            Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                let refreshed = match self
+                    .connections
+                    .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
+                    .await
+                {
+                    Ok(token) => token,
+                    Err(error) => {
+                        self.record_connection_failure(&mutation, &error).await?;
+                        return Ok(());
+                    }
+                };
+                match actions::execute_remote(&self.client, &mutation, &refreshed.value).await {
+                    Ok(result) => result,
+                    Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                        self.connections
+                            .reject_for_later(&mutation.user_id, &refreshed.value)
+                            .await?;
+                        self.repository
+                            .postpone_unattempted(
+                                &mutation,
+                                "SoundCloud rejected the refreshed access token",
+                                RATE_LIMIT_RETRY_SECONDS,
+                            )
+                            .await?;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        self.pause_writes_when_refused(&mutation, &error, refreshed.oauth_app_id);
+                        self.record_action_failure(&mutation, &error).await?;
+                        return Ok(());
                     }
                 }
-                Err(error) => {
-                    self.pause_writes_when_refused(&error, token.oauth_app_id);
-                    self.record_action_failure(&mutation, &error).await?;
-                    return Ok(());
-                }
-            };
+            }
+            Err(error) => {
+                self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id);
+                self.record_action_failure(&mutation, &error).await?;
+                return Ok(());
+            }
+        };
         if !self
             .repository
             .record_remote_success(&mutation, &remote_result)
@@ -210,8 +227,27 @@ impl SyncQueueHandler {
         self.finalize(&mutation).await
     }
 
-    fn pause_writes_when_refused(&self, error: &ActionError, oauth_app_id: Option<uuid::Uuid>) {
-        let (ActionError::SoundCloud(error), Some(oauth_app_id)) = (error, oauth_app_id) else {
+    fn pause_writes_when_refused(
+        &self,
+        mutation: &ClaimedMutation,
+        error: &ActionError,
+        oauth_app_id: Option<uuid::Uuid>,
+    ) {
+        let ActionError::SoundCloud(error) = error else {
+            return;
+        };
+        if error.is_account_rate_limited() {
+            warn!(
+                user_id = %mutation.user_id,
+                action = %mutation.action_type,
+                seconds = ACCOUNT_LIMIT_SECONDS,
+                "soundcloud limits this action for the account, holding its queue"
+            );
+            self.account_pauses
+                .pause(account_action(mutation), ACCOUNT_LIMIT_SECONDS);
+            return;
+        }
+        let Some(oauth_app_id) = oauth_app_id else {
             return;
         };
         let seconds = if error.is_subscription_required() {
@@ -321,6 +357,15 @@ impl SyncQueueHandler {
                     )
                     .await?;
             }
+            ActionError::SoundCloud(error) if error.is_account_rate_limited() => {
+                self.repository
+                    .postpone_unattempted(
+                        mutation,
+                        &error.to_string(),
+                        PAUSED_ACTION_RECHECK_SECONDS,
+                    )
+                    .await?;
+            }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
                 self.repository
                     .postpone(
@@ -386,6 +431,15 @@ impl SyncQueueHandler {
                     )
                     .await?;
             }
+            ActionError::SoundCloud(error) if error.is_account_rate_limited() => {
+                self.repository
+                    .postpone_unattempted(
+                        mutation,
+                        &error.to_string(),
+                        PAUSED_ACTION_RECHECK_SECONDS,
+                    )
+                    .await?;
+            }
             ActionError::SoundCloud(error) if error.is_rate_limited() => {
                 self.repository
                     .postpone_unattempted(
@@ -431,6 +485,10 @@ fn retry_delay_seconds(retry_count: i32) -> i64 {
     60_i64
         .saturating_mul(1_i64.checked_shl(exponent).unwrap_or(i64::MAX))
         .min(RETRY_CAP_SECONDS)
+}
+
+fn account_action(mutation: &ClaimedMutation) -> (String, String) {
+    (mutation.user_id.clone(), mutation.action_type.clone())
 }
 
 fn is_non_idempotent(action_type: &str) -> bool {
