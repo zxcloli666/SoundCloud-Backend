@@ -42,6 +42,8 @@ pub struct Playback {
     pub status: PlaybackStatus,
     pub track: Option<Value>,
     pub track_urn: Option<String>,
+    #[serde(default)]
+    pub next_track: Option<Value>,
     pub position_ms: i64,
     pub at: i64,
     pub rate: f64,
@@ -55,6 +57,7 @@ impl Default for Playback {
             status: PlaybackStatus::Idle,
             track: None,
             track_urn: None,
+            next_track: None,
             position_ms: 0,
             at: 0,
             rate: 1.0,
@@ -91,6 +94,8 @@ pub struct PlaybackUpdate {
     pub track: Option<Value>,
     #[serde(default)]
     pub track_urn: Option<String>,
+    #[serde(default)]
+    pub next_track: Option<Value>,
     #[serde(default)]
     pub position_ms: i64,
     #[serde(default)]
@@ -147,6 +152,16 @@ fn clean_name(name: &str, fallback: &str) -> String {
 fn clean_avatar(url: Option<&str>) -> Option<String> {
     let url = url?.trim();
     (url.starts_with("https://") && url.len() <= MAX_AVATAR_CHARS).then(|| url.to_owned())
+}
+
+fn check_snapshot(track: &Value) -> AppResult<()> {
+    let size = serde_json::to_vec(track)
+        .map(|v| v.len())
+        .unwrap_or(usize::MAX);
+    if size > MAX_TRACK_BYTES || !track.is_object() {
+        return Err(AppError::bad_request("track snapshot is too large"));
+    }
+    Ok(())
 }
 
 impl Room {
@@ -212,13 +227,8 @@ impl Room {
         if track_urn.is_none() && update.status != PlaybackStatus::Idle {
             return Err(AppError::bad_request("trackUrn is required"));
         }
-        if let Some(track) = &update.track {
-            let size = serde_json::to_vec(track)
-                .map(|v| v.len())
-                .unwrap_or(usize::MAX);
-            if size > MAX_TRACK_BYTES || !track.is_object() {
-                return Err(AppError::bad_request("track snapshot is too large"));
-            }
+        for snapshot in [&update.track, &update.next_track].into_iter().flatten() {
+            check_snapshot(snapshot)?;
         }
         let same_track = track_urn == self.playback.track_urn;
         let track = match update.track {
@@ -226,10 +236,16 @@ impl Room {
             None if same_track => self.playback.track.take(),
             None => None,
         };
+        let next_track = match update.next_track {
+            Some(next) => Some(next),
+            None if same_track => self.playback.next_track.take(),
+            None => None,
+        };
         self.playback = Playback {
             status: update.status,
             track,
             track_urn,
+            next_track,
             position_ms: update.position_ms.max(0),
             at: now + update.lead_ms.clamp(0, MAX_START_LEAD_MS),
             rate: update.rate.unwrap_or(1.0).clamp(MIN_RATE, MAX_RATE),

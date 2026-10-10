@@ -26,6 +26,7 @@ fn update(status: PlaybackStatus, urn: Option<&str>) -> PlaybackUpdate {
         lead_ms: 0,
         rate: None,
         crossfade_sec: None,
+        next_track: None,
     }
 }
 
@@ -159,4 +160,22 @@ fn removing_reports_whether_anyone_left() {
     assert!(room.remove("2"));
     assert!(!room.remove("2"));
     assert_eq!(room.members.len(), 1);
+}
+
+#[test]
+fn the_announced_next_track_follows_the_current_one() {
+    let mut room = room();
+    let mut with_next = update(PlaybackStatus::Playing, Some("42"));
+    with_next.next_track = Some(json!({"urn": "soundcloud:tracks:43"}));
+    room.set_playback("1", with_next, 100).unwrap();
+    assert!(room.playback.next_track.is_some());
+    room.set_playback("1", update(PlaybackStatus::Playing, Some("42")), 100)
+        .unwrap();
+    assert!(room.playback.next_track.is_some());
+    room.set_playback("1", update(PlaybackStatus::Playing, Some("44")), 100)
+        .unwrap();
+    assert!(room.playback.next_track.is_none());
+    let mut huge_next = update(PlaybackStatus::Playing, Some("44"));
+    huge_next.next_track = Some(json!("x"));
+    assert!(room.set_playback("1", huge_next, 100).is_err());
 }
