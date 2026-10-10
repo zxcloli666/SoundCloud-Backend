@@ -14,6 +14,7 @@ const MAX_NAME_CHARS: usize = 64;
 const MAX_AVATAR_CHARS: usize = 512;
 const MIN_RATE: f64 = 0.5;
 const MAX_RATE: f64 = 2.0;
+const MAX_CROSSFADE_SEC: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +45,8 @@ pub struct Playback {
     pub position_ms: i64,
     pub at: i64,
     pub rate: f64,
+    #[serde(default)]
+    pub crossfade_sec: u32,
 }
 
 impl Default for Playback {
@@ -55,6 +58,7 @@ impl Default for Playback {
             position_ms: 0,
             at: 0,
             rate: 1.0,
+            crossfade_sec: 0,
         }
     }
 }
@@ -93,6 +97,8 @@ pub struct PlaybackUpdate {
     pub lead_ms: i64,
     #[serde(default)]
     pub rate: Option<f64>,
+    #[serde(default)]
+    pub crossfade_sec: Option<u32>,
 }
 
 pub fn new_code() -> String {
@@ -227,6 +233,10 @@ impl Room {
             position_ms: update.position_ms.max(0),
             at: now + update.lead_ms.clamp(0, MAX_START_LEAD_MS),
             rate: update.rate.unwrap_or(1.0).clamp(MIN_RATE, MAX_RATE),
+            crossfade_sec: update
+                .crossfade_sec
+                .unwrap_or(self.playback.crossfade_sec)
+                .min(MAX_CROSSFADE_SEC),
         };
         Ok(())
     }

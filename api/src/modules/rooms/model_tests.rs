@@ -25,6 +25,7 @@ fn update(status: PlaybackStatus, urn: Option<&str>) -> PlaybackUpdate {
         position_ms: 1_500,
         lead_ms: 0,
         rate: None,
+        crossfade_sec: None,
     }
 }
 
@@ -98,9 +99,16 @@ fn a_scheduled_start_is_bounded_and_the_snapshot_is_kept_for_the_same_track() {
     let mut start = update(PlaybackStatus::Playing, Some("soundcloud:tracks:42"));
     start.lead_ms = 60_000;
     start.rate = Some(9.0);
-    room.set_playback("1", start, 1_000).unwrap();
+    room.set_playback("1", start.clone(), 1_000).unwrap();
     assert_eq!(room.playback.at, 1_000 + MAX_START_LEAD_MS);
     assert_eq!(room.playback.rate, 2.0);
+    assert_eq!(room.playback.crossfade_sec, 0);
+    start.crossfade_sec = Some(99);
+    room.set_playback("1", start.clone(), 100).unwrap();
+    assert_eq!(room.playback.crossfade_sec, 12);
+    room.set_playback("1", update(PlaybackStatus::Paused, Some("42")), 100)
+        .unwrap();
+    assert_eq!(room.playback.crossfade_sec, 12);
 
     let mut pause = update(PlaybackStatus::Paused, Some("42"));
     pause.track = None;
