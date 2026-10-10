@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 const OPEN_ROUTES: &[&str] = &[
     "/health",
+    "/probe",
     "/auth/login",
     "/auth/login/status",
     "/auth/callback",

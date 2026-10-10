@@ -1,6 +1,7 @@
 mod acceptor;
 mod acme;
 mod config;
+pub mod probe;
 mod proxy;
 mod redirect;
 mod serve;

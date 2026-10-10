@@ -3139,6 +3139,8 @@ dependencies = [
  "axum-server",
  "rustls",
  "rustls-acme",
+ "serde",
+ "sha2",
  "time",
  "tokio",
  "tokio-stream",

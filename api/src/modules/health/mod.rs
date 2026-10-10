@@ -6,5 +6,7 @@ use axum::routing::get;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/health", get(handler::check))
+    Router::new()
+        .route("/health", get(handler::check))
+        .route("/probe", get(tls_common::probe::probe))
 }
