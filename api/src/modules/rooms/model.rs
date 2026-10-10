@@ -156,6 +156,14 @@ fn clean_avatar(url: Option<&str>) -> Option<String> {
     (url.starts_with("https://") && url.len() <= MAX_AVATAR_CHARS).then(|| url.to_owned())
 }
 
+pub fn not_member() -> AppError {
+    AppError::coded(
+        axum::http::StatusCode::NOT_FOUND,
+        "room_not_member",
+        "You are not in this room",
+    )
+}
+
 fn check_snapshot(track: &Value) -> AppResult<()> {
     let size = serde_json::to_vec(track)
         .map(|v| v.len())
@@ -167,7 +175,7 @@ fn check_snapshot(track: &Value) -> AppResult<()> {
 }
 
 impl Room {
-    pub fn new(code: String, host: Member, now: i64) -> Self {
+    pub fn new(code: String, host: Member, public: bool, now: i64) -> Self {
         Self {
             code,
             host_id: host.user_id.clone(),
@@ -175,7 +183,7 @@ impl Room {
             created_at: now,
             members: vec![host],
             playback: Playback::default(),
-            public: false,
+            public,
         }
     }
 
@@ -287,7 +295,7 @@ impl Room {
             .members
             .iter_mut()
             .find(|m| m.user_id == user_id)
-            .ok_or_else(|| AppError::not_found("You are not in this room"))?;
+            .ok_or_else(not_member)?;
         if member.ready_urn.as_deref() == Some(urn.as_str()) {
             return Ok(false);
         }

@@ -7,9 +7,11 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::common::admission::{AdmissionRejection, Endpoint};
+use crate::common::admission::Endpoint;
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
+use crate::modules::rooms::identity::account_profile;
+use crate::modules::rooms::limits::admit;
 use crate::modules::rooms::listing::PublicRoom;
 use crate::modules::rooms::model::{PlaybackUpdate, Profile, normalize_code};
 use crate::modules::rooms::public::blocked_hosts;
@@ -35,6 +37,16 @@ pub fn router() -> Router<AppState> {
 struct WaitQuery {
     #[serde(default)]
     since: Option<u64>,
+    #[serde(default)]
+    follow: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateBody {
+    #[serde(flatten)]
+    profile: Profile,
+    #[serde(default)]
+    public: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,25 +60,6 @@ struct VisibilityBody {
     public: bool,
 }
 
-fn list_busy(rejection: AdmissionRejection) -> AppError {
-    match rejection {
-        AdmissionRejection::Limited {
-            retry_after_seconds,
-        } => AppError::coded(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rooms_list_limited",
-            "Too many requests for open rooms",
-        )
-        .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(60)),
-        AdmissionRejection::Unavailable => AppError::coded(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "rooms_list_busy",
-            "Open rooms are busy, try again shortly",
-        )
-        .with_retry_after(1),
-    }
-}
-
 fn code_of(raw: &str) -> AppResult<String> {
     normalize_code(raw).ok_or_else(|| AppError::not_found("Room not found"))
 }
@@ -74,9 +67,14 @@ fn code_of(raw: &str) -> AppResult<String> {
 async fn create(
     State(st): State<AppState>,
     ctx: SessionCtx,
-    Json(profile): Json<Profile>,
+    Json(body): Json<CreateBody>,
 ) -> AppResult<(StatusCode, Json<RoomView>)> {
-    let room = st.rooms.create(&ctx.sc_user_id, &profile).await?;
+    admit(&st, &ctx, Endpoint::RoomCreate).await?;
+    let profile = account_profile(&st.pg, &ctx.sc_user_id, body.profile).await?;
+    let room = st
+        .rooms
+        .create(&ctx.sc_user_id, &profile, body.public)
+        .await?;
     Ok((StatusCode::CREATED, Json(room)))
 }
 
@@ -89,7 +87,7 @@ async fn show(
     let code = code_of(&code)?;
     Ok(Json(
         st.rooms
-            .wait(&code, &ctx.sc_user_id, q.since, LONG_POLL_HOLD)
+            .wait(&code, &ctx.sc_user_id, q.since, LONG_POLL_HOLD, q.follow)
             .await?,
     ))
 }
@@ -101,6 +99,8 @@ async fn join(
     Json(profile): Json<Profile>,
 ) -> AppResult<Json<RoomView>> {
     let code = code_of(&code)?;
+    admit(&st, &ctx, Endpoint::RoomJoin).await?;
+    let profile = account_profile(&st.pg, &ctx.sc_user_id, profile).await?;
     Ok(Json(st.rooms.join(&code, &ctx.sc_user_id, &profile).await?))
 }
 
@@ -143,10 +143,7 @@ async fn ready(
 }
 
 async fn list_public(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
-    st.admission
-        .check_session(Endpoint::RoomList, ctx.session_id)
-        .await
-        .map_err(list_busy)?;
+    admit(&st, &ctx, Endpoint::RoomList).await?;
     let rooms = st.rooms.public_rooms().await?;
     let blocked = blocked_hosts(&st.pg, &ctx.sc_user_id).await?;
     let collection: Vec<&PublicRoom> = rooms
@@ -162,6 +159,8 @@ async fn join_public(
     Path(host_id): Path<String>,
     Json(profile): Json<Profile>,
 ) -> AppResult<Json<RoomView>> {
+    admit(&st, &ctx, Endpoint::RoomJoin).await?;
+    let profile = account_profile(&st.pg, &ctx.sc_user_id, profile).await?;
     Ok(Json(
         st.rooms
             .join_public(&host_id, &ctx.sc_user_id, &profile)

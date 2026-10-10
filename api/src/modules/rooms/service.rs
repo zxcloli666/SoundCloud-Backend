@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use deadpool_redis::Pool;
 use serde::Serialize;
 use tokio::time::Instant;
@@ -9,7 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::modules::rooms::directory::RoomDirectory;
 use crate::modules::rooms::hub::RoomHub;
 use crate::modules::rooms::listing::PublicRoom;
-use crate::modules::rooms::model::{Member, PlaybackUpdate, Profile, Room, new_code};
+use crate::modules::rooms::model::{Member, PlaybackUpdate, Profile, Room, new_code, not_member};
 use crate::modules::rooms::store::RoomStore;
 
 pub const ONLINE_WINDOW_MS: i64 = 45_000;
@@ -36,10 +37,6 @@ pub(super) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn not_member() -> AppError {
-    AppError::not_found("You are not in this room")
-}
-
 impl RoomsService {
     pub fn new(redis: Pool, hub: Arc<RoomHub>) -> Arc<Self> {
         Arc::new(Self {
@@ -50,15 +47,24 @@ impl RoomsService {
         })
     }
 
-    pub async fn create(&self, user_id: &str, profile: &Profile) -> AppResult<RoomView> {
+    pub async fn create(
+        &self,
+        user_id: &str,
+        profile: &Profile,
+        public: bool,
+    ) -> AppResult<RoomView> {
         if let Some(previous) = self.directory.hosted_by(user_id).await? {
             self.leave(&previous, user_id).await?;
         }
         let now = now_ms();
         for _ in 0..CODE_ATTEMPTS {
-            let room = Room::new(new_code(), Member::new(user_id, profile, now), now);
+            let host = Member::new(user_id, profile, now);
+            let room = Room::new(new_code(), host, public, now);
             if self.store.insert(&room).await? {
                 self.store.touch(&room.code, user_id, now).await?;
+                if public {
+                    *self.listing.lock().await = None;
+                }
                 return self.view(&room.code, user_id).await;
             }
         }
@@ -89,6 +95,26 @@ impl RoomsService {
     }
 
     pub async fn wait(
+        &self,
+        code: &str,
+        user_id: &str,
+        since: Option<u64>,
+        hold: Duration,
+        follow: bool,
+    ) -> AppResult<RoomView> {
+        let error = match self.wait_on(code, user_id, since, hold).await {
+            Err(error) if follow && error.status() == StatusCode::NOT_FOUND => error,
+            outcome => return outcome,
+        };
+        let Some(moved) = self.store.moved_to(code).await? else {
+            return Err(error);
+        };
+        let view = self.view(&moved, user_id).await?;
+        self.store.touch(&moved, user_id, now_ms()).await?;
+        Ok(view)
+    }
+
+    async fn wait_on(
         &self,
         code: &str,
         user_id: &str,
@@ -152,6 +178,11 @@ impl RoomsService {
     }
 
     pub async fn leave(&self, code: &str, user_id: &str) -> AppResult<()> {
+        let moved = match self.store.load(code).await? {
+            Some(_) => None,
+            None => self.store.moved_to(code).await?,
+        };
+        let code = moved.as_deref().unwrap_or(code);
         let Some(room) = self.store.load(code).await? else {
             return Ok(());
         };

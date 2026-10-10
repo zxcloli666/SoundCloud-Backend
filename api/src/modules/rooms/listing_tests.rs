@@ -18,6 +18,7 @@ fn room(host: &str, guests: usize, created_at: i64) -> Room {
     let mut room = Room::new(
         format!("ABC{created_at:03}"),
         member(host, "https://i1.sndcdn.com/avatars-1-large.jpg"),
+        true,
         created_at,
     );
     for guest in 0..guests {
@@ -83,6 +84,7 @@ fn only_soundcloud_images_reach_strangers() {
     let stranger = Room::new(
         "ABC234".to_owned(),
         member("1", "https://evil.example/a.png"),
+        true,
         0,
     );
     let card = PublicRoom::of(&stranger, &[]).unwrap();

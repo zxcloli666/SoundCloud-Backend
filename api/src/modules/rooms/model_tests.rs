@@ -13,6 +13,7 @@ fn room() -> Room {
     Room::new(
         "ABC234".to_owned(),
         Member::new("1", &profile("Host"), 10),
+        false,
         10,
     )
 }

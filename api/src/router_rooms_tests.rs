@@ -255,6 +255,7 @@ async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> an
     let (status, room) = call(&app, host, "PUT", &visibility, open).await?;
     assert_eq!(status, StatusCode::OK, "{room}");
     assert_eq!(room["public"], true);
+    assert_eq!(room["code"], code.as_str());
     call(
         &app,
         host,
@@ -275,7 +276,11 @@ async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> an
         .and_then(|rooms| rooms.iter().find(|room| room["hostId"] == host_id.as_str()))
         .cloned()
         .unwrap_or_default();
-    assert_eq!(card["hostName"], "Host");
+    assert_eq!(
+        card["hostName"],
+        host_id.as_str(),
+        "the name comes from the account, not from the request"
+    );
     assert_eq!(card["listeners"], 1);
     assert_eq!(card["capacity"], 10);
     assert_eq!(card["full"], false);
@@ -296,29 +301,87 @@ async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> an
     let blocker = session_for(&pool, "808").await?;
     let (_, list) = call(&app, blocker, "GET", "/rooms/public", None).await?;
     assert!(!hosts(&list).contains(&host_id));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_room_born_public_changes_its_code_when_it_goes_private(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let host_id = format!("7{}", Uuid::now_v7().as_u128() % 1_000_000_000);
+    let host = session_for(&pool, &host_id).await?;
+    let guest = session_for(&pool, "717").await?;
+    let stranger = session_for(&pool, "919").await?;
+    let join = format!("/rooms/public/{host_id}/members");
+
+    let born = Some(json!({"name": "Host", "public": true}));
+    let (status, room) = call(&app, host, "POST", "/rooms", born).await?;
+    assert_eq!(status, StatusCode::CREATED, "{room}");
+    assert_eq!(room["public"], true);
+    let code = room["code"].as_str().unwrap_or_default().to_owned();
+    let (_, list) = call(&app, guest, "GET", "/rooms/public", None).await?;
+    assert!(
+        hosts(&list).contains(&host_id),
+        "listed from the first second"
+    );
+    let (status, _) = call(&app, guest, "POST", &join, Some(json!({"name": "Guest"}))).await?;
+    assert_eq!(status, StatusCode::OK);
 
     let (status, room) = call(
         &app,
         host,
         "PUT",
-        &visibility,
+        &format!("/rooms/{code}/visibility"),
         Some(json!({"public": false})),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{room}");
+    assert_eq!(room["public"], false);
+    let moved = room["code"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(moved, code);
     assert_eq!(room["members"].as_array().map(Vec::len), Some(2));
-    let (_, list) = call(&app, blocker, "GET", "/rooms/public", None).await?;
+    assert_eq!(room["online"].as_array().map(Vec::len), Some(2));
+
+    let (_, list) = call(&app, stranger, "GET", "/rooms/public", None).await?;
     assert!(!hosts(&list).contains(&host_id));
-    let stranger = session_for(&pool, "909").await?;
-    let (status, _) = call(&app, stranger, "POST", &join, Some(json!({"name": "Late"}))).await?;
+    let late = Some(json!({"name": "Late"}));
+    let (status, _) = call(&app, stranger, "POST", &join, late.clone()).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    let by_old_code = format!("/rooms/{code}/members");
+    let (status, _) = call(&app, stranger, "POST", &by_old_code, late).await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the listed room's code is dead"
+    );
+
+    let (status, _) = call(&app, guest, "GET", &format!("/rooms/{code}"), None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let follow = format!("/rooms/{code}?since=1&follow=true");
+    let (status, _) = call(&app, stranger, "GET", &follow, None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "only members are led over");
+    let (status, room) = call(&app, guest, "GET", &follow, None).await?;
+    assert_eq!(status, StatusCode::OK, "{room}");
+    assert_eq!(room["code"], moved.as_str());
+
+    let (status, refusal) = call(&app, stranger, "GET", &format!("/rooms/{moved}"), None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(refusal["code"], "room_not_member");
+
+    let leave = format!("/rooms/{code}/members/me");
+    let (status, _) = call(&app, guest, "DELETE", &leave, None).await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, room) = call(&app, host, "GET", &format!("/rooms/{moved}"), None).await?;
+    assert_eq!(room["members"].as_array().map(Vec::len), Some(1));
 
     let (status, next) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;
     assert_eq!(status, StatusCode::CREATED);
-    assert_ne!(next["code"], code.as_str());
-    let (status, _) = call(&app, guest, "GET", &format!("/rooms/{code}"), None).await?;
+    let next_code = next["code"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(next_code, moved);
+    let (status, _) = call(&app, host, "GET", &format!("/rooms/{moved}"), None).await?;
     assert_eq!(status, StatusCode::NOT_FOUND, "a host keeps one room");
-    let next_code = next["code"].as_str().unwrap_or_default();
     call(
         &app,
         host,

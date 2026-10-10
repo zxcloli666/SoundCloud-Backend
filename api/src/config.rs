@@ -118,6 +118,8 @@ pub struct AdmissionCfg {
     pub sc_search: AdmissionLimitCfg,
     pub catalog_miss: AdmissionLimitCfg,
     pub room_list: AdmissionLimitCfg,
+    pub room_create: AdmissionLimitCfg,
+    pub room_join: AdmissionLimitCfg,
 }
 
 impl AdmissionCfg {
@@ -128,6 +130,8 @@ impl AdmissionCfg {
         let sc_search = admission_limit("SC_SEARCH", 600, 6000);
         let catalog_miss = admission_limit("CATALOG_MISS", 120, 2400);
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
+        let room_create = admission_limit("ROOMS_CREATE", 10, 600);
+        let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -140,6 +144,8 @@ impl AdmissionCfg {
             sc_search,
             catalog_miss,
             room_list,
+            room_create,
+            room_join,
         }
     }
 }

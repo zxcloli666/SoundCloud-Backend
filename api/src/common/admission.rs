@@ -75,6 +75,8 @@ pub enum Endpoint {
     SoundCloudSearch,
     CatalogMiss,
     RoomList,
+    RoomCreate,
+    RoomJoin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,9 +196,11 @@ impl PublicAdmission {
     fn gate(&self, endpoint: Endpoint) -> &Semaphore {
         match endpoint {
             Endpoint::Login | Endpoint::LinkCreate | Endpoint::Resolve => &self.in_flight,
-            Endpoint::SoundCloudSearch | Endpoint::CatalogMiss | Endpoint::RoomList => {
-                &self.session_in_flight
-            }
+            Endpoint::SoundCloudSearch
+            | Endpoint::CatalogMiss
+            | Endpoint::RoomList
+            | Endpoint::RoomCreate
+            | Endpoint::RoomJoin => &self.session_in_flight,
         }
     }
 
@@ -208,6 +212,8 @@ impl PublicAdmission {
             Endpoint::SoundCloudSearch => self.config.sc_search,
             Endpoint::CatalogMiss => self.config.catalog_miss,
             Endpoint::RoomList => self.config.room_list,
+            Endpoint::RoomCreate => self.config.room_create,
+            Endpoint::RoomJoin => self.config.room_join,
         }
     }
 
@@ -244,6 +250,8 @@ impl Endpoint {
             Self::SoundCloudSearch => "sc-search",
             Self::CatalogMiss => "catalog-miss",
             Self::RoomList => "rooms-list",
+            Self::RoomCreate => "rooms-create",
+            Self::RoomJoin => "rooms-join",
         }
     }
 
@@ -255,6 +263,8 @@ impl Endpoint {
             Self::SoundCloudSearch => "SoundCloud search",
             Self::CatalogMiss => "catalog miss",
             Self::RoomList => "/rooms/public",
+            Self::RoomCreate => "/rooms",
+            Self::RoomJoin => "/rooms/{code}/members",
         }
     }
 }

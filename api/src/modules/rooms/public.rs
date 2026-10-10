@@ -34,18 +34,36 @@ pub async fn blocked_hosts(pg: &PgPool, sc_user_id: &str) -> AppResult<HashSet<S
 
 impl RoomsService {
     pub async fn set_public(&self, code: &str, user_id: &str, public: bool) -> AppResult<RoomView> {
-        let (room, ()) = self
+        let current = self
             .store
-            .update(code, |room| room.set_public(user_id, public))
-            .await?;
-        if public {
-            self.directory.host_seen(&room, now_ms()).await?;
-        } else {
-            self.directory.unlist(code).await?;
+            .load(code)
+            .await?
+            .ok_or_else(|| AppError::not_found("Room not found"))?;
+        if !current.is_host(user_id) {
+            return Err(AppError::forbidden(
+                "Only the host opens or closes the room",
+            ));
         }
+        if current.public == public {
+            return self.view(code, user_id).await;
+        }
+        let room = if public {
+            self.store
+                .update(code, |room| room.set_public(user_id, true))
+                .await?
+                .0
+        } else {
+            let room = self
+                .store
+                .relocate(code, |room| room.set_public(user_id, false))
+                .await?;
+            self.directory.unlist(code).await?;
+            room
+        };
+        self.directory.host_seen(&room, now_ms()).await?;
         *self.listing.lock().await = None;
         self.hub.announce(code).await;
-        self.view(code, user_id).await
+        self.view(&room.code, user_id).await
     }
 
     pub async fn public_rooms(&self) -> AppResult<Arc<Vec<PublicRoom>>> {
