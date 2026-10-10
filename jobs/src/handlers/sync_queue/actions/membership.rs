@@ -57,7 +57,7 @@ impl MembershipApply {
             Value::Array(
                 self.tracks
                     .iter()
-                    .map(|id| json!({ "id": id.parse::<i64>().unwrap_or_default() }))
+                    .map(|id| json!({ "urn": format!("soundcloud:tracks:{id}") }))
                     .collect(),
             ),
         );
@@ -87,7 +87,11 @@ mod tests {
         assert_eq!(apply.len(), 3);
         assert_eq!(
             apply.body(),
-            json!({"playlist": {"tracks": [{"id": 30}, {"id": 10}, {"id": 20}]}})
+            json!({"playlist": {"tracks": [
+                {"urn": "soundcloud:tracks:30"},
+                {"urn": "soundcloud:tracks:10"},
+                {"urn": "soundcloud:tracks:20"}
+            ]}})
         );
     }
 

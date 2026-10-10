@@ -39,9 +39,7 @@ pub async fn execute_remote(
                 .await?
         }
         "unlike_track" => {
-            client
-                .delete(&format!("/likes/tracks/{target}"), access_token)
-                .await?
+            delete_remote(client, &format!("/likes/tracks/{target}"), access_token).await?
         }
         "like_playlist" => {
             client
@@ -49,9 +47,7 @@ pub async fn execute_remote(
                 .await?
         }
         "unlike_playlist" => {
-            client
-                .delete(&format!("/likes/playlists/{target}"), access_token)
-                .await?
+            delete_remote(client, &format!("/likes/playlists/{target}"), access_token).await?
         }
         "follow_user" => {
             client
@@ -59,9 +55,7 @@ pub async fn execute_remote(
                 .await?
         }
         "unfollow_user" => {
-            client
-                .delete(&format!("/me/followings/{target}"), access_token)
-                .await?
+            delete_remote(client, &format!("/me/followings/{target}"), access_token).await?
         }
         "playlist_create" => {
             client
