@@ -104,6 +104,14 @@ impl PlaylistsService {
     ) -> AppResult<Value> {
         let has_secret = params.iter().any(|(key, _)| key == "secret_token");
         self.get_by_id_with_fetch(session_id, sc_user_id, playlist_urn, has_secret, || async {
+            if let Some((_, secret)) = params.iter().find(|(key, _)| key == "secret_token")
+                && let Some(playlist) = self
+                    .miss
+                    .playlist_by_secret(extract_sc_id(playlist_urn), secret)
+                    .await
+            {
+                return Ok(playlist);
+            }
             let chain = self.tokens.chain(TokenKind::UserFirst(session_id)).await?;
             let mut metadata_params: Vec<_> = params
                 .iter()

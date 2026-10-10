@@ -446,10 +446,13 @@ impl ScClient {
         &self,
         playlist_id: &str,
         hydrate: bool,
+        secret_token: Option<&str>,
     ) -> crate::RelayRead<Value> {
-        let Ok(inputs) =
-            serde_json::to_vec(&serde_json::json!({ "id": playlist_id, "hydrate": hydrate }))
-        else {
+        let Ok(inputs) = serde_json::to_vec(&serde_json::json!({
+            "id": playlist_id,
+            "hydrate": hydrate,
+            "secret_token": secret_token,
+        })) else {
             return crate::RelayRead::Unavailable;
         };
         let answer = self

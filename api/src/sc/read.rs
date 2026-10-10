@@ -131,7 +131,7 @@ impl ScReadService {
             Self::timed(
                 "relay_lua",
                 "playlist_meta",
-                self.entity_lua(self.sc.playlist_full_via_relay(playlist_id, false)),
+                self.entity_lua(self.sc.playlist_full_via_relay(playlist_id, false, None)),
             ),
             Self::timed(
                 "backup",
@@ -140,6 +140,22 @@ impl ScReadService {
             ),
         )
         .await
+    }
+
+    pub async fn playlist_meta_by_secret(&self, playlist_id: &str, secret: &str) -> Option<Value> {
+        let relayed = self
+            .entity_lua(
+                self.sc
+                    .playlist_full_via_relay(playlist_id, false, Some(secret)),
+            )
+            .await;
+        if let Ok(playlist) = relayed {
+            return Some(playlist);
+        }
+        self.proxy
+            .playlist(playlist_id, false, Some(secret))
+            .await
+            .ok()
     }
 
     pub async fn search(
@@ -287,7 +303,7 @@ impl ScReadService {
     }
 
     async fn playlist_meta_chain(&self, kind: TokenKind, id: &str) -> AppResult<Value> {
-        match self.proxy.playlist(id, false).await {
+        match self.proxy.playlist(id, false, None).await {
             Ok(v) => Ok(v),
             Err(e) if authoritative_miss(&e) => Err(e.into()),
             Err(_) => {

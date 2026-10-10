@@ -42,9 +42,22 @@ impl Apiv2Proxy {
             .await
     }
 
-    pub async fn playlist(&self, playlist_id: &str, hydrate: bool) -> ScResult<Value> {
+    pub async fn playlist(
+        &self,
+        playlist_id: &str,
+        hydrate: bool,
+        secret_token: Option<&str>,
+    ) -> ScResult<Value> {
+        let secret = secret_token
+            .map(|secret| {
+                let secret = url::form_urlencoded::byte_serialize(secret.as_bytes());
+                format!("&secret_token={}", secret.collect::<String>())
+            })
+            .unwrap_or_default();
         let mut playlist = self
-            .get_with_retry(|cid| format!("{SC_API_V2}/playlists/{playlist_id}?client_id={cid}"))
+            .get_with_retry(|cid| {
+                format!("{SC_API_V2}/playlists/{playlist_id}?client_id={cid}{secret}")
+            })
             .await?;
         if !hydrate {
             mapping::normalize_v2_to_v1(&mut playlist);
@@ -75,6 +88,7 @@ impl Apiv2Proxy {
         mapping::normalize_v2_to_v1(&mut playlist);
         if let Some(obj) = playlist.as_object_mut() {
             obj.insert("tracks".to_string(), Value::Array(tracks));
+            obj.insert("track_ids".to_string(), serde_json::json!(ids));
         }
         Ok(playlist)
     }

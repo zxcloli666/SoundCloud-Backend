@@ -129,6 +129,10 @@ impl PlaylistReadClient {
 }
 
 impl PlaylistReadError {
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Api { status, .. } if *status == StatusCode::NOT_FOUND)
+    }
+
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status == StatusCode::UNAUTHORIZED)
     }

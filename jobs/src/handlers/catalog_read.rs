@@ -15,6 +15,11 @@ pub struct CollectionPage {
     pub next_href: Option<String>,
 }
 
+pub enum PlaylistRead {
+    Found(Value),
+    Gone,
+}
+
 pub struct PublicCatalogReader {
     sc: ScClient,
     proxy: Apiv2Proxy,
@@ -31,6 +36,18 @@ impl PublicCatalogReader {
             lua_health: EgressHealth::new(EGRESS_RELAY_LUA, EGRESS_APP, Some(store.clone())),
             raw_health: EgressHealth::new(EGRESS_RELAY_RAW, EGRESS_APP, Some(store)),
         }
+    }
+
+    #[cfg(test)]
+    pub fn offline(pg: sqlx::PgPool) -> Self {
+        let sc = ScClient::new(&sc_transport::ScConfig {
+            proxy_url: String::new(),
+            proxy_fallback: false,
+            api_base: Some("http://127.0.0.1:1".to_owned()),
+            home_base: Some("http://127.0.0.1:1".to_owned()),
+        })
+        .expect("an offline client builds");
+        Self::new(sc, pg)
     }
 
     async fn lua_is_worth_trying(&self) -> bool {
@@ -69,6 +86,29 @@ impl PublicCatalogReader {
             }
         }
         self.proxy.user(user_id).await
+    }
+
+    pub async fn playlist_full(
+        &self,
+        playlist_id: &str,
+        secret_token: Option<&str>,
+    ) -> ScResult<PlaylistRead> {
+        if self.lua_is_worth_trying().await {
+            let read = self
+                .sc
+                .playlist_full_via_relay(playlist_id, true, secret_token)
+                .await;
+            self.observe_lua(&read).await;
+            if let Some(mut playlist) = read.found() {
+                normalize_v2_to_v1(&mut playlist);
+                return Ok(PlaylistRead::Found(playlist));
+            }
+        }
+        match self.proxy.playlist(playlist_id, true, secret_token).await {
+            Ok(playlist) => Ok(PlaylistRead::Found(playlist)),
+            Err(sc_transport::ScError::Api { status: 404, .. }) => Ok(PlaylistRead::Gone),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn resolve_url(&self, url: &str) -> ScResult<Value> {

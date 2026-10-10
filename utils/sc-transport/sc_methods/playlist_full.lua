@@ -5,9 +5,10 @@
 -- /tracks?ids=… (≤50/req, order mapped by id), and returns the playlist with `tracks`
 -- replaced by the full ordered list.
 --
--- inputs:  { id = "123456", hydrate = true }   (bare playlist id; hydrate defaults true,
---                                                false = meta only, skip /tracks batch)
--- output:  { ok = true, playlist = <apiv2 playlist, tracks hydrated> }
+-- inputs:  { id = "123456", hydrate = true, secret_token = "s-abc" }
+--          (bare playlist id; hydrate defaults true, false = meta only, skip /tracks batch;
+--           secret_token opens a private playlist)
+-- output:  { ok = true, playlist = <apiv2 playlist, tracks hydrated, track_ids = every id in order> }
 --          | { ok = false, reason = "no_playlist" | "gone" }
 
 local cid = client_id()
@@ -20,6 +21,9 @@ local base = "https://api-v2.soundcloud.com"
 
 local function get_playlist(id)
   local url = base .. "/playlists/" .. urlencode(tostring(id)) .. "?client_id=" .. urlencode(cid)
+  if inputs.secret_token ~= nil and inputs.secret_token ~= "" then
+    url = url .. "&secret_token=" .. urlencode(tostring(inputs.secret_token))
+  end
   local resp = http({ url = url, method = "GET" })
   if resp.status == 200 then
     return json_decode(resp.body), nil
@@ -103,5 +107,6 @@ for _, key in ipairs(ids) do
   end
 end
 pl.tracks = ordered
+pl.track_ids = ids
 
 return { ok = true, playlist = pl }

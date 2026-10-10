@@ -75,6 +75,13 @@ impl PlaylistReader {
         .map_err(|_| PlaylistObserveError::Deadline)?
     }
 
+    pub async fn account_id(&self, access_token: &str) -> Result<String, PlaylistObserveError> {
+        let account = self.client.get_path("/me", access_token).await?;
+        numeric_id(account.value.get("id"))
+            .or_else(|| urn_id(account.value.get("urn"), "soundcloud:users:"))
+            .ok_or(PlaylistObserveError::Invalid("account ID is missing"))
+    }
+
     async fn observe_before_deadline(
         &self,
         urn: &PlaylistUrn,
@@ -187,6 +194,62 @@ impl PlaylistReader {
             hydrated_tracks,
         })
     }
+}
+
+pub fn public_snapshot(
+    value: &Value,
+    urn: &PlaylistUrn,
+) -> Result<PlaylistSnapshot, PlaylistObserveError> {
+    let state = RemoteState::parse(value, urn)?;
+    let listed =
+        value
+            .get("track_ids")
+            .and_then(Value::as_array)
+            .ok_or(PlaylistObserveError::Invalid(
+                "playlist has no track ID list",
+            ))?;
+    let mut track_ids = Vec::with_capacity(listed.len());
+    let mut seen_ids = HashSet::with_capacity(listed.len());
+    for listed_id in listed {
+        let track_id = numeric_id(Some(listed_id)).ok_or(PlaylistObserveError::Invalid(
+            "playlist track ID is missing",
+        ))?;
+        if seen_ids.insert(track_id.clone()) {
+            track_ids.push(track_id);
+        }
+    }
+    if track_ids.len() > MAX_TRACKS {
+        return Err(PlaylistObserveError::Invalid(
+            "playlist returned more tracks than allowed",
+        ));
+    }
+    let mut hydrated_ids = HashSet::with_capacity(track_ids.len());
+    let mut hydrated_tracks = Vec::with_capacity(track_ids.len());
+    for track in value
+        .get("tracks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let track_id = track_id(track)?;
+        if seen_ids.contains(&track_id)
+            && hydrated_ids.insert(track_id.clone())
+            && let Some(hydrated) = hydrate_track(track, &track_id)
+        {
+            hydrated_tracks.push(hydrated);
+        }
+    }
+    let track_count = i32::try_from(state.track_count.max(track_ids.len()))
+        .map_err(|_| PlaylistObserveError::Invalid("track count is too large"))?;
+    Ok(PlaylistSnapshot {
+        playlist_id: state.playlist_id,
+        owner_id: state.owner_id,
+        track_count,
+        track_ids,
+        hydrated_tracks,
+        remote_last_modified: state.last_modified,
+        observed_at: Utc::now(),
+    })
 }
 
 impl PlaylistObserveError {
@@ -429,6 +492,45 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_public_read_keeps_every_listed_track_even_when_it_was_not_hydrated() {
+        let urn = PlaylistUrn::parse("soundcloud:playlists:42").unwrap();
+        let playlist = json!({
+            "id": 42,
+            "user": {"id": 9},
+            "track_count": 2,
+            "last_modified": "2026-10-01T10:00:00Z",
+            "track_ids": ["1", "2", "3", "1"],
+            "tracks": [
+                {"id": 1, "title": "First", "duration": 1000, "user": {"id": 9}},
+                {"id": 5, "title": "Stray", "duration": 1000, "user": {"id": 9}}
+            ]
+        });
+
+        let snapshot = public_snapshot(&playlist, &urn).unwrap();
+
+        assert_eq!(snapshot.track_ids, vec!["1", "2", "3"]);
+        assert_eq!(snapshot.track_count, 3);
+        assert!(!snapshot.is_partial());
+        assert_eq!(snapshot.hydrated_tracks.len(), 1);
+        assert_eq!(snapshot.hydrated_tracks[0].sc_track_id, "1");
+        assert_eq!(snapshot.owner_id, "9");
+    }
+
+    #[test]
+    fn a_public_read_without_its_track_list_is_not_trusted() {
+        let urn = PlaylistUrn::parse("soundcloud:playlists:42").unwrap();
+        let playlist = json!({
+            "id": 42,
+            "user": {"id": 9},
+            "track_count": 0,
+            "last_modified": "2026-10-01T10:00:00Z",
+            "tracks": []
+        });
+
+        assert!(public_snapshot(&playlist, &urn).is_err());
+    }
 
     #[test]
     fn raw_numeric_track_ids_survive_page_parsing() {

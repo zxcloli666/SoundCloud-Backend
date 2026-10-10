@@ -11,6 +11,7 @@ mod urn;
 #[path = "reduce_tests.rs"]
 mod reduce_tests;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use backend_contracts::{JobKind, PlaylistObservePayload, Versioned};
@@ -24,12 +25,13 @@ use crate::queue::{JobError, JobRepository, JobResult, NewJob};
 
 pub(super) use self::client::{PlaylistReadClient, PlaylistReadError};
 use self::model::{Authority, PlaylistSnapshot};
-use self::remote::{PlaylistObserveError, PlaylistReader};
+use self::remote::{PlaylistObserveError, PlaylistReader, public_snapshot};
 use self::repository::{
     CaptureResult, FailureObservation, ObservationCapture, PersistResult,
     PlaylistObserveRepository, RepositoryError,
 };
 use self::urn::PlaylistUrn;
+use super::catalog_read::{PlaylistRead, PublicCatalogReader};
 use super::lyrics::wake;
 use super::sync_queue::{AccessToken, ConnectionError, ConnectionManager, TokenRefreshClient};
 
@@ -50,11 +52,16 @@ pub struct PlaylistObserveHandler {
     connections: ConnectionManager,
     token_client: TokenRefreshClient,
     reader: PlaylistReader,
+    public: Arc<PublicCatalogReader>,
     reconcile: PlaylistReconcileConfig,
 }
 
 impl PlaylistObserveHandler {
-    pub fn new(config: &JobsConfig, pool: PgPool) -> Result<Self, crate::ClientBuildError> {
+    pub fn new(
+        config: &JobsConfig,
+        pool: PgPool,
+        public: Arc<PublicCatalogReader>,
+    ) -> Result<Self, crate::ClientBuildError> {
         Ok(Self {
             queue: JobRepository::new(pool.clone(), "playlist-observe".to_owned()),
             repository: PlaylistObserveRepository::new(
@@ -65,6 +72,7 @@ impl PlaylistObserveHandler {
             pool,
             token_client: TokenRefreshClient::new(&config.oauth)?,
             reader: PlaylistReader::new(PlaylistReadClient::new(&config.sync_queue)?),
+            public,
             reconcile: config.playlist_reconcile,
         })
     }
@@ -128,6 +136,9 @@ impl PlaylistObserveHandler {
         let capture = captured
             .capture
             .ok_or_else(|| JobError::retryable(anyhow::anyhow!("playlist capture is missing")))?;
+        if self.observe_publicly(&urn, &capture).await? {
+            return Ok(());
+        }
         match self
             .connections
             .access_token(&self.token_client, &capture.owner_id)
@@ -139,6 +150,66 @@ impl PlaylistObserveHandler {
             }
             Err(error) => self.finish_connection_failure(&capture, error).await,
         }
+    }
+
+    async fn observe_publicly(
+        &self,
+        urn: &PlaylistUrn,
+        capture: &ObservationCapture,
+    ) -> JobResult<bool> {
+        let secret = self
+            .repository
+            .secret_token(urn)
+            .await
+            .map_err(repository_job_error)?;
+        let metadata_observation = catalog_ingest::Observation::begin(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+        let playlist = match self.public.playlist_full(urn.id(), secret.as_deref()).await {
+            Ok(PlaylistRead::Found(playlist)) => playlist,
+            Ok(PlaylistRead::Gone) => return Ok(false),
+            Err(error) => {
+                tracing::debug!(playlist = %urn.as_str(), %error, "public playlist read unavailable, asking the owner api");
+                return Ok(false);
+            }
+        };
+        let Ok(snapshot) = public_snapshot(&playlist, urn) else {
+            return Ok(false);
+        };
+        if snapshot.owner_id != capture.owner_id
+            || snapshot.track_ids.is_empty()
+            || self
+                .repository
+                .has_hidden_local_tracks(urn, &snapshot.track_ids)
+                .await
+                .map_err(repository_job_error)?
+        {
+            return Ok(false);
+        }
+        self.finish_success(capture, &snapshot, Authority::Owner, metadata_observation)
+            .await?;
+        Ok(true)
+    }
+
+    async fn confirm_remote_deletion(
+        &self,
+        capture: &ObservationCapture,
+        access_token: &str,
+    ) -> JobResult {
+        self.finish_failure(capture, not_found_failure()).await?;
+        match self.reader.account_id(access_token).await {
+            Ok(account_id) if account_id == capture.owner_id => {}
+            _ => return Ok(()),
+        }
+        let retired = self
+            .repository
+            .retire_remotely_deleted(capture)
+            .await
+            .map_err(repository_job_error)?;
+        if retired {
+            tracing::info!(playlist = %capture.playlist_urn, "playlist is deleted on soundcloud, removed locally");
+        }
+        Ok(())
     }
 
     async fn observe_as_owner(
@@ -178,6 +249,11 @@ impl PlaylistObserveHandler {
                 };
                 match self.reader.observe(urn, &refreshed.value).await {
                     Ok(snapshot) => snapshot,
+                    Err(error) if is_not_found(&error) => {
+                        return self
+                            .confirm_remote_deletion(capture, &refreshed.value)
+                            .await;
+                    }
                     Err(error) if is_unauthorized(&error) => {
                         self.connections
                             .reject_for_later(&capture.owner_id, &refreshed.value)
@@ -191,6 +267,9 @@ impl PlaylistObserveHandler {
                             .await;
                     }
                 }
+            }
+            Err(error) if is_not_found(&error) => {
+                return self.confirm_remote_deletion(capture, &token.value).await;
             }
             Err(error) => {
                 return self
@@ -511,6 +590,10 @@ fn seconds(value: i64, fallback: Duration) -> Duration {
         .map(Duration::from_secs)
         .unwrap_or(fallback)
         .min(MAX_REMOTE_RETRY)
+}
+
+fn is_not_found(error: &PlaylistObserveError) -> bool {
+    error.read().is_some_and(PlaylistReadError::is_not_found)
 }
 
 fn is_unauthorized(error: &PlaylistObserveError) -> bool {

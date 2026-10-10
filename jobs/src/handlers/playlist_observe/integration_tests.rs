@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::config::{OAuthConfig, PlaylistReconcileConfig, SyncQueueConfig};
 use crate::queue::JobRepository;
 
+use super::super::catalog_read::PublicCatalogReader;
 use super::client::PlaylistReadClient;
 use super::model::Authority;
 use super::remote::PlaylistReader;
@@ -41,6 +42,7 @@ async fn observer_is_get_only_and_releases_a_single_connection_before_http(
         connections: ConnectionManager::new(pool.clone()),
         token_client: TokenRefreshClient::new(&oauth)?,
         reader: PlaylistReader::new(PlaylistReadClient::new(&sync)?),
+        public: std::sync::Arc::new(PublicCatalogReader::offline(pool.clone())),
         reconcile: PlaylistReconcileConfig {
             sweep_batch: 512,
             sweep_owner_share: 8,
@@ -137,6 +139,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          CREATE TABLE playlists (
              urn text PRIMARY KEY,
              owner_sc_user_id text,
+             permalink_url text,
              sharing text NOT NULL DEFAULT 'public',
              track_count integer NOT NULL DEFAULT 0,
              desired_rev bigint NOT NULL DEFAULT 0,
@@ -1400,6 +1403,109 @@ async fn scripted_soundcloud(
     Ok((api_url, methods, server))
 }
 
+async fn deleted_playlist_soundcloud(account: &'static str) -> anyhow::Result<ScriptedServer> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let api_url = Url::parse(&format!("http://{address}/"))?;
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let server_methods = Arc::clone(&methods);
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            let request = read_request(&mut stream).await?;
+            let path = request.split_whitespace().nth(1).unwrap_or_default();
+            server_methods.lock().await.push(path.to_owned());
+            let (status, body) = if path.starts_with("/me") {
+                ("200 OK", account)
+            } else {
+                ("404 Not Found", "{}")
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).await?;
+            stream.write_all(body.as_bytes()).await?;
+            stream.shutdown().await?;
+        }
+    });
+    Ok((api_url, methods, server))
+}
+
+async fn observe_deleted_playlist(pool: &PgPool, account: &'static str) -> anyhow::Result<bool> {
+    install_schema(pool).await?;
+    seed_playlist_and_connection(pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO user_owned_playlists (user_id, playlist_urn)
+         VALUES ('42', 'soundcloud:playlists:42') ON CONFLICT DO NOTHING;
+         INSERT INTO sync_queue (user_id, action_type, target_urn)
+         VALUES ('42', 'playlist_update', 'soundcloud:playlists:42');",
+    )
+    .execute(pool)
+    .await?;
+    let (api_url, _, server) = deleted_playlist_soundcloud(account).await?;
+    let handler = observe_handler(pool, api_url)?;
+
+    handler
+        .observe(
+            Uuid::now_v7(),
+            1,
+            PlaylistObservePayload {
+                playlist_urn: "soundcloud:playlists:42".to_owned(),
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    server.abort();
+
+    Ok(sqlx::query_scalar(
+        "SELECT deleted_at IS NOT NULL FROM playlists WHERE urn = 'soundcloud:playlists:42'",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_playlist_deleted_on_soundcloud_is_removed_locally_with_its_pending_pushes(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    assert!(observe_deleted_playlist(&pool, r#"{"id":42}"#).await?);
+
+    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM user_owned_playlists")
+        .fetch_one(&pool)
+        .await?;
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
+    let due: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT next_reconcile_at FROM playlist_membership_state
+         WHERE playlist_urn = 'soundcloud:playlists:42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!((owned, queued, due), (0, 0, None));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_missing_playlist_stays_when_the_token_belongs_to_another_account(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    assert!(!observe_deleted_playlist(&pool, r#"{"id":7}"#).await?);
+
+    let (status, conflict) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT sync_status, conflict_code FROM playlist_membership_state
+         WHERE playlist_urn = 'soundcloud:playlists:42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        (status.as_str(), conflict.as_deref()),
+        ("conflict", Some("remote_not_found"))
+    );
+    Ok(())
+}
+
 fn observe_handler(pool: &PgPool, api_url: Url) -> anyhow::Result<PlaylistObserveHandler> {
     let sync = sync_config(api_url.clone());
     let oauth = OAuthConfig {
@@ -1413,6 +1519,7 @@ fn observe_handler(pool: &PgPool, api_url: Url) -> anyhow::Result<PlaylistObserv
         connections: ConnectionManager::new(pool.clone()),
         token_client: TokenRefreshClient::new(&oauth)?,
         reader: PlaylistReader::new(PlaylistReadClient::new(&sync)?),
+        public: std::sync::Arc::new(PublicCatalogReader::offline(pool.clone())),
         reconcile: PlaylistReconcileConfig {
             sweep_batch: 512,
             sweep_owner_share: 8,

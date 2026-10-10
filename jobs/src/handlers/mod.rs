@@ -253,7 +253,7 @@ impl JobHandlers {
                 databases.main.bulk.clone(),
                 sources.musicbrainz.clone(),
                 sources.genius.clone(),
-                reader,
+                reader.clone(),
                 wanted.clone(),
                 config.crawl.clone(),
             ),
@@ -297,7 +297,11 @@ impl JobHandlers {
                 databases.maintenance.clone(),
                 config.playlist_reconcile,
             ),
-            playlist_observe: PlaylistObserveHandler::new(config, databases.main.bulk.clone())?,
+            playlist_observe: PlaylistObserveHandler::new(
+                config,
+                databases.main.bulk.clone(),
+                reader.clone(),
+            )?,
             quality: QualityHandler::new(databases.maintenance.clone(), qdrant),
             recommendations: RecommendationHandler::new(
                 databases.maintenance.clone(),

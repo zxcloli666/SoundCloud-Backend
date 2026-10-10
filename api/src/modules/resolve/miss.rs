@@ -80,6 +80,12 @@ impl CatalogMiss {
         .await
     }
 
+    pub async fn playlist_by_secret(&self, sc_playlist_id: &str, secret: &str) -> Option<Value> {
+        self.reads
+            .playlist_meta_by_secret(sc_playlist_id, secret)
+            .await
+    }
+
     pub async fn tracks(&self, session: Uuid, ids: &[String]) -> AppResult<()> {
         if ids.is_empty() {
             return Ok(());
