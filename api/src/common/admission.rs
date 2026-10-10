@@ -74,6 +74,7 @@ pub enum Endpoint {
     Resolve,
     SoundCloudSearch,
     CatalogMiss,
+    RoomList,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,7 +194,9 @@ impl PublicAdmission {
     fn gate(&self, endpoint: Endpoint) -> &Semaphore {
         match endpoint {
             Endpoint::Login | Endpoint::LinkCreate | Endpoint::Resolve => &self.in_flight,
-            Endpoint::SoundCloudSearch | Endpoint::CatalogMiss => &self.session_in_flight,
+            Endpoint::SoundCloudSearch | Endpoint::CatalogMiss | Endpoint::RoomList => {
+                &self.session_in_flight
+            }
         }
     }
 
@@ -204,6 +207,7 @@ impl PublicAdmission {
             Endpoint::Resolve => self.config.resolve,
             Endpoint::SoundCloudSearch => self.config.sc_search,
             Endpoint::CatalogMiss => self.config.catalog_miss,
+            Endpoint::RoomList => self.config.room_list,
         }
     }
 
@@ -239,6 +243,7 @@ impl Endpoint {
             Self::Resolve => "resolve",
             Self::SoundCloudSearch => "sc-search",
             Self::CatalogMiss => "catalog-miss",
+            Self::RoomList => "rooms-list",
         }
     }
 
@@ -249,6 +254,7 @@ impl Endpoint {
             Self::Resolve => "/resolve",
             Self::SoundCloudSearch => "SoundCloud search",
             Self::CatalogMiss => "catalog miss",
+            Self::RoomList => "/rooms/public",
         }
     }
 }

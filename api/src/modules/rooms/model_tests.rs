@@ -179,3 +179,38 @@ fn the_announced_next_track_follows_the_current_one() {
     huge_next.next_track = Some(json!("x"));
     assert!(room.set_playback("1", huge_next, 100).is_err());
 }
+
+#[test]
+fn a_room_is_private_until_its_host_opens_it() {
+    let mut room = room();
+    assert!(!room.public);
+    room.join(Member::new("2", &profile("Guest"), 11)).unwrap();
+    let denied = room.set_public("2", true).unwrap_err();
+    assert_eq!(denied.status(), axum::http::StatusCode::FORBIDDEN);
+    room.set_public("1", true).unwrap();
+    assert!(room.public);
+    room.set_public("1", false).unwrap();
+    assert!(!room.public);
+    let stored = serde_json::to_value(&room).unwrap();
+    let mut legacy = stored.clone();
+    legacy.as_object_mut().unwrap().remove("public");
+    let decoded: Room = serde_json::from_value(legacy).unwrap();
+    assert!(!decoded.public);
+}
+
+#[test]
+fn a_full_room_gives_the_seats_of_absent_guests_away() {
+    let mut room = room();
+    for id in 2..=MAX_MEMBERS {
+        room.join(Member::new(&id.to_string(), &profile("x"), 0))
+            .unwrap();
+    }
+    room.join(Member::new("50", &profile("fresh"), 900))
+        .unwrap_err();
+    room.members[1].joined_at = 900;
+    room.drop_absent(&["3".to_owned()], 500);
+    let left: Vec<&str> = room.members.iter().map(|m| m.user_id.as_str()).collect();
+    assert_eq!(left, ["1", "2", "3"]);
+    room.join(Member::new("50", &profile("fresh"), 900))
+        .unwrap();
+}

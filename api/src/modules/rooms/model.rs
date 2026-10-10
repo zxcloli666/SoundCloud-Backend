@@ -75,6 +75,8 @@ pub struct Room {
     pub created_at: i64,
     pub members: Vec<Member>,
     pub playback: Playback,
+    #[serde(default)]
+    pub public: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -173,6 +175,7 @@ impl Room {
             created_at: now,
             members: vec![host],
             playback: Playback::default(),
+            public: false,
         }
     }
 
@@ -182,6 +185,27 @@ impl Room {
 
     pub fn is_host(&self, user_id: &str) -> bool {
         self.host_id == user_id
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.members.len() >= MAX_MEMBERS
+    }
+
+    pub fn set_public(&mut self, user_id: &str, public: bool) -> AppResult<()> {
+        if !self.is_host(user_id) {
+            return Err(AppError::forbidden(
+                "Only the host opens or closes the room",
+            ));
+        }
+        self.public = public;
+        Ok(())
+    }
+
+    pub fn drop_absent(&mut self, online: &[String], joined_after: i64) {
+        let host_id = self.host_id.clone();
+        self.members.retain(|m| {
+            m.user_id == host_id || m.joined_at > joined_after || online.contains(&m.user_id)
+        });
     }
 
     pub fn join(&mut self, member: Member) -> AppResult<()> {
@@ -194,7 +218,7 @@ impl Room {
             existing.avatar_url = member.avatar_url;
             return Ok(());
         }
-        if self.members.len() >= MAX_MEMBERS {
+        if self.is_full() {
             return Err(AppError::coded(
                 axum::http::StatusCode::CONFLICT,
                 "room_full",

@@ -72,6 +72,7 @@ fn config(redis: &str) -> AppConfig {
             resolve: limit,
             sc_search: limit,
             catalog_miss: limit,
+            room_list: limit,
         },
         nats: NatsCfg {
             url: "nats://127.0.0.1:1".to_owned(),

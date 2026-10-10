@@ -28,6 +28,8 @@ const READ_THROUGH_A_PREFIX: &[&str] = &[
     "SC_SEARCH_GLOBAL",
     "CATALOG_MISS_PER_CLIENT",
     "CATALOG_MISS_GLOBAL",
+    "ROOMS_LIST_PER_CLIENT",
+    "ROOMS_LIST_GLOBAL",
 ];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

@@ -65,6 +65,30 @@ impl RoomStore {
         .transpose()
     }
 
+    pub async fn load_with_presence(
+        &self,
+        codes: &[String],
+        since: i64,
+    ) -> AppResult<Vec<(Room, Vec<String>)>> {
+        if codes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut bodies = redis::pipe();
+        let mut presence = redis::pipe();
+        for code in codes {
+            bodies.hget(room_key(code), "body");
+            presence.zrangebyscore(seen_key(code), since, "+inf");
+        }
+        let mut conn = self.redis.get().await?;
+        let bodies: Vec<Option<String>> = bodies.query_async(&mut conn).await?;
+        let presence: Vec<Vec<String>> = presence.query_async(&mut conn).await?;
+        Ok(bodies
+            .into_iter()
+            .zip(presence)
+            .filter_map(|(body, online)| Some((serde_json::from_str(&body?).ok()?, online)))
+            .collect())
+    }
+
     pub async fn version(&self, code: &str) -> AppResult<Option<u64>> {
         let mut conn = self.redis.get().await?;
         Ok(conn.hget(room_key(code), "v").await?)

@@ -219,6 +219,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             resolve: limits(5, 6),
             sc_search: limits(7, 8),
             catalog_miss: limits(9, 10),
+            room_list: limits(11, 12),
         },
         "test:public:admission:budgets",
     );
@@ -233,6 +234,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
 
     assert_eq!(admission.limits(Endpoint::SoundCloudSearch).per_client, 7);
     assert_eq!(admission.limits(Endpoint::CatalogMiss).per_client, 9);
+    assert_eq!(admission.limits(Endpoint::RoomList).per_client, 11);
 
     let keys = [
         Endpoint::Login.key(),
@@ -240,6 +242,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         Endpoint::Resolve.key(),
         Endpoint::SoundCloudSearch.key(),
         Endpoint::CatalogMiss.key(),
+        Endpoint::RoomList.key(),
     ];
     assert_eq!(
         keys.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -348,6 +351,7 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         resolve: limit,
         sc_search: limit,
         catalog_miss: limit,
+        room_list: limit,
     }
 }
 

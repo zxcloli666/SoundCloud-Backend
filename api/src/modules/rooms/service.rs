@@ -6,7 +6,9 @@ use serde::Serialize;
 use tokio::time::Instant;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::rooms::directory::RoomDirectory;
 use crate::modules::rooms::hub::RoomHub;
+use crate::modules::rooms::listing::PublicRoom;
 use crate::modules::rooms::model::{Member, PlaybackUpdate, Profile, Room, new_code};
 use crate::modules::rooms::store::RoomStore;
 
@@ -24,11 +26,13 @@ pub struct RoomView {
 }
 
 pub struct RoomsService {
-    store: RoomStore,
-    hub: Arc<RoomHub>,
+    pub(super) store: RoomStore,
+    pub(super) directory: RoomDirectory,
+    pub(super) hub: Arc<RoomHub>,
+    pub(super) listing: tokio::sync::Mutex<Option<(Instant, Arc<Vec<PublicRoom>>)>>,
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
@@ -39,12 +43,17 @@ fn not_member() -> AppError {
 impl RoomsService {
     pub fn new(redis: Pool, hub: Arc<RoomHub>) -> Arc<Self> {
         Arc::new(Self {
-            store: RoomStore::new(redis),
+            store: RoomStore::new(redis.clone()),
+            directory: RoomDirectory::new(redis),
             hub,
+            listing: tokio::sync::Mutex::new(None),
         })
     }
 
     pub async fn create(&self, user_id: &str, profile: &Profile) -> AppResult<RoomView> {
+        if let Some(previous) = self.directory.hosted_by(user_id).await? {
+            self.leave(&previous, user_id).await?;
+        }
         let now = now_ms();
         for _ in 0..CODE_ATTEMPTS {
             let room = Room::new(new_code(), Member::new(user_id, profile, now), now);
@@ -68,6 +77,9 @@ impl RoomsService {
             return Err(not_member());
         }
         let now = now_ms();
+        if room.is_host(user_id) {
+            self.directory.host_seen(&room, now).await?;
+        }
         let online = self.store.seen_since(code, now - ONLINE_WINDOW_MS).await?;
         Ok(RoomView {
             room,
@@ -108,9 +120,31 @@ impl RoomsService {
     }
 
     pub async fn join(&self, code: &str, user_id: &str, profile: &Profile) -> AppResult<RoomView> {
-        let member = Member::new(user_id, profile, now_ms());
+        self.admit(code, user_id, profile, false).await
+    }
+
+    pub(super) async fn admit(
+        &self,
+        code: &str,
+        user_id: &str,
+        profile: &Profile,
+        public_only: bool,
+    ) -> AppResult<RoomView> {
+        let now = now_ms();
+        let member = Member::new(user_id, profile, now);
+        let recent = now - ONLINE_WINDOW_MS;
+        let online = self.store.seen_since(code, recent).await?;
         self.store
-            .update(code, |room| room.join(member.clone()))
+            .update(code, |room| {
+                let known = room.is_member(user_id);
+                if public_only && !room.public && !known {
+                    return Err(AppError::not_found("Room not found"));
+                }
+                if room.is_full() && !known {
+                    room.drop_absent(&online, recent);
+                }
+                room.join(member.clone())
+            })
             .await?;
         self.store.touch(code, user_id, now_ms()).await?;
         self.hub.announce(code).await;
@@ -123,6 +157,8 @@ impl RoomsService {
         };
         if room.is_host(user_id) {
             self.store.delete(code).await?;
+            self.directory.close(&room).await?;
+            *self.listing.lock().await = None;
         } else {
             let (_, left) = self
                 .store
