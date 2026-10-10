@@ -259,7 +259,9 @@ impl PlaylistObserveRepository {
                 .fetch_optional(&self.pool)
                 .await?
                 .flatten();
-        Ok(permalink.as_deref().and_then(secret_in_permalink))
+        Ok(permalink
+            .as_deref()
+            .and_then(crate::handlers::secret_link::playlist_secret))
     }
 
     pub async fn has_hidden_local_tracks(
@@ -1036,20 +1038,6 @@ fn reconciliation_decision(
     }
 }
 
-fn secret_in_permalink(permalink: &str) -> Option<String> {
-    let path = permalink.split(['?', '#']).next()?;
-    let mut segments = path.trim_end_matches('/').rsplit('/');
-    let secret = segments.next()?;
-    let _slug = segments.next()?;
-    (segments.next() == Some("sets")
-        && secret.len() > 2
-        && secret.starts_with("s-")
-        && secret
-            .chars()
-            .all(|symbol| symbol.is_ascii_alphanumeric() || symbol == '-'))
-    .then(|| secret.to_owned())
-}
-
 fn hydration_matches_snapshot(snapshot: &PlaylistSnapshot) -> bool {
     let track_ids = snapshot
         .track_ids
@@ -1235,23 +1223,6 @@ fn finished_capture() -> CapturedObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_secret_is_read_only_from_the_last_segment_of_a_permalink() {
-        let secret = |permalink| secret_in_permalink(permalink);
-
-        assert_eq!(
-            secret("https://soundcloud.com/user/sets/mix/s-Ab12Cd?si=x"),
-            Some("s-Ab12Cd".to_owned())
-        );
-        assert_eq!(
-            secret("https://soundcloud.com/user/sets/mix/s-Ab12Cd/"),
-            Some("s-Ab12Cd".to_owned())
-        );
-        assert_eq!(secret("https://soundcloud.com/user/sets/s-mix"), None);
-        assert_eq!(secret("https://soundcloud.com/user/sets/mix"), None);
-        assert_eq!(secret("https://soundcloud.com/s-user/sets/mix"), None);
-    }
 
     #[test]
     fn clean_observation_replaces_the_projection() {

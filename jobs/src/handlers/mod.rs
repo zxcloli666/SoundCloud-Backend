@@ -33,6 +33,7 @@ mod playlist_legacy_tests;
 mod playlist_observe;
 mod recommendations;
 mod search_terms;
+mod secret_link;
 mod subscriptions;
 mod sync_queue;
 pub(crate) mod taste;

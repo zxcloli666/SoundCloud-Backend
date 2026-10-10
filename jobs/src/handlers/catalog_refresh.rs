@@ -10,11 +10,13 @@ use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
 use super::catalog_remote::{CatalogRemote, public_error};
+use super::secret_link;
 
 const FETCH_DEADLINE: Duration = Duration::from_secs(45);
 const GEO_REGIONS: i32 = 3;
 
 pub struct CatalogRefreshHandler {
+    pool: PgPool,
     writer: super::catalog_refresh_writer::CatalogWriter,
     public: Arc<PublicCatalogReader>,
     remote: CatalogRemote,
@@ -31,7 +33,8 @@ impl CatalogRefreshHandler {
                 pool.clone(),
                 config.durations.max_track_duration_ms,
             ),
-            remote: CatalogRemote::new(pool, config)?,
+            remote: CatalogRemote::new(pool.clone(), config)?,
+            pool,
             public,
         })
     }
@@ -70,9 +73,47 @@ impl CatalogRefreshHandler {
             return self.remote.public_get(&path).await;
         }
         match payload.owner_id.as_deref() {
-            Some(owner) => self.remote.owner_get(owner, &path).await,
+            Some(owner) => match self.public_by_secret(payload, &path).await? {
+                Some(value) => Ok(value),
+                None => self.remote.owner_get(owner, &path).await,
+            },
             None => self.public_get_across_regions(&path).await,
         }
+    }
+
+    async fn public_by_secret(
+        &self,
+        payload: &CatalogRefreshPayload,
+        path: &str,
+    ) -> JobResult<Option<Value>> {
+        let playlist = match payload.entity {
+            CatalogEntity::Playlist => true,
+            CatalogEntity::Track => false,
+            _ => return Ok(None),
+        };
+        let permalink = sqlx::query_file_scalar!(
+            "queries/catalog/load_private_permalink.sql",
+            payload.entity.urn(&payload.sc_id),
+            playlist
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(JobError::retryable)?
+        .flatten();
+        let secret = permalink.as_deref().and_then(if playlist {
+            secret_link::playlist_secret
+        } else {
+            secret_link::track_secret
+        });
+        let path = match secret {
+            Some(secret) => format!("{path}?secret_token={secret}"),
+            None => path.to_owned(),
+        };
+        let Ok(mut value) = self.public.get_json(&path).await else {
+            return Ok(None);
+        };
+        sc_transport::normalize_v2_to_v1(&mut value);
+        Ok(validate_entity(payload, &value).is_ok().then_some(value))
     }
 
     async fn public_get_across_regions(&self, path: &str) -> JobResult<Value> {
