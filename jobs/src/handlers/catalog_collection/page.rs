@@ -11,6 +11,7 @@ pub(super) struct Page {
     pub items: Vec<Value>,
     pub next: Option<String>,
     pub liked_at: Vec<(String, DateTime<Utc>)>,
+    pub apiv2: bool,
 }
 
 fn like_time(
@@ -51,6 +52,7 @@ pub(super) fn parse(
             items,
             next,
             liked_at: Vec::new(),
+            apiv2,
         });
     }
     let mut items = Vec::with_capacity(collection.len());
@@ -133,6 +135,7 @@ pub(super) fn parse(
         items,
         next,
         liked_at,
+        apiv2,
     })
 }
 
@@ -271,7 +274,7 @@ pub(super) fn target(payload: &CatalogCollectionPayload, saved: &str) -> JobResu
         .split_once(':')
         .ok_or_else(|| malformed("saved cursor version is missing"))?;
     let apiv2 = match version {
-        "v2" if !payload.owner && payload.collection.public_apiv2() => true,
+        "v2" if payload.apiv2_first() => true,
         "v1" => false,
         _ => return Err(malformed("saved cursor version is invalid")),
     };
@@ -284,6 +287,21 @@ pub(super) fn target(payload: &CatalogCollectionPayload, saved: &str) -> JobResu
         return Err(malformed("saved cursor is not canonical"));
     }
     Ok((apiv2, path.to_owned()))
+}
+
+pub(super) fn first_path(payload: &CatalogCollectionPayload, apiv2: bool) -> String {
+    format!(
+        "{}?limit={PAGE_SIZE}&linked_partitioning=true",
+        payload.path(apiv2)
+    )
+}
+
+pub(super) fn owner_api_start(payload: &CatalogCollectionPayload) -> JobResult<String> {
+    cursor(
+        payload,
+        &format!("https://api.soundcloud.com{}", first_path(payload, false)),
+        false,
+    )
 }
 
 pub(super) fn request_path(payload: &CatalogCollectionPayload, path: &str) -> JobResult<String> {
@@ -432,6 +450,70 @@ mod tests {
         let value = json!({"collection": [{"created_at": "2019-10-06T06:37:19Z", "kind": "playlist-like",
             "playlist": {"id": 7, "title": "Mix", "sharing": "public"}}]});
         assert!(parse(&payload, value, true).unwrap().liked_at.is_empty());
+    }
+
+    #[test]
+    fn owner_likes_read_from_apiv2_keep_the_like_time_and_a_public_cursor() {
+        let mut payload = payload();
+        payload.owner = true;
+        let value = json!({"collection": [
+            {"created_at": "2019-10-06T06:37:19Z", "kind": "like",
+             "track": {"id": 7, "title": "Track", "sharing": "public", "created_at": "2012-01-01T00:00:00Z"}}
+        ], "next_href": "https://api-v2.soundcloud.com/users/42/track_likes?offset=100&client_id=secret"});
+        let parsed = parse(&payload, value, true).unwrap();
+        let expected = DateTime::parse_from_rfc3339("2019-10-06T06:37:19Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(parsed.apiv2);
+        assert_eq!(parsed.liked_at, vec![("7".to_owned(), expected)]);
+        assert_eq!(
+            parsed.next.as_deref(),
+            Some("v2:/users/42/track_likes?offset=100")
+        );
+        assert_eq!(
+            target(&payload, "v2:/users/42/track_likes?offset=100").unwrap(),
+            (true, "/users/42/track_likes?offset=100".into())
+        );
+        assert!(target(&payload, "v2:/me/track_likes?offset=100").is_err());
+    }
+
+    #[test]
+    fn an_owner_run_restarts_on_the_first_owner_api_page() {
+        let mut payload = payload();
+        payload.owner = true;
+        let start = owner_api_start(&payload).unwrap();
+        assert_eq!(
+            start,
+            "v1:/me/likes/tracks?limit=100&linked_partitioning=true"
+        );
+        assert_eq!(
+            target(&payload, &start).unwrap(),
+            (
+                false,
+                "/me/likes/tracks?limit=100&linked_partitioning=true".into()
+            )
+        );
+    }
+
+    #[test]
+    fn owner_playlists_and_uploads_never_leave_the_owner_api() {
+        let mut payload = payload();
+        payload.owner = true;
+        for (collection, segment) in [
+            (CatalogCollection::LikedPlaylists, "playlist_likes"),
+            (CatalogCollection::OwnedPlaylists, "playlists"),
+            (CatalogCollection::OwnedTracks, "tracks"),
+        ] {
+            payload.collection = collection;
+            assert!(!payload.apiv2_first());
+            assert!(target(&payload, &format!("v2:/users/42/{segment}?offset=100")).is_err());
+        }
+        payload.collection = CatalogCollection::Followings;
+        assert!(payload.apiv2_first());
+        assert_eq!(
+            target(&payload, "v2:/users/42/followings?offset=100").unwrap(),
+            (true, "/users/42/followings?offset=100".into())
+        );
     }
 
     #[test]

@@ -139,6 +139,26 @@ impl PublicCatalogReader {
         self.proxy.get_value(&url).await
     }
 
+    pub async fn user_collection_json(
+        &self,
+        user_id: &str,
+        kind: &str,
+        path: &str,
+    ) -> ScResult<Value> {
+        if self.lua_is_worth_trying().await {
+            let answer = self
+                .sc
+                .user_collection_page_via_relay(user_id, kind, &format!("{SC_API_V2}{path}"))
+                .await;
+            self.observe_lua_answer(answer.is_some()).await;
+            if let Some(page) = answer {
+                return Ok(page);
+            }
+            debug!(path, "relay collection unavailable, trying the raw relay");
+        }
+        self.get_json(path).await
+    }
+
     pub async fn search_tracks(&self, query: &str, limit: i64) -> ScResult<Vec<Value>> {
         if self.lua_is_worth_trying().await {
             let answer = self
@@ -279,6 +299,49 @@ mod tests {
         }
     }
 
+    struct AnsweringRelay {
+        calls: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    }
+
+    impl sc_transport::RelayTransport for AnsweringRelay {
+        fn fetch<'a>(
+            &'a self,
+            _request: &'a call_relay::Request,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<call_relay::Response, call_relay::Error>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Err(call_relay::Error::Disabled) })
+        }
+
+        fn call_method_rotated<'a>(
+            &'a self,
+            method_id: &'a str,
+            _script: &'a str,
+            inputs: sc_transport::Bytes,
+            _region_rotation: i32,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<sc_transport::Bytes, call_relay::Error>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            let inputs = serde_json::from_slice(&inputs).unwrap_or(Value::Null);
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push((method_id.to_owned(), inputs));
+            }
+            Box::pin(async {
+                Ok(sc_transport::Bytes::from_static(
+                    br#"{"ok":true,"collection":[{"created_at":"2019-10-06T06:37:19Z","track":{"id":7}}],"next_href":null}"#,
+                ))
+            })
+        }
+    }
+
     fn unreachable_pool() -> sqlx::PgPool {
         sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(50))
@@ -410,6 +473,41 @@ mod tests {
         assert!(
             reader.raw_is_worth_trying().await,
             "a dead lua tier must not close the raw apiv2 tier, they are different egress points"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_user_collection_takes_the_relay_lua_method_first_and_keeps_the_like_wrapper() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sc = ScClient::new(&sc_transport::ScConfig {
+            proxy_url: String::new(),
+            proxy_fallback: false,
+            api_base: Some("http://127.0.0.1:1".to_owned()),
+            home_base: Some("http://127.0.0.1:1".to_owned()),
+        })
+        .expect("builds")
+        .with_relay(Arc::new(AnsweringRelay {
+            calls: calls.clone(),
+        }));
+        let reader = PublicCatalogReader::new(sc, unreachable_pool());
+
+        let page = reader
+            .user_collection_json("42", "track_likes", "/users/42/track_likes?limit=100")
+            .await
+            .expect("the relay answered");
+
+        assert_eq!(
+            page["collection"][0]["created_at"], "2019-10-06T06:37:19Z",
+            "a like unwrapped to its track loses the time of the like"
+        );
+        let calls = calls.lock().expect("relay calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "sc.user_collection");
+        assert_eq!(calls[0].1["wrapped"], true);
+        assert_eq!(calls[0].1["kind"], "track_likes");
+        assert_eq!(
+            calls[0].1["cursor"],
+            "https://api-v2.soundcloud.com/users/42/track_likes?limit=100"
         );
     }
 }

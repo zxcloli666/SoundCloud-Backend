@@ -184,19 +184,10 @@ pub(super) async fn reconcile(
     let Shape::User { table, key, wanted } = shape(payload.collection) else {
         return Ok(());
     };
-    let wanted_filter = if wanted {
-        "AND m.wanted_state = true"
-    } else {
-        ""
-    };
+    let unseen = unseen(key, wanted);
+    let wanted_filter = wanted_filter(wanted);
     let sql = format!("DELETE FROM {table} m
-        WHERE m.user_id = ANY($1) {wanted_filter} AND m.progress = false
-        AND m.synced_at < $2 - interval '5 minutes' AND m.created_at < $2 - interval '5 minutes'
-        AND NOT EXISTS (SELECT 1 FROM catalog_collection_seen s
-            WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner'
-              AND s.snapshot_id = $5 AND s.entity_key = m.{key})
-        AND NOT EXISTS (SELECT 1 FROM sync_queue q WHERE q.user_id = ANY($1)
-            AND (q.target_urn = m.{key} OR q.target_urn = 'soundcloud:tracks:' || m.{key}))
+        WHERE {unseen}
         AND (SELECT count(*) * 2 FROM catalog_collection_seen s
              WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner' AND s.snapshot_id = $5)
             >= (SELECT count(*) FROM {table} m WHERE m.user_id = ANY($1) {wanted_filter} AND m.progress = false)");
@@ -210,4 +201,57 @@ pub(super) async fn reconcile(
         .await
         .map_err(JobError::retryable)?;
     Ok(())
+}
+
+fn wanted_filter(wanted: bool) -> &'static str {
+    if wanted {
+        "AND m.wanted_state = true"
+    } else {
+        ""
+    }
+}
+
+fn unseen(key: &str, wanted: bool) -> String {
+    let wanted_filter = wanted_filter(wanted);
+    format!(
+        "m.user_id = ANY($1) {wanted_filter} AND m.progress = false
+        AND m.synced_at < $2 - interval '5 minutes' AND m.created_at < $2 - interval '5 minutes'
+        AND NOT EXISTS (SELECT 1 FROM catalog_collection_seen s
+            WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner'
+              AND s.snapshot_id = $5 AND s.entity_key = m.{key})
+        AND NOT EXISTS (SELECT 1 FROM sync_queue q WHERE q.user_id = ANY($1)
+            AND (q.target_urn = m.{key} OR q.target_urn = 'soundcloud:tracks:' || m.{key}))"
+    )
+}
+
+pub(super) async fn owner_api_is_due(
+    connection: &mut PgConnection,
+    payload: &CatalogCollectionPayload,
+    snapshot: &Snapshot,
+) -> JobResult<bool> {
+    let Shape::User { table, key, wanted } = shape(payload.collection) else {
+        return Ok(true);
+    };
+    let unseen = unseen(key, wanted);
+    let known_private = if payload.collection == CatalogCollection::LikedTracks {
+        "AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.sc_track_id = m.sc_track_id AND t.sharing = 'private')"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT sync.verified_at IS NULL
+            OR sync.verified_at NOT BETWEEN now() - interval '7 days' AND now()
+            OR EXISTS (SELECT 1 FROM {table} m WHERE {unseen} {known_private})
+        FROM catalog_collection_sync sync
+        WHERE sync.subject_id = $3 AND sync.collection = $4 AND sync.scope = 'owner'"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(catalog_ingest::user_id_variants(&payload.subject_id))
+        .bind(snapshot.started_at)
+        .bind(&payload.subject_id)
+        .bind(payload.collection.as_str())
+        .bind(snapshot.snapshot_id)
+        .fetch_one(connection)
+        .await
+        .map_err(JobError::retryable)
 }

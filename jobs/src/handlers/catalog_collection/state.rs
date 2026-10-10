@@ -101,6 +101,7 @@ pub(super) async fn advance(
     snapshot: &Snapshot,
     keys: &[String],
     next: Option<&str>,
+    verified: bool,
 ) -> JobResult {
     if let Some(cursor) = next {
         let inserted = sqlx::query_file!(
@@ -137,10 +138,45 @@ pub(super) async fn advance(
         payload.scope(),
         next,
         keys.len() as i64,
-        next.is_none()
+        next.is_none(),
+        verified
     )
     .execute(connection)
     .await
     .map_err(JobError::retryable)?;
     Ok(())
+}
+
+pub(super) async fn restart_on_owner_api(
+    connection: &mut PgConnection,
+    job: &LeasedJob,
+    payload: &CatalogCollectionPayload,
+) -> JobResult {
+    sqlx::query_file!(
+        "queries/catalog_collection/restart.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope(),
+        job.id,
+        job.generation,
+        Uuid::now_v7(),
+        super::page::owner_api_start(payload)?
+    )
+    .execute(connection)
+    .await
+    .map_err(JobError::retryable)?;
+    Ok(())
+}
+
+pub(super) async fn abandon_apiv2(
+    pool: &PgPool,
+    job: &LeasedJob,
+    payload: &CatalogCollectionPayload,
+) -> JobResult {
+    let mut tx = pool.begin().await.map_err(JobError::retryable)?;
+    if !fence(&mut tx, job).await? {
+        return Ok(());
+    }
+    restart_on_owner_api(&mut tx, job, payload).await?;
+    tx.commit().await.map_err(JobError::retryable)
 }

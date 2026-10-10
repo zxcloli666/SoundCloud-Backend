@@ -6,7 +6,7 @@ mod writer;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::CatalogCollectionPayload;
+use backend_contracts::{CatalogCollectionPayload, CatalogEntity};
 use sqlx::PgPool;
 
 use crate::config::JobsConfig;
@@ -14,6 +14,8 @@ use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
 use super::catalog_remote::{CatalogRemote, postpone, public_error};
+
+const APIV2_DEADLINE: Duration = Duration::from_secs(25);
 
 pub struct CatalogCollectionHandler {
     pool: PgPool,
@@ -64,8 +66,15 @@ impl CatalogCollectionHandler {
             Err(JobError::Permanent(error)) => return Err(postpone(1800, error)),
             result => result?,
         };
-        let more = page.next.is_some();
-        self.writer
+        let Some(page) = page else {
+            state::abandon_apiv2(&self.pool, job, &payload).await?;
+            return Err(postpone(
+                1,
+                anyhow::anyhow!("collection restarts on the owner API"),
+            ));
+        };
+        let more = self
+            .writer
             .persist(job, &payload, &snapshot, page, observation)
             .await?;
         if more {
@@ -79,48 +88,81 @@ impl CatalogCollectionHandler {
         &self,
         payload: &CatalogCollectionPayload,
         cursor: Option<&str>,
-    ) -> JobResult<page::Page> {
-        let public_apiv2 = !payload.owner && payload.collection.public_apiv2();
+    ) -> JobResult<Option<page::Page>> {
         let (apiv2, path) = match cursor {
             Some(cursor) => page::target(payload, cursor)?,
-            None => (
-                public_apiv2,
-                format!(
-                    "{}?limit={}&linked_partitioning=true",
-                    payload.path(public_apiv2),
-                    page::PAGE_SIZE
-                ),
-            ),
+            None => {
+                let apiv2 = payload.apiv2_first();
+                (apiv2, page::first_path(payload, apiv2))
+            }
         };
         let path = page::request_path(payload, &path)?;
-        if payload.owner {
-            return page::parse(
-                payload,
-                self.remote.owner_get(&payload.subject_id, &path).await?,
-                false,
-            );
-        }
         if !apiv2 {
-            return page::parse(payload, self.remote.public_get(&path).await?, false);
+            return self.apiv1(payload, &path).await.map(Some);
         }
-        match self.public.get_json(&path).await {
-            Ok(value) => page::parse(payload, value, true),
+        let failure = match self.apiv2(payload, &path).await {
+            Ok(value) => match page::parse(payload, value, true) {
+                Ok(page) => return Ok(Some(page)),
+                Err(error) if !payload.owner => return Err(error),
+                Err(error) => error,
+            },
             Err(error)
-                if cursor.is_none()
-                    && !matches!(error, sc_transport::ScError::Api { status: 404, .. }) =>
+                if !payload.owner
+                    && (cursor.is_some()
+                        || matches!(error, sc_transport::ScError::Api { status: 404, .. })) =>
             {
-                let path = page::request_path(
-                    payload,
-                    &format!(
-                        "{}?limit={}&linked_partitioning=true",
-                        payload.path(false),
-                        page::PAGE_SIZE
-                    ),
-                )?;
-                page::parse(payload, self.remote.public_get(&path).await?, false)
+                return Err(public_error(error));
             }
-            Err(error) => Err(public_error(error)),
+            Err(error) => public_error(error),
+        };
+        if payload.owner {
+            tracing::debug!(
+                error = %failure,
+                collection = payload.collection.as_str(),
+                "apiv2 could not answer an owner collection, reading the owner API"
+            );
+            if cursor.is_some() {
+                return Ok(None);
+            }
         }
+        let path = page::request_path(payload, &page::first_path(payload, false))?;
+        self.apiv1(payload, &path).await.map(Some)
+    }
+
+    async fn apiv2(
+        &self,
+        payload: &CatalogCollectionPayload,
+        path: &str,
+    ) -> sc_transport::ScResult<serde_json::Value> {
+        let read = async {
+            if payload.collection.subject() == CatalogEntity::User {
+                self.public
+                    .user_collection_json(
+                        &payload.subject_id,
+                        payload.collection.path_segment(true),
+                        path,
+                    )
+                    .await
+            } else {
+                self.public.get_json(path).await
+            }
+        };
+        tokio::time::timeout(APIV2_DEADLINE, read)
+            .await
+            .unwrap_or_else(|_| {
+                Err(sc_transport::ScError::Unreachable(
+                    "apiv2 collection read timed out".to_owned(),
+                ))
+            })
+    }
+
+    async fn apiv1(&self, payload: &CatalogCollectionPayload, path: &str) -> JobResult<page::Page> {
+        let value = if payload.owner {
+            self.remote.owner_get(&payload.subject_id, path).await?
+        } else {
+            self.remote.public_get(path).await?
+        };
+        page::parse(payload, value, false)
     }
 }
 

@@ -73,6 +73,10 @@ impl CatalogCollection {
         !matches!(self, Self::TrackFavoriters)
     }
 
+    pub const fn owner_apiv2(self) -> bool {
+        matches!(self, Self::LikedTracks | Self::Followings)
+    }
+
     pub const fn public_only(self) -> bool {
         matches!(
             self,
@@ -135,9 +139,17 @@ impl CatalogCollectionPayload {
         )
     }
 
+    pub const fn apiv2_first(&self) -> bool {
+        if self.owner {
+            self.collection.owner_apiv2()
+        } else {
+            self.collection.public_apiv2()
+        }
+    }
+
     pub fn path(&self, apiv2: bool) -> String {
         let segment = self.collection.path_segment(apiv2);
-        if self.owner {
+        if self.owner && !apiv2 {
             return format!("/me/{segment}");
         }
         let root = match self.collection.subject() {
@@ -213,6 +225,12 @@ mod tests {
         payload.owner = true;
         assert_ne!(payload.dedup_key(), public);
         assert_eq!(payload.path(false), "/me/likes/tracks");
+        assert_eq!(payload.path(true), "/users/42/track_likes");
+        assert!(payload.apiv2_first());
+        payload.collection = CatalogCollection::LikedPlaylists;
+        assert!(!payload.apiv2_first());
+        payload.owner = false;
+        assert!(payload.apiv2_first());
         for id in ["0", "01", "-1", "42/tracks", "soundcloud:users:42"] {
             payload.subject_id = id.into();
             assert!(!payload.is_valid());

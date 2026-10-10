@@ -41,7 +41,57 @@ fn page(ids: &[i64], next: Option<&str>) -> page::Page {
         items: ids.iter().copied().map(track).collect(),
         next: next.map(str::to_owned),
         liked_at: Vec::new(),
+        apiv2: false,
     }
+}
+
+fn apiv2_page(ids: &[i64]) -> page::Page {
+    page::Page {
+        apiv2: true,
+        ..page(ids, None)
+    }
+}
+
+async fn age_likes(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE user_likes_tracks SET synced_at = now() - interval '1 day', created_at = created_at - interval '1 day'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn liked(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT sc_track_id FROM user_likes_tracks WHERE user_id = '42' ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn owner_likes_known_to_the_owner_api(
+    pool: &PgPool,
+    job: &mut LeasedJob,
+    payload: &CatalogCollectionPayload,
+    writer: &CollectionWriter,
+) -> anyhow::Result<()> {
+    let mut known = page(&[1, 2, 3], None);
+    known.items[2]["sharing"] = json!("private");
+    let snapshot = state::begin(pool, job, payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let more = writer
+        .persist(
+            job,
+            payload,
+            &snapshot,
+            known,
+            catalog_ingest::Observation::begin(pool).await?,
+        )
+        .await?;
+    assert!(!more);
+    age_likes(pool).await?;
+    next_generation(pool, job).await
 }
 
 async fn like_times(pool: &PgPool) -> anyhow::Result<Vec<(String, Option<String>, String)>> {
@@ -926,5 +976,245 @@ async fn a_page_repeating_one_comment_still_commits(pool: PgPool) -> anyhow::Res
         .fetch_all(&pool)
         .await?;
     assert_eq!(stored, ["first"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_apiv2_owner_snapshot_never_removes_a_like_and_leaves_removal_to_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, payload, writer) = setup(&pool).await?;
+    owner_likes_known_to_the_owner_api(&pool, &mut job, &payload, &writer).await?;
+    let order = liked(&pool).await?;
+    assert_eq!(order, ["1", "2", "3"]);
+
+    let public = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing apiv2 snapshot"))?;
+    let more = writer
+        .persist(
+            &job,
+            &payload,
+            &public,
+            apiv2_page(&[1]),
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    assert!(more, "a public like missing from apiv2 needs the owner API");
+    assert_eq!(liked(&pool).await?, order);
+    let (cursor, complete, items, synced): (Option<String>, bool, i64, bool) = sqlx::query_as(
+        "SELECT next_cursor, complete, item_count, synced_at IS NOT NULL FROM catalog_collection_sync WHERE scope = 'owner'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        cursor.as_deref(),
+        Some("v1:/me/likes/tracks?limit=100&linked_partitioning=true")
+    );
+    assert!(!complete && synced);
+    assert_eq!(items, 0);
+
+    let owner = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing owner snapshot"))?;
+    assert_ne!(owner.snapshot_id, public.snapshot_id);
+    let mut confirmed = page(&[1, 3], None);
+    confirmed.items[1]["sharing"] = json!("private");
+    let more = writer
+        .persist(
+            &job,
+            &payload,
+            &owner,
+            confirmed,
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    assert!(!more);
+    assert_eq!(liked(&pool).await?, ["1", "3"]);
+    let complete: bool = sqlx::query_scalar(
+        "SELECT complete AND verified_at > now() - interval '1 minute' FROM catalog_collection_sync WHERE scope = 'owner'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(complete);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_apiv2_owner_snapshot_missing_only_private_likes_completes_without_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, payload, writer) = setup(&pool).await?;
+    owner_likes_known_to_the_owner_api(&pool, &mut job, &payload, &writer).await?;
+    let verified: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT verified_at FROM catalog_collection_sync WHERE scope = 'owner'")
+            .fetch_one(&pool)
+            .await?;
+
+    let public = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing apiv2 snapshot"))?;
+    let liked_page = page::parse(
+        &payload,
+        json!({"collection": [
+            {"created_at": "2020-02-02T02:02:02Z", "kind": "like", "track": track(4)},
+            {"created_at": "2019-10-06T06:37:19Z", "kind": "like", "track": track(1)},
+            {"kind": "like", "track": track(2)}
+        ]}),
+        true,
+    )?;
+    let more = writer
+        .persist(
+            &job,
+            &payload,
+            &public,
+            liked_page,
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    assert!(!more);
+    assert_eq!(liked(&pool).await?, ["4", "1", "2", "3"]);
+    let times: Vec<(String, Option<String>)> = like_times(&pool)
+        .await?
+        .into_iter()
+        .map(|(track, liked_at, _)| (track, liked_at))
+        .collect();
+    assert_eq!(
+        times,
+        [
+            ("1".to_owned(), Some("2019-10-06T06:37:19".to_owned())),
+            ("2".to_owned(), None),
+            ("3".to_owned(), None),
+            ("4".to_owned(), Some("2020-02-02T02:02:02".to_owned())),
+        ]
+    );
+    let (complete, still): (bool, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT complete, verified_at FROM catalog_collection_sync WHERE scope = 'owner'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(complete);
+    assert_eq!(still, verified, "apiv2 cannot certify the owner view");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_owner_collection_is_checked_on_the_owner_api_the_first_time_and_then_weekly(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (mut job, mut payload, writer) = setup(&pool).await?;
+    for (collection, key) in [
+        (CatalogCollection::LikedTracks, "liked-tracks:42:owner"),
+        (CatalogCollection::Followings, "followings:42:owner"),
+    ] {
+        payload.collection = collection;
+        job.dedup_key = Some(key.into());
+        let item = |id: i64| match collection {
+            CatalogCollection::Followings => {
+                json!({"id": id, "urn": format!("soundcloud:users:{id}"), "username": "Artist"})
+            }
+            _ => track(id),
+        };
+        let walk = |apiv2| page::Page {
+            items: vec![item(5), item(6)],
+            next: None,
+            liked_at: Vec::new(),
+            apiv2,
+        };
+        for (verified_at, due) in [
+            ("NULL", true),
+            ("now() - interval '8 days'", true),
+            ("now() - interval '6 days'", false),
+        ] {
+            next_generation(&pool, &mut job).await?;
+            let snapshot = state::begin(&pool, &job, &payload)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+            sqlx::query(&format!(
+                "UPDATE catalog_collection_sync SET verified_at = {verified_at} WHERE collection = $1"
+            ))
+            .bind(collection.as_str())
+            .execute(&pool)
+            .await?;
+            let more = writer
+                .persist(
+                    &job,
+                    &payload,
+                    &snapshot,
+                    walk(true),
+                    catalog_ingest::Observation::begin(&pool).await?,
+                )
+                .await?;
+            assert_eq!(more, due, "{} {verified_at}", collection.as_str());
+            let ready: bool = sqlx::query_scalar(
+                "SELECT synced_at IS NOT NULL FROM catalog_collection_sync WHERE collection = $1",
+            )
+            .bind(collection.as_str())
+            .fetch_one(&pool)
+            .await?;
+            assert_eq!(
+                ready,
+                verified_at != "NULL",
+                "a first walk is not ready before the owner API saw it"
+            );
+            if !due {
+                continue;
+            }
+            let owner = state::begin(&pool, &job, &payload)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing owner snapshot"))?;
+            let more = writer
+                .persist(
+                    &job,
+                    &payload,
+                    &owner,
+                    walk(false),
+                    catalog_ingest::Observation::begin(&pool).await?,
+                )
+                .await?;
+            assert!(!more);
+        }
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_owner_run_abandoned_by_apiv2_starts_over_on_the_owner_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, payload, writer) = setup(&pool).await?;
+    let first = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let mut walk = apiv2_page(&[1, 2]);
+    walk.next = Some("v2:/users/42/track_likes?offset=100".into());
+    assert!(
+        writer
+            .persist(
+                &job,
+                &payload,
+                &first,
+                walk,
+                catalog_ingest::Observation::begin(&pool).await?,
+            )
+            .await?
+    );
+    state::abandon_apiv2(&pool, &job, &payload).await?;
+    let restarted = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing restarted snapshot"))?;
+    assert_ne!(restarted.snapshot_id, first.snapshot_id);
+    assert_eq!(restarted.item_count, 0);
+    assert!(!restarted.complete);
+    assert_eq!(
+        page::target(
+            &payload,
+            restarted.next_cursor.as_deref().unwrap_or_default()
+        )?,
+        (
+            false,
+            "/me/likes/tracks?limit=100&linked_partitioning=true".into()
+        )
+    );
     Ok(())
 }

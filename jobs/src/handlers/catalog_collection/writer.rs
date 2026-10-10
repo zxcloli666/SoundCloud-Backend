@@ -27,17 +27,18 @@ impl CollectionWriter {
         snapshot: &state::Snapshot,
         page: page::Page,
         observation: catalog_ingest::Observation,
-    ) -> JobResult {
+    ) -> JobResult<bool> {
+        let mut more = page.next.is_some();
         let mut tx = self.pool.begin().await.map_err(JobError::retryable)?;
         if !state::fence(&mut tx, job).await? {
-            return Ok(());
+            return Ok(more);
         }
         let current = state::load(&mut tx, job, payload).await?;
         if current.snapshot_id != snapshot.snapshot_id
             || current.page_count != snapshot.page_count
             || current.complete
         {
-            return Ok(());
+            return Ok(more);
         }
         let mut keys = Vec::with_capacity(page.items.len());
         let priority = match payload.collection {
@@ -114,8 +115,22 @@ impl CollectionWriter {
             .await
             .map_err(JobError::retryable)?;
         }
-        state::advance(&mut tx, payload, snapshot, &keys, page.next.as_deref()).await?;
-        if page.next.is_none() {
+        let owner_api = payload.owner && !page.apiv2;
+        state::advance(
+            &mut tx,
+            payload,
+            snapshot,
+            &keys,
+            page.next.as_deref(),
+            owner_api,
+        )
+        .await?;
+        if !more && payload.owner && page.apiv2 {
+            more = mirror::owner_api_is_due(&mut tx, payload, snapshot).await?;
+            if more {
+                state::restart_on_owner_api(&mut tx, job, payload).await?;
+            }
+        } else if !more {
             mirror::reconcile(&mut tx, payload, snapshot).await?;
         }
         sqlx::query_file!(
@@ -127,6 +142,7 @@ impl CollectionWriter {
         .execute(&mut *tx)
         .await
         .map_err(JobError::retryable)?;
-        tx.commit().await.map_err(JobError::retryable)
+        tx.commit().await.map_err(JobError::retryable)?;
+        Ok(more)
     }
 }

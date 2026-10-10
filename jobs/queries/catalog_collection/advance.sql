@@ -4,5 +4,6 @@ SET next_cursor = $4,
     item_count = item_count + $5,
     complete = $6,
     synced_at = CASE WHEN $6 THEN now() ELSE synced_at END,
+    verified_at = CASE WHEN $6 AND $7 THEN now() ELSE verified_at END,
     updated_at = now()
 WHERE subject_id = $1 AND collection = $2 AND scope = $3
