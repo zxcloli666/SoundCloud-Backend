@@ -21,8 +21,11 @@ WITH progress AS MATERIALIZED (
            track.created_at,
            track.pipeline_held
     FROM tracks AS track
-    JOIN progress ON NOT progress.completed
-    WHERE progress.cursor_id IS NULL OR track.id > progress.cursor_id
+    WHERE track.id > (
+        SELECT COALESCE(progress.cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        FROM progress
+        WHERE NOT progress.completed
+    )
     ORDER BY track.id
     LIMIT $1
 ), inserted AS (
