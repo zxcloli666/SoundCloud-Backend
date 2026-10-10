@@ -24,14 +24,14 @@ WITH soundcloud_plays AS (
     FROM combined
 ), aggregate AS (
     SELECT artist.id,
-           COALESCE(
+           round(COALESCE(
                LEAST(
                    1.0::real,
                    ln(greatest(combined.score, 0) + 1)::real
                        / NULLIF(ln(maximum.score + 1)::real, 0)
                ),
                0
-           ) AS popularity_score
+           )::numeric, 4)::real AS popularity_score
     FROM artists AS artist
     CROSS JOIN maximum
     LEFT JOIN combined ON combined.artist_id = artist.id

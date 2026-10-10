@@ -2,21 +2,19 @@ WITH weak AS (
     SELECT credit.track_id,
            credit.artist_id,
            credit.role
-    FROM track_artists AS credit
+    FROM artist_sc_accounts AS account
     JOIN tracks AS track
-      ON track.id = credit.track_id
-    JOIN artist_sc_accounts AS account
-      ON account.artist_id = credit.artist_id
-     AND account.sc_user_id = track.uploader_sc_user_id
-    WHERE credit.evidence IN (
+      ON track.uploader_sc_user_id = account.sc_user_id
+    JOIN track_artists AS credit
+      ON credit.track_id = track.id
+     AND credit.artist_id = account.artist_id
+    WHERE (account.verified OR account.source = 'mb_resolve')
+      AND credit.evidence IN (
               'uploader_name',
               'title_heuristic',
               'ai_inference',
               'unattributed'
           )
-      AND track.uploader_sc_user_id IS NOT NULL
-      AND (account.verified OR account.source = 'mb_resolve')
-    ORDER BY credit.track_id, credit.artist_id, credit.role
     LIMIT $1
     FOR UPDATE OF credit SKIP LOCKED
 )

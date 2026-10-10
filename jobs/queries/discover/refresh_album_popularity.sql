@@ -10,14 +10,14 @@ WITH plays AS (
     FROM plays
 ), aggregate AS (
     SELECT album.id,
-           COALESCE(
+           round(COALESCE(
                LEAST(
                    1.0::real,
                    ln(greatest(plays.play_count, 0) + 1)::real
                        / NULLIF(ln(maximum.play_count + 1)::real, 0)
                ),
                0
-           ) AS popularity_score
+           )::numeric, 4)::real AS popularity_score
     FROM albums AS album
     CROSS JOIN maximum
     LEFT JOIN plays ON plays.album_id = album.id
