@@ -177,7 +177,13 @@ impl SyncQueueHandler {
         let remote_result = match actions::execute_remote(&self.client, &mutation, &token.value)
             .await
         {
-            Ok(result) => result,
+            Ok(result) => {
+                if let Some(oauth_app_id) = token.oauth_app_id {
+                    self.write_pauses
+                        .clear(&(oauth_app_id, mutation.action_type.clone()));
+                }
+                result
+            }
             Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
                 let refreshed = match self
                     .connections
@@ -252,10 +258,19 @@ impl SyncQueueHandler {
         let Some(oauth_app_id) = oauth_app_id else {
             return;
         };
+        let action = (oauth_app_id, mutation.action_type.clone());
         let seconds = if error.is_subscription_required() {
+            self.write_pauses.pause(action, SUBSCRIPTION_RETRY_SECONDS);
             SUBSCRIPTION_RETRY_SECONDS
+        } else if let Some(seconds) = error
+            .retry_after_seconds()
+            .filter(|_| error.is_rate_limited())
+        {
+            self.write_pauses.pause(action, seconds);
+            seconds
         } else if error.is_rate_limited() {
-            error.retry_after_seconds().unwrap_or(WRITE_PAUSE_SECONDS)
+            self.write_pauses
+                .pause_longer_each_time(action, WRITE_PAUSE_SECONDS)
         } else {
             return;
         };
@@ -266,8 +281,6 @@ impl SyncQueueHandler {
             response = %error.response_excerpt(),
             "soundcloud refused this action for the whole application, pausing it"
         );
-        self.write_pauses
-            .pause((oauth_app_id, mutation.action_type.clone()), seconds);
     }
 
     async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), anyhow::Error> {
