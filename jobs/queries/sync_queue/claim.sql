@@ -10,8 +10,10 @@ WITH ready AS MATERIALIZED (
       AND EXISTS (
           SELECT 1
           FROM soundcloud_connections AS connection
+          JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
           WHERE connection.soundcloud_user_id = queued.user_id
-            AND connection.expires_at > now() + interval '1 minute'
+            AND app.active
+            AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
             AND (connection.retry_at IS NULL OR connection.retry_at <= now())
       )
       AND NOT EXISTS (
