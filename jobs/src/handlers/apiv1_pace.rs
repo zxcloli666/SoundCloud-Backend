@@ -96,11 +96,9 @@ pub fn record(usage: Use, rate_limited: bool) {
             .succeeded(now);
         return;
     }
-    for shared in [Use::Read, Use::Write] {
-        let mut pace = pace(shared).lock().unwrap_or_else(PoisonError::into_inner);
-        pace.limited(now);
-        tracing::warn!(hit_by = ?usage, slowed = ?shared, rate = pace.rate, "soundcloud api rate limit hit, slowing down");
-    }
+    let mut pace = pace(usage).lock().unwrap_or_else(PoisonError::into_inner);
+    pace.limited(now);
+    tracing::warn!(hit_by = ?usage, rate = pace.rate, "soundcloud api rate limit hit, slowing down");
 }
 
 #[cfg(test)]

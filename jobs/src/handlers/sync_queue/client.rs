@@ -106,12 +106,7 @@ impl SoundCloudClient {
             .map_err(|_| SoundCloudError::InvalidTokenResponse)?;
         apiv1_pace::wait_for_turn(apiv1_pace::Use::Write).await;
         let result = self.send_routed(method, &target, access_token, body).await;
-        apiv1_pace::record(
-            apiv1_pace::Use::Write,
-            result
-                .as_ref()
-                .is_err_and(SoundCloudError::is_app_rate_limited),
-        );
+        apiv1_pace::record(apiv1_pace::Use::Write, false);
         result
     }
 

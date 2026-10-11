@@ -32,7 +32,7 @@ pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManage
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
-const WRITE_PAUSE_SECONDS: i64 = 30;
+const WRITE_PAUSE_SECONDS: i64 = 60;
 const ACCOUNT_LIMIT_SECONDS: i64 = 30 * 60;
 const SUBSCRIPTION_RETRY_SECONDS: i64 = 6 * 60 * 60;
 const PAUSED_ACTION_RECHECK_SECONDS: i64 = 15 * 60;
@@ -46,7 +46,7 @@ pub struct SyncQueueHandler {
     client: Arc<SoundCloudClient>,
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
-    write_pauses: WritePauses<uuid::Uuid>,
+    write_pauses: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
     concurrency: usize,
     claim_batch: i64,
@@ -144,12 +144,14 @@ impl SyncQueueHandler {
             }
         };
         if let Some(oauth_app_id) = token.oauth_app_id
-            && let Some(seconds) = self.write_pauses.remaining_seconds(&oauth_app_id)
+            && let Some(seconds) = self
+                .write_pauses
+                .remaining_seconds(&(oauth_app_id, mutation.action_type.clone()))
         {
             self.repository
                 .postpone_unattempted(
                     &mutation,
-                    "SoundCloud writes are paused for this application",
+                    "SoundCloud paused this action for the application",
                     seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
                 )
                 .await?;
@@ -259,11 +261,13 @@ impl SyncQueueHandler {
         };
         warn!(
             %oauth_app_id,
+            action = %mutation.action_type,
             seconds,
             response = %error.response_excerpt(),
-            "soundcloud refused a write for the whole application, pausing its writes"
+            "soundcloud refused this action for the whole application, pausing it"
         );
-        self.write_pauses.pause(oauth_app_id, seconds);
+        self.write_pauses
+            .pause((oauth_app_id, mutation.action_type.clone()), seconds);
     }
 
     async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), anyhow::Error> {
