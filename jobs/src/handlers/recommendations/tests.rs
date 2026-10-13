@@ -125,6 +125,51 @@ async fn colike_rebuild_inserts_shared_audience_edge(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrations = false)]
+async fn colike_rebuild_leaves_an_unchanged_edge_untouched(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let first_artist = Uuid::from_u128(1);
+    let second_artist = Uuid::from_u128(2);
+    sqlx::query("INSERT INTO artists (id) VALUES ($1), ($2)")
+        .bind(first_artist)
+        .bind(second_artist)
+        .execute(&pool)
+        .await?;
+    insert_artist_track(&pool, first_artist, Uuid::from_u128(11), "track-1", "ok", 5).await?;
+    insert_artist_track(
+        &pool,
+        second_artist,
+        Uuid::from_u128(12),
+        "track-2",
+        "ok",
+        5,
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO user_likes_tracks (user_id, sc_track_id)
+         VALUES
+             ('100', 'track-1'),
+             ('100', 'track-2'),
+             ('200', 'track-1'),
+             ('200', 'track-2')",
+    )
+    .execute(&pool)
+    .await?;
+    let handler = RecommendationHandler::new(pool.clone(), 1);
+
+    handler.rebuild_colike().await?;
+    let written: String = sqlx::query_scalar("SELECT xmin::text FROM artist_colike")
+        .fetch_one(&pool)
+        .await?;
+    handler.rebuild_colike().await?;
+    let kept: String = sqlx::query_scalar("SELECT xmin::text FROM artist_colike")
+        .fetch_one(&pool)
+        .await?;
+
+    assert_eq!(kept, written);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn colike_rebuild_prunes_edges_missing_from_latest_snapshot(
     pool: PgPool,
 ) -> anyhow::Result<()> {

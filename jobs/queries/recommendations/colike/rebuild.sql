@@ -51,12 +51,25 @@ WITH ul AS (
            row_number() OVER (PARTITION BY a ORDER BY weight DESC) AS rank_a,
            row_number() OVER (PARTITION BY b ORDER BY weight DESC) AS rank_b
     FROM weighted
+), fresh AS MATERIALIZED (
+    SELECT a, b, co::int AS co, weight
+    FROM ranked
+    WHERE rank_a <= $2 OR rank_b <= $2
+), dropped AS (
+    DELETE FROM artist_colike AS edge
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM fresh
+        WHERE fresh.a = edge.a_id
+          AND fresh.b = edge.b_id
+    )
 )
 INSERT INTO artist_colike (a_id, b_id, co, w, updated_at)
-SELECT a, b, co::int, weight, now()
-FROM ranked
-WHERE rank_a <= $2 OR rank_b <= $2
+SELECT a, b, co, weight, now()
+FROM fresh
 ON CONFLICT (a_id, b_id) DO UPDATE
 SET co = excluded.co,
     w = excluded.w,
     updated_at = excluded.updated_at
+WHERE artist_colike.co IS DISTINCT FROM excluded.co
+   OR artist_colike.w IS DISTINCT FROM excluded.w

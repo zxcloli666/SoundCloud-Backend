@@ -25,10 +25,6 @@ pub(super) async fn rebuild(pool: &PgPool) -> JobResult<u64> {
     .execute(&mut *transaction)
     .await
     .map_err(JobError::retryable)?;
-    sqlx::query_file!("queries/recommendations/colike/prune.sql")
-        .execute(&mut *transaction)
-        .await
-        .map_err(JobError::retryable)?;
     transaction.commit().await.map_err(JobError::retryable)?;
     Ok(rebuilt.rows_affected())
 }
