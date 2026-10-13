@@ -5,7 +5,6 @@ WITH candidates AS (
       AND attempts < max_attempts
       AND lease_id IS NULL
       AND kind = $2
-      AND lane = $5
     ORDER BY priority DESC, available_at, created_at, id
     FOR UPDATE SKIP LOCKED
     LIMIT $1

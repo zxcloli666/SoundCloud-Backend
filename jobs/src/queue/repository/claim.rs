@@ -62,8 +62,7 @@ impl JobRepository {
                     limit,
                     kind.as_str(),
                     self.worker_id.as_str(),
-                    lease_milliseconds,
-                    lane.as_str()
+                    lease_milliseconds
                 )
                 .fetch_all(&mut *transaction)
                 .await?
