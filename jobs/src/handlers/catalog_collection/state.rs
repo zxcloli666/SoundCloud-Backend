@@ -168,6 +168,29 @@ pub(super) async fn restart_on_owner_api(
     Ok(())
 }
 
+pub(super) async fn finish_unverified(
+    pool: &PgPool,
+    job: &LeasedJob,
+    payload: &CatalogCollectionPayload,
+) -> JobResult {
+    let mut tx = pool.begin().await.map_err(JobError::retryable)?;
+    if !fence(&mut tx, job).await? {
+        return Ok(());
+    }
+    sqlx::query_file!(
+        "queries/catalog_collection/finish_unverified.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope(),
+        job.id,
+        job.generation
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(JobError::retryable)?;
+    tx.commit().await.map_err(JobError::retryable)
+}
+
 pub(super) async fn abandon_apiv2(
     pool: &PgPool,
     job: &LeasedJob,

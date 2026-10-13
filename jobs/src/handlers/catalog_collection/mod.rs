@@ -14,6 +14,7 @@ use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
 use super::catalog_remote::{CatalogRemote, postpone, public_error};
+use super::sync_queue::ConnectionError;
 
 const APIV2_DEADLINE: Duration = Duration::from_secs(25);
 
@@ -63,6 +64,9 @@ impl CatalogCollectionHandler {
         .await
         .map_err(|_| JobError::retryable(anyhow::anyhow!("collection page deadline exceeded")))?;
         let page = match page {
+            Err(error) if payload.owner && owner_is_signed_out(&error) => {
+                return self.finish_without_owner(job, &payload, &snapshot).await;
+            }
             Err(JobError::Permanent(error)) => return Err(postpone(1800, error)),
             result => result?,
         };
@@ -82,6 +86,19 @@ impl CatalogCollectionHandler {
         } else {
             Ok(())
         }
+    }
+
+    async fn finish_without_owner(
+        &self,
+        job: &LeasedJob,
+        payload: &CatalogCollectionPayload,
+        snapshot: &state::Snapshot,
+    ) -> JobResult {
+        let owner_api_start = page::owner_api_start(payload)?;
+        if payload.apiv2_first() && snapshot.next_cursor.as_deref() == Some(&owner_api_start) {
+            state::finish_unverified(&self.pool, job, payload).await?;
+        }
+        Ok(())
     }
 
     async fn fetch(
@@ -164,6 +181,16 @@ impl CatalogCollectionHandler {
         };
         page::parse(payload, value, false)
     }
+}
+
+fn owner_is_signed_out(error: &JobError) -> bool {
+    let JobError::Postponed { error, .. } = error else {
+        return false;
+    };
+    matches!(
+        error.downcast_ref::<ConnectionError>(),
+        Some(ConnectionError::ReauthorizationRequired)
+    )
 }
 
 #[cfg(test)]
