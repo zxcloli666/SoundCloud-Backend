@@ -7,6 +7,12 @@ use super::actions::{self, ActionError};
 use super::model::{ClaimedMutation, LockedMutation};
 
 pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
+const LIKES_AND_UNLIKES: [&str; 4] = [
+    "like_track",
+    "unlike_track",
+    "like_playlist",
+    "unlike_playlist",
+];
 
 pub struct SyncQueueRepository {
     pool: PgPool,
@@ -46,13 +52,15 @@ impl SyncQueueRepository {
         held: &[String],
     ) -> Result<Vec<ClaimedMutation>, sqlx::Error> {
         let paced = PACED_ACTIONS.map(str::to_owned);
+        let likes = LIKES_AND_UNLIKES.map(str::to_owned);
         sqlx::query_file_as!(
             ClaimedMutation,
             "queries/sync_queue/claim.sql",
             self.lease_milliseconds(),
             limit,
             held,
-            &paced
+            &paced,
+            &likes
         )
         .fetch_all(&self.pool)
         .await

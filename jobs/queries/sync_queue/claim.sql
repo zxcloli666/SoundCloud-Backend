@@ -43,6 +43,10 @@ waiting AS MATERIALIZED (
                     AND earlier.user_id = queued.user_id
                     AND earlier.target_urn = queued.target_urn
                     AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
+                    AND (
+                        earlier.action_type <> ALL ($5::text[])
+                        OR queued.action_type = ANY ($5::text[])
+                    )
               )
         ) AS ordered
         WHERE ordered.paced IS NULL OR ordered.turn = 1

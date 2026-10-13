@@ -200,6 +200,60 @@ async fn one_claim_carries_a_single_like_and_skips_actions_on_hold(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_like_on_hold_keeps_back_only_the_unlike_of_the_same_target(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, created_at) VALUES
+             ('1', 'like_playlist', 'playlist', now() - interval '5 minutes'),
+             ('1', 'playlist_membership', 'playlist', now() - interval '4 minutes'),
+             ('1', 'like_track', 'track', now() - interval '3 minutes'),
+             ('1', 'comment', 'track', now() - interval '2 minutes'),
+             ('1', 'unlike_track', 'track', now() - interval '1 minute')",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = repository(pool);
+
+    let claimed = repository
+        .claim_outside(
+            8,
+            &["1:like_track".to_owned(), "1:like_playlist".to_owned()],
+        )
+        .await?;
+
+    let mut actions: Vec<&str> = claimed
+        .iter()
+        .map(|mutation| mutation.action_type.as_str())
+        .collect();
+    actions.sort_unstable();
+    assert_eq!(actions, ["comment", "playlist_membership"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_edit_still_waits_for_the_earlier_edit_of_the_same_target(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, created_at, next_run_at) VALUES
+             ('1', 'playlist_create', 'playlist', now() - interval '2 minutes', now() + interval '1 hour'),
+             ('1', 'playlist_membership', 'playlist', now() - interval '1 minute', now()),
+             ('1', 'like_playlist', 'playlist', now(), now())",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = repository(pool);
+
+    let claimed = repository.claim_outside(8, &[]).await?;
+
+    assert!(claimed.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn terminal_intent_does_not_block_the_live_head(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     sqlx::query(
