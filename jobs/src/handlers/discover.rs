@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use sqlx::{PgPool, Postgres, Transaction};
 use tracing::info;
 
@@ -6,6 +8,8 @@ use crate::queue::{JobError, JobResult};
 mod stage;
 
 use stage::{Shards, Stage};
+
+const ARTIST_LOCK_RETRY: Duration = Duration::from_secs(60);
 
 pub struct DiscoverHandler {
     pool: PgPool,
@@ -112,9 +116,10 @@ impl DiscoverHandler {
             .map_err(JobError::retryable)?;
 
         if !acquired {
-            return Err(JobError::retryable(anyhow::anyhow!(
-                "another discover artist update is still running"
-            )));
+            return Err(JobError::postponed(
+                ARTIST_LOCK_RETRY,
+                anyhow::anyhow!("another discover artist update is still running"),
+            ));
         }
         Ok(transaction)
     }

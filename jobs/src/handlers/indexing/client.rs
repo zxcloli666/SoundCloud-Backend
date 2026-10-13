@@ -62,9 +62,7 @@ impl IndexingClient {
                 if response.cached {
                     Ok(TriggerOutcome::Cached)
                 } else {
-                    Err(JobError::retryable(anyhow!(
-                        "streaming returned 200 without a cached track"
-                    )))
+                    Ok(TriggerOutcome::Accepted)
                 }
             }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(JobError::retryable(anyhow!(
