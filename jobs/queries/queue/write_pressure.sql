@@ -8,4 +8,5 @@ SELECT COALESCE((
            FROM pg_stat_activity AS backend
            WHERE backend.state = 'active'
              AND backend.backend_type = 'client backend'
-       ) AS active_backends
+       ) AS active_backends,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')::bigint AS wal_position

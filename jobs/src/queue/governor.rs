@@ -15,6 +15,9 @@ const CALM_BACKLOG_BYTES: i64 = 128 * MEGABYTE;
 const HEAVY_BACKLOG_BYTES: i64 = 512 * MEGABYTE;
 const CALM_ACTIVE_BACKENDS: i64 = 16;
 const HEAVY_ACTIVE_BACKENDS: i64 = 32;
+const CALM_WRITE_BYTES_PER_SECOND: f64 = 3.0 * MEGABYTE as f64;
+const HEAVY_WRITE_BYTES_PER_SECOND: f64 = 6.0 * MEGABYTE as f64;
+const WRITE_RATE_SMOOTHING: f64 = 0.3;
 const PRESSURE: &str = include_str!("../../queries/queue/write_pressure.sql");
 
 pub(crate) struct WriteGovernor {
@@ -23,9 +26,37 @@ pub(crate) struct WriteGovernor {
 }
 
 #[derive(Clone, Copy, Debug, sqlx::FromRow)]
+struct Reading {
+    replication_backlog_bytes: i64,
+    active_backends: i64,
+    wal_position: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Pressure {
     replication_backlog_bytes: i64,
     active_backends: i64,
+    write_bytes_per_second: f64,
+}
+
+#[derive(Default)]
+struct WriteRate {
+    last: Option<(i64, Instant)>,
+    smoothed: f64,
+}
+
+impl WriteRate {
+    fn observe(&mut self, position: i64, now: Instant) -> f64 {
+        if let Some((previous, at)) = self.last {
+            let seconds = now.saturating_duration_since(at).as_secs_f64();
+            if seconds > 0.0 && position >= previous {
+                let rate = (position - previous) as f64 / seconds;
+                self.smoothed += WRITE_RATE_SMOOTHING * (rate - self.smoothed);
+            }
+        }
+        self.last = Some((position, now));
+        self.smoothed
+    }
 }
 
 impl WriteGovernor {
@@ -48,16 +79,23 @@ impl WriteGovernor {
         let mut interval = tokio::time::interval(CHECK_EVERY);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut changed_at = Instant::now();
+        let mut write_rate = WriteRate::default();
         loop {
             tokio::select! {
                 _ = cancellation.cancelled() => return Ok(()),
                 _ = interval.tick() => {}
             }
-            match sqlx::query_as::<_, Pressure>(PRESSURE)
+            match sqlx::query_as::<_, Reading>(PRESSURE)
                 .fetch_one(&pool)
                 .await
             {
-                Ok(pressure) => {
+                Ok(reading) => {
+                    let pressure = Pressure {
+                        replication_backlog_bytes: reading.replication_backlog_bytes,
+                        active_backends: reading.active_backends,
+                        write_bytes_per_second: write_rate
+                            .observe(reading.wal_position, Instant::now()),
+                    };
                     if self.adjust(pressure, changed_at.elapsed()) {
                         changed_at = Instant::now();
                     }
@@ -81,6 +119,7 @@ impl WriteGovernor {
             to = next,
             replication_backlog_mb = pressure.replication_backlog_bytes / MEGABYTE,
             active_backends = pressure.active_backends,
+            write_mb_per_second = pressure.write_bytes_per_second / MEGABYTE as f64,
             "bulk concurrency adjusted to the database pressure"
         );
         true
@@ -90,9 +129,11 @@ impl WriteGovernor {
 fn next_limit(current: usize, ceiling: usize, pressure: Pressure, since_change: Duration) -> usize {
     let floor = FLOOR.min(ceiling);
     let heavy = pressure.replication_backlog_bytes > HEAVY_BACKLOG_BYTES
-        || pressure.active_backends > HEAVY_ACTIVE_BACKENDS;
+        || pressure.active_backends > HEAVY_ACTIVE_BACKENDS
+        || pressure.write_bytes_per_second > HEAVY_WRITE_BYTES_PER_SECOND;
     let calm = pressure.replication_backlog_bytes < CALM_BACKLOG_BYTES
-        && pressure.active_backends < CALM_ACTIVE_BACKENDS;
+        && pressure.active_backends < CALM_ACTIVE_BACKENDS
+        && pressure.write_bytes_per_second < CALM_WRITE_BYTES_PER_SECOND;
     if heavy && since_change >= LOWER_EVERY {
         (current / 2).max(floor)
     } else if calm && since_change >= RAISE_EVERY {
@@ -110,7 +151,35 @@ mod tests {
         Pressure {
             replication_backlog_bytes: backlog_mb * MEGABYTE,
             active_backends,
+            write_bytes_per_second: 0.0,
         }
+    }
+
+    fn writing(megabytes_per_second: f64) -> Pressure {
+        Pressure {
+            write_bytes_per_second: megabytes_per_second * MEGABYTE as f64,
+            ..pressure(10, 3)
+        }
+    }
+
+    #[test]
+    fn heavy_writing_lowers_the_slots_and_moderate_writing_stops_their_growth() {
+        assert_eq!(next_limit(16, 32, writing(9.0), SETTLED), 8);
+        assert_eq!(next_limit(16, 32, writing(4.5), SETTLED), 16);
+        assert_eq!(next_limit(16, 32, writing(1.0), SETTLED), 17);
+    }
+
+    #[test]
+    fn the_write_rate_is_smoothed_between_readings() {
+        let start = Instant::now();
+        let mut rate = WriteRate::default();
+
+        assert_eq!(rate.observe(0, start), 0.0);
+        let first = rate.observe(50 * MEGABYTE, start + Duration::from_secs(5));
+        let second = rate.observe(100 * MEGABYTE, start + Duration::from_secs(10));
+
+        assert!((first - 3.0 * MEGABYTE as f64).abs() < 1.0);
+        assert!(second > first && second < 10.0 * MEGABYTE as f64);
     }
 
     const SETTLED: Duration = Duration::from_secs(60);
