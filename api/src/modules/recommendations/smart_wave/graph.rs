@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
+use mini_moka::sync::Cache;
 use sqlx::PgPool;
 use tracing::debug;
 use uuid::Uuid;
@@ -23,6 +26,8 @@ const TOTAL_CAP: usize = 1500;
 const DISLIKE_ARTIST_MIN: i64 = 3;
 const ANTISPREAD_MU: f32 = 0.6;
 const CACHE_TTL_SECS: u64 = 90;
+const EDGES_TTL: Duration = Duration::from_secs(600);
+const EDGES_KEPT: u64 = 4_000_000;
 
 pub enum GraphSeed {
     User,
@@ -31,7 +36,85 @@ pub enum GraphSeed {
 }
 
 pub type Affinity = HashMap<Uuid, f32>;
-type Adjacency = HashMap<Uuid, HashMap<i16, Vec<(Uuid, f32)>>>;
+type Neighbors = HashMap<i16, Vec<(Uuid, f32)>>;
+type Adjacency = HashMap<Uuid, Arc<Neighbors>>;
+
+pub struct GraphEdges {
+    by_artist: Cache<Uuid, Arc<Neighbors>>,
+}
+
+impl GraphEdges {
+    pub fn new() -> Self {
+        Self {
+            by_artist: Cache::builder()
+                .max_capacity(EDGES_KEPT)
+                .weigher(|_, neighbors: &Arc<Neighbors>| edge_count(neighbors))
+                .time_to_live(EDGES_TTL)
+                .build(),
+        }
+    }
+
+    async fn of(&self, pg: &PgPool, artists: &[Uuid]) -> Adjacency {
+        let mut adjacency = Adjacency::new();
+        let mut missing = Vec::new();
+        for artist in artists {
+            match self.by_artist.get(artist) {
+                Some(neighbors) => {
+                    adjacency.insert(*artist, neighbors);
+                }
+                None => missing.push(*artist),
+            }
+        }
+        if !missing.is_empty() {
+            let Ok(edges) = sqlx::query_file!(
+                "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+                &missing
+            )
+            .fetch_all(pg)
+            .await
+            else {
+                return Adjacency::new();
+            };
+            let edges = edges
+                .into_iter()
+                .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
+            for (artist, neighbors) in neighbors_by_artist(&missing, edges) {
+                let neighbors = Arc::new(neighbors);
+                self.by_artist.insert(artist, neighbors.clone());
+                adjacency.insert(artist, neighbors);
+            }
+        }
+        adjacency.retain(|_, neighbors| !neighbors.is_empty());
+        adjacency
+    }
+}
+
+impl Default for GraphEdges {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn neighbors_by_artist(
+    artists: &[Uuid],
+    edges: impl IntoIterator<Item = (Uuid, Uuid, f32, i16)>,
+) -> HashMap<Uuid, Neighbors> {
+    let mut by_artist: HashMap<Uuid, Neighbors> = artists
+        .iter()
+        .map(|artist| (*artist, Neighbors::new()))
+        .collect();
+    for (src, dst, weight, kind) in edges {
+        if let Some(neighbors) = by_artist.get_mut(&src) {
+            neighbors.entry(kind).or_default().push((dst, weight));
+        }
+    }
+    by_artist
+}
+
+fn edge_count(neighbors: &Neighbors) -> u32 {
+    let edges: usize = neighbors.values().map(Vec::len).sum();
+    u32::try_from(edges).unwrap_or(u32::MAX).saturating_add(1)
+}
 
 pub struct GraphResult {
     pub affinity: Affinity,
@@ -81,8 +164,8 @@ pub async fn build_affinity(
     }
     normalize_by_max(&mut seeds);
 
-    let mut affinity = propagate(&svc.pg, &seeds, &disliked).await;
-    anti_spread(&svc.pg, &mut affinity, &disliked).await;
+    let mut affinity = propagate(&svc.graph_edges, &svc.pg, &seeds, &disliked).await;
+    anti_spread(&svc.graph_edges, &svc.pg, &mut affinity, &disliked).await;
     cap_top(&mut affinity, TOTAL_CAP);
 
     if let GraphSeed::User = seed {
@@ -94,7 +177,12 @@ pub async fn build_affinity(
     }
 }
 
-async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity {
+async fn propagate(
+    edges: &GraphEdges,
+    pg: &PgPool,
+    seeds: &Affinity,
+    disliked: &[Uuid],
+) -> Affinity {
     let disliked_set: std::collections::HashSet<Uuid> = disliked.iter().copied().collect();
     let mut contribs: HashMap<Uuid, Vec<f32>> = HashMap::new();
     let mut seed_contribs: HashMap<Uuid, Vec<f32>> = HashMap::new();
@@ -105,7 +193,7 @@ async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity
             break;
         }
         let frontier = top_keys(&activation, FRONTIER_CAP);
-        let adjacency = load_adjacency(pg, &frontier).await;
+        let adjacency = edges.of(pg, &frontier).await;
         if adjacency.is_empty() {
             break;
         }
@@ -164,11 +252,11 @@ fn decay_fold(mut xs: Vec<f32>) -> f32 {
     sum.min(PROP_CAP)
 }
 
-async fn anti_spread(pg: &PgPool, affinity: &mut Affinity, disliked: &[Uuid]) {
+async fn anti_spread(edges: &GraphEdges, pg: &PgPool, affinity: &mut Affinity, disliked: &[Uuid]) {
     if disliked.is_empty() {
         return;
     }
-    for kinds in load_adjacency(pg, disliked).await.values() {
+    for kinds in edges.of(pg, disliked).await.values() {
         for (dst, e) in merge_normalized(kinds) {
             if let Some(v) = affinity.get_mut(&dst) {
                 *v = (*v - ANTISPREAD_MU * e).max(0.0);
@@ -242,29 +330,6 @@ async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
     .fetch_all(pg)
     .await
     .unwrap_or_default()
-}
-
-async fn load_adjacency(pg: &PgPool, nodes: &[Uuid]) -> Adjacency {
-    let mut adjacency = Adjacency::new();
-    if nodes.is_empty() {
-        return adjacency;
-    }
-    let edges = sqlx::query_file!(
-        "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
-        nodes
-    )
-    .fetch_all(pg)
-    .await
-    .unwrap_or_default();
-    for edge in edges {
-        adjacency
-            .entry(edge.src)
-            .or_default()
-            .entry(edge.kind)
-            .or_default()
-            .push((edge.dst, edge.weight));
-    }
-    adjacency
 }
 
 pub async fn collect_artist_tracks(
@@ -373,6 +438,29 @@ mod tests {
     #[test]
     fn decay_fold_empty_is_zero() {
         assert_eq!(decay_fold(Vec::new()), 0.0);
+    }
+
+    #[test]
+    fn neighbors_are_grouped_under_their_artist_and_kind() {
+        let artist = Uuid::from_u128(1);
+        let lonely = Uuid::from_u128(2);
+        let first = Uuid::from_u128(3);
+        let second = Uuid::from_u128(4);
+
+        let grouped = neighbors_by_artist(
+            &[artist, lonely, artist],
+            [
+                (artist, first, 0.5, 0),
+                (artist, second, 0.25, 1),
+                (artist, first, 0.75, 1),
+            ],
+        );
+
+        assert_eq!(grouped[&artist][&0], vec![(first, 0.5)]);
+        assert_eq!(grouped[&artist][&1], vec![(second, 0.25), (first, 0.75)]);
+        assert!(grouped[&lonely].is_empty());
+        assert_eq!(edge_count(&grouped[&artist]), 4);
+        assert_eq!(edge_count(&grouped[&lonely]), 1);
     }
 
     #[test]
