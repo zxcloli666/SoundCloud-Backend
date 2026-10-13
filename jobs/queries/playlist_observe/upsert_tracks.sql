@@ -130,7 +130,24 @@ ON CONFLICT (sc_track_id) DO UPDATE SET
    sc_desired = '{}',
    sc_write_confirmed = false,
    updated_at = now()
-WHERE tracks.deleted_at IS NULL AND catalog_observation_is_current(
+WHERE tracks.deleted_at IS NULL
+   AND (
+       EXCLUDED.sc_last_modified IS NULL
+       OR tracks.sc_synced_at < now() - interval '7 days'
+       OR tracks.sc_desired <> '{}'::jsonb
+       OR tracks.sc_last_modified IS DISTINCT FROM COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified)
+       OR tracks.title IS DISTINCT FROM EXCLUDED.title
+       OR tracks.sharing IS DISTINCT FROM EXCLUDED.sharing
+       OR tracks.artwork_url IS DISTINCT FROM EXCLUDED.artwork_url
+       OR tracks.permalink_url IS DISTINCT FROM EXCLUDED.permalink_url
+       OR tracks.needs_duration_resolve IS DISTINCT FROM EXCLUDED.needs_duration_resolve
+       OR (EXCLUDED.duration_ms > 0 AND tracks.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms)
+       OR (EXCLUDED.is_cover AND NOT tracks.is_cover)
+       OR (tracks.uploader_sc_user_id IS NULL AND EXCLUDED.uploader_sc_user_id IS NOT NULL)
+       OR EXCLUDED.index_priority < tracks.index_priority
+       OR EXCLUDED.storage_priority < tracks.storage_priority
+   )
+   AND catalog_observation_is_current(
    tracks.sc_observation, tracks.sc_mutation_observation, EXCLUDED.sc_observation,
    tracks.sc_last_modified, COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified),
    tracks.sc_desired, tracks.sc_write_confirmed, to_jsonb(EXCLUDED)

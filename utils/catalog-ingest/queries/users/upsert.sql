@@ -33,6 +33,14 @@ ON CONFLICT (sc_user_id) DO UPDATE SET
    sc_observation = GREATEST(users.sc_observation, EXCLUDED.sc_observation),
    updated_at = now()
 WHERE EXCLUDED.sc_observation > 0
+  AND (
+      EXCLUDED.sc_last_modified IS NULL
+      OR users.sc_synced_at < now() - interval '7 days'
+      OR users.sc_last_modified IS DISTINCT FROM EXCLUDED.sc_last_modified
+      OR users.username IS DISTINCT FROM EXCLUDED.username
+      OR ($25::jsonb ? 'avatar_url' AND users.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url)
+      OR ($25::jsonb ? 'verified' AND users.verified IS DISTINCT FROM EXCLUDED.verified)
+  )
   AND (EXCLUDED.sc_observation > users.sc_observation
        OR EXCLUDED.sc_last_modified > users.sc_last_modified)
   AND (users.sc_last_modified IS NULL

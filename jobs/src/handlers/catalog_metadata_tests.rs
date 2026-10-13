@@ -172,9 +172,10 @@ async fn catalog_metadata_newer_source_versions_win_without_crossing_local_mutat
     let slower = Observation::begin(&pool).await?;
     let faster = Observation::begin(&pool).await?;
     assert!(
-        observe_track(&pool, &current, faster)
+        !observe_track(&pool, &current, faster)
             .await?
-            .metadata_applied
+            .metadata_applied,
+        "an unchanged version was written again"
     );
     current["title"] = json!("Newest remote version");
     current["last_modified"] = json!("2026-09-07T12:00:00Z");
