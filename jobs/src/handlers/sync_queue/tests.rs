@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde_json::json;
 use sqlx::PgPool;
 
+use super::model::ClaimedMutation;
 use super::repository::SyncQueueRepository;
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -34,7 +35,9 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              soundcloud_user_id text NOT NULL,
              oauth_app_id integer NOT NULL DEFAULT 1,
              last_refresh_error_kind text,
-             retry_at timestamptz
+             retry_at timestamptz,
+             expires_at timestamptz NOT NULL DEFAULT now() + interval '1 hour',
+             updated_at timestamptz NOT NULL DEFAULT now()
          );
          INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('1');
          CREATE TABLE user_likes_tracks (
@@ -161,6 +164,38 @@ async fn only_users_whose_login_can_still_be_refreshed_are_served(
         .map(|mutation| mutation.target_urn.as_str())
         .collect();
     assert_eq!(targets, vec!["refreshable"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn one_claim_carries_a_single_like_and_skips_actions_on_hold(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, next_run_at) VALUES
+             ('1', 'like_track', 'first-like', now() - interval '3 minutes'),
+             ('1', 'like_track', 'second-like', now() - interval '2 minutes'),
+             ('1', 'follow_user', 'artist', now() - interval '1 minute'),
+             ('1', 'playlist_update', 'playlist', now())",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = repository(pool);
+
+    let open = repository.claim_outside(8, &[]).await?;
+    let targets = |claimed: &[ClaimedMutation]| {
+        claimed
+            .iter()
+            .map(|mutation| mutation.target_urn.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(targets(&open), ["first-like", "artist", "playlist"]);
+
+    let held = repository
+        .claim_outside(8, &["1:like_track".to_owned()])
+        .await?;
+    assert!(held.is_empty());
     Ok(())
 }
 

@@ -399,6 +399,7 @@ pub struct SyncQueueConfig {
     pub concurrency: usize,
     pub claim_batch: usize,
     pub lease_duration: Duration,
+    pub like_interval: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -735,6 +736,8 @@ impl SyncQueueConfig {
         let claim_batch = env::non_zero_usize("SYNC_QUEUE_CLAIM_BATCH", concurrency)?;
         let lease_duration =
             Duration::from_secs(env::positive_u64("SYNC_QUEUE_LEASE_SECONDS", 300)?);
+        let like_interval =
+            Duration::from_millis(env::positive_u64("SYNC_QUEUE_LIKE_INTERVAL_MS", 5_000)?);
         let config = Self {
             api_url,
             proxy_url,
@@ -743,6 +746,7 @@ impl SyncQueueConfig {
             concurrency,
             claim_batch,
             lease_duration,
+            like_interval,
         };
         config.validate()?;
         Ok(config)
@@ -1186,6 +1190,7 @@ mod tests {
             concurrency: 16,
             claim_batch: 16,
             lease_duration: Duration::from_secs(299),
+            like_interval: Duration::from_secs(5),
         };
 
         assert!(config.validate().is_err());

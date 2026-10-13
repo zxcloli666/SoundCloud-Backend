@@ -434,6 +434,7 @@ fn sync_config(api_url: Url) -> SyncQueueConfig {
         concurrency: 1,
         claim_batch: 1,
         lease_duration: Duration::from_secs(300),
+        like_interval: Duration::from_secs(5),
     }
 }
 

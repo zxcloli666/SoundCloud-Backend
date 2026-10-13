@@ -11,6 +11,7 @@ mod track_tests;
 mod write_pause;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use backend_contracts::{SYNC_QUEUE_MAX_RETRIES, SyncQueueFlushPayload};
 use futures::{StreamExt, stream};
@@ -22,9 +23,9 @@ use crate::queue::{JobError, JobResult};
 use self::actions::ActionError;
 use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
-use self::repository::{FinalizeError, SyncQueueRepository};
+use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
 use self::storage::TrackStorage;
-use self::write_pause::WritePauses;
+use self::write_pause::{Admission, WritePauses};
 
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
@@ -39,6 +40,7 @@ const PAUSED_ACTION_RECHECK_SECONDS: i64 = 15 * 60;
 const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
 const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
+const PACED_DRAIN_BUDGET: Duration = Duration::from_secs(50);
 
 pub struct SyncQueueHandler {
     repository: Arc<SyncQueueRepository>,
@@ -48,6 +50,7 @@ pub struct SyncQueueHandler {
     storage: TrackStorage,
     write_pauses: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
+    like_interval: Duration,
     concurrency: usize,
     claim_batch: i64,
 }
@@ -65,6 +68,7 @@ impl SyncQueueHandler {
             storage: TrackStorage::new(&config.sync_queue)?,
             write_pauses: WritePauses::default(),
             account_pauses: WritePauses::default(),
+            like_interval: config.sync_queue.like_interval,
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
         })
@@ -77,19 +81,30 @@ impl SyncQueueHandler {
                 .await
                 .map_err(JobError::retryable)?;
         }
+        let deadline = Instant::now() + PACED_DRAIN_BUDGET;
         for _ in 0..MAX_DRAIN_BATCHES {
             let claimed = self.flush_batch().await?;
-            if claimed < self.claim_batch as usize {
-                break;
+            if claimed >= self.claim_batch as usize {
+                continue;
+            }
+            match self.write_pauses.next_spacing_end() {
+                Some(wait) if Instant::now() + wait < deadline => tokio::time::sleep(wait).await,
+                _ => break,
             }
         }
         Ok(())
     }
 
     async fn flush_batch(&self) -> JobResult<usize> {
+        let held = self
+            .write_pauses
+            .held()
+            .into_iter()
+            .map(|(oauth_app_id, action)| format!("{oauth_app_id}:{action}"))
+            .collect::<Vec<_>>();
         let mutations = self
             .repository
-            .claim(self.claim_batch)
+            .claim_outside(self.claim_batch, &held)
             .await
             .map_err(JobError::retryable)?;
         let claimed = mutations.len();
@@ -143,19 +158,27 @@ impl SyncQueueHandler {
                 return Ok(());
             }
         };
-        if let Some(oauth_app_id) = token.oauth_app_id
-            && let Some(seconds) = self
-                .write_pauses
-                .remaining_seconds(&(oauth_app_id, mutation.action_type.clone()))
-        {
-            self.repository
-                .postpone_unattempted(
-                    &mutation,
-                    "SoundCloud paused this action for the application",
-                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-                )
-                .await?;
-            return Ok(());
+        if let Some(oauth_app_id) = token.oauth_app_id {
+            let action = (oauth_app_id, mutation.action_type.clone());
+            match self.write_pauses.admit(&action) {
+                Admission::Paused(seconds) => {
+                    self.repository
+                        .postpone_unattempted(
+                            &mutation,
+                            "SoundCloud paused this action for the application",
+                            seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                Admission::Open => {
+                    if let Some(spacing) = self.spacing(&mutation.action_type) {
+                        self.write_pauses
+                            .pause(action, i64::try_from(spacing.as_secs()).unwrap_or(1));
+                    }
+                }
+                Admission::Probe => {}
+            }
         }
         if let Some(seconds) = self
             .account_pauses
@@ -179,8 +202,10 @@ impl SyncQueueHandler {
         {
             Ok(result) => {
                 if let Some(oauth_app_id) = token.oauth_app_id {
-                    self.write_pauses
-                        .clear(&(oauth_app_id, mutation.action_type.clone()));
+                    self.write_pauses.succeeded(
+                        &(oauth_app_id, mutation.action_type.clone()),
+                        self.spacing(&mutation.action_type),
+                    );
                 }
                 result
             }
@@ -233,6 +258,12 @@ impl SyncQueueHandler {
             return Ok(());
         }
         self.finalize(&mutation).await
+    }
+
+    fn spacing(&self, action_type: &str) -> Option<Duration> {
+        PACED_ACTIONS
+            .contains(&action_type)
+            .then_some(self.like_interval)
     }
 
     fn pause_writes_when_refused(

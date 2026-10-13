@@ -1,36 +1,70 @@
 WITH usable AS MATERIALIZED (
-    SELECT DISTINCT connection.soundcloud_user_id AS user_id
+    SELECT DISTINCT ON (connection.soundcloud_user_id)
+           connection.soundcloud_user_id AS user_id,
+           connection.oauth_app_id::text AS app
     FROM soundcloud_connections AS connection
     JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
     WHERE app.active
       AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
       AND (connection.retry_at IS NULL OR connection.retry_at <= now())
+    ORDER BY connection.soundcloud_user_id,
+             (connection.expires_at > now()) DESC,
+             connection.updated_at DESC
 ),
-due AS MATERIALIZED (
-    SELECT waiting.id
+waiting AS MATERIALIZED (
+    SELECT head.id, head.next_run_at, head.created_at, head.paced
     FROM usable
     CROSS JOIN LATERAL (
-        SELECT queued.id, queued.next_run_at, queued.created_at
-        FROM sync_queue AS queued
-        WHERE queued.user_id = usable.user_id
-          AND queued.dead = false
-          AND queued.next_run_at <= now()
-          AND (
-              queued.lease_id IS NULL
-              OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM sync_queue AS earlier
-              WHERE earlier.dead = false
-                AND earlier.user_id = queued.user_id
-                AND earlier.target_urn = queued.target_urn
-                AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
-          )
-        ORDER BY queued.next_run_at, queued.created_at, queued.id
+        SELECT ordered.id, ordered.next_run_at, ordered.created_at, ordered.paced
+        FROM (
+            SELECT queued.id,
+                   queued.next_run_at,
+                   queued.created_at,
+                   CASE WHEN queued.action_type = ANY ($4::text[]) THEN queued.action_type END AS paced,
+                   row_number() OVER (
+                       PARTITION BY CASE
+                           WHEN queued.action_type = ANY ($4::text[]) THEN queued.action_type
+                       END
+                       ORDER BY queued.next_run_at, queued.created_at, queued.id
+                   ) AS turn
+            FROM sync_queue AS queued
+            WHERE queued.user_id = usable.user_id
+              AND queued.dead = false
+              AND queued.next_run_at <= now()
+              AND (
+                  queued.lease_id IS NULL
+                  OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
+              )
+              AND NOT ((usable.app || ':' || queued.action_type) = ANY ($3::text[]))
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM sync_queue AS earlier
+                  WHERE earlier.dead = false
+                    AND earlier.user_id = queued.user_id
+                    AND earlier.target_urn = queued.target_urn
+                    AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
+              )
+        ) AS ordered
+        WHERE ordered.paced IS NULL OR ordered.turn = 1
+        ORDER BY ordered.next_run_at, ordered.created_at, ordered.id
         LIMIT $2
-    ) AS waiting
-    ORDER BY waiting.next_run_at, waiting.created_at, waiting.id
+    ) AS head
+),
+due AS MATERIALIZED (
+    SELECT ranked.id
+    FROM (
+        SELECT waiting.id,
+               waiting.next_run_at,
+               waiting.created_at,
+               waiting.paced,
+               row_number() OVER (
+                   PARTITION BY waiting.paced
+                   ORDER BY waiting.next_run_at, waiting.created_at, waiting.id
+               ) AS turn
+        FROM waiting
+    ) AS ranked
+    WHERE ranked.paced IS NULL OR ranked.turn = 1
+    ORDER BY ranked.next_run_at, ranked.created_at, ranked.id
     LIMIT $2
 ),
 candidates AS (

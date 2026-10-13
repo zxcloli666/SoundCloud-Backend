@@ -6,6 +6,8 @@ use sqlx::PgPool;
 use super::actions::{self, ActionError};
 use super::model::{ClaimedMutation, LockedMutation};
 
+pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
+
 pub struct SyncQueueRepository {
     pool: PgPool,
     queue: crate::queue::JobRepository,
@@ -33,12 +35,24 @@ impl SyncQueueRepository {
         }
     }
 
+    #[cfg(test)]
     pub async fn claim(&self, limit: i64) -> Result<Vec<ClaimedMutation>, sqlx::Error> {
+        self.claim_outside(limit, &[]).await
+    }
+
+    pub async fn claim_outside(
+        &self,
+        limit: i64,
+        held: &[String],
+    ) -> Result<Vec<ClaimedMutation>, sqlx::Error> {
+        let paced = PACED_ACTIONS.map(str::to_owned);
         sqlx::query_file_as!(
             ClaimedMutation,
             "queries/sync_queue/claim.sql",
             self.lease_milliseconds(),
-            limit
+            limit,
+            held,
+            &paced
         )
         .fetch_all(&self.pool)
         .await

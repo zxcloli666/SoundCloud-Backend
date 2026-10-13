@@ -41,6 +41,7 @@ async fn remote_deletion_accepts_absence_but_preserves_authorization_and_server_
         concurrency: 1,
         claim_batch: 1,
         lease_duration: Duration::from_secs(60),
+        like_interval: Duration::from_secs(5),
     };
     let client = SoundCloudClient::new(&config)?;
     let result: anyhow::Result<()> = async {
