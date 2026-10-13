@@ -149,7 +149,8 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.core_bulk.clone(),
         CORE_BULK_KINDS,
     )
-    .governed_by(bulk_governor.clone());
+    .governed_by(bulk_governor.clone())
+    .sharing_between_kinds();
     let maintenance_worker = QueueWorker::new(
         maintenance_repository,
         handlers.clone(),

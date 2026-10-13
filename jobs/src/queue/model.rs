@@ -21,6 +21,7 @@ pub struct NewJob {
 pub enum ClaimOrder {
     Priority,
     Oldest,
+    Kind(JobKind),
 }
 
 #[derive(Clone, Debug)]

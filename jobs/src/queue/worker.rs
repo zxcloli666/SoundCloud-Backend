@@ -23,6 +23,7 @@ pub(crate) struct QueueWorker {
     lane: QueueLaneConfig,
     kinds: &'static [JobKind],
     governor: Option<Arc<WriteGovernor>>,
+    shares_between_kinds: bool,
 }
 
 struct JobTaskExit {
@@ -46,7 +47,36 @@ impl QueueWorker {
             lane,
             kinds,
             governor: None,
+            shares_between_kinds: false,
         }
+    }
+
+    pub(crate) fn sharing_between_kinds(mut self) -> Self {
+        self.shares_between_kinds = true;
+        self
+    }
+
+    async fn claim(
+        &self,
+        successful_claims: u64,
+        limit: usize,
+    ) -> Result<Vec<LeasedJob>, QueueError> {
+        let lease = self.config.lease_duration;
+        let Some(turn) = kind_turn(self.shares_between_kinds, successful_claims) else {
+            let order = next_claim_order(successful_claims);
+            return self.repository.claim(self.kinds, order, limit, lease).await;
+        };
+        for offset in 0..self.kinds.len() {
+            let kind = self.kinds[turn.wrapping_add(offset) % self.kinds.len()];
+            let jobs = self
+                .repository
+                .claim(self.kinds, ClaimOrder::Kind(kind), limit, lease)
+                .await?;
+            if !jobs.is_empty() {
+                return Ok(jobs);
+            }
+        }
+        Ok(Vec::new())
     }
 
     pub(crate) fn governed_by(mut self, governor: Arc<WriteGovernor>) -> Self {
@@ -84,11 +114,7 @@ impl QueueWorker {
                 continue;
             }
 
-            let order = next_claim_order(successful_claims);
-            let claimed = self
-                .repository
-                .claim(self.kinds, order, limit, self.config.lease_duration)
-                .await;
+            let claimed = self.claim(successful_claims, limit).await;
 
             match claimed {
                 Ok(jobs) if !jobs.is_empty() => {
@@ -155,6 +181,11 @@ fn spawn_job(
 
 fn claim_limit(concurrency: usize, running: usize, batch: usize) -> usize {
     concurrency.saturating_sub(running).min(batch)
+}
+
+fn kind_turn(shares_between_kinds: bool, successful_claims: u64) -> Option<usize> {
+    (shares_between_kinds && successful_claims.is_multiple_of(2))
+        .then(|| usize::try_from(successful_claims / 2).unwrap_or(usize::MAX))
 }
 
 fn next_claim_order(successful_claims: u64) -> ClaimOrder {
@@ -236,6 +267,15 @@ mod tests {
         assert_eq!(claim_limit(32, 10, 8), 8);
         assert_eq!(claim_limit(32, 32, 8), 0);
         assert_eq!(claim_limit(32, 40, 8), 0);
+    }
+
+    #[test]
+    fn every_second_claim_of_a_sharing_lane_is_the_turn_of_the_next_kind() {
+        assert_eq!(kind_turn(true, 0), Some(0));
+        assert_eq!(kind_turn(true, 1), None);
+        assert_eq!(kind_turn(true, 2), Some(1));
+        assert_eq!(kind_turn(true, 6), Some(3));
+        assert_eq!(kind_turn(false, 0), None);
     }
 
     #[test]

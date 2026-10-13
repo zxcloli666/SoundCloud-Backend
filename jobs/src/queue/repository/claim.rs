@@ -30,14 +30,16 @@ impl JobRepository {
             .collect::<Vec<_>>();
         let mut transaction = self.pool.begin().await?;
 
-        sqlx::query_file!(
-            "queries/queue/release_expired.sql",
-            limit,
-            &supported_kinds,
-            lane.as_str()
-        )
-        .execute(&mut *transaction)
-        .await?;
+        if !matches!(order, ClaimOrder::Kind(_)) {
+            sqlx::query_file!(
+                "queries/queue/release_expired.sql",
+                limit,
+                &supported_kinds,
+                lane.as_str()
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
 
         let rows = match order {
             ClaimOrder::Priority => {
@@ -46,6 +48,19 @@ impl JobRepository {
                     "queries/queue/claim_priority.sql",
                     limit,
                     &supported_kinds,
+                    self.worker_id.as_str(),
+                    lease_milliseconds,
+                    lane.as_str()
+                )
+                .fetch_all(&mut *transaction)
+                .await?
+            }
+            ClaimOrder::Kind(kind) => {
+                sqlx::query_file_as!(
+                    LeasedJobRow,
+                    "queries/queue/claim_kind.sql",
+                    limit,
+                    kind.as_str(),
                     self.worker_id.as_str(),
                     lease_milliseconds,
                     lane.as_str()

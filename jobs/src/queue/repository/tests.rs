@@ -47,6 +47,49 @@ fn errors_are_truncated_on_character_boundaries() {
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_kind_turn_takes_its_own_best_job_past_more_urgent_jobs_of_other_kinds(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "kind-turn-test".into());
+    let urgent = new_job(
+        JobKind::CatalogCollection,
+        Some("urgent"),
+        20,
+        1,
+        Utc::now(),
+    );
+    let background = new_job(JobKind::PlaylistObserveShadow, Some("b"), 0, 1, Utc::now());
+    let viewed = new_job(JobKind::PlaylistObserveShadow, Some("v"), 15, 1, Utc::now());
+    for job in [&urgent, &background, &viewed] {
+        repository.enqueue(job).await?;
+    }
+    let lane = [JobKind::CatalogCollection, JobKind::PlaylistObserveShadow];
+
+    let turn = repository
+        .claim(
+            &lane,
+            ClaimOrder::Kind(JobKind::PlaylistObserveShadow),
+            1,
+            Duration::from_secs(60),
+        )
+        .await?;
+    let next = repository
+        .claim(&lane, ClaimOrder::Priority, 1, Duration::from_secs(60))
+        .await?;
+
+    assert_eq!(
+        turn.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [viewed.id]
+    );
+    assert_eq!(
+        next.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [urgent.id]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn postponing_preserves_retry_budget_and_prevents_early_claim(
     pool: PgPool,
 ) -> anyhow::Result<()> {
