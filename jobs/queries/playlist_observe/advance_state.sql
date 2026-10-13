@@ -1,5 +1,15 @@
 UPDATE playlist_membership_state AS state
-SET reconcile_generation = state.reconcile_generation + 1,
+SET reconcile_generation = GREATEST(
+        state.reconcile_generation,
+        COALESCE(
+            (
+                SELECT max(run.reconcile_generation)
+                FROM playlist_reconcile_runs AS run
+                WHERE run.playlist_urn = state.playlist_urn
+            ),
+            0
+        )
+    ) + 1,
     updated_at = clock_timestamp()
 FROM playlists AS playlist
 WHERE state.playlist_urn = $1
