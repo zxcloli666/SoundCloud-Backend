@@ -147,6 +147,7 @@ fn upload(quality: Option<&str>) -> UploadedAudio {
         quality: quality.map(|quality| match quality {
             "sq" => "sq",
             "hq" => "hq",
+            "uq" => "uq",
             _ => unreachable!(),
         }),
     }
@@ -179,7 +180,12 @@ fn delivery(sequence: u64, seconds: i64) -> DeliveryContext {
 
 #[test]
 fn upload_validation_accepts_real_and_synthetic_events() -> anyhow::Result<()> {
-    for quality in [None, Some("sq".to_owned()), Some("hq".to_owned())] {
+    for quality in [
+        None,
+        Some("sq".to_owned()),
+        Some("hq".to_owned()),
+        Some("uq".to_owned()),
+    ] {
         validate_upload(StorageTrackUploaded {
             sc_track_id: "soundcloud:tracks:42".to_owned(),
             storage_url: "https://storage.example/redirect/42.m4a".to_owned(),
@@ -214,6 +220,60 @@ fn upload_validation_rejects_unsafe_values() {
             .into_iter()
             .all(|payload| validate_upload(payload).is_err())
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn only_an_sq_copy_waits_for_an_upgrade(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    insert_track(&pool, 180_000).await?;
+    let pending = || async {
+        sqlx::query_as::<_, (Option<String>, bool)>(
+            "SELECT storage_quality, hq_upgrade_pending FROM tracks WHERE sc_track_id = '42'",
+        )
+        .fetch_one(&pool)
+        .await
+    };
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(1, 10),
+        420_000,
+    )
+    .await?;
+    assert_eq!(pending().await?, (Some("sq".to_owned()), true));
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("hq")),
+        &delivery(2, 20),
+        420_000,
+    )
+    .await?;
+    assert_eq!(pending().await?, (Some("hq".to_owned()), false));
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("uq")),
+        &delivery(3, 30),
+        420_000,
+    )
+    .await?;
+    assert_eq!(pending().await?, (Some("uq".to_owned()), false));
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(4, 40),
+        420_000,
+    )
+    .await?;
+    assert_eq!(pending().await?, (Some("sq".to_owned()), false));
+    Ok(())
 }
 
 #[sqlx::test(migrations = false)]

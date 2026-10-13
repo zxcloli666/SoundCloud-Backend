@@ -8,6 +8,7 @@ use wreq::Client;
 
 use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::{fetch_get_json, fetch_get_text};
+use super::quality;
 pub(crate) use super::restricted::{Transcoding, build_transcoding_target};
 
 const SC_BASE_URL: &str = "https://soundcloud.com";
@@ -34,6 +35,7 @@ struct TranscodingResolveResponse {
 pub struct AnonStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
+    pub quality: &'static str,
 }
 
 pub struct AnonClient {
@@ -190,6 +192,7 @@ impl AnonClient {
     pub async fn get_stream(
         self: &Arc<Self>,
         track_urn: &str,
+        at_least: &'static str,
     ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
@@ -222,7 +225,11 @@ impl AnonClient {
                 {
                     Some(t) if !t.is_empty() => {
                         return self
-                            .stream_from_transcodings(t, retry_track.track_authorization.as_deref())
+                            .stream_from_transcodings(
+                                t,
+                                retry_track.track_authorization.as_deref(),
+                                at_least,
+                            )
                             .await;
                     }
                     _ => {
@@ -235,7 +242,7 @@ impl AnonClient {
 
         let track_auth = track.track_authorization.as_deref();
         match self
-            .stream_from_transcodings(transcodings, track_auth)
+            .stream_from_transcodings(transcodings, track_auth, at_least)
             .await
         {
             Ok(Some(r)) => Ok(Some(r)),
@@ -256,8 +263,12 @@ impl AnonClient {
                     .and_then(|m| m.transcodings.as_ref())
                 {
                     Some(t) if !t.is_empty() => {
-                        self.stream_from_transcodings(t, retry_track.track_authorization.as_deref())
-                            .await
+                        self.stream_from_transcodings(
+                            t,
+                            retry_track.track_authorization.as_deref(),
+                            at_least,
+                        )
+                        .await
                     }
                     _ => Ok(None),
                 }
@@ -269,8 +280,9 @@ impl AnonClient {
         self: &Arc<Self>,
         transcodings: &[Transcoding],
         track_auth: Option<&str>,
+        at_least: &'static str,
     ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
-        let ranked = ranked_transcodings(transcodings);
+        let ranked = ranked_transcodings(transcodings, at_least);
         if ranked.is_empty() {
             return Ok(None);
         }
@@ -353,7 +365,11 @@ impl AnonClient {
 
             match result {
                 Ok((data, content_type)) => {
-                    return Ok(Some(AnonStreamResult { data, content_type }));
+                    return Ok(Some(AnonStreamResult {
+                        data,
+                        content_type,
+                        quality: quality::of_transcoding(t),
+                    }));
                 }
                 Err(e) => {
                     warn!(
@@ -459,7 +475,11 @@ impl AnonClient {
     }
 }
 
-fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
+fn ranked_transcodings<'a>(
+    transcodings: &'a [Transcoding],
+    at_least: &str,
+) -> Vec<&'a Transcoding> {
+    let floor = quality::rank(at_least);
     let candidates: Vec<&Transcoding> = transcodings
         .iter()
         .filter(|t| {
@@ -471,6 +491,7 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
                 .contains("encrypted");
             !encrypted && !t.snipped.unwrap_or(false) && !t.url.contains("/preview")
         })
+        .filter(|t| quality::rank(quality::of_transcoding(t)) >= floor)
         .collect();
 
     if candidates.is_empty() {
@@ -511,6 +532,9 @@ fn ranked_transcodings(transcodings: &[Transcoding]) -> Vec<&Transcoding> {
         if !ordered.iter().any(|o| std::ptr::eq(*o, *t)) {
             ordered.push(t);
         }
+    }
+    if floor > quality::rank(quality::SQ) {
+        ordered.sort_by_key(|t| std::cmp::Reverse(quality::rank(quality::of_transcoding(t))));
     }
     ordered
 }
@@ -563,7 +587,7 @@ mod tests {
         let media: TrackMedia = serde_json::from_str(SAMPLE_MEDIA).unwrap();
         let transcodings = media.transcodings.expect("transcodings present");
 
-        let ranked = ranked_transcodings(&transcodings);
+        let ranked = ranked_transcodings(&transcodings, quality::SQ);
 
         assert_eq!(
             ranked.len(),
@@ -589,10 +613,30 @@ mod tests {
     }
 
     #[test]
+    fn asking_for_hq_leaves_only_aac_160k_and_better() {
+        let transcodings: Vec<Transcoding> = serde_json::from_value(serde_json::json!([
+            { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/a/stream/progressive", "preset": "mp3_1_0", "quality": "sq", "format": { "protocol": "progressive", "mime_type": "audio/mpeg" } },
+            { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/b/stream/hls", "preset": "aac_160k", "quality": "sq", "format": { "protocol": "hls", "mime_type": "audio/mp4" } },
+            { "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:1/c/stream/hls", "preset": "opus_0_0", "quality": "sq", "format": { "protocol": "hls", "mime_type": "audio/ogg" } }
+        ]))
+        .unwrap();
+
+        let economy = ranked_transcodings(&transcodings, quality::SQ);
+        assert_eq!(economy.len(), 3);
+        assert_eq!(economy[0].preset.as_deref(), Some("mp3_1_0"));
+
+        let hq = ranked_transcodings(&transcodings, quality::HQ);
+        assert_eq!(hq.len(), 1);
+        assert_eq!(hq[0].preset.as_deref(), Some("aac_160k"));
+
+        assert!(ranked_transcodings(&transcodings, quality::UQ).is_empty());
+    }
+
+    #[test]
     fn transcoding_target_includes_track_authorization() {
         let media: TrackMedia = serde_json::from_str(SAMPLE_MEDIA).unwrap();
         let transcodings = media.transcodings.expect("transcodings present");
-        let ranked = ranked_transcodings(&transcodings);
+        let ranked = ranked_transcodings(&transcodings, quality::SQ);
         let progressive = ranked[0];
 
         let with_auth = build_transcoding_target(&progressive.url, "CID", Some("TRACK_AUTH_JWT"));
@@ -693,7 +737,7 @@ mod tests {
             .expect("api-v2 /tracks returns track_authorization");
         let transcodings = track.media.unwrap().transcodings.unwrap();
 
-        let ranked = ranked_transcodings(&transcodings);
+        let ranked = ranked_transcodings(&transcodings, quality::SQ);
         assert_eq!(ranked.len(), 2, "only the two mp3_1_0 entries survive");
         for t in &ranked {
             let target = build_transcoding_target(&t.url, &client_id, Some(&track_auth))

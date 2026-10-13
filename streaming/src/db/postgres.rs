@@ -64,6 +64,7 @@ pub struct TrackRecord {
 impl TrackRecord {
     pub fn stored_quality(&self) -> Option<&'static str> {
         match self.storage_quality.as_deref() {
+            Some("uq") => Some("uq"),
             Some("hq") => Some("hq"),
             Some("sq") => Some("sq"),
             _ => None,
@@ -530,6 +531,7 @@ mod tests {
             is_public: true,
             storage_quality: quality.map(str::to_owned),
         };
+        assert_eq!(stored(Some("uq")).stored_quality(), Some("uq"));
         assert_eq!(stored(Some("hq")).stored_quality(), Some("hq"));
         assert_eq!(stored(Some("sq")).stored_quality(), Some("sq"));
         assert_eq!(stored(Some("lq")).stored_quality(), None);

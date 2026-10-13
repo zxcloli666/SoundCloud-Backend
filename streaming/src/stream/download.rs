@@ -12,6 +12,7 @@ use wreq::Client;
 
 use super::handler::{DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id};
 use super::proxy::{fetch_get_bytes, fetch_get_json, fetch_get_text};
+use super::quality;
 use super::restricted::{Transcoding, build_transcoding_target};
 use crate::AppState;
 use crate::error::AppError;
@@ -193,7 +194,7 @@ async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
         .and_then(|f| f.mime_type.as_deref())
         .unwrap_or("audio/mpeg")
         .to_string();
-    let quality = entry.t.quality.clone().unwrap_or_else(|| "sq".to_string());
+    let quality = quality::of_transcoding(&entry.t).to_string();
     let preset = entry
         .t
         .preset
@@ -202,7 +203,7 @@ async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
     if entry.t.snipped.unwrap_or(false) || entry.t.url.contains("/preview") {
         return None;
     }
-    if quality == "lq" {
+    if entry.t.quality.as_deref() == Some("lq") {
         return None;
     }
 

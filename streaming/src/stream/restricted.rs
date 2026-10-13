@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use wreq::Client;
 
 use super::proxy::{fetch_get_json, fetch_get_text};
+use super::quality;
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
@@ -24,7 +25,7 @@ pub(crate) struct RestrictedSource {
     pub manifest: String,
     pub token: String,
     pub content_type: &'static str,
-    pub is_hq: bool,
+    pub quality: &'static str,
 }
 
 #[derive(serde::Deserialize)]
@@ -67,16 +68,21 @@ fn is_full_encrypted(t: &Transcoding) -> bool {
         && !t.snipped.unwrap_or(false)
 }
 
-fn pick_encrypted<'a>(transcodings: &'a [Transcoding], hq_first: bool) -> Option<&'a Transcoding> {
-    let want = |hq: bool| -> Option<&'a Transcoding> {
-        let tag = if hq { "hq" } else { "sq" };
-        transcodings
-            .iter()
-            .find(|t| is_full_encrypted(t) && t.quality.as_deref() == Some(tag))
+fn pick_encrypted(transcodings: &[Transcoding], hq_first: bool) -> Option<&Transcoding> {
+    let full: Vec<&Transcoding> = transcodings
+        .iter()
+        .filter(|t| is_full_encrypted(t))
+        .collect();
+    let best = |allow_uq: bool| {
+        full.iter()
+            .copied()
+            .filter(|t| t.quality.as_deref() != Some("lq"))
+            .filter(|t| allow_uq || quality::of_transcoding(t) != quality::UQ)
+            .max_by_key(|t| quality::rank(quality::of_transcoding(t)))
     };
-    want(hq_first)
-        .or_else(|| want(!hq_first))
-        .or_else(|| transcodings.iter().find(|t| is_full_encrypted(t)))
+    best(hq_first)
+        .or_else(|| best(true))
+        .or_else(|| full.first().copied())
 }
 
 pub(crate) async fn resolve(
@@ -94,7 +100,7 @@ pub(crate) async fn resolve(
     };
     let content_type =
         content_type_from_mime(tc.format.as_ref().and_then(|f| f.mime_type.as_deref()));
-    let is_hq = tc.quality.as_deref() == Some("hq");
+    let quality = quality::of_transcoding(tc);
 
     let Some(target) = build_transcoding_target(&tc.url, client_id, track_auth) else {
         return Ok(None);
@@ -110,18 +116,28 @@ pub(crate) async fn resolve(
         manifest,
         token,
         content_type,
-        is_hq,
+        quality,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Transcoding, pick_encrypted};
+    use crate::stream::quality;
 
     fn encrypted(quality: &str, snipped: bool) -> Transcoding {
+        let preset = if quality == "hq" {
+            "aac_256k"
+        } else {
+            "aac_160k"
+        };
+        encrypted_preset(preset, quality, snipped)
+    }
+
+    fn encrypted_preset(preset: &str, quality: &str, snipped: bool) -> Transcoding {
         serde_json::from_value(serde_json::json!({
-            "url": format!("https://api-v2.soundcloud.com/media/soundcloud:tracks:1/{quality}/stream/ctr-encrypted-hls"),
-            "preset": "aac_160k",
+            "url": format!("https://api-v2.soundcloud.com/media/soundcloud:tracks:1/{preset}/stream/ctr-encrypted-hls"),
+            "preset": preset,
             "snipped": snipped,
             "quality": quality,
             "format": { "protocol": "ctr-encrypted-hls", "mime_type": "audio/mp4" }
@@ -138,5 +154,43 @@ mod tests {
         let picked = pick_encrypted(&mixed, true).unwrap();
         assert_eq!(picked.quality.as_deref(), Some("sq"));
         assert_eq!(picked.snipped, Some(false));
+    }
+
+    #[test]
+    fn the_best_full_transcoding_wins_when_quality_comes_first() {
+        let tcs = [
+            encrypted_preset("abr_sq", "sq", false),
+            encrypted_preset("aac_96k", "lq", false),
+            encrypted_preset("aac_160k", "sq", false),
+        ];
+        let picked = pick_encrypted(&tcs, true).unwrap();
+        assert_eq!(picked.preset.as_deref(), Some("aac_160k"));
+        assert_eq!(quality::of_transcoding(picked), quality::HQ);
+    }
+
+    #[test]
+    fn economy_skips_uq_but_still_takes_aac_160k() {
+        let tcs = [
+            encrypted_preset("aac_256k", "hq", false),
+            encrypted_preset("aac_160k", "sq", false),
+            encrypted_preset("abr_sq", "sq", false),
+        ];
+        assert_eq!(
+            pick_encrypted(&tcs, false).unwrap().preset.as_deref(),
+            Some("aac_160k")
+        );
+        assert_eq!(
+            pick_encrypted(&tcs, true).unwrap().preset.as_deref(),
+            Some("aac_256k")
+        );
+    }
+
+    #[test]
+    fn a_low_quality_stream_is_only_the_last_resort() {
+        let only_lq = [encrypted_preset("aac_96k", "lq", false)];
+        assert_eq!(
+            pick_encrypted(&only_lq, true).unwrap().preset.as_deref(),
+            Some("aac_96k")
+        );
     }
 }

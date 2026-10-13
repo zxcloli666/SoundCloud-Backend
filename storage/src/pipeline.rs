@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::backend::{self, Backend, BackendError};
 use crate::bus::{self, BusClient};
 use crate::config::Config;
+use crate::quality;
 use crate::transcode;
 
 #[derive(Debug, thiserror::Error)]
@@ -46,8 +47,8 @@ pub struct Pipeline {
 struct PipelineJob {
     source: PathBuf,
     filename: String,
-    /// `sq`/`hq` — forwarded into the `storage.track_uploaded` event so the
-    /// backend records `storage_quality` correctly.
+    /// `sq`/`hq`/`uq` — what the caller claimed until the source is measured,
+    /// then the measured tier; forwarded into the `storage.track_uploaded` event.
     quality: &'static str,
     /// SC-длительность по мнению вызывающего: probe обязан попасть в
     /// `duration_tolerance_secs`, иначе реджект. `None` — только min/max гейты.
@@ -158,18 +159,16 @@ async fn run_batch(
     .await;
 
     let mut accepted: Vec<(PipelineJob, PathBuf)> = Vec::with_capacity(jobs.len());
-    for (job, dur) in jobs.into_iter().zip(durations) {
+    for (mut job, dur) in jobs.into_iter().zip(durations) {
         // Probe не отработал — это не «ноль секунд»: пускаем в ffmpeg, судит
         // output-гейт по готовому m4a.
-        let Some(secs) = dur else {
-            let out = transcode::stage_output(&config.result_path(), &job.filename);
-            accepted.push((job, out));
-            continue;
-        };
-        if let Some(err) = gate_duration(&config, job.expected_duration_ms, secs) {
+        if let Some(secs) = dur
+            && let Some(err) = gate_duration(&config, job.expected_duration_ms, secs)
+        {
             reject(&bus, job, err).await;
             continue;
         }
+        measure_quality(&mut job, dur).await;
         let out = transcode::stage_output(&config.result_path(), &job.filename);
         accepted.push((job, out));
     }
@@ -184,8 +183,13 @@ async fn run_batch(
         .map(|(j, _)| j.source.as_path())
         .collect();
     let outputs: Vec<PathBuf> = accepted.iter().map(|(_, o)| o.clone()).collect();
+    let bitrates: Vec<&str> = accepted
+        .iter()
+        .map(|(j, _)| quality::output_bitrate(j.quality))
+        .collect();
 
-    let batch_res = transcode::run_ffmpeg_batch(&config.ffmpeg_bin, &inputs, &outputs).await;
+    let batch_res =
+        transcode::run_ffmpeg_batch(&config.ffmpeg_bin, &inputs, &outputs, &bitrates).await;
 
     let n = accepted.len();
     match batch_res {
@@ -211,6 +215,7 @@ async fn run_batch(
                         &cfg.ffmpeg_bin,
                         &[job.source.as_path()],
                         std::slice::from_ref(&out),
+                        &[quality::output_bitrate(job.quality)],
                     )
                     .await;
                     match single {
@@ -232,6 +237,30 @@ async fn run_batch(
             }
         }
     }
+}
+
+async fn measure_quality(job: &mut PipelineJob, probed_secs: Option<f64>) {
+    let expected_secs = job
+        .expected_duration_ms
+        .filter(|&ms| ms > 0)
+        .map(|ms| ms as f64 / 1000.0);
+    let Some(secs) = expected_secs.or(probed_secs) else {
+        return;
+    };
+    let Ok(meta) = tokio::fs::metadata(&job.source).await else {
+        return;
+    };
+    let Some(kbps) = quality::kbps(meta.len(), secs) else {
+        return;
+    };
+    let measured = quality::of_kbps(kbps);
+    if measured != job.quality {
+        info!(
+            "[quality] {} measured {kbps:.0} kbps as {measured}, caller said {}",
+            job.filename, job.quality
+        );
+    }
+    job.quality = measured;
 }
 
 fn spawn_commit(

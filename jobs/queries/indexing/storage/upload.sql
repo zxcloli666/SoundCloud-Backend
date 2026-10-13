@@ -121,8 +121,10 @@ WITH track AS MATERIALIZED (
         s3_missing_at = CASE WHEN decision.too_long THEN current.s3_missing_at ELSE NULL END,
         hq_upgrade_pending = CASE
             WHEN decision.too_long THEN false
-            WHEN $6::text = 'hq' THEN false
-            WHEN $6::text = 'sq' AND current.storage_quality IS DISTINCT FROM 'hq' THEN true
+            WHEN $6::text IN ('hq', 'uq') THEN false
+            WHEN $6::text = 'sq'
+                 AND current.storage_quality IS DISTINCT FROM 'hq'
+                 AND current.storage_quality IS DISTINCT FROM 'uq' THEN true
             ELSE current.hq_upgrade_pending
         END,
         index_state = CASE

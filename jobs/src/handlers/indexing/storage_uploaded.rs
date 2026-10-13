@@ -324,6 +324,7 @@ fn validate_upload(payload: StorageTrackUploaded) -> anyhow::Result<UploadedAudi
         None => None,
         Some("sq") => Some("sq"),
         Some("hq") => Some("hq"),
+        Some("uq") => Some("uq"),
         Some(_) => anyhow::bail!("storage upload has an invalid quality"),
     };
     Ok(UploadedAudio {

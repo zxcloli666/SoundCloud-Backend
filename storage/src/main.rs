@@ -14,6 +14,7 @@ mod backend;
 mod bus;
 mod config;
 mod pipeline;
+mod quality;
 mod routes;
 mod transcode;
 

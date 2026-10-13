@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::anon::AnonClient;
 use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::{fetch_get_json, fetch_get_text};
+use super::quality;
 use super::restricted::Transcoding;
 
 const FAILURE_THRESHOLD: u32 = 3;
@@ -141,11 +142,7 @@ impl CookiesClient {
         }
 
         for transcoding in ordered {
-            let quality = if transcoding.quality.as_deref() == Some("hq") {
-                "hq"
-            } else {
-                "sq"
-            };
+            let quality = quality::of_transcoding(transcoding);
 
             match self
                 .try_transcoding(transcoding, &track_auth, &client_id)

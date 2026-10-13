@@ -10,6 +10,7 @@ use tracing::{info, warn};
 use wreq::Client;
 
 use crate::AppState;
+use crate::stream::quality;
 use crate::stream::storage::{
     StorageClient, UploadError, is_canonical_track_urn, lookup_expected_duration_ms,
     upload_to_storage,
@@ -206,18 +207,20 @@ async fn fetch_track(state: &AppState, track_urn: &str) -> Option<(Bytes, &'stat
 
     if let Some(cookies) = state.cookies.as_ref() {
         if let Ok(Some(result)) = cookies.get_stream(track_urn, true).await {
-            info!("{tag} {track_urn} → cookies/hq");
-            return Some((result.data, "hq"));
+            info!("{tag} {track_urn} → cookies ({})", result.quality);
+            return Some((result.data, result.quality));
         }
         if let Ok(Some(result)) = cookies.get_stream(track_urn, false).await {
-            info!("{tag} {track_urn} → cookies/sq");
-            return Some((result.data, "sq"));
+            info!("{tag} {track_urn} → cookies ({})", result.quality);
+            return Some((result.data, result.quality));
         }
     }
 
-    if let Ok(Some(result)) = state.anon.get_stream(track_urn).await {
-        info!("{tag} {track_urn} → anon");
-        return Some((result.data, "sq"));
+    for at_least in [quality::HQ, quality::SQ] {
+        if let Ok(Some(result)) = state.anon.get_stream(track_urn, at_least).await {
+            info!("{tag} {track_urn} → anon ({})", result.quality);
+            return Some((result.data, result.quality));
+        }
     }
 
     warn!("{tag} {track_urn} → no stream available");

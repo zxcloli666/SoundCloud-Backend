@@ -56,8 +56,10 @@ pub async fn run_ffmpeg_batch(
     ffmpeg_bin: &str,
     inputs: &[&Path],
     outputs: &[PathBuf],
+    bitrates: &[&str],
 ) -> Result<(), TranscodeError> {
     debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert_eq!(inputs.len(), bitrates.len());
 
     let mut cmd = Command::new(ffmpeg_bin);
     cmd.args(["-v", "error", "-hide_banner", "-nostats", "-y"]);
@@ -66,7 +68,7 @@ pub async fn run_ffmpeg_batch(
         cmd.arg("-i").arg(input);
     }
 
-    for (idx, out) in outputs.iter().enumerate() {
+    for (idx, (out, bitrate)) in outputs.iter().zip(bitrates).enumerate() {
         cmd.args([
             "-map",
             &format!("{idx}:a:0"),
@@ -74,7 +76,7 @@ pub async fn run_ffmpeg_batch(
             "-c:a",
             "aac",
             "-b:a",
-            "192k",
+            bitrate,
             "-movflags",
             "+faststart",
         ]);

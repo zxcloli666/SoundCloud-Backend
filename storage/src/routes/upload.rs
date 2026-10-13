@@ -251,7 +251,7 @@ pub async fn upload(
         }
     };
 
-    let quality = normalize_quality(quality.as_deref());
+    let quality = crate::quality::normalize(quality.as_deref());
 
     let file_lock = state.file_lock(&filename);
     let _file_guard = file_lock.lock().await;
@@ -317,15 +317,6 @@ pub async fn upload(
         path: format!("{filename}.m4a"),
         duration_secs: output.duration_secs,
     }))
-}
-
-/// Clamp the caller-supplied quality to a known value; anything unrecognized
-/// (or absent) is treated as `sq` so it gets picked up for an hq upgrade later.
-fn normalize_quality(q: Option<&str>) -> &'static str {
-    match q.map(str::trim) {
-        Some("hq") => "hq",
-        _ => "sq",
-    }
 }
 
 fn sanitize_filename(s: &str) -> String {

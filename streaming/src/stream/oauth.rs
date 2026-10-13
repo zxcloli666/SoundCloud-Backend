@@ -9,6 +9,7 @@ use url::Url;
 
 use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::fetch_get_json;
+use super::quality;
 use crate::db::postgres::PgPool;
 
 const API_BASE: &str = "https://api.soundcloud.com";
@@ -24,6 +25,7 @@ pub struct ScStreams {
 pub struct OAuthStreamResult {
     pub data: Bytes,
     pub content_type: &'static str,
+    pub quality: &'static str,
 }
 
 pub struct OauthCtx<'a> {
@@ -43,33 +45,41 @@ pub async fn try_oauth_stream(
 ) -> Option<OAuthStreamResult> {
     let streams = get_streams(ctx, access_token, track_urn, secret_token).await?;
 
-    let candidates: Vec<(&str, &str, &str)> = if hq_only {
-        vec![(
-            streams.hls_aac_160_url.as_deref(),
-            "hls",
-            "audio/mp4; codecs=\"mp4a.40.2\"",
-        )]
+    let aac_160 = (
+        streams.hls_aac_160_url.as_deref(),
+        "hls",
+        "audio/mp4; codecs=\"mp4a.40.2\"",
+        quality::HQ,
+    );
+    let candidates: Vec<(&str, &str, &str, &'static str)> = if hq_only {
+        vec![aac_160]
     } else {
         vec![
+            aac_160,
             (
-                streams.hls_aac_160_url.as_deref(),
-                "hls",
-                "audio/mp4; codecs=\"mp4a.40.2\"",
+                streams.http_mp3_128_url.as_deref(),
+                "http",
+                "audio/mpeg",
+                quality::SQ,
             ),
-            (streams.http_mp3_128_url.as_deref(), "http", "audio/mpeg"),
-            (streams.hls_mp3_128_url.as_deref(), "hls", "audio/mpeg"),
+            (
+                streams.hls_mp3_128_url.as_deref(),
+                "hls",
+                "audio/mpeg",
+                quality::SQ,
+            ),
         ]
     }
     .into_iter()
-    .filter_map(|(url, proto, mime)| url.map(|u| (u, proto, mime)))
-    .filter(|(url, _, _)| !url.contains("preview"))
+    .filter_map(|(url, proto, mime, quality)| url.map(|u| (u, proto, mime, quality)))
+    .filter(|(url, _, _, _)| !url.contains("preview"))
     .collect();
 
     if candidates.is_empty() {
         return None;
     }
 
-    for (url, proto, mime) in candidates {
+    for (url, proto, mime, quality) in candidates {
         match try_format(
             ctx.client,
             ctx.proxy_url,
@@ -81,7 +91,13 @@ pub async fn try_oauth_stream(
         )
         .await
         {
-            Ok(result) => return Some(result),
+            Ok((data, content_type)) => {
+                return Some(OAuthStreamResult {
+                    data,
+                    content_type,
+                    quality,
+                });
+            }
             Err(_) => {
                 warn!("[oauth] format {proto} failed");
             }
@@ -221,7 +237,7 @@ async fn try_format(
     url: &str,
     proto: &str,
     mime: &str,
-) -> Result<OAuthStreamResult, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Bytes, &'static str), Box<dyn std::error::Error + Send + Sync>> {
     if proxy_fallback {
         match try_format_inner(client, proxy_url, access_token, url, proto, mime, true).await {
             Ok(result) => return Ok(result),
@@ -242,11 +258,11 @@ async fn try_format_inner(
     proto: &str,
     mime: &str,
     direct_only: bool,
-) -> Result<OAuthStreamResult, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Bytes, &'static str), Box<dyn std::error::Error + Send + Sync>> {
     let mut headers = HashMap::new();
     headers.insert("Authorization".into(), format!("OAuth {access_token}"));
 
-    let (data, content_type) = if proto == "hls" {
+    let downloaded = if proto == "hls" {
         let refresher: M3u8Refresher = {
             let client = client.clone();
             let proxy_url = proxy_url.to_string();
@@ -275,5 +291,5 @@ async fn try_format_inner(
     } else {
         download_progressive(client, proxy_url, url, mime, headers, direct_only).await?
     };
-    Ok(OAuthStreamResult { data, content_type })
+    Ok(downloaded)
 }

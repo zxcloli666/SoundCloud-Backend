@@ -8,10 +8,12 @@ use tracing::{debug, info, warn};
 use crate::db::postgres::PgPool;
 use crate::stream::anon::AnonClient;
 use crate::stream::cookies_pool::CookiesPool;
+use crate::stream::quality;
+use crate::stream::restricted::RestrictedSource;
 use crate::stream::storage::StorageClient;
 
 const TICK: Duration = Duration::from_secs(2 * 60);
-const BATCH: i64 = 5;
+const BATCH: i64 = 10;
 const RETRY_COOLDOWN_SEC: i64 = 6 * 60 * 60;
 const PER_TRACK_GAP: Duration = Duration::from_millis(500);
 const UPGRADE_DEADLINE: Duration = Duration::from_secs(180);
@@ -55,8 +57,10 @@ pub fn spawn_hq_upgrade_task(
     );
 
     tokio::spawn(async move {
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            tokio::time::sleep(TICK).await;
+            ticks.tick().await;
             let urns = match pg
                 .pick_hq_upgrade_candidates(BATCH, RETRY_COOLDOWN_SEC)
                 .await
@@ -102,41 +106,64 @@ pub fn spawn_hq_upgrade_task(
 
 async fn upgrade_one(
     track_urn: &str,
-    anon: &AnonClient,
+    anon: &Arc<AnonClient>,
     cookies: Option<&Arc<CookiesPool>>,
     engine: &decrypt::Engine,
     http_client: &wreq::Client,
     sc_proxy_url: &str,
     storage: &StorageClient,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let src = match anon.resolve_restricted(track_urn, true).await {
-        Ok(Some(v)) => Some(v),
-        Ok(None) => None,
-        Err(e) => {
-            debug!(urn = %track_urn, "[hq-upgrade] anon resolve failed: {e}");
-            None
-        }
-    };
-    let src = match src {
-        Some(s) => s,
-        None => match cookies {
-            Some(c) => match c.resolve_restricted(track_urn, true).await {
-                Ok(Some(v)) => v,
-                Ok(None) => return Ok(false),
-                Err(e) => {
-                    debug!(urn = %track_urn, "[hq-upgrade] cookies resolve failed: {e}");
-                    return Ok(false);
-                }
-            },
-            None => return Ok(false),
-        },
-    };
-
-    if !src.is_hq {
-        debug!(urn = %track_urn, "[hq-upgrade] source not marked hq, skipping");
-        return Ok(false);
+    if let Some(src) = restricted_source(track_urn, anon, cookies).await
+        && above_sq(src.quality)
+    {
+        let data = decrypt_all(&src, engine, http_client, sc_proxy_url).await?;
+        return Ok(upload(storage, track_urn, data, src.quality));
     }
 
+    match anon.get_stream(track_urn, quality::HQ).await {
+        Ok(Some(result)) => Ok(upload(
+            storage,
+            track_urn,
+            result.data.to_vec(),
+            result.quality,
+        )),
+        Ok(None) => Ok(false),
+        Err(e) => {
+            debug!(urn = %track_urn, "[hq-upgrade] anon stream failed: {e}");
+            Ok(false)
+        }
+    }
+}
+
+fn above_sq(quality: &str) -> bool {
+    quality::rank(quality) > quality::rank(quality::SQ)
+}
+
+async fn restricted_source(
+    track_urn: &str,
+    anon: &AnonClient,
+    cookies: Option<&Arc<CookiesPool>>,
+) -> Option<RestrictedSource> {
+    match anon.resolve_restricted(track_urn, true).await {
+        Ok(Some(v)) => return Some(v),
+        Ok(None) => {}
+        Err(e) => debug!(urn = %track_urn, "[hq-upgrade] anon resolve failed: {e}"),
+    }
+    match cookies?.resolve_restricted(track_urn, true).await {
+        Ok(v) => v,
+        Err(e) => {
+            debug!(urn = %track_urn, "[hq-upgrade] cookies resolve failed: {e}");
+            None
+        }
+    }
+}
+
+async fn decrypt_all(
+    src: &RestrictedSource,
+    engine: &decrypt::Engine,
+    http_client: &wreq::Client,
+    sc_proxy_url: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let fetcher: Arc<dyn decrypt::Fetcher> = Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
         client: http_client.clone(),
         proxy_url: sc_proxy_url.to_string(),
@@ -147,17 +174,18 @@ async fn upgrade_one(
 
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024 * 1024);
     while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(b) => buf.extend_from_slice(&b),
-            Err(e) => return Err(Box::new(e)),
-        }
+        buf.extend_from_slice(&chunk?);
     }
-    if buf.len() < 32 * 1024 {
-        debug!(urn = %track_urn, bytes = buf.len(), "[hq-upgrade] too small, skipping");
-        return Ok(false);
+    Ok(buf)
+}
+
+fn upload(storage: &StorageClient, track_urn: &str, data: Vec<u8>, quality: &'static str) -> bool {
+    if data.len() < 32 * 1024 {
+        debug!(urn = %track_urn, bytes = data.len(), "[hq-upgrade] too small, skipping");
+        return false;
     }
-    storage.upload_in_background_with_quality(track_urn.to_string(), Bytes::from(buf), "hq");
-    Ok(true)
+    storage.upload_in_background_with_quality(track_urn.to_string(), Bytes::from(data), quality);
+    true
 }
 
 #[cfg(test)]
