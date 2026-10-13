@@ -28,8 +28,31 @@ async fn update(pool: &PgPool, body: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub(super) async fn connect_owner(pool: &PgPool) -> anyhow::Result<()> {
+    let app = uuid::Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+         VALUES ($1, 'test', $2, 'secret', 'https://app.test/')",
+    )
+    .bind(app)
+    .bind(app.to_string())
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO soundcloud_connections (
+             id, soundcloud_user_id, oauth_app_id, access_token, refresh_token, expires_at, scope
+         ) VALUES ($1, '17', $2, 'access', 'refresh', now() + interval '1 day', '')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(app)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn setup(pool: &PgPool) -> anyhow::Result<SyncQueueRepository> {
     crate::db::migrations::run_core(pool, None).await?;
+    connect_owner(pool).await?;
     sqlx::query("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id)
         VALUES ('42', 'soundcloud:tracks:42', 'Track', 'track', 120000, '17')")
         .execute(pool).await?;

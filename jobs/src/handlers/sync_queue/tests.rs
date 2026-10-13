@@ -36,6 +36,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              last_refresh_error_kind text,
              retry_at timestamptz
          );
+         INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('1');
          CREATE TABLE user_likes_tracks (
              user_id text NOT NULL,
              sc_track_id text NOT NULL,
@@ -126,15 +127,16 @@ async fn later_intent_waits_behind_a_head_in_backoff(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_user_whose_login_can_still_be_refreshed_is_served_ahead_of_a_dead_backlog(
+async fn only_users_whose_login_can_still_be_refreshed_are_served(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     sqlx::query(
         "INSERT INTO sync_queue (user_id, action_type, target_urn, next_run_at) VALUES
-             ('1', 'like_track', 'retired-app', now() - interval '3 days'),
+             ('5', 'like_track', 'retired-app', now() - interval '3 days'),
              ('2', 'like_track', 'relogin', now() - interval '2 days'),
              ('3', 'like_track', 'cooling', now() - interval '1 day'),
+             ('6', 'like_track', 'never-connected', now() - interval '1 day'),
              ('4', 'like_track', 'refreshable', now())",
     )
     .execute(&pool)
@@ -143,7 +145,7 @@ async fn a_user_whose_login_can_still_be_refreshed_is_served_ahead_of_a_dead_bac
         "INSERT INTO soundcloud_connections (
              soundcloud_user_id, oauth_app_id, last_refresh_error_kind, retry_at
          ) VALUES
-             ('1', 2, NULL, NULL),
+             ('5', 2, NULL, NULL),
              ('2', 1, 'reauthorization_required', NULL),
              ('3', 1, NULL, now() + interval '5 minutes'),
              ('4', 1, NULL, NULL)",
@@ -152,15 +154,13 @@ async fn a_user_whose_login_can_still_be_refreshed_is_served_ahead_of_a_dead_bac
     .await?;
     let repository = repository(pool);
 
-    let claimed = repository.claim(2).await?;
+    let claimed = repository.claim(8).await?;
 
     let targets: Vec<&str> = claimed
         .iter()
         .map(|mutation| mutation.target_urn.as_str())
         .collect();
-    assert_eq!(claimed.len(), 2);
-    assert!(targets.contains(&"refreshable"));
-    assert!(targets.contains(&"retired-app"));
+    assert_eq!(targets, vec!["refreshable"]);
     Ok(())
 }
 

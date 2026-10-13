@@ -1,65 +1,49 @@
-WITH ready AS MATERIALIZED (
-    SELECT queued.id, queued.next_run_at, queued.created_at
-    FROM sync_queue AS queued
-    WHERE queued.dead = false
-      AND queued.next_run_at <= now()
-      AND (
-          queued.lease_id IS NULL
-          OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
-      )
-      AND EXISTS (
-          SELECT 1
-          FROM soundcloud_connections AS connection
-          JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
-          WHERE connection.soundcloud_user_id = queued.user_id
-            AND app.active
-            AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
-            AND (connection.retry_at IS NULL OR connection.retry_at <= now())
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM sync_queue AS earlier
-          WHERE earlier.dead = false
-            AND earlier.user_id = queued.user_id
-            AND earlier.target_urn = queued.target_urn
-            AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
-      )
-    ORDER BY queued.next_run_at, queued.created_at, queued.id
-    FOR UPDATE OF queued SKIP LOCKED
-    LIMIT $2
+WITH usable AS MATERIALIZED (
+    SELECT DISTINCT connection.soundcloud_user_id AS user_id
+    FROM soundcloud_connections AS connection
+    JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
+    WHERE app.active
+      AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
+      AND (connection.retry_at IS NULL OR connection.retry_at <= now())
 ),
-oldest AS MATERIALIZED (
-    SELECT queued.id, queued.next_run_at, queued.created_at
-    FROM sync_queue AS queued
-    WHERE queued.dead = false
-      AND queued.next_run_at <= now()
-      AND (
-          queued.lease_id IS NULL
-          OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM sync_queue AS earlier
-          WHERE earlier.dead = false
-            AND earlier.user_id = queued.user_id
-            AND earlier.target_urn = queued.target_urn
-            AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
-      )
-    ORDER BY queued.next_run_at, queued.created_at, queued.id
-    FOR UPDATE OF queued SKIP LOCKED
+due AS MATERIALIZED (
+    SELECT waiting.id
+    FROM usable
+    CROSS JOIN LATERAL (
+        SELECT queued.id, queued.next_run_at, queued.created_at
+        FROM sync_queue AS queued
+        WHERE queued.user_id = usable.user_id
+          AND queued.dead = false
+          AND queued.next_run_at <= now()
+          AND (
+              queued.lease_id IS NULL
+              OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM sync_queue AS earlier
+              WHERE earlier.dead = false
+                AND earlier.user_id = queued.user_id
+                AND earlier.target_urn = queued.target_urn
+                AND (earlier.created_at, earlier.id) < (queued.created_at, queued.id)
+          )
+        ORDER BY queued.next_run_at, queued.created_at, queued.id
+        LIMIT $2
+    ) AS waiting
+    ORDER BY waiting.next_run_at, waiting.created_at, waiting.id
     LIMIT $2
 ),
 candidates AS (
-    SELECT ranked.id
-    FROM (
-        SELECT id, 0 AS tier, next_run_at, created_at FROM ready
-        UNION ALL
-        SELECT id, 1 AS tier, next_run_at, created_at
-        FROM oldest
-        WHERE id NOT IN (SELECT id FROM ready)
-    ) AS ranked
-    ORDER BY ranked.tier, ranked.next_run_at, ranked.created_at, ranked.id
-    LIMIT $2
+    SELECT queued.id
+    FROM sync_queue AS queued
+    WHERE queued.id = ANY (ARRAY(SELECT id FROM due))
+      AND queued.dead = false
+      AND queued.next_run_at <= now()
+      AND (
+          queued.lease_id IS NULL
+          OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
+      )
+    FOR UPDATE OF queued SKIP LOCKED
 )
 UPDATE sync_queue AS queued
 SET lease_id = gen_random_uuid(),

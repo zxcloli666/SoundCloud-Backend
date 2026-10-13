@@ -108,6 +108,7 @@ async fn a_finished_membership_apply_is_recorded_and_pulls_the_next_observation_
     pool: PgPool,
 ) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
+    super::track_tests::connect_owner(&pool).await?;
     seed_membership_state(&pool, 4).await?;
     enqueue_membership(&pool, 4).await?;
 
@@ -130,6 +131,7 @@ async fn a_membership_apply_that_lost_its_generation_records_no_mark(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
+    super::track_tests::connect_owner(&pool).await?;
     seed_membership_state(&pool, 9).await?;
     enqueue_membership(&pool, 4).await?;
 
@@ -144,6 +146,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
     pool: PgPool,
 ) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
+    super::track_tests::connect_owner(&pool).await?;
     let remote = json!({"urn": PLAYLIST, "title": "Original", "sharing": "public", "description": "Old", "user": {"urn": "soundcloud:users:17"}});
     catalog_ingest::upsert_playlist_from_sc(
         &pool,
