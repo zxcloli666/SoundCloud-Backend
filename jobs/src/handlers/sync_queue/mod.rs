@@ -51,6 +51,7 @@ pub struct SyncQueueHandler {
     write_pauses: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
     like_interval: Duration,
+    pauses_restored: tokio::sync::OnceCell<()>,
     concurrency: usize,
     claim_batch: i64,
 }
@@ -69,6 +70,7 @@ impl SyncQueueHandler {
             write_pauses: WritePauses::default(),
             account_pauses: WritePauses::default(),
             like_interval: config.sync_queue.like_interval,
+            pauses_restored: tokio::sync::OnceCell::new(),
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
         })
@@ -81,6 +83,9 @@ impl SyncQueueHandler {
                 .await
                 .map_err(JobError::retryable)?;
         }
+        self.pauses_restored
+            .get_or_init(|| self.restore_pauses())
+            .await;
         let deadline = Instant::now() + PACED_DRAIN_BUDGET;
         for _ in 0..MAX_DRAIN_BATCHES {
             let claimed = self.flush_batch().await?;
@@ -202,10 +207,13 @@ impl SyncQueueHandler {
         {
             Ok(result) => {
                 if let Some(oauth_app_id) = token.oauth_app_id {
-                    self.write_pauses.succeeded(
+                    let reopened = self.write_pauses.succeeded(
                         &(oauth_app_id, mutation.action_type.clone()),
                         self.spacing(&mutation.action_type),
                     );
+                    if reopened {
+                        self.forget_pause(oauth_app_id, &mutation.action_type).await;
+                    }
                 }
                 result
             }
@@ -237,14 +245,16 @@ impl SyncQueueHandler {
                         return Ok(());
                     }
                     Err(error) => {
-                        self.pause_writes_when_refused(&mutation, &error, refreshed.oauth_app_id);
+                        self.pause_writes_when_refused(&mutation, &error, refreshed.oauth_app_id)
+                            .await;
                         self.record_action_failure(&mutation, &error).await?;
                         return Ok(());
                     }
                 }
             }
             Err(error) => {
-                self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id);
+                self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id)
+                    .await;
                 self.record_action_failure(&mutation, &error).await?;
                 return Ok(());
             }
@@ -260,13 +270,38 @@ impl SyncQueueHandler {
         self.finalize(&mutation).await
     }
 
+    async fn restore_pauses(&self) {
+        let pauses = match self.repository.action_pauses().await {
+            Ok(pauses) => pauses,
+            Err(error) => {
+                warn!(%error, "saved action pauses were not loaded, refused actions start a new backoff");
+                return;
+            }
+        };
+        for (oauth_app_id, action_type, remaining_seconds, strikes) in pauses {
+            let remaining = Duration::from_secs(u64::try_from(remaining_seconds).unwrap_or(0));
+            self.write_pauses
+                .restore((oauth_app_id, action_type), remaining, strikes);
+        }
+    }
+
+    async fn forget_pause(&self, oauth_app_id: uuid::Uuid, action_type: &str) {
+        let cleared = self
+            .repository
+            .clear_action_pause(oauth_app_id, action_type)
+            .await;
+        if let Err(error) = cleared {
+            warn!(%error, "a lifted action pause was not removed from the database");
+        }
+    }
+
     fn spacing(&self, action_type: &str) -> Option<Duration> {
         PACED_ACTIONS
             .contains(&action_type)
             .then_some(self.like_interval)
     }
 
-    fn pause_writes_when_refused(
+    async fn pause_writes_when_refused(
         &self,
         mutation: &ClaimedMutation,
         error: &ActionError,
@@ -300,8 +335,17 @@ impl SyncQueueHandler {
             self.write_pauses.pause(action, seconds);
             seconds
         } else if error.is_rate_limited() {
-            self.write_pauses
-                .pause_longer_each_time(action, WRITE_PAUSE_SECONDS)
+            let (seconds, strikes) = self
+                .write_pauses
+                .pause_longer_each_time(action, WRITE_PAUSE_SECONDS);
+            let saved = self
+                .repository
+                .save_action_pause(oauth_app_id, &mutation.action_type, seconds, strikes)
+                .await;
+            if let Err(error) = saved {
+                warn!(%error, "a refused action pause was not saved and will not survive a restart");
+            }
+            seconds
         } else {
             return;
         };

@@ -58,6 +58,57 @@ impl SyncQueueRepository {
         .await
     }
 
+    pub async fn save_action_pause(
+        &self,
+        oauth_app_id: uuid::Uuid,
+        action_type: &str,
+        seconds: i64,
+        strikes: u32,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query_file!(
+            "queries/sync_queue/pauses/save.sql",
+            oauth_app_id,
+            action_type,
+            seconds,
+            i32::try_from(strikes).unwrap_or(i32::MAX)
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn clear_action_pause(
+        &self,
+        oauth_app_id: uuid::Uuid,
+        action_type: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query_file!(
+            "queries/sync_queue/pauses/clear.sql",
+            oauth_app_id,
+            action_type
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn action_pauses(&self) -> Result<Vec<(uuid::Uuid, String, i64, u32)>, sqlx::Error> {
+        let rows = sqlx::query_file!("queries/sync_queue/pauses/load.sql")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.oauth_app_id,
+                    row.action_type,
+                    row.remaining_seconds,
+                    u32::try_from(row.strikes).unwrap_or(1),
+                )
+            })
+            .collect())
+    }
+
     pub async fn force_due(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query_file!(
             "queries/sync_queue/force_due.sql",

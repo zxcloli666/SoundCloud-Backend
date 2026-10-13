@@ -36,8 +36,31 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         self.hold(key, seconds, false);
     }
 
-    pub fn pause_longer_each_time(&self, key: K, seconds: i64) -> i64 {
-        self.hold(key, seconds, true)
+    pub fn pause_longer_each_time(&self, key: K, seconds: i64) -> (i64, u32) {
+        let seconds = self.hold(key.clone(), seconds, true);
+        (seconds, self.strikes(&key))
+    }
+
+    pub fn restore(&self, key: K, remaining: Duration, strikes: u32) {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                key,
+                Pause {
+                    until: Instant::now() + remaining,
+                    strikes,
+                    probing: false,
+                },
+            );
+    }
+
+    fn strikes(&self, key: &K) -> u32 {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+            .map_or(0, |pause| pause.strikes)
     }
 
     pub fn admit(&self, key: &K) -> Admission {
@@ -59,8 +82,9 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         Admission::Probe
     }
 
-    pub fn succeeded(&self, key: &K, spacing: Option<Duration>) {
+    pub fn succeeded(&self, key: &K, spacing: Option<Duration>) -> bool {
         let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
+        let was_refused = paused.get(key).is_some_and(|pause| pause.strikes > 0);
         match spacing {
             Some(spacing) => {
                 paused.insert(
@@ -76,6 +100,7 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
                 paused.remove(key);
             }
         }
+        was_refused
     }
 
     pub fn remaining_seconds(&self, key: &K) -> Option<i64> {
@@ -179,16 +204,30 @@ mod tests {
     fn after_a_refusal_only_one_probe_goes_out_and_its_failure_doubles_the_wait() {
         let pauses = WritePauses::default();
 
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 60);
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 60);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60).0, 60);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60).0, 60);
         expire(&pauses, &"likes");
 
         assert_eq!(pauses.admit(&"likes"), Admission::Probe);
         assert!(matches!(pauses.admit(&"likes"), Admission::Paused(_)));
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 120);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60), (120, 2));
         expire(&pauses, &"likes");
         assert_eq!(pauses.admit(&"likes"), Admission::Probe);
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 240);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60), (240, 3));
+    }
+
+    #[test]
+    fn a_restored_refusal_keeps_its_wait_and_its_place_in_the_backoff() {
+        let pauses = WritePauses::default();
+
+        pauses.restore("likes", Duration::from_secs(600), 4);
+
+        assert!(matches!(pauses.admit(&"likes"), Admission::Paused(seconds) if seconds > 590));
+        expire(&pauses, &"likes");
+        assert_eq!(pauses.admit(&"likes"), Admission::Probe);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60), (960, 5));
+        assert!(pauses.succeeded(&"likes", None));
+        assert!(!pauses.succeeded(&"likes", None));
     }
 
     #[test]
@@ -197,7 +236,7 @@ mod tests {
         let mut longest = 0;
 
         for _ in 0..20 {
-            longest = pauses.pause_longer_each_time("likes", 60);
+            longest = pauses.pause_longer_each_time("likes", 60).0;
             expire(&pauses, &"likes");
         }
 
@@ -218,7 +257,7 @@ mod tests {
         assert!(pauses.next_spacing_end().is_some());
         expire(&pauses, &"likes");
         assert_eq!(pauses.admit(&"likes"), Admission::Open);
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 60);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60).0, 60);
     }
 
     #[test]
@@ -226,7 +265,7 @@ mod tests {
         let pauses = WritePauses::default();
         pauses.pause("likes", 5);
 
-        assert_eq!(pauses.pause_longer_each_time("likes", 60), 60);
+        assert_eq!(pauses.pause_longer_each_time("likes", 60).0, 60);
         expire(&pauses, &"likes");
 
         assert_eq!(pauses.admit(&"likes"), Admission::Probe);
