@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS tracks_album_idx;
+DROP INDEX IF EXISTS tracks_canonical_idx;
+DROP INDEX IF EXISTS tracks_genius_song_id_idx;
+DROP INDEX IF EXISTS tracks_index_pickup_idx;
+DROP INDEX IF EXISTS tracks_is_cover_idx;
+DROP INDEX IF EXISTS tracks_public_genre_popular_idx;
+DROP INDEX IF EXISTS tracks_public_tags_search_idx;
+DROP INDEX IF EXISTS tracks_quality_score_idx;
+DROP INDEX IF EXISTS tracks_recording_key_idx;
+DROP INDEX IF EXISTS tracks_release_date_idx;
+DROP INDEX IF EXISTS tracks_release_year_idx;
