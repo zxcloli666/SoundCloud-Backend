@@ -109,7 +109,11 @@ impl CatalogRemote {
     }
 
     async fn owner_error(&self, error: PlaylistReadError, app_id: Option<uuid::Uuid>) -> JobError {
-        let cooldown = match &error {
+        let forbidden = matches!(
+            &error,
+            PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::FORBIDDEN
+        );
+        let app_pause = match &error {
             PlaylistReadError::Api {
                 status,
                 retry_after_seconds,
@@ -117,14 +121,14 @@ impl CatalogRemote {
             } if *status == wreq::StatusCode::TOO_MANY_REQUESTS => {
                 Some(retry_after_seconds.unwrap_or(300))
             }
-            PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::FORBIDDEN => {
-                Some(1800)
+            PlaylistReadError::Api { status, .. } if forbidden || status.is_server_error() => {
+                Some(30)
             }
-            PlaylistReadError::Api { status, .. } if status.is_server_error() => Some(30),
             _ => None,
         };
-        if let (Some(app_id), Some(seconds)) = (app_id, cooldown) {
+        if let (Some(app_id), Some(seconds)) = (app_id, app_pause) {
             match self.connections.penalize_app(app_id, seconds).await {
+                Ok(_) if forbidden => {}
                 Ok(seconds) => return postpone(seconds, error),
                 Err(error) => return connection_error(error),
             }

@@ -449,8 +449,7 @@ impl PlaylistObserveHandler {
 fn app_wide_cooldown(failure: &FailureObservation) -> Option<i64> {
     let minimum = match failure.error_kind.as_str() {
         "soundcloud_rate_limited" => RATE_LIMIT_RETRY,
-        "soundcloud_forbidden" => FORBIDDEN_RETRY,
-        "soundcloud_playlist_server_error" => TRANSPORT_RETRY,
+        "soundcloud_forbidden" | "soundcloud_playlist_server_error" => TRANSPORT_RETRY,
         _ => return None,
     };
     i64::try_from(minimum.as_secs()).ok()
@@ -716,7 +715,13 @@ mod tests {
         }));
 
         assert_eq!(app_wide_cooldown(&rate_limited), Some(300));
-        assert_eq!(app_wide_cooldown(&forbidden), Some(1800));
+        assert_eq!(app_wide_cooldown(&forbidden), Some(120));
+        assert_eq!(
+            forbidden
+                .retry_at
+                .map(|retry_at| (retry_at - forbidden.observed_at).num_seconds()),
+            Some(1800)
+        );
         assert_eq!(app_wide_cooldown(&server_error), Some(120));
         assert_eq!(app_wide_cooldown(&unreachable), None);
         assert_eq!(app_wide_cooldown(&not_found), None);
