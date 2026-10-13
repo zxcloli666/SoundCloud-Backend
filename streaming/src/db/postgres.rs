@@ -329,7 +329,7 @@ impl PgPool {
                        WHERE hq_upgrade_pending = true
                          AND (hq_upgrade_last_at IS NULL
                               OR hq_upgrade_last_at < now() - make_interval(secs => $2))
-                       ORDER BY hq_upgrade_last_at NULLS FIRST, hq_upgrade_attempts
+                       ORDER BY hq_upgrade_last_at NULLS FIRST
                        FOR UPDATE SKIP LOCKED
                        LIMIT $1
                    )
