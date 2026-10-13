@@ -11,8 +11,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(5);
 const RAISE_EVERY: Duration = Duration::from_secs(20);
 const LOWER_EVERY: Duration = Duration::from_secs(30);
 const MEGABYTE: i64 = 1024 * 1024;
-const CALM_BACKLOG_BYTES: i64 = 256 * MEGABYTE;
-const HEAVY_BACKLOG_BYTES: i64 = 1024 * MEGABYTE;
+const CALM_BACKLOG_BYTES: i64 = 128 * MEGABYTE;
+const HEAVY_BACKLOG_BYTES: i64 = 512 * MEGABYTE;
 const CALM_ACTIVE_BACKENDS: i64 = 16;
 const HEAVY_ACTIVE_BACKENDS: i64 = 32;
 const PRESSURE: &str = include_str!("../../queries/queue/write_pressure.sql");
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn moderate_pressure_keeps_the_current_slots() {
-        assert_eq!(next_limit(10, 32, pressure(600, 3), SETTLED), 10);
+        assert_eq!(next_limit(10, 32, pressure(300, 3), SETTLED), 10);
         assert_eq!(next_limit(10, 32, pressure(10, 20), SETTLED), 10);
     }
 
