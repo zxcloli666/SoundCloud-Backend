@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use backend_contracts::JobKind;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::config::QueueConfig;
@@ -8,6 +9,8 @@ use crate::handlers::JobHandlers;
 
 use super::model::{JobError, JobResult, LeasedJob, QueueError};
 use super::repository::{Completion, JobRepository};
+
+const GRAPH_REBUILD_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 enum Execution {
     Finished(JobResult),
@@ -85,11 +88,18 @@ async fn execute_with_heartbeat(
 ) -> Result<Execution, QueueError> {
     drive(
         handlers.handle(job),
-        config.job_timeout,
+        execution_limit(job.kind, config.job_timeout),
         config.heartbeat_interval,
         || repository.heartbeat(job, config.lease_duration),
     )
     .await
+}
+
+fn execution_limit(kind: JobKind, default: Duration) -> Duration {
+    match kind {
+        JobKind::RecommendationColike => default.max(GRAPH_REBUILD_LIMIT),
+        _ => default,
+    }
 }
 
 async fn drive<W, H, B>(
