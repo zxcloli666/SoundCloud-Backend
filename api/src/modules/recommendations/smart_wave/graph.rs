@@ -31,6 +31,7 @@ pub enum GraphSeed {
 }
 
 pub type Affinity = HashMap<Uuid, f32>;
+type Adjacency = HashMap<Uuid, HashMap<i16, Vec<(Uuid, f32)>>>;
 
 pub struct GraphResult {
     pub affinity: Affinity,
@@ -104,30 +105,9 @@ async fn propagate(pg: &PgPool, seeds: &Affinity, disliked: &[Uuid]) -> Affinity
             break;
         }
         let frontier = top_keys(&activation, FRONTIER_CAP);
-        let edges = load_graph_edges(pg, &frontier).await;
-        if edges.is_empty() {
+        let adjacency = load_adjacency(pg, &frontier).await;
+        if adjacency.is_empty() {
             break;
-        }
-
-        let frontier_set: std::collections::HashSet<Uuid> = frontier.iter().copied().collect();
-        let mut adjacency: HashMap<Uuid, HashMap<i16, Vec<(Uuid, f32)>>> = HashMap::new();
-        for (a, b, w, kind) in edges {
-            if frontier_set.contains(&a) {
-                adjacency
-                    .entry(a)
-                    .or_default()
-                    .entry(kind)
-                    .or_default()
-                    .push((b, w));
-            }
-            if frontier_set.contains(&b) {
-                adjacency
-                    .entry(b)
-                    .or_default()
-                    .entry(kind)
-                    .or_default()
-                    .push((a, w));
-            }
         }
 
         let mut hop_contribs: HashMap<Uuid, Vec<f32>> = HashMap::new();
@@ -188,29 +168,8 @@ async fn anti_spread(pg: &PgPool, affinity: &mut Affinity, disliked: &[Uuid]) {
     if disliked.is_empty() {
         return;
     }
-    let edges = load_graph_edges(pg, disliked).await;
-    let disliked_set: std::collections::HashSet<Uuid> = disliked.iter().copied().collect();
-    let mut by_src: HashMap<Uuid, HashMap<i16, Vec<(Uuid, f32)>>> = HashMap::new();
-    for (a, b, w, kind) in edges {
-        if disliked_set.contains(&a) {
-            by_src
-                .entry(a)
-                .or_default()
-                .entry(kind)
-                .or_default()
-                .push((b, w));
-        }
-        if disliked_set.contains(&b) {
-            by_src
-                .entry(b)
-                .or_default()
-                .entry(kind)
-                .or_default()
-                .push((a, w));
-        }
-    }
-    for (_, kinds) in by_src {
-        for (dst, e) in merge_normalized(&kinds) {
+    for kinds in load_adjacency(pg, disliked).await.values() {
+        for (dst, e) in merge_normalized(kinds) {
             if let Some(v) = affinity.get_mut(&dst) {
                 *v = (*v - ANTISPREAD_MU * e).max(0.0);
             }
@@ -285,22 +244,27 @@ async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
     .unwrap_or_default()
 }
 
-async fn load_graph_edges(pg: &PgPool, nodes: &[Uuid]) -> Vec<(Uuid, Uuid, f32, i16)> {
+async fn load_adjacency(pg: &PgPool, nodes: &[Uuid]) -> Adjacency {
+    let mut adjacency = Adjacency::new();
     if nodes.is_empty() {
-        return Vec::new();
+        return adjacency;
     }
-    sqlx::query_file!(
+    let edges = sqlx::query_file!(
         "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
         nodes
     )
     .fetch_all(pg)
     .await
-    .map(|rows| {
-        rows.into_iter()
-            .map(|r| (r.a_id, r.b_id, r.weight, r.kind))
-            .collect()
-    })
-    .unwrap_or_default()
+    .unwrap_or_default();
+    for edge in edges {
+        adjacency
+            .entry(edge.src)
+            .or_default()
+            .entry(edge.kind)
+            .or_default()
+            .push((edge.dst, edge.weight));
+    }
+    adjacency
 }
 
 pub async fn collect_artist_tracks(
