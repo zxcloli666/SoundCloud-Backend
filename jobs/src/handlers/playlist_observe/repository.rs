@@ -253,6 +253,14 @@ impl PlaylistObserveRepository {
         Ok(ready_capture(capture))
     }
 
+    pub async fn background_backlog_is_full(&self, batch: i64) -> Result<bool, RepositoryError> {
+        let waiting =
+            sqlx::query_file_scalar!("queries/playlist_observe/background_backlog.sql", batch)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(waiting >= batch)
+    }
+
     pub async fn secret_token(&self, urn: &PlaylistUrn) -> Result<Option<String>, RepositoryError> {
         let permalink =
             sqlx::query_file_scalar!("queries/playlist_observe/load_permalink.sql", urn.as_str())

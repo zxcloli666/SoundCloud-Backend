@@ -84,6 +84,14 @@ impl PlaylistObserveHandler {
             .await
             .map_err(repository_job_error)?;
         self.enqueue_observations(edited, EDITED_PRIORITY).await?;
+        if self
+            .repository
+            .background_backlog_is_full(self.reconcile.sweep_batch)
+            .await
+            .map_err(repository_job_error)?
+        {
+            return Ok(());
+        }
         let due = self
             .repository
             .claim_due(

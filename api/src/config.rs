@@ -317,7 +317,7 @@ impl AppConfig {
 
             collab_trigger: CollabTriggerCfg {
                 event_threshold: u64::from(env_u32("COLLAB_TRIGGER_EVENTS", 100).max(1)),
-                cooldown: Duration::from_millis(env_u64("COLLAB_TRIGGER_COOLDOWN_MS", 600_000)),
+                cooldown: Duration::from_millis(env_u64("COLLAB_TRIGGER_COOLDOWN_MS", 21_600_000)),
             },
 
             cold: ColdCfg {
