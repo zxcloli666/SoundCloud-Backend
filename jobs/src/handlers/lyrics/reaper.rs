@@ -17,6 +17,7 @@ use super::embedding_queue;
 use crate::handlers::worker_backlog::unclaimed_room;
 
 const QUARANTINE_BATCH: i64 = 50;
+const ORPHAN_SCAN_WINDOW: i64 = 2_000;
 const TRANSCRIPTION_PRIORITY: i16 = 10;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
@@ -145,7 +146,8 @@ impl LyricsReaper {
         .map_err(JobError::retryable)?;
         let orphaned_lyrics = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_orphaned_embeddings.sql",
-            QUARANTINE_BATCH
+            QUARANTINE_BATCH,
+            ORPHAN_SCAN_WINDOW
         )
         .fetch_one(&mut *transaction)
         .await
