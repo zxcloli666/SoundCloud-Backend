@@ -23,7 +23,9 @@ use crate::handlers::{
     CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
 };
 use crate::health::HealthState;
-use crate::queue::{JobError, JobRepository, NewJob, QueueError, QueueWorker, recover_exhausted};
+use crate::queue::{
+    JobError, JobRepository, NewJob, QueueError, QueueWorker, WriteGovernor, recover_exhausted,
+};
 use crate::scheduler::Scheduler;
 use crate::supervisor::Supervisor;
 
@@ -139,13 +141,15 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.core_fast.clone(),
         CORE_FAST_KINDS,
     );
+    let bulk_governor = WriteGovernor::new(config.queue.core_bulk.concurrency);
     let core_bulk_worker = QueueWorker::new(
         core_bulk_repository,
         handlers.clone(),
         config.queue.clone(),
         config.queue.core_bulk.clone(),
         CORE_BULK_KINDS,
-    );
+    )
+    .governed_by(bulk_governor.clone());
     let maintenance_worker = QueueWorker::new(
         maintenance_repository,
         handlers.clone(),
@@ -299,6 +303,10 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn(
         "core fast worker",
         core_fast_worker.run(cancellation.clone()),
+    );
+    supervisor.spawn(
+        "bulk governor",
+        bulk_governor.run(databases.queue.clone(), cancellation.clone()),
     );
     supervisor.spawn(
         "core bulk worker",

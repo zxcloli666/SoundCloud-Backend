@@ -9,6 +9,7 @@ use crate::handlers::JobHandlers;
 
 use super::ClaimOrder;
 use super::execution::process_job;
+use super::governor::WriteGovernor;
 use super::model::{LeasedJob, QueueError};
 use super::repository::JobRepository;
 
@@ -21,6 +22,7 @@ pub(crate) struct QueueWorker {
     config: QueueConfig,
     lane: QueueLaneConfig,
     kinds: &'static [JobKind],
+    governor: Option<Arc<WriteGovernor>>,
 }
 
 struct JobTaskExit {
@@ -43,6 +45,19 @@ impl QueueWorker {
             config,
             lane,
             kinds,
+            governor: None,
+        }
+    }
+
+    pub(crate) fn governed_by(mut self, governor: Arc<WriteGovernor>) -> Self {
+        self.governor = Some(governor);
+        self
+    }
+
+    fn concurrency(&self) -> usize {
+        match &self.governor {
+            Some(governor) => governor.limit().min(self.lane.concurrency),
+            None => self.lane.concurrency,
         }
     }
 
@@ -58,7 +73,7 @@ impl QueueWorker {
                 break;
             }
 
-            let limit = claim_limit(self.lane.concurrency, tasks.len(), self.lane.claim_batch);
+            let limit = claim_limit(self.concurrency(), tasks.len(), self.lane.claim_batch);
 
             if limit == 0 {
                 tokio::select! {
