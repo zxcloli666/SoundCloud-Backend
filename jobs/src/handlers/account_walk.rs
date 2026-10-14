@@ -10,11 +10,14 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::config::AccountWalkConfig;
+use crate::handlers::star_priority::Turns;
 use crate::queue::{JobError, JobRepository, JobResult};
 
 use super::catalog_read::{PublicCatalogReader, UserRead};
 use super::lyrics::wake;
 
+#[path = "account_walk_claim.rs"]
+mod claim;
 #[cfg(test)]
 #[path = "account_walk_tests.rs"]
 mod tests;
@@ -29,6 +32,7 @@ pub struct AccountWalkHandler {
     queue: JobRepository,
     reader: Arc<PublicCatalogReader>,
     config: AccountWalkConfig,
+    turns: Turns,
 }
 
 impl AccountWalkHandler {
@@ -38,19 +42,12 @@ impl AccountWalkHandler {
             pool,
             reader,
             config,
+            turns: Turns::default(),
         }
     }
 
     pub async fn run(&self) -> JobResult {
-        let artists = sqlx::query_file_scalar!(
-            "queries/account_walk/claim.sql",
-            self.config.walk_interval_days,
-            self.config.lease_seconds,
-            self.config.batch
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        let artists = self.claim().await.map_err(JobError::retryable)?;
 
         if artists.is_empty() {
             return Ok(());

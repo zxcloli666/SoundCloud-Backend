@@ -110,3 +110,52 @@ async fn account_walk_drops_a_gone_unverified_account_and_keeps_a_verified_one(
     assert_eq!(left, vec!["410".to_owned()]);
     Ok(())
 }
+
+async fn seed_walkable_artist(
+    pool: &PgPool,
+    name: &str,
+    star: bool,
+    walked_days_ago: Option<i32>,
+) -> anyhow::Result<Uuid> {
+    let artist_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source, has_sc_account, is_star, last_account_walk_at)
+         VALUES ($1, $2, $2, 'sc_verified', true, $3, now() - $4 * interval '1 day')",
+    )
+    .bind(artist_id)
+    .bind(name)
+    .bind(star)
+    .bind(walked_days_ago)
+    .execute(pool)
+    .await?;
+    Ok(artist_id)
+}
+
+#[sqlx::test(migrations = false)]
+async fn star_artists_are_walked_first_and_the_others_keep_every_fourth_run(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let handler = handler(&pool).await?;
+    let mut star = Vec::new();
+    for (name, walked) in [
+        ("star a", Some(30)),
+        ("star b", Some(20)),
+        ("star c", Some(10)),
+    ] {
+        star.push(seed_walkable_artist(&pool, name, true, walked).await?);
+    }
+    let never_walked = seed_walkable_artist(&pool, "regular", false, None).await?;
+    seed_walkable_artist(&pool, "recent star", true, Some(1)).await?;
+
+    let mut claimed = Vec::new();
+    for _ in 0..5 {
+        claimed.extend(handler.claim().await?);
+    }
+
+    assert_eq!(
+        claimed,
+        [star[0], star[1], star[2], never_walked],
+        "three star turns take the star artists, the fourth turn goes to the old order"
+    );
+    Ok(())
+}
