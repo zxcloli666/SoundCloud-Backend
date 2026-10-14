@@ -1,4 +1,7 @@
-use backend_contracts::{CatalogCollection, CatalogCollectionPayload, JobKind, Versioned};
+use backend_contracts::{
+    CatalogCollection, CatalogCollectionPayload, CatalogEntity, JobKind, STAR_PRIORITY_BONUS,
+    Versioned,
+};
 use chrono::{DateTime, Utc};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
@@ -99,6 +102,11 @@ pub(super) async fn ensure(
     let key = payload.dedup_key();
     let mut retry_after_seconds = 0;
     if !fresh {
+        let star_candidate = if collection.subject() == CatalogEntity::User {
+            payload.subject_id.clone()
+        } else {
+            String::new()
+        };
         let body = serde_json::to_value(Versioned::V1(payload))
             .map_err(|error| AppError::internal(error.to_string()))?;
         let kind = JobKind::CatalogCollection;
@@ -114,7 +122,9 @@ pub(super) async fn ensure(
             kind.lane().as_str(),
             &key,
             body,
-            priority
+            priority,
+            star_candidate,
+            STAR_PRIORITY_BONUS
         )
         .execute(pool)
         .await?;

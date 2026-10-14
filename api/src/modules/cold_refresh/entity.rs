@@ -1,4 +1,6 @@
-use backend_contracts::{CatalogEntity, CatalogRefreshPayload, JobKind, Versioned};
+use backend_contracts::{
+    CatalogEntity, CatalogRefreshPayload, JobKind, STAR_PRIORITY_BONUS, Versioned,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -110,6 +112,7 @@ pub async fn enqueue_entity_in(
         return Err(AppError::bad_request("Invalid catalog resource"));
     }
     let dedup_key = payload.dedup_key();
+    let star_candidate = payload.owner_id.clone().unwrap_or_default();
     let body = serde_json::to_value(Versioned::V1(payload))
         .map_err(|error| AppError::internal(error.to_string()))?;
     let kind = JobKind::CatalogRefresh;
@@ -120,7 +123,9 @@ pub async fn enqueue_entity_in(
         kind.lane().as_str(),
         dedup_key,
         body,
-        priority
+        priority,
+        star_candidate,
+        STAR_PRIORITY_BONUS
     )
     .execute(connection)
     .await?;

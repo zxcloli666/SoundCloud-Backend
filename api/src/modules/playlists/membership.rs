@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use backend_contracts::{JobKind, PlaylistObservePayload};
+use backend_contracts::{JobKind, PlaylistObservePayload, STAR_PRIORITY_BONUS};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -116,6 +116,9 @@ impl PlaylistMembership {
     }
 
     async fn enqueue(&self, playlist_urn: &str, priority: i16) -> bool {
+        let priority = owner_priority(&self.pool, playlist_urn, priority)
+            .await
+            .unwrap_or(priority);
         let job = BackgroundJob::coalescing(
             JobKind::PlaylistObserveShadow,
             playlist_urn,
@@ -129,6 +132,21 @@ impl PlaylistMembership {
             Err(_) => false,
         }
     }
+}
+
+async fn owner_priority(
+    pool: &PgPool,
+    playlist_urn: &str,
+    priority: i16,
+) -> Result<i16, sqlx::Error> {
+    sqlx::query_file_scalar!(
+        "queries/playlists/observe_priority.sql",
+        playlist_urn,
+        priority,
+        STAR_PRIORITY_BONUS
+    )
+    .fetch_one(pool)
+    .await
 }
 
 async fn load_membership_status(

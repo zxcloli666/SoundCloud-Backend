@@ -13,7 +13,8 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
         );
         CREATE TABLE tracks (urn text PRIMARY KEY, sharing text NOT NULL, deleted_at timestamp);
         CREATE TABLE playlists (urn text PRIMARY KEY, sharing text NOT NULL, deleted_at timestamp);
-        CREATE TABLE users (urn text PRIMARY KEY);",
+        CREATE TABLE users (urn text PRIMARY KEY);
+        CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);",
     )
     .execute(pool)
     .await?;

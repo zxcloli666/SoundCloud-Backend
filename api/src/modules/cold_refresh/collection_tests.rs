@@ -13,6 +13,11 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(
+        "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -130,6 +135,40 @@ async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
         .fetch_one(&pool)
         .await?;
     assert_eq!(generation, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    sqlx::query(
+        "INSERT INTO subscriptions (user_urn, exp_date) VALUES
+             ('42', extract(epoch FROM now())::bigint + 3600),
+             ('43', extract(epoch FROM now())::bigint - 3600)",
+    )
+    .execute(&pool)
+    .await?;
+
+    for owner in ["42", "43", "44"] {
+        ensure(&pool, CatalogCollection::LikedTracks, owner, true, 600).await?;
+    }
+    ensure(&pool, CatalogCollection::Followings, "42", false, 600).await?;
+    ensure(&pool, CatalogCollection::TrackFavoriters, "42", false, 600).await?;
+
+    let priorities: Vec<(String, i16)> =
+        sqlx::query_as("SELECT dedup_key, priority FROM background_jobs ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        priorities,
+        [
+            ("followings:42:public".into(), 20),
+            ("liked-tracks:42:owner".into(), 25),
+            ("liked-tracks:43:owner".into(), 20),
+            ("liked-tracks:44:owner".into(), 20),
+            ("track-favoriters:42:public".into(), 15)
+        ]
+    );
     Ok(())
 }
 

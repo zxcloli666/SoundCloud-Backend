@@ -14,7 +14,8 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
             sc_user_id text PRIMARY KEY, urn text NOT NULL, username text, full_name text,
             avatar_url text, permalink_url text, followers_count bigint, followings_count bigint,
             tracks_count bigint, playlists_count bigint
-         );",
+         );
+         CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);",
     ).execute(pool).await?;
     Ok(())
 }
