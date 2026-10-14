@@ -10,7 +10,7 @@ WITH ranked AS (
            ) AS position
     FROM artist_sc_accounts AS account
     LEFT JOIN user_auras AS aura
-        ON aura.user_urn = 'soundcloud:users:' || account.sc_user_id
+        ON aura.user_urn = account.sc_user_id
     WHERE account.role IN ('main', 'demo')
 ), aggregate AS (
     SELECT artist.id,

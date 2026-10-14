@@ -10,9 +10,9 @@ WITH ranked AS (
            ) AS position
     FROM artist_sc_accounts AS account
     JOIN subscriptions AS subscription
-        ON subscription.user_urn = 'soundcloud:users:' || account.sc_user_id
+        ON subscription.user_urn = account.sc_user_id
     LEFT JOIN user_auras AS aura
-        ON aura.user_urn = 'soundcloud:users:' || account.sc_user_id
+        ON aura.user_urn = account.sc_user_id
     WHERE account.role IN ('main', 'demo')
       AND subscription.exp_date > $1
 ), aggregate AS (

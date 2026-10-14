@@ -352,3 +352,70 @@ fn the_rotation_visits_every_share_once_per_cycle() {
         "zero shares is one share"
     );
 }
+
+async fn install_star_schema(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "CREATE TABLE artists (
+             id uuid PRIMARY KEY,
+             merged_into uuid,
+             is_star boolean NOT NULL DEFAULT false,
+             star_aura_id text,
+             star_custom_hex varchar(16)
+         );
+         CREATE TABLE artist_sc_accounts (
+             artist_id uuid NOT NULL,
+             sc_user_id text NOT NULL,
+             role varchar(8) NOT NULL DEFAULT 'main',
+             verified boolean NOT NULL DEFAULT false
+         );
+         CREATE TABLE subscriptions (
+             user_urn text PRIMARY KEY,
+             exp_date bigint NOT NULL
+         );
+         CREATE TABLE user_auras (
+             user_urn text PRIMARY KEY,
+             aura_id varchar(32),
+             custom_hex varchar(16)
+         );
+         INSERT INTO artists (id) VALUES
+             ('00000000-0000-0000-0000-000000000001'),
+             ('00000000-0000-0000-0000-000000000002');
+         INSERT INTO artist_sc_accounts (artist_id, sc_user_id) VALUES
+             ('00000000-0000-0000-0000-000000000001', '501'),
+             ('00000000-0000-0000-0000-000000000002', '502');
+         INSERT INTO subscriptions (user_urn, exp_date) VALUES
+             ('501', extract(epoch FROM now())::bigint + 3600),
+             ('502', extract(epoch FROM now())::bigint - 3600);
+         INSERT INTO user_auras (user_urn, aura_id, custom_hex) VALUES ('501', 'flame', '#ff0000');",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_artist_whose_account_holds_star_now_is_marked_with_its_aura(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_star_schema(&pool).await?;
+
+    sqlx::query_file!(
+        "queries/discover/refresh_artist_star_active.sql",
+        chrono::Utc::now().timestamp()
+    )
+    .execute(&pool)
+    .await?;
+
+    let artists: Vec<(Uuid, bool, Option<String>)> =
+        sqlx::query_as("SELECT id, is_star, star_aura_id FROM artists ORDER BY id")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        artists,
+        vec![
+            (Uuid::from_u128(1), true, Some("flame".to_owned())),
+            (Uuid::from_u128(2), false, None),
+        ]
+    );
+    Ok(())
+}
