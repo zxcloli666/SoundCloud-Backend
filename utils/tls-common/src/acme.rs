@@ -1,6 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustls::ServerConfig;
 use rustls_acme::caches::DirCache;
@@ -14,6 +15,8 @@ use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompat
 use tracing::{error, info};
 
 pub type TlsStream = Compat<FuturesTlsStream<Compat<TcpStream>>>;
+
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AcmeParams {
     pub domains: Vec<String>,
@@ -60,6 +63,12 @@ pub fn acme_acceptor(p: AcmeParams) -> AcmeAcceptor {
 
 impl AcmeAcceptor {
     pub async fn accept(&self, tcp: TcpStream) -> io::Result<Option<TlsStream>> {
+        tokio::time::timeout(HANDSHAKE_TIMEOUT, self.handshake(tcp))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tls handshake timed out"))?
+    }
+
+    async fn handshake(&self, tcp: TcpStream) -> io::Result<Option<TlsStream>> {
         let handshake = LazyConfigAcceptor::new(Acceptor::default(), tcp.compat()).await?;
         if is_tls_alpn_challenge(&handshake.client_hello()) {
             let _ = handshake.into_stream(self.challenge.clone()).await?;

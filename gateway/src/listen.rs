@@ -2,11 +2,12 @@ use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockRef, Socket, TcpKeepalive, Type};
 use tls_common::AcmeAcceptor;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
@@ -94,7 +95,7 @@ async fn accept_http(
             _ = rx.changed() => break,
             res = listener.accept() => match res {
                 Ok((tcp, peer)) => {
-                    let _ = tcp.set_nodelay(true);
+                    tune(&tcp);
                     tokio::spawn(serve_http(tcp, peer, state.clone(), mode));
                 }
                 Err(e) => debug!("http accept: {e}"),
@@ -114,7 +115,7 @@ async fn accept_https(
             _ = rx.changed() => break,
             res = listener.accept() => match res {
                 Ok((tcp, peer)) => {
-                    let _ = tcp.set_nodelay(true);
+                    tune(&tcp);
                     tokio::spawn(serve_https(tcp, peer, state.clone(), acme.clone()));
                 }
                 Err(e) => debug!("https accept: {e}"),
@@ -164,6 +165,15 @@ async fn serve_https(tcp: TcpStream, peer: SocketAddr, state: Arc<ProxyState>, a
     {
         debug!("https conn {peer}: {e}");
     }
+}
+
+fn tune(tcp: &TcpStream) {
+    let _ = tcp.set_nodelay(true);
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    let _ = SockRef::from(tcp).set_tcp_keepalive(&keepalive);
 }
 
 /// One SO_REUSEPORT socket per shard — the kernel spreads accepts, avoiding
