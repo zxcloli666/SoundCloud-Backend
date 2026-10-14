@@ -3,6 +3,7 @@ mod dataset;
 mod history;
 mod metrics;
 mod pooling;
+mod refresh_order;
 mod result;
 mod vectors;
 
@@ -22,6 +23,7 @@ use uuid::Uuid;
 
 use crate::bus::{Bus, ObjectStoreError, WorkerQueueSnapshot};
 use crate::config::TasteConfig;
+use crate::handlers::star_priority::Round;
 use crate::qdrant::{QdrantProvisioner, TRACKS_TASTE};
 use crate::queue::{JobError, JobResult};
 
@@ -238,30 +240,32 @@ impl TasteHandler {
         let lookback = chrono::Duration::from_std(self.config.refresh_interval)
             .map_err(JobError::permanent)?;
         let (from, until) = refresh_window(active.refreshed_through, now, lookback);
-        let users: Vec<String> =
-            sqlx::query_file_scalar!("queries/taste/refresh_users.sql", from, until)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(JobError::retryable)?
-                .into_iter()
-                .filter(|user| is_canonical_user(user))
-                .collect();
+        let (star, regular) = refresh_order::users(&self.pool, from, until)
+            .await
+            .map_err(JobError::retryable)?;
+        let users = star.len() + regular.len();
+        let batches = refresh_order::star_first(star, regular, REFRESH_BATCH);
         let now_unix = now.and_utc().timestamp();
+        let mut round = Round::new("taste");
+        round.record("star", 0, None);
+        round.record("regular", 0, None);
         let mut refreshed = 0usize;
-        for chunk in users.chunks(REFRESH_BATCH) {
+        for batch in batches {
             let pooled = vectors::pool_users(
                 &self.pool,
                 &self.qdrant,
                 self.config.history_days,
                 &pooling,
                 &active.collection,
-                chunk,
+                &batch.users,
                 now_unix,
             )
             .await?;
             vectors::store(&self.pool, &active.version, &pooled).await?;
             refreshed += pooled.len();
+            record_batch(&mut round, &batch, from);
         }
+        round.report();
         sqlx::query_file!("queries/taste/finish_refresh.sql", active.version, until)
             .execute(&self.pool)
             .await
@@ -270,9 +274,7 @@ impl TasteHandler {
             record_user_vectors(refreshed);
             info!(
                 version = active.version,
-                users = users.len(),
-                refreshed,
-                "taste user vectors refreshed"
+                users, refreshed, "taste user vectors refreshed"
             );
         }
         Ok(())
@@ -315,6 +317,16 @@ fn refresh_window(
 ) -> (NaiveDateTime, NaiveDateTime) {
     let from = refreshed_through.unwrap_or(now - lookback).min(now);
     (from, now.min(from + REFRESH_CATCH_UP))
+}
+
+fn record_batch(round: &mut Round, batch: &refresh_order::RefreshBatch, from: NaiveDateTime) {
+    let waiting_since = Some(from.and_utc());
+    if batch.star > 0 {
+        round.record("star", batch.star, waiting_since);
+    }
+    if batch.regular() > 0 {
+        round.record("regular", batch.regular(), waiting_since);
+    }
 }
 
 fn is_canonical_user(user: &str) -> bool {
