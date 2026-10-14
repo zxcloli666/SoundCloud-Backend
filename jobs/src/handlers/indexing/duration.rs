@@ -395,6 +395,42 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    async fn a_star_like_resolved_late_outranks_a_freshly_crawled_track_for_indexing(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        use crate::handlers::star_priority::{INDEX_TRACK_PRIORITY, Tier};
+
+        install_schema(&pool).await?;
+        sqlx::raw_sql(include_str!(
+            "../../../../api/migrations/0057_background_jobs.sql"
+        ))
+        .execute(&pool)
+        .await?;
+        sqlx::raw_sql(
+            "INSERT INTO tracks (
+                 sc_track_id, duration_ms, needs_duration_resolve,
+                 storage_state, storage_attempts, index_state
+             ) VALUES ('42', 30000, true, 'pending', 0, 'pending');
+             INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('42', 1);",
+        )
+        .execute(&pool)
+        .await?;
+
+        resolver(&pool)?
+            .persist_duration("42".to_owned(), 180_000)
+            .await?;
+
+        let priority: i16 = sqlx::query_scalar(
+            "SELECT priority FROM background_jobs WHERE kind = 'indexing.track'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(priority, Tier::StarLiked.job_priority(INDEX_TRACK_PRIORITY));
+        assert!(priority > Tier::Rest.job_priority(INDEX_TRACK_PRIORITY));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
     async fn failed_index_enqueue_keeps_duration_pending(pool: PgPool) -> anyhow::Result<()> {
         install_schema(&pool).await?;
         sqlx::query(

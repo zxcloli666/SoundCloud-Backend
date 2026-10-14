@@ -1,6 +1,6 @@
 SELECT track.sc_track_id AS "sc_track_id!",
        storage.uploaded_generation AS "uploaded_generation?",
-       track.created_at AS "waiting_since!"
+       coalesce(storage.updated_at, track.created_at) AS "waiting_since!"
 FROM tracks AS track
 LEFT JOIN storage_event_state AS storage
   ON storage.sc_track_id = track.sc_track_id
@@ -10,8 +10,8 @@ WHERE track.index_state = 'pending'
   AND NOT track.needs_duration_resolve
   AND NOT track.pipeline_held
   AND track.created_at < now() - INTERVAL '5 minutes'
-  AND track.index_priority <= $4
-  AND track.sc_track_id <> ALL ($5::text[])
+  AND track.index_priority BETWEEN $4 AND $5
+  AND track.sc_track_id <> ALL ($6::text[])
   AND NOT EXISTS (
       SELECT 1
       FROM audio_index_wire_state AS wire

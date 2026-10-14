@@ -15,14 +15,14 @@ mod reduce_tests;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::{JobKind, PlaylistObservePayload, STAR_PRIORITY_BONUS, Versioned};
+use backend_contracts::{JobKind, PlaylistObservePayload, Versioned};
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 use wreq::StatusCode;
 
 use crate::config::{JobsConfig, PlaylistReconcileConfig};
-use crate::handlers::star_priority::Picks;
+use crate::handlers::star_priority::{Round, Turns};
 use crate::queue::{JobError, JobRepository, JobResult, NewJob};
 
 pub(super) use self::client::{PlaylistReadClient, PlaylistReadError};
@@ -47,7 +47,6 @@ const OBSERVE_MAX_ATTEMPTS: i16 = 8;
 const PUBLIC_TOKEN_ATTEMPTS: usize = 4;
 const EDITED_PRIORITY: i16 = 30;
 const BACKGROUND_PRIORITY: i16 = 0;
-const STAR_BACKGROUND_PRIORITY: i16 = BACKGROUND_PRIORITY + STAR_PRIORITY_BONUS;
 
 pub struct PlaylistObserveHandler {
     pool: PgPool,
@@ -58,6 +57,7 @@ pub struct PlaylistObserveHandler {
     reader: PlaylistReader,
     public: Arc<PublicCatalogReader>,
     reconcile: PlaylistReconcileConfig,
+    turns: Turns,
 }
 
 impl PlaylistObserveHandler {
@@ -78,6 +78,7 @@ impl PlaylistObserveHandler {
             reader: PlaylistReader::new(PlaylistReadClient::new(&config.sync_queue)?),
             public,
             reconcile: config.playlist_reconcile,
+            turns: Turns::default(),
         })
     }
 
@@ -88,45 +89,58 @@ impl PlaylistObserveHandler {
             .await
             .map_err(repository_job_error)?;
         self.enqueue_observations(edited, EDITED_PRIORITY).await?;
-        let mut picks = Picks::new("playlist_sweep");
-        let star = self.claim_star_owned().await?;
-        picks.record("star", star.iter().map(|playlist| playlist.due_at));
-        self.enqueue_observations(urns(star), STAR_BACKGROUND_PRIORITY)
-            .await?;
-        let regular = self.claim_regular().await?;
-        picks.record("regular", regular.iter().map(|playlist| playlist.due_at));
-        picks.report();
-        self.enqueue_observations(urns(regular), BACKGROUND_PRIORITY)
+        let backlog_full = self
+            .repository
+            .background_backlog_is_full(self.reconcile.sweep_batch)
             .await
-    }
-
-    async fn claim_star_owned(&self) -> JobResult<Vec<due::DuePlaylist>> {
-        let batch = self.reconcile.sweep_batch;
-        let share = batch - batch / 4;
-        let waiting = due::waiting(&self.pool, share, STAR_BACKGROUND_PRIORITY)
+            .map_err(repository_job_error)?;
+        let (star, regular) = if backlog_full {
+            (Vec::new(), Vec::new())
+        } else {
+            self.claim_background().await?
+        };
+        let next = due::next_waiting(&self.pool)
             .await
             .map_err(JobError::retryable)?;
+        let mut round = Round::new("playlist_sweep");
+        round.record("star", star.len(), next.star);
+        round.record("regular", regular.len(), next.regular);
+        round.report();
+        let due = star.into_iter().chain(regular).collect();
+        self.enqueue_observations(due, BACKGROUND_PRIORITY).await
+    }
+
+    async fn claim_background(&self) -> JobResult<(Vec<String>, Vec<String>)> {
+        let batch = self.reconcile.sweep_batch;
+        if self.turns.next().star_first() {
+            let star = self.claim_star_owned(batch).await?;
+            let regular = self.claim_regular(batch - count(&star)).await?;
+            Ok((star, regular))
+        } else {
+            let regular = self.claim_regular(batch).await?;
+            let star = self.claim_star_owned(batch - count(&regular)).await?;
+            Ok((star, regular))
+        }
+    }
+
+    async fn claim_star_owned(&self, limit: i64) -> JobResult<Vec<String>> {
         due::claim_star_owned(
             &self.pool,
             self.reconcile.sweep_owner_share,
-            share - waiting,
+            limit,
             self.reconcile.claim_seconds,
         )
         .await
         .map_err(JobError::retryable)
     }
 
-    async fn claim_regular(&self) -> JobResult<Vec<due::DuePlaylist>> {
-        let batch = self.reconcile.sweep_batch;
-        let waiting = due::waiting(&self.pool, batch, BACKGROUND_PRIORITY)
-            .await
-            .map_err(JobError::retryable)?;
-        if waiting >= batch {
+    async fn claim_regular(&self, limit: i64) -> JobResult<Vec<String>> {
+        if limit <= 0 {
             return Ok(Vec::new());
         }
         self.repository
             .claim_due(
-                batch,
+                limit,
                 self.reconcile.sweep_owner_share,
                 self.reconcile.claim_seconds,
             )
@@ -637,11 +651,8 @@ fn is_unauthorized(error: &PlaylistObserveError) -> bool {
     error.read().is_some_and(PlaylistReadError::is_unauthorized)
 }
 
-fn urns(playlists: Vec<due::DuePlaylist>) -> Vec<String> {
-    playlists
-        .into_iter()
-        .map(|playlist| playlist.playlist_urn)
-        .collect()
+fn count(playlists: &[String]) -> i64 {
+    i64::try_from(playlists.len()).unwrap_or(i64::MAX)
 }
 
 fn repository_job_error(error: RepositoryError) -> JobError {

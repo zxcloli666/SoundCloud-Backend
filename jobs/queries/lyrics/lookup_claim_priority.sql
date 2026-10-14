@@ -13,7 +13,7 @@ WITH owned_job AS MATERIALIZED (
     JOIN owned_job ON true
     WHERE state.next_run_at <= now()
       AND state.claim_job_id IS NULL
-      AND state.priority <= $6
+      AND state.priority BETWEEN $6 AND $7
     ORDER BY state.priority, state.next_run_at, state.created_at, state.track_id
     FOR UPDATE OF state SKIP LOCKED
     LIMIT $4
@@ -40,8 +40,7 @@ WITH owned_job AS MATERIALIZED (
               state.input_release_date,
               state.input_sc_created_at,
               state.miss_streak,
-              state.failure_streak,
-              state.next_run_at
+              state.failure_streak
 )
 SELECT track_id,
        sc_track_id,
@@ -54,6 +53,5 @@ SELECT track_id,
        input_release_date,
        input_sc_created_at,
        miss_streak,
-       failure_streak,
-       next_run_at AS due_at
+       failure_streak
 FROM claimed

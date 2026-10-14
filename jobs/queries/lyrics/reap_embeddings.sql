@@ -10,8 +10,7 @@ WHERE lyrics.embedded_at IS NULL
   AND length(coalesce(lyrics.plain_text, lyrics.synced_lrc, '')) > 30
   AND lyrics.created_at < (now() AT TIME ZONE 'UTC') - interval '10 minutes'
   AND (wire.sc_track_id IS NULL OR wire.status <> 'pending')
-  AND track.index_priority <= $2
-  AND lyrics.sc_track_id <> ALL ($3::text[])
+  AND lyrics.sc_track_id <> ALL ($2::text[])
   AND NOT EXISTS (
       SELECT 1
       FROM background_jobs AS job

@@ -17,7 +17,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::config::LyricsConfig;
-use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Picks, Tier};
+use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
 
 use super::embedding_queue;
@@ -42,7 +42,6 @@ struct LookupClaim {
     input_sc_created_at: Option<chrono::DateTime<Utc>>,
     miss_streak: i32,
     failure_streak: i32,
-    due_at: chrono::DateTime<Utc>,
 }
 
 pub struct LyricsLookupHandler {
@@ -50,6 +49,7 @@ pub struct LyricsLookupHandler {
     queue: JobRepository,
     sources: Arc<LyricsSources>,
     config: LyricsConfig,
+    turns: Turns,
 }
 
 impl LyricsLookupHandler {
@@ -59,6 +59,7 @@ impl LyricsLookupHandler {
             pool,
             sources,
             config,
+            turns: Turns::default(),
         }
     }
 
@@ -108,39 +109,15 @@ impl LyricsLookupHandler {
         .await
         .map_err(JobError::retryable)?;
 
-        let total = self.config.batch.max(1);
-        let oldest = (total / 4).max(1).min(total);
-        let priority = total - oldest;
-        let mut picks = Picks::new("lyrics_lookup");
-        let mut claims = Vec::new();
-        if priority > 0 {
-            claims.extend(
-                tiered::claim(
-                    &self.pool,
-                    job,
-                    priority,
-                    self.config.claim_seconds,
-                    &mut picks,
-                )
-                .await
-                .map_err(JobError::retryable)?,
-            );
-        }
-        let oldest_claims = sqlx::query_file_as!(
-            LookupClaim,
-            "queries/lyrics/lookup_claim_oldest.sql",
-            job.id,
-            job.generation,
-            job.lease_id,
-            oldest,
-            self.config.claim_seconds
+        let claims = tiered::claim(
+            &self.pool,
+            job,
+            self.config.batch.max(1),
+            self.config.claim_seconds,
+            self.turns.next(),
         )
-        .fetch_all(&self.pool)
         .await
         .map_err(JobError::retryable)?;
-        picks.record("oldest", oldest_claims.iter().map(|claim| claim.due_at));
-        picks.report();
-        claims.extend(oldest_claims);
         self.process_batch(job, claims).await
     }
 
@@ -430,7 +407,6 @@ mod tests {
             input_sc_created_at: None,
             miss_streak: streak,
             failure_streak: 0,
-            due_at: Utc::now(),
         }
     }
 

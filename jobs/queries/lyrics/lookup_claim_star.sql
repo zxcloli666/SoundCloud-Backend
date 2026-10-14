@@ -7,14 +7,20 @@ WITH owned_job AS MATERIALIZED (
       AND lease_generation = $2
       AND lease_id = $3
       AND lease_expires_at > now()
+), star AS MATERIALIZED (
+    SELECT tiered.sc_track_id, tiered.tiered_at
+    FROM star_track_tiers AS tiered
+    WHERE tiered.tier = $6
+      AND tiered.lookup_due
+    ORDER BY tiered.tiered_at, tiered.sc_track_id
+    LIMIT $7
 ), candidates AS MATERIALIZED (
     SELECT state.track_id
-    FROM star_track_tiers AS star
+    FROM star
     JOIN lyrics_lookup_state AS state
       ON state.sc_track_id = star.sc_track_id
     JOIN owned_job ON true
-    WHERE star.tier = $6
-      AND state.next_run_at <= now()
+    WHERE state.next_run_at <= now()
       AND state.claim_job_id IS NULL
     ORDER BY star.tiered_at, star.sc_track_id
     FOR UPDATE OF state SKIP LOCKED
@@ -42,8 +48,7 @@ WITH owned_job AS MATERIALIZED (
               state.input_release_date,
               state.input_sc_created_at,
               state.miss_streak,
-              state.failure_streak,
-              state.next_run_at
+              state.failure_streak
 )
 SELECT track_id,
        sc_track_id,
@@ -56,6 +61,5 @@ SELECT track_id,
        input_release_date,
        input_sc_created_at,
        miss_streak,
-       failure_streak,
-       next_run_at AS due_at
+       failure_streak
 FROM claimed

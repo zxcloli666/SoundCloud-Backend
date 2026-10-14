@@ -31,7 +31,7 @@ use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;
 use self::storage_events::StorageEventHandler;
 use self::storage_uploaded::StorageUploadHandler;
-use super::star_priority::{self, Tier, Turns};
+use super::star_priority::{self, INDEX_TRACK_PRIORITY, Tier, Turns};
 use super::worker_backlog::{WorkerBacklog, unclaimed_room};
 
 const REAP_BATCH: i64 = 50;
@@ -39,7 +39,7 @@ const SETTLE_BATCH: i64 = 50;
 const FAILED_RETRY_BATCH: i64 = 10;
 const MAX_ATTEMPTS: i16 = 8;
 const MAX_DISPATCH_ATTEMPTS: i32 = MAX_ATTEMPTS as i32;
-const AUDIO_INDEX_QUARANTINE_SECONDS: i64 = match AUDIO_LANE.quarantine_after_s() {
+pub(super) const AUDIO_INDEX_QUARANTINE_SECONDS: i64 = match AUDIO_LANE.quarantine_after_s() {
     Some(seconds) => seconds as i64,
     None => panic!("the audio lane must have an attempt window"),
 };
@@ -349,7 +349,7 @@ fn new_index_job(sc_track_id: String, tier: Tier) -> JobResult<NewJob> {
         kind: JobKind::IndexTrack,
         dedup_key: Some(sc_track_id),
         payload,
-        priority: tier.job_priority(0),
+        priority: tier.job_priority(INDEX_TRACK_PRIORITY),
         max_attempts: MAX_ATTEMPTS,
         available_at: Utc::now(),
     })
@@ -381,7 +381,7 @@ fn queue_error(error: QueueError) -> JobError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handlers::star_priority::Turn;
+    use crate::handlers::star_priority::{Tier, Turn};
 
     async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
         sqlx::raw_sql(
@@ -400,7 +400,8 @@ mod tests {
              );
              CREATE TABLE storage_event_state (
                  sc_track_id text PRIMARY KEY,
-                 uploaded_generation bigint NOT NULL
+                 uploaded_generation bigint NOT NULL,
+                 updated_at timestamptz NOT NULL DEFAULT now()
              );
              CREATE TABLE background_jobs (
                  id uuid PRIMARY KEY,
@@ -420,6 +421,7 @@ mod tests {
         )
         .execute(pool)
         .await?;
+        star_priority::install_star_track_tiers(pool).await?;
         test_schema::install_audio_index_wire_state(pool).await
     }
 
@@ -435,7 +437,7 @@ mod tests {
     }
 
     async fn backfill_candidates(pool: &PgPool) -> anyhow::Result<Vec<(String, Option<i64>)>> {
-        Ok(backfill::pick(pool, REAP_BATCH, Turn::RestFirst)
+        Ok(backfill::pick(pool, REAP_BATCH, Turn::led_by(Tier::Rest))
             .await?
             .into_iter()
             .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))

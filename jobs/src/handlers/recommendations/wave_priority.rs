@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sqlx::PgPool;
 
+use crate::handlers::star_priority::LIKED_PRIORITY;
 use crate::queue::{JobError, JobResult};
 
 pub(super) fn shard_for(shards: i64, now: chrono::DateTime<Utc>) -> i64 {
@@ -14,7 +15,8 @@ pub(super) async fn bump(pool: &PgPool, shards: i64) -> JobResult<u64> {
     let result = sqlx::query_file!(
         "queries/recommendations/wave_priority/bump.sql",
         shards,
-        shard
+        shard,
+        LIKED_PRIORITY
     )
     .execute(pool)
     .await

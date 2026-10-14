@@ -1,7 +1,15 @@
+WITH star AS MATERIALIZED (
+    SELECT tiered.sc_track_id, tiered.tiered_at
+    FROM star_track_tiers AS tiered
+    WHERE tiered.tier = $2
+      AND tiered.align_due
+    ORDER BY tiered.tiered_at, tiered.sc_track_id
+    LIMIT $4
+)
 SELECT track.sc_track_id AS "sc_track_id!",
        event.uploaded_generation AS "uploaded_generation!",
-       event.updated_at AS "waiting_since!"
-FROM star_track_tiers AS star
+       greatest(event.updated_at, star.tiered_at) AS "waiting_since!"
+FROM star
 JOIN storage_event_state AS event
   ON event.sc_track_id = star.sc_track_id
 JOIN tracks AS track
@@ -17,7 +25,6 @@ WHERE NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
   AND event.uploaded_generation > 0
   AND track.storage_state = 'ok'
   AND NOT track.needs_duration_resolve
-  AND star.tier = $2
   AND track.sc_track_id <> ALL ($3::text[])
   AND (
       (

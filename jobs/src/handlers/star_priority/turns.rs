@@ -2,41 +2,48 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::tier::Tier;
 
-const REST_TURN_EVERY: u64 = 4;
+const LEADS: [Tier; 8] = [
+    Tier::StarLiked,
+    Tier::StarLiked,
+    Tier::Liked,
+    Tier::Rest,
+    Tier::StarLiked,
+    Tier::StarOther,
+    Tier::StarLiked,
+    Tier::Rest,
+];
 
 #[derive(Default)]
 pub(crate) struct Turns(AtomicU64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Turn {
-    StarFirst,
-    RestFirst,
+pub(crate) struct Turn {
+    lead: Tier,
 }
 
 impl Turns {
     pub(crate) fn next(&self) -> Turn {
-        turn_at(self.0.fetch_add(1, Ordering::Relaxed))
+        let count = self.0.fetch_add(1, Ordering::Relaxed);
+        let slot = usize::try_from(count % LEADS.len() as u64).unwrap_or(0);
+        let lead = LEADS.get(slot).copied().unwrap_or(Tier::Rest);
+        Turn { lead }
     }
 }
 
 impl Turn {
+    #[cfg(test)]
+    pub(crate) fn led_by(lead: Tier) -> Self {
+        Self { lead }
+    }
+
     pub(crate) fn star_first(self) -> bool {
-        self == Self::StarFirst
+        self.lead != Tier::Rest
     }
 
-    pub(crate) fn tiers(self) -> &'static [Tier] {
-        match self {
-            Self::StarFirst => &Tier::ORDER,
-            Self::RestFirst => &[Tier::Rest],
-        }
-    }
-}
-
-fn turn_at(count: u64) -> Turn {
-    if count.wrapping_add(1).is_multiple_of(REST_TURN_EVERY) {
-        Turn::RestFirst
-    } else {
-        Turn::StarFirst
+    pub(crate) fn tiers(self) -> impl Iterator<Item = Tier> {
+        let lead = self.lead;
+        let others = Tier::ORDER.into_iter().filter(move |tier| *tier != lead);
+        std::iter::once(lead).chain(others)
     }
 }
 
@@ -44,30 +51,42 @@ fn turn_at(count: u64) -> Turn {
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_fourth_turn_belongs_to_the_old_order() {
+    fn leads(rounds: usize) -> Vec<Tier> {
         let turns = Turns::default();
-        let taken: Vec<Turn> = (0..8).map(|_| turns.next()).collect();
+        (0..rounds).map(|_| turns.next().lead).collect()
+    }
+
+    fn tiers_led_by(lead: Tier) -> Vec<Tier> {
+        Turn::led_by(lead).tiers().collect()
+    }
+
+    #[test]
+    fn every_lower_tier_leads_its_own_share_of_rounds() {
+        let taken = leads(16);
+        let share = |tier: Tier| taken.iter().filter(|lead| **lead == tier).count();
+        assert_eq!(share(Tier::StarLiked), 8);
+        assert_eq!(share(Tier::Liked), 2);
+        assert_eq!(share(Tier::StarOther), 2);
+        assert_eq!(share(Tier::Rest), 4);
+    }
+
+    #[test]
+    fn the_rest_of_a_round_follows_the_tier_order() {
+        assert_eq!(tiers_led_by(Tier::StarLiked), Tier::ORDER);
         assert_eq!(
-            taken,
-            [
-                Turn::StarFirst,
-                Turn::StarFirst,
-                Turn::StarFirst,
-                Turn::RestFirst,
-                Turn::StarFirst,
-                Turn::StarFirst,
-                Turn::StarFirst,
-                Turn::RestFirst,
-            ]
+            tiers_led_by(Tier::StarOther),
+            [Tier::StarOther, Tier::StarLiked, Tier::Liked, Tier::Rest]
+        );
+        assert_eq!(
+            tiers_led_by(Tier::Rest),
+            [Tier::Rest, Tier::StarLiked, Tier::Liked, Tier::StarOther]
         );
     }
 
     #[test]
-    fn a_rest_turn_walks_only_the_old_order() {
-        assert_eq!(Turn::RestFirst.tiers(), [Tier::Rest]);
-        assert_eq!(Turn::StarFirst.tiers(), Tier::ORDER);
-        assert!(Turn::StarFirst.star_first());
-        assert!(!Turn::RestFirst.star_first());
+    fn only_a_rest_lead_puts_regular_users_first() {
+        assert!(Turn::led_by(Tier::StarLiked).star_first());
+        assert!(Turn::led_by(Tier::StarOther).star_first());
+        assert!(!Turn::led_by(Tier::Rest).star_first());
     }
 }

@@ -115,7 +115,7 @@ impl LyricsReaper {
         let align = tiered::alignments(
             &mut transaction,
             room.saturating_sub(reopened),
-            &self.alignment_turns,
+            self.alignment_turns.next(),
         )
         .await
         .map_err(JobError::retryable)?;
@@ -170,7 +170,7 @@ impl LyricsReaper {
         .map_err(JobError::retryable)?;
 
         let mut enqueued = 0i64;
-        let candidates = tiered::embeddings(&mut transaction, room, &self.embedding_turns)
+        let candidates = tiered::embeddings(&mut transaction, room, self.embedding_turns.next())
             .await
             .map_err(JobError::retryable)?;
         for (sc_track_id, tier) in candidates {

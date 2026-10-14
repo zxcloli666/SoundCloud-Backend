@@ -18,7 +18,7 @@ use futures::{StreamExt, stream};
 use tracing::warn;
 
 use crate::config::JobsConfig;
-use crate::handlers::star_priority::{Picks, Turns};
+use crate::handlers::star_priority::{Round, Turns};
 use crate::queue::{JobError, JobResult};
 
 use self::actions::ActionError;
@@ -90,9 +90,9 @@ impl SyncQueueHandler {
             .get_or_init(|| self.restore_pauses())
             .await;
         let deadline = Instant::now() + PACED_DRAIN_BUDGET;
-        let mut picks = Picks::new("sync_queue");
+        let mut round = Round::new("sync_queue");
         for _ in 0..MAX_DRAIN_BATCHES {
-            let claimed = self.flush_batch(&mut picks).await?;
+            let claimed = self.flush_batch(&mut round).await?;
             if claimed >= self.claim_batch as usize {
                 continue;
             }
@@ -101,23 +101,38 @@ impl SyncQueueHandler {
                 _ => break,
             }
         }
-        picks.report();
+        let next = self
+            .repository
+            .next_waiting(&self.held_actions())
+            .await
+            .map_err(JobError::retryable)?;
+        round.record("star", 0, next.star);
+        round.record("regular", 0, next.regular);
+        round.report();
         Ok(())
     }
 
-    async fn flush_batch(&self, picks: &mut Picks) -> JobResult<usize> {
-        let held = self
-            .write_pauses
+    fn held_actions(&self) -> Vec<String> {
+        self.write_pauses
             .held()
             .into_iter()
             .map(|(oauth_app_id, action)| format!("{oauth_app_id}:{action}"))
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    async fn flush_batch(&self, round: &mut Round) -> JobResult<usize> {
         let mutations = self
             .repository
-            .claim_outside(self.claim_batch, &held, self.turns.next().star_first())
+            .claim_outside(
+                self.claim_batch,
+                &self.held_actions(),
+                self.turns.next().star_first(),
+            )
             .await
             .map_err(JobError::retryable)?;
-        record_picks(picks, &mutations);
+        let star = mutations.iter().filter(|mutation| mutation.star).count();
+        round.record("star", star, None);
+        round.record("regular", mutations.len() - star, None);
         let claimed = mutations.len();
         let mut executions = stream::iter(mutations)
             .map(|mutation| self.execute(mutation))
@@ -575,18 +590,6 @@ impl SyncQueueHandler {
             }
         }
         Ok(())
-    }
-}
-
-fn record_picks(picks: &mut Picks, mutations: &[ClaimedMutation]) {
-    for (label, star) in [("star", true), ("regular", false)] {
-        picks.record(
-            label,
-            mutations
-                .iter()
-                .filter(|mutation| mutation.star == star)
-                .map(|mutation| mutation.created_at),
-        );
     }
 }
 

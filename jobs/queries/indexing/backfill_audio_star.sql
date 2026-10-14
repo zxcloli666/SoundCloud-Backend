@@ -1,7 +1,15 @@
+WITH star AS MATERIALIZED (
+    SELECT tiered.sc_track_id, tiered.tiered_at
+    FROM star_track_tiers AS tiered
+    WHERE tiered.tier = $4
+      AND tiered.audio_due
+    ORDER BY tiered.tiered_at, tiered.sc_track_id
+    LIMIT $6
+)
 SELECT track.sc_track_id AS "sc_track_id!",
        storage.uploaded_generation AS "uploaded_generation?",
-       track.created_at AS "waiting_since!"
-FROM star_track_tiers AS star
+       greatest(coalesce(storage.updated_at, track.created_at), star.tiered_at) AS "waiting_since!"
+FROM star
 JOIN tracks AS track
   ON track.sc_track_id = star.sc_track_id
 LEFT JOIN storage_event_state AS storage
@@ -12,7 +20,6 @@ WHERE track.index_state = 'pending'
   AND NOT track.needs_duration_resolve
   AND NOT track.pipeline_held
   AND track.created_at < now() - INTERVAL '5 minutes'
-  AND star.tier = $4
   AND track.sc_track_id <> ALL ($5::text[])
   AND NOT EXISTS (
       SELECT 1

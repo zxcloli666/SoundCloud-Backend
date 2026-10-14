@@ -4,7 +4,7 @@ WITH star AS MATERIALIZED (
     WHERE subscription.exp_date > extract(epoch FROM now())::bigint
 ),
 picked AS (
-    SELECT share.playlist_urn, share.next_reconcile_at
+    SELECT share.playlist_urn
     FROM star
     CROSS JOIN LATERAL (
         SELECT state.playlist_urn, state.next_reconcile_at
@@ -24,5 +24,4 @@ SET next_reconcile_at = clock_timestamp() + $3::double precision * interval '1 s
     updated_at = clock_timestamp()
 FROM picked
 WHERE state.playlist_urn = picked.playlist_urn
-RETURNING state.playlist_urn AS "playlist_urn!",
-          picked.next_reconcile_at AS "due_at!"
+RETURNING state.playlist_urn AS "playlist_urn!"

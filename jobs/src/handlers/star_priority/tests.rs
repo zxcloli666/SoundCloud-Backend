@@ -58,6 +58,47 @@ async fn the_refresh_follows_the_current_star_users_only(pool: PgPool) -> anyhow
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
+async fn the_refresh_marks_which_pipelines_still_wait_for_each_star_track(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_star_library(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO tracks (
+             sc_track_id, urn, title, title_normalized, duration_ms, storage_state, s3_verified_at
+         ) VALUES
+             ('101', 'soundcloud:tracks:101', 'Stored', 'stored', 1000, 'ok', now()),
+             ('102', 'soundcloud:tracks:102', 'Indexed', 'indexed', 1000, 'ok', now());
+         UPDATE tracks SET index_state = 'ok' WHERE sc_track_id = '102';
+         UPDATE lyrics_lookup_state SET next_run_at = now() + interval '30 days'
+         WHERE sc_track_id = '102';
+         INSERT INTO lyrics_cache (sc_track_id, plain_text, source)
+         VALUES ('102', 'a lyrics text long enough to be embedded later', 'genius');",
+    )
+    .execute(&pool)
+    .await?;
+
+    StarTiersHandler::new(pool.clone()).refresh().await?;
+
+    let due: Vec<(String, bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT sc_track_id, audio_due, lookup_due, embed_due, align_due
+         FROM star_track_tiers
+         WHERE sc_track_id IN ('101', '102', '104')
+         ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        due,
+        [
+            ("101".to_owned(), true, true, false, false),
+            ("102".to_owned(), false, false, true, false),
+            ("104".to_owned(), false, false, false, false),
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
 async fn a_lapsed_star_user_drops_out_at_the_next_refresh(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
     let handler = StarTiersHandler::new(pool.clone());
@@ -96,19 +137,21 @@ async fn a_track_tier_puts_star_likes_before_likes_before_star_listening(
          VALUES ('1', 'soundcloud:tracks:1', 'A', 'a', 1000, 5),
                 ('2', 'soundcloud:tracks:2', 'B', 'b', 1000, 1),
                 ('3', 'soundcloud:tracks:3', 'C', 'c', 1000, 1),
-                ('4', 'soundcloud:tracks:4', 'D', 'd', 1000, 5);
+                ('4', 'soundcloud:tracks:4', 'D', 'd', 1000, 5),
+                ('5', 'soundcloud:tracks:5', 'Wave pick', 'wave pick', 1000, 0);
          INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('1', 1), ('3', 3), ('4', 3);",
     )
     .execute(&pool)
     .await?;
-    let ids: Vec<String> = ["1", "2", "3", "4", "5"].map(str::to_owned).to_vec();
+    let ids: Vec<String> = ["1", "2", "3", "4", "5", "6"].map(str::to_owned).to_vec();
 
     let found = of_tracks(&pool, &ids).await?;
 
     assert_eq!(found.get("1"), Some(&Tier::StarLiked));
     assert_eq!(found.get("2"), Some(&Tier::Liked));
     assert_eq!(found.get("3"), Some(&Tier::Liked));
+    assert_eq!(found.get("5"), Some(&Tier::Rest));
     assert_eq!(found.get("4"), Some(&Tier::StarOther));
-    assert_eq!(found.get("5"), None);
+    assert_eq!(found.get("6"), None);
     Ok(())
 }

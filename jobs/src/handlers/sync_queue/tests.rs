@@ -425,3 +425,19 @@ async fn a_regular_turn_sends_the_oldest_regular_writes_first(pool: PgPool) -> a
     assert!(claimed.iter().all(|mutation| !mutation.star));
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn the_writes_left_waiting_after_a_star_turn_show_up_per_group(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_star_and_regular_writes(&pool).await?;
+    let repository = repository(pool);
+
+    repository.claim_outside(2, &[], true).await?;
+    let next = repository.next_waiting(&[]).await?;
+
+    assert!(next.star.is_none());
+    assert!(next.regular.is_some());
+    Ok(())
+}

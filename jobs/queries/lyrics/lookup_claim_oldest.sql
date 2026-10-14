@@ -39,8 +39,7 @@ WITH owned_job AS MATERIALIZED (
               state.input_release_date,
               state.input_sc_created_at,
               state.miss_streak,
-              state.failure_streak,
-              state.next_run_at
+              state.failure_streak
 )
 SELECT track_id,
        sc_track_id,
@@ -53,6 +52,5 @@ SELECT track_id,
        input_release_date,
        input_sc_created_at,
        miss_streak,
-       failure_streak,
-       next_run_at AS due_at
+       failure_streak
 FROM claimed

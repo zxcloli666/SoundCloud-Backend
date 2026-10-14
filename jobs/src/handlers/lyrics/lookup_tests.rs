@@ -594,3 +594,65 @@ async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Res
     assert!(state.1);
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldest_share(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    for id in ["45", "44", "43", "42", "41"] {
+        insert_track(&pool, id, "Track").await?;
+    }
+    sqlx::raw_sql(
+        "UPDATE tracks SET index_priority = 0 WHERE sc_track_id = '41';
+         UPDATE tracks SET index_priority = 1 WHERE sc_track_id = '42';
+         INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('43', 3), ('44', 1);
+         UPDATE lyrics_lookup_state SET next_run_at = now() - interval '1 hour';
+         UPDATE lyrics_lookup_state SET next_run_at = now() - interval '2 hours'
+         WHERE sc_track_id = '45';",
+    )
+    .execute(&pool)
+    .await?;
+    let job = sweep_job(&pool).await?;
+
+    let claims = super::tiered::claim(
+        &pool,
+        &job,
+        5,
+        900,
+        crate::handlers::star_priority::Turn::led_by(
+            crate::handlers::star_priority::Tier::StarLiked,
+        ),
+    )
+    .await?;
+
+    let claimed: Vec<String> = claims.into_iter().map(|claim| claim.sc_track_id).collect();
+    assert_eq!(claimed, ["44", "42", "43", "41", "45"]);
+    Ok(())
+}
+
+async fn sweep_job(pool: &PgPool) -> anyhow::Result<crate::queue::LeasedJob> {
+    let queue = JobRepository::new(pool.clone(), "lyrics-sweep".to_owned());
+    queue
+        .enqueue(&crate::queue::NewJob {
+            id: uuid::Uuid::now_v7(),
+            kind: backend_contracts::JobKind::LyricsLookupSweep,
+            dedup_key: None,
+            payload: serde_json::json!({}),
+            priority: 0,
+            max_attempts: 8,
+            available_at: chrono::Utc::now() - chrono::Duration::minutes(1),
+        })
+        .await?;
+    queue
+        .claim(
+            &[backend_contracts::JobKind::LyricsLookupSweep],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(600),
+        )
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
+}

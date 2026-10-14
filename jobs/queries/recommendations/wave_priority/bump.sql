@@ -60,11 +60,11 @@ WITH active_users AS MATERIALIZED (
         ON counter.sc_track_id = candidate.sc_track_id
     WHERE candidate.sharing = 'public'
       AND candidate.storage_state = 'pending'
-      AND (candidate.storage_priority > 0 OR candidate.index_priority > 0)
+      AND (candidate.storage_priority > 0 OR candidate.index_priority > $3)
 )
 UPDATE tracks
 SET storage_priority = 0,
-    index_priority = 0
+    index_priority = CASE WHEN index_priority = $3 THEN index_priority ELSE 0 END
 WHERE id IN (
     SELECT id
     FROM candidates

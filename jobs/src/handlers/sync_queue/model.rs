@@ -17,7 +17,6 @@ pub struct ClaimedMutation {
     pub remote_attempted_generation: Option<i64>,
     pub remote_completed_generation: Option<i64>,
     pub remote_result: Option<Value>,
-    pub created_at: DateTime<Utc>,
     pub star: bool,
 }
 
@@ -29,6 +28,11 @@ impl ClaimedMutation {
     pub fn has_ambiguous_remote_attempt(&self) -> bool {
         self.remote_attempted_generation == Some(self.generation) && !self.has_remote_result()
     }
+}
+
+pub struct NextWaiting {
+    pub star: Option<DateTime<Utc>>,
+    pub regular: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, FromRow)]

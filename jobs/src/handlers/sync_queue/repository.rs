@@ -4,7 +4,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use super::actions::{self, ActionError};
-use super::model::{ClaimedMutation, LockedMutation};
+use super::model::{ClaimedMutation, LockedMutation, NextWaiting};
 
 pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
 const LIKES_AND_UNLIKES: [&str; 4] = [
@@ -66,6 +66,20 @@ impl SyncQueueRepository {
         )
         .fetch_all(&self.pool)
         .await
+    }
+
+    pub async fn next_waiting(&self, held: &[String]) -> Result<NextWaiting, sqlx::Error> {
+        let next = sqlx::query_file!(
+            "queries/sync_queue/next_waiting.sql",
+            self.lease_milliseconds(),
+            held
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(NextWaiting {
+            star: next.star,
+            regular: next.regular,
+        })
     }
 
     pub async fn save_action_pause(

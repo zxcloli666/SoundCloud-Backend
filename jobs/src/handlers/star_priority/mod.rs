@@ -1,4 +1,5 @@
-mod picks;
+mod queued;
+mod round;
 #[cfg(test)]
 mod tests;
 mod tier;
@@ -6,13 +7,19 @@ mod turns;
 
 use sqlx::{PgConnection, PgPool};
 
+use super::indexing::AUDIO_INDEX_QUARANTINE_SECONDS;
 use crate::queue::{JobError, JobResult};
 
-pub(crate) use self::picks::Picks;
-pub(crate) use self::tier::{CORE_FAST_TRACK_PRIORITY, Pass, Tier, of_track, of_tracks};
+pub(crate) use self::queued::record_queued_waits;
+pub(crate) use self::round::{Round, split_next, with_next};
+pub(crate) use self::tier::{
+    CORE_FAST_TRACK_PRIORITY, INDEX_TRACK_PRIORITY, LIKED_PRIORITY, LYRICS_EMBED_PRIORITY, Pass,
+    Tier, of_track, of_tracks,
+};
 pub(crate) use self::turns::{Turn, Turns};
 
 const HISTORY_DAYS: i32 = 30;
+pub(crate) const STAR_SCAN_WINDOW: i64 = 2_000;
 
 pub(crate) struct StarTiersHandler {
     pool: PgPool,
@@ -31,12 +38,24 @@ impl StarTiersHandler {
         .fetch_one(&self.pool)
         .await
         .map_err(JobError::retryable)?;
+        let due = sqlx::query_file!(
+            "queries/star_priority/refresh_due.sql",
+            AUDIO_INDEX_QUARANTINE_SECONDS
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(JobError::retryable)?;
         tracing::info!(
             star_users = refreshed.star_users,
             star_liked = refreshed.star_liked,
             star_other = refreshed.star_other,
             written = refreshed.written,
             removed = refreshed.removed,
+            due_changed = due.changed,
+            audio_due = due.audio_due,
+            lookup_due = due.lookup_due,
+            embed_due = due.embed_due,
+            align_due = due.align_due,
             "star track tiers refreshed"
         );
         Ok(())

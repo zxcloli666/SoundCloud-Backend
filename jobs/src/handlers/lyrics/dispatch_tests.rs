@@ -336,7 +336,6 @@ async fn an_upload_without_transcription_room_is_left_for_the_align_reaper(
     let reaped = sqlx::query_file!(
         "queries/lyrics/reap_transcriptions_align.sql",
         10_i64,
-        i16::MAX,
         &Vec::<String>::new()
     )
     .fetch_all(&pool)

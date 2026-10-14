@@ -21,7 +21,8 @@ const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
 const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
 const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
-const STAR_PRIORITY_OLDEST_WAIT: &str = "jobs_star_priority_oldest_wait_seconds";
+const STAR_PRIORITY_WAITING: &str = "jobs_star_priority_waiting_seconds";
+const STAR_PRIORITY_QUEUED_WAITING: &str = "jobs_star_priority_queued_waiting_seconds";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -203,16 +204,21 @@ impl WorkerLostOutcome {
     }
 }
 
-pub fn record_star_priority_pick(
+pub fn record_star_priority_round(
     pipeline: &'static str,
     tier: &'static str,
     picked: usize,
-    oldest_wait_seconds: i64,
+    waiting_seconds: i64,
 ) {
     metrics::counter!(STAR_PRIORITY_PICKED, "pipeline" => pipeline, "tier" => tier)
         .increment(u64::try_from(picked).unwrap_or(u64::MAX));
-    metrics::gauge!(STAR_PRIORITY_OLDEST_WAIT, "pipeline" => pipeline, "tier" => tier)
-        .set(oldest_wait_seconds as f64);
+    metrics::gauge!(STAR_PRIORITY_WAITING, "pipeline" => pipeline, "tier" => tier)
+        .set(waiting_seconds as f64);
+}
+
+pub fn record_star_priority_queued(kind: &'static str, tier: &'static str, waiting_seconds: f64) {
+    metrics::gauge!(STAR_PRIORITY_QUEUED_WAITING, "kind" => kind, "tier" => tier)
+        .set(waiting_seconds);
 }
 
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {
@@ -451,6 +457,9 @@ async fn record_kind_depths(pool: &PgPool) {
             .set(leased as f64);
         metrics::gauge!(QUEUE_KIND_OLDEST_DUE, "lane" => lane, "kind" => name).set(oldest_due);
         metrics::gauge!(QUEUE_KIND_OLDEST_AGE, "lane" => lane, "kind" => name).set(oldest_age);
+    }
+    if let Err(error) = crate::handlers::star_priority::record_queued_waits(pool).await {
+        tracing::warn!(%error, "star priority queue metrics snapshot failed");
     }
 }
 

@@ -108,5 +108,4 @@ RETURNING queued.id,
           queued.remote_attempted_generation,
           queued.remote_completed_generation,
           queued.remote_result,
-          queued.created_at,
           (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!"

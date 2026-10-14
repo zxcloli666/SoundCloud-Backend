@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::handlers::star_priority::Turn;
 use crate::queue::ClaimOrder;
 
 use super::*;
@@ -740,6 +741,93 @@ async fn star_tracks_get_the_alignment_room_first(pool: PgPool) -> anyhow::Resul
             .fetch_all(&pool)
             .await?;
     assert_eq!(jobs, vec![("42".to_owned(), 7)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_star_like_picked_in_the_old_order_still_gets_its_star_priority(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    sqlx::query("INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('41', 1)")
+        .execute(&pool)
+        .await?;
+    let mut transaction = pool.begin().await?;
+
+    let picked = super::tiered::embeddings(&mut transaction, 1, Turn::led_by(Tier::Rest)).await?;
+
+    assert_eq!(picked, vec![("41".to_owned(), Tier::StarLiked)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_liked_embedding_pass_leaves_wave_picks_to_the_rest(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    sqlx::raw_sql(
+        "UPDATE tracks SET index_priority = 0 WHERE sc_track_id = '41';
+         UPDATE tracks SET index_priority = 1 WHERE sc_track_id = '42';",
+    )
+    .execute(&pool)
+    .await?;
+    let mut transaction = pool.begin().await?;
+
+    let picked = super::tiered::embeddings(&mut transaction, 1, Turn::led_by(Tier::Liked)).await?;
+
+    assert_eq!(picked, vec![("42".to_owned(), Tier::Liked)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_star_text_the_refresh_found_embedded_is_not_walked_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    sqlx::query(
+        "INSERT INTO star_track_tiers (sc_track_id, tier, embed_due)
+         VALUES ('41', 1, true), ('42', 1, false)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "UPDATE star_track_tiers SET tiered_at = now() - interval '1 day' WHERE sc_track_id = '42'",
+    )
+    .execute(&pool)
+    .await?;
+    let mut transaction = pool.begin().await?;
+
+    let picked =
+        super::tiered::embeddings(&mut transaction, 1, Turn::led_by(Tier::StarLiked)).await?;
+
+    assert_eq!(picked, vec![("41".to_owned(), Tier::StarLiked)]);
     Ok(())
 }
 

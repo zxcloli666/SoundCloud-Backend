@@ -15,8 +15,7 @@ WHERE NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
   AND event.uploaded_generation > 0
   AND track.storage_state = 'ok'
   AND NOT track.needs_duration_resolve
-  AND track.index_priority <= $2
-  AND track.sc_track_id <> ALL ($3::text[])
+  AND track.sc_track_id <> ALL ($2::text[])
   AND (
       (
           event.transcription_generation IS NULL
