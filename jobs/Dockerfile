@@ -1,5 +1,4 @@
-FROM public.ecr.aws/docker/library/rust:1.99-bookworm AS builder
-
+FROM mirror.gcr.io/library/rust:1.99-bookworm AS toolchain
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler curl ca-certificates gnupg cmake clang libclang-dev pkg-config \
     && install -d /usr/share/postgresql-common/pgdg \
@@ -10,25 +9,36 @@ RUN apt-get update \
     && apt-get update \
     && apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 \
     && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /build
+
+FROM toolchain AS skeleton
+COPY scripts/cargo-skeleton.sh /usr/local/bin/cargo-skeleton
+COPY backend-contracts ./backend-contracts
+COPY utils ./utils
+COPY jobs ./jobs
+RUN cargo-skeleton /skeleton jobs backend-contracts utils
+
+FROM toolchain AS dependencies
+COPY --from=skeleton /skeleton ./
+RUN cargo build --release --manifest-path jobs/Cargo.toml
+
+FROM dependencies AS builder
 COPY backend-contracts ./backend-contracts
 COPY utils ./utils
 COPY jobs ./jobs
 COPY api/migrations ./api/migrations
 COPY api/migrations-ops ./api/migrations-ops
 COPY api/queries ./api/queries
-
 ARG APP_VERSION
-
-RUN pg_ctlcluster "$(ls /etc/postgresql)" main start \
+RUN find jobs backend-contracts utils -name '*.rs' -exec touch {} + \
+    && pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
     && for file in api/migrations/*.sql api/migrations-ops/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$file"; done \
     && if [ -n "$APP_VERSION" ]; then sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" jobs/Cargo.toml; fi \
     && DATABASE_URL=postgres://scd:dev@127.0.0.1:5432/scd cargo build --manifest-path jobs/Cargo.toml --release
 
-FROM public.ecr.aws/docker/library/debian:bookworm-slim AS runtime
+FROM mirror.gcr.io/library/debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \

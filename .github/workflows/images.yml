@@ -1,0 +1,71 @@
+name: Images
+
+on:
+  pull_request:
+    paths:
+      - '**/Dockerfile'
+      - '.dockerignore'
+      - 'scripts/cargo-skeleton.sh'
+      - '.github/workflows/images.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/Dockerfile'
+      - '.dockerignore'
+      - 'scripts/cargo-skeleton.sh'
+      - '.github/workflows/images.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            file: api/Dockerfile
+          - name: jobs
+            context: .
+            file: jobs/Dockerfile
+          - name: streaming
+            context: streaming
+            build_contexts: |
+              tls-common=utils/tls-common
+              call=utils/call
+              decrypt=utils/decrypt
+              decrypt-client=utils/decrypt-client
+              stream-ticket=utils/stream-ticket
+              sc-fingerprint=utils/sc-fingerprint
+              entity-ref=utils/entity-ref
+          - name: storage
+            context: storage
+            build_contexts: |
+              tls-common=utils/tls-common
+              sc-fingerprint=utils/sc-fingerprint
+              entity-ref=utils/entity-ref
+          - name: gateway
+            context: gateway
+            build_contexts: tls-common=utils/tls-common
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-contexts: ${{ matrix.build_contexts }}
+          push: false
+          tags: soundcloud-backend-${{ matrix.name }}:ci
