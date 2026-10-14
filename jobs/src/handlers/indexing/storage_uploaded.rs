@@ -296,6 +296,13 @@ async fn apply_upload(
         )
         .await?;
     }
+    sqlx::query_file!(
+        "queries/indexing/storage/drop_index_trigger.sql",
+        &upload.sc_track_id
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(JobError::retryable)?;
     transaction.commit().await.map_err(JobError::retryable)?;
     Ok(AppliedUpload {
         sc_track_id: upload.sc_track_id.clone(),

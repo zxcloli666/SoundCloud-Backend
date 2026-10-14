@@ -120,14 +120,16 @@ impl DurationResolver {
 
     async fn persist_duration(&self, track_id: String, duration_ms: i32) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        let applied = sqlx::query(include_str!("../../../queries/indexing/duration/apply.sql"))
-            .bind(&track_id)
-            .bind(duration_ms)
-            .bind(self.max_track_duration_ms)
-            .execute(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-        if applied.rows_affected() == 1 && duration_ms <= self.max_track_duration_ms {
+        let storage_state = sqlx::query_scalar::<_, String>(include_str!(
+            "../../../queries/indexing/duration/apply.sql"
+        ))
+        .bind(&track_id)
+        .bind(duration_ms)
+        .bind(self.max_track_duration_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(JobError::retryable)?;
+        if matches!(storage_state.as_deref(), Some("pending" | "missing")) {
             let tier = star_priority::of_track(&mut *transaction, &track_id)
                 .await
                 .map_err(JobError::retryable)?;
@@ -391,6 +393,44 @@ mod tests {
         .await?;
         assert!(!needs_resolve);
         assert_eq!(queued, ("indexing.track".to_owned(), Some("42".to_owned())));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn only_a_track_still_waiting_for_its_audio_gets_an_index_trigger_with_its_duration(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::raw_sql(include_str!(
+            "../../../../api/migrations/0057_background_jobs.sql"
+        ))
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO tracks (
+                 sc_track_id, duration_ms, needs_duration_resolve,
+                 storage_state, storage_attempts, index_state
+             ) VALUES ('42', 30000, true, 'ok', 0, 'pending'),
+                      ('43', 30000, true, 'pending', 0, 'pending'),
+                      ('44', 30000, true, 'missing', 0, 'pending')",
+        )
+        .execute(&pool)
+        .await?;
+
+        let resolver = resolver(&pool)?;
+        resolver.persist_duration("42".to_owned(), 180_000).await?;
+        resolver.persist_duration("43".to_owned(), 500_000).await?;
+        resolver.persist_duration("44".to_owned(), 180_000).await?;
+
+        let resolved: Vec<bool> =
+            sqlx::query_scalar("SELECT needs_duration_resolve FROM tracks ORDER BY sc_track_id")
+                .fetch_all(&pool)
+                .await?;
+        let queued: Vec<String> = sqlx::query_scalar("SELECT dedup_key FROM background_jobs")
+            .fetch_all(&pool)
+            .await?;
+        assert_eq!(resolved, [false, false, false]);
+        assert_eq!(queued, ["44"]);
         Ok(())
     }
 

@@ -35,3 +35,4 @@ SET duration_ms = $2::integer,
     updated_at = now()
 WHERE sc_track_id = $1
   AND needs_duration_resolve = true
+RETURNING storage_state

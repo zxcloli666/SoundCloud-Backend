@@ -92,7 +92,7 @@ WITH track AS MATERIALIZED (
                OR track.index_state = 'too_long'
                OR ($7 > 0 AND track.duration_ms > $7) AS too_long,
            NOT track.needs_duration_resolve AS dispatch_audio,
-           track.index_state = 'indexed' AS reindex,
+           track.index_state IN ('indexed', 'failed') AS reindex,
            track.transcribe_state IS NULL
                AND EXISTS (
                    SELECT 1

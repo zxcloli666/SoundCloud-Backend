@@ -751,6 +751,101 @@ async fn a_quality_upgrade_reopens_the_index_of_an_already_indexed_track(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_new_upload_reopens_the_index_of_a_track_whose_index_failed(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    insert_track(&pool, 180_000).await?;
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(1, 10),
+        420_000,
+    )
+    .await?;
+    sqlx::query("UPDATE tracks SET index_state = 'failed' WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("hq")),
+        &delivery(2, 20),
+        420_000,
+    )
+    .await?;
+
+    let index_state: String =
+        sqlx::query_scalar("SELECT index_state FROM tracks WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(index_state, "pending");
+    assert_eq!(claim_audio_dispatch(&pool, 2).await?, Some(1));
+    Ok(())
+}
+
+async fn insert_index_trigger(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, priority, max_attempts, available_at
+         ) VALUES (gen_random_uuid(), 'indexing.track', 'core_bulk', '42', '{}', 5, 8, now())",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn index_triggers(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'indexing.track'")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_upload_drops_the_waiting_index_trigger_and_leaves_a_running_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    insert_track(&pool, 180_000).await?;
+    insert_index_trigger(&pool).await?;
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(1, 10),
+        420_000,
+    )
+    .await?;
+    let after_waiting = index_triggers(&pool).await?;
+
+    insert_index_trigger(&pool).await?;
+    sqlx::query(
+        "UPDATE background_jobs
+         SET lease_id = gen_random_uuid(), lease_generation = 1, leased_by = 'jobs',
+             lease_expires_at = now() + interval '1 minute'",
+    )
+    .execute(&pool)
+    .await?;
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("hq")),
+        &delivery(2, 20),
+        420_000,
+    )
+    .await?;
+
+    assert_eq!(after_waiting, 0);
+    assert_eq!(index_triggers(&pool).await?, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn an_unpublished_dispatch_stays_reopenable_and_is_republished_with_the_same_attempt(
     pool: PgPool,
 ) -> anyhow::Result<()> {
