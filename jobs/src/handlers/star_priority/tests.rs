@@ -4,6 +4,8 @@ use sqlx::PgPool;
 
 use super::{StarTiersHandler, Tier, mark_liked_tracks, of_tracks};
 
+const ENRICH_MAX_ATTEMPTS: i16 = 5;
+
 async fn seed_star_library(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO subscriptions (user_urn, exp_date) VALUES
@@ -48,7 +50,9 @@ fn expected(pairs: &[(&str, i16)]) -> BTreeMap<String, i16> {
 async fn the_refresh_follows_the_current_star_users_only(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
 
-    StarTiersHandler::new(pool.clone()).refresh().await?;
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
 
     assert_eq!(
         tiers(&pool).await?,
@@ -77,7 +81,9 @@ async fn the_refresh_marks_which_pipelines_still_wait_for_each_star_track(
     .execute(&pool)
     .await?;
 
-    StarTiersHandler::new(pool.clone()).refresh().await?;
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
 
     let due: Vec<(String, bool, bool, bool, bool)> = sqlx::query_as(
         "SELECT sc_track_id, audio_due, lookup_due, embed_due, align_due
@@ -101,7 +107,7 @@ async fn the_refresh_marks_which_pipelines_still_wait_for_each_star_track(
 #[sqlx::test(migrations = "../api/migrations")]
 async fn a_lapsed_star_user_drops_out_at_the_next_refresh(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
-    let handler = StarTiersHandler::new(pool.clone());
+    let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
     handler.refresh().await?;
 
     sqlx::query("UPDATE subscriptions SET exp_date = 0 WHERE user_urn = '7'")
@@ -157,7 +163,7 @@ async fn a_track_tier_puts_star_likes_before_likes_before_star_listening(
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
-async fn the_refresh_marks_star_tracks_waiting_for_artist_links_and_a_better_copy(
+async fn the_refresh_marks_star_tracks_claimable_for_artist_links_and_a_better_copy(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
@@ -169,15 +175,21 @@ async fn the_refresh_marks_star_tracks_waiting_for_artist_links_and_a_better_cop
                 ('106', 'soundcloud:tracks:106', 'Hq', 'hq', 1000, 'hq');
          UPDATE tracks SET hq_upgrade_pending = true WHERE sc_track_id IN ('101', '102', '106');
          UPDATE tracks SET hq_upgrade_last_at = now() - interval '1 hour' WHERE sc_track_id = '102';
-         UPDATE tracks SET enrich_state = 'done' WHERE sc_track_id IN ('102', '106');",
+         UPDATE tracks SET enrich_state = 'done' WHERE sc_track_id = '102';
+         UPDATE tracks SET enrich_state = 'failed', enrich_attempts = 5 WHERE sc_track_id = '104';
+         UPDATE tracks
+         SET enrich_state = 'failed', enrich_next_run_at = now() + interval '1 hour'
+         WHERE sc_track_id = '106';",
     )
     .execute(&pool)
     .await?;
 
-    StarTiersHandler::new(pool.clone()).refresh().await?;
+    StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS)
+        .refresh()
+        .await?;
 
-    let due: Vec<(String, bool, Option<String>)> = sqlx::query_as(
-        "SELECT sc_track_id, enrich_due, upgrade_from
+    let due: Vec<(String, bool, Option<String>, bool)> = sqlx::query_as(
+        "SELECT sc_track_id, enrich_due, upgrade_from, upgrade_tried_at IS NOT NULL
          FROM star_track_tiers
          ORDER BY sc_track_id",
     )
@@ -186,10 +198,10 @@ async fn the_refresh_marks_star_tracks_waiting_for_artist_links_and_a_better_cop
     assert_eq!(
         due,
         [
-            ("101".to_owned(), true, Some("sq".to_owned())),
-            ("102".to_owned(), false, None),
-            ("104".to_owned(), true, None),
-            ("106".to_owned(), false, Some("hq".to_owned())),
+            ("101".to_owned(), true, Some("sq".to_owned()), false),
+            ("102".to_owned(), false, None, true),
+            ("104".to_owned(), false, None, false),
+            ("106".to_owned(), false, Some("hq".to_owned()), false),
         ]
     );
     Ok(())

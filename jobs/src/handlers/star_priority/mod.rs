@@ -24,11 +24,15 @@ pub(crate) const STAR_SCAN_WINDOW: i64 = 2_000;
 
 pub(crate) struct StarTiersHandler {
     pool: PgPool,
+    enrich_max_attempts: i16,
 }
 
 impl StarTiersHandler {
-    pub(crate) fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub(crate) fn new(pool: PgPool, enrich_max_attempts: i16) -> Self {
+        Self {
+            pool,
+            enrich_max_attempts,
+        }
     }
 
     pub(crate) async fn refresh(&self) -> JobResult {
@@ -42,7 +46,8 @@ impl StarTiersHandler {
         let due = sqlx::query_file!(
             "queries/star_priority/refresh_due.sql",
             AUDIO_INDEX_QUARANTINE_SECONDS,
-            QUALITY_UPGRADE_COOLDOWN_SECONDS
+            QUALITY_UPGRADE_COOLDOWN_SECONDS,
+            self.enrich_max_attempts
         )
         .fetch_one(&self.pool)
         .await

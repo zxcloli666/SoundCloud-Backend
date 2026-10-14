@@ -313,7 +313,10 @@ impl JobHandlers {
                 config.schedules.recommendation_wave_priority_shards,
             ),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
-            star_tiers: StarTiersHandler::new(databases.maintenance.clone()),
+            star_tiers: StarTiersHandler::new(
+                databases.maintenance.clone(),
+                config.enrich.max_attempts,
+            ),
             subscriptions: SubscriptionSnapshotHandler::new(
                 databases.maintenance.clone(),
                 &config.subscriptions,

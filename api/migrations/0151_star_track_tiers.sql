@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS star_track_tiers (
     align_due boolean NOT NULL DEFAULT true,
     enrich_due boolean NOT NULL DEFAULT true,
     upgrade_from text,
+    upgrade_tried_at timestamptz,
     CONSTRAINT star_track_tiers_tier_valid CHECK (tier IN (1, 3))
 );
 
@@ -32,5 +33,5 @@ CREATE INDEX IF NOT EXISTS star_track_tiers_enrich_due_idx
     WHERE enrich_due;
 
 CREATE INDEX IF NOT EXISTS star_track_tiers_upgrade_idx
-    ON star_track_tiers (tier, upgrade_from, tiered_at, sc_track_id)
+    ON star_track_tiers (tier, upgrade_from, upgrade_tried_at NULLS FIRST, tiered_at, sc_track_id)
     WHERE upgrade_from IS NOT NULL;

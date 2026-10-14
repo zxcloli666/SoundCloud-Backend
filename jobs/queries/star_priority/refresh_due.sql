@@ -4,7 +4,12 @@ WITH due AS MATERIALIZED (
            lookup.sc_track_id IS NOT NULL AS lookup_due,
            embed.sc_track_id IS NOT NULL AS embed_due,
            align.sc_track_id IS NOT NULL AS align_due,
-           coalesce(stored.enrich_state IN ('pending', 'failed'), false) AS enrich_due,
+           coalesce(
+               stored.enrich_state IN ('pending', 'failed')
+               AND stored.enrich_next_run_at <= now()
+               AND stored.enrich_attempts < $3,
+               false
+           ) AS enrich_due,
            CASE
                WHEN stored.hq_upgrade_pending
                 AND stored.storage_quality IN ('sq', 'hq')
@@ -13,10 +18,13 @@ WITH due AS MATERIALIZED (
                     OR stored.hq_upgrade_last_at < now() - $2::bigint * interval '1 second'
                 )
                    THEN stored.storage_quality
-           END AS upgrade_from
+           END AS upgrade_from,
+           stored.hq_upgrade_last_at AS upgrade_tried_at
     FROM star_track_tiers AS star
     LEFT JOIN LATERAL (
         SELECT track.enrich_state,
+               track.enrich_next_run_at,
+               track.enrich_attempts,
                track.hq_upgrade_pending,
                track.storage_quality,
                track.hq_upgrade_last_at
@@ -112,7 +120,8 @@ WITH due AS MATERIALIZED (
         embed_due = due.embed_due,
         align_due = due.align_due,
         enrich_due = due.enrich_due,
-        upgrade_from = due.upgrade_from
+        upgrade_from = due.upgrade_from,
+        upgrade_tried_at = due.upgrade_tried_at
     FROM due
     WHERE star.sc_track_id = due.sc_track_id
       AND (
@@ -121,14 +130,16 @@ WITH due AS MATERIALIZED (
           star.embed_due,
           star.align_due,
           star.enrich_due,
-          star.upgrade_from
+          star.upgrade_from,
+          star.upgrade_tried_at
       ) IS DISTINCT FROM (
           due.audio_due,
           due.lookup_due,
           due.embed_due,
           due.align_due,
           due.enrich_due,
-          due.upgrade_from
+          due.upgrade_from,
+          due.upgrade_tried_at
       )
     RETURNING star.sc_track_id
 )
