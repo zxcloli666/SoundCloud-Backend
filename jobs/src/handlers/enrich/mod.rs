@@ -1,4 +1,5 @@
 mod ai;
+mod claim;
 mod coplay;
 mod error;
 mod genius_stage;
@@ -16,9 +17,11 @@ use uuid::Uuid;
 
 use crate::config::EnrichConfig;
 use crate::handlers::external::ExternalSources;
+use crate::handlers::star_priority::Turns;
 use crate::queue::{JobError, JobResult};
 
 use self::ai::AiResolverClient;
+use self::claim::Claim;
 use self::error::{EnrichError, EnrichResult};
 use self::resolver::{ResolveSource, ResolverDeps, TrackContext};
 
@@ -29,9 +32,9 @@ const BACKOFF_CAP: Duration = Duration::from_secs(6 * 60 * 60);
 pub struct EnrichHandler {
     pool: PgPool,
     deps: Arc<ResolverDeps>,
-    batch: i64,
+    claim: Claim,
     concurrency: usize,
-    max_attempts: i16,
+    turns: Turns,
 }
 
 struct ClaimedTrack {
@@ -58,14 +61,21 @@ impl EnrichHandler {
         Self {
             pool,
             deps: Arc::new(deps),
-            batch: (concurrency * 4) as i64,
+            claim: Claim {
+                batch: (concurrency * 4) as i64,
+                max_attempts: config.max_attempts,
+            },
             concurrency,
-            max_attempts: config.max_attempts,
+            turns: Turns::default(),
         }
     }
 
     pub async fn run(&self) -> JobResult {
-        let claimed = self.claim().await.map_err(JobError::retryable)?;
+        let claimed = self
+            .claim
+            .take(&self.pool, self.turns.next())
+            .await
+            .map_err(JobError::retryable)?;
         if claimed.is_empty() {
             return Ok(());
         }
@@ -164,18 +174,6 @@ impl EnrichHandler {
         Ok(())
     }
 
-    async fn claim(&self) -> Result<Vec<ClaimedTrack>, sqlx::Error> {
-        sqlx::query_file_as!(
-            ClaimedTrack,
-            "queries/enrich/source/claim_batch.sql",
-            LEASE_TIMEOUT.as_secs() as f64,
-            self.max_attempts,
-            self.batch
-        )
-        .fetch_all(&self.pool)
-        .await
-    }
-
     async fn load(&self, sc_track_id: &str) -> EnrichResult<Option<EnrichTrack>> {
         let track = sqlx::query_file_as!(
             EnrichTrack,
@@ -189,7 +187,7 @@ impl EnrichHandler {
 
     async fn record_failure(&self, track: &ClaimedTrack, error: &str) -> EnrichResult<()> {
         let error: String = error.chars().take(300).collect();
-        if track.enrich_attempts >= self.max_attempts {
+        if track.enrich_attempts >= self.claim.max_attempts {
             sqlx::query_file!(
                 "queries/enrich/source/mark_dead.sql",
                 track.id,
