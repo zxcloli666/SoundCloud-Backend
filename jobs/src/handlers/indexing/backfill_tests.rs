@@ -92,3 +92,36 @@ async fn a_star_track_the_refresh_found_indexed_is_not_walked_again(
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_stored_star_like_with_a_stale_trigger_is_held_back_only_by_its_audio_dispatch(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_stored_tracks(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+         VALUES (gen_random_uuid(), 'indexing.track', 'core_bulk', '4', '{}');
+         INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation,
+             attempts, max_attempts, last_error, created_at
+         ) VALUES (
+             gen_random_uuid(), 'indexing.track', 'core_bulk', '4', '{}', 0, 1,
+             8, 8, 'gave up', now()
+         );",
+    )
+    .execute(&pool)
+    .await?;
+    let star_first = Turn::led_by(Tier::StarLiked);
+
+    assert_eq!(picked(&pool, 1, star_first).await?, ["4"]);
+
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+         VALUES (gen_random_uuid(), 'indexing.dispatch_audio', 'core_bulk', '4', '{}')",
+    )
+    .execute(&pool)
+    .await?;
+
+    assert_eq!(picked(&pool, 1, star_first).await?, ["2"]);
+    Ok(())
+}
