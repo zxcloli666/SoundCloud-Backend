@@ -211,6 +211,10 @@ mod router_rooms_tests;
 mod router_likes_order_tests;
 
 #[cfg(test)]
+#[path = "router_likes_rank_tests.rs"]
+mod router_likes_rank_tests;
+
+#[cfg(test)]
 mod tests {
     use super::is_sensitive_path;
 

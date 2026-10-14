@@ -36,7 +36,9 @@ pub async fn set_wanted(
              progress = CASE WHEN {table}.wanted_state = false \
                              THEN false \
                              ELSE {table}.progress END, \
-             created_at = now()",
+             created_at = CASE WHEN {table}.wanted_state \
+                               THEN {table}.created_at \
+                               ELSE now() END",
         table = m.table,
         key_col = m.key_col,
     );

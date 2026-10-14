@@ -1,3 +1,4 @@
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::{PgConnection, PgPool};
@@ -8,22 +9,18 @@ use crate::error::{AppError, AppResult};
 const STEP: i64 = 1 << 32;
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LikesOrderRequest {
-    Move {
-        track: String,
-        after: Option<String>,
-    },
-    MoveToBottom {
-        track: String,
-    },
+    MoveAfter { track: String, after: String },
+    MoveToTop { track: String },
+    MoveToBottom { track: String },
     Reset,
 }
 
-enum Target {
+enum Target<Anchor> {
     Top,
     Bottom,
-    After(String),
+    After(Anchor),
 }
 
 struct Owner {
@@ -36,10 +33,9 @@ struct Bounds {
     high: Option<i64>,
 }
 
-struct Placement {
+struct Like {
     sc_track_id: String,
     created_at: DateTime<Utc>,
-    rank: Option<i64>,
 }
 
 pub async fn apply(pg: &PgPool, sc_user_id: &str, request: LikesOrderRequest) -> AppResult<()> {
@@ -57,17 +53,14 @@ pub async fn apply(pg: &PgPool, sc_user_id: &str, request: LikesOrderRequest) ->
                 .execute(&mut *tx)
                 .await?;
         }
+        LikesOrderRequest::MoveToTop { track } => {
+            move_track(&mut tx, &owner, &track_id(&track)?, Target::Top).await?;
+        }
         LikesOrderRequest::MoveToBottom { track } => {
             move_track(&mut tx, &owner, &track_id(&track)?, Target::Bottom).await?;
         }
-        LikesOrderRequest::Move { track, after: None } => {
-            move_track(&mut tx, &owner, &track_id(&track)?, Target::Top).await?;
-        }
-        LikesOrderRequest::Move {
-            track,
-            after: Some(anchor),
-        } => {
-            let target = Target::After(track_id(&anchor)?);
+        LikesOrderRequest::MoveAfter { track, after } => {
+            let target = Target::After(track_id(&after)?);
             move_track(&mut tx, &owner, &track_id(&track)?, target).await?;
         }
     }
@@ -94,43 +87,35 @@ async fn move_track(
     tx: &mut PgConnection,
     owner: &Owner,
     sc_track_id: &str,
-    target: Target,
+    target: Target<String>,
 ) -> AppResult<()> {
-    let anchor = match &target {
+    let anchor_id = match &target {
         Target::After(anchor) if anchor == sc_track_id => {
             return Err(AppError::bad_request("a track cannot follow itself"));
         }
         Target::After(anchor) => Some(anchor.as_str()),
         Target::Top | Target::Bottom => None,
     };
-    let ids: Vec<String> = [Some(sc_track_id), anchor]
-        .into_iter()
-        .flatten()
-        .map(str::to_owned)
-        .collect();
-    let placements = sqlx::query_file_as!(
-        Placement,
-        "queries/likes/order/placements.sql",
-        &owner.variants,
-        &owner.id,
-        &ids
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    let placement_of = |id: &str| {
-        placements
+    let likes = live_likes(tx, owner, [Some(sc_track_id), anchor_id]).await?;
+    let like_of = |id: &str| {
+        likes
             .iter()
-            .find(|placement| placement.sc_track_id == id)
-            .ok_or_else(|| AppError::not_found("track is not among your likes"))
+            .find(|like| like.sc_track_id == id)
+            .ok_or_else(|| {
+                AppError::coded(
+                    StatusCode::NOT_FOUND,
+                    "like_not_found",
+                    "track is not among your likes",
+                )
+            })
     };
-    let track = placement_of(sc_track_id)?;
-    let anchor_unranked = match anchor {
-        Some(anchor) => placement_of(anchor)?.rank.is_none(),
-        None => false,
+    let track = like_of(sc_track_id)?;
+    let target = match target {
+        Target::Top => Target::Top,
+        Target::Bottom => Target::Bottom,
+        Target::After(anchor) => Target::After(like_of(&anchor)?),
     };
-    if matches!(target, Target::Top) || anchor_unranked {
-        rank_unranked(tx, owner).await?;
-    }
+    rank_unranked(tx, owner, false).await?;
     let rank = match free_rank(tx, owner, sc_track_id, &target).await? {
         Some(rank) => rank,
         None => {
@@ -152,12 +137,30 @@ async fn move_track(
     Ok(())
 }
 
-async fn rank_unranked(tx: &mut PgConnection, owner: &Owner) -> AppResult<()> {
+async fn live_likes(
+    tx: &mut PgConnection,
+    owner: &Owner,
+    ids: [Option<&str>; 2],
+) -> AppResult<Vec<Like>> {
+    let ids: Vec<String> = ids.into_iter().flatten().map(str::to_owned).collect();
+    Ok(sqlx::query_file_as!(
+        Like,
+        "queries/likes/order/likes.sql",
+        &owner.variants,
+        &owner.id,
+        &ids
+    )
+    .fetch_all(&mut *tx)
+    .await?)
+}
+
+async fn rank_unranked(tx: &mut PgConnection, owner: &Owner, everything: bool) -> AppResult<()> {
     sqlx::query_file!(
         "queries/likes/order/rank_unranked.sql",
         &owner.variants,
         &owner.id,
-        STEP
+        STEP,
+        everything
     )
     .execute(&mut *tx)
     .await?;
@@ -182,7 +185,7 @@ async fn free_rank(
     tx: &mut PgConnection,
     owner: &Owner,
     sc_track_id: &str,
-    target: &Target,
+    target: &Target<&Like>,
 ) -> AppResult<Option<i64>> {
     let anchor = match target {
         Target::Top => {
@@ -195,10 +198,7 @@ async fn free_rank(
         }
         Target::After(anchor) => anchor,
     };
-    let anchor_rank =
-        sqlx::query_file_scalar!("queries/likes/order/anchor_rank.sql", &owner.id, anchor)
-            .fetch_one(&mut *tx)
-            .await?;
+    let anchor_rank = anchor_rank(tx, owner, anchor).await?;
     let next = sqlx::query_file_scalar!(
         "queries/likes/order/next_rank.sql",
         &owner.id,
@@ -214,6 +214,27 @@ async fn free_rank(
             .filter(|gap| *gap >= 2)
             .map(|gap| anchor_rank + gap / 2),
     })
+}
+
+async fn anchor_rank(tx: &mut PgConnection, owner: &Owner, anchor: &Like) -> AppResult<i64> {
+    if let Some(rank) = ranked(tx, owner, anchor).await? {
+        return Ok(rank);
+    }
+    rank_unranked(tx, owner, true).await?;
+    ranked(tx, owner, anchor)
+        .await?
+        .ok_or_else(|| AppError::internal("the anchor like has no rank"))
+}
+
+async fn ranked(tx: &mut PgConnection, owner: &Owner, like: &Like) -> AppResult<Option<i64>> {
+    Ok(sqlx::query_file_scalar!(
+        "queries/likes/order/anchor_rank.sql",
+        &owner.id,
+        &like.sc_track_id,
+        like.created_at
+    )
+    .fetch_optional(&mut *tx)
+    .await?)
 }
 
 async fn bounds(tx: &mut PgConnection, owner: &Owner, sc_track_id: &str) -> AppResult<Bounds> {

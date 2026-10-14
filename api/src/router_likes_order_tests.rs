@@ -6,9 +6,10 @@ use uuid::Uuid;
 use super::router_identity_tests::send;
 use super::router_search_tests::{LISTENER, app, get, seed_tracks, session, urns};
 
-const NO_REDIS: &str = "redis://127.0.0.1:1";
+pub(super) const NO_REDIS: &str = "redis://127.0.0.1:1";
+const ORDER: &str = "/me/likes/tracks/order";
 
-async fn like_oldest_first(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
+pub(super) async fn like_oldest_first(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
     seed_tracks(pool, ids).await?;
     for (age, id) in ids.iter().rev().enumerate() {
         sqlx::query(
@@ -24,7 +25,7 @@ async fn like_oldest_first(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn order(app: &axum::Router, session: Uuid) -> anyhow::Result<Vec<String>> {
+pub(super) async fn order(app: &axum::Router, session: Uuid) -> anyhow::Result<Vec<String>> {
     let (status, body) = get(app, session, "/me/likes/tracks?limit=200").await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     Ok(urns(&body)
@@ -33,8 +34,12 @@ async fn order(app: &axum::Router, session: Uuid) -> anyhow::Result<Vec<String>>
         .collect())
 }
 
-async fn reorder(app: &axum::Router, session: Uuid, body: Value) -> anyhow::Result<StatusCode> {
-    let (status, _, _) = send(app, session, "POST", "/me/likes/tracks/order", Some(body)).await?;
+pub(super) async fn reorder(
+    app: &axum::Router,
+    session: Uuid,
+    body: Value,
+) -> anyhow::Result<StatusCode> {
+    let (status, _, _) = send(app, session, "POST", ORDER, Some(body)).await?;
     Ok(status)
 }
 
@@ -57,19 +62,23 @@ async fn visitor_session(pool: &PgPool) -> anyhow::Result<Uuid> {
     Ok(session)
 }
 
-fn move_after(track: &str, after: Option<&str>) -> Value {
+pub(super) fn move_after(track: &str, after: &str) -> Value {
     json!({
-        "action": "move",
+        "action": "move_after",
         "track": format!("soundcloud:tracks:{track}"),
-        "after": after.map(|id| format!("soundcloud:tracks:{id}")),
+        "after": format!("soundcloud:tracks:{after}"),
     })
+}
+
+pub(super) fn move_to_top(track: &str) -> Value {
+    json!({"action": "move_to_top", "track": format!("soundcloud:tracks:{track}")})
 }
 
 fn move_to_bottom(track: &str) -> Value {
     json!({"action": "move_to_bottom", "track": format!("soundcloud:tracks:{track}")})
 }
 
-fn expected(ids: &[&str]) -> Vec<String> {
+pub(super) fn expected(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|id| (*id).to_owned()).collect()
 }
 
@@ -87,7 +96,7 @@ async fn the_owner_order_survives_moves_new_likes_relikes_and_reset(
     );
 
     assert_eq!(
-        reorder(&app, session, move_after("1", Some("4"))).await?,
+        reorder(&app, session, move_after("1", "4")).await?,
         StatusCode::NO_CONTENT
     );
     assert_eq!(
@@ -103,7 +112,7 @@ async fn the_owner_order_survives_moves_new_likes_relikes_and_reset(
         expected(&["4", "1", "3", "2", "5"])
     );
     assert_eq!(
-        reorder(&app, session, move_after("2", None)).await?,
+        reorder(&app, session, move_to_top("2")).await?,
         StatusCode::NO_CONTENT
     );
     assert_eq!(
@@ -118,7 +127,7 @@ async fn the_owner_order_survives_moves_new_likes_relikes_and_reset(
         expected(&["6", "2", "4", "1", "3", "5"])
     );
     assert_eq!(
-        reorder(&app, session, move_after("6", Some("4"))).await?,
+        reorder(&app, session, move_after("6", "4")).await?,
         StatusCode::NO_CONTENT
     );
     assert_eq!(
@@ -165,7 +174,7 @@ async fn exhausted_gaps_are_renumbered_without_changing_the_order(
     for round in 0..40 {
         let track = if round % 2 == 0 { "1" } else { "2" };
         assert_eq!(
-            reorder(&app, session, move_after(track, Some("4"))).await?,
+            reorder(&app, session, move_after(track, "4")).await?,
             StatusCode::NO_CONTENT
         );
         model.retain(|id| id != track);
@@ -188,27 +197,36 @@ async fn only_live_likes_of_the_owner_can_be_moved(pool: PgPool) -> anyhow::Resu
         .await?;
     let app = app(&pool, NO_REDIS).await?;
     let session = session(&pool).await?;
+    for body in [move_to_top("3"), move_after("1", "3")] {
+        let (status, _, error) = send(&app, session, "POST", ORDER, Some(body)).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(error["code"], "like_not_found");
+    }
     assert_eq!(
-        reorder(&app, session, move_after("3", None)).await?,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        reorder(&app, session, move_after("1", Some("3"))).await?,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        reorder(&app, session, move_after("1", Some("1"))).await?,
+        reorder(&app, session, move_after("1", "1")).await?,
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
         reorder(
             &app,
             session,
-            json!({"action": "move", "track": "soundcloud:users:1"})
+            json!({"action": "move_to_top", "track": "soundcloud:users:1"})
         )
         .await?,
         StatusCode::BAD_REQUEST
     );
+    for body in [
+        json!({"action": "move_after", "track": "soundcloud:tracks:1"}),
+        json!({"action": "move_after", "track": "soundcloud:tracks:1", "afterUrn": "soundcloud:tracks:2"}),
+        json!({"action": "move_to_top", "track": "soundcloud:tracks:1", "after": null}),
+        json!({"action": "move", "track": "soundcloud:tracks:1", "after": null}),
+    ] {
+        assert_eq!(
+            reorder(&app, session, body.clone()).await?,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}"
+        );
+    }
     assert_eq!(order(&app, session).await?, expected(&["2", "1"]));
     Ok(())
 }

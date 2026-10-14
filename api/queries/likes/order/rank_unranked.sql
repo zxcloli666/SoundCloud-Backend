@@ -1,8 +1,38 @@
-WITH live AS (
-    SELECT DISTINCT ON (sc_track_id) sc_track_id, created_at, wanted_state
-    FROM user_likes_tracks
-    WHERE user_id = ANY($1)
-    ORDER BY sc_track_id, (user_id = $2) DESC
+WITH newest_ranked AS (
+    SELECT max(found.created_at) AS created_at
+    FROM unnest($1::text[]) AS variant(user_id)
+    CROSS JOIN LATERAL (
+        SELECT likes.created_at
+        FROM user_likes_tracks likes
+        JOIN user_like_ranks ranked
+            ON ranked.user_id = $2
+            AND ranked.sc_track_id = likes.sc_track_id
+            AND ranked.like_created_at = likes.created_at
+        WHERE likes.user_id = variant.user_id
+          AND likes.wanted_state
+          AND NOT $4
+        ORDER BY likes.created_at DESC
+        LIMIT 1
+    ) found
+),
+since AS (
+    SELECT COALESCE(created_at - interval '1 day', '-infinity'::timestamptz) AS created_at
+    FROM newest_ranked
+),
+live AS (
+    SELECT likes.sc_track_id, likes.created_at
+    FROM user_likes_tracks likes
+    CROSS JOIN since
+    WHERE likes.user_id = ANY($1)
+      AND likes.created_at > since.created_at
+      AND likes.wanted_state
+      AND (
+          likes.user_id = $2
+          OR NOT EXISTS (
+              SELECT 1 FROM user_likes_tracks preferred
+              WHERE preferred.user_id = $2 AND preferred.sc_track_id = likes.sc_track_id
+          )
+      )
 ),
 unranked AS (
     SELECT live.sc_track_id,
@@ -10,13 +40,10 @@ unranked AS (
            row_number() OVER (ORDER BY live.created_at DESC, live.sc_track_id DESC) AS position,
            count(*) OVER () AS total
     FROM live
-    WHERE live.wanted_state
-      AND NOT EXISTS (
-          SELECT 1 FROM user_like_ranks ranked
-          WHERE ranked.user_id = $2
-            AND ranked.sc_track_id = live.sc_track_id
-            AND ranked.like_created_at = live.created_at
-      )
+    WHERE (
+        SELECT ranked.like_created_at FROM user_like_ranks ranked
+        WHERE ranked.user_id = $2 AND ranked.sc_track_id = live.sc_track_id
+    ) IS DISTINCT FROM live.created_at
 ),
 top AS (
     SELECT COALESCE(min(rank), 0) AS rank FROM user_like_ranks WHERE user_id = $2
