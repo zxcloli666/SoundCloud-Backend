@@ -8,6 +8,7 @@ WITH due AS (
     WHERE (
             wire.status = 'reopenable'
             OR (wire.status = 'terminal' AND wire.outcome_reason = 'audio_forbidden')
+            OR (wire.status = 'terminal' AND wire.outcome_reason = ANY($4::text[]))
         )
       AND wire.updated_at < now() - $2::bigint * interval '1 second'
       AND wire.attempt < $3
@@ -21,24 +22,37 @@ WITH due AS (
     ORDER BY wire.updated_at, wire.sc_track_id
     LIMIT $1
     FOR UPDATE OF wire SKIP LOCKED
+), reopened AS (
+    UPDATE audio_index_wire_state AS wire
+    SET status = 'pending',
+        attempt = wire.attempt + 1,
+        outcome_rank = 0,
+        outcome_status = NULL,
+        outcome_reason = NULL,
+        dispatched_at = now(),
+        completed_at = NULL,
+        result_consumer = NULL,
+        result_stream = NULL,
+        result_stream_sequence = NULL,
+        result_published_at = NULL,
+        result_lease_id = NULL,
+        result_lease_expires_at = NULL,
+        updated_at = now()
+    FROM due
+    WHERE wire.sc_track_id = due.sc_track_id
+    RETURNING wire.sc_track_id,
+              wire.upload_generation,
+              wire.attempt
+), revived AS (
+    UPDATE tracks AS track
+    SET index_state = 'pending',
+        updated_at = now()
+    FROM reopened
+    WHERE track.sc_track_id = reopened.sc_track_id
+      AND track.index_state = 'failed'
+    RETURNING track.sc_track_id
 )
-UPDATE audio_index_wire_state AS wire
-SET status = 'pending',
-    attempt = wire.attempt + 1,
-    outcome_rank = 0,
-    outcome_status = NULL,
-    outcome_reason = NULL,
-    dispatched_at = now(),
-    completed_at = NULL,
-    result_consumer = NULL,
-    result_stream = NULL,
-    result_stream_sequence = NULL,
-    result_published_at = NULL,
-    result_lease_id = NULL,
-    result_lease_expires_at = NULL,
-    updated_at = now()
-FROM due
-WHERE wire.sc_track_id = due.sc_track_id
-RETURNING wire.sc_track_id,
-          wire.upload_generation AS "upload_generation!",
-          wire.attempt
+SELECT reopened.sc_track_id AS "sc_track_id!",
+       reopened.upload_generation AS "upload_generation!",
+       reopened.attempt AS "attempt!"
+FROM reopened

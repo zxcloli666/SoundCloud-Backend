@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,8 @@ DURATION_PROBE_MARGIN_S = 1.0
 STDERR_TAIL_CHARS = 200
 PCM16_SCALE = 32768.0
 SILENCE_FLOOR = 1e-10
+TOOL_ENV = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
+HOST_STARVATION_MARKERS = (b"pthread_create failed", b"Resource temporarily unavailable")
 
 
 @dataclass(frozen=True)
@@ -70,7 +73,7 @@ async def decode(path: Path, *, max_duration_s: float, deadline: Deadline) -> Pc
     ]
     returncode, stdout, stderr = await run_tool(argv, deadline, "decode")
     if returncode != 0:
-        raise PermanentFailure(Reason.UNDECODABLE_AUDIO, f"ffmpeg rc={returncode} {tail(stderr)}")
+        raise tool_failure("ffmpeg", returncode, stderr)
     frames = len(stdout) // (4 * channels)
     if frames == 0:
         raise PermanentFailure(Reason.UNDECODABLE_AUDIO, "no audio frames")
@@ -98,7 +101,7 @@ async def probe(path: Path, deadline: Deadline) -> StreamInfo:
     ]
     returncode, stdout, stderr = await run_tool(argv, deadline, "probe")
     if returncode != 0:
-        raise PermanentFailure(Reason.UNDECODABLE_AUDIO, f"ffprobe rc={returncode} {tail(stderr)}")
+        raise tool_failure("ffprobe", returncode, stderr)
     streams = json.loads(stdout or b"{}").get("streams") or []
     if not streams:
         raise PermanentFailure(Reason.UNDECODABLE_AUDIO, "no audio stream")
@@ -118,6 +121,7 @@ async def run_tool(argv: list[str], deadline: Deadline, stage: str) -> tuple[int
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=TOOL_ENV,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), deadline.remaining())
@@ -128,6 +132,14 @@ async def run_tool(argv: list[str], deadline: Deadline, stage: str) -> tuple[int
             process.kill()
             await process.wait()
     return await process.wait(), stdout, stderr
+
+
+def tool_failure(tool: str, returncode: int, stderr: bytes) -> Exception:
+    detail = f"{tool} rc={returncode} {tail(stderr)}"
+    starved = any(marker in stderr for marker in HOST_STARVATION_MARKERS)
+    if returncode < 0 or starved:
+        return TransientFailure(Reason.INTERNAL_ERROR, detail)
+    return PermanentFailure(Reason.UNDECODABLE_AUDIO, detail)
 
 
 def resample(samples: Float32Array, from_rate: int, to_rate: int) -> Float32Array:

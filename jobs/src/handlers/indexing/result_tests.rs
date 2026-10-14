@@ -175,7 +175,8 @@ async fn reopen(pool: &PgPool, max_attempts: i32) -> anyhow::Result<Vec<(String,
         "queries/indexing/reopen_dispatches.sql",
         10_i64,
         3_600_i64,
-        max_attempts
+        max_attempts,
+        &crate::handlers::indexing::storage_uploaded::worker_side_failures()
     )
     .fetch_all(pool)
     .await?
@@ -1081,6 +1082,53 @@ async fn a_lost_task_is_redispatched_with_the_next_attempt_after_the_cooldown(
     assert!(second_attempt.claimed);
     assert!(committed.committed && committed.indexed);
     assert_eq!(wire_outcome(&pool).await?, ("done".to_owned(), 2, 4, None));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_worker_side_failure_is_retried_and_the_track_waits_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_track(&pool, "pending", 1).await?;
+    dispatch(&pool, 1).await?;
+    let handler = AudioIndexResultHandler::new(pool.clone(), unreachable_qdrant()?);
+
+    handler
+        .finish(
+            settled(WorkerStatus::Failed, WorkerReason::InternalError),
+            delivery(1),
+        )
+        .await?;
+    let failed = track_state(&pool).await?;
+    let during_cooldown = reopen(&pool, 8).await?;
+    age_wire(&pool).await?;
+    let reopened = reopen(&pool, 8).await?;
+
+    assert_eq!(failed, ("failed".to_owned(), false));
+    assert!(during_cooldown.is_empty());
+    assert_eq!(reopened, vec![("42".to_owned(), 1, 2)]);
+    assert_eq!(track_state(&pool).await?, ("pending".to_owned(), false));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_storage_side_failure_is_not_retried(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_track(&pool, "pending", 1).await?;
+    dispatch(&pool, 1).await?;
+    let handler = AudioIndexResultHandler::new(pool.clone(), unreachable_qdrant()?);
+
+    handler
+        .finish(
+            settled(WorkerStatus::Failed, WorkerReason::DownloadFailed),
+            delivery(1),
+        )
+        .await?;
+    age_wire(&pool).await?;
+
+    assert!(reopen(&pool, 8).await?.is_empty());
+    assert_eq!(track_state(&pool).await?, ("failed".to_owned(), false));
     Ok(())
 }
 

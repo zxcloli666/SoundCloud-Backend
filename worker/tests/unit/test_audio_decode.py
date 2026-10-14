@@ -153,6 +153,36 @@ async def test_tool_is_killed_at_deadline() -> None:
     assert time.monotonic() - started < 3
 
 
+def test_a_starved_host_is_not_a_broken_file() -> None:
+    stderr = (
+        b"OpenBLAS blas_thread_init: pthread_create failed for thread 9 of 64: "
+        b"Resource temporarily unavailable"
+    )
+    failure = decode.tool_failure("ffprobe", 1, stderr)
+    assert isinstance(failure, TransientFailure)
+    assert failure.reason is Reason.INTERNAL_ERROR
+
+
+def test_a_killed_tool_is_retried() -> None:
+    failure = decode.tool_failure("ffmpeg", -2, b"")
+    assert isinstance(failure, TransientFailure)
+    assert failure.reason is Reason.INTERNAL_ERROR
+
+
+def test_a_tool_that_rejects_the_file_marks_it_undecodable() -> None:
+    failure = decode.tool_failure("ffmpeg", 1, b"Invalid data found when processing input")
+    assert isinstance(failure, PermanentFailure)
+    assert failure.reason is Reason.UNDECODABLE_AUDIO
+
+
+async def test_tools_run_with_one_blas_thread() -> None:
+    returncode, stdout, _ = await decode.run_tool(
+        ["sh", "-c", "echo $OPENBLAS_NUM_THREADS $OMP_NUM_THREADS"], Deadline.after(5), "probe"
+    )
+    assert returncode == 0
+    assert stdout.split() == [b"1", b"1"]
+
+
 def test_resample_changes_rate_and_keeps_pitch() -> None:
     source = tone(2, 44_100, hz=1000)
 

@@ -4,6 +4,7 @@ mod tests;
 
 use anyhow::ensure;
 use backend_contracts::pipeline::{AudioIndexRequest, INDEX_AUDIO, StorageTrackUploaded};
+use backend_contracts::reasons::{FailureClass, WorkerReason, reasons_in};
 use backend_contracts::{JobKind, StoredAudioDispatchPayload, Versioned};
 use chrono::Utc;
 use sqlx::PgPool;
@@ -127,7 +128,8 @@ impl StorageUploadHandler {
             "queries/indexing/reopen_dispatches.sql",
             batch,
             cooldown_seconds,
-            max_attempts
+            max_attempts,
+            &worker_side_failures()
         )
         .fetch_all(&self.pool)
         .await
@@ -315,6 +317,18 @@ async fn enqueue_dispatch(
         .enqueue_in(transaction, &job)
         .await
         .map_err(queue_error)
+}
+
+pub(super) fn worker_side_failures() -> Vec<String> {
+    reasons_in(FailureClass::Transient)
+        .filter(|reason| {
+            !matches!(
+                reason,
+                WorkerReason::DownloadFailed | WorkerReason::ObjectStoreUnavailable
+            )
+        })
+        .map(|reason| reason.as_str().to_owned())
+        .collect()
 }
 
 fn validate_upload(payload: StorageTrackUploaded) -> anyhow::Result<UploadedAudio> {
