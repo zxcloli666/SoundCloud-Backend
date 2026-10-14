@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use super::order::{self, LikesOrderRequest};
-use crate::common::sc_ids::{EntityKind, require_ref};
+use crate::common::sc_ids::{EntityKind, EntityRef, require_ref};
 use crate::error::AppResult;
 use crate::modules::events::EventsService;
 use crate::modules::sync_queue::SyncQueueService;
@@ -32,25 +32,21 @@ impl LikesService {
 
     pub async fn like_track(&self, sc_user_id: &str, track_urn: &str) -> AppResult<Value> {
         let track = require_ref(EntityKind::Track, track_urn)?;
-        let (sc_track_id, track_urn) = (&track.sc_id(), &track.urn());
+        let sc_track_id = &track.sc_id();
         crate::modules::cold_refresh::entity::want_track(
             &self.pg,
             sc_track_id,
             TrackPriority::Like,
         )
         .await?;
-        self.sync_queue
-            .set_wanted(
-                LIKES_TRACKS,
-                sc_user_id,
-                sc_track_id,
-                "like_track",
-                track_urn,
-            )
-            .await?;
-        self.events
-            .record(sc_user_id, sc_track_id, "like", None)
-            .await?;
+        let mut transaction = self.pg.begin().await?;
+        let liked = like_track_on(&mut transaction, &self.sync_queue, sc_user_id, &track).await?;
+        transaction.commit().await?;
+        if liked {
+            self.events
+                .record(sc_user_id, sc_track_id, "like", None)
+                .await?;
+        }
         Ok(json!({ "status": "queued", "actionType": "like_track" }))
     }
 
@@ -123,4 +119,22 @@ impl LikesService {
         .await?;
         Ok(json!({ "liked": exists }))
     }
+}
+
+pub async fn like_track_on(
+    connection: &mut PgConnection,
+    sync_queue: &SyncQueueService,
+    sc_user_id: &str,
+    track: &EntityRef,
+) -> AppResult<bool> {
+    sync_queue
+        .set_wanted_on(
+            connection,
+            LIKES_TRACKS,
+            sc_user_id,
+            &track.sc_id(),
+            "like_track",
+            &track.urn(),
+        )
+        .await
 }

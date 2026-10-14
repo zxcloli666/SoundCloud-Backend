@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::common::sc_ids::{EntityKind, require_ref};
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
+use crate::modules::cold_refresh::entity::want_track;
 use crate::modules::recommendations::smart_wave::graph::forget_user_affinity;
 use crate::modules::superlikes::page::{self, SuperlikesPage};
 use crate::modules::superlikes::service::{self, Quota};
+use crate::modules::tracks::TrackPriority;
 use crate::state::AppState;
 
 const PAGE_DEFAULT: i64 = 50;
@@ -44,15 +46,17 @@ async fn add(
     let track = require_ref(EntityKind::Track, &track_urn)?;
     let sc_track_id = track.sc_id();
     let premium = st.subscriptions.is_premium(&ctx.sc_user_id).await?;
-    if !service::like_is_alive(&st.pg, &ctx.sc_user_id, &sc_track_id).await? {
-        service::ensure_room(&st.pg, &ctx.sc_user_id, premium).await?;
-        st.likes.like_track(&ctx.sc_user_id, &track.urn()).await?;
+    let done = service::superlike(&st.pg, &st.sync_queue, &ctx.sc_user_id, &track, premium).await?;
+    want_track(&st.pg, &sc_track_id, TrackPriority::Like).await?;
+    if done.newly_liked {
+        st.events
+            .record(&ctx.sc_user_id, &sc_track_id, "like", None)
+            .await?;
     }
-    let quota = service::superlike(&st.pg, &ctx.sc_user_id, &sc_track_id, premium).await?;
     forget_user_affinity(&st.recommendations.redis, &ctx.sc_user_id).await;
     Ok(Json(SuperlikeAnswer {
         superliked: true,
-        quota,
+        quota: done.quota,
     }))
 }
 

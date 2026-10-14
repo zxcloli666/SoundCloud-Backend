@@ -76,11 +76,34 @@ impl SyncQueueService {
         target_urn: &str,
     ) -> AppResult<()> {
         let mut transaction = self.pg.begin().await?;
-        mirror::set_wanted(&mut transaction, mirror, user_id, mirror_key).await?;
-        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, None)
-            .await?;
+        self.set_wanted_on(
+            &mut transaction,
+            mirror,
+            user_id,
+            mirror_key,
+            action_type,
+            target_urn,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub(crate) async fn set_wanted_on(
+        &self,
+        connection: &mut PgConnection,
+        mirror: WantedMirror,
+        user_id: &str,
+        mirror_key: &str,
+        action_type: &str,
+        target_urn: &str,
+    ) -> AppResult<bool> {
+        if !mirror::set_wanted(&mut *connection, mirror, user_id, mirror_key).await? {
+            return Ok(false);
+        }
+        self.enqueue_on(connection, user_id, action_type, target_urn, None)
+            .await?;
+        Ok(true)
     }
 
     pub async fn clear_wanted(

@@ -26,28 +26,25 @@ pub async fn set_wanted(
     m: WantedMirror,
     user_id: &str,
     key: &str,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     let user_id = crate::common::sc_ids::extract_sc_id(user_id);
     let sql = format!(
         "INSERT INTO {table} (user_id, {key_col}, wanted_state, progress) \
          VALUES ($1, $2, true, true) \
          ON CONFLICT (user_id, {key_col}) DO UPDATE SET \
              wanted_state = true, \
-             progress = CASE WHEN {table}.wanted_state = false \
-                             THEN false \
-                             ELSE {table}.progress END, \
-             created_at = CASE WHEN {table}.wanted_state \
-                               THEN {table}.created_at \
-                               ELSE now() END",
+             progress = false, \
+             created_at = now() \
+         WHERE {table}.wanted_state = false",
         table = m.table,
         key_col = m.key_col,
     );
-    sqlx::query(&sql)
+    let written = sqlx::query(&sql)
         .bind(user_id)
         .bind(key)
         .execute(connection)
         .await?;
-    Ok(())
+    Ok(written.rows_affected() > 0)
 }
 
 pub async fn clear_wanted(

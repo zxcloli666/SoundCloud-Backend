@@ -2,10 +2,18 @@ use axum::http::StatusCode;
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool};
 
-use crate::common::sc_ids::{extract_sc_id, user_id_variants};
+use crate::common::sc_ids::{EntityRef, extract_sc_id, user_id_variants};
 use crate::error::{AppError, AppResult};
+use crate::modules::likes::service::like_track_on;
+use crate::modules::sync_queue::SyncQueueService;
 
 pub const FREE_LIMIT: i64 = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Superliked {
+    pub quota: Quota,
+    pub newly_liked: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Quota {
@@ -40,32 +48,15 @@ pub async fn quota(pg: &PgPool, sc_user_id: &str, premium: bool) -> AppResult<Qu
     Ok(Quota::of(used, premium))
 }
 
-pub async fn like_is_alive(pg: &PgPool, sc_user_id: &str, sc_track_id: &str) -> AppResult<bool> {
-    let variants = user_id_variants(sc_user_id);
-    let alive = sqlx::query_file_scalar!(
-        "queries/superlikes/like_is_alive.sql",
-        &variants,
-        sc_track_id
-    )
-    .fetch_one(pg)
-    .await?;
-    Ok(alive)
-}
-
-pub async fn ensure_room(pg: &PgPool, sc_user_id: &str, premium: bool) -> AppResult<()> {
-    if quota(pg, sc_user_id, premium).await?.is_full() {
-        return Err(limit_reached());
-    }
-    Ok(())
-}
-
 pub async fn superlike(
     pg: &PgPool,
+    sync_queue: &SyncQueueService,
     sc_user_id: &str,
-    sc_track_id: &str,
+    track: &EntityRef,
     premium: bool,
-) -> AppResult<Quota> {
+) -> AppResult<Superliked> {
     let variants = user_id_variants(sc_user_id);
+    let sc_track_id = &track.sc_id();
     let mut transaction = pg.begin().await?;
     sqlx::query_file_scalar!(
         "queries/superlikes/lock_user.sql",
@@ -75,11 +66,15 @@ pub async fn superlike(
     .await?;
     let used = live_count(&mut transaction, &variants).await?;
     if is_live(&mut transaction, &variants, sc_track_id).await? {
-        return Ok(Quota::of(used, premium));
+        return Ok(Superliked {
+            quota: Quota::of(used, premium),
+            newly_liked: false,
+        });
     }
     if Quota::of(used, premium).is_full() {
         return Err(limit_reached());
     }
+    let newly_liked = like_track_on(&mut transaction, sync_queue, sc_user_id, track).await?;
     let written = sqlx::query_file!("queries/superlikes/insert.sql", &variants, sc_track_id)
         .execute(&mut *transaction)
         .await?;
@@ -87,7 +82,10 @@ pub async fn superlike(
         return Err(AppError::conflict("only a liked track can be superliked"));
     }
     transaction.commit().await?;
-    Ok(Quota::of(used + 1, premium))
+    Ok(Superliked {
+        quota: Quota::of(used + 1, premium),
+        newly_liked,
+    })
 }
 
 pub async fn forget(pg: &PgPool, sc_user_id: &str, sc_track_id: &str) -> AppResult<()> {
