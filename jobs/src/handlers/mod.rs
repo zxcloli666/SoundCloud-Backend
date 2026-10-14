@@ -34,6 +34,7 @@ mod playlist_observe;
 mod recommendations;
 mod search_terms;
 mod secret_link;
+pub(crate) mod star_priority;
 mod subscriptions;
 mod sync_queue;
 pub(crate) mod taste;
@@ -77,6 +78,7 @@ use self::playlist_observe::PlaylistObserveHandler;
 use self::recommendations::RecommendationHandler;
 use self::recommendations::quality::QualityHandler;
 use self::search_terms::SearchTermsHandler;
+use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
 use self::sync_queue::SyncQueueHandler;
 use self::telemetry::TelemetryHandler;
@@ -130,6 +132,7 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::RecommendationWavePriority,
     JobKind::ResolveDurations,
     JobKind::ResolveWantedTracks,
+    JobKind::StarTrackTiers,
     JobKind::SubscriptionsSnapshot,
 ];
 
@@ -188,6 +191,7 @@ pub struct JobHandlers {
     quality: QualityHandler,
     recommendations: RecommendationHandler,
     search_terms: SearchTermsHandler,
+    star_tiers: StarTiersHandler,
     subscriptions: SubscriptionSnapshotHandler,
     sync_queue: SyncQueueHandler,
     telemetry: TelemetryHandler,
@@ -309,6 +313,7 @@ impl JobHandlers {
                 config.schedules.recommendation_wave_priority_shards,
             ),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
+            star_tiers: StarTiersHandler::new(databases.maintenance.clone()),
             subscriptions: SubscriptionSnapshotHandler::new(
                 databases.maintenance.clone(),
                 &config.subscriptions,
@@ -581,6 +586,10 @@ impl JobHandlers {
             JobKind::SearchTermsRefresh => {
                 empty_payload(job)?;
                 self.search_terms.refresh().await
+            }
+            JobKind::StarTrackTiers => {
+                empty_payload(job)?;
+                self.star_tiers.refresh().await
             }
             JobKind::SubscriptionsSnapshot => {
                 empty_payload(job)?;

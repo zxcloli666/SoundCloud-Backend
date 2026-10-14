@@ -15,8 +15,8 @@ pub use catalog_refresh::{CatalogEntity, CatalogRefreshPayload};
 pub use job::{
     AdminMaintenancePayload, COLLAB_MAX_MIN_COUNT, CollabTrainPayload, CrawlArtistPayload,
     EmptyPayload, IndexTrackPayload, JobKind, JobLane, LyricsEmbedPayload, LyricsLookupPayload,
-    PlaylistObservePayload, SYNC_QUEUE_MAX_RETRIES, StoredAudioDispatchPayload,
-    SyncQueueFlushPayload, UnknownJobKind, Versioned,
+    PlaylistObservePayload, STAR_PRIORITY_BONUS, SYNC_QUEUE_MAX_RETRIES,
+    StoredAudioDispatchPayload, SyncQueueFlushPayload, UnknownJobKind, Versioned,
 };
 pub use taste::SUPERLIKE_WEIGHT;
 pub use telemetry::{HardNegative, Impression, ImpressionBatch};

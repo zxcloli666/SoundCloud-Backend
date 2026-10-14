@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 
 use super::state::Snapshot;
+use crate::handlers::star_priority;
 use crate::queue::{JobError, JobResult};
 
 enum Shape {
@@ -108,9 +109,14 @@ pub(super) async fn persist(
         .bind(snapshot.started_at)
         .bind(snapshot.item_count)
         .bind(catalog_ingest::user_id_variants(&payload.subject_id))
-        .execute(connection)
+        .execute(&mut *connection)
         .await
         .map_err(JobError::retryable)?;
+    if payload.collection == CatalogCollection::LikedTracks {
+        star_priority::mark_liked_tracks(connection, &payload.subject_id, keys)
+            .await
+            .map_err(JobError::retryable)?;
+    }
     Ok(())
 }
 

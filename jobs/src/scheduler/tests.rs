@@ -90,6 +90,30 @@ fn discover_interest_preserves_previous_cadence() {
 }
 
 #[test]
+fn star_tracks_never_overtake_the_write_back_in_the_fast_lane() {
+    use crate::handlers::star_priority::{CORE_FAST_TRACK_PRIORITY, Tier};
+
+    let flush = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::SyncQueueFlush)
+        .expect("sync queue flush schedule");
+
+    assert_eq!(flush.kind.lane(), JobKind::DispatchAudioIndex.lane());
+    assert!(Tier::StarLiked.job_priority(CORE_FAST_TRACK_PRIORITY) < flush.priority);
+}
+
+#[test]
+fn star_track_tiers_follow_star_status_within_minutes() {
+    let schedule = SCHEDULES
+        .iter()
+        .find(|schedule| schedule.kind == JobKind::StarTrackTiers)
+        .expect("star track tier schedule");
+
+    assert_eq!(schedule.interval_seconds, 5 * 60);
+    assert_eq!(schedule.initial_delay_seconds, 0);
+}
+
+#[test]
 fn indexing_reap_tops_up_the_worker_backlog_every_minute() {
     let schedule = SCHEDULES
         .iter()

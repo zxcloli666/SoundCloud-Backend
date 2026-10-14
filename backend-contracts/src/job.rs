@@ -81,6 +81,8 @@ pub const COLLAB_MAX_MIN_COUNT: u32 = 1_000_000;
 
 pub const SYNC_QUEUE_MAX_RETRIES: i32 = 5;
 
+pub const STAR_PRIORITY_BONUS: i16 = 5;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
@@ -125,6 +127,7 @@ pub enum JobKind {
     ResolveDurations,
     ResolveWantedTracks,
     SearchTermsRefresh,
+    StarTrackTiers,
     SubscriptionsSnapshot,
     SweepHardNegatives,
     SyncQueueFlush,
@@ -174,6 +177,7 @@ impl JobKind {
         Self::ResolveDurations,
         Self::ResolveWantedTracks,
         Self::SearchTermsRefresh,
+        Self::StarTrackTiers,
         Self::SubscriptionsSnapshot,
         Self::SweepHardNegatives,
         Self::SyncQueueFlush,
@@ -223,6 +227,7 @@ impl JobKind {
             Self::ResolveDurations => "indexing.resolve_durations",
             Self::ResolveWantedTracks => "enrich.resolve_wanted",
             Self::SearchTermsRefresh => "search.refresh_terms",
+            Self::StarTrackTiers => "star.refresh_track_tiers",
             Self::SubscriptionsSnapshot => "subscriptions.snapshot",
             Self::SweepHardNegatives => "telemetry.sweep_hard_negatives",
             Self::SyncQueueFlush => "sync_queue.flush",
@@ -268,6 +273,7 @@ impl JobKind {
             | Self::RecommendationWavePriority
             | Self::ResolveDurations
             | Self::ResolveWantedTracks
+            | Self::StarTrackTiers
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
             | Self::AdminMusicBrainzNames
@@ -333,6 +339,7 @@ impl FromStr for JobKind {
             "indexing.resolve_durations" => Self::ResolveDurations,
             "enrich.resolve_wanted" => Self::ResolveWantedTracks,
             "search.refresh_terms" => Self::SearchTermsRefresh,
+            "star.refresh_track_tiers" => Self::StarTrackTiers,
             "subscriptions.snapshot" => Self::SubscriptionsSnapshot,
             "telemetry.sweep_hard_negatives" => Self::SweepHardNegatives,
             "sync_queue.flush" => Self::SyncQueueFlush,
@@ -425,7 +432,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 45);
+        assert_eq!(kinds.len(), 46);
     }
 
     #[test]
@@ -439,6 +446,7 @@ mod tests {
         assert_eq!(JobKind::IndexingRequeueStuck.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::StarTrackTiers.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::IndexTrack.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::PlaylistObserveShadow.lane(), JobLane::CoreBulk);

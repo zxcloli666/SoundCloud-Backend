@@ -20,6 +20,8 @@ const POOL_CONNECTIONS: &str = "jobs_pg_pool_connections";
 const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
 const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
+const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
+const STAR_PRIORITY_OLDEST_WAIT: &str = "jobs_star_priority_oldest_wait_seconds";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -199,6 +201,18 @@ impl WorkerLostOutcome {
             Self::Failed => "failed",
         }
     }
+}
+
+pub fn record_star_priority_pick(
+    pipeline: &'static str,
+    tier: &'static str,
+    picked: usize,
+    oldest_wait_seconds: i64,
+) {
+    metrics::counter!(STAR_PRIORITY_PICKED, "pipeline" => pipeline, "tier" => tier)
+        .increment(u64::try_from(picked).unwrap_or(u64::MAX));
+    metrics::gauge!(STAR_PRIORITY_OLDEST_WAIT, "pipeline" => pipeline, "tier" => tier)
+        .set(oldest_wait_seconds as f64);
 }
 
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {
