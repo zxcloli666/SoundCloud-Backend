@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS star_track_tiers (
     lookup_due boolean NOT NULL DEFAULT true,
     embed_due boolean NOT NULL DEFAULT true,
     align_due boolean NOT NULL DEFAULT true,
+    enrich_due boolean NOT NULL DEFAULT true,
+    upgrade_from text,
     CONSTRAINT star_track_tiers_tier_valid CHECK (tier IN (1, 3))
 );
 
@@ -24,3 +26,11 @@ CREATE INDEX IF NOT EXISTS star_track_tiers_embed_due_idx
 CREATE INDEX IF NOT EXISTS star_track_tiers_align_due_idx
     ON star_track_tiers (tier, tiered_at, sc_track_id)
     WHERE align_due;
+
+CREATE INDEX IF NOT EXISTS star_track_tiers_enrich_due_idx
+    ON star_track_tiers (tier, tiered_at, sc_track_id)
+    WHERE enrich_due;
+
+CREATE INDEX IF NOT EXISTS star_track_tiers_upgrade_idx
+    ON star_track_tiers (tier, upgrade_from, tiered_at, sc_track_id)
+    WHERE upgrade_from IS NOT NULL;

@@ -3,8 +3,27 @@ WITH due AS MATERIALIZED (
            audio.sc_track_id IS NOT NULL AS audio_due,
            lookup.sc_track_id IS NOT NULL AS lookup_due,
            embed.sc_track_id IS NOT NULL AS embed_due,
-           align.sc_track_id IS NOT NULL AS align_due
+           align.sc_track_id IS NOT NULL AS align_due,
+           coalesce(stored.enrich_state IN ('pending', 'failed'), false) AS enrich_due,
+           CASE
+               WHEN stored.hq_upgrade_pending
+                AND stored.storage_quality IN ('sq', 'hq')
+                AND (
+                    stored.hq_upgrade_last_at IS NULL
+                    OR stored.hq_upgrade_last_at < now() - $2::bigint * interval '1 second'
+                )
+                   THEN stored.storage_quality
+           END AS upgrade_from
     FROM star_track_tiers AS star
+    LEFT JOIN LATERAL (
+        SELECT track.enrich_state,
+               track.hq_upgrade_pending,
+               track.storage_quality,
+               track.hq_upgrade_last_at
+        FROM tracks AS track
+        WHERE track.sc_track_id = star.sc_track_id
+        LIMIT 1
+    ) AS stored ON true
     LEFT JOIN LATERAL (
         SELECT track.sc_track_id
         FROM tracks AS track
@@ -91,16 +110,33 @@ WITH due AS MATERIALIZED (
     SET audio_due = due.audio_due,
         lookup_due = due.lookup_due,
         embed_due = due.embed_due,
-        align_due = due.align_due
+        align_due = due.align_due,
+        enrich_due = due.enrich_due,
+        upgrade_from = due.upgrade_from
     FROM due
     WHERE star.sc_track_id = due.sc_track_id
-      AND (star.audio_due, star.lookup_due, star.embed_due, star.align_due)
-          IS DISTINCT FROM (due.audio_due, due.lookup_due, due.embed_due, due.align_due)
+      AND (
+          star.audio_due,
+          star.lookup_due,
+          star.embed_due,
+          star.align_due,
+          star.enrich_due,
+          star.upgrade_from
+      ) IS DISTINCT FROM (
+          due.audio_due,
+          due.lookup_due,
+          due.embed_due,
+          due.align_due,
+          due.enrich_due,
+          due.upgrade_from
+      )
     RETURNING star.sc_track_id
 )
 SELECT (SELECT count(*) FROM changed) AS "changed!",
        count(*) FILTER (WHERE due.audio_due) AS "audio_due!",
        count(*) FILTER (WHERE due.lookup_due) AS "lookup_due!",
        count(*) FILTER (WHERE due.embed_due) AS "embed_due!",
-       count(*) FILTER (WHERE due.align_due) AS "align_due!"
+       count(*) FILTER (WHERE due.align_due) AS "align_due!",
+       count(*) FILTER (WHERE due.enrich_due) AS "enrich_due!",
+       count(*) FILTER (WHERE due.upgrade_from IS NOT NULL) AS "upgrade_due!"
 FROM due

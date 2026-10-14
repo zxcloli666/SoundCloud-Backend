@@ -155,3 +155,42 @@ async fn a_track_tier_puts_star_likes_before_likes_before_star_listening(
     assert_eq!(found.get("6"), None);
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_refresh_marks_star_tracks_waiting_for_artist_links_and_a_better_copy(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_star_library(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, storage_quality)
+         VALUES ('101', 'soundcloud:tracks:101', 'Sq', 'sq', 1000, 'sq'),
+                ('102', 'soundcloud:tracks:102', 'Hq tried', 'hq tried', 1000, 'hq'),
+                ('104', 'soundcloud:tracks:104', 'Uq', 'uq', 1000, 'uq'),
+                ('106', 'soundcloud:tracks:106', 'Hq', 'hq', 1000, 'hq');
+         UPDATE tracks SET hq_upgrade_pending = true WHERE sc_track_id IN ('101', '102', '106');
+         UPDATE tracks SET hq_upgrade_last_at = now() - interval '1 hour' WHERE sc_track_id = '102';
+         UPDATE tracks SET enrich_state = 'done' WHERE sc_track_id IN ('102', '106');",
+    )
+    .execute(&pool)
+    .await?;
+
+    StarTiersHandler::new(pool.clone()).refresh().await?;
+
+    let due: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT sc_track_id, enrich_due, upgrade_from
+         FROM star_track_tiers
+         ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        due,
+        [
+            ("101".to_owned(), true, Some("sq".to_owned())),
+            ("102".to_owned(), false, None),
+            ("104".to_owned(), true, None),
+            ("106".to_owned(), false, Some("hq".to_owned())),
+        ]
+    );
+    Ok(())
+}

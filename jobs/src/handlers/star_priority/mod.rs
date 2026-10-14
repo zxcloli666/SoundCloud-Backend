@@ -19,6 +19,7 @@ pub(crate) use self::tier::{
 pub(crate) use self::turns::{Turn, Turns};
 
 const HISTORY_DAYS: i32 = 30;
+const QUALITY_UPGRADE_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 pub(crate) const STAR_SCAN_WINDOW: i64 = 2_000;
 
 pub(crate) struct StarTiersHandler {
@@ -40,7 +41,8 @@ impl StarTiersHandler {
         .map_err(JobError::retryable)?;
         let due = sqlx::query_file!(
             "queries/star_priority/refresh_due.sql",
-            AUDIO_INDEX_QUARANTINE_SECONDS
+            AUDIO_INDEX_QUARANTINE_SECONDS,
+            QUALITY_UPGRADE_COOLDOWN_SECONDS
         )
         .fetch_one(&self.pool)
         .await
@@ -56,6 +58,8 @@ impl StarTiersHandler {
             lookup_due = due.lookup_due,
             embed_due = due.embed_due,
             align_due = due.align_due,
+            enrich_due = due.enrich_due,
+            upgrade_due = due.upgrade_due,
             "star track tiers refreshed"
         );
         Ok(())
