@@ -86,7 +86,7 @@ DTO — резолвер, кравл и wanted-резолвер живут в `j
 LRCLIB/Musixmatch/Genius lookup и align decision живут в `jobs`), `recommendations` (`smart_wave`, arms, blender, cursors,
 clusters, bandits, trainer), `collab`/`centroids` (vectors), `cold_refresh` (TTL-based SC re-sync), `auth`/
 `oauth_apps` (SC token chains + proxy), `sync_queue` (write-back to SC), `resolve` (`/resolve` handler → `ScReadService`), read-path:
-`search discover albums artists playlists users me likes dislikes history auras featured subscriptions`. Infra: `bus/` (
+`search discover albums artists playlists users me likes dislikes superlikes history auras featured subscriptions`. Infra: `bus/` (
 nats), `cache/`, `db/`, `qdrant/`, `redis/`, `sc/` (`ScClient` transport + `ScReadService` public-read facade +
 `apiv2`/`mapping`/`lua_methods` — see [docs/sc-networking.md](docs/sc-networking.md)), `common/`, `config.rs`, `main.rs`.
 
