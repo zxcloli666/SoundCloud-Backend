@@ -59,6 +59,7 @@ const SESSION_QUERY: &str = r#"SELECT CASE
 pub struct TrackRecord {
     pub is_public: bool,
     pub storage_quality: Option<String>,
+    pub storage_ok: bool,
 }
 
 impl TrackRecord {
@@ -69,6 +70,10 @@ impl TrackRecord {
             Some("sq") => Some("sq"),
             _ => None,
         }
+    }
+
+    pub fn kept_quality(&self) -> Option<&'static str> {
+        self.stored_quality().filter(|_| self.storage_ok)
     }
 }
 
@@ -180,13 +185,14 @@ impl PgPool {
         let client = self.connection().await?;
         let row = client
             .query_opt(
-                "SELECT sharing = 'public', storage_quality FROM tracks WHERE urn = $1",
+                "SELECT sharing = 'public', storage_quality, storage_state = 'ok' FROM tracks WHERE urn = $1",
                 &[&track_urn],
             )
             .await?;
         Ok(row.map(|row| TrackRecord {
             is_public: row.get(0),
             storage_quality: row.get(1),
+            storage_ok: row.get(2),
         }))
     }
 
@@ -315,8 +321,9 @@ impl PgPool {
         Ok(tokens)
     }
 
-    pub async fn pick_hq_upgrade_candidates(
+    pub async fn pick_upgrade_candidates(
         &self,
+        stored: &str,
         limit: i64,
         retry_cooldown_sec: i64,
     ) -> Result<Vec<String>, PgError> {
@@ -328,6 +335,7 @@ impl PgPool {
                    WHERE id IN (
                        SELECT id FROM tracks
                        WHERE hq_upgrade_pending = true
+                         AND storage_quality = $3
                          AND (hq_upgrade_last_at IS NULL
                               OR hq_upgrade_last_at < now() - make_interval(secs => $2))
                        ORDER BY hq_upgrade_last_at NULLS FIRST
@@ -335,7 +343,7 @@ impl PgPool {
                        LIMIT $1
                    )
                    RETURNING urn"#,
-                &[&limit, &(retry_cooldown_sec as f64)],
+                &[&limit, &(retry_cooldown_sec as f64), &stored],
             )
             .await?;
         Ok(rows.iter().map(|r| r.get(0)).collect())
@@ -530,11 +538,24 @@ mod tests {
         let stored = |quality: Option<&str>| TrackRecord {
             is_public: true,
             storage_quality: quality.map(str::to_owned),
+            storage_ok: true,
         };
         assert_eq!(stored(Some("uq")).stored_quality(), Some("uq"));
         assert_eq!(stored(Some("hq")).stored_quality(), Some("hq"));
         assert_eq!(stored(Some("sq")).stored_quality(), Some("sq"));
         assert_eq!(stored(Some("lq")).stored_quality(), None);
         assert_eq!(stored(None).stored_quality(), None);
+    }
+
+    #[test]
+    fn a_copy_that_is_not_in_storage_is_not_kept() {
+        let track = |ok: bool| TrackRecord {
+            is_public: true,
+            storage_quality: Some("hq".to_owned()),
+            storage_ok: ok,
+        };
+        assert_eq!(track(true).kept_quality(), Some("hq"));
+        assert_eq!(track(false).kept_quality(), None);
+        assert_eq!(track(false).stored_quality(), Some("hq"));
     }
 }

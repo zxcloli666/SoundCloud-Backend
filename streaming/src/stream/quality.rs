@@ -15,6 +15,15 @@ pub fn of_transcoding(t: &Transcoding) -> &'static str {
     }
 }
 
+pub fn parse(label: &str) -> Option<&'static str> {
+    match label {
+        UQ => Some(UQ),
+        HQ => Some(HQ),
+        SQ => Some(SQ),
+        _ => None,
+    }
+}
+
 pub fn rank(quality: &str) -> u8 {
     match quality {
         UQ => 2,

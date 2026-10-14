@@ -12,6 +12,7 @@ pub mod oauth;
 pub mod proxy;
 pub mod quality;
 pub mod restricted;
+mod sources;
 pub mod storage;
 pub mod target;
 pub mod validate;

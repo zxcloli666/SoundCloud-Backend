@@ -51,6 +51,8 @@ struct StreamProxyQuery {
     secret_token: Option<String>,
     #[serde(default)]
     hq: Option<String>,
+    #[serde(default)]
+    quality: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -197,7 +199,11 @@ async fn proxy_stream(
     if let Some(sc_track_id) = crate::common::sc_ids::normalize_sc_track_id(&track_urn) {
         st.tracks.opened(&sc_track_id).await;
     }
-    let high_quality = q.hq.as_deref() == Some("true");
+    let quality = q
+        .quality
+        .as_deref()
+        .filter(|tier| matches!(*tier, "sq" | "hq" | "uq"));
+    let high_quality = q.hq.as_deref() == Some("true") || matches!(quality, Some("hq" | "uq"));
     let ticket = st
         .config
         .streaming
@@ -220,6 +226,9 @@ async fn proxy_stream(
         .map_err(|_| AppError::internal("streaming service URL cannot be a base URL"))?
         .extend(["stream", &track_urn]);
     url.query_pairs_mut().append_pair("ticket", &ticket);
+    if let Some(quality) = quality {
+        url.query_pairs_mut().append_pair("quality", quality);
+    }
     Ok(Redirect::temporary(url.as_str()).into_response())
 }
 

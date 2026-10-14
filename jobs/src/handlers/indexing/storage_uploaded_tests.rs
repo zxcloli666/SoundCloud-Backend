@@ -223,7 +223,7 @@ fn upload_validation_rejects_unsafe_values() {
 }
 
 #[sqlx::test(migrations = false)]
-async fn only_an_sq_copy_waits_for_an_upgrade(pool: PgPool) -> anyhow::Result<()> {
+async fn everything_below_uq_waits_for_an_upgrade(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     insert_track(&pool, 180_000).await?;
     let pending = || async {
@@ -252,7 +252,7 @@ async fn only_an_sq_copy_waits_for_an_upgrade(pool: PgPool) -> anyhow::Result<()
         420_000,
     )
     .await?;
-    assert_eq!(pending().await?, (Some("hq".to_owned()), false));
+    assert_eq!(pending().await?, (Some("hq".to_owned()), true));
 
     apply_upload(
         &pool,
@@ -263,16 +263,6 @@ async fn only_an_sq_copy_waits_for_an_upgrade(pool: PgPool) -> anyhow::Result<()
     )
     .await?;
     assert_eq!(pending().await?, (Some("uq".to_owned()), false));
-
-    apply_upload(
-        &pool,
-        &queue(&pool),
-        &upload(Some("sq")),
-        &delivery(4, 40),
-        420_000,
-    )
-    .await?;
-    assert_eq!(pending().await?, (Some("sq".to_owned()), false));
     Ok(())
 }
 

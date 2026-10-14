@@ -1,15 +1,16 @@
 use std::time::Duration;
 
 use axum::Json;
-use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
-use bytes::Bytes;
-use futures::StreamExt;
 use tracing::{info, warn};
 
 use super::quality;
+use super::sources::{
+    UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
+    try_restricted, try_session_oauth,
+};
 use crate::AppState;
 use crate::db::postgres::SessionInfo;
 use crate::error::AppError;
@@ -17,11 +18,10 @@ use crate::error::AppError;
 pub(crate) const STREAM_DEADLINE: Duration = Duration::from_secs(120);
 pub(crate) const DOWNLOAD_DEADLINE: Duration = Duration::from_secs(60);
 
-type Fetched = (Bytes, &'static str, &'static str);
-
 #[derive(serde::Deserialize)]
 pub struct StreamQuery {
     pub ticket: Option<String>,
+    pub quality: Option<String>,
 }
 
 pub(crate) struct StreamAccess {
@@ -102,16 +102,21 @@ async fn stream_inner(
 
     let is_premium = check_is_premium(&state, &session).await;
     let hq = access.high_quality;
+    let tier = query.quality.as_deref().and_then(quality::parse);
     let secret_token = access.secret_token.as_deref();
     let track = state.pg.find_track(&track_urn).await?;
     let is_public = track.as_ref().map(|track| track.is_public);
     let stored_quality = track.as_ref().and_then(|track| track.stored_quality());
+    let kept_quality = track.as_ref().and_then(|track| track.kept_quality());
     let policy = TrackAccessPolicy::new(is_public, secret_token.is_some());
 
     if state.config.premium_only && !is_premium {
         return Err(AppError::Forbidden);
     }
     if hq && !is_premium {
+        return Err(AppError::Forbidden);
+    }
+    if tier.is_some_and(|tier| tier != quality::SQ) && !hq {
         return Err(AppError::Forbidden);
     }
 
@@ -126,8 +131,113 @@ async fn stream_inner(
         .await;
     }
 
+    let request = StreamRequest {
+        state: &state,
+        headers: &headers,
+        track_urn: &track_urn,
+        access_token: session.access_token.as_deref(),
+        secret_token,
+        is_premium,
+        stored_quality,
+        upload: UploadRule {
+            cacheable: policy.cacheable,
+            kept: kept_quality,
+        },
+    };
+    match tier {
+        Some(tier) => stream_tier(&request, tier).await,
+        None => stream_any(&request, hq).await,
+    }
+}
+
+struct StreamRequest<'a> {
+    state: &'a AppState,
+    headers: &'a HeaderMap,
+    track_urn: &'a str,
+    access_token: Option<&'a str>,
+    secret_token: Option<&'a str>,
+    is_premium: bool,
+    stored_quality: Option<&'static str>,
+    upload: UploadRule,
+}
+
+async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Response, AppError> {
+    let tag = "[stream/tier]";
+    let StreamRequest {
+        state,
+        track_urn,
+        access_token,
+        secret_token,
+        upload,
+        ..
+    } = *req;
+
+    if tier == quality::UQ {
+        let uq_live = state.cookies.as_ref().is_some_and(|c| c.serves_uq());
+        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true).await {
+            served(tag, track_urn, "cookies_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+    } else if tier == quality::HQ {
+        if let Some(r) = try_session_oauth(state, access_token, track_urn, secret_token, true).await
+        {
+            served(tag, track_urn, "oauth_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if let Some((r, q)) = try_restricted(state, track_urn, tag, true, quality::HQ, upload).await
+        {
+            served(tag, track_urn, "restricted_hq", q);
+            return Ok(r);
+        }
+        if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
+            served(tag, track_urn, "anon_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+    } else {
+        if let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
+            served(tag, track_urn, "relay_track", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if let Some(r) =
+            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        {
+            served(tag, track_urn, "oauth_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+            served(tag, track_urn, "anon", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if req.is_premium
+            && let Some(r) = try_cookies(state, track_urn, tag, false).await
+        {
+            served(tag, track_urn, "cookies_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if let Some((r, q)) =
+            try_restricted(state, track_urn, tag, false, quality::SQ, upload).await
+        {
+            served(tag, track_urn, "restricted_sq", q);
+            return Ok(r);
+        }
+    }
+
+    info!("{tag} {track_urn} → nothing at {tier}");
+    crate::metrics::record_source("none", "exhausted");
+    Err(AppError::NoStream)
+}
+
+async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppError> {
     let tag = "[stream]";
-    let cacheable = policy.cacheable;
+    let StreamRequest {
+        state,
+        track_urn,
+        access_token,
+        secret_token,
+        stored_quality,
+        upload,
+        ..
+    } = *req;
     let uq_live = hq && state.cookies.as_ref().is_some_and(|c| c.serves_uq());
     let wanted = match (hq, uq_live) {
         (false, _) => quality::SQ,
@@ -136,90 +246,89 @@ async fn stream_inner(
     };
     let stored = stored_quality.map_or(0, quality::rank);
 
-    if cacheable
+    if upload.cacheable
         && stored >= quality::rank(wanted)
-        && let Some(response) =
-            from_storage(&state, &headers, tag, &track_urn, stored_quality).await
+        && let Some(response) = from_storage(req, tag).await
     {
         return Ok(response);
     }
 
-    if !hq && let Some(r) = try_relay_track(&state, &track_urn, quality::SQ).await {
-        served(tag, &track_urn, "relay_track", r.2);
-        return respond_with_data(&state, &track_urn, r, cacheable);
+    if !hq && let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
+        served(tag, track_urn, "relay_track", r.2);
+        return respond_with_data(state, track_urn, r, upload);
     }
-
-    let access = session.access_token.as_deref();
 
     if hq {
-        if uq_live && let Some(r) = try_cookies(&state, &track_urn, tag, true).await {
-            served(tag, &track_urn, "cookies_hq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true).await {
+            served(tag, track_urn, "cookies_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if cacheable
+        if upload.cacheable
             && stored >= quality::rank(quality::HQ)
             && stored < quality::rank(wanted)
-            && let Some(response) =
-                from_storage(&state, &headers, tag, &track_urn, stored_quality).await
+            && let Some(response) = from_storage(req, tag).await
         {
             return Ok(response);
         }
-        if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, true).await {
-            served(tag, &track_urn, "oauth_hq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
-        }
-        if let Some((r, q)) =
-            try_restricted(&state, &track_urn, tag, true, quality::HQ, cacheable).await
+        if let Some(r) = try_session_oauth(state, access_token, track_urn, secret_token, true).await
         {
-            served(tag, &track_urn, "restricted_hq", q);
+            served(tag, track_urn, "oauth_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
+        }
+        if let Some((r, q)) = try_restricted(state, track_urn, tag, true, quality::HQ, upload).await
+        {
+            served(tag, track_urn, "restricted_hq", q);
             return Ok(r);
         }
-        if let Some(r) = try_anon(&state, &track_urn, tag, quality::HQ).await {
-            served(tag, &track_urn, "anon_hq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
+            served(tag, track_urn, "anon_hq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if cacheable
+        if upload.cacheable
             && stored < quality::rank(quality::HQ)
-            && let Some(response) =
-                from_storage(&state, &headers, tag, &track_urn, stored_quality).await
+            && let Some(response) = from_storage(req, tag).await
         {
             return Ok(response);
         }
-        if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, false).await {
-            served(tag, &track_urn, "oauth_sq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) =
+            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        {
+            served(tag, track_urn, "oauth_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_anon(&state, &track_urn, tag, quality::SQ).await {
-            served(tag, &track_urn, "anon", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+            served(tag, track_urn, "anon", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_cookies(&state, &track_urn, tag, false).await {
-            served(tag, &track_urn, "cookies_sq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) = try_cookies(state, track_urn, tag, false).await {
+            served(tag, track_urn, "cookies_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_relay_track(&state, &track_urn, quality::SQ).await {
-            served(tag, &track_urn, "relay_track", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
+            served(tag, track_urn, "relay_track", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
     } else {
-        if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, false).await {
-            served(tag, &track_urn, "oauth_sq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) =
+            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        {
+            served(tag, track_urn, "oauth_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_anon(&state, &track_urn, tag, quality::SQ).await {
-            served(tag, &track_urn, "anon", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+            served(tag, track_urn, "anon", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
-        if is_premium && let Some(r) = try_cookies(&state, &track_urn, tag, false).await {
-            served(tag, &track_urn, "cookies_sq", r.2);
-            return respond_with_data(&state, &track_urn, r, cacheable);
+        if req.is_premium
+            && let Some(r) = try_cookies(state, track_urn, tag, false).await
+        {
+            served(tag, track_urn, "cookies_sq", r.2);
+            return respond_with_data(state, track_urn, r, upload);
         }
     }
 
-    if let Some((r, q)) =
-        try_restricted(&state, &track_urn, tag, false, quality::SQ, cacheable).await
-    {
-        served(tag, &track_urn, "restricted_sq", q);
+    if let Some((r, q)) = try_restricted(state, track_urn, tag, false, quality::SQ, upload).await {
+        served(tag, track_urn, "restricted_sq", q);
         return Ok(r);
     }
 
@@ -233,13 +342,14 @@ fn served(tag: &str, track_urn: &str, source: &'static str, quality: &str) {
     crate::metrics::record_source(source, "served");
 }
 
-async fn from_storage(
-    state: &AppState,
-    headers: &HeaderMap,
-    tag: &str,
-    track_urn: &str,
-    stored_quality: Option<&'static str>,
-) -> Option<Response> {
+async fn from_storage(req: &StreamRequest<'_>, tag: &str) -> Option<Response> {
+    let StreamRequest {
+        state,
+        headers,
+        track_urn,
+        stored_quality,
+        ..
+    } = *req;
     let shown = stored_quality.unwrap_or("?");
     if headers.contains_key("x-session-id") {
         let response = state.storage.try_proxy(track_urn, stored_quality).await?;
@@ -281,223 +391,6 @@ pub(crate) async fn check_is_premium(state: &AppState, session: &SessionInfo) ->
     state.pg.is_premium(user).await.unwrap_or(false)
 }
 
-async fn try_oauth(
-    state: &AppState,
-    access_token: &str,
-    track_urn: &str,
-    secret_token: Option<&str>,
-    hq_only: bool,
-) -> Option<Fetched> {
-    let ctx = super::oauth::OauthCtx {
-        client: &state.http_client,
-        pg: &state.pg,
-        proxy_url: &state.config.sc_proxy_url,
-        proxy_fallback: state.config.sc_proxy_fallback,
-        fallback_session_count: state.config.sc_oauth_fallback_sessions,
-    };
-    let result =
-        super::oauth::try_oauth_stream(&ctx, access_token, track_urn, secret_token, hq_only)
-            .await?;
-    Some((result.data, result.content_type, result.quality))
-}
-
-async fn try_session_oauth(
-    state: &AppState,
-    access_token: Option<&str>,
-    track_urn: &str,
-    secret_token: Option<&str>,
-    hq_only: bool,
-) -> Option<Fetched> {
-    let access_token = access_token?;
-    try_oauth(state, access_token, track_urn, secret_token, hq_only).await
-}
-
-async fn try_cookies(
-    state: &AppState,
-    track_urn: &str,
-    tag: &str,
-    hq_only: bool,
-) -> Option<Fetched> {
-    let cookies_client = state.cookies.as_ref()?;
-    match cookies_client.get_stream(track_urn, hq_only).await {
-        Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
-        Ok(None) => {
-            warn!("{tag} {track_urn} cookies returned nothing");
-            None
-        }
-        Err(e) => {
-            warn!("{tag} {track_urn} cookies failed: {e}");
-            None
-        }
-    }
-}
-
-async fn try_anon(
-    state: &AppState,
-    track_urn: &str,
-    tag: &str,
-    at_least: &'static str,
-) -> Option<Fetched> {
-    match state.anon.get_stream(track_urn, at_least).await {
-        Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
-        Ok(None) => {
-            info!("{tag} {track_urn} anon has nothing at {at_least} or above");
-            None
-        }
-        Err(e) => {
-            warn!("{tag} {track_urn} anon failed: {e}");
-            None
-        }
-    }
-}
-
-async fn restricted_source(
-    state: &AppState,
-    track_urn: &str,
-    tag: &str,
-    hq_first: bool,
-) -> Option<crate::stream::restricted::RestrictedSource> {
-    match state.anon.resolve_restricted(track_urn, hq_first).await {
-        Ok(Some(v)) => return Some(v),
-        Ok(None) => {}
-        Err(e) => warn!("{tag} {track_urn} restricted(anon) failed: {e}"),
-    }
-    let cookies = state.cookies.as_ref()?;
-    match cookies.resolve_restricted(track_urn, hq_first).await {
-        Ok(Some(v)) => Some(v),
-        Ok(None) => None,
-        Err(e) => {
-            warn!("{tag} {track_urn} restricted(cookies) failed: {e}");
-            None
-        }
-    }
-}
-
-async fn try_relay_track(
-    state: &AppState,
-    track_urn: &str,
-    quality: &'static str,
-) -> Option<Fetched> {
-    let id = track_urn.rsplit(':').next()?;
-    if id.is_empty() || id == track_urn {
-        return None; // not a canonical soundcloud:tracks:<id> urn
-    }
-    let client_id = state.anon.get_client_id().await.unwrap_or_default();
-    let (audio, ct) = crate::stream::proxy::get_track_via_relay(
-        id,
-        quality,
-        &client_id,
-        state.config.edge_wvd_url.as_deref(),
-        state.config.edge_wvd_token.as_deref(),
-    )
-    .await?;
-    Some((
-        Bytes::from(audio),
-        crate::stream::hls::mime_to_content_type(&ct),
-        quality,
-    ))
-}
-
-async fn try_restricted(
-    state: &AppState,
-    track_urn: &str,
-    tag: &str,
-    hq_first: bool,
-    at_least: &'static str,
-    cacheable: bool,
-) -> Option<(Response, &'static str)> {
-    let src = restricted_source(state, track_urn, tag, hq_first).await?;
-    let quality = src.quality;
-    if quality::rank(quality) < quality::rank(at_least) {
-        info!("{tag} {track_urn} restricted has only {quality}, wanted {at_least}");
-        return None;
-    }
-
-    if let (Some(wvd_url), Some(wvd_token)) = (
-        state.config.edge_wvd_url.as_deref(),
-        state.config.edge_wvd_token.as_deref(),
-    ) && let Some(audio) =
-        crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
-            .await
-    {
-        let bytes = Bytes::from(audio);
-        if cacheable && bytes.len() > 8192 {
-            state.storage.upload_in_background_with_quality(
-                track_urn.to_string(),
-                bytes.clone(),
-                quality,
-            );
-        }
-        return Some((
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", src.content_type)
-                .header("x-audio-quality", quality)
-                .body(Body::from(bytes))
-                .unwrap(),
-            quality,
-        ));
-    }
-
-    let engine = state.decryptor.as_ref()?;
-    let fetcher: std::sync::Arc<dyn decrypt::Fetcher> =
-        std::sync::Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-            client: state.http_client.clone(),
-            proxy_url: state.config.sc_proxy_url.clone(),
-        });
-    let stream = match engine
-        .process_stream(&src.manifest, &src.token, fetcher)
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("{tag} {track_urn} restricted decode failed: {e}");
-            return None;
-        }
-    };
-
-    if !cacheable {
-        return Some((
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", src.content_type)
-                .header("x-audio-quality", quality)
-                .body(Body::from_stream(stream))
-                .unwrap(),
-            quality,
-        ));
-    }
-
-    let acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    let acc_w = acc.clone();
-    let storage = state.storage.clone();
-    let urn = track_urn.to_string();
-    let teed = stream
-        .map(move |chunk| {
-            if let Ok(b) = &chunk {
-                acc_w.lock().unwrap().extend_from_slice(b);
-            }
-            chunk
-        })
-        .chain(futures::stream::once(async move {
-            let data = std::mem::take(&mut *acc.lock().unwrap());
-            if data.len() > 8192 {
-                storage.upload_in_background_with_quality(urn, Bytes::from(data), quality);
-            }
-            Ok::<_, decrypt::Error>(Bytes::new())
-        }));
-
-    Some((
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", src.content_type)
-            .header("x-audio-quality", quality)
-            .body(Body::from_stream(teed))
-            .unwrap(),
-        quality,
-    ))
-}
-
 fn extract_header_session_id(headers: &HeaderMap) -> Result<String, AppError> {
     if let Some(val) = headers.get("x-session-id") {
         return val
@@ -528,37 +421,6 @@ pub(crate) fn extract_stream_access(
         secret_token: ticket.secret_token,
         high_quality: ticket.high_quality,
     })
-}
-
-fn respond_with_data(
-    state: &AppState,
-    track_urn: &str,
-    (data, content_type, quality): Fetched,
-    cacheable: bool,
-) -> Result<Response, AppError> {
-    if cacheable && data.len() > 8192 {
-        state.storage.upload_in_background_with_quality(
-            track_urn.to_string(),
-            data.clone(),
-            quality,
-        );
-    }
-
-    data_response(data, content_type, quality)
-}
-
-fn data_response(
-    data: Bytes,
-    content_type: &'static str,
-    quality: &'static str,
-) -> Result<Response, AppError> {
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", content_type)
-        .header("content-length", data.len().to_string())
-        .header("x-audio-quality", quality)
-        .body(Body::from(data))
-        .unwrap())
 }
 
 #[cfg(test)]
