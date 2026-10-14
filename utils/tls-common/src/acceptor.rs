@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::extract::ConnectInfo;
 use axum::http::Request;
 use axum_server::accept::Accept;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
 use tower::Service;
 
@@ -58,6 +59,7 @@ where
         let inner = self.inner.clone();
         let proxy_protocol = self.proxy_protocol;
         let proxy_trusted = self.proxy_trusted.clone();
+        keep_alive(&stream);
         Box::pin(async move {
             let accepted = async {
                 let mut stream = stream;
@@ -85,6 +87,14 @@ where
                 })?
         })
     }
+}
+
+fn keep_alive(stream: &TcpStream) {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    let _ = SockRef::from(stream).set_tcp_keepalive(&keepalive);
 }
 
 async fn peek_proxy_signature(stream: &TcpStream) -> io::Result<bool> {

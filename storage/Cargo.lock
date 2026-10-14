@@ -3141,6 +3141,7 @@ dependencies = [
  "rustls-acme",
  "serde",
  "sha2",
+ "socket2",
  "time",
  "tokio",
  "tokio-stream",
