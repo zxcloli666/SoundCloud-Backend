@@ -2,7 +2,7 @@ ARG FLAVOR=cu126
 
 FROM ghcr.io/astral-sh/uv:0.12 AS uv
 
-FROM public.ecr.aws/docker/library/python:3.12-bookworm AS builder
+FROM mirror.gcr.io/library/python:3.12-bookworm AS builder
 ARG FLAVOR
 ENV FLAVOR=${FLAVOR} \
     UV_COMPILE_BYTECODE=1 \
@@ -18,9 +18,8 @@ RUN --mount=type=cache,target=/root/.cache/uv uv-sync --no-install-project
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv uv-sync --no-editable
 
-FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
+FROM mirror.gcr.io/library/python:3.12-slim-bookworm
 ARG FLAVOR
-ARG APP_VERSION=dev
 RUN apt-get update \
     && if [ "$FLAVOR" = cpu ]; then triton_cc=""; else triton_cc="gcc libc6-dev"; fi \
     && apt-get install -y --no-install-recommends ffmpeg libchromaprint1 tini $triton_cc \
@@ -30,6 +29,7 @@ RUN apt-get update \
 COPY --from=builder /app/.venv /app/.venv
 COPY config /app/config
 COPY contract/worker-contract.json /app/contract/worker-contract.json
+ARG APP_VERSION=dev
 ENV PATH=/app/.venv/bin:${PATH} \
     HOME=/tmp \
     PYTHONUNBUFFERED=1 \

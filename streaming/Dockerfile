@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/rust:bookworm AS builder
+FROM mirror.gcr.io/library/rust:bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler cmake clang libclang-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -22,7 +22,7 @@ ARG APP_VERSION
 RUN { [ -z "$APP_VERSION" ] || sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" Cargo.toml; } \
     && touch src/main.rs && cargo build --release
 
-FROM public.ecr.aws/docker/library/debian:bookworm-slim
+FROM mirror.gcr.io/library/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 

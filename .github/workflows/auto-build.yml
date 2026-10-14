@@ -30,11 +30,11 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Bump version (services + git tag vX.Y.Z)
+      - name: Tag the next version
         id: bump
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -61,41 +61,42 @@ jobs:
 
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
           git tag "v$NEW_VERSION"
           git push origin "v$NEW_VERSION"
 
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
-  docker:
+  image:
+    name: ${{ matrix.name }}
     needs: version
     runs-on: ubuntu-latest
-    env:
-      HAS_INTERNAL_PAT: ${{ secrets.INTERNAL_PAT != '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: api
+            image: api
             context: .
             file: api/Dockerfile
-            extra_tags: ""
-            cache_type: gha
-            free_disk: false
-            build_contexts: ""
+            sources: api backend-contracts utils
+            internal: call
+            cache: scd-api:release
           - name: jobs
+            image: jobs
             context: .
             file: jobs/Dockerfile
-            extra_tags: ""
-            cache_type: gha
-            free_disk: false
-            build_contexts: ""
+            sources: jobs backend-contracts utils api/migrations api/migrations-ops api/queries
+            internal: call
+            cache: scd-jobs:release
           - name: streaming
+            image: streaming
             context: streaming
-            file: ""
-            extra_tags: ""
-            cache_type: gha
-            free_disk: false
+            sources: streaming utils
+            internal: |
+              call
+              decrypt
+              decrypt-client
+            cache: scd-streaming:release
             build_contexts: |
               tls-common=utils/tls-common
               call=utils/call
@@ -105,101 +106,136 @@ jobs:
               sc-fingerprint=utils/sc-fingerprint
               entity-ref=utils/entity-ref
           - name: storage
+            image: storage
             context: storage
-            file: ""
-            extra_tags: ""
-            cache_type: gha
-            free_disk: false
+            sources: storage utils
+            cache: scd-storage:release
             build_contexts: |
               tls-common=utils/tls-common
               sc-fingerprint=utils/sc-fingerprint
               entity-ref=utils/entity-ref
           - name: gateway
+            image: gateway
             context: gateway
-            file: ""
-            extra_tags: ""
-            cache_type: gha
-            free_disk: false
-            build_contexts: "tls-common=utils/tls-common"
+            sources: gateway utils
+            cache: scd-gateway:release
+            build_contexts: tls-common=utils/tls-common
           - name: worker-cpu
-            image_name: worker
+            image: worker
             context: worker
             file: worker/docker/Dockerfile
+            sources: worker
             flavor: cpu
-            tag_suffix: "-cpu"
-            extra_tags: |
-              ghcr.io/__REPO__/worker:cpu
-            cache_type: registry-cpu
-            free_disk: false
-            no_default_tags: true
+            suffix: -cpu
+            only_versioned: true
+            extra_tags: worker:cpu
+            cache: scd-worker:cpu
           - name: worker-gpu
-            image_name: worker
+            image: worker
             context: worker
             file: worker/docker/Dockerfile
+            sources: worker
             flavor: cu126
-            tag_suffix: "-gpu"
-            extra_tags: |
-              ghcr.io/__REPO__/worker:gpu
-              ghcr.io/__REPO__/worker:gpu-cuda12
-            cache_type: registry-gpu
+            suffix: -gpu
+            only_versioned: true
+            extra_tags: worker:gpu worker:gpu-cuda12
+            cache: scd-worker:gpu
             free_disk: true
-            no_default_tags: true
           - name: worker-gpu-cuda13
-            image_name: worker
+            image: worker
             context: worker
             file: worker/docker/Dockerfile
+            sources: worker
             flavor: cu130
-            tag_suffix: "-gpu-cuda13"
-            extra_tags: |
-              ghcr.io/__REPO__/worker:gpu-cuda13
-            cache_type: registry-gpu-cuda13
+            suffix: -gpu-cuda13
+            only_versioned: true
+            extra_tags: worker:gpu-cuda13
+            cache: scd-worker:gpu-cuda13
             free_disk: true
-            no_default_tags: true
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
+      - uses: actions/checkout@v7
 
-      - name: Checkout internal repo (when PAT present, for api/jobs/streaming)
-        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming') }}
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        if: matrix.internal
         with:
           repository: ${{ github.repository_owner }}/SoundCloud-Internal
           token: ${{ secrets.INTERNAL_PAT }}
           path: _internal
+          sparse-checkout: ${{ matrix.internal }}
 
-      - name: Replace mock crates with real
-        if: ${{ env.HAS_INTERNAL_PAT == 'true' && (matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming') }}
+      - name: Names
+        id: names
         env:
-          MATRIX_NAME: ${{ matrix.name }}
+          IMAGE: ${{ matrix.image }}
+          SUFFIX: ${{ matrix.suffix }}
+          SOURCES: ${{ matrix.sources }}
+          INTERNAL: ${{ matrix.internal }}
+          ONLY_VERSIONED: ${{ matrix.only_versioned }}
+          EXTRA_TAGS: ${{ matrix.extra_tags }}
         run: |
-          rm -rf utils/call
-          cp -r _internal/call ./utils/call
-          if [ "$MATRIX_NAME" = "streaming" ]; then
-            rm -rf utils/decrypt utils/decrypt-client
-            cp -r _internal/decrypt ./utils/decrypt
-            cp -r _internal/decrypt-client ./utils/decrypt-client
+          repo=$(echo "ghcr.io/$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          trees=$(
+            for entry in $SOURCES scripts/cargo-skeleton.sh .dockerignore .github/workflows/auto-build.yml; do git rev-parse "HEAD:$entry"; done
+            for entry in $INTERNAL; do git -C _internal rev-parse "HEAD:$entry"; done
+          )
+          source_tag="$repo/$IMAGE:src-$(echo "$trees" | sha256sum | cut -c1-16)$SUFFIX"
+          {
+            echo "source=$source_tag"
+            echo "tags<<EOF"
+            echo "$repo/$IMAGE:$VERSION$SUFFIX"
+            [ "$ONLY_VERSIONED" = true ] || echo "$repo/$IMAGE:latest"
+            for tag in $EXTRA_TAGS; do echo "$repo/$tag"; done
+            echo "EOF"
+            echo "cache=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/cache/${{ matrix.cache }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Look for an image built from the same sources
+        id: built
+        env:
+          SOURCE: ${{ steps.names.outputs.source }}
+        run: |
+          if docker buildx imagetools inspect "$SOURCE" > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify real call-relay is present
-        if: ${{ matrix.name == 'api' || matrix.name == 'jobs' || matrix.name == 'streaming' }}
+      - name: Tag the existing image
+        if: steps.built.outputs.found == 'true'
         env:
-          MATRIX_NAME: ${{ matrix.name }}
-          HAS_PAT: ${{ env.HAS_INTERNAL_PAT }}
+          SOURCE: ${{ steps.names.outputs.source }}
+          TAGS: ${{ steps.names.outputs.tags }}
         run: |
+          tags=()
+          for tag in $TAGS; do tags+=(--tag "$tag"); done
+          docker buildx imagetools create "${tags[@]}" "$SOURCE"
+
+      - name: Real call and decrypt crates
+        if: steps.built.outputs.found == 'false' && matrix.internal
+        env:
+          INTERNAL: ${{ matrix.internal }}
+        run: |
+          for crate in $INTERNAL; do
+            rm -rf "utils/$crate"
+            mv "_internal/$crate" "utils/$crate"
+          done
           if [ ! -d utils/call/server ] || grep -q "call-relay disabled" utils/call/relay/src/lib.rs; then
-            echo "::error::utils/call is still the MOCK relay — refusing to build a prod '$MATRIX_NAME' image."
-            echo "::error::Real-relay swap was skipped: INTERNAL_PAT missing/expired (HAS_INTERNAL_PAT=$HAS_PAT)."
-            echo "::error::Set a valid INTERNAL_PAT (read access to SoundCloud-Internal) and re-run this workflow."
+            echo "::error::utils/call is still the mock relay"
             exit 1
           fi
-          echo "real call-relay confirmed — utils/call/server present, no mock marker"
 
-      - name: Free disk space
-        if: matrix.free_disk
-        uses: jlumbroso/free-disk-space@main
+      - uses: jlumbroso/free-disk-space@v2.0.0
+        if: steps.built.outputs.found == 'false' && matrix.free_disk
         with:
-          tool-cache: true
+          preinstalled-runtimes: true
           android: true
           dotnet: true
           haskell: true
@@ -207,79 +243,24 @@ jobs:
           swap-storage: false
           docker-images: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
+        if: steps.built.outputs.found == 'false'
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Lowercase image name
-        id: repo
-        env:
-          REPO_RAW: ${{ github.repository }}
-          OWNER_RAW: ${{ github.repository_owner }}
-        run: |
-          echo "name=$(echo "$REPO_RAW" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-          echo "owner=$(echo "$OWNER_RAW" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Compute tags & cache
-        id: meta
-        env:
-          REPO: ${{ steps.repo.outputs.name }}
-          OWNER: ${{ steps.repo.outputs.owner }}
-          VERSION: ${{ needs.version.outputs.version }}
-          IMG: ${{ matrix.image_name || matrix.name }}
-          SUFFIX: ${{ matrix.tag_suffix }}
-          EXTRA: ${{ matrix.extra_tags }}
-          CACHE: ${{ matrix.cache_type }}
-          NO_DEFAULT: ${{ matrix.no_default_tags }}
-        run: |
-          {
-            echo "tags<<EOF"
-            echo "ghcr.io/$REPO/$IMG:$VERSION$SUFFIX"
-            if [ "$NO_DEFAULT" != "true" ]; then
-              echo "ghcr.io/$REPO/$IMG:latest"
-            fi
-            if [ -n "$EXTRA" ]; then
-              echo "$EXTRA" | sed -e "s|__REPO__|$REPO|g" -e "s|__VERSION__|$VERSION|g"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          case "$CACHE" in
-            gha)
-              echo "cache_from=type=gha,scope=${{ matrix.name }}" >> "$GITHUB_OUTPUT"
-              echo "cache_to=type=gha,mode=max,scope=${{ matrix.name }}" >> "$GITHUB_OUTPUT"
-              ;;
-            registry-cpu)
-              echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:cpu" >> "$GITHUB_OUTPUT"
-              echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:cpu,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
-              ;;
-            registry-gpu)
-              echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu" >> "$GITHUB_OUTPUT"
-              echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
-              ;;
-            registry-gpu-cuda13)
-              echo "cache_from=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda13" >> "$GITHUB_OUTPUT"
-              echo "cache_to=type=registry,ref=ghcr.io/$OWNER/cache/scd-worker:gpu-cuda13,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-
-      - name: Build & push ${{ matrix.name }}
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
+        if: steps.built.outputs.found == 'false'
         with:
           context: ${{ matrix.context }}
-          file: ${{ matrix.file || '' }}
-          build-contexts: ${{ matrix.build_contexts || '' }}
+          file: ${{ matrix.file }}
+          build-contexts: ${{ matrix.build_contexts }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          provenance: false
+          tags: |
+            ${{ steps.names.outputs.tags }}
+            ${{ steps.names.outputs.source }}
           build-args: |
-            APP_VERSION=${{ needs.version.outputs.version }}
-            ${{ matrix.flavor && format('FLAVOR={0}', matrix.flavor) || '' }}
-          cache-from: ${{ steps.meta.outputs.cache_from }}
-          cache-to: ${{ steps.meta.outputs.cache_to }}
+            APP_VERSION=${{ env.VERSION }}
+            ${{ matrix.flavor && format('FLAVOR={0}', matrix.flavor) }}
+          cache-from: type=registry,ref=${{ steps.names.outputs.cache }}
+          cache-to: type=registry,ref=${{ steps.names.outputs.cache }},mode=max,image-manifest=true,oci-mediatypes=true
