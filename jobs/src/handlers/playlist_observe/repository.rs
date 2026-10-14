@@ -6,6 +6,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::classification::{MembershipRelation, membership_relation};
+use super::due::DuePlaylist;
 use super::fingerprint::membership_fingerprint;
 use super::model::{Authority, PlaylistSnapshot};
 use super::reduce::{
@@ -123,9 +124,10 @@ impl PlaylistObserveRepository {
         batch: i64,
         owner_share: i64,
         claim_seconds: i64,
-    ) -> Result<Vec<String>, RepositoryError> {
+    ) -> Result<Vec<DuePlaylist>, RepositoryError> {
         let owners = i32::try_from(batch.div_euclid(owner_share.max(1)).max(1)).unwrap_or(i32::MAX);
-        let urns = sqlx::query_file_scalar!(
+        let due = sqlx::query_file_as!(
+            DuePlaylist,
             "queries/playlist_observe/claim_due_playlists.sql",
             owners,
             owner_share.max(1),
@@ -134,7 +136,7 @@ impl PlaylistObserveRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(urns)
+        Ok(due)
     }
 
     pub async fn claim_edited(
@@ -251,14 +253,6 @@ impl PlaylistObserveRepository {
         };
         transaction.commit().await?;
         Ok(ready_capture(capture))
-    }
-
-    pub async fn background_backlog_is_full(&self, batch: i64) -> Result<bool, RepositoryError> {
-        let waiting =
-            sqlx::query_file_scalar!("queries/playlist_observe/background_backlog.sql", batch)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(waiting >= batch)
     }
 
     pub async fn secret_token(&self, urn: &PlaylistUrn) -> Result<Option<String>, RepositoryError> {

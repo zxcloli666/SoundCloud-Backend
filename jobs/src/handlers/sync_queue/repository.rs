@@ -43,13 +43,14 @@ impl SyncQueueRepository {
 
     #[cfg(test)]
     pub async fn claim(&self, limit: i64) -> Result<Vec<ClaimedMutation>, sqlx::Error> {
-        self.claim_outside(limit, &[]).await
+        self.claim_outside(limit, &[], true).await
     }
 
     pub async fn claim_outside(
         &self,
         limit: i64,
         held: &[String],
+        star_first: bool,
     ) -> Result<Vec<ClaimedMutation>, sqlx::Error> {
         let paced = PACED_ACTIONS.map(str::to_owned);
         let likes = LIKES_AND_UNLIKES.map(str::to_owned);
@@ -60,7 +61,8 @@ impl SyncQueueRepository {
             limit,
             held,
             &paced,
-            &likes
+            &likes,
+            star_first
         )
         .fetch_all(&self.pool)
         .await

@@ -18,6 +18,7 @@ use futures::{StreamExt, stream};
 use tracing::warn;
 
 use crate::config::JobsConfig;
+use crate::handlers::star_priority::{Picks, Turns};
 use crate::queue::{JobError, JobResult};
 
 use self::actions::ActionError;
@@ -54,6 +55,7 @@ pub struct SyncQueueHandler {
     pauses_restored: tokio::sync::OnceCell<()>,
     concurrency: usize,
     claim_batch: i64,
+    turns: Turns,
 }
 
 impl SyncQueueHandler {
@@ -73,6 +75,7 @@ impl SyncQueueHandler {
             pauses_restored: tokio::sync::OnceCell::new(),
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
+            turns: Turns::default(),
         })
     }
 
@@ -87,8 +90,9 @@ impl SyncQueueHandler {
             .get_or_init(|| self.restore_pauses())
             .await;
         let deadline = Instant::now() + PACED_DRAIN_BUDGET;
+        let mut picks = Picks::new("sync_queue");
         for _ in 0..MAX_DRAIN_BATCHES {
-            let claimed = self.flush_batch().await?;
+            let claimed = self.flush_batch(&mut picks).await?;
             if claimed >= self.claim_batch as usize {
                 continue;
             }
@@ -97,10 +101,11 @@ impl SyncQueueHandler {
                 _ => break,
             }
         }
+        picks.report();
         Ok(())
     }
 
-    async fn flush_batch(&self) -> JobResult<usize> {
+    async fn flush_batch(&self, picks: &mut Picks) -> JobResult<usize> {
         let held = self
             .write_pauses
             .held()
@@ -109,9 +114,10 @@ impl SyncQueueHandler {
             .collect::<Vec<_>>();
         let mutations = self
             .repository
-            .claim_outside(self.claim_batch, &held)
+            .claim_outside(self.claim_batch, &held, self.turns.next().star_first())
             .await
             .map_err(JobError::retryable)?;
+        record_picks(picks, &mutations);
         let claimed = mutations.len();
         let mut executions = stream::iter(mutations)
             .map(|mutation| self.execute(mutation))
@@ -569,6 +575,18 @@ impl SyncQueueHandler {
             }
         }
         Ok(())
+    }
+}
+
+fn record_picks(picks: &mut Picks, mutations: &[ClaimedMutation]) {
+    for (label, star) in [("star", true), ("regular", false)] {
+        picks.record(
+            label,
+            mutations
+                .iter()
+                .filter(|mutation| mutation.star == star)
+                .map(|mutation| mutation.created_at),
+        );
     }
 }
 

@@ -40,6 +40,10 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              updated_at timestamptz NOT NULL DEFAULT now()
          );
          INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('1');
+         CREATE TABLE subscriptions (
+             user_urn text PRIMARY KEY,
+             exp_date bigint NOT NULL
+         );
          CREATE TABLE user_likes_tracks (
              user_id text NOT NULL,
              sc_track_id text NOT NULL,
@@ -183,7 +187,7 @@ async fn one_claim_carries_a_single_like_and_skips_actions_on_hold(
     .await?;
     let repository = repository(pool);
 
-    let open = repository.claim_outside(8, &[]).await?;
+    let open = repository.claim_outside(8, &[], true).await?;
     let targets = |claimed: &[ClaimedMutation]| {
         claimed
             .iter()
@@ -193,7 +197,7 @@ async fn one_claim_carries_a_single_like_and_skips_actions_on_hold(
     assert_eq!(targets(&open), ["first-like", "artist", "playlist"]);
 
     let held = repository
-        .claim_outside(8, &["1:like_track".to_owned()])
+        .claim_outside(8, &["1:like_track".to_owned()], true)
         .await?;
     assert!(held.is_empty());
     Ok(())
@@ -220,6 +224,7 @@ async fn a_like_on_hold_keeps_back_only_the_unlike_of_the_same_target(
         .claim_outside(
             8,
             &["1:like_track".to_owned(), "1:like_playlist".to_owned()],
+            true,
         )
         .await?;
 
@@ -247,7 +252,7 @@ async fn an_edit_still_waits_for_the_earlier_edit_of_the_same_target(
     .await?;
     let repository = repository(pool);
 
-    let claimed = repository.claim_outside(8, &[]).await?;
+    let claimed = repository.claim_outside(8, &[], true).await?;
 
     assert!(claimed.is_empty());
     Ok(())
@@ -366,5 +371,57 @@ async fn recorded_comment_is_finalized_without_another_remote_call(
         .fetch_one(&pool)
         .await?;
     assert_eq!(remaining, 0);
+    Ok(())
+}
+
+async fn seed_star_and_regular_writes(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('2');
+         INSERT INTO subscriptions (user_urn, exp_date)
+         VALUES ('2', extract(epoch FROM now())::bigint + 3600),
+                ('1', extract(epoch FROM now())::bigint - 3600);
+         INSERT INTO sync_queue (user_id, action_type, target_urn, created_at) VALUES
+             ('1', 'like_track', 'old-like', now() - interval '10 minutes'),
+             ('2', 'like_track', 'star-like', now() - interval '1 minute'),
+             ('1', 'comment', 'old-comment', now() - interval '10 minutes'),
+             ('2', 'comment', 'star-comment', now() - interval '1 minute')",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn claimed_targets(claimed: &[ClaimedMutation]) -> Vec<String> {
+    let mut targets: Vec<String> = claimed
+        .iter()
+        .map(|mutation| mutation.target_urn.clone())
+        .collect();
+    targets.sort_unstable();
+    targets
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_star_turn_sends_star_writes_first(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_star_and_regular_writes(&pool).await?;
+    let repository = repository(pool);
+
+    let claimed = repository.claim_outside(2, &[], true).await?;
+
+    assert_eq!(claimed_targets(&claimed), ["star-comment", "star-like"]);
+    assert!(claimed.iter().all(|mutation| mutation.star));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_regular_turn_sends_the_oldest_regular_writes_first(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_star_and_regular_writes(&pool).await?;
+    let repository = repository(pool);
+
+    let claimed = repository.claim_outside(2, &[], false).await?;
+
+    assert_eq!(claimed_targets(&claimed), ["old-comment", "old-like"]);
+    assert!(claimed.iter().all(|mutation| !mutation.star));
     Ok(())
 }

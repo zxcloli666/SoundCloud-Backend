@@ -39,10 +39,10 @@ owners AS (
     WHERE owners.depth < $1
 ),
 picked AS (
-    SELECT share.playlist_urn, owners.owner_sc_user_id
+    SELECT share.playlist_urn, share.next_reconcile_at, owners.owner_sc_user_id
     FROM owners
     CROSS JOIN LATERAL (
-        SELECT state.playlist_urn
+        SELECT state.playlist_urn, state.next_reconcile_at
         FROM playlist_membership_state AS state
         WHERE state.owner_sc_user_id = owners.owner_sc_user_id
           AND state.sync_status <> 'clean'
@@ -64,4 +64,5 @@ SET next_reconcile_at = clock_timestamp() + make_interval(secs => $4::double pre
     updated_at = clock_timestamp()
 FROM picked
 WHERE state.playlist_urn = picked.playlist_urn
-RETURNING state.playlist_urn AS "playlist_urn!"
+RETURNING state.playlist_urn AS "playlist_urn!",
+          picked.next_reconcile_at AS "due_at!"

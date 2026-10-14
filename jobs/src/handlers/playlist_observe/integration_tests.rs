@@ -1321,12 +1321,7 @@ async fn deleting_a_playlist_finishes_inflight_observation_without_rescheduling(
         repository.capture(&urn, Uuid::now_v7(), 1).await?.result,
         super::repository::CaptureResult::Finished
     );
-    assert!(
-        !repository
-            .claim_due(16, 8, 600)
-            .await?
-            .contains(&RECONCILABLE.to_owned())
-    );
+    assert!(!due_urns(repository.claim_due(16, 8, 600).await?).contains(&RECONCILABLE.to_owned()));
     let state: (bool, bool, i64) = sqlx::query_as(
         "SELECT playlist.deleted_at IS NOT NULL, state.next_reconcile_at IS NULL,
                 (SELECT count(*) FROM playlist_remote_observations WHERE playlist_urn = $1)
@@ -1348,7 +1343,7 @@ async fn the_sweep_claims_due_playlists_and_leaves_clean_ones_alone(
     seed_reconcilable_playlist(&pool, &["1", "2"]).await?;
     let repository = PlaylistObserveRepository::new(pool.clone(), false);
 
-    let first = repository.claim_due(16, 8, 600).await?;
+    let first = due_urns(repository.claim_due(16, 8, 600).await?);
     assert!(!first.contains(&RECONCILABLE.to_owned()));
 
     sqlx::query(
@@ -1361,10 +1356,10 @@ async fn the_sweep_claims_due_playlists_and_leaves_clean_ones_alone(
     .await?;
 
     assert_eq!(
-        repository.claim_due(16, 8, 600).await?,
+        due_urns(repository.claim_due(16, 8, 600).await?),
         vec![RECONCILABLE.to_owned()]
     );
-    assert!(repository.claim_due(16, 8, 600).await?.is_empty());
+    assert!(due_urns(repository.claim_due(16, 8, 600).await?).is_empty());
     Ok(())
 }
 
@@ -1869,7 +1864,7 @@ async fn one_owner_with_a_deep_backlog_cannot_take_the_whole_sweep(
     seed_owned_playlists(&pool, "300", 1).await?;
     let repository = PlaylistObserveRepository::new(pool.clone(), false);
 
-    let claimed = repository.claim_due(16, 4, 600).await?;
+    let claimed = due_urns(repository.claim_due(16, 4, 600).await?);
     let owners: std::collections::BTreeSet<String> =
         claimed.iter().map(|urn| owner_of(urn)).collect();
     let greedy = claimed.iter().filter(|urn| owner_of(urn) == "100").count();
@@ -1901,7 +1896,7 @@ async fn the_sweep_rotates_owners_instead_of_restarting_from_the_first(
 
     let mut sweeps = Vec::new();
     for _ in 0..3 {
-        let claimed = repository.claim_due(4, 2, 600).await?;
+        let claimed = due_urns(repository.claim_due(4, 2, 600).await?);
         sweeps.push(
             claimed
                 .iter()
@@ -1924,7 +1919,7 @@ async fn the_sweep_rotates_owners_instead_of_restarting_from_the_first(
         "consecutive sweeps must not serve the same owner again: {sweeps:?}"
     );
 
-    let wrapped = repository.claim_due(4, 2, 600).await?;
+    let wrapped = due_urns(repository.claim_due(4, 2, 600).await?);
     let wrapped_owners: std::collections::BTreeSet<String> =
         wrapped.iter().map(|urn| owner_of(urn)).collect();
     assert_eq!(
@@ -1932,6 +1927,39 @@ async fn the_sweep_rotates_owners_instead_of_restarting_from_the_first(
         "the rotation must wrap back to the first owners"
     );
     Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_star_share_takes_only_playlists_of_current_star_owners(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::raw_sql(
+        "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);
+         INSERT INTO subscriptions (user_urn, exp_date) VALUES
+             ('200', extract(epoch FROM now())::bigint + 3600),
+             ('300', extract(epoch FROM now())::bigint - 3600);",
+    )
+    .execute(&pool)
+    .await?;
+    for owner in ["100", "200", "300"] {
+        seed_owned_playlists(&pool, owner, 3).await?;
+    }
+
+    let star = due_urns(super::due::claim_star_owned(&pool, 2, 16, 600).await?);
+    let again = due_urns(super::due::claim_star_owned(&pool, 2, 16, 600).await?);
+
+    assert_eq!(star.len(), 2);
+    assert!(star.iter().all(|urn| owner_of(urn) == "200"), "{star:?}");
+    assert_eq!(again.len(), 1);
+    assert!(again.iter().all(|urn| owner_of(urn) == "200"), "{again:?}");
+    Ok(())
+}
+
+fn due_urns(due: Vec<super::due::DuePlaylist>) -> Vec<String> {
+    due.into_iter()
+        .map(|playlist| playlist.playlist_urn)
+        .collect()
 }
 
 mod partial_and_public;

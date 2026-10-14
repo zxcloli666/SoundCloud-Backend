@@ -1,7 +1,13 @@
 WITH usable AS MATERIALIZED (
     SELECT DISTINCT ON (connection.soundcloud_user_id)
            connection.soundcloud_user_id AS user_id,
-           connection.oauth_app_id::text AS app
+           connection.oauth_app_id::text AS app,
+           EXISTS (
+               SELECT 1
+               FROM subscriptions AS subscription
+               WHERE subscription.user_urn = connection.soundcloud_user_id
+                 AND subscription.exp_date > extract(epoch FROM now())::bigint
+           ) AS star
     FROM soundcloud_connections AS connection
     JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
     WHERE app.active
@@ -12,7 +18,7 @@ WITH usable AS MATERIALIZED (
              connection.updated_at DESC
 ),
 waiting AS MATERIALIZED (
-    SELECT head.id, head.next_run_at, head.created_at, head.paced
+    SELECT head.id, head.next_run_at, head.created_at, head.paced, usable.star
     FROM usable
     CROSS JOIN LATERAL (
         SELECT ordered.id, ordered.next_run_at, ordered.created_at, ordered.paced
@@ -55,20 +61,21 @@ waiting AS MATERIALIZED (
     ) AS head
 ),
 due AS MATERIALIZED (
-    SELECT ranked.id
+    SELECT ranked.id, ranked.star
     FROM (
         SELECT waiting.id,
                waiting.next_run_at,
                waiting.created_at,
                waiting.paced,
+               waiting.star,
                row_number() OVER (
                    PARTITION BY waiting.paced
-                   ORDER BY waiting.next_run_at, waiting.created_at, waiting.id
+                   ORDER BY waiting.star = $6 DESC, waiting.next_run_at, waiting.created_at, waiting.id
                ) AS turn
         FROM waiting
     ) AS ranked
     WHERE ranked.paced IS NULL OR ranked.turn = 1
-    ORDER BY ranked.next_run_at, ranked.created_at, ranked.id
+    ORDER BY ranked.star = $6 DESC, ranked.next_run_at, ranked.created_at, ranked.id
     LIMIT $2
 ),
 candidates AS (
@@ -100,4 +107,6 @@ RETURNING queued.id,
           queued.lease_generation AS "lease_generation!",
           queued.remote_attempted_generation,
           queued.remote_completed_generation,
-          queued.remote_result
+          queued.remote_result,
+          queued.created_at,
+          (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!"
