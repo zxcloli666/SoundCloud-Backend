@@ -8,6 +8,7 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
         CREATE TABLE users (urn text PRIMARY KEY);
         CREATE TABLE playlists (urn text PRIMARY KEY, sharing text NOT NULL, deleted_at timestamptz);
         CREATE TABLE user_likes_tracks (user_id text, sc_track_id text, wanted_state boolean, created_at timestamptz);
+        CREATE TABLE user_like_ranks (user_id text, sc_track_id text, like_created_at timestamptz, rank bigint);
         CREATE TABLE user_owned_playlists (user_id text, playlist_urn text, created_at timestamptz);
         CREATE TABLE user_owned_tracks (user_id text, sc_track_id text, created_at timestamptz);
         CREATE TABLE user_followings (user_id text, target_user_urn text, wanted_state boolean, created_at timestamptz)")

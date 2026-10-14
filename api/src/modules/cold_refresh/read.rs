@@ -86,6 +86,17 @@ pub(super) async fn collection_page_keys(
         .fetch_all(pg)
         .await?);
     }
+    if coll.kind == backend_contracts::CatalogCollection::LikedTracks && !public_only {
+        return Ok(sqlx::query_file_scalar!(
+            "queries/cold_refresh/owner_likes_page.sql",
+            &crate::common::sc_ids::user_id_variants(sc_user_id),
+            limit + 1,
+            offset,
+            crate::common::sc_ids::extract_sc_id(sc_user_id)
+        )
+        .fetch_all(pg)
+        .await?);
+    }
     let table = coll.mirror_table;
     let key_col = coll.mirror_key_col;
     let wanted_column = if coll.has_wanted_state {

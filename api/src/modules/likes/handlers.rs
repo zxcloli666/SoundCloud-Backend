@@ -4,6 +4,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::Value;
 
+use super::LikesOrderRequest;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -14,6 +15,7 @@ pub fn router() -> Router<AppState> {
             "/likes/tracks/{track_urn}",
             post(like_track).delete(unlike_track),
         )
+        .route("/me/likes/tracks/order", post(order_liked_tracks))
         .route(
             "/likes/playlists/{playlist_urn}",
             post(like_playlist)
@@ -39,6 +41,15 @@ async fn unlike_track(
 ) -> AppResult<Json<Value>> {
     let v = st.likes.unlike_track(&ctx.sc_user_id, &track_urn).await?;
     Ok(Json(v))
+}
+
+async fn order_liked_tracks(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Json(request): Json<LikesOrderRequest>,
+) -> AppResult<StatusCode> {
+    st.likes.order_tracks(&ctx.sc_user_id, request).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn like_playlist(

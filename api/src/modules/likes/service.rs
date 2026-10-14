@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
+use super::order::{self, LikesOrderRequest};
 use crate::common::sc_ids::{EntityKind, require_ref};
 use crate::error::AppResult;
 use crate::modules::events::EventsService;
@@ -65,7 +66,16 @@ impl LikesService {
                 track_urn,
             )
             .await?;
+        order::forget(&self.pg, sc_user_id, sc_track_id).await?;
         Ok(json!({ "status": "queued", "actionType": "unlike_track" }))
+    }
+
+    pub async fn order_tracks(
+        &self,
+        sc_user_id: &str,
+        request: LikesOrderRequest,
+    ) -> AppResult<()> {
+        order::apply(&self.pg, sc_user_id, request).await
     }
 
     pub async fn like_playlist(&self, sc_user_id: &str, playlist_urn: &str) -> AppResult<Value> {

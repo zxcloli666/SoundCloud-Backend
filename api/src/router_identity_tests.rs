@@ -9,7 +9,7 @@ use super::router_search_tests::{LISTENER, app, get, redis_url, seed_tracks, ses
 
 const NO_REDIS: &str = "redis://127.0.0.1:1";
 
-async fn send(
+pub(super) async fn send(
     app: &axum::Router,
     session: Uuid,
     method: &str,
