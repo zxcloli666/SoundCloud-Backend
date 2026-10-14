@@ -1,7 +1,8 @@
-use super::star_priority::{self, INDEX_TRACK_PRIORITY};
+use super::star_priority;
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob};
 use backend_contracts::{
-    CatalogEntity, CatalogRefreshPayload, IndexTrackPayload, JobKind, Versioned,
+    CatalogEntity, CatalogRefreshPayload, INDEX_TRACK_PRIORITY, IndexTrackPayload, JobKind,
+    Versioned,
 };
 use catalog_ingest::{ScTrackFields, TrackPriority};
 use chrono::Utc;

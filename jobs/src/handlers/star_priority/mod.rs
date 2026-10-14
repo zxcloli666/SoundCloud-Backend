@@ -13,8 +13,8 @@ use crate::queue::{JobError, JobResult};
 pub(crate) use self::queued::record_queued_waits;
 pub(crate) use self::round::{Round, split_next, with_next};
 pub(crate) use self::tier::{
-    CORE_FAST_TRACK_PRIORITY, INDEX_TRACK_PRIORITY, LIKED_PRIORITY, LYRICS_EMBED_PRIORITY, Pass,
-    Tier, of_track, of_tracks,
+    CORE_FAST_TRACK_PRIORITY, LIKED_PRIORITY, LYRICS_EMBED_PRIORITY, Pass, Tier, of_track,
+    of_tracks,
 };
 pub(crate) use self::turns::{Turn, Turns};
 

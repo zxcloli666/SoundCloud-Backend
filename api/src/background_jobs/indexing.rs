@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::{IndexTrackPayload, JobKind};
+use backend_contracts::{INDEX_TRACK_PRIORITY, IndexTrackPayload, JobKind};
 use mini_moka::sync::Cache;
 
 use super::{BackgroundJob, BackgroundJobs};
@@ -38,7 +38,8 @@ impl IndexingJobs {
             IndexTrackPayload {
                 sc_track_id: sc_track_id.to_owned(),
             },
-        )?;
+        )?
+        .with_priority(INDEX_TRACK_PRIORITY);
         self.jobs.enqueue(&job).await?;
         self.recent.insert(key, ());
         Ok(())

@@ -83,6 +83,8 @@ pub const SYNC_QUEUE_MAX_RETRIES: i32 = 5;
 
 pub const STAR_PRIORITY_BONUS: i16 = 5;
 
+pub const INDEX_TRACK_PRIORITY: i16 = 5;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {

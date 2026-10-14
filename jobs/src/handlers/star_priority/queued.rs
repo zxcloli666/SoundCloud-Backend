@@ -1,7 +1,7 @@
-use backend_contracts::JobKind;
+use backend_contracts::{INDEX_TRACK_PRIORITY, JobKind};
 use sqlx::PgPool;
 
-use super::tier::{CORE_FAST_TRACK_PRIORITY, INDEX_TRACK_PRIORITY, LYRICS_EMBED_PRIORITY, Tier};
+use super::tier::{CORE_FAST_TRACK_PRIORITY, LYRICS_EMBED_PRIORITY, Tier};
 
 const TIERED_KINDS: [(JobKind, i16); 4] = [
     (JobKind::IndexTrack, INDEX_TRACK_PRIORITY),

@@ -13,7 +13,7 @@ mod test_schema;
 use anyhow::anyhow;
 use backend_contracts::pipeline::STORAGE_TRACK_UPLOADED;
 use backend_contracts::worker_contract::AUDIO_LANE;
-use backend_contracts::{IndexTrackPayload, JobKind, Versioned};
+use backend_contracts::{INDEX_TRACK_PRIORITY, IndexTrackPayload, JobKind, Versioned};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
@@ -31,7 +31,7 @@ use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;
 use self::storage_events::StorageEventHandler;
 use self::storage_uploaded::StorageUploadHandler;
-use super::star_priority::{self, INDEX_TRACK_PRIORITY, Tier, Turns};
+use super::star_priority::{self, Tier, Turns};
 use super::worker_backlog::{WorkerBacklog, unclaimed_room};
 
 const REAP_BATCH: i64 = 50;

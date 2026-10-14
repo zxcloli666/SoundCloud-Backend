@@ -4,7 +4,6 @@ use catalog_ingest::TrackPriority;
 use sqlx::PgExecutor;
 
 pub(crate) const CORE_FAST_TRACK_PRIORITY: i16 = 6;
-pub(crate) const INDEX_TRACK_PRIORITY: i16 = 5;
 pub(crate) const LYRICS_EMBED_PRIORITY: i16 = 0;
 pub(crate) const LIKED_PRIORITY: i16 = TrackPriority::Like as i16;
 

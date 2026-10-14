@@ -398,7 +398,8 @@ mod tests {
     async fn a_star_like_resolved_late_outranks_a_freshly_crawled_track_for_indexing(
         pool: PgPool,
     ) -> anyhow::Result<()> {
-        use crate::handlers::star_priority::{INDEX_TRACK_PRIORITY, Tier};
+        use crate::handlers::star_priority::Tier;
+        use backend_contracts::INDEX_TRACK_PRIORITY;
 
         install_schema(&pool).await?;
         sqlx::raw_sql(include_str!(
