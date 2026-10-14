@@ -20,6 +20,31 @@ impl CatalogRemote {
             tokens: TokenRefreshClient::new(&config.oauth)?,
         })
     }
+
+    #[cfg(test)]
+    pub(super) fn offline(pool: PgPool) -> Result<Self, crate::ClientBuildError> {
+        let unreachable = url::Url::parse("http://127.0.0.1:1/")?;
+        let sync_queue = crate::config::SyncQueueConfig {
+            api_url: unreachable.clone(),
+            proxy_url: None,
+            storage_url: unreachable.clone(),
+            storage_token: String::new().into(),
+            concurrency: 1,
+            claim_batch: 1,
+            lease_duration: Duration::from_secs(300),
+            like_interval: Duration::from_secs(5),
+        };
+        let oauth = crate::config::OAuthConfig {
+            token_url: unreachable,
+            bootstrap_app: None,
+        };
+        Ok(Self {
+            connections: ConnectionManager::new(pool),
+            owner: PlaylistReadClient::new(&sync_queue)?,
+            tokens: TokenRefreshClient::new(&oauth)?,
+        })
+    }
+
     pub(super) async fn public_get(&self, path: &str) -> JobResult<Value> {
         let candidates = self
             .connections
@@ -186,6 +211,16 @@ pub(super) fn connection_error(error: ConnectionError) -> JobError {
         } => postpone(*retry_after_seconds, error),
         ConnectionError::Database(_) => JobError::retryable(error),
     }
+}
+
+pub(super) fn owner_is_signed_out(error: &JobError) -> bool {
+    let JobError::Postponed { error, .. } = error else {
+        return false;
+    };
+    matches!(
+        error.downcast_ref::<ConnectionError>(),
+        Some(ConnectionError::ReauthorizationRequired)
+    )
 }
 
 pub(super) fn postpone(seconds: i64, error: impl Into<anyhow::Error>) -> JobError {

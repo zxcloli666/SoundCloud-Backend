@@ -13,8 +13,7 @@ use crate::config::JobsConfig;
 use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
-use super::catalog_remote::{CatalogRemote, postpone, public_error};
-use super::sync_queue::ConnectionError;
+use super::catalog_remote::{CatalogRemote, owner_is_signed_out, postpone, public_error};
 
 const APIV2_DEADLINE: Duration = Duration::from_secs(25);
 
@@ -181,16 +180,6 @@ impl CatalogCollectionHandler {
         };
         page::parse(payload, value, false)
     }
-}
-
-fn owner_is_signed_out(error: &JobError) -> bool {
-    let JobError::Postponed { error, .. } = error else {
-        return false;
-    };
-    matches!(
-        error.downcast_ref::<ConnectionError>(),
-        Some(ConnectionError::ReauthorizationRequired)
-    )
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use crate::config::JobsConfig;
 use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
-use super::catalog_remote::{CatalogRemote, public_error};
+use super::catalog_remote::{CatalogRemote, owner_is_signed_out, public_error};
 use super::secret_link;
 
 const FETCH_DEADLINE: Duration = Duration::from_secs(45);
@@ -49,11 +49,17 @@ impl CatalogRefreshHandler {
             return Ok(());
         }
         let observation = self.writer.begin_observation().await?;
-        let mut value = tokio::time::timeout(FETCH_DEADLINE, self.fetch(&payload))
+        let value = tokio::time::timeout(FETCH_DEADLINE, self.fetch(&payload))
             .await
             .map_err(|_| {
                 JobError::retryable(anyhow::anyhow!("catalog refresh deadline exceeded"))
-            })??;
+            })?;
+        let mut value = match value {
+            Err(error) if payload.owner_id.is_some() && owner_is_signed_out(&error) => {
+                return Ok(());
+            }
+            result => result?,
+        };
         sc_transport::normalize_v2_to_v1(&mut value);
         validate_entity(&payload, &value)?;
         if let Some(object) = value.as_object_mut() {
@@ -208,9 +214,12 @@ pub(super) fn validate_entity(payload: &CatalogRefreshPayload, value: &Value) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handlers::catalog_refresh_writer::CatalogWriter;
     use crate::handlers::catalog_remote::{connection_error, owner_error};
     use crate::handlers::playlist_observe::PlaylistReadError;
     use crate::handlers::sync_queue::ConnectionError;
+    use backend_contracts::JobKind;
+    use uuid::Uuid;
 
     #[test]
     fn cooldowns_and_reauthorization_postpone_without_spending_attempts() {
@@ -270,6 +279,60 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn refresh_for_a_signed_out_owner_finishes_without_retrying(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        crate::db::migrations::run_core(&pool, None).await?;
+        let app = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+             VALUES ($1, 'test', $2, 'secret', 'https://app.test/')",
+        )
+        .bind(app)
+        .bind(app.to_string())
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO soundcloud_connections (
+                 id, soundcloud_user_id, oauth_app_id, access_token, refresh_token, expires_at, scope, last_refresh_error_kind
+             ) VALUES ($1, '17', $2, 'access', 'refresh', now(), '', 'reauthorization_required')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(app)
+        .execute(&pool)
+        .await?;
+        let handler = CatalogRefreshHandler {
+            writer: CatalogWriter::new(pool.clone(), 420_000),
+            public: Arc::new(PublicCatalogReader::offline(pool.clone())),
+            remote: CatalogRemote::offline(pool.clone())?,
+            pool: pool.clone(),
+        };
+        let job = LeasedJob {
+            id: Uuid::now_v7(),
+            kind: JobKind::CatalogRefresh,
+            dedup_key: None,
+            payload: Value::Null,
+            generation: 1,
+            attempts: 1,
+            max_attempts: 8,
+            lease_id: Uuid::now_v7(),
+        };
+        let profile = CatalogRefreshPayload {
+            entity: CatalogEntity::Profile,
+            sc_id: "17".into(),
+            owner_id: Some("17".into()),
+        };
+
+        handler.refresh(&job, profile).await?;
+
+        let profiles: i64 = sqlx::query_scalar("SELECT count(*) FROM user_profiles")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(profiles, 0);
+        Ok(())
     }
 }
 
