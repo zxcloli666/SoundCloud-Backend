@@ -410,4 +410,58 @@ mod tests {
         assert!(signals.has_any_signal());
         assert_eq!(signals.best_seed_kind(), SeedKind::ColdStart);
     }
+
+    async fn like_at_once(pool: &PgPool, tracks: &[&str]) -> anyhow::Result<()> {
+        for track in tracks {
+            sqlx::query(
+                "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at)
+                 VALUES ('17', $1, true, now() - interval '1 day')",
+            )
+            .bind(track)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn superlike_rows(pool: &PgPool, tracks: &[&str]) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO user_superlikes (user_id, sc_track_id, like_created_at)
+             SELECT user_id, sc_track_id, created_at FROM user_likes_tracks
+             WHERE sc_track_id = ANY ($1)",
+        )
+        .bind(tracks)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    fn weight_of(positives: &[WeightedTrack], id: &str) -> f32 {
+        positives
+            .iter()
+            .find(|w| w.sc_track_id == id)
+            .map_or(0.0, |w| w.weight)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_superliked_like_weighs_three_likes_in_events_and_in_the_mirror(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO user_events (sc_user_id, sc_track_id, event_type, weight, created_at)
+             SELECT '17', id, 'like', 1.0, now() - interval '1 day' FROM unnest(ARRAY['1', '2']) id",
+        )
+        .execute(&pool)
+        .await?;
+        like_at_once(&pool, &["1", "2", "3", "4"]).await?;
+        superlike_rows(&pool, &["1", "3"]).await?;
+
+        let positives = load_strong_positives(&pool, "17", &HashSet::new()).await;
+
+        let events = weight_of(&positives, "1") / weight_of(&positives, "2");
+        let mirror = weight_of(&positives, "3") / weight_of(&positives, "4");
+        assert!((events - 3.0).abs() < 1e-3, "events ratio {events}");
+        assert!((mirror - 3.0).abs() < 1e-3, "mirror ratio {mirror}");
+        Ok(())
+    }
 }

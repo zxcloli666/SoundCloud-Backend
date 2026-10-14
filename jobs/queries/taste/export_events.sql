@@ -45,15 +45,19 @@ imported AS (
     FROM user_likes_tracks
     WHERE wanted_state
 ),
-superliked AS (
+superliked AS MATERIALIZED (
     SELECT regexp_replace(s.user_id, '^.*:', '') AS user_id,
            regexp_replace(s.sc_track_id, '^.*:', '') AS track_id
     FROM user_superlikes s
-    JOIN user_likes_tracks l
-      ON l.user_id = s.user_id
-     AND l.sc_track_id = s.sc_track_id
-     AND l.created_at = s.like_created_at
-    WHERE l.wanted_state
+    CROSS JOIN LATERAL (
+        SELECT 1
+        FROM user_likes_tracks l
+        WHERE l.user_id = s.user_id
+          AND l.sc_track_id = s.sc_track_id
+          AND l.created_at = s.like_created_at
+          AND l.wanted_state
+        LIMIT 1
+    ) live
 ),
 events AS (
     SELECT user_id, track_id, event_code, unix_s, weight

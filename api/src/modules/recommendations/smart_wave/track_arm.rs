@@ -104,8 +104,7 @@ pub async fn recommend_from_many(
                 );
                 SeedCandidates {
                     position,
-                    weight: recency_factor(position, seeds.len())
-                        * superlike_factor(seed_track_id, boosted),
+                    weight: seed_weight(position, seeds.len(), seed_track_id, boosted),
                     mert,
                     clap,
                     lyrics,
@@ -164,12 +163,18 @@ fn recency_factor(position: usize, total: usize) -> f32 {
     (1.0 - 0.7 * progress).clamp(0.3, 1.0)
 }
 
-fn superlike_factor(seed_track_id: u64, boosted: &HashSet<u64>) -> f32 {
-    if boosted.contains(&seed_track_id) {
+pub(super) fn seed_weight(
+    position: usize,
+    total: usize,
+    seed_track_id: u64,
+    boosted: &HashSet<u64>,
+) -> f32 {
+    let superlike = if boosted.contains(&seed_track_id) {
         SUPERLIKE_WEIGHT
     } else {
         1.0
-    }
+    };
+    recency_factor(position, total) * superlike
 }
 
 async fn recommend_one(

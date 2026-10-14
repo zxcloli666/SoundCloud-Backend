@@ -20,6 +20,7 @@ use crate::error::AppResult;
 use crate::modules::recommendations::service::util::user_id_variants;
 use crate::modules::recommendations::service::{RecommendResult, RecommendationsService};
 use crate::modules::superlikes::SUPERLIKE_WEIGHT;
+use crate::modules::superlikes::service::FREE_LIMIT;
 use crate::qdrant::collections;
 
 use cursor::{SeedKind, WaveCursor};
@@ -36,8 +37,7 @@ const GRAPH_ARTISTS: usize = 160;
 const GRAPH_PER_ARTIST: i64 = 6;
 const GRAPH_TRACKS_TOTAL: i64 = 800;
 const SEED_LIKES_USER: usize = 14;
-const SEED_SUPERLIKES_USER: usize = 6;
-const SEED_SUPERLIKES_MOOD: usize = 2;
+const SEED_SUPERLIKES_USER: usize = FREE_LIMIT as usize;
 const TASTE_LIKES: usize = 80;
 const SEED_SERVED_FORWARD: usize = 8;
 
@@ -97,6 +97,7 @@ pub async fn build(
 
     let mert_seeds_raw = pick_mert_seeds(&req.seed, &signals, &wave_cursor);
     let boosted = superliked_ids(&signals);
+    let seed_boost = mert_boost(&req.seed, &boosted);
     let exclude = build_exclude(&signals, &wave_cursor, &req.seed, &hidden_listen);
     let negative_raw = negative_ids_for_qdrant(&signals);
 
@@ -110,7 +111,7 @@ pub async fn build(
     let mert_fut = track_arm::recommend_from_many(
         svc,
         &mert_seeds,
-        &boosted,
+        &seed_boost,
         &negative_ids,
         filter.as_ref(),
         MERT_POOL,
@@ -314,23 +315,21 @@ fn build_exclude(
 
 fn pick_mert_seeds(seed: &SmartWaveSeed, signals: &UserSignals, cursor: &WaveCursor) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
-    let superliked = signals.superliked.iter();
     let fresh = signals.fresh_likes.iter();
     match seed {
         SmartWaveSeed::Track(t) => {
             out.push(*t);
-            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_MOOD), usize::MAX);
             push_parsed(&mut out, fresh.take(5), usize::MAX);
         }
         SmartWaveSeed::Artist(_, tracks) => {
             for t in tracks.iter().take(8) {
                 push_seed(&mut out, *t);
             }
-            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_MOOD), usize::MAX);
             push_parsed(&mut out, fresh.take(3), usize::MAX);
         }
         SmartWaveSeed::User => {
-            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_USER), usize::MAX);
+            let superliked = signals.superliked.iter().take(SEED_SUPERLIKES_USER);
+            push_parsed(&mut out, superliked, usize::MAX);
             push_parsed(&mut out, fresh, SEED_LIKES_USER);
             push_parsed(&mut out, signals.recent_played.iter(), SEED_LIKES_USER);
         }
@@ -364,6 +363,13 @@ fn superliked_ids(signals: &UserSignals) -> HashSet<u64> {
         .iter()
         .filter_map(|id| id.parse::<u64>().ok())
         .collect()
+}
+
+fn mert_boost(seed: &SmartWaveSeed, boosted: &HashSet<u64>) -> HashSet<u64> {
+    match seed {
+        SmartWaveSeed::User => boosted.clone(),
+        SmartWaveSeed::Track(_) | SmartWaveSeed::Artist(..) => HashSet::new(),
+    }
 }
 
 fn taste_ids(signals: &UserSignals) -> Vec<u64> {
@@ -787,17 +793,52 @@ mod tests {
     }
 
     #[test]
-    fn a_track_wave_keeps_its_track_first_and_adds_two_superlikes() {
+    fn every_free_superlike_seeds_the_user_wave() {
+        let superliked = strings(900..=911);
         let signals = UserSignals {
-            superliked: vec!["900".into(), "901".into(), "902".into()],
+            superliked: superliked.clone(),
+            fresh_likes: strings(10..=40),
+            ..UserSignals::default()
+        };
+        let cursor = WaveCursor::new(SeedKind::User, "17".into());
+
+        let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor);
+
+        let expected: Vec<u64> = (900..910).chain(10..14).collect();
+        assert_eq!(seeds, expected);
+    }
+
+    #[test]
+    fn a_track_wave_keeps_its_seed_track_the_strongest() {
+        let signals = UserSignals {
+            superliked: vec!["900".into(), "11".into()],
             fresh_likes: strings(10..=20),
             ..UserSignals::default()
         };
         let cursor = WaveCursor::new(SeedKind::Track, "t7".into());
+        let seed = SmartWaveSeed::Track(7);
 
-        let seeds = pick_mert_seeds(&SmartWaveSeed::Track(7), &signals, &cursor);
+        let seeds = pick_mert_seeds(&seed, &signals, &cursor);
+        let boost = mert_boost(&seed, &superliked_ids(&signals));
+        let weights: Vec<f32> = seeds
+            .iter()
+            .enumerate()
+            .map(|(position, id)| track_arm::seed_weight(position, seeds.len(), *id, &boost))
+            .collect();
 
-        assert_eq!(seeds, vec![7, 900, 901, 10, 11, 12, 13, 14]);
+        assert_eq!(seeds, vec![7, 10, 11, 12, 13, 14]);
+        assert!(weights[1..].iter().all(|weight| *weight < weights[0]));
+    }
+
+    #[test]
+    fn a_superlike_weighs_three_times_in_the_user_wave_seeds() {
+        let boosted: HashSet<u64> = [900].into();
+        let boost = mert_boost(&SmartWaveSeed::User, &boosted);
+
+        let superliked = track_arm::seed_weight(0, 10, 900, &boost);
+        let liked = track_arm::seed_weight(0, 10, 10, &boost);
+
+        assert!((superliked - SUPERLIKE_WEIGHT * liked).abs() < 1e-6);
     }
 
     #[test]

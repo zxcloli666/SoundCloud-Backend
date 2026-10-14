@@ -493,4 +493,57 @@ mod tests {
         assert!((m[&a] - 1.0).abs() < 1e-6);
         assert!((m[&b] - 0.5).abs() < 1e-6);
     }
+
+    async fn liked_artist(pool: &PgPool, track: &str, liked_days_ago: i32) -> anyhow::Result<Uuid> {
+        let artist: Uuid = sqlx::query_scalar(
+            "INSERT INTO artists (name, normalized_name, source) VALUES ($1, $1, 'test') RETURNING id",
+        )
+        .bind(format!("artist {track}"))
+        .fetch_one(pool)
+        .await?;
+        sqlx::query(
+            "WITH t AS (
+                 INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+                 VALUES ($1, 'soundcloud:tracks:' || $1, 'Song', 'song', 200000) RETURNING id
+             )
+             INSERT INTO track_artists (artist_id, role, source, track_id)
+             SELECT $2, 'primary', 'test', id FROM t",
+        )
+        .bind(track)
+        .bind(artist)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at)
+             VALUES ('17', $1, true, date_trunc('day', now()) - make_interval(days => $2))",
+        )
+        .bind(track)
+        .bind(liked_days_ago)
+        .execute(pool)
+        .await?;
+        Ok(artist)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_superliked_like_seeds_its_artist_three_times_harder_even_when_old(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        let superliked = liked_artist(&pool, "1", 2).await?;
+        let liked = liked_artist(&pool, "2", 2).await?;
+        let old = liked_artist(&pool, "3", 400).await?;
+        sqlx::query(
+            "INSERT INTO user_superlikes (user_id, sc_track_id, like_created_at, created_at)
+             SELECT user_id, sc_track_id, created_at, created_at FROM user_likes_tracks
+             WHERE sc_track_id IN ('1', '3')",
+        )
+        .execute(&pool)
+        .await?;
+
+        let seeds = load_user_seeds(&pool, &user_id_variants("17")).await;
+
+        let ratio = seeds[&superliked] / seeds[&liked];
+        assert!((ratio - 3.0).abs() < 1e-3, "ratio {ratio}");
+        assert!(seeds.contains_key(&old), "an old superlike stays a seed");
+        Ok(())
+    }
 }
