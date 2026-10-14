@@ -115,7 +115,7 @@ async fn a_private_track_serves_no_comments_and_keeps_none(pool: PgPool) -> anyh
             evict_after_sec: 86400,
         },
     );
-    let page = service.comments_page("42", 0, 30).await?;
+    let page = service.comments_page("42", "9", 0, 30).await?;
     assert!(page.collection.is_empty());
     assert_eq!(page.sync.status, "ready");
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM track_comments")

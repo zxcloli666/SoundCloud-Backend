@@ -134,13 +134,51 @@ async fn an_unknown_subject_asks_for_the_entity_before_its_audience(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let page = service(&pool)
-        .audience_page(TRACK_FAVORITERS, "soundcloud:tracks:42", 0, 30)
+        .audience_page(TRACK_FAVORITERS, "soundcloud:tracks:42", "9", 0, 30)
         .await?;
     assert!(page.collection.is_empty());
     assert_eq!(page.sync.status, "refreshing");
     assert!(page.sync.last_completed_at.is_none());
     assert!(queued(&pool, "catalog.collection").await?.is_empty());
     assert_eq!(queued(&pool, "catalog.refresh").await?, ["track:42:public"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_star_reader_lifts_the_card_refresh_behind_an_audience_or_comments_page(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO subscriptions (user_urn, exp_date)
+         VALUES ('7', extract(epoch FROM now())::bigint + 3600)",
+    )
+    .execute(&pool)
+    .await?;
+    let service = service(&pool);
+
+    service
+        .audience_page(TRACK_FAVORITERS, "41", "soundcloud:users:7", 0, 30)
+        .await?;
+    service.comments_page("42", "7", 0, 30).await?;
+    service
+        .audience_page(PLAYLIST_REPOSTERS, "43", "9", 0, 30)
+        .await?;
+
+    let priorities: Vec<(String, i16)> = sqlx::query_as(
+        "SELECT dedup_key, priority FROM background_jobs
+         WHERE kind = 'catalog.refresh'
+         ORDER BY dedup_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        priorities,
+        [
+            ("playlist:43:public".into(), 5),
+            ("track:41:public".into(), 10),
+            ("track:42:public".into(), 10),
+        ]
+    );
     Ok(())
 }
 
@@ -165,7 +203,7 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
     .execute(&pool)
     .await?;
     let page = service(&pool)
-        .audience_page(TRACK_FAVORITERS, "42", 0, 30)
+        .audience_page(TRACK_FAVORITERS, "42", "9", 0, 30)
         .await?;
     assert!(page.collection.is_empty());
     assert_eq!(page.sync.status, "ready");
@@ -198,7 +236,7 @@ async fn a_public_subject_serves_its_mirror_and_schedules_one_refresh(
     .execute(&pool)
     .await?;
     let page = service(&pool)
-        .audience_page(PLAYLIST_REPOSTERS, "soundcloud:playlists:42", 0, 30)
+        .audience_page(PLAYLIST_REPOSTERS, "soundcloud:playlists:42", "9", 0, 30)
         .await?;
     assert_eq!(page.collection.len(), 1);
     assert_eq!(page.collection[0]["urn"], "soundcloud:users:1");

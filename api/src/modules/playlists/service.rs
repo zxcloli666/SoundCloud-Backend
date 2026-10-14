@@ -518,7 +518,7 @@ impl PlaylistsService {
             .ensure_read_access(sc_user_id, playlist_urn, false)
             .await?;
         self.cold_refresh
-            .audience_page(PLAYLIST_REPOSTERS, playlist_urn, page, limit)
+            .audience_page(PLAYLIST_REPOSTERS, playlist_urn, sc_user_id, page, limit)
             .await
     }
 }

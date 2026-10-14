@@ -192,6 +192,7 @@ impl ColdRefreshService {
         &self,
         coll: AudienceCollection,
         subject_urn: &str,
+        reader: &str,
         page: i64,
         limit: i64,
     ) -> AppResult<super::collection::CollectionPage> {
@@ -202,7 +203,7 @@ impl ColdRefreshService {
                 coll.subject,
                 &subject,
                 None,
-                None,
+                Some(reader),
                 super::BACKGROUND_PRIORITY,
             )
             .await?;
@@ -236,6 +237,7 @@ impl ColdRefreshService {
     pub async fn comments_page(
         &self,
         sc_track_id: &str,
+        reader: &str,
         page: i64,
         limit: i64,
     ) -> AppResult<super::collection::CollectionPage> {
@@ -249,7 +251,7 @@ impl ColdRefreshService {
                 backend_contracts::CatalogEntity::Track,
                 &subject,
                 None,
-                None,
+                Some(reader),
                 super::BACKGROUND_PRIORITY,
             )
             .await?;

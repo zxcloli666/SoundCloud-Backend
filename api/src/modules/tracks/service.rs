@@ -275,7 +275,7 @@ impl TracksService {
     ) -> AppResult<CollectionPage> {
         let sc_track_id = self.readable_sc_track_id(sc_user_id, track_urn).await?;
         self.cold_refresh
-            .comments_page(&sc_track_id, page, limit)
+            .comments_page(&sc_track_id, sc_user_id, page, limit)
             .await
     }
 
@@ -330,7 +330,7 @@ impl TracksService {
     ) -> AppResult<CollectionPage> {
         let track_urn = self.readable_sc_track_id(sc_user_id, track_urn).await?;
         self.cold_refresh
-            .audience_page(coll, &track_urn, page, limit)
+            .audience_page(coll, &track_urn, sc_user_id, page, limit)
             .await
     }
 
