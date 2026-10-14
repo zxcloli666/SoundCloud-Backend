@@ -47,7 +47,7 @@ async fn add(
     let sc_track_id = track.sc_id();
     let premium = st.subscriptions.is_premium(&ctx.sc_user_id).await?;
     let done = service::superlike(&st.pg, &st.sync_queue, &ctx.sc_user_id, &track, premium).await?;
-    want_track(&st.pg, &sc_track_id, TrackPriority::Like).await?;
+    want_track(&st.pg, &sc_track_id, TrackPriority::Like, &ctx.sc_user_id).await?;
     if done.newly_liked {
         st.events
             .record(&ctx.sc_user_id, &sc_track_id, "like", None)

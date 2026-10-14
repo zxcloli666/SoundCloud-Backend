@@ -33,6 +33,7 @@ async fn enqueue_featured(
         entity,
         urn,
         None,
+        None,
         crate::modules::cold_refresh::BACKGROUND_PRIORITY,
     )
     .await

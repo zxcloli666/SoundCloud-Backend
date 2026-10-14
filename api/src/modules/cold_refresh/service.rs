@@ -202,6 +202,7 @@ impl ColdRefreshService {
                 coll.subject,
                 &subject,
                 None,
+                None,
                 super::BACKGROUND_PRIORITY,
             )
             .await?;
@@ -247,6 +248,7 @@ impl ColdRefreshService {
                 &self.pg,
                 backend_contracts::CatalogEntity::Track,
                 &subject,
+                None,
                 None,
                 super::BACKGROUND_PRIORITY,
             )

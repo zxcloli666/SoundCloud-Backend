@@ -45,6 +45,7 @@ impl DislikesService {
             &self.pg,
             &id,
             crate::modules::tracks::TrackPriority::Discovery,
+            sc_user_id,
         )
         .await?;
 

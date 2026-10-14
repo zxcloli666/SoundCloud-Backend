@@ -14,16 +14,18 @@ pub async fn enqueue_entity(
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    reader: Option<&str>,
     priority: i16,
 ) -> AppResult<()> {
     let mut connection = pool.acquire().await?;
-    enqueue_entity_in(&mut connection, entity, urn, owner_id, priority).await
+    enqueue_entity_in(&mut connection, entity, urn, owner_id, reader, priority).await
 }
 
 pub async fn want_track(
     pool: &PgPool,
     sc_track_id: &str,
     priority: catalog_ingest::TrackPriority,
+    reader: &str,
 ) -> AppResult<()> {
     let wanted = [sc_track_id.to_owned()];
     let missing =
@@ -39,6 +41,7 @@ pub async fn want_track(
         CatalogEntity::Track,
         sc_track_id,
         None,
+        Some(reader),
         VIEWER_PRIORITY,
     )
     .await
@@ -49,6 +52,7 @@ pub async fn refresh_pending(
     entity: CatalogEntity,
     urn: &str,
     viewer: Option<&str>,
+    reader: Option<&str>,
     code: &'static str,
     message: &'static str,
 ) -> AppError {
@@ -70,7 +74,9 @@ pub async fn refresh_pending(
             Ok(false) => {}
             Err(error) => return error.into(),
         }
-        if let Err(error) = enqueue_entity(pool, entity, urn, owner_id, VIEWER_PRIORITY).await {
+        if let Err(error) =
+            enqueue_entity(pool, entity, urn, owner_id, reader, VIEWER_PRIORITY).await
+        {
             return error;
         }
         let retry_after =
@@ -101,6 +107,7 @@ pub async fn enqueue_entity_in(
     entity: CatalogEntity,
     urn: &str,
     owner_id: Option<&str>,
+    reader: Option<&str>,
     priority: i16,
 ) -> AppResult<()> {
     let payload = CatalogRefreshPayload {
@@ -112,7 +119,13 @@ pub async fn enqueue_entity_in(
         return Err(AppError::bad_request("Invalid catalog resource"));
     }
     let dedup_key = payload.dedup_key();
-    let star_candidate = payload.owner_id.clone().unwrap_or_default();
+    let star_candidates: Vec<String> = payload
+        .owner_id
+        .iter()
+        .map(String::as_str)
+        .chain(reader.map(extract_sc_id))
+        .map(str::to_owned)
+        .collect();
     let body = serde_json::to_value(Versioned::V1(payload))
         .map_err(|error| AppError::internal(error.to_string()))?;
     let kind = JobKind::CatalogRefresh;
@@ -124,7 +137,7 @@ pub async fn enqueue_entity_in(
         dedup_key,
         body,
         priority,
-        star_candidate,
+        &star_candidates,
         STAR_PRIORITY_BONUS
     )
     .execute(connection)

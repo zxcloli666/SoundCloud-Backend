@@ -102,10 +102,10 @@ pub(super) async fn ensure(
     let key = payload.dedup_key();
     let mut retry_after_seconds = 0;
     if !fresh {
-        let star_candidate = if collection.subject() == CatalogEntity::User {
-            payload.subject_id.clone()
+        let star_candidates = if collection.subject() == CatalogEntity::User {
+            vec![payload.subject_id.clone()]
         } else {
-            String::new()
+            Vec::new()
         };
         let body = serde_json::to_value(Versioned::V1(payload))
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -123,7 +123,7 @@ pub(super) async fn ensure(
             &key,
             body,
             priority,
-            star_candidate,
+            &star_candidates,
             STAR_PRIORITY_BONUS
         )
         .execute(pool)

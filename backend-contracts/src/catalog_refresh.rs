@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub const CATALOG_REFRESH_BACKGROUND_PRIORITY: i16 = 5;
+
+pub const CATALOG_REFRESH_VIEWER_PRIORITY: i16 = 15;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogEntity {

@@ -37,6 +37,7 @@ impl LikesService {
             &self.pg,
             sc_track_id,
             TrackPriority::Like,
+            sc_user_id,
         )
         .await?;
         let mut transaction = self.pg.begin().await?;

@@ -168,6 +168,7 @@ impl PlaylistsService {
                     CatalogEntity::Playlist,
                     playlist_urn,
                     (row.sharing != "public").then_some(sc_user_id),
+                    Some(sc_user_id),
                     BACKGROUND_PRIORITY,
                 )
                 .await
@@ -191,6 +192,7 @@ impl PlaylistsService {
                         &self.pg,
                         CatalogEntity::Playlist,
                         playlist_urn,
+                        Some(sc_user_id),
                         Some(sc_user_id),
                         "playlist_refresh_pending",
                         "Playlist is being loaded",
@@ -370,6 +372,7 @@ impl PlaylistsService {
                         CatalogEntity::Track,
                         &track_id,
                         None,
+                        Some(sc_user_id),
                         VIEWER_PRIORITY,
                     )
                     .await
@@ -477,6 +480,7 @@ impl PlaylistsService {
                 &self.pg,
                 CatalogEntity::Playlist,
                 playlist_urn,
+                Some(sc_user_id),
                 Some(sc_user_id),
                 "playlist_refresh_pending",
                 "Playlist is being loaded",

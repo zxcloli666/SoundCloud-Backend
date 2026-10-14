@@ -9,7 +9,7 @@ VALUES (
         WHEN EXISTS (
             SELECT 1
             FROM subscriptions AS subscription
-            WHERE subscription.user_urn = $7
+            WHERE subscription.user_urn = ANY ($7::text[])
               AND subscription.exp_date > extract(epoch FROM now())::bigint
         ) THEN $8::smallint
         ELSE 0::smallint

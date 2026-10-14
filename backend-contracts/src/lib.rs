@@ -10,7 +10,10 @@ pub mod vector_store;
 pub mod worker_contract;
 
 pub use catalog_collection::{CatalogCollection, CatalogCollectionPayload, CollectionItem};
-pub use catalog_refresh::{CatalogEntity, CatalogRefreshPayload};
+pub use catalog_refresh::{
+    CATALOG_REFRESH_BACKGROUND_PRIORITY, CATALOG_REFRESH_VIEWER_PRIORITY, CatalogEntity,
+    CatalogRefreshPayload,
+};
 
 pub use job::{
     AdminMaintenancePayload, COLLAB_MAX_MIN_COUNT, CollabTrainPayload, CrawlArtistPayload,

@@ -125,6 +125,7 @@ impl TracksService {
                     backend_contracts::CatalogEntity::Track,
                     track_urn,
                     (row.sharing != "public").then_some(sc_user_id),
+                    Some(sc_user_id),
                     crate::modules::cold_refresh::BACKGROUND_PRIORITY,
                 )
                 .await
@@ -153,6 +154,7 @@ impl TracksService {
                         backend_contracts::CatalogEntity::Track,
                         track_urn,
                         None,
+                        Some(sc_user_id),
                         "track_refresh_pending",
                         "Track is being loaded",
                     )

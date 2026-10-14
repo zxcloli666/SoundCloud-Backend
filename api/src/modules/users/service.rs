@@ -32,7 +32,12 @@ impl UsersService {
         })
     }
 
-    pub async fn get_by_id(&self, session_id: uuid::Uuid, user_urn: &str) -> AppResult<Value> {
+    pub async fn get_by_id(
+        &self,
+        session_id: uuid::Uuid,
+        reader: &str,
+        user_urn: &str,
+    ) -> AppResult<Value> {
         let repo = crate::modules::users::UserRepository::new(self.pg.clone());
         if let Some(row) = repo.find_by_urn(user_urn).await? {
             let synced_at = row.sc_synced_at;
@@ -43,6 +48,7 @@ impl UsersService {
                     backend_contracts::CatalogEntity::User,
                     user_urn,
                     None,
+                    Some(reader),
                     crate::modules::cold_refresh::BACKGROUND_PRIORITY,
                 )
                 .await
@@ -66,6 +72,7 @@ impl UsersService {
             backend_contracts::CatalogEntity::User,
             user_urn,
             None,
+            Some(reader),
             "user_refresh_pending",
             "Profile is being loaded",
         )
@@ -270,8 +277,8 @@ impl UsersService {
         Ok(CollectionPage::new(result, sync))
     }
 
-    pub async fn get_web_profiles(&self, user_urn: &str) -> AppResult<Value> {
-        super::web_profiles::read(&self.pg, user_urn).await
+    pub async fn get_web_profiles(&self, reader: &str, user_urn: &str) -> AppResult<Value> {
+        super::web_profiles::read(&self.pg, reader, user_urn).await
     }
 }
 

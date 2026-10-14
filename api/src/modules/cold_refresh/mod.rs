@@ -3,8 +3,8 @@ pub mod entity;
 mod read;
 pub mod service;
 
-pub const BACKGROUND_PRIORITY: i16 = 5;
-pub const VIEWER_PRIORITY: i16 = 15;
+pub const BACKGROUND_PRIORITY: i16 = backend_contracts::CATALOG_REFRESH_BACKGROUND_PRIORITY;
+pub const VIEWER_PRIORITY: i16 = backend_contracts::CATALOG_REFRESH_VIEWER_PRIORITY;
 
 #[cfg(test)]
 mod page_tests;

@@ -23,6 +23,7 @@ pub async fn read(pool: &PgPool, sc_user_id: &str) -> AppResult<Value> {
                 CatalogEntity::Profile,
                 sc_user_id,
                 Some(sc_user_id),
+                Some(sc_user_id),
                 BACKGROUND_PRIORITY,
             )
             .await
@@ -35,6 +36,7 @@ pub async fn read(pool: &PgPool, sc_user_id: &str) -> AppResult<Value> {
         pool,
         CatalogEntity::Profile,
         sc_user_id,
+        Some(sc_user_id),
         Some(sc_user_id),
         BACKGROUND_PRIORITY,
     )

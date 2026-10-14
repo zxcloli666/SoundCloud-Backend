@@ -214,6 +214,7 @@ async fn enqueue_stale(
         key.entity,
         &key.urn(),
         owner,
+        viewer,
         crate::modules::cold_refresh::BACKGROUND_PRIORITY,
     )
     .await

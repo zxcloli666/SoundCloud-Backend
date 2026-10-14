@@ -72,7 +72,11 @@ async fn get_by_id(
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
     let user_urn = user_param(&user_urn)?.urn();
-    Ok(Json(st.users.get_by_id(ctx.session_id, &user_urn).await?))
+    Ok(Json(
+        st.users
+            .get_by_id(ctx.session_id, &ctx.sc_user_id, &user_urn)
+            .await?,
+    ))
 }
 
 async fn get_followers(
@@ -202,11 +206,15 @@ async fn get_subscription(
 
 async fn get_web_profiles(
     State(st): State<AppState>,
-    _ctx: SessionCtx,
+    ctx: SessionCtx,
     Path(user_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
     let user_urn = user_param(&user_urn)?.urn();
-    Ok(Json(st.users.get_web_profiles(&user_urn).await?))
+    Ok(Json(
+        st.users
+            .get_web_profiles(&ctx.sc_user_id, &user_urn)
+            .await?,
+    ))
 }
 
 fn user_param(raw: &str) -> AppResult<EntityRef> {

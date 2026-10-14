@@ -7,7 +7,7 @@ use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::BACKGROUND_PRIORITY;
 use crate::modules::cold_refresh::entity::enqueue_entity;
 
-pub(super) async fn read(pool: &PgPool, user_urn: &str) -> AppResult<Value> {
+pub(super) async fn read(pool: &PgPool, reader: &str, user_urn: &str) -> AppResult<Value> {
     let payload = CatalogRefreshPayload {
         entity: CatalogEntity::WebProfiles,
         sc_id: extract_sc_id(user_urn).to_owned(),
@@ -22,8 +22,15 @@ pub(super) async fn read(pool: &PgPool, user_urn: &str) -> AppResult<Value> {
         .fetch_optional(pool)
         .await?;
     if snapshot.as_ref().is_none_or(|row| !row.fresh) {
-        let enqueued =
-            enqueue_entity(pool, payload.entity, user_urn, None, BACKGROUND_PRIORITY).await;
+        let enqueued = enqueue_entity(
+            pool,
+            payload.entity,
+            user_urn,
+            None,
+            Some(reader),
+            BACKGROUND_PRIORITY,
+        )
+        .await;
         if snapshot.is_none() {
             enqueued?;
         } else if let Err(error) = enqueued {
