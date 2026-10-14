@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::config::AccountWalkConfig;
 use crate::queue::{JobError, JobRepository, JobResult};
 
-use super::catalog_read::PublicCatalogReader;
+use super::catalog_read::{PublicCatalogReader, UserRead};
 use super::lyrics::wake;
 
 #[cfg(test)]
@@ -112,8 +112,13 @@ impl AccountWalkHandler {
         let mut ingested = 0usize;
         let mut avatar: Option<String> = None;
         for sc_user_id in accounts {
+            let UserRead::Found(user) = self.reader.user_by_id(&sc_user_id).await? else {
+                self.forget_gone_account(artist_id, &sc_user_id).await?;
+                continue;
+            };
+            let expected = user.get("track_count").and_then(Value::as_i64);
             let observation = Observation::begin(&self.pool).await?;
-            for track in self.account_uploads(&sc_user_id).await? {
+            for track in self.account_uploads(&sc_user_id, expected).await? {
                 let Some(fields) = ScTrackFields::from_sc(&track) else {
                     continue;
                 };
@@ -154,8 +159,28 @@ impl AccountWalkHandler {
         Ok(())
     }
 
-    async fn account_uploads(&self, sc_user_id: &str) -> Result<Vec<Value>, WalkError> {
-        let expected = self.expected_track_count(sc_user_id).await?;
+    async fn forget_gone_account(
+        &self,
+        artist_id: Uuid,
+        sc_user_id: &str,
+    ) -> Result<(), WalkError> {
+        let deleted = sqlx::query_file!(
+            "queries/account_walk/forget_gone_account.sql",
+            artist_id,
+            sc_user_id
+        )
+        .execute(&self.pool)
+        .await?;
+        let dropped = deleted.rows_affected() > 0;
+        info!(artist = %artist_id, sc_user_id, dropped, "soundcloud account is gone");
+        Ok(())
+    }
+
+    async fn account_uploads(
+        &self,
+        sc_user_id: &str,
+        expected: Option<i64>,
+    ) -> Result<Vec<Value>, WalkError> {
         let mut by_id: HashMap<String, Value> = HashMap::new();
 
         for attempt in 0..MAX_GEO_ATTEMPTS {
@@ -217,11 +242,6 @@ impl AccountWalkHandler {
             }
         }
         Ok((collected, exhausted))
-    }
-
-    async fn expected_track_count(&self, sc_user_id: &str) -> Result<Option<i64>, WalkError> {
-        let user = self.reader.user_by_id(sc_user_id).await?;
-        Ok(user.get("track_count").and_then(Value::as_i64))
     }
 }
 

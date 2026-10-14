@@ -63,3 +63,50 @@ async fn account_walk_stores_an_upload_with_nul_text_without_the_nul(
     );
     Ok(())
 }
+
+async fn link_account(
+    pool: &PgPool,
+    artist_id: Uuid,
+    sc_user_id: &str,
+    verified: bool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO artist_sc_accounts (artist_id, sc_user_id, role, source, verified)
+         VALUES ($1, $2, 'main', 'mb_resolve', $3)",
+    )
+    .bind(artist_id)
+    .bind(sc_user_id)
+    .bind(verified)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn account_walk_drops_a_gone_unverified_account_and_keeps_a_verified_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let handler = handler(&pool).await?;
+    let artist_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source)
+         VALUES ($1, 'Gone Artist', 'gone artist', 'sc_verified')",
+    )
+    .bind(artist_id)
+    .execute(&pool)
+    .await?;
+    link_account(&pool, artist_id, "404", false).await?;
+    link_account(&pool, artist_id, "410", true).await?;
+
+    handler.forget_gone_account(artist_id, "404").await?;
+    handler.forget_gone_account(artist_id, "410").await?;
+
+    let left: Vec<String> = sqlx::query_scalar(
+        "SELECT sc_user_id FROM artist_sc_accounts WHERE artist_id = $1 ORDER BY sc_user_id",
+    )
+    .bind(artist_id)
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(left, vec!["410".to_owned()]);
+    Ok(())
+}

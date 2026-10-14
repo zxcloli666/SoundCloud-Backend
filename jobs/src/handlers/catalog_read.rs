@@ -20,6 +20,11 @@ pub enum PlaylistRead {
     Gone,
 }
 
+pub enum UserRead {
+    Found(Value),
+    Gone,
+}
+
 pub struct PublicCatalogReader {
     sc: ScClient,
     proxy: Apiv2Proxy,
@@ -76,16 +81,20 @@ impl PublicCatalogReader {
         }
     }
 
-    pub async fn user_by_id(&self, user_id: &str) -> ScResult<Value> {
+    pub async fn user_by_id(&self, user_id: &str) -> ScResult<UserRead> {
         if self.lua_is_worth_trying().await {
             let read = self.sc.user_by_id_via_relay(user_id).await;
             self.observe_lua(&read).await;
             if let Some(mut user) = read.found() {
                 normalize_v2_to_v1(&mut user);
-                return Ok(user);
+                return Ok(UserRead::Found(user));
             }
         }
-        self.proxy.user(user_id).await
+        match self.proxy.user(user_id).await {
+            Ok(user) => Ok(UserRead::Found(user)),
+            Err(sc_transport::ScError::Api { status: 404, .. }) => Ok(UserRead::Gone),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn playlist_full(
