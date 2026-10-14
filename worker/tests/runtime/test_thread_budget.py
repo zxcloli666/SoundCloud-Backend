@@ -22,6 +22,7 @@ from worker.runtime.supervisor import (
     Supervisor,
     budget_plans,
     cpu_budget,
+    cpus_within_pid_limit,
     fair_share,
     plan_engines,
     reserved_threads,
@@ -33,6 +34,13 @@ PROMPT_S = 1.0
 
 def plans_of(*plans: EnginePlan) -> list[EnginePlan]:
     return list(budget_plans(plans, 8))
+
+
+def test_engines_take_at_most_half_of_the_container_pid_limit() -> None:
+    assert cpus_within_pid_limit(64, 13, 2560) == 33
+    assert cpus_within_pid_limit(8, 13, 2560) == 8
+    assert cpus_within_pid_limit(64, 13, None) == 64
+    assert cpus_within_pid_limit(64, 200, 512) == 1
 
 
 def test_the_budget_leaves_a_core_for_the_node_and_reserves_up_to_four_threads() -> None:

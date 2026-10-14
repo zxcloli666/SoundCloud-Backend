@@ -58,6 +58,8 @@ from worker.runtime.supervisor import (
     available_cpus,
     budget_plans,
     cpu_budget,
+    cpus_within_pid_limit,
+    pid_limit,
     plan_engines,
 )
 from worker.settings import CPU_ONLY_SLOTS, Settings, SettingsError
@@ -200,7 +202,7 @@ class Blueprint:
             plans.append(EnginePlan(CPU_TOOLS, tools))
             specs.update({spec.name: spec for spec in tools})
             env[FASTTEXT_HOME_ENV] = required_env(environ, FASTTEXT_HOME_ENV)
-        cpus = cpus or available_cpus()
+        cpus = cpus or cpus_within_pid_limit(available_cpus(), len(plans), pid_limit())
         policy = RuntimePolicy(
             onednn=runtime.onednn,
             threads=runtime.threads,

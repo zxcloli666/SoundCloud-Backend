@@ -5,6 +5,7 @@ import os
 from collections import deque
 from collections.abc import Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, cast
 
 from worker.observability.counters import Counters
@@ -48,6 +49,8 @@ GPU_DEVICES = frozenset({"auto", "cuda"})
 INLINE_SLOTS = frozenset({"vad", "lid", "fingerprint"})
 BULK_NICE = 10
 RESERVED_THREADS_MAX = 4
+PID_LIMIT_FILES = (Path("/sys/fs/cgroup/pids.max"), Path("/sys/fs/cgroup/pids/pids.max"))
+OS_THREADS_PER_TORCH_THREAD = 3
 
 
 @dataclass(frozen=True)
@@ -130,6 +133,21 @@ def replica_name(base: str, index: int, total: int) -> str:
 
 def available_cpus() -> int:
     return max(1, len(os.sched_getaffinity(0)))
+
+
+def pid_limit() -> int | None:
+    for path in PID_LIMIT_FILES:
+        if path.is_file():
+            raw = path.read_text().strip()
+            return int(raw) if raw.isdigit() else None
+    return None
+
+
+def cpus_within_pid_limit(cpus: int, engines: int, limit: int | None) -> int:
+    if limit is None:
+        return cpus
+    room = limit // 2 // (max(1, engines) * OS_THREADS_PER_TORCH_THREAD)
+    return max(1, min(cpus, room + 1))
 
 
 def cpu_budget(cpus: int) -> int:
