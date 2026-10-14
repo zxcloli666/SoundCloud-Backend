@@ -55,6 +55,15 @@ fn validate_position_pct(position_pct: Option<f32>) -> AppResult<()> {
     Ok(())
 }
 
+async fn track_needs_storage(pg: &PgPool, sc_track_id: &str) -> AppResult<bool> {
+    Ok(sqlx::query_file_scalar!(
+        "queries/events/service/track_needs_storage.sql",
+        sc_track_id
+    )
+    .fetch_one(pg)
+    .await?)
+}
+
 pub struct EventsService {
     pg: PgPool,
     indexing_jobs: Arc<IndexingJobs>,
@@ -95,7 +104,12 @@ impl EventsService {
     }
 
     async fn enqueue_indexing(&self, sc_track_id: &str) {
-        if let Err(error) = self.indexing_jobs.enqueue(sc_track_id).await {
+        let queued = match track_needs_storage(&self.pg, sc_track_id).await {
+            Ok(true) => self.indexing_jobs.enqueue(sc_track_id).await,
+            Ok(false) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = queued {
             warn!(track = sc_track_id, %error, "indexing trigger enqueue failed");
         }
     }
@@ -195,5 +209,26 @@ mod tests {
         assert!(
             validate_position_pct(Some(0.0)).is_ok() && validate_position_pct(Some(1.0)).is_ok()
         );
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn only_a_track_still_waiting_for_its_audio_gets_an_index_trigger(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, storage_state)
+             SELECT id, 'soundcloud:tracks:' || id, 'Song', 'song', 180000, state
+             FROM (VALUES ('1', 'pending'), ('2', 'failed'), ('3', 'missing'),
+                          ('4', 'ok'), ('5', 'too_long')) AS seeded (id, state)",
+        )
+        .execute(&pool)
+        .await?;
+
+        let mut needs_storage = Vec::new();
+        for sc_track_id in ["1", "2", "3", "4", "5", "6"] {
+            needs_storage.push(track_needs_storage(&pool, sc_track_id).await?);
+        }
+        assert_eq!(needs_storage, [true, true, true, false, false, false]);
+        Ok(())
     }
 }
