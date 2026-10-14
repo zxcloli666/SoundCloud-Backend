@@ -390,6 +390,13 @@ fn cache_key(sc_user_id: &str) -> String {
     format!("wave:graph2:{sc_user_id}")
 }
 
+pub async fn forget_user_affinity(redis: &RedisPool, sc_user_id: &str) {
+    let Ok(mut conn) = redis.get().await else {
+        return;
+    };
+    let _: Result<(), _> = conn.del::<_, ()>(cache_key(sc_user_id)).await;
+}
+
 async fn read_cache(redis: &RedisPool, sc_user_id: &str) -> Option<Affinity> {
     let mut conn = redis.get().await.ok()?;
     let raw: Option<String> = conn.get(cache_key(sc_user_id)).await.ok().flatten();

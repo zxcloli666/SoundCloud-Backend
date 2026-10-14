@@ -67,6 +67,7 @@ impl LikesService {
             )
             .await?;
         order::forget(&self.pg, sc_user_id, sc_track_id).await?;
+        crate::modules::superlikes::service::forget(&self.pg, sc_user_id, sc_track_id).await?;
         Ok(json!({ "status": "queued", "actionType": "unlike_track" }))
     }
 

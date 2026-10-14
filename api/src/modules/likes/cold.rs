@@ -97,5 +97,44 @@ pub async fn apply_user_favorite_flag(
             obj.insert("user_favorite".into(), Value::Bool(true));
         }
     }
+    apply_user_superlike_flag(pg, sc_user_id, tracks).await
+}
+
+pub async fn apply_user_superlike_flag(
+    pg: &PgPool,
+    sc_user_id: &str,
+    tracks: &mut [Value],
+) -> AppResult<()> {
+    let liked_ids: Vec<String> = tracks
+        .iter()
+        .filter(|t| t.get("user_favorite") == Some(&Value::Bool(true)))
+        .filter_map(|t| t.get("urn").and_then(|v| v.as_str()).map(extract_sc_id))
+        .map(String::from)
+        .collect();
+    if liked_ids.is_empty() {
+        return Ok(());
+    }
+    let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+    let superliked: HashSet<String> = sqlx::query_file_scalar!(
+        "queries/likes/cold/fetch_superliked_ids.sql",
+        &variants,
+        &liked_ids,
+    )
+    .fetch_all(pg)
+    .await?
+    .into_iter()
+    .collect();
+    if superliked.is_empty() {
+        return Ok(());
+    }
+    for t in tracks.iter_mut() {
+        let marked = t
+            .get("urn")
+            .and_then(|v| v.as_str())
+            .is_some_and(|u| superliked.contains(extract_sc_id(u)));
+        if marked && let Some(obj) = t.as_object_mut() {
+            obj.insert("user_superlike".into(), Value::Bool(true));
+        }
+    }
     Ok(())
 }

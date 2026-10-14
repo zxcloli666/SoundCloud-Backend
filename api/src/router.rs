@@ -63,6 +63,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::auras::router())
         .merge(modules::likes::router())
         .merge(modules::dislikes::router())
+        .merge(modules::superlikes::router())
         .merge(modules::blocked_artists::router())
         .merge(modules::featured::router())
         .merge(modules::lyrics::router())
@@ -213,6 +214,10 @@ mod router_likes_order_tests;
 #[cfg(test)]
 #[path = "router_likes_rank_tests.rs"]
 mod router_likes_rank_tests;
+
+#[cfg(test)]
+#[path = "router_superlikes_tests.rs"]
+mod router_superlikes_tests;
 
 #[cfg(test)]
 mod tests {

@@ -341,6 +341,48 @@ async fn a_bad_request_keeps_its_public_message() {
     );
 }
 
+#[tokio::test]
+async fn a_full_superlike_quota_is_a_402_the_desktop_can_tell_apart() {
+    let (status, retry_after, body) =
+        error_wire(crate::modules::superlikes::service::limit_reached()).await;
+
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(retry_after, None);
+    assert_eq!(
+        body,
+        json!({
+            "statusCode": 402,
+            "code": "superlike_limit_reached",
+            "message": "Without Star up to 10 superlikes can be active at a time",
+            "error": "Payment Required"
+        })
+    );
+}
+
+#[test]
+fn a_superlike_answer_carries_the_quota_and_a_null_limit_for_star() {
+    use crate::modules::superlikes::handlers::SuperlikeAnswer;
+    use crate::modules::superlikes::service::Quota;
+
+    let free = SuperlikeAnswer {
+        superliked: true,
+        quota: Quota {
+            used: 7,
+            limit: Some(10),
+        },
+    };
+    let star = Quota {
+        used: 42,
+        limit: None,
+    };
+
+    assert_eq!(
+        wire(&free),
+        json!({"superliked": true, "used": 7, "limit": 10})
+    );
+    assert_eq!(wire(&star), json!({"used": 42, "limit": null}));
+}
+
 #[test]
 fn a_lyrics_page_keeps_matched_line_and_echoes_text_mode() {
     use crate::modules::search::lyrics::{LyricsHit, LyricsSearchResponse};

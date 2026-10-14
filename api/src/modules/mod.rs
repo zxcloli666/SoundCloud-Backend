@@ -25,6 +25,7 @@ pub mod rooms;
 pub mod search;
 pub mod soundcloud_search;
 pub mod subscriptions;
+pub mod superlikes;
 pub mod sync_queue;
 pub mod tracks;
 pub mod users;

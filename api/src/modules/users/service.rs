@@ -199,6 +199,12 @@ impl UsersService {
                     obj.insert("user_favorite".into(), Value::Bool(true));
                 }
             }
+            likes_cold::apply_user_superlike_flag(
+                &self.pg,
+                viewer_sc_user_id,
+                &mut result.collection,
+            )
+            .await?;
         } else {
             likes_cold::apply_user_favorite_flag(
                 &self.pg,
