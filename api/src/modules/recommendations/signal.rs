@@ -193,7 +193,8 @@ async fn load_strong_positives(
     let event_likes = sqlx::query_file!(
         "queries/recommendations/signal/event_likes.sql",
         &variants,
-        POSITIVE_LIMIT
+        POSITIVE_LIMIT,
+        backend_contracts::SUPERLIKE_WEIGHT
     )
     .fetch_all(pg)
     .await
@@ -221,7 +222,8 @@ async fn load_strong_positives(
     let mirror_likes = sqlx::query_file!(
         "queries/recommendations/signal/mirror_likes.sql",
         &variants,
-        need_more as i64
+        need_more as i64,
+        crate::modules::superlikes::SUPERLIKE_WEIGHT
     )
     .fetch_all(pg)
     .await
@@ -233,7 +235,7 @@ async fn load_strong_positives(
         }
         out.push(WeightedTrack {
             sc_track_id: r.sc_track_id,
-            weight: decay_factor(r.age_days),
+            weight: decay_factor(r.age_days) * r.boost,
         });
         if out.len() >= POSITIVE_LIMIT as usize {
             break;

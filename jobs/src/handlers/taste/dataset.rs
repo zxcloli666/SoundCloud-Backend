@@ -208,8 +208,13 @@ async fn write_users(
         timed_users: 0,
     };
     let mut grouper = HistoryGrouper::default();
-    let mut rows =
-        sqlx::query_file_as!(EventRow, "queries/taste/export_events.sql", days).fetch(pool);
+    let mut rows = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/export_events.sql",
+        days,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch(pool);
     while let Some(row) = rows.try_next().await.map_err(JobError::retryable)? {
         let Some((user_id, event)) = row.into_event() else {
             continue;

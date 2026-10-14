@@ -291,7 +291,8 @@ async fn load_user_seeds(pg: &PgPool, variants: &[String]) -> Affinity {
         LIKES_WINDOW_DAYS,
         PLAYS_WINDOW_DAYS,
         PLAY_BOOST,
-        SEED_LIMIT
+        SEED_LIMIT,
+        crate::modules::superlikes::SUPERLIKE_WEIGHT
     )
     .fetch_all(pg)
     .await

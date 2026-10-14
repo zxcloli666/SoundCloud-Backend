@@ -45,6 +45,16 @@ imported AS (
     FROM user_likes_tracks
     WHERE wanted_state
 ),
+superliked AS (
+    SELECT regexp_replace(s.user_id, '^.*:', '') AS user_id,
+           regexp_replace(s.sc_track_id, '^.*:', '') AS track_id
+    FROM user_superlikes s
+    JOIN user_likes_tracks l
+      ON l.user_id = s.user_id
+     AND l.sc_track_id = s.sc_track_id
+     AND l.created_at = s.like_created_at
+    WHERE l.wanted_state
+),
 events AS (
     SELECT user_id, track_id, event_code, unix_s, weight
     FROM timed
@@ -71,13 +81,21 @@ events AS (
     FROM disliked_tracks
 ),
 canonical AS (
-    SELECT user_id,
-           CASE WHEN track_id ~ '^[0-9]{1,18}$' THEN track_id::bigint END AS track_id,
-           event_code,
-           unix_s,
-           weight
-    FROM events
-    WHERE user_id ~ '^[0-9]{1,18}$'
+    SELECT e.user_id,
+           CASE WHEN e.track_id ~ '^[0-9]{1,18}$' THEN e.track_id::bigint END AS track_id,
+           e.event_code,
+           e.unix_s,
+           CASE
+               WHEN e.event_code IN (0, 1) AND EXISTS (
+                   SELECT 1
+                   FROM superliked sl
+                   WHERE sl.user_id = e.user_id
+                     AND sl.track_id = e.track_id
+               ) THEN e.weight * $2::float8
+               ELSE e.weight
+           END AS weight
+    FROM events e
+    WHERE e.user_id ~ '^[0-9]{1,18}$'
 )
 SELECT user_id AS "user_id!",
        track_id AS "track_id!",

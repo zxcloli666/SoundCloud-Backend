@@ -4,6 +4,7 @@ use crate::error::AppResult;
 use crate::modules::recommendations::service::util::user_id_variants;
 
 const FRESH_LIKES_LIMIT: i64 = 80;
+const SUPERLIKES_LIMIT: i64 = 80;
 const DISLIKES_LIMIT: i64 = 200;
 const RECENT_SKIPS_DAYS: i32 = 30;
 const RECENT_SKIPS_LIMIT: i64 = 60;
@@ -13,6 +14,7 @@ const RECENT_PLAYED_LIMIT: i64 = 200;
 #[derive(Debug, Default)]
 pub struct UserSignals {
     pub fresh_likes: Vec<String>,
+    pub superliked: Vec<String>,
     pub disliked_ids: Vec<String>,
     pub recent_skips: Vec<String>,
     pub recent_played: Vec<String>,
@@ -30,8 +32,9 @@ impl UserSignals {
 pub async fn load_recent_signals(pg: &PgPool, sc_user_id: &str) -> AppResult<UserSignals> {
     let ids = user_id_variants(sc_user_id);
 
-    let (fresh_likes, disliked_ids, recent_skips, recent_played) = tokio::try_join!(
+    let (fresh_likes, superliked, disliked_ids, recent_skips, recent_played) = tokio::try_join!(
         load_fresh_likes(pg, &ids),
+        load_superliked(pg, &ids),
         load_dislikes(pg, &ids),
         load_recent_skips(pg, &ids),
         load_recent_played(pg, &ids),
@@ -39,6 +42,7 @@ pub async fn load_recent_signals(pg: &PgPool, sc_user_id: &str) -> AppResult<Use
 
     Ok(UserSignals {
         fresh_likes,
+        superliked,
         disliked_ids,
         recent_skips,
         recent_played,
@@ -60,6 +64,17 @@ async fn load_fresh_likes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>>
         "queries/recommendations/smart_wave/signals/fresh_likes.sql",
         ids,
         FRESH_LIKES_LIMIT
+    )
+    .fetch_all(pg)
+    .await?;
+    Ok(dedup_keep_order(rows))
+}
+
+async fn load_superliked(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
+    let rows = sqlx::query_file_scalar!(
+        "queries/recommendations/smart_wave/signals/superlikes.sql",
+        ids,
+        SUPERLIKES_LIMIT
     )
     .fetch_all(pg)
     .await?;

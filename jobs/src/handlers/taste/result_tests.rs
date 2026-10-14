@@ -148,9 +148,14 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 async fn exported(pool: &PgPool) -> anyhow::Result<Vec<(String, i64, EventKind, bool)>> {
-    let rows = sqlx::query_file_as!(EventRow, "queries/taste/export_events.sql", 180)
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/export_events.sql",
+        180,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -233,9 +238,14 @@ async fn an_imported_like_with_a_soundcloud_like_time_is_a_timed_like(
     )
     .execute(&pool)
     .await?;
-    let rows = sqlx::query_file_as!(EventRow, "queries/taste/export_events.sql", 180)
-        .fetch_all(&pool)
-        .await?;
+    let rows = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/export_events.sql",
+        180,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch_all(&pool)
+    .await?;
     let seven: Vec<(i64, EventKind, Option<i64>)> = rows
         .into_iter()
         .filter_map(|row| {
@@ -270,7 +280,8 @@ async fn an_imported_like_with_a_soundcloud_like_time_is_a_timed_like(
         EventRow,
         "queries/taste/user_events.sql",
         180,
-        &["7".to_owned()]
+        &["7".to_owned()],
+        backend_contracts::SUPERLIKE_WEIGHT
     )
     .fetch_all(&pool)
     .await?;
@@ -280,6 +291,61 @@ async fn an_imported_like_with_a_soundcloud_like_time_is_a_timed_like(
             event.track == 101 && event.kind == EventKind::Like && unix_s.is_some()
         })
     }));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_superliked_like_weighs_three_likes_while_the_like_lives(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO user_events (sc_user_id, sc_track_id, event_type, weight, created_at) VALUES
+            ('7', '201', 'like', 1.0, now() - interval '1 day');
+         INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at) VALUES
+            ('7', '201', true, '2026-10-01T00:00:00Z'),
+            ('7', '202', true, '2026-10-02T00:00:00Z'),
+            ('7', '203', true, '2026-10-03T00:00:00Z');
+         INSERT INTO user_superlikes (user_id, sc_track_id, like_created_at) VALUES
+            ('7', '201', '2026-10-01T00:00:00Z'),
+            ('7', '202', '2026-09-01T00:00:00Z');",
+    )
+    .execute(&pool)
+    .await?;
+    let weights = |rows: Vec<EventRow>| -> Vec<(u64, f64)> {
+        let mut out: Vec<(u64, f64)> = rows
+            .into_iter()
+            .filter_map(|row| row.into_event())
+            .map(|(_, event)| (event.track, event.weight))
+            .collect();
+        out.sort_by_key(|(track, _)| *track);
+        out
+    };
+    let expected = vec![(201, 3.0), (202, 1.0), (203, 1.0)];
+
+    let exported = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/export_events.sql",
+        180,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        weights(exported),
+        expected,
+        "a superlike of a like that was removed and given again is gone"
+    );
+
+    let pooled = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/user_events.sql",
+        180,
+        &["7".to_owned()],
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(weights(pooled), expected);
     Ok(())
 }
 

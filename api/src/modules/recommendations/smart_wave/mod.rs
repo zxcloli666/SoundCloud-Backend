@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::error::AppResult;
 use crate::modules::recommendations::service::util::user_id_variants;
 use crate::modules::recommendations::service::{RecommendResult, RecommendationsService};
+use crate::modules::superlikes::SUPERLIKE_WEIGHT;
 use crate::qdrant::collections;
 
 use cursor::{SeedKind, WaveCursor};
@@ -35,6 +36,9 @@ const GRAPH_ARTISTS: usize = 160;
 const GRAPH_PER_ARTIST: i64 = 6;
 const GRAPH_TRACKS_TOTAL: i64 = 800;
 const SEED_LIKES_USER: usize = 14;
+const SEED_SUPERLIKES_USER: usize = 6;
+const SEED_SUPERLIKES_MOOD: usize = 2;
+const TASTE_LIKES: usize = 80;
 const SEED_SERVED_FORWARD: usize = 8;
 
 pub enum SmartWaveSeed<'a> {
@@ -92,6 +96,7 @@ pub async fn build(
         cursor::load_or_new(&svc.redis, owner, req.cursor_token, seed_kind, &seed_key).await;
 
     let mert_seeds_raw = pick_mert_seeds(&req.seed, &signals, &wave_cursor);
+    let boosted = superliked_ids(&signals);
     let exclude = build_exclude(&signals, &wave_cursor, &req.seed, &hidden_listen);
     let negative_raw = negative_ids_for_qdrant(&signals);
 
@@ -102,8 +107,14 @@ pub async fn build(
     let filter = svc.build_filter(&exclude, req.languages);
 
     let graph_fut = graph::build_affinity(svc, req.sc_user_id, graph_seed);
-    let mert_fut =
-        track_arm::recommend_from_many(svc, &mert_seeds, &negative_ids, filter.as_ref(), MERT_POOL);
+    let mert_fut = track_arm::recommend_from_many(
+        svc,
+        &mert_seeds,
+        &boosted,
+        &negative_ids,
+        filter.as_ref(),
+        MERT_POOL,
+    );
     let (graph_res, mert) = tokio::join!(graph_fut, mert_fut);
     let disliked_set: HashSet<Uuid> = graph_res.disliked_artists.iter().copied().collect();
 
@@ -137,18 +148,13 @@ pub async fn build(
         blocked::blocked_uploads(&svc.pg, &user_id_variants(req.sc_user_id), &pooled).await;
     artist_of.retain(|tid, _| !blocked.contains(tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
-    let liked_ids: Vec<u64> = signals
-        .fresh_likes
-        .iter()
-        .take(80)
-        .filter_map(|s| s.parse::<u64>().ok())
-        .collect();
+    let liked_ids = taste_ids(&signals);
     let mood_seed_ids: Vec<u64> = match &req.seed {
         SmartWaveSeed::User => Vec::new(),
         SmartWaveSeed::Track(t) => vec![*t],
         SmartWaveSeed::Artist(_, tracks) => tracks.iter().take(20).copied().collect(),
     };
-    let centroids_fut = mood_centroids(svc, req.sc_user_id, &mood_seed_ids, &liked_ids);
+    let centroids_fut = mood_centroids(svc, req.sc_user_id, &mood_seed_ids, &liked_ids, &boosted);
     let cands_vecs_fut = async {
         tokio::join!(
             svc.retrieve_vectors(collections::TRACKS_MERT, &cand_ids),
@@ -308,52 +314,73 @@ fn build_exclude(
 
 fn pick_mert_seeds(seed: &SmartWaveSeed, signals: &UserSignals, cursor: &WaveCursor) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
-    let push = |n: u64, out: &mut Vec<u64>| {
-        if !out.contains(&n) {
-            out.push(n);
-        }
-    };
+    let superliked = signals.superliked.iter();
+    let fresh = signals.fresh_likes.iter();
     match seed {
         SmartWaveSeed::Track(t) => {
             out.push(*t);
-            for id in signals.fresh_likes.iter().take(5) {
-                if let Ok(n) = id.parse::<u64>()
-                    && n != *t
-                {
-                    push(n, &mut out);
-                }
-            }
+            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_MOOD), usize::MAX);
+            push_parsed(&mut out, fresh.take(5), usize::MAX);
         }
         SmartWaveSeed::Artist(_, tracks) => {
             for t in tracks.iter().take(8) {
-                push(*t, &mut out);
+                push_seed(&mut out, *t);
             }
-            for id in signals.fresh_likes.iter().take(3) {
-                if let Ok(n) = id.parse::<u64>() {
-                    push(n, &mut out);
-                }
-            }
+            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_MOOD), usize::MAX);
+            push_parsed(&mut out, fresh.take(3), usize::MAX);
         }
         SmartWaveSeed::User => {
-            for id in signals.fresh_likes.iter().take(SEED_LIKES_USER) {
-                if let Ok(n) = id.parse::<u64>() {
-                    push(n, &mut out);
-                }
-            }
-            for id in signals.recent_played.iter() {
-                if out.len() >= SEED_LIKES_USER {
-                    break;
-                }
-                if let Ok(n) = id.parse::<u64>() {
-                    push(n, &mut out);
-                }
-            }
+            push_parsed(&mut out, superliked.take(SEED_SUPERLIKES_USER), usize::MAX);
+            push_parsed(&mut out, fresh, SEED_LIKES_USER);
+            push_parsed(&mut out, signals.recent_played.iter(), SEED_LIKES_USER);
         }
     }
     for t in cursor.seen_tracks.iter().rev().take(SEED_SERVED_FORWARD) {
-        push(*t, &mut out);
+        push_seed(&mut out, *t);
     }
     out
+}
+
+fn push_seed(out: &mut Vec<u64>, id: u64) {
+    if !out.contains(&id) {
+        out.push(id);
+    }
+}
+
+fn push_parsed<'a>(out: &mut Vec<u64>, ids: impl Iterator<Item = &'a String>, cap: usize) {
+    for id in ids {
+        if out.len() >= cap {
+            break;
+        }
+        if let Ok(n) = id.parse::<u64>() {
+            push_seed(out, n);
+        }
+    }
+}
+
+fn superliked_ids(signals: &UserSignals) -> HashSet<u64> {
+    signals
+        .superliked
+        .iter()
+        .filter_map(|id| id.parse::<u64>().ok())
+        .collect()
+}
+
+fn taste_ids(signals: &UserSignals) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::new();
+    let liked = signals
+        .superliked
+        .iter()
+        .chain(signals.fresh_likes.iter().take(TASTE_LIKES));
+    push_parsed(&mut out, liked, usize::MAX);
+    out
+}
+
+fn seed_weight(id: &str, boosted: &HashSet<u64>) -> f32 {
+    match id.parse::<u64>() {
+        Ok(n) if boosted.contains(&n) => SUPERLIKE_WEIGHT,
+        _ => 1.0,
+    }
 }
 
 fn negative_ids_for_qdrant(signals: &UserSignals) -> Vec<u64> {
@@ -393,9 +420,11 @@ async fn taste_centroids(
     svc: &RecommendationsService,
     sc_user_id: &str,
     liked_ids: &[u64],
+    boosted: &HashSet<u64>,
 ) -> TasteCentroids {
+    let key = taste_key(sc_user_id, liked_ids, boosted);
     if !sc_user_id.is_empty()
-        && let Some(cached) = read_taste_cache(&svc.redis, sc_user_id, liked_ids).await
+        && let Some(cached) = read_taste_cache(&svc.redis, &key).await
     {
         let lyrics = svc
             .retrieve_vectors(collections::TRACKS_LYRICS, liked_ids)
@@ -403,7 +432,7 @@ async fn taste_centroids(
         return TasteCentroids {
             m: cached.m,
             c: cached.c,
-            l: kmeans_centroids(&lyrics, TASTE_CLUSTERS),
+            l: kmeans_centroids(&lyrics, TASTE_CLUSTERS, boosted),
         };
     }
     let (lm, lc, ll) = tokio::join!(
@@ -412,15 +441,14 @@ async fn taste_centroids(
         svc.retrieve_vectors(collections::TRACKS_LYRICS, liked_ids),
     );
     let cen = TasteCentroids {
-        m: kmeans_centroids(&lm, TASTE_CLUSTERS),
-        c: kmeans_centroids(&lc, TASTE_CLUSTERS),
-        l: kmeans_centroids(&ll, TASTE_CLUSTERS),
+        m: kmeans_centroids(&lm, TASTE_CLUSTERS, boosted),
+        c: kmeans_centroids(&lc, TASTE_CLUSTERS, boosted),
+        l: kmeans_centroids(&ll, TASTE_CLUSTERS, boosted),
     };
     if !sc_user_id.is_empty() && (!cen.m.is_empty() || !cen.c.is_empty() || !cen.l.is_empty()) {
         write_taste_cache(
             &svc.redis,
-            sc_user_id,
-            liked_ids,
+            &key,
             &CachedTasteCentroids {
                 m: cen.m.clone(),
                 c: cen.c.clone(),
@@ -436,8 +464,9 @@ async fn mood_centroids(
     sc_user_id: &str,
     seed_ids: &[u64],
     liked_ids: &[u64],
+    boosted: &HashSet<u64>,
 ) -> TasteCentroids {
-    let user = taste_centroids(svc, sc_user_id, liked_ids).await;
+    let user = taste_centroids(svc, sc_user_id, liked_ids, boosted).await;
     if seed_ids.is_empty() {
         return user;
     }
@@ -448,17 +477,17 @@ async fn mood_centroids(
     );
     TasteCentroids {
         m: opt_to_centroids(blend_centroids(
-            mean_centroid(&sm),
+            mean_centroid(&sm, boosted),
             centroids_mean(&user.m),
             SEED_MOOD_WEIGHT,
         )),
         c: opt_to_centroids(blend_centroids(
-            mean_centroid(&sc),
+            mean_centroid(&sc, boosted),
             centroids_mean(&user.c),
             SEED_MOOD_WEIGHT,
         )),
         l: opt_to_centroids(blend_centroids(
-            mean_centroid(&sl),
+            mean_centroid(&sl, boosted),
             centroids_mean(&user.l),
             SEED_MOOD_WEIGHT,
         )),
@@ -495,12 +524,18 @@ fn blend_centroids(seed: Option<Vec<f32>>, user: Option<Vec<f32>>, w: f32) -> Op
     }
 }
 
-fn taste_key(sc_user_id: &str, liked_ids: &[u64]) -> String {
+fn taste_key(sc_user_id: &str, liked_ids: &[u64], boosted: &HashSet<u64>) -> String {
     let mut ids = liked_ids.to_vec();
     ids.sort_unstable();
     ids.dedup();
     let mut digest = Sha256::new();
     for id in ids {
+        digest.update(id.to_le_bytes());
+    }
+    let mut superliked: Vec<u64> = boosted.iter().copied().collect();
+    superliked.sort_unstable();
+    for id in superliked {
+        digest.update(b"s");
         digest.update(id.to_le_bytes());
     }
     format!(
@@ -509,35 +544,20 @@ fn taste_key(sc_user_id: &str, liked_ids: &[u64]) -> String {
     )
 }
 
-async fn read_taste_cache(
-    redis: &RedisPool,
-    sc_user_id: &str,
-    liked_ids: &[u64],
-) -> Option<CachedTasteCentroids> {
+async fn read_taste_cache(redis: &RedisPool, key: &str) -> Option<CachedTasteCentroids> {
     let mut conn = redis.get().await.ok()?;
-    let raw: Option<String> = conn
-        .get(taste_key(sc_user_id, liked_ids))
-        .await
-        .ok()
-        .flatten();
+    let raw: Option<String> = conn.get(key).await.ok().flatten();
     serde_json::from_str(&raw?).ok()
 }
 
-async fn write_taste_cache(
-    redis: &RedisPool,
-    sc_user_id: &str,
-    liked_ids: &[u64],
-    centroids: &CachedTasteCentroids,
-) {
+async fn write_taste_cache(redis: &RedisPool, key: &str, centroids: &CachedTasteCentroids) {
     let Ok(payload) = serde_json::to_string(centroids) else {
         return;
     };
     let Ok(mut conn) = redis.get().await else {
         return;
     };
-    let _: Result<(), _> = conn
-        .set_ex::<_, _, ()>(taste_key(sc_user_id, liked_ids), payload, TASTE_TTL_SECS)
-        .await;
+    let _: Result<(), _> = conn.set_ex::<_, _, ()>(key, payload, TASTE_TTL_SECS).await;
 }
 
 fn sim(centroids: &[Vec<f32>], vec: Option<&Vec<f32>>) -> Option<f32> {
@@ -563,44 +583,51 @@ fn geomean(sims: &[Option<f32>]) -> f32 {
     (s / xs.len() as f32).exp()
 }
 
-fn kmeans_centroids(vecs: &HashMap<String, Vec<f32>>, k: usize) -> Vec<Vec<f32>> {
+fn kmeans_centroids(
+    vecs: &HashMap<String, Vec<f32>>,
+    k: usize,
+    boosted: &HashSet<u64>,
+) -> Vec<Vec<f32>> {
     if vecs.is_empty() {
         return Vec::new();
     }
     let k = k.min(vecs.len() / 8).max(1);
     if k == 1 {
-        return mean_centroid(vecs).into_iter().collect();
+        return mean_centroid(vecs, boosted).into_iter().collect();
     }
     let mut ids: Vec<&String> = vecs.keys().collect();
     ids.sort();
-    let points: Vec<&Vec<f32>> = ids.into_iter().filter_map(|id| vecs.get(id)).collect();
-    let Some(first) = points.first() else {
+    let points: Vec<(f32, &Vec<f32>)> = ids
+        .into_iter()
+        .filter_map(|id| Some((seed_weight(id, boosted), vecs.get(id)?)))
+        .collect();
+    let Some((_, first)) = points.first() else {
         return Vec::new();
     };
     let mut centers: Vec<Vec<f32>> = vec![(*first).clone()];
     while centers.len() < k {
         let far = points.iter().max_by(|a, b| {
-            nearest_dist(a, &centers)
-                .partial_cmp(&nearest_dist(b, &centers))
+            nearest_dist(a.1, &centers)
+                .partial_cmp(&nearest_dist(b.1, &centers))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let Some(p) = far else { break };
+        let Some((_, p)) = far else { break };
         centers.push((*p).clone());
     }
     for _ in 0..8 {
-        let mut sums: Vec<(Vec<f32>, usize)> =
-            centers.iter().map(|c| (vec![0.0; c.len()], 0)).collect();
-        for p in &points {
+        let mut sums: Vec<(Vec<f32>, f32)> =
+            centers.iter().map(|c| (vec![0.0; c.len()], 0.0)).collect();
+        for (weight, p) in &points {
             let ci = nearest_center(p, &centers);
-            let (s, n) = &mut sums[ci];
+            let (s, total) = &mut sums[ci];
             for (a, b) in s.iter_mut().zip(p.iter()) {
-                *a += *b;
+                *a += weight * b;
             }
-            *n += 1;
+            *total += weight;
         }
-        for (i, (s, n)) in sums.into_iter().enumerate() {
-            if n > 0 {
-                centers[i] = s.into_iter().map(|x| x / n as f32).collect();
+        for (i, (s, total)) in sums.into_iter().enumerate() {
+            if total > 0.0 {
+                centers[i] = s.into_iter().map(|x| x / total).collect();
             }
         }
     }
@@ -627,20 +654,19 @@ fn nearest_center(p: &[f32], centers: &[Vec<f32>]) -> usize {
     best
 }
 
-fn mean_centroid(vecs: &HashMap<String, Vec<f32>>) -> Option<Vec<f32>> {
-    let mut iter = vecs.values();
-    let first = iter.next()?;
-    let mut acc = first.clone();
-    let mut n = 1usize;
-    for v in iter {
+fn mean_centroid(vecs: &HashMap<String, Vec<f32>>, boosted: &HashSet<u64>) -> Option<Vec<f32>> {
+    let dimensions = vecs.values().next()?.len();
+    let mut acc = vec![0.0f32; dimensions];
+    let mut total = 0.0f32;
+    for (id, v) in vecs {
+        let weight = seed_weight(id, boosted);
         for (a, b) in acc.iter_mut().zip(v.iter()) {
-            *a += *b;
+            *a += weight * b;
         }
-        n += 1;
+        total += weight;
     }
-    let inv = 1.0 / n as f32;
     for a in acc.iter_mut() {
-        *a *= inv;
+        *a /= total;
     }
     Some(acc)
 }
@@ -712,7 +738,7 @@ mod tests {
     #[test]
     fn kmeans_k1_is_mean() {
         let v = vecs(&[("1", vec![1.0, 0.0]), ("2", vec![0.0, 1.0])]);
-        let cs = kmeans_centroids(&v, 1);
+        let cs = kmeans_centroids(&v, 1, &HashSet::new());
         assert_eq!(cs.len(), 1);
         assert!((cs[0][0] - 0.5).abs() < 1e-6 && (cs[0][1] - 0.5).abs() < 1e-6);
     }
@@ -720,7 +746,7 @@ mod tests {
     #[test]
     fn kmeans_few_points_stay_single_centroid() {
         let v = vecs(&[("1", vec![1.0, 0.0]), ("2", vec![0.0, 1.0])]);
-        assert_eq!(kmeans_centroids(&v, 3).len(), 1);
+        assert_eq!(kmeans_centroids(&v, 3, &HashSet::new()).len(), 1);
     }
 
     #[test]
@@ -731,12 +757,62 @@ mod tests {
             pts.push((format!("y{i}"), vec![0.05 * i as f32, 1.0]));
         }
         let v: HashMap<String, Vec<f32>> = pts.into_iter().collect();
-        let a = kmeans_centroids(&v, 2);
-        let b = kmeans_centroids(&v, 2);
+        let a = kmeans_centroids(&v, 2, &HashSet::new());
+        let b = kmeans_centroids(&v, 2, &HashSet::new());
         assert_eq!(a, b);
         assert_eq!(a.len(), 2);
         let cross = crate::modules::centroids::cosine(&a[0], &a[1]);
         assert!(cross < 0.8, "modes not separated: cos={cross}");
+    }
+
+    fn strings(range: std::ops::RangeInclusive<u64>) -> Vec<String> {
+        range.map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn superlikes_lead_the_user_seeds_within_the_same_budget() {
+        let signals = UserSignals {
+            superliked: vec!["900".into(), "901".into(), "12".into()],
+            fresh_likes: strings(10..=40),
+            recent_played: strings(50..=60),
+            ..UserSignals::default()
+        };
+        let cursor = WaveCursor::new(SeedKind::User, "17".into());
+
+        let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor);
+
+        assert_eq!(seeds.len(), SEED_LIKES_USER);
+        assert_eq!(&seeds[..4], &[900, 901, 12, 10]);
+        assert_eq!(seeds.iter().filter(|id| **id == 12).count(), 1);
+    }
+
+    #[test]
+    fn a_track_wave_keeps_its_track_first_and_adds_two_superlikes() {
+        let signals = UserSignals {
+            superliked: vec!["900".into(), "901".into(), "902".into()],
+            fresh_likes: strings(10..=20),
+            ..UserSignals::default()
+        };
+        let cursor = WaveCursor::new(SeedKind::Track, "t7".into());
+
+        let seeds = pick_mert_seeds(&SmartWaveSeed::Track(7), &signals, &cursor);
+
+        assert_eq!(seeds, vec![7, 900, 901, 10, 11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn a_superliked_track_pulls_the_taste_three_times_harder() {
+        let v = vecs(&[("1", vec![1.0, 0.0]), ("2", vec![0.0, 1.0])]);
+        let boosted: HashSet<u64> = [1].into();
+
+        let mean = mean_centroid(&v, &boosted).unwrap_or_default();
+
+        assert!((mean[0] - 0.75).abs() < 1e-6 && (mean[1] - 0.25).abs() < 1e-6);
+        assert_ne!(
+            taste_key("17", &[1, 2], &boosted),
+            taste_key("17", &[1, 2], &HashSet::new()),
+            "a new superlike must not be answered from the old taste"
+        );
     }
 
     #[test]

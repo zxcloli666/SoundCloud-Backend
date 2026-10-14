@@ -8,6 +8,7 @@ use qdrant_client::qdrant::{
 use tracing::debug;
 
 use crate::modules::recommendations::service::RecommendationsService;
+use crate::modules::superlikes::SUPERLIKE_WEIGHT;
 use crate::qdrant::collections;
 
 const MERT_WEIGHT: f32 = 0.5;
@@ -30,7 +31,7 @@ struct RawCandidate {
 
 struct SeedCandidates {
     position: usize,
-    recency_weight: f32,
+    weight: f32,
     mert: Vec<RawCandidate>,
     clap: Vec<RawCandidate>,
     lyrics: Vec<RawCandidate>,
@@ -48,6 +49,7 @@ impl SeedCandidates {
 pub async fn recommend_from_many(
     svc: &RecommendationsService,
     seeds: &[u64],
+    boosted: &HashSet<u64>,
     negative_ids: &[u64],
     filter: Option<&Filter>,
     limit: usize,
@@ -102,7 +104,8 @@ pub async fn recommend_from_many(
                 );
                 SeedCandidates {
                     position,
-                    recency_weight: recency_factor(position, seeds.len()),
+                    weight: recency_factor(position, seeds.len())
+                        * superlike_factor(seed_track_id, boosted),
                     mert,
                     clap,
                     lyrics,
@@ -147,7 +150,7 @@ pub async fn recommend_from_many(
             |track_id, payload| lyrics_eligibility.matches(track_id, payload),
         );
         let candidates = blend_arms(mert, clap, lyrics, per_seed_limit);
-        (candidates, seed.recency_weight)
+        (candidates, seed.weight)
     });
 
     merge_weighted(weighted, &excluded_ids, limit)
@@ -159,6 +162,14 @@ fn recency_factor(position: usize, total: usize) -> f32 {
     }
     let progress = position as f32 / (total - 1) as f32;
     (1.0 - 0.7 * progress).clamp(0.3, 1.0)
+}
+
+fn superlike_factor(seed_track_id: u64, boosted: &HashSet<u64>) -> f32 {
+    if boosted.contains(&seed_track_id) {
+        SUPERLIKE_WEIGHT
+    } else {
+        1.0
+    }
 }
 
 async fn recommend_one(

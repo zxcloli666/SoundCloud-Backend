@@ -3,6 +3,7 @@ mod catalog_refresh;
 mod job;
 pub mod pipeline;
 pub mod reasons;
+mod taste;
 mod telemetry;
 mod transport;
 pub mod vector_store;
@@ -17,6 +18,7 @@ pub use job::{
     PlaylistObservePayload, SYNC_QUEUE_MAX_RETRIES, StoredAudioDispatchPayload,
     SyncQueueFlushPayload, UnknownJobKind, Versioned,
 };
+pub use taste::SUPERLIKE_WEIGHT;
 pub use telemetry::{HardNegative, Impression, ImpressionBatch};
 pub use transport::{
     IMPRESSION_CONSUMER, IMPRESSION_STREAM, IMPRESSION_SUBJECT, JOB_INGRESS_CONSUMER,

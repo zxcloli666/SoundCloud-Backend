@@ -31,8 +31,13 @@ pub(super) async fn pool_everyone(
     let days = i32::try_from(history_days).map_err(JobError::permanent)?;
     let mut vectors = Vec::new();
     let mut grouper = HistoryGrouper::default();
-    let mut rows =
-        sqlx::query_file_as!(EventRow, "queries/taste/export_events.sql", days).fetch(pool);
+    let mut rows = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/export_events.sql",
+        days,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch(pool);
     let mut pool_one = |history: UserHistory| {
         if !pooling.serves(history.positives()) {
             return;
@@ -72,10 +77,16 @@ pub(super) async fn pool_users(
         .iter()
         .flat_map(|user| [user.clone(), format!("soundcloud:users:{user}")])
         .collect();
-    let rows = sqlx::query_file_as!(EventRow, "queries/taste/user_events.sql", days, &variants)
-        .fetch_all(pool)
-        .await
-        .map_err(JobError::retryable)?;
+    let rows = sqlx::query_file_as!(
+        EventRow,
+        "queries/taste/user_events.sql",
+        days,
+        &variants,
+        backend_contracts::SUPERLIKE_WEIGHT
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(JobError::retryable)?;
     let mut histories = Vec::new();
     let mut grouper = HistoryGrouper::default();
     for row in rows {
