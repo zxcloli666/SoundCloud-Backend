@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use catalog_ingest::{ScTrackFields, TrackPriority, extract_sc_id};
+use catalog_ingest::{Observation, ScTrackFields, TrackPriority, extract_sc_id};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -14,6 +14,10 @@ use crate::queue::{JobError, JobRepository, JobResult};
 
 use super::catalog_read::PublicCatalogReader;
 use super::lyrics::wake;
+
+#[cfg(test)]
+#[path = "account_walk_tests.rs"]
+mod tests;
 
 const PER_ACCOUNT_PAGES: usize = 5;
 const PAGE_SIZE: i64 = 100;
@@ -108,27 +112,15 @@ impl AccountWalkHandler {
         let mut ingested = 0usize;
         let mut avatar: Option<String> = None;
         for sc_user_id in accounts {
-            let observation = catalog_ingest::Observation::begin(&self.pool).await?;
+            let observation = Observation::begin(&self.pool).await?;
             for track in self.account_uploads(&sc_user_id).await? {
-                if avatar.is_none() {
-                    avatar = avatar_of(&track);
-                }
                 let Some(fields) = ScTrackFields::from_sc(&track) else {
                     continue;
                 };
-                let result = catalog_ingest::upsert_from_sc(
-                    &self.pool,
-                    &fields,
-                    TrackPriority::Discovery,
-                    TrackPriority::Discovery,
-                    observation,
-                )
-                .await?;
-                if result.was_new {
-                    wake::enqueue(&self.pool, &self.queue, &fields.sc_track_id)
-                        .await
-                        .map_err(|error| WalkError::Lyrics(error.to_string()))?;
+                if avatar.is_none() {
+                    avatar = avatar_of(&fields);
                 }
+                self.ingest(&fields, observation).await?;
                 ingested += 1;
             }
         }
@@ -139,6 +131,27 @@ impl AccountWalkHandler {
                 .await?;
         }
         Ok(ingested)
+    }
+
+    async fn ingest(
+        &self,
+        fields: &ScTrackFields,
+        observation: Observation,
+    ) -> Result<(), WalkError> {
+        let result = catalog_ingest::upsert_from_sc(
+            &self.pool,
+            fields,
+            TrackPriority::Discovery,
+            TrackPriority::Discovery,
+            observation,
+        )
+        .await?;
+        if result.was_new {
+            wake::enqueue(&self.pool, &self.queue, &fields.sc_track_id)
+                .await
+                .map_err(|error| WalkError::Lyrics(error.to_string()))?;
+        }
+        Ok(())
     }
 
     async fn account_uploads(&self, sc_user_id: &str) -> Result<Vec<Value>, WalkError> {
@@ -232,11 +245,10 @@ fn sc_id_of(track: &Value) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
-fn avatar_of(track: &Value) -> Option<String> {
-    track
-        .get("user")
-        .and_then(|user| user.get("avatar_url"))
-        .and_then(Value::as_str)
+fn avatar_of(fields: &ScTrackFields) -> Option<String> {
+    fields
+        .uploader_avatar_url
+        .as_deref()
         .filter(|url| !url.is_empty())
         .map(|url| url.replace("-large.", "-t500x500."))
 }

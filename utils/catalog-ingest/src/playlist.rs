@@ -4,7 +4,7 @@ use sqlx::PgPool;
 
 use crate::Observation;
 use crate::release_date;
-use crate::sc_payload::{parse_dt, string_field};
+use crate::sc_payload::{parse_dt, string_field, without_nul};
 use catalog_normalize::normalize_title;
 
 pub async fn upsert_playlist_from_sc(
@@ -23,6 +23,7 @@ pub async fn upsert_playlist_in(
     payload: &Value,
     observation: Observation,
 ) -> Result<bool, sqlx::Error> {
+    let payload = &without_nul(payload);
     let Some(fields) = ScPlaylistFields::from_sc(payload) else {
         return Ok(false);
     };

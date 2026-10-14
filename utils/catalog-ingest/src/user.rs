@@ -3,7 +3,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use crate::Observation;
-use crate::sc_payload::{parse_dt, string_field};
+use crate::sc_payload::{parse_dt, string_field, without_nul};
 
 pub async fn upsert_user_from_sc(
     pool: &PgPool,
@@ -21,6 +21,7 @@ pub async fn upsert_user_in(
     payload: &Value,
     observation: Observation,
 ) -> Result<bool, sqlx::Error> {
+    let payload = &without_nul(payload);
     let Some(fields) = ScUserFields::from_sc(payload) else {
         return Err(sqlx::Error::Protocol(
             "invalid SoundCloud user payload".into(),
@@ -65,6 +66,7 @@ pub async fn upsert_profile_in(
     profile: &Value,
     observation: Observation,
 ) -> Result<(), sqlx::Error> {
+    let profile = &without_nul(profile);
     if profile.get("urn").and_then(Value::as_str) != Some(crate::sc_ids::user_urn(user_id).as_str())
     {
         return Err(sqlx::Error::Protocol(

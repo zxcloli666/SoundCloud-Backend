@@ -5,6 +5,7 @@ use sqlx::PgPool;
 
 use crate::payload::ScTrackFields;
 use crate::playlist::ScPlaylistFields;
+use crate::sc_payload::without_nul;
 use crate::user::ScUserFields;
 use crate::{Observation, TrackPriority};
 
@@ -68,6 +69,7 @@ pub async fn insert_absent_playlists(
     payloads: &[Value],
     observation: Observation,
 ) -> Result<AbsentInserted, sqlx::Error> {
+    let payloads: Vec<Value> = payloads.iter().map(without_nul).collect();
     let playlists = unique(
         payloads
             .iter()
@@ -128,6 +130,7 @@ async fn insert_users(
     payloads: &[Value],
     observation: Observation,
 ) -> Result<Vec<String>, sqlx::Error> {
+    let payloads: Vec<Value> = payloads.iter().map(without_nul).collect();
     let users = unique(payloads.iter().filter_map(ScUserFields::from_sc), |user| {
         user.sc_user_id().to_owned()
     });

@@ -83,6 +83,8 @@ pub fn unescape_json_unicode(s: &str) -> String {
                     }
                     out.push(chars[i]);
                     i += 1;
+                } else if cp == 0 {
+                    i = next;
                 } else if let Some(c) = char::from_u32(cp) {
                     out.push(c);
                     i = next;
@@ -353,6 +355,11 @@ mod tests {
             r"lonely \uD83D end"
         );
         assert_eq!(unescape_json_unicode("plain"), "plain");
+    }
+
+    #[test]
+    fn unescape_drops_escaped_nul() {
+        assert_eq!(unescape_json_unicode(r"Null\u0000 Track"), "Null Track");
     }
 
     #[test]

@@ -78,15 +78,16 @@ impl ScTrackFields {
     }
 
     pub fn from_sc(payload: &Value) -> Option<Self> {
+        let payload = &without_nul(payload);
         let entity = crate::sc_ids::payload_ref(crate::EntityKind::Track, payload)?;
         let urn = entity.urn();
         let sc_track_id = entity.sc_id();
 
         let raw_title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
-        if raw_title.is_empty() {
+        let title = catalog_normalize::unescape_json_unicode(raw_title);
+        if title.is_empty() {
             return None;
         }
-        let title = catalog_normalize::unescape_json_unicode(raw_title);
         let title_normalized = normalize_title(&title);
         let is_cover = catalog_normalize::title_marks_cover(&title);
 
@@ -170,7 +171,7 @@ impl ScTrackFields {
 
 use catalog_normalize::normalize_title;
 
-use crate::sc_payload::{parse_dt, string_field};
+use crate::sc_payload::{parse_dt, string_field, without_nul};
 
 fn extract_isrc(payload: &Value) -> Option<String> {
     let candidates = [
