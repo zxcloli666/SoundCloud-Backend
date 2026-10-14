@@ -147,7 +147,10 @@ impl IndexingHandler {
 
     pub async fn index_track(&self, payload: IndexTrackPayload) -> JobResult {
         let sc_track_id = validate_track_id(&payload.sc_track_id)?;
-        if !self.is_due(sc_track_id).await? {
+        if !is_due(&self.pool, sc_track_id)
+            .await
+            .map_err(JobError::retryable)?
+        {
             return Ok(());
         }
 
@@ -273,30 +276,6 @@ impl IndexingHandler {
         Ok(())
     }
 
-    async fn is_due(&self, sc_track_id: &str) -> JobResult<bool> {
-        let row = sqlx::query_file!(
-            "queries/indexing/track_state.sql",
-            sc_track_id,
-            AUDIO_INDEX_QUARANTINE_SECONDS
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
-        let Some(row) = row else {
-            return Ok(false);
-        };
-        if row.index_state == "indexed"
-            || row.index_state == "too_long"
-            || row.storage_state == "too_long"
-            || row.needs_duration_resolve
-            || row.index_in_flight
-        {
-            return Ok(false);
-        }
-        Ok(row.storage_state != "failed"
-            || row.updated_at < Utc::now() - chrono::Duration::hours(24))
-    }
-
     async fn finish_cached(&self, sc_track_id: &str) -> JobResult {
         self.bus
             .publish(STORAGE_TRACK_UPLOADED, &self.stored_upload(sc_track_id)?)
@@ -333,6 +312,29 @@ impl IndexingHandler {
         })?;
         append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
     }
+}
+
+async fn is_due(pool: &PgPool, sc_track_id: &str) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_file!(
+        "queries/indexing/track_state.sql",
+        sc_track_id,
+        AUDIO_INDEX_QUARANTINE_SECONDS
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    if row.index_state == "indexed"
+        || row.index_state == "too_long"
+        || row.storage_state == "ok"
+        || row.storage_state == "too_long"
+        || row.needs_duration_resolve
+        || row.index_in_flight
+    {
+        return Ok(false);
+    }
+    Ok(row.storage_state != "failed" || row.updated_at < Utc::now() - chrono::Duration::hours(24))
 }
 
 fn stored_upload_message_id(sc_track_id: &str) -> String {
@@ -635,12 +637,10 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
-    async fn a_track_the_reaper_already_handed_out_does_not_take_a_slot_again(
+    async fn a_queued_trigger_holds_back_the_stuck_reaper_but_not_the_audio_backfill(
         pool: PgPool,
     ) -> anyhow::Result<()> {
         install_schema(&pool).await?;
-        assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
-
         sqlx::query(
             "INSERT INTO background_jobs (id, kind, dedup_key)
              VALUES (gen_random_uuid(), 'indexing.track', '42')",
@@ -648,18 +648,55 @@ mod tests {
         .execute(&pool)
         .await?;
 
+        assert_eq!(backfilled(&pool).await?, vec!["42".to_owned()]);
+
+        sqlx::query("UPDATE tracks SET storage_state = 'pending'")
+            .execute(&pool)
+            .await?;
         assert!(stuck(&pool).await?.is_empty());
+
+        sqlx::query("DELETE FROM background_jobs")
+            .execute(&pool)
+            .await?;
+        assert_eq!(requeued(&pool).await?, vec!["42".to_owned()]);
         Ok(())
     }
 
     #[sqlx::test(migrations = false)]
-    async fn a_track_that_just_exhausted_its_attempts_waits_out_the_cooldown(
+    async fn a_trigger_that_just_exhausted_its_attempts_holds_back_only_a_track_waiting_for_storage(
         pool: PgPool,
     ) -> anyhow::Result<()> {
         install_schema(&pool).await?;
         sqlx::query(
             "INSERT INTO background_job_failures (id, kind, dedup_key, failed_at)
              VALUES (gen_random_uuid(), 'indexing.track', '42', now())",
+        )
+        .execute(&pool)
+        .await?;
+
+        assert_eq!(backfilled(&pool).await?, vec!["42".to_owned()]);
+
+        sqlx::query("UPDATE tracks SET storage_state = 'pending'")
+            .execute(&pool)
+            .await?;
+        assert!(stuck(&pool).await?.is_empty());
+
+        sqlx::query("UPDATE background_job_failures SET failed_at = now() - interval '7 hours'")
+            .execute(&pool)
+            .await?;
+
+        assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_dispatch_that_just_exhausted_its_attempts_waits_out_the_cooldown(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        sqlx::query(
+            "INSERT INTO background_job_failures (id, kind, dedup_key, failed_at)
+             VALUES (gen_random_uuid(), 'indexing.dispatch_audio', '42', now())",
         )
         .execute(&pool)
         .await?;
@@ -671,6 +708,20 @@ mod tests {
             .await?;
 
         assert_eq!(stuck(&pool).await?, vec!["42".to_owned()]);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_trigger_left_queued_for_a_track_stored_another_way_does_nothing(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        install_schema(&pool).await?;
+        assert!(!is_due(&pool, "42").await?);
+
+        sqlx::query("UPDATE tracks SET storage_state = 'pending'")
+            .execute(&pool)
+            .await?;
+        assert!(is_due(&pool, "42").await?);
         Ok(())
     }
 

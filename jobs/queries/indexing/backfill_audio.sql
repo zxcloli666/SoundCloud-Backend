@@ -30,13 +30,13 @@ WHERE track.index_state = 'pending'
   AND NOT EXISTS (
       SELECT 1
       FROM background_jobs AS job
-      WHERE job.kind IN ('indexing.track', 'indexing.dispatch_audio')
+      WHERE job.kind = 'indexing.dispatch_audio'
         AND job.dedup_key = track.sc_track_id
   )
   AND NOT EXISTS (
       SELECT 1
       FROM background_job_failures AS failure
-      WHERE failure.kind IN ('indexing.track', 'indexing.dispatch_audio')
+      WHERE failure.kind = 'indexing.dispatch_audio'
         AND failure.failed_at > now() - $3::bigint * interval '1 second'
         AND failure.dedup_key = track.sc_track_id
   )
