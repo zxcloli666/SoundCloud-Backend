@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -9,6 +9,7 @@ use wreq::Client;
 
 use super::anon::AnonClient;
 use super::cookies::{CookieStreamResult, CookiesClient, PREVIEWS_ONLY};
+use super::quality;
 use super::restricted::{RestrictedSource, Transcoding};
 use crate::config::parse_cookie_value;
 
@@ -16,6 +17,7 @@ type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(30);
 const REJECTED_COOLDOWN: Duration = Duration::from_secs(600);
+const UQ_MEMORY: Duration = Duration::from_secs(6 * 60 * 60);
 
 struct PoolEntry {
     client: CookiesClient,
@@ -25,6 +27,7 @@ struct PoolEntry {
 pub struct CookiesPool {
     entries: Vec<PoolEntry>,
     cursor: AtomicUsize,
+    uq_seen_at: AtomicU64,
 }
 
 impl CookiesPool {
@@ -49,6 +52,7 @@ impl CookiesPool {
         Self {
             entries,
             cursor: AtomicUsize::new(0),
+            uq_seen_at: AtomicU64::new(0),
         }
     }
 
@@ -58,6 +62,16 @@ impl CookiesPool {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn serves_uq(&self) -> bool {
+        recently(self.uq_seen_at.load(Ordering::Relaxed), now_secs())
+    }
+
+    fn note_quality(&self, seen: &str) {
+        if seen == quality::UQ {
+            self.uq_seen_at.store(now_secs(), Ordering::Relaxed);
+        }
     }
 
     async fn try_rotate<'a, F, Fut, T>(&'a self, authed: bool, mut op: F) -> Result<T, BoxErr>
@@ -119,10 +133,15 @@ impl CookiesPool {
         track_urn: &str,
         hq_only: bool,
     ) -> Result<Option<CookieStreamResult>, BoxErr> {
-        self.try_rotate(false, |client| async move {
-            client.get_stream(track_urn, hq_only).await
-        })
-        .await
+        let result = self
+            .try_rotate(false, |client| async move {
+                client.get_stream(track_urn, hq_only).await
+            })
+            .await?;
+        if let Some(stream) = &result {
+            self.note_quality(stream.quality);
+        }
+        Ok(result)
     }
 
     pub async fn fetch_track_meta(
@@ -137,11 +156,17 @@ impl CookiesPool {
         ),
         BoxErr,
     > {
-        self.try_rotate(true, |client| async move {
-            let (tcs, auth, cid) = client.fetch_track_meta(track_urn).await?;
-            Ok((tcs, auth, cid, client.cookie_auth_headers()))
-        })
-        .await
+        let meta = self
+            .try_rotate(true, |client| async move {
+                let (tcs, auth, cid) = client.fetch_track_meta(track_urn).await?;
+                Ok((tcs, auth, cid, client.cookie_auth_headers()))
+            })
+            .await?;
+        let full = meta.0.iter().filter(|t| !t.snipped.unwrap_or(false));
+        if let Some(best) = full.max_by_key(|t| quality::rank(quality::of_transcoding(t))) {
+            self.note_quality(quality::of_transcoding(best));
+        }
+        Ok(meta)
     }
 
     pub(crate) async fn resolve_restricted(
@@ -149,10 +174,15 @@ impl CookiesPool {
         track_urn: &str,
         hq_first: bool,
     ) -> Result<Option<RestrictedSource>, BoxErr> {
-        self.try_rotate(true, |client| async move {
-            client.resolve_restricted(track_urn, hq_first).await
-        })
-        .await
+        let source = self
+            .try_rotate(true, |client| async move {
+                client.resolve_restricted(track_urn, hq_first).await
+            })
+            .await?;
+        if let Some(found) = &source {
+            self.note_quality(found.quality);
+        }
+        Ok(source)
     }
 
     pub fn log_summary(&self) {
@@ -161,6 +191,17 @@ impl CookiesPool {
             self.entries.len()
         );
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn recently(seen_at: u64, now: u64) -> bool {
+    seen_at > 0 && now.saturating_sub(seen_at) < UQ_MEMORY.as_secs()
 }
 
 fn is_rate_limited(msg: &str) -> bool {
@@ -175,7 +216,10 @@ fn is_rejected(msg: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{BoxErr, CookiesPool, PREVIEWS_ONLY, is_rate_limited, is_rejected};
+    use super::{
+        BoxErr, CookiesPool, PREVIEWS_ONLY, UQ_MEMORY, is_rate_limited, is_rejected, recently,
+    };
+    use crate::stream::quality;
 
     #[test]
     fn detects_429_variants() {
@@ -246,5 +290,25 @@ mod tests {
 
         assert_eq!(result.unwrap(), 2);
         assert_eq!(pool.cursor.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn uq_is_tried_only_after_an_account_showed_it_lately() {
+        let pool = CookiesPool::new(wreq::Client::new(), "", &["oauth_token=a".to_string()]);
+        assert!(!pool.serves_uq());
+
+        pool.note_quality(quality::HQ);
+        assert!(!pool.serves_uq());
+
+        pool.note_quality(quality::UQ);
+        assert!(pool.serves_uq());
+    }
+
+    #[test]
+    fn an_old_sighting_of_uq_wears_off() {
+        let memory = UQ_MEMORY.as_secs();
+        assert!(!recently(0, 1_000_000));
+        assert!(recently(1_000_000, 1_000_000 + memory - 1));
+        assert!(!recently(1_000_000, 1_000_000 + memory));
     }
 }

@@ -128,11 +128,16 @@ async fn stream_inner(
 
     let tag = "[stream]";
     let cacheable = policy.cacheable;
-    let stored_is_enough =
-        !hq || stored_quality.is_some_and(|q| quality::rank(q) >= quality::rank(quality::HQ));
+    let uq_live = hq && state.cookies.as_ref().is_some_and(|c| c.serves_uq());
+    let wanted = match (hq, uq_live) {
+        (false, _) => quality::SQ,
+        (true, false) => quality::HQ,
+        (true, true) => quality::UQ,
+    };
+    let stored = stored_quality.map_or(0, quality::rank);
 
     if cacheable
-        && stored_is_enough
+        && stored >= quality::rank(wanted)
         && let Some(response) =
             from_storage(&state, &headers, tag, &track_urn, stored_quality).await
     {
@@ -147,12 +152,20 @@ async fn stream_inner(
     let access = session.access_token.as_deref();
 
     if hq {
-        if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, true).await {
-            served(tag, &track_urn, "oauth_hq", r.2);
+        if uq_live && let Some(r) = try_cookies(&state, &track_urn, tag, true).await {
+            served(tag, &track_urn, "cookies_hq", r.2);
             return respond_with_data(&state, &track_urn, r, cacheable);
         }
-        if let Some(r) = try_cookies(&state, &track_urn, tag, true).await {
-            served(tag, &track_urn, "cookies_hq", r.2);
+        if cacheable
+            && stored >= quality::rank(quality::HQ)
+            && stored < quality::rank(wanted)
+            && let Some(response) =
+                from_storage(&state, &headers, tag, &track_urn, stored_quality).await
+        {
+            return Ok(response);
+        }
+        if let Some(r) = try_session_oauth(&state, access, &track_urn, secret_token, true).await {
+            served(tag, &track_urn, "oauth_hq", r.2);
             return respond_with_data(&state, &track_urn, r, cacheable);
         }
         if let Some((r, q)) =
@@ -166,7 +179,7 @@ async fn stream_inner(
             return respond_with_data(&state, &track_urn, r, cacheable);
         }
         if cacheable
-            && !stored_is_enough
+            && stored < quality::rank(quality::HQ)
             && let Some(response) =
                 from_storage(&state, &headers, tag, &track_urn, stored_quality).await
         {

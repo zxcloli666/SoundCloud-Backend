@@ -113,6 +113,17 @@ async fn upgrade_one(
     sc_proxy_url: &str,
     storage: &StorageClient,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(pool) = cookies.filter(|pool| pool.serves_uq())
+        && let Ok(Some(result)) = pool.get_stream(track_urn, true).await
+    {
+        return Ok(upload(
+            storage,
+            track_urn,
+            result.data.to_vec(),
+            result.quality,
+        ));
+    }
+
     if let Some(src) = restricted_source(track_urn, anon, cookies).await
         && above_sq(src.quality)
     {
