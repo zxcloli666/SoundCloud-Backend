@@ -333,12 +333,17 @@ async fn an_upload_without_transcription_room_is_left_for_the_align_reaper(
     let claimed: i64 = sqlx::query_scalar("SELECT count(*) FROM transcription_wire_state")
         .fetch_one(&pool)
         .await?;
-    let reaped = sqlx::query_file!("queries/lyrics/reap_transcriptions_align.sql", 10_i64)
-        .fetch_all(&pool)
-        .await?
-        .into_iter()
-        .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
-        .collect::<Vec<_>>();
+    let reaped = sqlx::query_file!(
+        "queries/lyrics/reap_transcriptions_align.sql",
+        10_i64,
+        i16::MAX,
+        &Vec::<String>::new()
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
+    .collect::<Vec<_>>();
     assert!(!with_room);
     assert!(without_room);
     assert_eq!(claimed, 0);

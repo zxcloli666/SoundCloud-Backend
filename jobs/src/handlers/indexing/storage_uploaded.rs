@@ -12,10 +12,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::bus::{Bus, DeliveryContext};
+use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier};
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
 const MAX_ATTEMPTS: i16 = 8;
-const DISPATCH_PRIORITY: i16 = 10;
 const MAX_STORAGE_URL_BYTES: usize = 4_096;
 
 pub struct StorageUploadHandler {
@@ -269,12 +269,20 @@ async fn apply_upload(
         sc_track_id: upload.sc_track_id.clone(),
         uploaded_generation: generation,
     };
+    let tier = if outcome.dispatch_audio || outcome.dispatch_transcription {
+        star_priority::of_track(&mut *transaction, &upload.sc_track_id)
+            .await
+            .map_err(JobError::retryable)?
+    } else {
+        Tier::Rest
+    };
     if outcome.dispatch_audio {
         enqueue_dispatch(
             queue,
             &mut transaction,
             JobKind::DispatchAudioIndex,
             &payload,
+            tier,
         )
         .await?;
     }
@@ -284,6 +292,7 @@ async fn apply_upload(
             &mut transaction,
             JobKind::DispatchTranscription,
             &payload,
+            tier,
         )
         .await?;
     }
@@ -301,6 +310,7 @@ async fn enqueue_dispatch(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     kind: JobKind,
     payload: &StoredAudioDispatchPayload,
+    tier: Tier,
 ) -> JobResult {
     let dedup_key = payload.sc_track_id.clone();
     let payload = serde_json::to_value(Versioned::V1(payload)).map_err(JobError::permanent)?;
@@ -309,7 +319,7 @@ async fn enqueue_dispatch(
         kind,
         dedup_key: Some(dedup_key),
         payload,
-        priority: DISPATCH_PRIORITY,
+        priority: tier.job_priority(CORE_FAST_TRACK_PRIORITY),
         max_attempts: MAX_ATTEMPTS,
         available_at: Utc::now(),
     };

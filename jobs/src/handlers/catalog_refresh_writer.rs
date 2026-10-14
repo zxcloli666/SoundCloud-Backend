@@ -8,6 +8,8 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+const NEW_TRACK_INDEX_PRIORITY: i16 = 5;
+
 pub(super) struct CatalogWriter {
     pool: PgPool,
     queue: JobRepository,
@@ -107,6 +109,10 @@ impl CatalogWriter {
                     .await
                     .map_err(JobError::retryable)?;
                 } else if result.was_new {
+                    let tier =
+                        super::star_priority::of_track(&mut **connection, &fields.sc_track_id)
+                            .await
+                            .map_err(JobError::retryable)?;
                     let downstream = NewJob {
                         id: Uuid::now_v7(),
                         kind: JobKind::IndexTrack,
@@ -115,7 +121,7 @@ impl CatalogWriter {
                             sc_track_id: fields.sc_track_id.clone(),
                         }))
                         .map_err(JobError::permanent)?,
-                        priority: 5,
+                        priority: tier.job_priority(NEW_TRACK_INDEX_PRIORITY),
                         max_attempts: 8,
                         available_at: Utc::now(),
                     };

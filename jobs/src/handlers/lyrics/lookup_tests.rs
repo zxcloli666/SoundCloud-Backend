@@ -74,7 +74,7 @@ async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
-    Ok(())
+    crate::handlers::star_priority::install_star_track_tiers(pool).await
 }
 
 async fn install_lookup(pool: &PgPool) -> anyhow::Result<()> {

@@ -1,6 +1,8 @@
 #[cfg(test)]
 #[path = "reaper_tests.rs"]
 mod tests;
+#[path = "reaper_tiered.rs"]
+mod tiered;
 
 use backend_contracts::worker_contract::{
     LYRICS_LANE, TRANSCRIBE_LANE, WorkerLane, WorkerLaneSpec,
@@ -11,6 +13,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::config::WorkerDispatchConfig;
+use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
 use super::embedding_queue;
@@ -18,7 +21,6 @@ use crate::handlers::worker_backlog::unclaimed_room;
 
 const QUARANTINE_BATCH: i64 = 50;
 const ORPHAN_SCAN_WINDOW: i64 = 2_000;
-const TRANSCRIPTION_PRIORITY: i16 = 10;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
 const MAX_TRANSCRIPTION_REOPENS: i32 = 7;
@@ -28,6 +30,8 @@ pub struct LyricsReaper {
     pool: PgPool,
     queue: JobRepository,
     dispatch: WorkerDispatchConfig,
+    embedding_turns: Turns,
+    alignment_turns: Turns,
 }
 
 struct TranscriptionCandidate {
@@ -41,6 +45,8 @@ impl LyricsReaper {
             queue: JobRepository::new(pool.clone(), "lyrics-reaper".to_owned()),
             pool,
             dispatch,
+            embedding_turns: Turns::default(),
+            alignment_turns: Turns::default(),
         }
     }
 
@@ -91,20 +97,30 @@ impl LyricsReaper {
         .fetch_all(&mut *transaction)
         .await
         .map_err(JobError::retryable)?;
+        let reopened_ids: Vec<String> = reopen
+            .iter()
+            .map(|candidate| candidate.sc_track_id.clone())
+            .collect();
+        let reopened_tiers = star_priority::of_tracks(&mut *transaction, &reopened_ids)
+            .await
+            .map_err(JobError::retryable)?;
         for candidate in reopen {
-            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+            let tier = reopened_tiers
+                .get(&candidate.sc_track_id)
+                .copied()
+                .unwrap_or(Tier::Rest);
+            enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             reopened += 1;
         }
-        let align = sqlx::query_file_as!(
-            TranscriptionCandidate,
-            "queries/lyrics/reap_transcriptions_align.sql",
-            room.saturating_sub(reopened)
+        let align = tiered::alignments(
+            &mut transaction,
+            room.saturating_sub(reopened),
+            &self.alignment_turns,
         )
-        .fetch_all(&mut *transaction)
         .await
         .map_err(JobError::retryable)?;
-        for candidate in align {
-            enqueue_transcription(&self.queue, &mut transaction, candidate).await?;
+        for (candidate, tier) in align {
+            enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             enqueued += 1;
         }
         transaction.commit().await.map_err(JobError::retryable)?;
@@ -154,12 +170,13 @@ impl LyricsReaper {
         .map_err(JobError::retryable)?;
 
         let mut enqueued = 0i64;
-        let candidates = sqlx::query_file_scalar!("queries/lyrics/reap_embeddings.sql", room)
-            .fetch_all(&mut *transaction)
+        let candidates = tiered::embeddings(&mut transaction, room, &self.embedding_turns)
             .await
             .map_err(JobError::retryable)?;
-        for sc_track_id in candidates {
-            if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id).await? {
+        for (sc_track_id, tier) in candidates {
+            if embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &sc_track_id, tier)
+                .await?
+            {
                 enqueued += 1;
             }
         }
@@ -214,6 +231,7 @@ async fn enqueue_transcription(
     queue: &JobRepository,
     transaction: &mut Transaction<'_, Postgres>,
     candidate: TranscriptionCandidate,
+    tier: Tier,
 ) -> JobResult {
     let job = NewJob {
         id: Uuid::now_v7(),
@@ -224,7 +242,7 @@ async fn enqueue_transcription(
             uploaded_generation: candidate.uploaded_generation,
         }))
         .map_err(JobError::permanent)?,
-        priority: TRANSCRIPTION_PRIORITY,
+        priority: tier.job_priority(CORE_FAST_TRACK_PRIORITY),
         max_attempts: MAX_ATTEMPTS,
         available_at: Utc::now(),
     };

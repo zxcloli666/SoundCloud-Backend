@@ -1,3 +1,4 @@
+mod backfill;
 #[cfg(test)]
 mod backfill_live_tests;
 mod client;
@@ -30,6 +31,7 @@ use self::duration::DurationResolver;
 use self::result::AudioIndexResultHandler;
 use self::storage_events::StorageEventHandler;
 use self::storage_uploaded::StorageUploadHandler;
+use super::star_priority::{self, Tier, Turns};
 use super::worker_backlog::{WorkerBacklog, unclaimed_room};
 
 const REAP_BATCH: i64 = 50;
@@ -55,17 +57,13 @@ pub struct IndexingHandler {
     storage_url: Url,
     backlog: WorkerBacklog,
     audio_backlog: i64,
+    turns: Turns,
 }
 
 #[derive(Default)]
 struct Backfill {
     dispatched: i64,
     announced: i64,
-}
-
-struct AudioBackfill {
-    sc_track_id: String,
-    uploaded_generation: Option<i64>,
 }
 
 impl IndexingHandler {
@@ -96,6 +94,7 @@ impl IndexingHandler {
             storage_url: storage_url.clone(),
             backlog: WorkerBacklog::new(bus),
             audio_backlog,
+            turns: Turns::default(),
         })
     }
 
@@ -191,16 +190,9 @@ impl IndexingHandler {
         if room == 0 {
             return Ok(backfill);
         }
-        let candidates = sqlx::query_file_as!(
-            AudioBackfill,
-            "queries/indexing/backfill_audio.sql",
-            room,
-            AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        let candidates = backfill::pick(&self.pool, room, self.turns.next())
+            .await
+            .map_err(JobError::retryable)?;
         let mut first_failure = None;
         for candidate in candidates {
             let Some(uploaded_generation) = candidate.uploaded_generation else {
@@ -270,8 +262,13 @@ impl IndexingHandler {
         .await
         .map_err(JobError::retryable)?;
 
-        for sc_track_id in stuck.into_iter().chain(failed) {
-            self.enqueue(sc_track_id).await?;
+        let requeued: Vec<String> = stuck.into_iter().chain(failed).collect();
+        let tiers = star_priority::of_tracks(&self.pool, &requeued)
+            .await
+            .map_err(JobError::retryable)?;
+        for sc_track_id in requeued {
+            let tier = tiers.get(&sc_track_id).copied().unwrap_or(Tier::Rest);
+            self.enqueue(sc_track_id, tier).await?;
         }
         Ok(())
     }
@@ -325,8 +322,8 @@ impl IndexingHandler {
         }))
     }
 
-    async fn enqueue(&self, sc_track_id: String) -> JobResult {
-        let job = new_index_job(sc_track_id)?;
+    async fn enqueue(&self, sc_track_id: String, tier: Tier) -> JobResult {
+        let job = new_index_job(sc_track_id, tier)?;
         self.queue.enqueue(&job).await.map_err(queue_error)
     }
 
@@ -342,7 +339,7 @@ fn stored_upload_message_id(sc_track_id: &str) -> String {
     format!("stored-audio:{sc_track_id}")
 }
 
-fn new_index_job(sc_track_id: String) -> JobResult<NewJob> {
+fn new_index_job(sc_track_id: String, tier: Tier) -> JobResult<NewJob> {
     let payload = serde_json::to_value(Versioned::V1(IndexTrackPayload {
         sc_track_id: sc_track_id.clone(),
     }))
@@ -352,7 +349,7 @@ fn new_index_job(sc_track_id: String) -> JobResult<NewJob> {
         kind: JobKind::IndexTrack,
         dedup_key: Some(sc_track_id),
         payload,
-        priority: 0,
+        priority: tier.job_priority(0),
         max_attempts: MAX_ATTEMPTS,
         available_at: Utc::now(),
     })
@@ -384,6 +381,7 @@ fn queue_error(error: QueueError) -> JobError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handlers::star_priority::Turn;
 
     async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
         sqlx::raw_sql(
@@ -437,18 +435,11 @@ mod tests {
     }
 
     async fn backfill_candidates(pool: &PgPool) -> anyhow::Result<Vec<(String, Option<i64>)>> {
-        Ok(sqlx::query_file_as!(
-            AudioBackfill,
-            "queries/indexing/backfill_audio.sql",
-            REAP_BATCH,
-            AUDIO_INDEX_QUARANTINE_SECONDS,
-            REAP_RETRY_COOLDOWN_SECONDS
-        )
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
-        .collect())
+        Ok(backfill::pick(pool, REAP_BATCH, Turn::RestFirst)
+            .await?
+            .into_iter()
+            .map(|candidate| (candidate.sc_track_id, candidate.uploaded_generation))
+            .collect())
     }
 
     async fn backfilled(pool: &PgPool) -> anyhow::Result<Vec<String>> {

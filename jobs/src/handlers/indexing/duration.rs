@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 
 use crate::config::DurationConfig;
+use crate::handlers::star_priority;
 use crate::queue::{JobError, JobRepository, JobResult};
 
 use super::public_client::{PublicReadError, PublicSoundCloudClient};
@@ -127,7 +128,10 @@ impl DurationResolver {
             .await
             .map_err(JobError::retryable)?;
         if applied.rows_affected() == 1 && duration_ms <= self.max_track_duration_ms {
-            let job = new_index_job(track_id)?;
+            let tier = star_priority::of_track(&mut *transaction, &track_id)
+                .await
+                .map_err(JobError::retryable)?;
+            let job = new_index_job(track_id, tier)?;
             self.queue
                 .enqueue_in(&mut transaction, &job)
                 .await
@@ -204,6 +208,7 @@ mod tests {
                  storage_state varchar(16) NOT NULL,
                  storage_attempts smallint NOT NULL,
                  index_state varchar(16) NOT NULL,
+                 index_priority smallint NOT NULL DEFAULT 5,
                  indexed_at timestamptz,
                  transcribe_state varchar(16),
                  hq_upgrade_pending boolean NOT NULL DEFAULT false,
@@ -212,7 +217,7 @@ mod tests {
         )
         .execute(pool)
         .await?;
-        Ok(())
+        crate::handlers::star_priority::install_star_track_tiers(pool).await
     }
 
     #[sqlx::test(migrations = false)]

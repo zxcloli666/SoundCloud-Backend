@@ -1,5 +1,6 @@
 SELECT track.sc_track_id AS "sc_track_id!",
-       event.uploaded_generation AS "uploaded_generation!"
+       event.uploaded_generation AS "uploaded_generation!",
+       event.updated_at AS "waiting_since!"
 FROM storage_event_state AS event
 JOIN tracks AS track
   ON track.sc_track_id = event.sc_track_id
@@ -14,6 +15,8 @@ WHERE NULLIF(btrim(lyrics.plain_text), '') IS NOT NULL
   AND event.uploaded_generation > 0
   AND track.storage_state = 'ok'
   AND NOT track.needs_duration_resolve
+  AND track.index_priority <= $2
+  AND track.sc_track_id <> ALL ($3::text[])
   AND (
       (
           event.transcription_generation IS NULL

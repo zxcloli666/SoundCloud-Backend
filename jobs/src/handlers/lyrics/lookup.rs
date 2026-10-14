@@ -1,6 +1,8 @@
 #[cfg(test)]
 #[path = "lookup_tests.rs"]
 mod db_tests;
+#[path = "lookup_tiered.rs"]
+mod tiered;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,13 +17,13 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::config::LyricsConfig;
+use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Picks, Tier};
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
 
 use super::embedding_queue;
 use super::text::lyrics_text;
 
 const MAX_ATTEMPTS: i16 = 8;
-const ALIGN_PRIORITY: i16 = 10;
 const EXPIRED_RELEASE_BATCH: i64 = 256;
 const INSUFFICIENT_METADATA_DELAY: i64 = 7 * 24 * 60 * 60;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(180);
@@ -40,6 +42,7 @@ struct LookupClaim {
     input_sc_created_at: Option<chrono::DateTime<Utc>>,
     miss_streak: i32,
     failure_streak: i32,
+    due_at: chrono::DateTime<Utc>,
 }
 
 pub struct LyricsLookupHandler {
@@ -108,37 +111,36 @@ impl LyricsLookupHandler {
         let total = self.config.batch.max(1);
         let oldest = (total / 4).max(1).min(total);
         let priority = total - oldest;
+        let mut picks = Picks::new("lyrics_lookup");
         let mut claims = Vec::new();
         if priority > 0 {
             claims.extend(
-                sqlx::query_file_as!(
-                    LookupClaim,
-                    "queries/lyrics/lookup_claim_priority.sql",
-                    job.id,
-                    job.generation,
-                    job.lease_id,
+                tiered::claim(
+                    &self.pool,
+                    job,
                     priority,
-                    self.config.claim_seconds
+                    self.config.claim_seconds,
+                    &mut picks,
                 )
-                .fetch_all(&self.pool)
                 .await
                 .map_err(JobError::retryable)?,
             );
         }
-        claims.extend(
-            sqlx::query_file_as!(
-                LookupClaim,
-                "queries/lyrics/lookup_claim_oldest.sql",
-                job.id,
-                job.generation,
-                job.lease_id,
-                oldest,
-                self.config.claim_seconds
-            )
-            .fetch_all(&self.pool)
-            .await
-            .map_err(JobError::retryable)?,
-        );
+        let oldest_claims = sqlx::query_file_as!(
+            LookupClaim,
+            "queries/lyrics/lookup_claim_oldest.sql",
+            job.id,
+            job.generation,
+            job.lease_id,
+            oldest,
+            self.config.claim_seconds
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(JobError::retryable)?;
+        picks.record("oldest", oldest_claims.iter().map(|claim| claim.due_at));
+        picks.report();
+        claims.extend(oldest_claims);
         self.process_batch(job, claims).await
     }
 
@@ -232,13 +234,21 @@ impl LyricsLookupHandler {
                 "lyrics lookup result was not fenced"
             )));
         }
+        let tier = star_priority::of_track(&mut *transaction, &settled.sc_track_id)
+            .await
+            .map_err(JobError::retryable)?;
         if lyrics_text(settled.plain_text.as_deref(), settled.synced_lrc.as_deref())
             .is_some_and(|text| text.chars().count() > 30)
         {
-            embedding_queue::enqueue_if_new(&self.queue, &mut transaction, &settled.sc_track_id)
-                .await?;
+            embedding_queue::enqueue_if_new(
+                &self.queue,
+                &mut transaction,
+                &settled.sc_track_id,
+                tier,
+            )
+            .await?;
         }
-        self.enqueue_align_if_ready(&mut transaction, &settled.sc_track_id)
+        self.enqueue_align_if_ready(&mut transaction, &settled.sc_track_id, tier)
             .await?;
         transaction.commit().await.map_err(JobError::retryable)?;
         Ok(())
@@ -300,6 +310,7 @@ impl LyricsLookupHandler {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         sc_track_id: &str,
+        tier: Tier,
     ) -> JobResult {
         let generation =
             sqlx::query_file_scalar!("queries/lyrics/lookup_align_candidate.sql", sc_track_id)
@@ -318,7 +329,7 @@ impl LyricsLookupHandler {
             kind: JobKind::DispatchTranscription,
             dedup_key: Some(sc_track_id.to_owned()),
             payload: serde_json::to_value(Versioned::V1(payload)).map_err(JobError::permanent)?,
-            priority: ALIGN_PRIORITY,
+            priority: tier.job_priority(CORE_FAST_TRACK_PRIORITY),
             max_attempts: MAX_ATTEMPTS,
             available_at: Utc::now(),
         };
@@ -419,6 +430,7 @@ mod tests {
             input_sc_created_at: None,
             miss_streak: streak,
             failure_streak: 0,
+            due_at: Utc::now(),
         }
     }
 

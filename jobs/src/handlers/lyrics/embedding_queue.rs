@@ -3,15 +3,17 @@ use chrono::Utc;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::handlers::star_priority::Tier;
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
-const PRIORITY: i16 = 0;
+const BASE_PRIORITY: i16 = 0;
 const MAX_ATTEMPTS: i16 = 8;
 
 pub async fn enqueue_if_new(
     queue: &JobRepository,
     transaction: &mut Transaction<'_, Postgres>,
     sc_track_id: &str,
+    tier: Tier,
 ) -> JobResult<bool> {
     let inserted = sqlx::query_file_scalar!("queries/lyrics/queue_embedding.sql", sc_track_id)
         .fetch_optional(&mut **transaction)
@@ -29,7 +31,7 @@ pub async fn enqueue_if_new(
         kind: JobKind::LyricsEmbed,
         dedup_key: Some(sc_track_id.to_owned()),
         payload: serde_json::to_value(Versioned::V1(payload)).map_err(JobError::permanent)?,
-        priority: PRIORITY,
+        priority: tier.job_priority(BASE_PRIORITY),
         max_attempts: MAX_ATTEMPTS,
         available_at: Utc::now(),
     };

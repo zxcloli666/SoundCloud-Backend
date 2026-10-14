@@ -15,6 +15,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              s3_missing_at timestamptz,
              hq_upgrade_pending boolean NOT NULL DEFAULT false,
              index_state varchar(16) NOT NULL DEFAULT 'pending',
+             index_priority smallint NOT NULL DEFAULT 5,
              indexed_at timestamptz,
              transcribe_state varchar(16),
              transcribe_at timestamptz,
@@ -83,6 +84,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+    crate::handlers::star_priority::install_star_track_tiers(pool).await?;
     super::super::test_schema::install_audio_index_wire_state(pool).await
 }
 
@@ -322,6 +324,61 @@ async fn upload_and_redelivery_enqueue_each_dispatch_once(pool: PgPool) -> anyho
             .iter()
             .all(|payload| payload["payload"].get("storage_url").is_none())
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_track_a_star_user_likes_is_dispatched_ahead_of_the_rest(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    insert_track(&pool, 180_000).await?;
+    insert_plain_lyrics(&pool).await?;
+    sqlx::query("INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('42', 1)")
+        .execute(&pool)
+        .await?;
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(1, 10),
+        420_000,
+    )
+    .await?;
+
+    let priorities: Vec<(String, i16)> =
+        sqlx::query_as("SELECT kind, priority FROM background_jobs ORDER BY kind")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        priorities,
+        vec![
+            ("indexing.dispatch_audio".to_owned(), 9),
+            ("lyrics.dispatch_transcription".to_owned(), 9)
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_ordinary_track_is_dispatched_below_the_write_back(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    insert_track(&pool, 180_000).await?;
+
+    apply_upload(
+        &pool,
+        &queue(&pool),
+        &upload(Some("sq")),
+        &delivery(1, 10),
+        420_000,
+    )
+    .await?;
+
+    let priorities: Vec<i16> = sqlx::query_scalar("SELECT priority FROM background_jobs")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(priorities, vec![6]);
     Ok(())
 }
 

@@ -33,6 +33,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
         "CREATE TABLE tracks (
              sc_track_id text PRIMARY KEY,
              storage_state varchar(16) NOT NULL,
+             index_priority smallint NOT NULL DEFAULT 5,
              needs_duration_resolve boolean NOT NULL DEFAULT false,
              transcribe_state varchar(16),
              transcribe_at timestamptz,
@@ -101,7 +102,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
-    Ok(())
+    crate::handlers::star_priority::install_star_track_tiers(pool).await
 }
 
 async fn seed_stored_track(pool: &PgPool, id: &str, generation: i64) -> anyhow::Result<()> {
@@ -687,6 +688,58 @@ async fn embedding_reaper_fills_only_the_room_the_worker_backlog_leaves(
     assert_eq!(untouched, 0);
     assert_eq!(first_round, 2);
     assert_eq!(second_round, 3);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn star_likes_get_the_embedding_room_before_likes_and_the_rest(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for id in ["41", "42", "43"] {
+        seed_stored_track(&pool, id, 1).await?;
+        seed_lyrics(
+            &pool,
+            id,
+            "lyrics long enough to require a durable embedding job",
+        )
+        .await?;
+    }
+    sqlx::raw_sql(
+        "UPDATE tracks SET index_priority = 1 WHERE sc_track_id = '42';
+         INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('43', 1);",
+    )
+    .execute(&pool)
+    .await?;
+
+    reaper(&pool).reap_embeddings(2).await?;
+
+    let jobs: Vec<(String, i16)> =
+        sqlx::query_as("SELECT dedup_key, priority FROM background_jobs ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(jobs, vec![("42".to_owned(), 2), ("43".to_owned(), 3)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn star_tracks_get_the_alignment_room_first(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for (id, generation) in [("41", 3), ("42", 4)] {
+        seed_stored_track(&pool, id, generation).await?;
+        seed_lyrics(&pool, id, "plain lyrics waiting for alignment").await?;
+    }
+    sqlx::query("INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('42', 3)")
+        .execute(&pool)
+        .await?;
+
+    reaper(&pool).reap_transcriptions(1).await?;
+
+    let jobs: Vec<(String, i16)> =
+        sqlx::query_as("SELECT dedup_key, priority FROM background_jobs ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(jobs, vec![("42".to_owned(), 7)]);
     Ok(())
 }
 
