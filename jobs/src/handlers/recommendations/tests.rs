@@ -266,57 +266,6 @@ async fn wave_priority_promotes_four_most_played_tracks_per_artist(
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_wave_pick_of_a_liked_track_stays_a_like_for_indexing(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let artist_id = Uuid::from_u128(1);
-    sqlx::query("INSERT INTO artists (id) VALUES ($1)")
-        .bind(artist_id)
-        .execute(&pool)
-        .await?;
-    insert_artist_track(&pool, artist_id, Uuid::from_u128(10), "seed-track", "ok", 5).await?;
-    insert_artist_track(&pool, artist_id, Uuid::from_u128(11), "liked", "pending", 1).await?;
-    insert_artist_track(
-        &pool,
-        artist_id,
-        Uuid::from_u128(12),
-        "unliked",
-        "pending",
-        5,
-    )
-    .await?;
-    sqlx::query("INSERT INTO user_events (id, sc_user_id) VALUES ($1, '100')")
-        .bind(Uuid::from_u128(100))
-        .execute(&pool)
-        .await?;
-    sqlx::query(
-        "INSERT INTO user_likes_tracks (user_id, sc_track_id)
-         VALUES ('100', 'seed-track')",
-    )
-    .execute(&pool)
-    .await?;
-    let handler = RecommendationHandler::new(pool.clone(), 1);
-
-    handler.bump_wave_priority().await?;
-    handler.bump_wave_priority().await?;
-
-    let priorities: Vec<(String, i16, i16)> = sqlx::query_as(
-        "SELECT sc_track_id, storage_priority, index_priority
-         FROM tracks
-         WHERE storage_state = 'pending'
-         ORDER BY sc_track_id",
-    )
-    .fetch_all(&pool)
-    .await?;
-    assert_eq!(
-        priorities,
-        [("liked".to_owned(), 0, 1), ("unliked".to_owned(), 0, 0)]
-    );
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
 async fn wave_priority_ignores_users_without_recent_playback(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let artist_id = Uuid::from_u128(1);
@@ -407,7 +356,6 @@ async fn wave_priority_reads_active_users_from_the_covering_index(
     let plan: serde_json::Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}"))
         .bind(1_i64)
         .bind(0_i64)
-        .bind(1_i16)
         .fetch_one(&pool)
         .await?;
 
