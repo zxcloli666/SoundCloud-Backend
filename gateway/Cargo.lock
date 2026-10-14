@@ -1537,6 +1537,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-server",
+ "hyper-util",
  "rustls",
  "rustls-acme",
  "serde",

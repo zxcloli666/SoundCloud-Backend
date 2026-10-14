@@ -14,9 +14,14 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-acme = { version = "0.14", features = ["axum"] }
 time = "=0.3.47"
 axum-server = "0.7"
+hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
 tokio-stream = "0.1"
 tower = "0.5"
 tokio-util = { version = "0.7.18", features = ["compat"] }
+
+[dev-dependencies]
+hyper = { version = "1", features = ["client", "http2"] }
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 lto = true

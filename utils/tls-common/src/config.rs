@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub struct TlsConfig {
     pub domains: Vec<String>,
@@ -122,6 +123,28 @@ impl ProxyProtocolConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Http2Ping {
+    pub interval: Option<Duration>,
+    pub timeout: Duration,
+}
+
+impl Http2Ping {
+    pub fn from_env() -> Self {
+        Self::from_secs(
+            env_u64("TLS_H2_PING_INTERVAL_SECS", 30),
+            env_u64("TLS_H2_PING_TIMEOUT_SECS", 20),
+        )
+    }
+
+    pub fn from_secs(interval: u64, timeout: u64) -> Self {
+        Self {
+            interval: (interval > 0).then(|| Duration::from_secs(interval)),
+            timeout: Duration::from_secs(timeout.max(1)),
+        }
+    }
+}
+
 fn env_bool(key: &str, default: bool) -> bool {
     std::env::var(key)
         .ok()
@@ -130,6 +153,13 @@ fn env_bool(key: &str, default: bool) -> bool {
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())

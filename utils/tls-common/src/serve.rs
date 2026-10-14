@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
+use hyper_util::server::conn::auto::Builder;
 use rustls::ServerConfig;
 use rustls_acme::caches::DirCache;
 use rustls_acme::AcmeConfig;
@@ -13,7 +15,7 @@ use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use crate::acceptor::{ConnectInfoAcceptor, TrustedProxies};
-use crate::config::{ProxyProtocolConfig, TlsConfig};
+use crate::config::{Http2Ping, ProxyProtocolConfig, TlsConfig};
 use crate::redirect::redirect_router;
 use crate::shutdown::shutdown_signal;
 
@@ -57,15 +59,17 @@ pub async fn serve(cfg: TlsConfig, app: Router) {
 
     let https_addr = SocketAddr::from(([0, 0, 0, 0], cfg.https_port));
     let http_addr = SocketAddr::from(([0, 0, 0, 0], cfg.http_port));
+    let ping = Http2Ping::from_env();
 
     info!(
-        "TLS: {} domain(s), https=:{} http=:{} redirect={} staging={} proxy_protocol={}",
+        "TLS: {} domain(s), https=:{} http=:{} redirect={} staging={} proxy_protocol={} h2_ping={:?}",
         cfg.domains.len(),
         cfg.https_port,
         cfg.http_port,
         cfg.http_redirect,
         cfg.staging,
         cfg.proxy.enabled,
+        ping,
     );
 
     let http_app = if cfg.http_redirect {
@@ -87,24 +91,22 @@ pub async fn serve(cfg: TlsConfig, app: Router) {
 
     let http_port = cfg.http_port;
     let http_task = tokio::spawn(async move {
-        if let Err(e) = axum_server::bind(http_addr)
+        let mut server = axum_server::bind(http_addr)
             .handle(http_handle)
-            .acceptor(http_acceptor)
-            .serve(http_app.into_make_service())
-            .await
-        {
+            .acceptor(http_acceptor);
+        ping_idle_connections(server.http_builder(), ping);
+        if let Err(e) = server.serve(http_app.into_make_service()).await {
             error!("HTTP :{} server error: {}", http_port, e);
         }
     });
 
     let https_port = cfg.https_port;
     let https_task = tokio::spawn(async move {
-        if let Err(e) = axum_server::bind(https_addr)
+        let mut server = axum_server::bind(https_addr)
             .handle(https_handle)
-            .acceptor(https_acceptor)
-            .serve(app.into_make_service())
-            .await
-        {
+            .acceptor(https_acceptor);
+        ping_idle_connections(server.http_builder(), ping);
+        if let Err(e) = server.serve(app.into_make_service()).await {
             error!("HTTPS :{} server error: {}", https_port, e);
         }
     });
@@ -129,11 +131,19 @@ pub async fn serve_http(
         shutdown_signal().await;
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(3)));
     });
-    axum_server::bind(addr)
-        .handle(handle)
-        .acceptor(acceptor)
-        .serve(app.into_make_service())
-        .await
+    let mut server = axum_server::bind(addr).handle(handle).acceptor(acceptor);
+    ping_idle_connections(server.http_builder(), Http2Ping::from_env());
+    server.serve(app.into_make_service()).await
+}
+
+fn ping_idle_connections(builder: &mut Builder<TokioExecutor>, ping: Http2Ping) {
+    if let Some(interval) = ping.interval {
+        builder
+            .http2()
+            .timer(TokioTimer::new())
+            .keep_alive_interval(interval)
+            .keep_alive_timeout(ping.timeout);
+    }
 }
 
 async fn trusted_proxies(config: &ProxyProtocolConfig) -> TrustedProxies {
@@ -208,7 +218,82 @@ fn flattened_addresses(resolved: &HashMap<String, Vec<IpAddr>>) -> Vec<IpAddr> {
 
 #[cfg(test)]
 mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+
     use super::*;
+
+    const H2_PREFACE_AND_EMPTY_SETTINGS: &[u8] =
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00";
+
+    async fn serve_connection(
+        io: DuplexStream,
+        ping: Http2Ping,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut builder = Builder::new(TokioExecutor::new());
+        ping_idle_connections(&mut builder, ping);
+        builder
+            .serve_connection(TokioIo::new(io), TowerToHyperService::new(Router::new()))
+            .await
+    }
+
+    #[test]
+    fn zero_interval_turns_h2_ping_off() {
+        assert_eq!(Http2Ping::from_secs(0, 20).interval, None);
+        assert_eq!(
+            Http2Ping::from_secs(30, 0),
+            Http2Ping {
+                interval: Some(Duration::from_secs(30)),
+                timeout: Duration::from_secs(1),
+            }
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_h2_peer_is_dropped_after_an_unanswered_ping() {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let serving = tokio::spawn(serve_connection(server, Http2Ping::from_secs(30, 20)));
+        let started = tokio::time::Instant::now();
+
+        client
+            .write_all(H2_PREFACE_AND_EMPTY_SETTINGS)
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        tokio::time::timeout(Duration::from_secs(120), client.read_to_end(&mut received))
+            .await
+            .expect("server kept a silent h2 peer")
+            .unwrap();
+
+        assert_eq!(started.elapsed(), Duration::from_secs(50));
+        assert!(serving.await.unwrap().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn h2_peer_that_answers_pings_stays_connected() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(serve_connection(server, Http2Ping::from_secs(30, 20)));
+        let (mut sender, connection) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(client))
+                .await
+                .unwrap();
+        tokio::spawn(connection);
+
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        let response = sender
+            .send_request(
+                Request::get("http://localhost/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 
     #[test]
     fn failed_refresh_can_retain_last_known_addresses() {
