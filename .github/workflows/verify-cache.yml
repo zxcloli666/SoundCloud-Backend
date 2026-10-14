@@ -26,5 +26,6 @@ jobs:
           start=$(date +%s)
           docker buildx build -f jobs/Dockerfile --progress=plain . > second.log 2>&1
           echo "second build $(( $(date +%s) - start ))s"
-          grep -E '^#[0-9]+ \[(dependencies|builder|skeleton|toolchain)' second.log | grep -E 'CACHED|DONE' | sort -u
-          grep -c 'Compiling' second.log || true
+          grep -E 'CACHED' second.log | sort -u | head -20
+          grep -oE 'Compiling [a-z0-9_-]+ v[^ ]+' second.log | sort | tee compiled.txt | wc -l
+          cat compiled.txt
