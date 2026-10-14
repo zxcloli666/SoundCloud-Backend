@@ -2,7 +2,6 @@ use std::env;
 
 use stream_ticket::{StreamTicketKey, StreamTicketKeys};
 
-#[derive(Clone)]
 pub struct Config {
     pub port: u16,
     pub database_host: String,
@@ -24,9 +23,6 @@ pub struct Config {
     pub storage_public_url: String,
     pub storage_upload_url: String,
     pub storage_token: String,
-    pub storage_cleanup_days: u64,
-    pub storage_max_size_bytes: u64,
-    pub storage_cleanup_interval_secs: u64,
     pub internal_token: String,
     pub stream_ticket_keys: StreamTicketKeys,
     pub decrypt_device: Option<String>,
@@ -88,18 +84,6 @@ impl Config {
             storage_public_url,
             storage_upload_url,
             storage_token: env::var("STORAGE_TOKEN").unwrap_or_default(),
-            storage_cleanup_days: env::var("STORAGE_CLEANUP_DAYS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(7),
-            storage_max_size_bytes: env::var("STORAGE_MAX_SIZE_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-            storage_cleanup_interval_secs: env::var("STORAGE_CLEANUP_INTERVAL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3600),
             internal_token: env::var("INTERNAL_TOKEN").unwrap_or_default(),
             stream_ticket_keys: stream_ticket_keys(),
             decrypt_device: env::var("SC_DECRYPT_DEVICE").ok().filter(|s| !s.is_empty()),

@@ -80,8 +80,6 @@ impl TrackRecord {
 #[derive(Debug)]
 pub struct CdnTrackRecord {
     pub id: String,
-    pub track_urn: String,
-    pub status: String,
 }
 
 fn pool_config(pool_max: usize, acquire_timeout_secs: u64) -> PoolConfig {
@@ -203,7 +201,7 @@ impl PgPool {
         let client = self.connection().await?;
         let row = client
             .query_opt(
-                r#"SELECT id, track_urn, status
+                r#"SELECT id
                    FROM cdn_tracks
                    WHERE track_urn = $1 AND quality = 'single' AND status = 'ok'"#,
                 &[&track_urn],
@@ -250,53 +248,6 @@ impl PgPool {
                 r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() WHERE id = $1::text::uuid"#,
                 &[&id, &status],
             )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn get_stale_cdn_tracks(
-        &self,
-        older_than_days: u64,
-    ) -> Result<Vec<CdnTrackRecord>, PgError> {
-        let client = self.connection().await?;
-        let interval = format!("{older_than_days} days");
-        let rows = client
-            .query(
-                r#"SELECT id, track_urn, status
-                   FROM cdn_tracks
-                   WHERE status = 'ok'
-                     AND last_accessed_at < NOW() - $1::interval
-                   ORDER BY last_accessed_at ASC"#,
-                &[&interval],
-            )
-            .await?;
-
-        Ok(rows.iter().map(row_to_cdn_track).collect())
-    }
-
-    pub async fn get_cdn_tracks_oldest_first(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<CdnTrackRecord>, PgError> {
-        let client = self.connection().await?;
-        let rows = client
-            .query(
-                r#"SELECT id, track_urn, status
-                   FROM cdn_tracks
-                   WHERE status = 'ok'
-                   ORDER BY last_accessed_at ASC
-                   LIMIT $1"#,
-                &[&limit],
-            )
-            .await?;
-
-        Ok(rows.iter().map(row_to_cdn_track).collect())
-    }
-
-    pub async fn delete_cdn_track(&self, id: &str) -> Result<(), PgError> {
-        let client = self.connection().await?;
-        client
-            .execute("DELETE FROM cdn_tracks WHERE id = $1::text::uuid", &[&id])
             .await?;
         Ok(())
     }
@@ -415,8 +366,6 @@ fn user_id_variants(user_id: &str) -> Vec<String> {
 fn row_to_cdn_track(row: &tokio_postgres::Row) -> CdnTrackRecord {
     CdnTrackRecord {
         id: row.get::<_, Uuid>(0).to_string(),
-        track_urn: row.get(1),
-        status: row.get(2),
     }
 }
 

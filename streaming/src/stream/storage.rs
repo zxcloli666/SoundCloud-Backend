@@ -223,21 +223,6 @@ impl StorageClient {
         });
     }
 
-    pub async fn delete_file(&self, track_urn: &str) -> Result<(), wreq::Error> {
-        let Some(filename) = Self::track_filename(track_urn) else {
-            warn!("[storage] refusing delete for non-canonical urn: {track_urn:?}");
-            return Ok(());
-        };
-        let url = format!("{}/files/{}", self.base_url, filename);
-        self.client
-            .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.auth_token))
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-
     async fn verify_url(&self, url: &str) -> VerifyResult {
         if self.is_temporarily_unavailable() {
             return VerifyResult::Unavailable;

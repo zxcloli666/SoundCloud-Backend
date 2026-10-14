@@ -10,10 +10,10 @@ use axum::routing::{get, post};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-mod cleanup;
 mod config;
 mod db;
 mod error;
+mod hq_upgrade;
 mod metrics;
 mod sc_methods;
 mod stream;
@@ -143,8 +143,7 @@ async fn main() {
 
     let config = Arc::new(config);
 
-    cleanup::task::spawn_cleanup_task((*config).clone(), pg.clone(), storage.clone());
-    cleanup::hq_upgrade::spawn_hq_upgrade_task(
+    hq_upgrade::spawn_hq_upgrade_task(
         pg.clone(),
         anon.clone(),
         cookies.clone(),
