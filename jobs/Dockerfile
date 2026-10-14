@@ -30,7 +30,7 @@ COPY api/migrations ./api/migrations
 COPY api/migrations-ops ./api/migrations-ops
 COPY api/queries ./api/queries
 ARG APP_VERSION
-RUN find jobs backend-contracts utils -name '*.rs' -exec touch {} + \
+RUN find jobs backend-contracts utils -name '*.rs' -not -path '*/target/*' -exec touch {} + \
     && pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \

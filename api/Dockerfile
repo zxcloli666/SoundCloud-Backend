@@ -27,7 +27,7 @@ COPY backend-contracts ./backend-contracts
 COPY utils ./utils
 COPY api ./api
 ARG APP_VERSION
-RUN find api backend-contracts utils -name '*.rs' -exec touch {} + \
+RUN find api backend-contracts utils -name '*.rs' -not -path '*/target/*' -exec touch {} + \
     && pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
