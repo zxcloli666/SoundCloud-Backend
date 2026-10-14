@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::config::Config;
 
+pub mod upgrade;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PgError {
     #[error("pool: {0}")]
@@ -270,46 +272,6 @@ impl PgPool {
         use rand::seq::SliceRandom;
         tokens.shuffle(&mut rand::thread_rng());
         Ok(tokens)
-    }
-
-    pub async fn pick_upgrade_candidates(
-        &self,
-        stored: &str,
-        limit: i64,
-        retry_cooldown_sec: i64,
-    ) -> Result<Vec<String>, PgError> {
-        let client = self.connection().await?;
-        let rows = client
-            .query(
-                r#"UPDATE tracks SET hq_upgrade_last_at = now(),
-                       hq_upgrade_attempts = hq_upgrade_attempts + 1, updated_at = now()
-                   WHERE id IN (
-                       SELECT id FROM tracks
-                       WHERE hq_upgrade_pending = true
-                         AND storage_quality = $3
-                         AND (hq_upgrade_last_at IS NULL
-                              OR hq_upgrade_last_at < now() - make_interval(secs => $2))
-                       ORDER BY hq_upgrade_last_at NULLS FIRST
-                       FOR UPDATE SKIP LOCKED
-                       LIMIT $1
-                   )
-                   RETURNING urn"#,
-                &[&limit, &(retry_cooldown_sec as f64), &stored],
-            )
-            .await?;
-        Ok(rows.iter().map(|r| r.get(0)).collect())
-    }
-
-    pub async fn mark_hq_upgrade_failed(&self, urn: &str) -> Result<(), PgError> {
-        let client = self.connection().await?;
-        client
-            .execute(
-                "UPDATE tracks SET hq_upgrade_last_at = now(), updated_at = now() \
-                 WHERE urn = $1",
-                &[&urn],
-            )
-            .await?;
-        Ok(())
     }
 
     pub async fn get_trusted_duration_ms(&self, track_urn: &str) -> Result<Option<i64>, PgError> {

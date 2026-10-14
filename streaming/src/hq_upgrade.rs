@@ -1,3 +1,5 @@
+mod tiers;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,6 +8,7 @@ use futures::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::db::postgres::PgPool;
+use crate::db::postgres::upgrade::UpgradeTier;
 use crate::stream::anon::AnonClient;
 use crate::stream::cookies_pool::CookiesPool;
 use crate::stream::quality;
@@ -68,11 +71,14 @@ pub fn spawn_hq_upgrade_task(
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut turn: u64 = 0;
         loop {
             ticks.tick().await;
-            upgrader.run_batch(quality::SQ).await;
+            let tiers = tiers::for_turn(turn);
+            turn = turn.wrapping_add(1);
+            upgrader.run_batch(quality::SQ, &tiers).await;
             if upgrader.uq_live() {
-                upgrader.run_batch(quality::HQ).await;
+                upgrader.run_batch(quality::HQ, &tiers).await;
             }
         }
     });
@@ -93,19 +99,8 @@ impl Upgrader {
         self.cookies.as_ref().is_some_and(|pool| pool.serves_uq())
     }
 
-    async fn run_batch(&self, stored: &'static str) {
-        let urns = match self
-            .pg
-            .pick_upgrade_candidates(stored, BATCH, RETRY_COOLDOWN_SEC)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("[hq-upgrade] pick {stored} failed: {e}");
-                return;
-            }
-        };
-        for urn in urns {
+    async fn run_batch(&self, stored: &'static str, tiers: &[UpgradeTier]) {
+        for urn in self.pick(stored, tiers).await {
             tokio::time::sleep(PER_TRACK_GAP).await;
             let outcome =
                 within_deadline(UPGRADE_DEADLINE, &urn, self.upgrade_one(&urn, stored)).await;
@@ -119,6 +114,31 @@ impl Upgrader {
                 Err(e) => warn!(urn = %urn, "[hq-upgrade] error: {e}"),
             }
         }
+    }
+
+    async fn pick(&self, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
+        let mut urns: Vec<String> = Vec::new();
+        let mut round = Vec::new();
+        for &tier in tiers {
+            let left = BATCH - urns.len() as i64;
+            match self
+                .pg
+                .pick_upgrade_candidates(stored, tier, left, RETRY_COOLDOWN_SEC)
+                .await
+            {
+                Ok(pick) => {
+                    round.push(tiers::Picked {
+                        tier,
+                        count: pick.urns.len(),
+                        waiting_seconds: pick.waiting_seconds,
+                    });
+                    urns.extend(pick.urns);
+                }
+                Err(e) => warn!("[hq-upgrade] pick {stored} {} failed: {e}", tier.label()),
+            }
+        }
+        tiers::report(stored, &round);
+        urns
     }
 
     async fn upgrade_one(&self, track_urn: &str, stored: &'static str) -> UpgradeOutcome {

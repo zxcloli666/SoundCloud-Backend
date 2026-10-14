@@ -11,6 +11,8 @@ const POOL_CONNECTIONS: &str = "streaming_pg_pool_connections";
 const POOL_WAIT: &str = "streaming_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "streaming_pg_pool_wait_last_seconds";
 const SOURCE_TOTAL: &str = "streaming_source_total";
+const STAR_PRIORITY_PICKED: &str = "streaming_star_priority_picked_total";
+const STAR_PRIORITY_WAITING: &str = "streaming_star_priority_waiting_seconds";
 
 const HTTP_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0];
 const POOL_WAIT_BUCKETS: &[f64] = &[
@@ -90,6 +92,28 @@ pub fn record_source(source: &'static str, outcome: &'static str) {
         return;
     }
     metrics::counter!(SOURCE_TOTAL, "source" => source, "outcome" => outcome).increment(1);
+}
+
+pub fn record_star_priority_round(
+    stored: &'static str,
+    tier: &'static str,
+    picked: usize,
+    waiting_seconds: i64,
+) {
+    metrics::counter!(
+        STAR_PRIORITY_PICKED,
+        "pipeline" => "quality_upgrade",
+        "stored" => stored,
+        "tier" => tier
+    )
+    .increment(picked as u64);
+    metrics::gauge!(
+        STAR_PRIORITY_WAITING,
+        "pipeline" => "quality_upgrade",
+        "stored" => stored,
+        "tier" => tier
+    )
+    .set(waiting_seconds as f64);
 }
 
 pub fn record_pool_wait(outcome: &'static str, waited: Duration) {
