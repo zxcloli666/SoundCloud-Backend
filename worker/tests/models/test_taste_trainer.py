@@ -19,11 +19,11 @@ WORLD = World(users=3000, tracks=20_000, tastes=40, seed=11)
 SPEC = SlotSpec("train-taste", "worker.models.taste_trainer:TasteTrainerSlot", "", "", "cuda", 1, 0)
 MIN_USERS = 500
 BUDGET_S = 900
-LIBRARY_WORKSPACE_BYTES = 32 * 1024 * 1024
 
 
 def test_the_gpu_trainer_beats_every_baseline_on_a_planted_taste(tmp_path: Path) -> None:
     source = write_input(tmp_path / "input.jsonl", WORLD)
+    held_before = held_by_tensors()
     slot = TasteTrainerSlot()
     slot.load(SPEC)
     slot.warmup()
@@ -58,4 +58,10 @@ def test_the_gpu_trainer_beats_every_baseline_on_a_planted_taste(tmp_path: Path)
     assert training.evaluated_users >= MIN_USERS
     assert training.items_count == WORLD.tracks
     assert judge(training, MIN_USERS) is None
-    assert torch.cuda.memory_allocated() < LIBRARY_WORKSPACE_BYTES
+    assert held_by_tensors() <= held_before
+
+
+def held_by_tensors() -> int:
+    torch.cuda.synchronize()
+    torch._C._cuda_clearCublasWorkspaces()
+    return torch.cuda.memory_allocated()
