@@ -133,3 +133,24 @@ async fn pages_follow_the_order_through_the_offset_link(pool: PgPool) -> anyhow:
     assert_eq!(second["next_href"], serde_json::Value::Null);
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_old_cursor_link_ends_the_list_instead_of_repeating_the_first_page(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_tracks(&pool, &["1", "2", "3"]).await?;
+    let app = app(&pool, NO_REDIS).await?;
+    let session = session(&pool).await?;
+    superlike(&app, session, &["1", "2", "3"]).await?;
+
+    let (status, page) = get(
+        &app,
+        session,
+        "/superlikes?limit=2&cursor=2026-10-14T20:00:00.000000Z",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(urns(&page).is_empty(), "{page}");
+    assert_eq!(page["next_href"], serde_json::Value::Null);
+    Ok(())
+}

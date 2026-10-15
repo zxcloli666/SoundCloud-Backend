@@ -40,6 +40,8 @@ struct PageQuery {
     limit: Option<String>,
     #[serde(default)]
     offset: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
 }
 
 async fn add(
@@ -100,6 +102,12 @@ async fn list(
     ctx: SessionCtx,
     Query(q): Query<PageQuery>,
 ) -> AppResult<Json<SuperlikesPage>> {
+    if q.cursor.is_some() && q.offset.is_none() {
+        return Ok(Json(SuperlikesPage {
+            collection: Vec::new(),
+            next_href: None,
+        }));
+    }
     let limit = q
         .limit
         .as_deref()
