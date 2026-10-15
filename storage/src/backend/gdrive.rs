@@ -482,3 +482,25 @@ fn parse_size(s: Option<&str>) -> u64 {
 fn http_err(e: wreq::Error) -> BackendError {
     BackendError::Other(format!("http: {e}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jwt_signing_has_a_crypto_backend() {
+        let claims = JwtClaims {
+            iss: "storage@example.iam.gserviceaccount.com",
+            scope: SCOPE,
+            aud: TOKEN_URL,
+            exp: 3600,
+            iat: 0,
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(b"test"),
+        );
+        assert!(token.is_ok());
+    }
+}
