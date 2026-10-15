@@ -6,7 +6,9 @@ import pytest
 
 from tests.conftest import BASE_ENV, CONFIG_DIR, LLM_KEYS
 from worker import settings as s
+from worker.app import Blueprint
 from worker.contract import Contract
+from worker.fetch_models import FASTTEXT_HOME_ENV
 
 TRUSTED_LANES = {
     "audio": 16,
@@ -43,6 +45,9 @@ DESIGN = {
         "lane", "public", {"audio": 4, "lyrics": 8, "transcribe": 1}, dict.fromkeys(SYNC_X2, 1)
     ),
     "gpu-12-audio": Profile("lane", "public", {"audio": 8, "lyrics": 8}, {}),
+    "gpu-16": Profile(
+        "slot", "public", {"audio": 8, "lyrics": 16, "transcribe": 2}, dict.fromkeys(SYNC_X2, 1)
+    ),
     "gpu-24": Profile("slot", "trusted", TRUSTED_LANES, SYNC_X2),
     "gpu-24-lane": Profile("lane", "trusted", TRUSTED_LANES, SYNC_X2),
     "gpu-48": Profile(
@@ -115,7 +120,7 @@ def test_profile_ships_every_fallback(name: str) -> None:
 def test_profile_passes_both_public_locks(contract: Contract, name: str) -> None:
     settings = load(name)
     s.check_public_lanes(settings, contract.public_lanes)
-    assert settings.is_public == settings.is_gpu12
+    assert settings.is_public == bool(settings.small_card)
     if settings.is_public:
         assert set(settings.lanes.enabled) <= contract.public_lanes
 
@@ -148,14 +153,37 @@ def test_ping_catches_a_dead_socket_before_any_lease_expires(contract: Contract,
     assert ping.interval_s * (ping.max_outstanding + 1) < slack
 
 
-@pytest.mark.parametrize("name", ["gpu-12", "gpu-12-audio"])
-def test_twelve_gigabyte_profiles_unload_idle_slots_and_use_small_batches(name: str) -> None:
+@pytest.mark.parametrize("name", ["gpu-12", "gpu-12-audio", "gpu-16"])
+def test_small_card_profiles_unload_idle_slots_and_use_their_batches(name: str) -> None:
     settings = load(name)
+    batches = s.SMALL_CARD_MAX_BATCH[settings.small_card]
     assert settings.runtime.idle_unload_s > 0
-    assert {slot: settings.slots[slot].max_batch for slot in s.GPU12_MAX_BATCH} == dict(
-        s.GPU12_MAX_BATCH
-    )
+    assert {slot: settings.slots[slot].max_batch for slot in batches} == dict(batches)
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(settings)
+
+
+def test_sixteen_gigabyte_profile_sits_between_the_twelve_and_the_twenty_four() -> None:
+    small, middle, large = load("gpu-12"), load("gpu-16"), load("gpu-24")
+    for lane in middle.lanes.enabled:
+        capacity = middle.lanes.capacity[lane]
+        assert small.lanes.capacity[lane] < capacity < large.lanes.capacity[lane], lane
+    for slot in SLOT_MODE_MAX_BATCH:
+        batch = middle.slots[slot].max_batch
+        assert small.slots[slot].max_batch <= batch <= large.slots[slot].max_batch, slot
+
+
+def test_sixteen_gigabyte_profile_runs_one_engine_per_model(contract: Contract) -> None:
+    blueprint = Blueprint.of(load("gpu-16"), contract, {FASTTEXT_HOME_ENV: "/tmp"}, cpus=16)
+    assert sorted(plan.name for plan in blueprint.plans) == [
+        "align",
+        "asr",
+        "cpu-tools",
+        "mms",
+        "mulan",
+        "muq",
+        "sep",
+        "text",
+    ]
 
 
 @pytest.mark.parametrize("name", ["gpu-24", "gpu-48"])

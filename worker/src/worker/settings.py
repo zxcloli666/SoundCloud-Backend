@@ -48,9 +48,15 @@ LANE_SLOTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 CPU_ONLY_SLOTS = frozenset({"cpu-tools", "train-collab"})
 SYNC_MODEL_SLOTS = ("sep", "asr", "align", "mms", "cpu-tools")
 SYNC_SCHEMA = 4
-GPU12_PROFILE_PREFIX = "gpu-12"
-GPU12_MAX_BATCH: Mapping[str, int] = MappingProxyType(
-    {"muq": 1, "mulan": 1, "text": 8000, "sep": 1, "asr": 4, "align": 2, "mms": 2}
+SMALL_CARD_MAX_BATCH: Mapping[str, Mapping[str, int]] = MappingProxyType(
+    {
+        "gpu-12": MappingProxyType(
+            {"muq": 1, "mulan": 1, "text": 8000, "sep": 1, "asr": 4, "align": 2, "mms": 2}
+        ),
+        "gpu-16": MappingProxyType(
+            {"muq": 3, "mulan": 6, "text": 12000, "sep": 1, "asr": 4, "align": 4, "mms": 4}
+        ),
+    }
 )
 
 
@@ -294,8 +300,8 @@ class Settings:
         return self.worker.trust == "public"
 
     @property
-    def is_gpu12(self) -> bool:
-        return self.profile.startswith(GPU12_PROFILE_PREFIX)
+    def small_card(self) -> str:
+        return next((card for card in SMALL_CARD_MAX_BATCH if self.profile.startswith(card)), "")
 
 
 def load(config_dir: Path, environ: Mapping[str, str]) -> Settings:
@@ -571,7 +577,7 @@ def validate_lanes(settings: Settings) -> list[str]:
             problems.append(f"lanes.capacity.{lane} must be >= 1")
     if lanes.required_grace_s < 0:
         problems.append("lanes.required_grace_s must be >= 0")
-    if settings.is_gpu12:
+    if settings.small_card:
         heavy = [lane for lane in lanes.enabled if lane not in ("audio", "lyrics", "transcribe")]
         if heavy:
             problems.append(f"profile {settings.profile} cannot enable {heavy}")
@@ -676,13 +682,14 @@ def fallback_gaps(settings: Settings) -> list[str]:
         gaps.append("runtime.oom_unload disabled")
     if "ai" in settings.lanes.enabled:
         gaps += llm_gaps(settings.llm)
-    if settings.is_gpu12:
+    card = settings.small_card
+    if card:
         if settings.runtime.idle_unload_s <= 0:
-            gaps.append("runtime.idle_unload_s must be > 0 on gpu-12 profiles")
-        for slot_name, max_batch in GPU12_MAX_BATCH.items():
+            gaps.append(f"runtime.idle_unload_s must be > 0 on {card} profiles")
+        for slot_name, max_batch in SMALL_CARD_MAX_BATCH[card].items():
             slot = settings.slots.get(slot_name)
             if slot is not None and slot.max_batch != max_batch:
-                gaps.append(f"slots.{slot_name}.max_batch != {max_batch} on gpu-12 profiles")
+                gaps.append(f"slots.{slot_name}.max_batch != {max_batch} on {card} profiles")
     return gaps
 
 

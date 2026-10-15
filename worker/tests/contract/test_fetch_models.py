@@ -74,6 +74,14 @@ def test_public_audio_node_fetches_no_sync_models(env: dict[str, str]) -> None:
     assert slots == {"muq", "mulan", "cpu-tools", "text"}
 
 
+@pytest.mark.parametrize("profile", ["gpu-12", "gpu-16"])
+def test_public_node_with_transcribe_fetches_every_public_lane_model(
+    profile: str, env: dict[str, str]
+) -> None:
+    slots = {item.slot for item in plan_for(profile, env)}
+    assert slots == {"muq", "mulan", "cpu-tools", "text", "sep", "asr", "align", "mms"}
+
+
 def test_local_llm_weights_come_only_with_the_48_gigabyte_profile(env: dict[str, str]) -> None:
     for profile in PROFILES:
         slots = {item.slot for item in plan_for(profile, env)}

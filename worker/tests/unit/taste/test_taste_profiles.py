@@ -42,9 +42,10 @@ def test_a_public_node_cannot_serve_taste(contract: Contract) -> None:
         served_lanes(public, contract)
 
 
-def test_gpu12_profiles_refuse_taste() -> None:
+@pytest.mark.parametrize("profile", ["gpu-12", "gpu-16"])
+def test_small_card_profiles_refuse_taste(profile: str) -> None:
     with pytest.raises(s.SettingsError, match="cannot enable \\['taste'\\]"):
-        load("gpu-12", WORKER__LANES__ENABLED='["audio", "taste"]')
+        load(profile, WORKER__LANES__ENABLED='["audio", "taste"]')
 
 
 def test_the_trainer_slot_uses_the_gpu_when_there_is_one(contract: Contract) -> None:

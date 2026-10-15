@@ -110,7 +110,7 @@ max_batch = 1
     )
     settings = s.load(config_copy, {**base_env, "WORKER_PROFILE": "gpu-12"})
     assert settings.profile == "gpu-12"
-    assert settings.is_gpu12 and settings.is_public
+    assert settings.small_card == "gpu-12" and settings.is_public
     assert settings.runtime.mode == "lane"
     assert settings.lanes.enabled == ("audio", "lyrics", "transcribe")
     assert settings.lanes.capacity["audio"] == 4
@@ -204,12 +204,13 @@ def test_secret_without_env_ref_is_a_start_error(
         s.load(CONFIG_DIR, {**base_env, "WORKER__NATS__PASSWORD": "hunter2"})
 
 
-def test_gpu12_profile_cannot_enable_trusted_lanes(
-    base_env: dict[str, str], config_copy: Path
+@pytest.mark.parametrize("profile", ["gpu-12", "gpu-16"])
+def test_small_card_profile_cannot_enable_trusted_lanes(
+    base_env: dict[str, str], config_copy: Path, profile: str
 ) -> None:
-    write_profile(config_copy, "gpu-12", '[lanes]\nenabled = ["audio", "encode"]\n')
+    write_profile(config_copy, profile, '[lanes]\nenabled = ["audio", "encode"]\n')
     with pytest.raises(s.SettingsError, match="cannot enable \\['encode'\\]"):
-        s.load(config_copy, {**base_env, "WORKER_PROFILE": "gpu-12"})
+        s.load(config_copy, {**base_env, "WORKER_PROFILE": profile})
 
 
 @pytest.mark.parametrize(

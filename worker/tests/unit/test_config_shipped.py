@@ -89,7 +89,8 @@ def test_shipped_config_has_all_lanes_and_slots(settings: s.Settings) -> None:
     assert set(settings.lanes.required) == set(s.LANES)
     needed = {slot for lane in s.LANES for slot in s.LANE_SLOTS[lane]}
     assert needed <= set(settings.slots)
-    assert set(s.GPU12_MAX_BATCH) <= set(settings.slots)
+    for batches in s.SMALL_CARD_MAX_BATCH.values():
+        assert set(batches) <= set(settings.slots)
     assert settings.lanes.enabled == (
         "audio",
         "lyrics",
@@ -152,16 +153,19 @@ def test_llm_keys_do_not_matter_without_the_ai_lane(base_env: dict[str, str]) ->
     assert s.fallback_gaps(s.load(CONFIG_DIR, env)) == []
 
 
-def test_gpu12_gaps_cover_idle_unload_and_batches(base_env: dict[str, str], tmp_path: Path) -> None:
+@pytest.mark.parametrize(("profile", "card"), [("gpu-12-audio", "gpu-12"), ("gpu-16", "gpu-16")])
+def test_small_card_gaps_cover_idle_unload_and_batches(
+    base_env: dict[str, str], tmp_path: Path, profile: str, card: str
+) -> None:
     config = tmp_path / "config"
     config.mkdir()
     (config / "worker.toml").write_bytes((CONFIG_DIR / "worker.toml").read_bytes())
     (config / "profiles").mkdir()
-    (config / "profiles" / "gpu-12-audio.toml").write_text(
+    (config / "profiles" / f"{profile}.toml").write_text(
         '[lanes]\nenabled = ["audio", "lyrics"]\n', encoding="utf-8"
     )
-    gaps = s.fallback_gaps(s.load(config, {**base_env, s.PROFILE_ENV: "gpu-12-audio"}))
-    assert "runtime.idle_unload_s must be > 0 on gpu-12 profiles" in gaps
+    gaps = s.fallback_gaps(s.load(config, {**base_env, s.PROFILE_ENV: profile}))
+    assert f"runtime.idle_unload_s must be > 0 on {card} profiles" in gaps
     assert any(gap.startswith("slots.muq.max_batch") for gap in gaps)
 
 
