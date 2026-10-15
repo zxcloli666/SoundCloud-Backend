@@ -1,4 +1,5 @@
 pub mod handlers;
+pub mod order;
 pub mod page;
 pub mod service;
 

@@ -220,6 +220,10 @@ mod router_likes_rank_tests;
 mod router_superlikes_tests;
 
 #[cfg(test)]
+#[path = "router_superlikes_order_tests.rs"]
+mod router_superlikes_order_tests;
+
+#[cfg(test)]
 mod tests {
     use super::is_sensitive_path;
 

@@ -5,6 +5,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::common::sc_ids::{EntityRef, extract_sc_id, user_id_variants};
 use crate::error::{AppError, AppResult};
 use crate::modules::likes::service::like_track_on;
+use crate::modules::superlikes::order;
 use crate::modules::sync_queue::SyncQueueService;
 
 pub const FREE_LIMIT: i64 = 10;
@@ -93,7 +94,7 @@ pub async fn forget(pg: &PgPool, sc_user_id: &str, sc_track_id: &str) -> AppResu
     sqlx::query_file!("queries/superlikes/remove.sql", &variants, sc_track_id)
         .execute(pg)
         .await?;
-    Ok(())
+    order::forget(pg, sc_user_id, sc_track_id).await
 }
 
 async fn live_count(connection: &mut PgConnection, variants: &[String]) -> AppResult<i64> {

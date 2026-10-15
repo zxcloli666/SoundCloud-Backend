@@ -1,10 +1,9 @@
-use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::common::sc_ids::user_id_variants;
-use crate::error::{AppError, AppResult};
+use crate::common::sc_ids::{extract_sc_id, user_id_variants};
+use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SuperlikesPage {
@@ -16,49 +15,23 @@ pub async fn page(
     pg: &PgPool,
     sc_user_id: &str,
     limit: i64,
-    cursor: Option<&str>,
+    offset: i64,
 ) -> AppResult<SuperlikesPage> {
-    let mut rows = superliked_rows(pg, sc_user_id, limit + 1, cursor).await?;
-    let has_more = rows.len() as i64 > limit;
-    rows.truncate(limit as usize);
-    let next_href = rows
-        .last()
-        .filter(|_| has_more)
-        .map(|(_, at)| next_href(limit, *at));
-    let ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+    let mut ids = sqlx::query_file_scalar!(
+        "queries/superlikes/page.sql",
+        &user_id_variants(sc_user_id),
+        extract_sc_id(sc_user_id),
+        limit + 1,
+        offset
+    )
+    .fetch_all(pg)
+    .await?;
+    let has_more = ids.len() as i64 > limit;
+    ids.truncate(limit as usize);
     Ok(SuperlikesPage {
         collection: project(pg, &ids).await?,
-        next_href,
+        next_href: has_more.then(|| format!("?limit={limit}&offset={}", offset + limit)),
     })
-}
-
-async fn superliked_rows(
-    pg: &PgPool,
-    sc_user_id: &str,
-    limit: i64,
-    cursor: Option<&str>,
-) -> AppResult<Vec<(String, DateTime<Utc>)>> {
-    let variants = user_id_variants(sc_user_id);
-    let rows = match cursor {
-        Some(cursor) => sqlx::query_file!(
-            "queries/superlikes/page_after.sql",
-            &variants,
-            parse_cursor(cursor)?,
-            limit
-        )
-        .fetch_all(pg)
-        .await?
-        .into_iter()
-        .map(|row| (row.sc_track_id, row.created_at))
-        .collect(),
-        None => sqlx::query_file!("queries/superlikes/page.sql", &variants, limit)
-            .fetch_all(pg)
-            .await?
-            .into_iter()
-            .map(|row| (row.sc_track_id, row.created_at))
-            .collect(),
-    };
-    Ok(rows)
 }
 
 async fn project(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Value>> {
@@ -75,15 +48,4 @@ async fn project(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Value>> {
         }
     }
     Ok(tracks)
-}
-
-fn next_href(limit: i64, last: DateTime<Utc>) -> String {
-    let cursor = last.to_rfc3339_opts(SecondsFormat::Micros, true);
-    format!("?limit={limit}&cursor={cursor}")
-}
-
-fn parse_cursor(raw: &str) -> AppResult<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|at| at.with_timezone(&Utc))
-        .map_err(|e| AppError::bad_request(format!("invalid cursor: {e}")))
 }

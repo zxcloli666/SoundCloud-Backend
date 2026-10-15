@@ -117,7 +117,7 @@ async fn the_superlikes_list_pages_newest_first(pool: PgPool) -> anyhow::Result<
         vec!["soundcloud:tracks:3", "soundcloud:tracks:2"]
     );
     let next = first["next_href"].as_str().unwrap_or_default().to_owned();
-    assert!(next.starts_with("?limit=2&cursor="), "{next}");
+    assert_eq!(next, "?limit=2&offset=2");
 
     let (status, second) = get(&app, session, &format!("/superlikes{next}")).await?;
     assert_eq!(status, StatusCode::OK, "{second}");

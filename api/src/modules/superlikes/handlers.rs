@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,9 @@ use crate::common::sc_ids::{EntityKind, require_ref};
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::cold_refresh::entity::want_track;
+use crate::modules::likes::LikesOrderRequest;
 use crate::modules::recommendations::smart_wave::graph::forget_user_affinity;
+use crate::modules::superlikes::order;
 use crate::modules::superlikes::page::{self, SuperlikesPage};
 use crate::modules::superlikes::service::{self, Quota};
 use crate::modules::tracks::TrackPriority;
@@ -20,6 +23,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/superlikes", get(list))
         .route("/superlikes/quota", get(quota))
+        .route("/superlikes/order", post(reorder))
         .route("/superlikes/{track_urn}", post(add).delete(remove))
 }
 
@@ -35,7 +39,7 @@ struct PageQuery {
     #[serde(default)]
     limit: Option<String>,
     #[serde(default)]
-    cursor: Option<String>,
+    offset: Option<String>,
 }
 
 async fn add(
@@ -75,6 +79,15 @@ async fn remove(
     }))
 }
 
+async fn reorder(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Json(request): Json<LikesOrderRequest>,
+) -> AppResult<StatusCode> {
+    order::apply(&st.pg, &ctx.sc_user_id, request).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn quota(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Quota>> {
     let premium = st.subscriptions.is_premium(&ctx.sc_user_id).await?;
     Ok(Json(
@@ -93,7 +106,13 @@ async fn list(
         .and_then(|raw| raw.parse::<i64>().ok())
         .unwrap_or(PAGE_DEFAULT)
         .clamp(1, PAGE_MAX);
+    let offset = q
+        .offset
+        .as_deref()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
     Ok(Json(
-        page::page(&st.pg, &ctx.sc_user_id, limit, q.cursor.as_deref()).await?,
+        page::page(&st.pg, &ctx.sc_user_id, limit, offset).await?,
     ))
 }
