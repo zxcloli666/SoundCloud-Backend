@@ -29,7 +29,7 @@ async fn setup(
     pool: &PgPool,
     action_type: &str,
     target_urn: &str,
-) -> anyhow::Result<(Uuid, SyncQueueHandler)> {
+) -> anyhow::Result<(Uuid, Uuid, SyncQueueHandler)> {
     crate::db::migrations::run_core(pool, None).await?;
     super::track_tests::connect_owner(pool).await?;
     let app: Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
@@ -44,24 +44,34 @@ async fn setup(
     .bind(other.to_string())
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT INTO sync_queue_action_pauses (oauth_app_id, action_type, paused_until, strikes, reason)
-         VALUES ($1, 'playlist_create', now(), 1, 'subscription_required'),
-                ($1, 'like_track', now(), 1, 'subscription_required'),
-                ($1, 'comment', now(), 1, 'subscription_required'),
-                ($1, 'follow_user', now(), 1, 'rate_limited'),
-                ($2, 'playlist_create', now(), 1, 'subscription_required')",
-    )
-    .bind(app)
-    .bind(other)
-    .execute(pool)
-    .await?;
+    let handler = handler(pool, serve().await?)?;
+    let pauses = [
+        (app, "playlist_create", "subscription_required"),
+        (app, "like_track", "subscription_required"),
+        (app, "comment", "subscription_required"),
+        (app, "follow_user", "rate_limited"),
+        (other, "playlist_create", "subscription_required"),
+    ];
+    for (app, action, reason) in pauses {
+        sqlx::query(
+            "INSERT INTO sync_queue_action_pauses (oauth_app_id, action_type, paused_until, strikes, reason)
+             VALUES ($1, $2, now(), 1, $3)",
+        )
+        .bind(app)
+        .bind(action)
+        .bind(reason)
+        .execute(pool)
+        .await?;
+        handler
+            .write_pauses
+            .restore((app, action.to_owned()), Duration::from_secs(600), 1);
+    }
     sqlx::query("INSERT INTO sync_queue (user_id, action_type, target_urn) VALUES ('17', $1, $2)")
         .bind(action_type)
         .bind(target_urn)
         .execute(pool)
         .await?;
-    Ok((app, handler(pool, serve().await?)?))
+    Ok((app, other, handler))
 }
 
 async fn marks(pool: &PgPool, app: Uuid) -> anyhow::Result<Vec<(String, String, bool)>> {
@@ -85,11 +95,22 @@ async fn queued(pool: &PgPool) -> anyhow::Result<i64> {
 async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_limits(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    let (app, handler) = setup(&pool, "like_playlist", "soundcloud:playlists:1").await?;
+    let (app, other, handler) = setup(&pool, "like_playlist", "soundcloud:playlists:1").await?;
+    let paused = |app: Uuid, action: &str| {
+        handler
+            .write_pauses
+            .remaining_seconds(&(app, action.to_owned()))
+            .is_some()
+    };
 
     run(&pool, &handler).await?;
 
     assert_eq!(queued(&pool).await?, 0);
+    assert!(!paused(app, "playlist_create"));
+    assert!(!paused(app, "like_track"));
+    assert!(!paused(app, "comment"));
+    assert!(paused(app, "follow_user"));
+    assert!(paused(other, "playlist_create"));
     assert_eq!(
         marks(&pool, app).await?,
         [
@@ -108,7 +129,7 @@ async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_
 async fn a_like_closed_on_a_missing_track_leaves_every_mark_in_place(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    let (app, handler) = setup(&pool, "like_track", "soundcloud:tracks:404").await?;
+    let (app, _, handler) = setup(&pool, "like_track", "soundcloud:tracks:404").await?;
     handler
         .write_pauses
         .restore((app, "like_track".to_owned()), Duration::ZERO, 1);
@@ -119,5 +140,11 @@ async fn a_like_closed_on_a_missing_track_leaves_every_mark_in_place(
     assert_eq!(queued(&pool).await?, 0);
     assert_eq!(before.len(), 5);
     assert_eq!(marks(&pool, app).await?, before);
+    assert!(
+        handler
+            .write_pauses
+            .remaining_seconds(&(app, "playlist_create".to_owned()))
+            .is_some()
+    );
     Ok(())
 }

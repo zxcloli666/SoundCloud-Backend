@@ -434,8 +434,15 @@ impl SyncQueueHandler {
             .repository
             .clear_action_pauses(oauth_app_id, action_type)
             .await;
-        if let Err(error) = cleared {
-            warn!(%error, "lifted action pauses were not removed from the database");
+        match cleared {
+            Ok(lifted) => {
+                for lifted in lifted.into_iter().filter(|lifted| lifted != action_type) {
+                    self.write_pauses.succeeded(&(oauth_app_id, lifted), None);
+                }
+            }
+            Err(error) => {
+                warn!(%error, "lifted action pauses were not removed from the database");
+            }
         }
     }
 
