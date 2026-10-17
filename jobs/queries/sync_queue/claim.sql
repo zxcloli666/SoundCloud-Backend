@@ -14,6 +14,12 @@ WITH usable AS MATERIALIZED (
       AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
       AND (connection.retry_at IS NULL OR connection.retry_at <= now())
     ORDER BY connection.soundcloud_user_id,
+             EXISTS (
+                 SELECT 1
+                 FROM sync_queue_action_pauses AS pause
+                 WHERE pause.oauth_app_id = connection.oauth_app_id
+                   AND pause.reason = 'subscription_required'
+             ),
              (connection.expires_at > now()) DESC,
              connection.updated_at DESC
 ),
@@ -108,4 +114,5 @@ RETURNING queued.id,
           queued.remote_attempted_generation,
           queued.remote_completed_generation,
           queued.remote_result,
+          queued.created_at,
           (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!"

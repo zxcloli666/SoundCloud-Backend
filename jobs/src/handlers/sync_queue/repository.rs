@@ -88,13 +88,15 @@ impl SyncQueueRepository {
         action_type: &str,
         seconds: i64,
         strikes: u32,
+        reason: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query_file!(
             "queries/sync_queue/pauses/save.sql",
             oauth_app_id,
             action_type,
             seconds,
-            i32::try_from(strikes).unwrap_or(i32::MAX)
+            i32::try_from(strikes).unwrap_or(i32::MAX),
+            reason
         )
         .execute(&self.pool)
         .await?;
@@ -116,6 +118,16 @@ impl SyncQueueRepository {
         Ok(())
     }
 
+    pub async fn cap_action_pauses(&self, longest: Duration) -> Result<(), sqlx::Error> {
+        sqlx::query_file!(
+            "queries/sync_queue/pauses/cap.sql",
+            i64::try_from(longest.as_secs()).unwrap_or(i64::MAX)
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn action_pauses(&self) -> Result<Vec<(uuid::Uuid, String, i64, u32)>, sqlx::Error> {
         let rows = sqlx::query_file!("queries/sync_queue/pauses/load.sql")
             .fetch_all(&self.pool)
@@ -131,6 +143,19 @@ impl SyncQueueRepository {
                 )
             })
             .collect())
+    }
+
+    pub async fn owned_playlist_urns(
+        &self,
+        mutation: &ClaimedMutation,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/owned_playlist_urns.sql",
+            &catalog_ingest::user_id_variants(&mutation.user_id),
+            mutation.created_at
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     pub async fn force_due(&self) -> Result<u64, sqlx::Error> {

@@ -18,6 +18,17 @@ FROM soundcloud_connections AS connection
 LEFT JOIN oauth_apps AS app ON app.id = connection.oauth_app_id
 WHERE connection.soundcloud_user_id = $1
 ORDER BY (
+             app.id IS NOT NULL
+             AND app.active
+             AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM sync_queue_action_pauses AS pause
+                 WHERE pause.oauth_app_id = connection.oauth_app_id
+                   AND pause.reason = 'subscription_required'
+             )
+         ) DESC,
+         (
              connection.expires_at > now()
              AND connection.last_refresh_error_kind IS DISTINCT FROM 'token_rejected'
              AND connection.last_refresh_error_kind IS DISTINCT FROM 'reauthorization_required'

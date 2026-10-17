@@ -1,20 +1,35 @@
 use axum::extract::{Path, Query, State};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use serde_json::Value;
+use backend_contracts::{JobKind, PlaylistObservePayload};
+use serde::Deserialize;
+use serde_json::{Value, json};
 
+use crate::background_jobs::BackgroundJob;
 use crate::common::pagination::PaginationQuery;
+use crate::common::sc_ids::EntityRef;
 use crate::common::session::SessionCtx;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::collection::CollectionPage;
 use crate::modules::enrich::dto as enrich_dto;
 use crate::modules::me::service::premium_response;
+use crate::modules::sync_queue::status::SyncCounts;
 use crate::state::AppState;
+
+const REOBSERVE_PRIORITY: i16 = 30;
+const MAX_RETRY_TARGET_LEN: usize = 128;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RetrySyncBody {
+    target_urn: Option<String>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(get_profile))
         .route("/me/sync", get(get_sync_status))
+        .route("/me/sync/retry", post(retry_sync))
         .route("/me/subscription", get(get_subscription))
         .route("/me/likes/tracks", get(get_liked_tracks))
         .route("/me/likes/playlists", get(get_liked_playlists))
@@ -36,8 +51,45 @@ async fn get_profile(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<J
 async fn get_sync_status(
     State(st): State<AppState>,
     ctx: SessionCtx,
-) -> AppResult<Json<crate::modules::sync_queue::service::SyncCounts>> {
+) -> AppResult<Json<SyncCounts>> {
     Ok(Json(st.sync_queue.status_for_user(&ctx.sc_user_id).await?))
+}
+
+async fn retry_sync(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    body: Option<Json<RetrySyncBody>>,
+) -> AppResult<Json<Value>> {
+    let target_urn = body.and_then(|Json(body)| body.target_urn);
+    if target_urn
+        .as_deref()
+        .is_some_and(|target| !is_retry_target(target))
+    {
+        return Err(AppError::bad_request("invalid sync retry target"));
+    }
+    let revived = st
+        .sync_queue
+        .revive(&ctx.sc_user_id, target_urn.as_deref())
+        .await?;
+    for playlist_urn in revived.reobserve {
+        let job = BackgroundJob::coalescing(
+            JobKind::PlaylistObserveShadow,
+            playlist_urn.clone(),
+            PlaylistObservePayload { playlist_urn },
+        )?
+        .if_absent()
+        .with_priority(REOBSERVE_PRIORITY);
+        st.background_jobs.enqueue_opportunistic(&job).await;
+    }
+    Ok(Json(json!({ "revived": revived.count })))
+}
+
+fn is_retry_target(target: &str) -> bool {
+    target.len() <= MAX_RETRY_TARGET_LEN
+        && match target.strip_prefix("new:") {
+            Some(nonce) => uuid::Uuid::parse_str(nonce).is_ok(),
+            None => EntityRef::parse_urn(target).is_some_and(|entity| entity.urn() == target),
+        }
 }
 
 async fn get_subscription(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
@@ -153,4 +205,22 @@ async fn get_tracks(
         .await?;
     enrich_dto::apply_to_tracks(&st.pg, &mut result.collection).await?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retry_target;
+
+    #[test]
+    fn a_retry_target_is_a_queued_create_or_a_canonical_urn() {
+        assert!(is_retry_target("new:7d4c4c56-8c0f-4c2e-9a37-1b0e8a4f3e21"));
+        assert!(is_retry_target("soundcloud:playlists:42"));
+        assert!(!is_retry_target("new:42"));
+        assert!(!is_retry_target("42"));
+        assert!(!is_retry_target("soundcloud:playlists:042"));
+        assert!(!is_retry_target(&format!(
+            "soundcloud:playlists:{}",
+            "1".repeat(130)
+        )));
+    }
 }

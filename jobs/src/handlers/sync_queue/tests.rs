@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use serde_json::json;
 use sqlx::PgPool;
+use uuid::Uuid;
 
+use super::client::TokenRefreshClient;
+use super::connection::ConnectionManager;
 use super::model::ClaimedMutation;
 use super::repository::SyncQueueRepository;
 
@@ -40,6 +43,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              updated_at timestamptz NOT NULL DEFAULT now()
          );
          INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('1');
+         CREATE TABLE sync_queue_action_pauses (
+             oauth_app_id integer NOT NULL,
+             action_type text NOT NULL,
+             reason text NOT NULL
+         );
          CREATE TABLE subscriptions (
              user_urn text PRIMARY KEY,
              exp_date bigint NOT NULL
@@ -439,5 +447,152 @@ async fn the_writes_left_waiting_after_a_star_turn_show_up_per_group(
 
     assert!(next.star.is_none());
     assert!(next.regular.is_some());
+    Ok(())
+}
+
+async fn oauth_app(pool: &PgPool) -> anyhow::Result<Uuid> {
+    let app = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+         VALUES ($1, 'test', $2, 'secret', 'https://app.test/')",
+    )
+    .bind(app)
+    .bind(app.to_string())
+    .execute(pool)
+    .await?;
+    Ok(app)
+}
+
+async fn connect(
+    pool: &PgPool,
+    app: Uuid,
+    refreshed_minutes_ago: i32,
+    error_kind: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO soundcloud_connections (
+             id, soundcloud_user_id, oauth_app_id, access_token, refresh_token,
+             expires_at, scope, last_refresh_error_kind, updated_at
+         ) VALUES (
+             $1, '17', $2, $3, 'refresh', now() + interval '1 day', '', $4,
+             now() - $5::int * interval '1 minute'
+         )",
+    )
+    .bind(Uuid::now_v7())
+    .bind(app)
+    .bind(app.to_string())
+    .bind(error_kind)
+    .bind(refreshed_minutes_ago)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn refuse_writes(pool: &PgPool, app: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO sync_queue_action_pauses (oauth_app_id, action_type, paused_until, strikes, reason)
+         VALUES ($1, 'playlist_create', now() - interval '1 hour', 1, 'subscription_required')",
+    )
+    .bind(app)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn write_app(pool: &PgPool) -> anyhow::Result<Option<Uuid>> {
+    let client = TokenRefreshClient::new(&crate::config::OAuthConfig {
+        token_url: "http://127.0.0.1:1/token".parse()?,
+        bootstrap_app: None,
+    })?;
+    let token = ConnectionManager::new(pool.clone())
+        .access_token(&client, "soundcloud:users:17")
+        .await?;
+    Ok(token.oauth_app_id)
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_saved_pause_keeps_its_reason_and_restores_with_a_strike(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let app = oauth_app(&pool).await?;
+    let repository = repository(pool.clone());
+
+    repository
+        .save_action_pause(app, "like_track", 600, 1, "subscription_required")
+        .await?;
+
+    let reason: String =
+        sqlx::query_scalar("SELECT reason FROM sync_queue_action_pauses WHERE oauth_app_id = $1")
+            .bind(app)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(reason, "subscription_required");
+    let restored = repository.action_pauses().await?;
+    assert_eq!(restored.len(), 1);
+    assert!(restored[0].2 > 590 && restored[0].2 <= 600);
+    assert!(restored[0].3 >= 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_pause_saved_for_a_day_is_cut_to_two_hours(pool: PgPool) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let app = oauth_app(&pool).await?;
+    let repository = repository(pool.clone());
+    repository
+        .save_action_pause(app, "like_track", 24 * 60 * 60, 9, "rate_limited")
+        .await?;
+
+    repository
+        .cap_action_pauses(Duration::from_secs(2 * 60 * 60))
+        .await?;
+
+    let restored = repository.action_pauses().await?;
+    assert!(restored[0].2 <= 2 * 60 * 60);
+    assert_eq!(restored[0].3, 9);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn writes_go_through_the_good_app_even_when_the_refused_one_was_refreshed_later(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let good = oauth_app(&pool).await?;
+    let refused = oauth_app(&pool).await?;
+    connect(&pool, good, 60, None).await?;
+    connect(&pool, refused, 0, None).await?;
+    refuse_writes(&pool, refused).await?;
+    sqlx::query("INSERT INTO sync_queue (user_id, action_type, target_urn) VALUES ('17', 'like_track', 'soundcloud:tracks:1')")
+        .execute(&pool)
+        .await?;
+    let repository = repository(pool.clone());
+
+    let behind_the_good_app = repository
+        .claim_outside(8, &[format!("{good}:like_track")], true)
+        .await?;
+    let behind_the_refused_app = repository
+        .claim_outside(8, &[format!("{refused}:like_track")], true)
+        .await?;
+
+    assert!(behind_the_good_app.is_empty());
+    assert_eq!(behind_the_refused_app.len(), 1);
+    assert_eq!(write_app(&pool).await?, Some(good));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_good_app_that_needs_sign_in_does_not_beat_a_usable_refused_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let good = oauth_app(&pool).await?;
+    let refused = oauth_app(&pool).await?;
+    connect(&pool, good, 0, Some("reauthorization_required")).await?;
+    connect(&pool, refused, 60, None).await?;
+    refuse_writes(&pool, refused).await?;
+
+    assert_eq!(write_app(&pool).await?, Some(refused));
     Ok(())
 }

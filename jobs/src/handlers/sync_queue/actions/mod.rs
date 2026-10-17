@@ -33,27 +33,30 @@ pub async fn execute_remote(
 ) -> Result<Value, ActionError> {
     let target = &mutation.target_urn;
     let result = match mutation.action_type.as_str() {
-        "like_track" => {
+        "like_track" => done_if_missing(
             client
                 .post(&format!("/likes/tracks/{target}"), access_token, None)
-                .await?
-        }
+                .await,
+            target,
+        )?,
         "unlike_track" => {
             delete_remote(client, &format!("/likes/tracks/{target}"), access_token).await?
         }
-        "like_playlist" => {
+        "like_playlist" => done_if_missing(
             client
                 .post(&format!("/likes/playlists/{target}"), access_token, None)
-                .await?
-        }
+                .await,
+            target,
+        )?,
         "unlike_playlist" => {
             delete_remote(client, &format!("/likes/playlists/{target}"), access_token).await?
         }
-        "follow_user" => {
+        "follow_user" => done_if_missing(
             client
                 .put(&format!("/me/followings/{target}"), access_token, None)
-                .await?
-        }
+                .await,
+            target,
+        )?,
         "unfollow_user" => {
             delete_remote(client, &format!("/me/followings/{target}"), access_token).await?
         }
@@ -274,6 +277,22 @@ async fn delete_remote(
             ..
         }) => Ok(Value::Null),
         Err(error) => Err(error.into()),
+    }
+}
+
+fn done_if_missing(
+    result: Result<Value, SoundCloudError>,
+    target: &str,
+) -> Result<Value, ActionError> {
+    match result {
+        Err(SoundCloudError::Api {
+            status: wreq::StatusCode::NOT_FOUND | wreq::StatusCode::GONE,
+            ..
+        }) => {
+            tracing::info!(%target, "soundcloud has no such target, the write is closed");
+            Ok(Value::Null)
+        }
+        result => Ok(result?),
     }
 }
 

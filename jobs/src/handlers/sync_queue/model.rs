@@ -17,6 +17,7 @@ pub struct ClaimedMutation {
     pub remote_attempted_generation: Option<i64>,
     pub remote_completed_generation: Option<i64>,
     pub remote_result: Option<Value>,
+    pub created_at: DateTime<Utc>,
     pub star: bool,
 }
 

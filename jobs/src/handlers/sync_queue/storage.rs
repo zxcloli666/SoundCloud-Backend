@@ -128,6 +128,7 @@ mod tests {
             remote_attempted_generation: None,
             remote_completed_generation: None,
             remote_result: None,
+            created_at: chrono::Utc::now(),
             star: false,
         }
     }

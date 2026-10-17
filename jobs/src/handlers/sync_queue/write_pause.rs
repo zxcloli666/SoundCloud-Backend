@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-const MAX_PAUSE: Duration = Duration::from_secs(24 * 60 * 60);
+pub const MAX_PAUSE: Duration = Duration::from_secs(2 * 60 * 60);
 const PROBE_HOLD: Duration = Duration::from_secs(120);
 
 struct Pause {
@@ -41,6 +41,24 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         (seconds, self.strikes(&key))
     }
 
+    pub fn pause_refused(&self, key: K, seconds: i64) -> (i64, u32) {
+        let now = Instant::now();
+        let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
+        let pause = paused.entry(key).or_insert(Pause {
+            until: now,
+            strikes: 0,
+            probing: false,
+        });
+        let hold = Duration::from_secs(u64::try_from(seconds).unwrap_or(0).max(1)).min(MAX_PAUSE);
+        pause.until = pause.until.max(now + hold);
+        pause.strikes = pause.strikes.max(1);
+        pause.probing = false;
+        (
+            whole_seconds(pause.until.saturating_duration_since(now)),
+            pause.strikes,
+        )
+    }
+
     pub fn restore(&self, key: K, remaining: Duration, strikes: u32) {
         self.paused
             .lock()
@@ -48,8 +66,8 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
             .insert(
                 key,
                 Pause {
-                    until: Instant::now() + remaining,
-                    strikes,
+                    until: Instant::now() + remaining.min(MAX_PAUSE),
+                    strikes: strikes.max(1),
                     probing: false,
                 },
             );
@@ -231,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wait_stops_growing_at_a_day() {
+    fn the_wait_stops_growing_at_two_hours() {
         let pauses = WritePauses::default();
         let mut longest = 0;
 
@@ -240,7 +258,38 @@ mod tests {
             expire(&pauses, &"likes");
         }
 
-        assert_eq!(longest, 24 * 60 * 60);
+        assert_eq!(longest, 2 * 60 * 60);
+    }
+
+    #[test]
+    fn a_refused_pause_lets_one_probe_through_and_is_cleared_by_success() {
+        let pauses = WritePauses::default();
+
+        assert_eq!(pauses.pause_refused("likes", 6 * 60 * 60), (2 * 60 * 60, 1));
+        assert!(matches!(
+            pauses.pause_refused("likes", 60),
+            (seconds, 1) if seconds > 2 * 60 * 60 - 10
+        ));
+        expire(&pauses, &"likes");
+
+        assert_eq!(pauses.admit(&"likes"), Admission::Probe);
+        assert!(matches!(pauses.admit(&"likes"), Admission::Paused(_)));
+        assert!(pauses.succeeded(&"likes", None));
+        assert_eq!(pauses.admit(&"likes"), Admission::Open);
+    }
+
+    #[test]
+    fn a_restored_pause_never_exceeds_two_hours() {
+        let pauses = WritePauses::default();
+
+        pauses.restore("likes", Duration::from_secs(20 * 60 * 60), 6);
+
+        assert!(matches!(
+            pauses.admit(&"likes"),
+            Admission::Paused(seconds) if seconds <= 2 * 60 * 60
+        ));
+        expire(&pauses, &"likes");
+        assert_eq!(pauses.admit(&"likes"), Admission::Probe);
     }
 
     #[test]

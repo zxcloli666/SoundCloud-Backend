@@ -161,6 +161,17 @@ impl AuthService {
                 "No active OAuth apps available",
             ));
         }
+        let refused_ids = sqlx::query_file_scalar!("queries/auth/service/write_refused_apps.sql")
+            .fetch_all(&self.pool)
+            .await?;
+        let (writable, refused): (Vec<_>, Vec<_>) = active
+            .into_iter()
+            .partition(|app| !refused_ids.contains(&app.id));
+        let active = if writable.is_empty() {
+            refused
+        } else {
+            writable
+        };
 
         let app_keys = active
             .iter()

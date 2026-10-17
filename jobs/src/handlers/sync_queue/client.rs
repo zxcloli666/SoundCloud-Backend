@@ -70,6 +70,10 @@ impl SoundCloudClient {
         })
     }
 
+    pub async fn get(&self, path: &str, access_token: &str) -> Result<Value, SoundCloudError> {
+        self.send_api(Method::GET, path, access_token, None).await
+    }
+
     pub async fn post(
         &self,
         path: &str,
@@ -104,9 +108,14 @@ impl SoundCloudClient {
             .api_url
             .join(path.trim_start_matches('/'))
             .map_err(|_| SoundCloudError::InvalidTokenResponse)?;
-        apiv1_pace::wait_for_turn(apiv1_pace::Use::Write).await;
+        let usage = if method == Method::GET {
+            apiv1_pace::Use::Read
+        } else {
+            apiv1_pace::Use::Write
+        };
+        apiv1_pace::wait_for_turn(usage).await;
         let result = self.send_routed(method, &target, access_token, body).await;
-        apiv1_pace::record(apiv1_pace::Use::Write, false);
+        apiv1_pace::record(usage, false);
         result
     }
 

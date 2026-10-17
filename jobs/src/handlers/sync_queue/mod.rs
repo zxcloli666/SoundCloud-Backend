@@ -1,6 +1,7 @@
 mod actions;
 mod client;
 mod connection;
+mod create_check;
 mod model;
 #[cfg(test)]
 mod playlist_tests;
@@ -8,6 +9,8 @@ mod repository;
 mod storage;
 #[cfg(test)]
 mod track_tests;
+#[cfg(test)]
+mod unclear_create_tests;
 mod write_pause;
 
 use std::sync::Arc;
@@ -15,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use backend_contracts::{SYNC_QUEUE_MAX_RETRIES, SyncQueueFlushPayload};
 use futures::{StreamExt, stream};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::config::JobsConfig;
 use crate::handlers::star_priority::{Round, Turns};
@@ -26,7 +29,7 @@ use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
 use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
 use self::storage::TrackStorage;
-use self::write_pause::{Admission, WritePauses};
+use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
 
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
@@ -36,8 +39,9 @@ const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const RATE_LIMIT_RETRY_SECONDS: i64 = 5 * 60;
 const WRITE_PAUSE_SECONDS: i64 = 60;
 const ACCOUNT_LIMIT_SECONDS: i64 = 30 * 60;
-const SUBSCRIPTION_RETRY_SECONDS: i64 = 6 * 60 * 60;
+const SUBSCRIPTION_RETRY_SECONDS: i64 = 2 * 60 * 60;
 const PAUSED_ACTION_RECHECK_SECONDS: i64 = 15 * 60;
+const UNCLEAR_CREATE_RETRY_SECONDS: i64 = 2 * 60;
 const INFRASTRUCTURE_RETRY_SECONDS: i64 = 60;
 const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
@@ -163,7 +167,7 @@ impl SyncQueueHandler {
         if mutation.has_remote_result() {
             return self.finalize(&mutation).await;
         }
-        if is_non_idempotent(&mutation.action_type) && mutation.has_ambiguous_remote_attempt() {
+        if mutation.action_type == "comment" && mutation.has_ambiguous_remote_attempt() {
             self.repository
                 .park(
                     &mutation,
@@ -184,17 +188,26 @@ impl SyncQueueHandler {
                 return Ok(());
             }
         };
+        let token = if mutation.action_type == "playlist_create"
+            && mutation.has_ambiguous_remote_attempt()
+        {
+            let Some(token) = self.confirm_unclear_create(&mutation, token).await? else {
+                return Ok(());
+            };
+            token
+        } else {
+            token
+        };
         if let Some(oauth_app_id) = token.oauth_app_id {
             let action = (oauth_app_id, mutation.action_type.clone());
             match self.write_pauses.admit(&action) {
                 Admission::Paused(seconds) => {
-                    self.repository
-                        .postpone_unattempted(
-                            &mutation,
-                            "SoundCloud paused this action for the application",
-                            seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-                        )
-                        .await?;
+                    self.postpone_before_post(
+                        &mutation,
+                        "SoundCloud paused this action for the application",
+                        seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                    )
+                    .await?;
                     return Ok(());
                 }
                 Admission::Open => {
@@ -210,13 +223,12 @@ impl SyncQueueHandler {
             .account_pauses
             .remaining_seconds(&account_action(&mutation))
         {
-            self.repository
-                .postpone_unattempted(
-                    &mutation,
-                    "SoundCloud limits this action for the account",
-                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-                )
-                .await?;
+            self.postpone_before_post(
+                &mutation,
+                "SoundCloud limits this action for the account",
+                seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+            )
+            .await?;
             return Ok(());
         }
         if !self.repository.record_remote_attempt(&mutation).await? {
@@ -256,13 +268,12 @@ impl SyncQueueHandler {
                         self.connections
                             .reject_for_later(&mutation.user_id, &refreshed.value)
                             .await?;
-                        self.repository
-                            .postpone_unattempted(
-                                &mutation,
-                                "SoundCloud rejected the refreshed access token",
-                                RATE_LIMIT_RETRY_SECONDS,
-                            )
-                            .await?;
+                        self.postpone_before_post(
+                            &mutation,
+                            "SoundCloud rejected the refreshed access token",
+                            RATE_LIMIT_RETRY_SECONDS,
+                        )
+                        .await?;
                         return Ok(());
                     }
                     Err(error) => {
@@ -291,7 +302,105 @@ impl SyncQueueHandler {
         self.finalize(&mutation).await
     }
 
+    async fn confirm_unclear_create(
+        &self,
+        mutation: &ClaimedMutation,
+        mut token: AccessToken,
+    ) -> Result<Option<AccessToken>, anyhow::Error> {
+        let owned = self.repository.owned_playlist_urns(mutation).await?;
+        let mut checked = create_check::confirm(&self.client, &token.value, mutation, &owned).await;
+        if matches!(&checked, Err(ActionError::SoundCloud(error)) if error.is_unauthorized()) {
+            token = match self
+                .connections
+                .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
+                .await
+            {
+                Ok(token) => token,
+                Err(error) => {
+                    self.record_connection_failure(mutation, &error).await?;
+                    return Ok(None);
+                }
+            };
+            checked = create_check::confirm(&self.client, &token.value, mutation, &owned).await;
+        }
+        match checked {
+            Ok(None) => {
+                info!(
+                    target = %mutation.target_urn,
+                    "the unclear playlist create is not on soundcloud, sending it again"
+                );
+                Ok(Some(token))
+            }
+            Ok(Some(playlist)) => {
+                info!(
+                    target = %mutation.target_urn,
+                    playlist = playlist.get("urn").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "the unclear playlist create is already on soundcloud"
+                );
+                if self
+                    .repository
+                    .record_remote_success(mutation, &playlist)
+                    .await?
+                {
+                    self.finalize(mutation).await?;
+                } else {
+                    self.repository.release(mutation).await?;
+                }
+                Ok(None)
+            }
+            Err(error) => {
+                self.retry_unclear_create(
+                    mutation,
+                    &format!("checking SoundCloud for the created playlist: {error}"),
+                )
+                .await?;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn postpone_before_post(
+        &self,
+        mutation: &ClaimedMutation,
+        message: &str,
+        retry_after_seconds: i64,
+    ) -> Result<bool, sqlx::Error> {
+        if mutation.has_ambiguous_remote_attempt() {
+            self.repository
+                .postpone(mutation, message, retry_after_seconds)
+                .await
+        } else {
+            self.repository
+                .postpone_unattempted(mutation, message, retry_after_seconds)
+                .await
+        }
+    }
+
+    async fn retry_unclear_create(
+        &self,
+        mutation: &ClaimedMutation,
+        message: &str,
+    ) -> Result<(), sqlx::Error> {
+        let retry_count = mutation.retry_count.saturating_add(1);
+        if retry_count >= SYNC_QUEUE_MAX_RETRIES {
+            self.repository.park(mutation, retry_count, message).await?;
+            warn!(
+                target = %mutation.target_urn,
+                retries = retry_count,
+                "unclear playlist create parked"
+            );
+        } else {
+            self.repository
+                .retry(mutation, message, UNCLEAR_CREATE_RETRY_SECONDS)
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn restore_pauses(&self) {
+        if let Err(error) = self.repository.cap_action_pauses(MAX_PAUSE).await {
+            warn!(%error, "saved action pauses were not cut to the longest pause");
+        }
         let pauses = match self.repository.action_pauses().await {
             Ok(pauses) => pauses,
             Err(error) => {
@@ -346,30 +455,38 @@ impl SyncQueueHandler {
             return;
         };
         let action = (oauth_app_id, mutation.action_type.clone());
-        let seconds = if error.is_subscription_required() {
-            self.write_pauses.pause(action, SUBSCRIPTION_RETRY_SECONDS);
-            SUBSCRIPTION_RETRY_SECONDS
+        let (seconds, strikes, reason) = if error.is_subscription_required() {
+            let (seconds, strikes) = self
+                .write_pauses
+                .pause_refused(action, SUBSCRIPTION_RETRY_SECONDS);
+            (seconds, strikes, "subscription_required")
         } else if let Some(seconds) = error
             .retry_after_seconds()
             .filter(|_| error.is_rate_limited())
         {
-            self.write_pauses.pause(action, seconds);
-            seconds
+            let (seconds, strikes) = self.write_pauses.pause_refused(action, seconds);
+            (seconds, strikes, "rate_limited")
         } else if error.is_rate_limited() {
             let (seconds, strikes) = self
                 .write_pauses
                 .pause_longer_each_time(action, WRITE_PAUSE_SECONDS);
-            let saved = self
-                .repository
-                .save_action_pause(oauth_app_id, &mutation.action_type, seconds, strikes)
-                .await;
-            if let Err(error) = saved {
-                warn!(%error, "a refused action pause was not saved and will not survive a restart");
-            }
-            seconds
+            (seconds, strikes, "rate_limited")
         } else {
             return;
         };
+        let saved = self
+            .repository
+            .save_action_pause(
+                oauth_app_id,
+                &mutation.action_type,
+                seconds,
+                strikes,
+                reason,
+            )
+            .await;
+        if let Err(error) = saved {
+            warn!(%error, "a refused action pause was not saved and will not survive a restart");
+        }
         warn!(
             %oauth_app_id,
             action = %mutation.action_type,
@@ -436,8 +553,7 @@ impl SyncQueueHandler {
             ConnectionError::Database(error) => return Err(clone_database_error(error)),
         };
         if is_non_idempotent(&mutation.action_type) {
-            self.repository
-                .postpone_unattempted(mutation, &error.to_string(), retry_after_seconds)
+            self.postpone_before_post(mutation, &error.to_string(), retry_after_seconds)
                 .await?;
         } else {
             self.repository
@@ -577,6 +693,10 @@ impl SyncQueueHandler {
             | ActionError::UnknownAction(_) => {
                 self.repository
                     .park(mutation, SYNC_QUEUE_MAX_RETRIES, &error.to_string())
+                    .await?;
+            }
+            ActionError::SoundCloud(error) if mutation.action_type == "playlist_create" => {
+                self.retry_unclear_create(mutation, &error.to_string())
                     .await?;
             }
             ActionError::SoundCloud(_) => {

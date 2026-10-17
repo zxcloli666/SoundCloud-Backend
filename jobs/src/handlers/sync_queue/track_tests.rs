@@ -159,3 +159,51 @@ async fn failed_confirmation_enqueue_preserves_the_stored_remote_result(
     repository.finalize(&mutation).await?;
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_like_of_a_missing_track_is_closed_and_heal_leaves_it_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    connect_owner(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO user_likes_tracks (user_id, sc_track_id, progress, created_at)
+         VALUES ('17', '404', true, now() - interval '1 hour');
+         INSERT INTO sync_queue (user_id, action_type, target_urn)
+         VALUES ('17', 'like_track', 'soundcloud:tracks:404')",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = SyncQueueRepository::new(pool.clone(), Duration::from_secs(60));
+    let like = repository
+        .claim(1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("like was not claimed"))?;
+    assert!(repository.record_remote_attempt(&like).await?);
+    assert!(
+        repository
+            .record_remote_success(&like, &Value::Null)
+            .await?
+    );
+
+    repository.finalize(&like).await?;
+    sqlx::raw_sql(include_str!(
+        "../../../queries/maintenance/heal_track_likes.sql"
+    ))
+    .execute(&pool)
+    .await?;
+
+    let progress: bool = sqlx::query_scalar(
+        "SELECT progress FROM user_likes_tracks WHERE user_id = '17' AND sc_track_id = '404'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert!(!progress);
+    assert_eq!(queued, 0);
+    Ok(())
+}

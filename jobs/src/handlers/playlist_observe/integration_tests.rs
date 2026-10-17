@@ -321,6 +321,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              first_refresh_rejection_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );
+         CREATE TABLE sync_queue_action_pauses (
+             oauth_app_id uuid NOT NULL,
+             action_type text NOT NULL,
+             reason text NOT NULL
+         );
          CREATE TABLE background_jobs (
              id uuid PRIMARY KEY,
              kind varchar(96) NOT NULL,
