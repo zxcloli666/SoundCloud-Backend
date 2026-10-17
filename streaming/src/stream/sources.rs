@@ -96,16 +96,16 @@ pub(super) async fn try_anon(
     track_urn: &str,
     tag: &str,
     at_least: &'static str,
-) -> Option<Fetched> {
+) -> Result<Option<Fetched>, Box<dyn std::error::Error + Send + Sync>> {
     match state.anon.get_stream(track_urn, at_least).await {
-        Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
+        Ok(Some(result)) => Ok(Some((result.data, result.content_type, result.quality))),
         Ok(None) => {
             info!("{tag} {track_urn} anon has nothing at {at_least} or above");
-            None
+            Ok(None)
         }
         Err(e) => {
             warn!("{tag} {track_urn} anon failed: {e}");
-            None
+            Err(e)
         }
     }
 }

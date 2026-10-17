@@ -196,13 +196,10 @@ impl AnonClient {
     ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
-        let track = match self.get_track_by_id(track_id).await {
-            Ok(t) => t,
-            Err(e) => {
-                warn!("[anon] get track failed: {e}");
-                return Ok(None);
-            }
-        };
+        let track = self
+            .get_track_by_id(track_id)
+            .await
+            .map_err(|e| format!("get track failed: {e}"))?;
 
         let transcodings = track.media.as_ref().and_then(|m| m.transcodings.as_ref());
 
@@ -211,13 +208,10 @@ impl AnonClient {
             _ => {
                 warn!("[anon] no transcodings for {track_id}, refreshing client_id");
                 self.invalidate_and_refresh().await?;
-                let retry_track = match self.get_track_by_id(track_id).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        warn!("[anon] retry get track failed: {e}");
-                        return Ok(None);
-                    }
-                };
+                let retry_track = self
+                    .get_track_by_id(track_id)
+                    .await
+                    .map_err(|e| format!("retry get track failed: {e}"))?;
                 match retry_track
                     .media
                     .as_ref()
@@ -233,8 +227,10 @@ impl AnonClient {
                             .await;
                     }
                     _ => {
-                        warn!("[anon] still no transcodings for {track_id} after refresh");
-                        return Ok(None);
+                        return Err(format!(
+                            "still no transcodings for {track_id} after a client_id refresh"
+                        )
+                        .into());
                     }
                 }
             }
@@ -250,13 +246,10 @@ impl AnonClient {
             Err(e) => {
                 warn!("[anon] stream failed for {track_id}, refreshing client_id: {e}");
                 self.invalidate_and_refresh().await?;
-                let retry_track = match self.get_track_by_id(track_id).await {
-                    Ok(t) => t,
-                    Err(e2) => {
-                        warn!("[anon] retry get track failed: {e2}");
-                        return Ok(None);
-                    }
-                };
+                let retry_track = self
+                    .get_track_by_id(track_id)
+                    .await
+                    .map_err(|e2| format!("retry get track failed: {e2}"))?;
                 match retry_track
                     .media
                     .as_ref()
@@ -270,7 +263,9 @@ impl AnonClient {
                         )
                         .await
                     }
-                    _ => Ok(None),
+                    _ => Err(
+                        format!("no transcodings for {track_id} after a client_id refresh").into(),
+                    ),
                 }
             }
         }

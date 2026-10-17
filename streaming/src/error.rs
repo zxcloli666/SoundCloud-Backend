@@ -17,6 +17,8 @@ pub enum AppError {
     FreeHqBusy(Duration),
     #[error("timed out")]
     Timeout,
+    #[error("soundcloud did not answer about this track")]
+    Upstream,
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -30,6 +32,7 @@ impl IntoResponse for AppError {
             AppError::NoStream => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::FreeHqBusy(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, self.to_string()),
+            AppError::Upstream => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
         let mut response = (status, serde_json::json!({"error": msg}).to_string()).into_response();

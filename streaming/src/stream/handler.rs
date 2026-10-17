@@ -119,11 +119,10 @@ async fn stream_inner(
     if policy.private_only {
         return stream_private(
             &state,
-            &access.session_id,
+            &access,
             session.access_token.as_deref(),
             &track_urn,
-            secret_token,
-            hq,
+            tier,
             is_premium,
         )
         .await;
@@ -218,7 +217,7 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+        if let Ok(Some(r)) = try_anon(state, track_urn, tag, quality::SQ).await {
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -305,7 +304,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+        if let Ok(Some(r)) = try_anon(state, track_urn, tag, quality::SQ).await {
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -331,7 +330,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) = try_anon(state, track_urn, tag, quality::SQ).await {
+        if let Ok(Some(r)) = try_anon(state, track_urn, tag, quality::SQ).await {
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -392,6 +391,7 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         Err(answer) => return Ok(HqTry::Refused(answer)),
     };
 
+    let mut anon_has_no_hq = false;
     for source in live_hq_order(is_premium) {
         match source {
             LiveHq::Oauth => {
@@ -425,15 +425,17 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
                     return Ok(HqTry::Served(r));
                 }
             }
-            LiveHq::Anon => {
-                if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
+            LiveHq::Anon => match try_anon(state, track_urn, tag, quality::HQ).await {
+                Ok(Some(r)) => {
                     served(tag, track_urn, "anon_hq", r.2);
                     return respond_with_data(state, track_urn, r, upload).map(HqTry::Served);
                 }
-            }
+                Ok(None) => anon_has_no_hq = true,
+                Err(_) => {}
+            },
         }
     }
-    if !is_premium {
+    if !is_premium && anon_has_no_hq {
         state.free_hq.note_miss(track_urn);
     }
     Ok(HqTry::Missed)
@@ -486,26 +488,36 @@ async fn from_storage(req: &StreamRequest<'_>, tag: &str) -> Option<Response> {
 
 async fn stream_private(
     state: &AppState,
-    session_id: &str,
+    access: &StreamAccess,
     access_token: Option<&str>,
     track_urn: &str,
-    secret_token: Option<&str>,
-    high_quality: bool,
+    tier: Option<&'static str>,
     is_premium: bool,
 ) -> Result<Response, AppError> {
-    if high_quality
-        && let Gate::Open(_slot) = state.free_hq.gate(track_urn, session_id, is_premium)
-        && let Some((data, content_type, quality)) = try_session_oauth(
-            state,
-            access_token,
-            track_urn,
-            secret_token,
-            true,
-            is_premium,
-        )
-        .await
-    {
-        return data_response(data, content_type, quality);
+    let session_id = access.session_id.as_str();
+    let secret_token = access.secret_token.as_deref();
+    if access.high_quality {
+        let gate = state.free_hq.gate(track_urn, session_id, is_premium);
+        let slot = match free_slot(gate, "[stream]", track_urn, "none") {
+            Ok(slot) => Some(slot),
+            Err(busy @ AppError::FreeHqBusy(_)) if tier.is_some_and(|t| t != quality::SQ) => {
+                return Err(busy);
+            }
+            Err(_) => None,
+        };
+        if slot.is_some()
+            && let Some((data, content_type, quality)) = try_session_oauth(
+                state,
+                access_token,
+                track_urn,
+                secret_token,
+                true,
+                is_premium,
+            )
+            .await
+        {
+            return data_response(data, content_type, quality);
+        }
     }
     if let Some((data, content_type, quality)) = try_session_oauth(
         state,
@@ -816,6 +828,28 @@ mod tests {
             gate < hq,
             "a secret link with an hq ticket would reach SoundCloud past the free hq cap, \
              and FREE_HQ_FETCHES=0 would not stop it"
+        );
+        assert!(
+            body.contains("AppError::FreeHqBusy(_)) if tier.is_some_and("),
+            "an explicit hq ask on a private track must hear 429 like a public one, or the \
+             desktop never learns that free hq is busy"
+        );
+    }
+
+    #[test]
+    fn only_an_anon_answer_without_hq_marks_a_track_as_missing_hq() {
+        let body = include_str!("handler.rs")
+            .split_once("async fn live_hq(")
+            .expect("live hq is still here")
+            .1;
+        let body = body.split_once("\n}\n").expect("the function ends").0;
+        assert!(
+            body.contains("Ok(None) => anon_has_no_hq = true"),
+            "only anon meta that answered may say a track has no hq"
+        );
+        assert!(
+            body.contains("if !is_premium && anon_has_no_hq {"),
+            "a proxy or relay outage would mark every asked track as missing hq for 15 min"
         );
     }
 

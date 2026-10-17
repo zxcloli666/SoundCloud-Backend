@@ -207,14 +207,28 @@ async fn free_tier_entries(
     tier: &'static str,
 ) -> Result<(Vec<Entry>, Option<Arc<FreeSlot>>), AppError> {
     let slot = take_slot(&state.free_hq, track_urn, session_id, tier)?;
-    let mut entries = collect_entries(state, track_urn, false).await;
-    let answered = !entries.is_empty();
+    let entries = collect_entries(state, track_urn, false).await;
+    match only_tier(entries, tier) {
+        Ok(entries) => Ok((entries, slot)),
+        Err(error) => {
+            info!("[download] {track_urn} → no {tier}: {error}");
+            Err(error)
+        }
+    }
+}
+
+fn only_tier(mut entries: Vec<Entry>, tier: &str) -> Result<Vec<Entry>, AppError> {
+    if entries.is_empty() && tier != quality::SQ {
+        return Err(AppError::Upstream);
+    }
+    if entries.is_empty() {
+        return Ok(entries);
+    }
     entries.retain(|e| quality::of_transcoding(&e.t) == tier);
-    if answered && entries.is_empty() {
-        info!("[download] {track_urn} → no {tier}");
+    if entries.is_empty() {
         return Err(AppError::NoStream);
     }
-    Ok((entries, slot))
+    Ok(entries)
 }
 
 fn take_slot(
@@ -460,6 +474,35 @@ mod tests {
             take_slot(&free, URN, SESSION, quality::HQ),
             Err(AppError::NoStream)
         ));
+    }
+
+    #[test]
+    fn a_free_hq_download_tells_a_track_without_hq_from_a_meta_that_never_came() {
+        let entry = |preset: &str| Entry {
+            t: Transcoding {
+                url: format!("https://api-v2.soundcloud.com/media/{preset}"),
+                preset: Some(preset.to_owned()),
+                snipped: Some(false),
+                quality: Some("sq".to_owned()),
+                format: None,
+            },
+            client_id: String::new(),
+            track_auth: None,
+            headers: HashMap::new(),
+        };
+
+        assert!(
+            matches!(only_tier(Vec::new(), quality::HQ), Err(AppError::Upstream)),
+            "the desktop keeps a 404 on hq as no hq for 15 min, a failed meta read is not that"
+        );
+        assert!(only_tier(Vec::new(), quality::SQ).is_ok_and(|entries| entries.is_empty()));
+        assert!(matches!(
+            only_tier(vec![entry("mp3_0_0")], quality::HQ),
+            Err(AppError::NoStream)
+        ));
+        let hq = only_tier(vec![entry("mp3_0_0"), entry("aac_160k")], quality::HQ).unwrap();
+        assert_eq!(hq.len(), 1);
+        assert_eq!(hq[0].t.preset.as_deref(), Some("aac_160k"));
     }
 
     #[test]
