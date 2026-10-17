@@ -102,11 +102,17 @@ pub async fn build(
     };
     let mut wave_cursor =
         cursor::load_or_new(&svc.redis, owner, req.cursor_token, seed_kind, &seed_key).await;
-    let history_until = *wave_cursor
+    wave_cursor
         .history_until
         .get_or_insert_with(|| signals.newest_at());
     let lately_since = Utc::now().timestamp_micros() - cursor::TTL_SECS as i64 * 1_000_000;
-    let session = SessionFeedback::from_signals(&signals, &wave_cursor, lately_since);
+    let mood_seed_ids: Vec<u64> = match &req.seed {
+        SmartWaveSeed::User => Vec::new(),
+        SmartWaveSeed::Track(t) => vec![*t],
+        SmartWaveSeed::Artist(_, tracks) => tracks.iter().take(20).copied().collect(),
+    };
+    let session =
+        SessionFeedback::from_signals(&signals, &wave_cursor, lately_since, &mood_seed_ids);
     let session_ids = session.track_ids();
     let mut meta_ids = session_ids.clone();
     if let SmartWaveSeed::Track(t) = &req.seed {
@@ -117,7 +123,7 @@ pub async fn build(
     let boosted = superliked_ids(&signals);
     let seed_boost = mert_boost(&req.seed, &boosted);
     let exclude = build_exclude(&signals, &wave_cursor, &req.seed, &hidden_listen);
-    let negative_raw = negative_ids_for_qdrant(&signals, history_until.min(lately_since));
+    let negative_raw = negative_ids_for_qdrant(&signals, lately_since, &session);
 
     let (mert_seeds, negative_ids) = tokio::join!(
         filter_indexed(&svc.pg, &mert_seeds_raw),
@@ -177,11 +183,6 @@ pub async fn build(
     artist_of.retain(|tid, _| !blocked.contains(tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
     let liked_ids = taste_ids(&signals);
-    let mood_seed_ids: Vec<u64> = match &req.seed {
-        SmartWaveSeed::User => Vec::new(),
-        SmartWaveSeed::Track(t) => vec![*t],
-        SmartWaveSeed::Artist(_, tracks) => tracks.iter().take(20).copied().collect(),
-    };
     let session_pull = match &req.seed {
         SmartWaveSeed::User => SESSION_PULL_USER,
         SmartWaveSeed::Track(_) | SmartWaveSeed::Artist(..) => SESSION_PULL_SEEDED,
@@ -467,16 +468,20 @@ fn seed_weight(id: &str, boosted: &HashSet<u64>) -> f32 {
     }
 }
 
-fn negative_ids_for_qdrant(signals: &UserSignals, until: i64) -> Vec<u64> {
-    let earlier_skips: Vec<&Signal> = signals
-        .recent_skips
-        .iter()
-        .filter(|skip| skip.at <= until)
-        .collect();
-    let earlier_dislikes = signals
-        .disliked_ids
-        .iter()
-        .filter(|dislike| dislike.at <= until);
+fn negative_ids_for_qdrant(
+    signals: &UserSignals,
+    until: i64,
+    session: &SessionFeedback,
+) -> Vec<u64> {
+    let pushes_away = |signal: &&Signal| {
+        signal.at <= until
+            && signal
+                .id
+                .parse::<u64>()
+                .is_ok_and(|id| !session.negatives.contains(&id))
+    };
+    let earlier_skips: Vec<&Signal> = signals.recent_skips.iter().filter(pushes_away).collect();
+    let earlier_dislikes = signals.disliked_ids.iter().filter(pushes_away);
     let mut out: Vec<u64> = Vec::new();
     push_parsed(
         &mut out,
@@ -948,7 +953,7 @@ mod tests {
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::User, &[60, 70, 80]);
-        let session = SessionFeedback::from_signals(&signals, &cursor, 0);
+        let session = SessionFeedback::from_signals(&signals, &cursor, 0, &[]);
 
         let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor, &session);
 
@@ -964,7 +969,7 @@ mod tests {
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Track, &[60, 70]);
-        let session = SessionFeedback::from_signals(&signals, &cursor, 0);
+        let session = SessionFeedback::from_signals(&signals, &cursor, 0, &[]);
         let seed = SmartWaveSeed::Track(7);
 
         let seeds = pick_mert_seeds(&seed, &signals, &cursor, &session);
@@ -988,7 +993,7 @@ mod tests {
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Artist, &[70]);
-        let session = SessionFeedback::from_signals(&signals, &cursor, 0);
+        let session = SessionFeedback::from_signals(&signals, &cursor, 0, &[]);
         let top: Vec<u64> = (100..110).collect();
         let seed = SmartWaveSeed::Artist(Uuid::from_u128(1), &top);
 
@@ -1006,7 +1011,7 @@ mod tests {
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Track, &[60, 61, 62, 63]);
-        let session = SessionFeedback::from_signals(&signals, &cursor, 0);
+        let session = SessionFeedback::from_signals(&signals, &cursor, 0, &[]);
 
         let seeds = pick_mert_seeds(&SmartWaveSeed::Track(7), &signals, &cursor, &session);
 
@@ -1014,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn only_skips_and_dislikes_older_than_the_session_push_qdrant_away() {
+    fn skips_and_dislikes_of_the_last_hours_or_of_this_wave_never_push_qdrant_away() {
         let newer = |ids: Vec<Signal>| -> Vec<Signal> {
             ids.into_iter()
                 .map(|signal| Signal { at: 50, ..signal })
@@ -1025,16 +1030,25 @@ mod tests {
             recent_skips: [newer(signals([999])), signals(500..=560)].concat(),
             ..UserSignals::default()
         };
+        let session = SessionFeedback {
+            negatives: vec![500, 1],
+            disliked: vec![1],
+            ..SessionFeedback::default()
+        };
 
-        let negatives = negative_ids_for_qdrant(&signals, 20);
+        let negatives = negative_ids_for_qdrant(&signals, 20, &session);
 
         assert_eq!(negatives.len(), QDRANT_NEGATIVES);
         assert!(
             !negatives.contains(&999) && !negatives.contains(&998),
             "a fresh skip or dislike would push its whole neighbourhood out of the pool"
         );
-        assert_eq!(&negatives[..2], &[500, 501]);
-        assert!(negatives.contains(&1), "older dislikes still push away");
+        assert!(
+            !negatives.contains(&500) && !negatives.contains(&1),
+            "a skip or dislike of this wave pushed its neighbourhood out of the pool"
+        );
+        assert_eq!(&negatives[..2], &[501, 502]);
+        assert!(negatives.contains(&2), "older dislikes still push away");
     }
 
     #[test]
@@ -1068,7 +1082,7 @@ mod tests {
         cursor
             .history_until
             .get_or_insert_with(|| signals.newest_at());
-        let session = SessionFeedback::from_signals(signals, cursor, 0);
+        let session = SessionFeedback::from_signals(signals, cursor, 0, &[]);
         let meta: HashMap<u64, TrackMeta> = cands
             .iter()
             .map(|c| {
@@ -1199,13 +1213,21 @@ mod tests {
         );
 
         let updated = record_feedback(&redis, "17", &handle, 1, 0).await;
+        let outcomes = format!("smartwave:outcomes:17:{handle}");
+        let outcomes_ttl: i64 = redis.get().await?.ttl(&outcomes).await?;
         wave.mark_served(71, None);
         cursor::save(&redis, "17", &wave).await;
         let pinged = record_feedback(&redis, "17", &handle, 0, 0).await;
+        let lost = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
         let stored = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
+        cursor::save(&redis, "17", &stored).await;
         let again = cursor::load_or_new(&redis, "17", Some(&handle), SeedKind::Track, "t7").await;
 
         assert_eq!(updated.as_deref(), Some(handle.as_str()));
+        assert!(
+            outcomes_ttl > 5 * 60 * 60,
+            "feedback counts must live as long as the wave, they live {outcomes_ttl}s"
+        );
         assert_eq!(pinged.as_deref(), Some(handle.as_str()));
         assert_eq!(
             stored.handle, handle,
@@ -1215,8 +1237,24 @@ mod tests {
             stored.contains(70) && stored.contains(71),
             "feedback overwrote what the wave served"
         );
+        assert!(
+            (lost.neg_rate() - 1.0).abs() < 1e-6,
+            "a page that was never saved still took the feedback"
+        );
         assert!((stored.neg_rate() - 1.0).abs() < 1e-6);
-        assert_eq!(again.neg_flags.len(), 0, "feedback was counted twice");
+        assert_eq!(again.neg_flags.len(), 1, "feedback was counted twice");
+        let left: bool = redis.get().await?.exists(&outcomes).await?;
+        assert!(!left, "a saved page left its feedback counts behind");
+
+        redis
+            .get()
+            .await?
+            .del::<_, ()>(wave.redis_key("17"))
+            .await?;
+        let dead = record_feedback(&redis, "17", &handle, 1, 0).await;
+        let orphan: bool = redis.get().await?.exists(&outcomes).await?;
+        assert_eq!(dead, None, "feedback on a gone cursor answered ok");
+        assert!(!orphan, "feedback on a gone cursor left its counts behind");
         assert_eq!(record_feedback(&redis, "17", "missing", 1, 0).await, None);
         Ok(())
     }

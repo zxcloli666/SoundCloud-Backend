@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use deadpool_redis::Pool as RedisPool;
-use deadpool_redis::redis::{AsyncCommands, pipe};
+use deadpool_redis::redis::{AsyncCommands, Script};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -11,6 +11,33 @@ pub const TTL_SECS: u64 = 6 * 60 * 60;
 const SEEN_TRACKS_CAP: usize = 200;
 const ARTIST_WINDOW: usize = 30;
 const NEG_WINDOW: u8 = 20;
+
+const SAVE_SCRIPT: &str = r"
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+local left = 0
+for index, field in ipairs({'negatives', 'positives'}) do
+  local count = redis.call('HINCRBY', KEYS[2], field, -tonumber(ARGV[index + 2]))
+  if count < 0 then
+    redis.call('HSET', KEYS[2], field, 0)
+  end
+  left = left + math.max(count, 0)
+end
+if left == 0 then
+  redis.call('DEL', KEYS[2])
+end
+return 1
+";
+
+const TOUCH_SCRIPT: &str = r"
+if redis.call('EXPIRE', KEYS[1], ARGV[1]) == 0 then return 0 end
+redis.call('EXPIRE', KEYS[2], ARGV[1])
+if tonumber(ARGV[2]) + tonumber(ARGV[3]) > 0 then
+  redis.call('HINCRBY', KEYS[3], 'negatives', ARGV[2])
+  redis.call('HINCRBY', KEYS[3], 'positives', ARGV[3])
+  redis.call('EXPIRE', KEYS[3], ARGV[1])
+end
+return 1
+";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SeedKind {
@@ -40,6 +67,8 @@ pub struct WaveCursor {
     pub neg_flags: VecDeque<u8>,
     #[serde(default)]
     pub history_until: Option<i64>,
+    #[serde(skip)]
+    taken_outcomes: (usize, usize),
 }
 
 impl WaveCursor {
@@ -54,6 +83,7 @@ impl WaveCursor {
             seen_artists: VecDeque::with_capacity(ARTIST_WINDOW),
             neg_flags: VecDeque::with_capacity(NEG_WINDOW as usize),
             history_until: None,
+            taken_outcomes: (0, 0),
         }
     }
 
@@ -141,20 +171,20 @@ pub async fn load_or_new(
         && c.seed_kind == seed_kind
         && c.seed_key == seed_key
     {
-        let outcomes = outcomes_key(owner, t);
         let pending = match redis.get().await {
-            Ok(mut conn) => pipe()
-                .atomic()
-                .hget(&outcomes, &["negatives", "positives"])
-                .del(&outcomes)
-                .ignore()
-                .query_async::<((Option<usize>, Option<usize>),)>(&mut conn)
+            Ok(mut conn) => conn
+                .hget::<_, _, (Option<usize>, Option<usize>)>(
+                    outcomes_key(owner, t),
+                    &["negatives", "positives"],
+                )
                 .await
                 .ok(),
             Err(_) => None,
         };
-        if let Some(((negatives, positives),)) = pending {
-            c.record_outcomes(negatives.unwrap_or(0), positives.unwrap_or(0));
+        if let Some((negatives, positives)) = pending {
+            let taken = (negatives.unwrap_or(0), positives.unwrap_or(0));
+            c.record_outcomes(taken.0, taken.1);
+            c.taken_outcomes = taken;
         }
         return c;
     }
@@ -170,7 +200,16 @@ pub async fn save(redis: &RedisPool, owner: &str, cursor: &WaveCursor) -> Option
         debug!("smartwave: redis unavailable, cursor stateless");
         return None;
     };
-    let res: Result<(), _> = conn.set_ex::<_, _, ()>(&key, payload, TTL_SECS).await;
+    let (negatives, positives) = cursor.taken_outcomes;
+    let res: Result<i64, _> = Script::new(SAVE_SCRIPT)
+        .key(&key)
+        .key(outcomes_key(owner, &cursor.handle))
+        .arg(payload)
+        .arg(TTL_SECS)
+        .arg(negatives)
+        .arg(positives)
+        .invoke_async(&mut conn)
+        .await;
     if let Err(e) = res {
         debug!(error = %e, "smartwave: cursor save failed");
         return None;
@@ -218,24 +257,17 @@ pub async fn touch(
     let Ok(Some(full_key)) = conn.get::<_, Option<String>>(&lookup).await else {
         return false;
     };
-    let ttl = TTL_SECS as i64;
     let (negatives, positives) = within_window(negatives, positives);
-    let outcomes = outcomes_key(owner, handle);
-    let mut touches = pipe();
-    touches.expire(&full_key, ttl).expire(&lookup, ttl).ignore();
-    if negatives + positives > 0 {
-        touches
-            .hincr(&outcomes, "negatives", negatives)
-            .ignore()
-            .hincr(&outcomes, "positives", positives)
-            .ignore()
-            .expire(&outcomes, ttl)
-            .ignore();
-    }
-    touches
-        .query_async::<(bool,)>(&mut conn)
+    Script::new(TOUCH_SCRIPT)
+        .key(&full_key)
+        .key(&lookup)
+        .key(outcomes_key(owner, handle))
+        .arg(TTL_SECS)
+        .arg(negatives)
+        .arg(positives)
+        .invoke_async::<i64>(&mut conn)
         .await
-        .is_ok_and(|(alive,)| alive)
+        .is_ok_and(|alive| alive == 1)
 }
 
 fn handle_lookup_key(owner: &str, handle: &str) -> String {

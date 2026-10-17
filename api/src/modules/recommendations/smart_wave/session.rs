@@ -26,7 +26,12 @@ pub struct SessionFeedback {
 }
 
 impl SessionFeedback {
-    pub fn from_signals(signals: &UserSignals, cursor: &WaveCursor, lately_since: i64) -> Self {
+    pub fn from_signals(
+        signals: &UserSignals,
+        cursor: &WaveCursor,
+        lately_since: i64,
+        wave_seeds: &[u64],
+    ) -> Self {
         let since = cursor.history_until.unwrap_or(i64::MAX);
         let served: HashSet<u64> = cursor.seen_tracks.iter().copied().collect();
         let mut decided: HashSet<u64> = HashSet::new();
@@ -82,6 +87,7 @@ impl SessionFeedback {
             .chain(&signals.recent_skips)
             .filter(|signal| signal.at > lately_since)
             .filter_map(|signal| Some((signal.id.parse::<u64>().ok()?, signal.at)))
+            .filter(|(id, _)| !wave_seeds.contains(id))
             .filter(|(id, at)| kept.get(id).is_none_or(|kept_at| kept_at < at))
             .collect();
         lately.sort_by_key(|(_, at)| Reverse(*at));
@@ -306,7 +312,8 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE);
+        let session =
+            SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE, &[]);
 
         assert_eq!(session.positives, vec![1, 3]);
         assert_eq!(session.negatives, vec![2]);
@@ -322,7 +329,8 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE);
+        let session =
+            SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE, &[]);
 
         assert_eq!(session.positives, vec![2]);
         assert!(
@@ -347,7 +355,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE);
+        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE, &[]);
 
         assert_eq!(session.negatives, vec![1]);
         assert_eq!(session.lately, vec![93, 90]);
@@ -365,6 +373,22 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_seed_never_sinks_the_sound_of_its_own_wave() {
+        let signals = UserSignals {
+            recent_skips: at(EARLIER, &[7, 90]),
+            disliked_ids: at(EARLIER, &[100]),
+            ..UserSignals::default()
+        };
+
+        let track = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE, &[7]);
+        let artist =
+            SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE, &[100, 101]);
+
+        assert_eq!(track.avoided(), vec![100, 90]);
+        assert_eq!(artist.avoided(), vec![7, 90]);
+    }
+
+    #[test]
     fn a_wave_without_a_history_mark_has_no_session_yet() {
         let signals = UserSignals {
             recent_skips: at(LATER, &[1]),
@@ -373,7 +397,7 @@ mod tests {
         let mut cursor = served(&[1]);
         cursor.history_until = None;
 
-        let session = SessionFeedback::from_signals(&signals, &cursor, LATELY_SINCE);
+        let session = SessionFeedback::from_signals(&signals, &cursor, LATELY_SINCE, &[]);
 
         assert!(session.negatives.is_empty());
     }
@@ -391,7 +415,8 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE);
+        let session =
+            SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE, &[]);
 
         assert_eq!(session.positives, vec![3, 1]);
         assert_eq!(session.negatives, vec![2]);
@@ -405,7 +430,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE);
+        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE, &[]);
 
         assert_eq!(session.positives, vec![1]);
     }
@@ -420,7 +445,8 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE);
+        let session =
+            SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE, &[]);
 
         assert_eq!(session.negatives, vec![1, 3]);
         assert_eq!(session.disliked, vec![1]);
