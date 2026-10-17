@@ -30,6 +30,7 @@ use config::Config;
 use db::postgres::PgPool;
 use stream::anon::AnonClient;
 use stream::cookies_pool::CookiesPool;
+use stream::free_hq::FreeHq;
 use stream::storage::StorageClient;
 
 #[derive(Clone)]
@@ -43,6 +44,7 @@ pub struct AppState {
     pub storage: Arc<StorageClient>,
     pub decryptor: Option<Arc<decrypt::Engine>>,
     pub readiness: ready::ReadyCache,
+    pub free_hq: Arc<FreeHq>,
 }
 
 #[tokio::main]
@@ -165,6 +167,7 @@ async fn main() {
         storage,
         decryptor,
         readiness: ready::ReadyCache::default(),
+        free_hq: Arc::new(FreeHq::new(config.free_hq_fetches)),
     };
 
     let cors = CorsLayer::new()

@@ -17,6 +17,7 @@ pub struct Config {
     pub sc_proxy_url: String,
     pub sc_proxy_fallback: bool,
     pub sc_oauth_fallback_sessions: usize,
+    pub free_hq_fetches: usize,
     pub sc_cookies: Vec<String>,
     pub premium_only: bool,
     pub storage_url: String,
@@ -77,6 +78,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10),
+            free_hq_fetches: env::var("FREE_HQ_FETCHES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8),
             sc_cookies: cookies,
             premium_only: env::var("PREMIUM_ONLY")
                 .map(|v| v == "true")

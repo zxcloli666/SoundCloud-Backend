@@ -1,16 +1,30 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
-use bytes::Bytes;
-use futures::StreamExt;
+use bytes::{Bytes, BytesMut};
+use futures::channel::mpsc::SendError;
+use futures::stream::BoxStream;
+use futures::{FutureExt, Sink, SinkExt, StreamExt};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{info, warn};
 
+use super::free_hq::FreeSlot;
 use super::quality;
 use super::restricted::RestrictedSource;
 use crate::AppState;
 use crate::error::AppError;
 
 pub(super) type Fetched = (Bytes, &'static str, &'static str);
+type Decrypted = BoxStream<'static, Result<Bytes, decrypt::Error>>;
+type Keep = Box<dyn FnOnce(Bytes) + Send>;
+
+const CHUNKS_IN_FLIGHT: usize = 2;
+const BYTES_IN_FLIGHT: usize = 16 << 20;
+const KEPT_AT_MOST: usize = 32 << 20;
+const SLOT_HELD_AT_MOST: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy)]
 pub(super) struct UploadRule {
@@ -27,18 +41,20 @@ impl UploadRule {
     }
 }
 
-async fn try_oauth(
+pub(super) async fn try_session_oauth(
     state: &AppState,
-    access_token: &str,
+    access_token: Option<&str>,
     track_urn: &str,
     secret_token: Option<&str>,
     hq_only: bool,
+    premium: bool,
 ) -> Option<Fetched> {
+    let access_token = access_token?;
     let ctx = super::oauth::OauthCtx {
         client: &state.http_client,
         pg: &state.pg,
         proxy_url: &state.config.sc_proxy_url,
-        proxy_fallback: state.config.sc_proxy_fallback,
+        proxy_fallback: may_go_direct(state.config.sc_proxy_fallback, premium, hq_only),
         fallback_session_count: state.config.sc_oauth_fallback_sessions,
     };
     let result =
@@ -47,15 +63,8 @@ async fn try_oauth(
     Some((result.data, result.content_type, result.quality))
 }
 
-pub(super) async fn try_session_oauth(
-    state: &AppState,
-    access_token: Option<&str>,
-    track_urn: &str,
-    secret_token: Option<&str>,
-    hq_only: bool,
-) -> Option<Fetched> {
-    let access_token = access_token?;
-    try_oauth(state, access_token, track_urn, secret_token, hq_only).await
+fn may_go_direct(allowed: bool, premium: bool, hq_only: bool) -> bool {
+    allowed && (premium || !hq_only)
 }
 
 pub(super) async fn try_cookies(
@@ -63,7 +72,11 @@ pub(super) async fn try_cookies(
     track_urn: &str,
     tag: &str,
     hq_only: bool,
+    premium: bool,
 ) -> Option<Fetched> {
+    if !premium {
+        return None;
+    }
     let cookies_client = state.cookies.as_ref()?;
     match cookies_client.get_stream(track_urn, hq_only).await {
         Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
@@ -101,15 +114,27 @@ async fn restricted_source(
     state: &AppState,
     track_urn: &str,
     tag: &str,
-    hq_first: bool,
+    at_least: &'static str,
+    premium: bool,
 ) -> Option<RestrictedSource> {
-    match state.anon.resolve_restricted(track_urn, hq_first).await {
+    let uq_first = premium && at_least != quality::SQ;
+    match state
+        .anon
+        .resolve_restricted(track_urn, uq_first, at_least)
+        .await
+    {
         Ok(Some(v)) => return Some(v),
         Ok(None) => {}
         Err(e) => warn!("{tag} {track_urn} restricted(anon) failed: {e}"),
     }
+    if !premium {
+        return None;
+    }
     let cookies = state.cookies.as_ref()?;
-    match cookies.resolve_restricted(track_urn, hq_first).await {
+    match cookies
+        .resolve_restricted(track_urn, uq_first, at_least)
+        .await
+    {
         Ok(Some(v)) => Some(v),
         Ok(None) => None,
         Err(e) => {
@@ -148,16 +173,13 @@ pub(super) async fn try_restricted(
     state: &AppState,
     track_urn: &str,
     tag: &str,
-    hq_first: bool,
     at_least: &'static str,
+    premium: bool,
     upload: UploadRule,
+    slot: Option<Arc<FreeSlot>>,
 ) -> Option<(Response, &'static str)> {
-    let src = restricted_source(state, track_urn, tag, hq_first).await?;
+    let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
     let quality = src.quality;
-    if quality::rank(quality) < quality::rank(at_least) {
-        info!("{tag} {track_urn} restricted has only {quality}, wanted {at_least}");
-        return None;
-    }
 
     if let (Some(wvd_url), Some(wvd_token)) = (
         state.config.edge_wvd_url.as_deref(),
@@ -186,11 +208,10 @@ pub(super) async fn try_restricted(
     }
 
     let engine = state.decryptor.as_ref()?;
-    let fetcher: std::sync::Arc<dyn decrypt::Fetcher> =
-        std::sync::Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-            client: state.http_client.clone(),
-            proxy_url: state.config.sc_proxy_url.clone(),
-        });
+    let fetcher: Arc<dyn decrypt::Fetcher> = Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
+        client: state.http_client.clone(),
+        proxy_url: state.config.sc_proxy_url.clone(),
+    });
     let stream = match engine
         .process_stream(&src.manifest, &src.token, fetcher)
         .await
@@ -202,46 +223,150 @@ pub(super) async fn try_restricted(
         }
     };
 
-    if !upload.takes(quality) {
-        return Some((
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", src.content_type)
-                .header("x-audio-quality", quality)
-                .body(Body::from_stream(stream))
-                .unwrap(),
-            quality,
-        ));
-    }
-
-    let acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    let acc_w = acc.clone();
-    let storage = state.storage.clone();
-    let urn = track_urn.to_string();
-    let teed = stream
-        .map(move |chunk| {
-            if let Ok(b) = &chunk {
-                acc_w.lock().unwrap().extend_from_slice(b);
-            }
-            chunk
-        })
-        .chain(futures::stream::once(async move {
-            let data = std::mem::take(&mut *acc.lock().unwrap());
-            if data.len() > 8192 {
-                storage.upload_in_background_with_quality(urn, Bytes::from(data), quality);
-            }
-            Ok::<_, decrypt::Error>(Bytes::new())
-        }));
-
+    let keep = upload.takes(quality).then(|| {
+        let storage = state.storage.clone();
+        let urn = track_urn.to_string();
+        Box::new(move |whole: Bytes| storage.upload_in_background_with_quality(urn, whole, quality))
+            as Keep
+    });
     Some((
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", src.content_type)
             .header("x-audio-quality", quality)
-            .body(Body::from_stream(teed))
+            .body(decrypt_to_the_end(stream, keep, slot))
             .unwrap(),
         quality,
     ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Keeping {
+    Nothing,
+    WhileHeard,
+    Whole,
+}
+
+fn decrypt_to_the_end(stream: Decrypted, keep: Option<Keep>, slot: Option<Arc<FreeSlot>>) -> Body {
+    let keeping = match (&keep, &slot) {
+        (None, _) => Keeping::Nothing,
+        (Some(_), None) => Keeping::WhileHeard,
+        (Some(_), Some(_)) => Keeping::Whole,
+    };
+    if slot.is_some() {
+        let room = Arc::new(Semaphore::new(BYTES_IN_FLIGHT));
+        let (listener, heard) = futures::channel::mpsc::unbounded();
+        let listener = listener.with(move |chunk| take_room(room.clone(), chunk).boxed());
+        tokio::spawn(finish(Pump::new(stream, listener, keeping), keep, slot));
+        return Body::from_stream(heard.map(|(chunk, _room)| chunk));
+    }
+    let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+    tokio::spawn(finish(Pump::new(stream, listener, keeping), keep, slot));
+    Body::from_stream(heard)
+}
+
+async fn take_room(
+    room: Arc<Semaphore>,
+    chunk: Result<Bytes, decrypt::Error>,
+) -> Result<(Result<Bytes, decrypt::Error>, OwnedSemaphorePermit), SendError> {
+    let size = chunk
+        .as_ref()
+        .map_or(0, |chunk| chunk.len().min(BYTES_IN_FLIGHT));
+    let taken = room
+        .acquire_many_owned(size as u32)
+        .await
+        .expect("the room is never closed");
+    Ok((chunk, taken))
+}
+
+async fn finish<L>(mut pump: Pump<L>, keep: Option<Keep>, slot: Option<Arc<FreeSlot>>)
+where
+    L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
+{
+    let whole = match slot {
+        None => pump.run().await,
+        Some(slot) => {
+            let held = tokio::time::timeout(SLOT_HELD_AT_MOST, pump.run()).await;
+            drop(slot);
+            match held {
+                Ok(whole) => whole,
+                Err(_) => {
+                    warn!(
+                        "[stream] free hq decrypt passed {SLOT_HELD_AT_MOST:?}, slot and copy let go"
+                    );
+                    pump.stop_keeping();
+                    if pump.heard {
+                        pump.run().await;
+                    }
+                    None
+                }
+            }
+        }
+    };
+    if let (Some(keep), Some(whole)) = (keep, whole)
+        && whole.len() > 8192
+    {
+        keep(whole);
+    }
+}
+
+struct Pump<L> {
+    stream: Decrypted,
+    listener: L,
+    keeping: Keeping,
+    kept: BytesMut,
+    heard: bool,
+}
+
+impl<L> Pump<L>
+where
+    L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
+{
+    fn new(stream: Decrypted, listener: L, keeping: Keeping) -> Self {
+        Self {
+            stream,
+            listener,
+            keeping,
+            kept: BytesMut::new(),
+            heard: true,
+        }
+    }
+
+    async fn run(&mut self) -> Option<Bytes> {
+        while let Some(chunk) = self.stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(e) => {
+                    if self.heard {
+                        let _ = self.listener.send(Err(e)).await;
+                    }
+                    return None;
+                }
+            };
+            if self.keeping != Keeping::Nothing && self.kept.len() + chunk.len() > KEPT_AT_MOST {
+                self.stop_keeping();
+                if !self.heard {
+                    return None;
+                }
+            }
+            if self.keeping != Keeping::Nothing {
+                self.kept.extend_from_slice(&chunk);
+            }
+            if self.heard && self.listener.send(Ok(chunk)).await.is_err() {
+                if self.keeping != Keeping::Whole {
+                    return None;
+                }
+                self.heard = false;
+            }
+        }
+        let _ = self.listener.close().await;
+        (self.keeping != Keeping::Nothing).then(|| self.kept.split().freeze())
+    }
+
+    fn stop_keeping(&mut self) {
+        self.keeping = Keeping::Nothing;
+        self.kept = BytesMut::new();
+    }
 }
 
 pub(super) fn respond_with_data(
@@ -278,6 +403,323 @@ pub(super) fn data_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream::free_hq::{FreeHq, Gate};
+    use futures::channel::mpsc::Sender;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    const URN: &str = "soundcloud:tracks:1";
+
+    fn free_slot(free: &FreeHq) -> Arc<FreeSlot> {
+        let Gate::Open(Some(slot)) = free.gate(URN, "listener", false) else {
+            panic!("the slot was free");
+        };
+        slot
+    }
+
+    fn stored_copy() -> (Keep, tokio::sync::oneshot::Receiver<usize>) {
+        let (stored_tx, stored) = tokio::sync::oneshot::channel();
+        let keep: Keep = Box::new(move |whole: Bytes| {
+            let _ = stored_tx.send(whole.len());
+        });
+        (keep, stored)
+    }
+
+    fn chunks(count: usize) -> Decrypted {
+        futures::stream::iter((0..count).map(|_| Ok(Bytes::from_static(b"abcd")))).boxed()
+    }
+
+    fn counted(count: usize) -> (Decrypted, Arc<AtomicUsize>) {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let stream = chunks(count)
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+        (stream, pulled)
+    }
+
+    fn gone_listener() -> Sender<Result<Bytes, decrypt::Error>> {
+        let (listener, gone) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+        drop(gone);
+        listener
+    }
+
+    async fn pump<L>(stream: Decrypted, listener: L, keeping: Keeping) -> Option<Bytes>
+    where
+        L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
+    {
+        Pump::new(stream, listener, keeping).run().await
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_leaves_early_still_leaves_a_whole_copy_for_storage() {
+        let whole = pump(chunks(5), gone_listener(), Keeping::Whole).await;
+
+        assert_eq!(
+            whole.map(|whole| whole.len()),
+            Some(20),
+            "the desktop drops the slower of /download and /stream; the decrypt we already \
+             paid for must still reach storage"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_nothing_to_keep_the_decrypt_stops_when_the_listener_leaves() {
+        let (stream, pulled) = counted(5);
+
+        assert!(
+            pump(stream, gone_listener(), Keeping::Nothing)
+                .await
+                .is_none()
+        );
+        assert_eq!(pulled.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn without_a_slot_the_copy_is_dropped_with_the_listener() {
+        let (stream, pulled) = counted(5);
+
+        assert!(
+            pump(stream, gone_listener(), Keeping::WhileHeard)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            pulled.load(Ordering::SeqCst),
+            1,
+            "only a decrypt holding a slot may run on with nobody listening"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_slot_a_slow_listener_holds_the_decrypt_back() {
+        let (stream, pulled) = counted(50);
+        let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+        let decrypt = tokio::spawn(pump(stream, listener, Keeping::Nothing));
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            pulled.load(Ordering::SeqCst) <= CHUNKS_IN_FLIGHT + 2,
+            "a listener that does not read must not make us buffer the whole track"
+        );
+        drop(heard);
+        assert!(decrypt.await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_decrypt_that_breaks_halfway_is_never_kept() {
+        let stream = futures::stream::iter([
+            Ok(Bytes::from_static(b"abcd")),
+            Err(decrypt::Error::Fetch("segment 2".into())),
+            Ok(Bytes::from_static(b"efgh")),
+        ])
+        .boxed();
+        let (listener, mut heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+
+        assert!(pump(stream, listener, Keeping::Whole).await.is_none());
+        assert!(heard.next().await.is_some_and(|chunk| chunk.is_ok()));
+        assert!(heard.next().await.is_some_and(|chunk| chunk.is_err()));
+        assert!(heard.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_free_slot_comes_back_only_after_the_detached_decrypt_ends() {
+        let free = FreeHq::new(1);
+        let (feed, segments) = futures::channel::mpsc::unbounded();
+        let (keep, stored) = stored_copy();
+
+        drop(decrypt_to_the_end(
+            segments.boxed(),
+            Some(keep),
+            Some(free_slot(&free)),
+        ));
+        for _ in 0..3 {
+            feed.unbounded_send(Ok(Bytes::from(vec![0u8; 4096])))
+                .unwrap();
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            matches!(free.gate(URN, "another", false), Gate::Busy(_)),
+            "the slot bounds decrypts nobody listens to; it must stay taken while one runs"
+        );
+
+        drop(feed);
+        assert_eq!(stored.await.unwrap(), 3 * 4096);
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_slow_listener_does_not_hold_a_free_slot() {
+        let free = FreeHq::new(1);
+        let (keep, stored) = stored_copy();
+        let segments = futures::stream::iter((0..4).map(|_| Ok(Bytes::from(vec![7u8; 4096]))));
+
+        let body = decrypt_to_the_end(segments.boxed(), Some(keep), Some(free_slot(&free)));
+        let stored = tokio::time::timeout(Duration::from_secs(1), stored).await;
+
+        assert_eq!(
+            stored.ok().and_then(Result::ok),
+            Some(4 * 4096),
+            "a client behind a slow relay must not keep a free slot for its whole download"
+        );
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+        let heard = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(heard.len(), 4 * 4096);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_listener_holds_its_slot_rather_than_the_whole_track() {
+        let free = FreeHq::new(1);
+        let chunk = Bytes::from(vec![0u8; BYTES_IN_FLIGHT / 4]);
+        let segments = futures::stream::iter((0..8).map(move |_| Ok(chunk.clone()))).boxed();
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let segments = segments
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+
+        let body = decrypt_to_the_end(segments, None, Some(free_slot(&free)));
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            pulled.load(Ordering::SeqCst) <= 5,
+            "a listener that stopped reading must not make us buffer a whole mix"
+        );
+        assert!(matches!(free.gate(URN, "another", false), Gate::Busy(_)));
+
+        let mut heard = 0;
+        let mut body = body.into_data_stream();
+        while let Some(chunk) = body.next().await {
+            heard += chunk.unwrap().len();
+        }
+        assert_eq!(heard, 2 * BYTES_IN_FLIGHT);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_decrypt_gives_its_free_slot_back_at_the_deadline_and_keeps_nothing() {
+        let free = FreeHq::new(1);
+        let (feed, segments) = futures::channel::mpsc::unbounded();
+        let (keep, stored) = stored_copy();
+
+        let body = decrypt_to_the_end(segments.boxed(), Some(keep), Some(free_slot(&free)));
+        feed.unbounded_send(Ok(Bytes::from(vec![0u8; 4096])))
+            .unwrap();
+        tokio::time::sleep(SLOT_HELD_AT_MOST / 2).await;
+        assert!(matches!(free.gate(URN, "another", false), Gate::Busy(_)));
+
+        tokio::time::sleep(SLOT_HELD_AT_MOST).await;
+        assert!(
+            matches!(free.gate(URN, "another", false), Gate::Open(Some(_))),
+            "a chain of slow segments must not hold one of the few free slots for minutes"
+        );
+
+        feed.unbounded_send(Ok(Bytes::from(vec![0u8; 4096])))
+            .unwrap();
+        drop(feed);
+        let heard = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(
+            heard.len(),
+            2 * 4096,
+            "the listener still gets the whole track"
+        );
+        assert!(stored.await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_decrypt_nobody_listens_to_ends_at_the_deadline_without_a_copy() {
+        let free = FreeHq::new(1);
+        let (keep, stored) = stored_copy();
+        let endless = futures::stream::repeat_with(|| Ok(Bytes::from(vec![0u8; 4096])))
+            .then(|chunk| async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                chunk
+            })
+            .boxed();
+
+        finish(
+            Pump::new(endless, gone_listener(), Keeping::Whole),
+            Some(keep),
+            Some(free_slot(&free)),
+        )
+        .await;
+
+        assert!(stored.await.is_err());
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_listener_that_stopped_reading_loses_the_slot_at_the_deadline_but_not_the_track() {
+        let free = FreeHq::new(1);
+        let chunk = Bytes::from(vec![0u8; BYTES_IN_FLIGHT / 4]);
+        let segments = futures::stream::iter((0..8).map(move |_| Ok(chunk.clone()))).boxed();
+
+        let body = decrypt_to_the_end(segments, None, Some(free_slot(&free)));
+        tokio::time::sleep(SLOT_HELD_AT_MOST + Duration::from_secs(1)).await;
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+
+        let heard = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(heard.len(), 2 * BYTES_IN_FLIGHT);
+    }
+
+    #[tokio::test]
+    async fn a_mix_too_long_to_keep_is_never_stored_and_stops_without_a_listener() {
+        let chunk = Bytes::from(vec![0u8; KEPT_AT_MOST / 4]);
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let stream = futures::stream::iter((0..6).map(move |_| Ok(chunk.clone())))
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+
+        assert!(
+            pump(stream, gone_listener(), Keeping::Whole)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            pulled.load(Ordering::SeqCst),
+            5,
+            "past the cap there is nothing to store, so nobody is left to decrypt for"
+        );
+    }
+
+    #[test]
+    fn a_free_session_reads_apiv1_directly_only_for_sq() {
+        assert!(!may_go_direct(true, false, true));
+        assert!(may_go_direct(true, false, false));
+        assert!(may_go_direct(true, true, true));
+        assert!(!may_go_direct(false, true, false));
+    }
 
     #[test]
     fn storage_only_gets_a_copy_better_than_the_one_it_keeps() {

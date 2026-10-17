@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use base64::Engine as _;
 use bytes::Bytes;
@@ -10,7 +10,10 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use wreq::Client;
 
-use super::handler::{DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id};
+use super::free_hq::{FreeHq, FreeSlot};
+use super::handler::{
+    DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id, free_slot, granted_tier,
+};
 use super::proxy::{fetch_get_bytes, fetch_get_json, fetch_get_text};
 use super::quality;
 use super::restricted::{Transcoding, build_transcoding_target};
@@ -57,6 +60,11 @@ struct Entry {
 }
 
 #[derive(serde::Deserialize)]
+pub struct DownloadQuery {
+    pub quality: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct ResolveResp {
     url: String,
     #[serde(rename = "licenseAuthToken")]
@@ -67,9 +75,11 @@ pub async fn download(
     state: State<AppState>,
     track_urn: Path<String>,
     headers: HeaderMap,
+    query: Query<DownloadQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
     let urn_for_log = track_urn.0.clone();
-    match tokio::time::timeout(DOWNLOAD_DEADLINE, download_inner(state, track_urn, headers)).await {
+    let inner = download_inner(state, track_urn, headers, query);
+    match tokio::time::timeout(DOWNLOAD_DEADLINE, inner).await {
         Ok(r) => r,
         Err(_) => {
             warn!("[download] {urn_for_log} → deadline {DOWNLOAD_DEADLINE:?} exceeded");
@@ -82,6 +92,7 @@ async fn download_inner(
     State(state): State<AppState>,
     Path(track_urn): Path<String>,
     headers: HeaderMap,
+    Query(query): Query<DownloadQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
     let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let session_id = extract_download_session_id(&headers)?;
@@ -97,7 +108,12 @@ async fn download_inner(
         return Err(AppError::Forbidden);
     }
 
-    let entries = collect_entries(&state, &track_urn, is_premium).await;
+    let (entries, _slot) = if is_premium {
+        (collect_entries(&state, &track_urn, true).await, None)
+    } else {
+        let tier = free_tier(query.quality.as_deref());
+        free_tier_entries(&state, &track_urn, &session_id, tier).await?
+    };
     if entries.is_empty() {
         warn!("[download] {track_urn} → no transcodings");
         return Err(AppError::NotFound);
@@ -178,6 +194,40 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
         "[download] {track_urn} sources: anon={anon_count}, cookies={cookies_count} ({cookies_status})"
     );
     entries
+}
+
+fn free_tier(asked: Option<&str>) -> &'static str {
+    granted_tier(asked, false).unwrap_or(quality::SQ)
+}
+
+async fn free_tier_entries(
+    state: &AppState,
+    track_urn: &str,
+    session_id: &str,
+    tier: &'static str,
+) -> Result<(Vec<Entry>, Option<Arc<FreeSlot>>), AppError> {
+    let slot = take_slot(&state.free_hq, track_urn, session_id, tier)?;
+    let mut entries = collect_entries(state, track_urn, false).await;
+    let answered = !entries.is_empty();
+    entries.retain(|e| quality::of_transcoding(&e.t) == tier);
+    if answered && entries.is_empty() {
+        info!("[download] {track_urn} → no {tier}");
+        return Err(AppError::NoStream);
+    }
+    Ok((entries, slot))
+}
+
+fn take_slot(
+    free_hq: &FreeHq,
+    track_urn: &str,
+    session_id: &str,
+    tier: &str,
+) -> Result<Option<Arc<FreeSlot>>, AppError> {
+    if tier == quality::SQ {
+        return Ok(None);
+    }
+    let gate = free_hq.download_gate(track_urn, session_id);
+    free_slot(gate, "[download]", track_urn, "download")
 }
 
 async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
@@ -373,6 +423,69 @@ fn log_resolve_failure(msg: &str, stage: &str, preset: &str, protocol: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const URN: &str = "soundcloud:tracks:1";
+    const SESSION: &str = "session";
+
+    #[test]
+    fn a_free_download_without_quality_is_sq_and_waits_for_no_slot() {
+        let full = FreeHq::new(0);
+
+        assert_eq!(
+            free_tier(None),
+            quality::SQ,
+            "8.5.1 and every sq ask of the new desktop send no quality and never play hq from it"
+        );
+        assert!(
+            take_slot(&full, URN, SESSION, free_tier(None)).is_ok_and(|slot| slot.is_none()),
+            "old clients must not keep the hq slots busy for the ones that ask hq"
+        );
+        assert_eq!(free_tier(Some("sq")), quality::SQ);
+        assert_eq!(free_tier(Some("uq")), quality::HQ);
+    }
+
+    #[test]
+    fn a_free_hq_download_needs_a_slot_and_reads_the_miss_list() {
+        let free = FreeHq::new(1);
+        let held = take_slot(&free, URN, SESSION, quality::HQ).unwrap();
+        assert!(held.is_some());
+        assert!(matches!(
+            take_slot(&free, URN, "another", quality::HQ),
+            Err(AppError::FreeHqBusy(_))
+        ));
+        drop(held);
+
+        free.note_miss(URN);
+        assert!(matches!(
+            take_slot(&free, URN, SESSION, quality::HQ),
+            Err(AppError::NoStream)
+        ));
+    }
+
+    #[test]
+    fn a_free_ask_above_sq_is_turned_away_before_soundcloud_hears_of_it() {
+        let body = include_str!("download.rs")
+            .split_once("async fn free_tier_entries(")
+            .expect("the free tier path is still here")
+            .1;
+        let body = body.split_once("\n}\n").expect("the function ends").0;
+        let gate = body
+            .find("take_slot(")
+            .expect("a free ask above sq waits for a slot");
+        let meta = body
+            .find("collect_entries(")
+            .expect("the free tier path still reads the track");
+        assert!(
+            gate < meta,
+            "with every slot busy the answer is 429 and costs SoundCloud nothing; reading the \
+             track first spends a meta request and an sq license on a reply nobody uses"
+        );
+        assert!(
+            !body.contains("note_miss"),
+            "anon meta alone does not know about apiv1 hq; only /stream, which tries every \
+             source, may mark a track as having no hq"
+        );
+    }
 
     #[test]
     fn classify_status_parses_known_formats() {

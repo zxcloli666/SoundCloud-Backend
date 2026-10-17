@@ -396,7 +396,8 @@ impl AnonClient {
     pub(crate) async fn resolve_restricted(
         &self,
         track_urn: &str,
-        hq_first: bool,
+        uq_first: bool,
+        at_least: &str,
     ) -> Result<Option<super::restricted::RestrictedSource>, Box<dyn std::error::Error + Send + Sync>>
     {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
@@ -405,15 +406,17 @@ impl AnonClient {
             Some(t) => t,
             None => return Ok(None),
         };
+        let Some(tc) = super::restricted::pick_encrypted(tcs, uq_first, at_least) else {
+            return Ok(None);
+        };
         let cid = self.get_client_id().await?;
         super::restricted::resolve(
             &self.client,
             &self.proxy_url,
-            tcs,
+            tc,
             &cid,
             track.track_authorization.as_deref(),
             HashMap::new(),
-            hq_first,
         )
         .await
     }
