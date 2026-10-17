@@ -228,6 +228,10 @@ mod router_superlikes_order_tests;
 mod router_sync_retry_tests;
 
 #[cfg(test)]
+#[path = "router_upload_tests.rs"]
+mod router_upload_tests;
+
+#[cfg(test)]
 mod tests {
     use super::is_sensitive_path;
 

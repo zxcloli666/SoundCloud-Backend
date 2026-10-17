@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use tokio::time::Instant;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -18,6 +19,8 @@ use super::oauth::{
 const REFRESH_DUE_BUFFER: Duration = Duration::from_secs(5 * 60);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_LEASE_SECONDS: i32 = 60;
+const LEASE_WAIT: Duration = Duration::from_secs(12);
+const LEASE_POLL: Duration = Duration::from_millis(500);
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
 const RETRY_TRANSIENT_BASE_SECONDS: i32 = 30;
 const RETRY_TRANSIENT_MAX_SECONDS: i32 = 15 * 60;
@@ -88,7 +91,21 @@ impl AuthService {
             return Ok(connection.access_token);
         }
 
-        let attempt = self.refresh_connection_once(connection).await?;
+        let connection_id = connection.id;
+        let wait_ends = Instant::now() + LEASE_WAIT;
+        let mut attempt = self.refresh_connection_once(connection).await?;
+        while attempt.outcome == RefreshOutcome::InProgress && Instant::now() < wait_ends {
+            tokio::time::sleep(LEASE_POLL).await;
+            let connection = self
+                .get_connection_by_id(connection_id)
+                .await?
+                .ok_or_else(AppError::soundcloud_reauthorization_required)?;
+            if access_token_is_usable(&connection) {
+                return Ok(connection.access_token);
+            }
+            attempt = self.refresh_connection_once(connection).await?;
+        }
+
         if let Some(connection) = attempt.connection.as_ref()
             && access_token_is_usable(connection)
             && !matches!(attempt.outcome, RefreshOutcome::NotConnected)
@@ -123,8 +140,7 @@ impl AuthService {
     }
 
     pub async fn refresh_soundcloud(&self, session_id: Uuid) -> AppResult<RefreshAttempt> {
-        let session = self
-            .get_auth_session(session_id)
+        self.get_auth_session(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
         let Some(connection) = self.get_connection_for_session(session_id).await? else {
@@ -133,9 +149,6 @@ impl AuthService {
                 connection: None,
             });
         };
-        if session.oauth_app_id.is_none() || session.oauth_app_active != Some(true) {
-            return Err(AppError::soundcloud_temporarily_unavailable_for(Some(1800)));
-        }
         if !refresh_due(&connection) {
             return Ok(attempt(RefreshOutcome::AlreadyFresh, connection));
         }
@@ -209,6 +222,18 @@ impl AuthService {
         if lease_active(&connection) {
             return Ok(attempt(RefreshOutcome::InProgress, connection));
         }
+        let credentials = match self.credentials_for_connection(&connection).await {
+            Ok(credentials) => credentials,
+            Err(AppError::NotFound(_)) => {
+                let outcome = if self.oauth_apps.count_active().await? > 0 {
+                    RefreshOutcome::ReauthorizationRequired
+                } else {
+                    RefreshOutcome::RetryLater
+                };
+                return Ok(attempt(outcome, connection));
+            }
+            Err(error) => return Err(error),
+        };
         if retry_pending(&connection) {
             return Ok(attempt(retry_outcome(&connection), connection));
         }
@@ -230,26 +255,6 @@ impl AuthService {
             return self.refresh_race_outcome(connection.id).await;
         };
 
-        let credentials = match self.credentials_for_connection(&claimed).await {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                warn!(connection = %claimed.id, %error, "OAuth credentials lookup failed");
-                let retry_seconds = retry_delay(
-                    &claimed,
-                    RETRY_TRANSIENT_BASE_SECONDS,
-                    RETRY_TRANSIENT_MAX_SECONDS,
-                );
-                self.record_retryable_failure(
-                    &claimed,
-                    lease_id,
-                    "temporarily_unavailable",
-                    "OAuth credentials are temporarily unavailable",
-                    retry_seconds,
-                )
-                .await?;
-                return self.refresh_race_outcome(claimed.id).await;
-            }
-        };
         let app_key = oauth_app_key(&credentials.client_id);
         let oauth_app_id = claimed
             .oauth_app_id

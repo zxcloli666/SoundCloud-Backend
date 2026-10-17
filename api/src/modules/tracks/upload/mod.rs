@@ -36,6 +36,7 @@ async fn upload_track(
     multipart: Multipart,
 ) -> AppResult<Json<Value>> {
     let _ticket = st.tracks.uploads().enter(&ctx.sc_user_id)?;
+    ctx.access_token().await?;
     let parsed = form::read(multipart).await?;
     let token = ctx.access_token().await?;
     let track = st.tracks.sc().upload_track(&token, &parsed.upload).await?;
