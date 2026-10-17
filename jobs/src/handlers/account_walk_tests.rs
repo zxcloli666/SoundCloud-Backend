@@ -111,6 +111,38 @@ async fn account_walk_drops_a_gone_unverified_account_and_keeps_a_verified_one(
     Ok(())
 }
 
+#[sqlx::test(migrations = false)]
+async fn name_matched_accounts_never_feed_the_walk_or_the_avatar(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let artist_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO artists (id, name, normalized_name, source) VALUES ($1, 'z²', 'z2', 'mb')",
+    )
+    .bind(artist_id)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO artist_sc_accounts (artist_id, sc_user_id, role, source, verified) VALUES
+             ($1, '1211580634', 'main', 'mb_resolve', false),
+             ($1, '972358267', 'main', 'auto_match', false),
+             ($1, '1281291292', 'alt', 'reupload_pattern', false),
+             ($1, '555', 'alt', 'manual', true)",
+    )
+    .bind(artist_id)
+    .execute(&pool)
+    .await?;
+
+    let mut walked = sqlx::query_file_scalar!("queries/account_walk/list_accounts.sql", artist_id)
+        .fetch_all(&pool)
+        .await?;
+    walked.sort();
+
+    assert_eq!(walked, ["1211580634", "555"]);
+    Ok(())
+}
+
 async fn seed_walkable_artist(
     pool: &PgPool,
     name: &str,

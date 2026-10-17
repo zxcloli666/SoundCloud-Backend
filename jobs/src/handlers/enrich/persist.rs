@@ -1,6 +1,16 @@
+mod accounts;
+
+#[cfg(test)]
+#[path = "persist_tests.rs"]
+mod tests;
+
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+use self::accounts::{
+    compute_upload_kind, maybe_attach_reupload_account, maybe_auto_attach_sc_account,
+    without_foreign_namesakes,
+};
 use super::error::EnrichResult;
 use super::resolver::{AlbumCandidate, ArtistCandidate, Credit, ResolveResult, ResolveSource};
 use catalog_normalize::{clean_artist_name, normalize_name, normalize_title};
@@ -20,7 +30,18 @@ pub async fn apply(
 ) -> EnrichResult<PersistOutcome> {
     let mut tx = pg.begin().await?;
 
-    let primary_ids = upsert_artists(&mut tx, &res.primary).await?;
+    let primaries = if res.is_cover {
+        res.primary.clone()
+    } else {
+        without_foreign_namesakes(
+            &mut tx,
+            &res.primary,
+            uploader_sc_user_id,
+            uploader_username,
+        )
+        .await?
+    };
+    let primary_ids = upsert_artists(&mut tx, &primaries).await?;
     let featured_ids = upsert_artists(&mut tx, &res.featured).await?;
     let producer_ids = upsert_artists(&mut tx, &res.producers).await?;
     let remixer_ids = upsert_artists(&mut tx, &res.remixers).await?;
@@ -105,7 +126,7 @@ pub async fn apply(
         .execute(&mut *tx)
         .await?;
 
-        let primary_name = res.primary.first().map(|c| c.name.as_str()).unwrap_or("");
+        let primary_name = primaries.first().map(|c| c.name.as_str()).unwrap_or("");
         maybe_auto_attach_sc_account(
             &mut tx,
             artist_id,
@@ -169,150 +190,6 @@ async fn calibrate_confidence(
     .fetch_optional(&mut **tx)
     .await?;
     Ok(row.map(|v| v.clamp(0.0, 1.0)).unwrap_or(raw))
-}
-
-async fn maybe_auto_attach_sc_account(
-    tx: &mut Transaction<'_, Postgres>,
-    artist_id: Uuid,
-    sc_user_id: &str,
-    uploader_username: &str,
-    artist_name: &str,
-) -> EnrichResult<()> {
-    if sc_user_id.is_empty() || uploader_username.is_empty() || artist_name.is_empty() {
-        return Ok(());
-    }
-    let exists: Option<String> = sqlx::query_file_scalar!(
-        "queries/enrich/persist/sc_account_role.sql",
-        artist_id,
-        sc_user_id
-    )
-    .fetch_optional(&mut **tx)
-    .await?;
-    if exists.is_some() {
-        return Ok(());
-    }
-    let un = normalize_name(uploader_username);
-    let an = normalize_name(artist_name);
-    if un.is_empty() || an.is_empty() {
-        return Ok(());
-    }
-    let exact = un == an;
-    let strong_substring = un.len() >= 4 && an.len() >= 4 && (un.contains(&an) || an.contains(&un));
-    if !exact && !strong_substring {
-        return Ok(());
-    }
-    let has_main: Option<i64> = sqlx::query_file_scalar!(
-        "queries/enrich/persist/count_main_sc_accounts.sql",
-        artist_id
-    )
-    .fetch_optional(&mut **tx)
-    .await?;
-    let role = match has_main {
-        Some(n) if n == 0 && exact => "main",
-        _ => "alt",
-    };
-    sqlx::query_file!(
-        "queries/enrich/persist/insert_auto_match_account.sql",
-        artist_id,
-        sc_user_id,
-        role
-    )
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/enrich/persist/set_artist_sc_user_id.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/enrich/persist/repoint_uploader_tracks.sql",
-        sc_user_id,
-        artist_id
-    )
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-const REUPLOAD_THRESHOLD: i64 = 3;
-
-async fn maybe_attach_reupload_account(
-    tx: &mut Transaction<'_, Postgres>,
-    artist_id: Uuid,
-    sc_user_id: &str,
-) -> EnrichResult<()> {
-    if sc_user_id.is_empty() {
-        return Ok(());
-    }
-    let exists: Option<i32> = sqlx::query_file_scalar!(
-        "queries/enrich/persist/sc_account_exists.sql",
-        artist_id,
-        sc_user_id
-    )
-    .fetch_optional(&mut **tx)
-    .await?;
-    if exists.is_some() {
-        return Ok(());
-    }
-    let count: i64 = sqlx::query_file_scalar!(
-        "queries/enrich/persist/count_reupload_tracks.sql",
-        sc_user_id,
-        artist_id
-    )
-    .fetch_one(&mut **tx)
-    .await?;
-    if count < REUPLOAD_THRESHOLD {
-        return Ok(());
-    }
-    sqlx::query_file!(
-        "queries/enrich/persist/insert_reupload_account.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-async fn compute_upload_kind(
-    tx: &mut Transaction<'_, Postgres>,
-    primary_artist_id: Option<Uuid>,
-    uploader_sc_user_id: Option<&str>,
-    source: ResolveSource,
-) -> EnrichResult<&'static str> {
-    let Some(artist_id) = primary_artist_id else {
-        return Ok("unknown");
-    };
-    if let Some(sc_id) = uploader_sc_user_id
-        && !sc_id.is_empty()
-    {
-        let account = sqlx::query_file!(
-            "queries/enrich/persist/sc_account_role_verified.sql",
-            artist_id,
-            sc_id
-        )
-        .fetch_optional(&mut **tx)
-        .await?
-        .filter(|account| account.verified || account.source == "mb_resolve");
-        if let Some(account) = account {
-            return Ok(match account.role.as_str() {
-                "main" => "original",
-                "demo" => "demo",
-                _ => "alt",
-            });
-        }
-    }
-    let external_credit = matches!(
-        source,
-        ResolveSource::Isrc | ResolveSource::Mb | ResolveSource::Genius | ResolveSource::ScVerified
-    );
-    Ok(if external_credit {
-        "reupload"
-    } else {
-        "unknown"
-    })
 }
 
 async fn upsert_artists(
@@ -400,15 +277,14 @@ async fn upsert_one_artist(
     }
 
     let inserted: (Uuid,) = sqlx::query_as(
-        "INSERT INTO artists (name, normalized_name, mb_artist_id, genius_artist_id, sc_user_id, source, confidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "INSERT INTO artists (name, normalized_name, mb_artist_id, genius_artist_id, source, confidence)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id",
     )
     .bind(name)
     .bind(normalized)
     .bind(cand.mb_id.as_deref())
     .bind(cand.genius_id.as_deref())
-    .bind(cand.sc_user_id.as_deref())
     .bind(source.as_str())
     .bind(confidence)
     .fetch_one(&mut **tx)
@@ -429,21 +305,15 @@ async fn maybe_promote(
     let Some(r) = row else {
         return Ok(());
     };
-    let (cur_source, cur_conf, cur_mb, cur_genius, cur_sc) = (
-        r.source,
-        r.confidence,
-        r.mb_artist_id,
-        r.genius_artist_id,
-        r.sc_user_id,
-    );
+    let (cur_source, cur_conf, cur_mb, cur_genius) =
+        (r.source, r.confidence, r.mb_artist_id, r.genius_artist_id);
     let new_priority = source.priority();
     let cur_priority = ResolveSource::priority_of(&cur_source);
     let stronger = new_priority > cur_priority
         || (new_priority == cur_priority && confidence > cur_conf + 0.05);
     let mb_to_set = cand.mb_id.clone().or(cur_mb);
     let genius_to_set = cand.genius_id.clone().or(cur_genius);
-    let sc_to_set = cand.sc_user_id.clone().or(cur_sc);
-    if !stronger && mb_to_set.is_none() && genius_to_set.is_none() && sc_to_set.is_none() {
+    if !stronger && mb_to_set.is_none() && genius_to_set.is_none() {
         return Ok(());
     }
     sqlx::query_file!(
@@ -451,7 +321,6 @@ async fn maybe_promote(
         id,
         mb_to_set.as_deref(),
         genius_to_set.as_deref(),
-        sc_to_set.as_deref(),
         stronger,
         source.as_str(),
         confidence
