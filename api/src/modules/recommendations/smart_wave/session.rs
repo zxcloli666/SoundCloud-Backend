@@ -22,10 +22,11 @@ pub struct SessionFeedback {
     pub positives: Vec<u64>,
     pub negatives: Vec<u64>,
     pub disliked: Vec<u64>,
+    pub lately: Vec<u64>,
 }
 
 impl SessionFeedback {
-    pub fn from_signals(signals: &UserSignals, cursor: &WaveCursor) -> Self {
+    pub fn from_signals(signals: &UserSignals, cursor: &WaveCursor, lately_since: i64) -> Self {
         let since = cursor.history_until.unwrap_or(i64::MAX);
         let served: HashSet<u64> = cursor.seen_tracks.iter().copied().collect();
         let mut decided: HashSet<u64> = HashSet::new();
@@ -61,6 +62,32 @@ impl SessionFeedback {
                 session.positives.push(id);
             } else {
                 session.negatives.push(id);
+            }
+        }
+        let mut kept: HashMap<u64, i64> = HashMap::new();
+        let positive = signals
+            .fresh_likes
+            .iter()
+            .chain(&signals.superliked)
+            .chain(&signals.recent_played);
+        for signal in positive {
+            if let Ok(id) = signal.id.parse::<u64>() {
+                let at = kept.entry(id).or_insert(signal.at);
+                *at = (*at).max(signal.at);
+            }
+        }
+        let mut lately: Vec<(u64, i64)> = signals
+            .disliked_ids
+            .iter()
+            .chain(&signals.recent_skips)
+            .filter(|signal| signal.at > lately_since)
+            .filter_map(|signal| Some((signal.id.parse::<u64>().ok()?, signal.at)))
+            .filter(|(id, at)| kept.get(id).is_none_or(|kept_at| kept_at < at))
+            .collect();
+        lately.sort_by_key(|(_, at)| Reverse(*at));
+        for (id, _) in lately {
+            if decided.insert(id) {
+                session.lately.push(id);
             }
         }
         session
@@ -136,13 +163,22 @@ impl SessionFeedback {
         }
     }
 
+    pub fn avoided(&self) -> Vec<u64> {
+        self.negatives
+            .iter()
+            .chain(&self.lately)
+            .take(SKIPS_TO_AVOID)
+            .copied()
+            .collect()
+    }
+
     pub(super) fn skipped_vectors(
         &self,
         vectors: [&HashMap<String, Vec<f32>>; 3],
     ) -> TasteCentroids {
-        let latest = &self.negatives[..self.negatives.len().min(SKIPS_TO_AVOID)];
+        let avoided = self.avoided();
         let unit = |vectors: &HashMap<String, Vec<f32>>| -> Vec<Vec<f32>> {
-            vectors_by_id(latest, vectors)
+            vectors_by_id(&avoided, vectors)
                 .into_values()
                 .map(|mut vector| {
                     normalize(&mut vector);
@@ -226,6 +262,7 @@ mod tests {
     const HISTORY: i64 = 1_000;
     const EARLIER: i64 = HISTORY - 600;
     const LATER: i64 = HISTORY + 60;
+    const LATELY_SINCE: i64 = HISTORY - 3_600;
 
     fn served(ids: &[u64]) -> WaveCursor {
         let mut cursor = WaveCursor::new(SeedKind::User, "17".into());
@@ -269,7 +306,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]));
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE);
 
         assert_eq!(session.positives, vec![1, 3]);
         assert_eq!(session.negatives, vec![2]);
@@ -285,7 +322,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]));
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]), LATELY_SINCE);
 
         assert_eq!(session.positives, vec![2]);
         assert!(
@@ -293,6 +330,38 @@ mod tests {
             "an old skip of a served track counted: {:?}",
             session.negatives
         );
+        assert_eq!(session.lately, vec![4]);
+    }
+
+    #[test]
+    fn skips_and_dislikes_outside_the_session_only_sink_by_sound() {
+        let signals = UserSignals {
+            disliked_ids: at(LATER + 10, &[93]),
+            recent_skips: [
+                at(LATER, &[90, 92]),
+                at(LATELY_SINCE - 1, &[91]),
+                at(LATER, &[1]),
+            ]
+            .concat(),
+            recent_played: at(LATER + 5, &[92]),
+            ..UserSignals::default()
+        };
+
+        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE);
+
+        assert_eq!(session.negatives, vec![1]);
+        assert_eq!(session.lately, vec![93, 90]);
+        assert_eq!(session.avoided(), vec![1, 93, 90]);
+        let mut steered: Affinity = HashMap::new();
+        let mut disliked = HashSet::new();
+        let sunk = session.steer_artists(
+            &meta(&[(1, 10), (90, 20), (93, 30)]),
+            None,
+            &mut steered,
+            &mut disliked,
+        );
+        assert_eq!(sunk, HashSet::from([Uuid::from_u128(10)]));
+        assert!(disliked.is_empty());
     }
 
     #[test]
@@ -304,7 +373,7 @@ mod tests {
         let mut cursor = served(&[1]);
         cursor.history_until = None;
 
-        let session = SessionFeedback::from_signals(&signals, &cursor);
+        let session = SessionFeedback::from_signals(&signals, &cursor, LATELY_SINCE);
 
         assert!(session.negatives.is_empty());
     }
@@ -322,7 +391,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]));
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE);
 
         assert_eq!(session.positives, vec![3, 1]);
         assert_eq!(session.negatives, vec![2]);
@@ -336,7 +405,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1]));
+        let session = SessionFeedback::from_signals(&signals, &served(&[1]), LATELY_SINCE);
 
         assert_eq!(session.positives, vec![1]);
     }
@@ -351,7 +420,7 @@ mod tests {
             ..UserSignals::default()
         };
 
-        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]));
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]), LATELY_SINCE);
 
         assert_eq!(session.negatives, vec![1, 3]);
         assert_eq!(session.disliked, vec![1]);
@@ -363,7 +432,7 @@ mod tests {
         let session = SessionFeedback {
             positives: vec![1],
             negatives: vec![2],
-            disliked: Vec::new(),
+            ..SessionFeedback::default()
         };
         let mut affinity: Affinity = HashMap::from([(Uuid::from_u128(20), 0.6)]);
         let mut disliked = HashSet::new();
@@ -386,6 +455,7 @@ mod tests {
             positives: vec![5],
             negatives: vec![1, 2, 3, 4],
             disliked: vec![3],
+            ..SessionFeedback::default()
         };
         let mut affinity: Affinity = HashMap::from([
             (Uuid::from_u128(10), 1.0),

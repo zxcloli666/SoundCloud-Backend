@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 
 use deadpool_redis::Pool as RedisPool;
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{AsyncCommands, pipe};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use uuid::Uuid;
 
-const TTL_SECS: u64 = 6 * 60 * 60;
+pub const TTL_SECS: u64 = 6 * 60 * 60;
 const SEEN_TRACKS_CAP: usize = 200;
 const ARTIST_WINDOW: usize = 30;
 const NEG_WINDOW: u8 = 20;
@@ -76,19 +76,12 @@ impl WaveCursor {
     }
 
     pub fn record_outcomes(&mut self, negatives: usize, positives: usize) {
-        let window = NEG_WINDOW as usize;
-        let total = negatives.saturating_add(positives);
-        let (negatives, positives) = if total > window {
-            let kept = (negatives as f64 / total as f64 * window as f64).round() as usize;
-            (kept, window - kept)
-        } else {
-            (negatives, positives)
-        };
+        let (negatives, positives) = within_window(negatives, positives);
         for _ in 0..negatives {
-            push_capped(&mut self.neg_flags, 1, window);
+            push_capped(&mut self.neg_flags, 1, NEG_WINDOW as usize);
         }
         for _ in 0..positives {
-            push_capped(&mut self.neg_flags, 0, window);
+            push_capped(&mut self.neg_flags, 0, NEG_WINDOW as usize);
         }
     }
 
@@ -109,6 +102,17 @@ impl WaveCursor {
 
     pub fn contains(&self, sc_track_id: u64) -> bool {
         self.seen_tracks.iter().any(|t| *t == sc_track_id)
+    }
+}
+
+fn within_window(negatives: usize, positives: usize) -> (usize, usize) {
+    let window = NEG_WINDOW as usize;
+    let total = negatives.saturating_add(positives);
+    if total > window {
+        let kept = (negatives as f64 / total as f64 * window as f64).round() as usize;
+        (kept, window - kept)
+    } else {
+        (negatives, positives)
     }
 }
 
@@ -133,10 +137,25 @@ pub async fn load_or_new(
     seed_key: &str,
 ) -> WaveCursor {
     if let Some(t) = token
-        && let Some(c) = read(redis, owner, t).await
+        && let Some(mut c) = read(redis, owner, t).await
         && c.seed_kind == seed_kind
         && c.seed_key == seed_key
     {
+        let outcomes = outcomes_key(owner, t);
+        let pending = match redis.get().await {
+            Ok(mut conn) => pipe()
+                .atomic()
+                .hget(&outcomes, &["negatives", "positives"])
+                .del(&outcomes)
+                .ignore()
+                .query_async::<((Option<usize>, Option<usize>),)>(&mut conn)
+                .await
+                .ok(),
+            Err(_) => None,
+        };
+        if let Some(((negatives, positives),)) = pending {
+            c.record_outcomes(negatives.unwrap_or(0), positives.unwrap_or(0));
+        }
         return c;
     }
     WaveCursor::new(seed_kind, seed_key.to_string())
@@ -185,8 +204,46 @@ pub async fn register_handle(redis: &RedisPool, owner: &str, cursor: &WaveCursor
         .await;
 }
 
+pub async fn touch(
+    redis: &RedisPool,
+    owner: &str,
+    handle: &str,
+    negatives: usize,
+    positives: usize,
+) -> bool {
+    let Ok(mut conn) = redis.get().await else {
+        return false;
+    };
+    let lookup = handle_lookup_key(owner, handle);
+    let Ok(Some(full_key)) = conn.get::<_, Option<String>>(&lookup).await else {
+        return false;
+    };
+    let ttl = TTL_SECS as i64;
+    let (negatives, positives) = within_window(negatives, positives);
+    let outcomes = outcomes_key(owner, handle);
+    let mut touches = pipe();
+    touches.expire(&full_key, ttl).expire(&lookup, ttl).ignore();
+    if negatives + positives > 0 {
+        touches
+            .hincr(&outcomes, "negatives", negatives)
+            .ignore()
+            .hincr(&outcomes, "positives", positives)
+            .ignore()
+            .expire(&outcomes, ttl)
+            .ignore();
+    }
+    touches
+        .query_async::<(bool,)>(&mut conn)
+        .await
+        .is_ok_and(|(alive,)| alive)
+}
+
 fn handle_lookup_key(owner: &str, handle: &str) -> String {
     format!("smartwave:handle:{owner}:{handle}")
+}
+
+fn outcomes_key(owner: &str, handle: &str) -> String {
+    format!("smartwave:outcomes:{owner}:{handle}")
 }
 
 #[cfg(test)]
