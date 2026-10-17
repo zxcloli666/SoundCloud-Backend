@@ -20,6 +20,10 @@ impl SessionCtx {
     pub async fn access_token(&self) -> AppResult<String> {
         self.auth.get_valid_access_token(self.session_id).await
     }
+
+    pub async fn lasting_access_token(&self) -> AppResult<String> {
+        self.auth.get_lasting_access_token(self.session_id).await
+    }
 }
 
 impl FromRequestParts<AppState> for SessionCtx {

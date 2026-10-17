@@ -16,6 +16,7 @@ pub struct AuthSession {
     pub username: Option<String>,
     pub oauth_app_id: Option<Uuid>,
     pub oauth_app_active: Option<bool>,
+    pub any_oauth_app_active: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub refresh_lease_id: Option<Uuid>,
     pub refresh_lease_expires_at: Option<DateTime<Utc>>,

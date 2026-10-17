@@ -112,6 +112,7 @@ fn auth_session(expires_at: DateTime<Utc>) -> AuthSession {
         username: Some("listener".to_owned()),
         oauth_app_id: Some(TEST_OAUTH_APP_ID),
         oauth_app_active: Some(true),
+        any_oauth_app_active: true,
         expires_at: Some(expires_at),
         refresh_lease_id: None,
         refresh_lease_expires_at: None,
@@ -223,6 +224,7 @@ fn missing_oauth_source_does_not_require_login() {
 fn inactive_oauth_app_is_not_reported_as_refreshable() {
     let mut session = auth_session(Utc::now() - chrono::Duration::minutes(1));
     session.oauth_app_active = Some(false);
+    session.any_oauth_app_active = false;
 
     let response = auth_session_response(&session);
 
@@ -231,11 +233,67 @@ fn inactive_oauth_app_is_not_reported_as_refreshable() {
         SoundCloudConnectionState::RetryLater
     ));
     assert!(!response.can_refresh);
+    assert_eq!(response.retry_after_sec, Some(1800));
+}
+
+#[test]
+fn an_expired_login_of_an_inactive_app_asks_for_a_new_login_when_another_app_works() {
+    let mut session = auth_session(Utc::now() - chrono::Duration::minutes(1));
+    session.oauth_app_active = Some(false);
+    session.retry_at = Some(Utc::now() + chrono::Duration::minutes(10));
+
+    let response = auth_session_response(&session);
+
+    assert!(matches!(
+        response.state,
+        SoundCloudConnectionState::ReauthorizationRequired
+    ));
+    assert!(!response.can_use_soundcloud);
+    assert!(!response.can_refresh);
+    assert_eq!(response.retry_after_sec, None);
+    assert_eq!(
+        response.error_code.as_deref(),
+        Some("oauth_app_unavailable")
+    );
+}
+
+#[test]
+fn a_live_token_of_an_inactive_app_stays_usable() {
+    let mut session = auth_session(Utc::now() + chrono::Duration::hours(1));
+    session.oauth_app_active = Some(false);
+
+    let response = auth_session_response(&session);
+
+    assert!(matches!(
+        response.state,
+        SoundCloudConnectionState::RetryLater
+    ));
+    assert!(response.can_use_soundcloud);
+}
+
+#[test]
+fn a_new_login_asked_for_a_gone_app_names_the_app() {
+    let mut connection = connection(Utc::now() - chrono::Duration::minutes(1));
+    connection.retry_at = Some(Utc::now() + chrono::Duration::minutes(10));
+    let attempt = RefreshAttempt {
+        outcome: RefreshOutcome::ReauthorizationRequired,
+        connection: Some(connection),
+    };
+
+    let response = attempt.response();
+
+    assert_eq!(
+        response.error_code.as_deref(),
+        Some("oauth_app_unavailable")
+    );
+    assert_eq!(response.error_message.as_deref(), Some(OAUTH_APP_GONE));
+    assert_eq!(response.retry_after_sec, None);
 }
 
 #[test]
 fn confirmed_rejection_disables_soundcloud_without_removing_the_session() {
-    let connection = connection(Utc::now() + chrono::Duration::hours(1));
+    let mut connection = connection(Utc::now() + chrono::Duration::hours(1));
+    connection.last_refresh_error_kind = Some("reauthorization_required".to_owned());
     let attempt = RefreshAttempt {
         outcome: RefreshOutcome::ReauthorizationRequired,
         connection: Some(connection),

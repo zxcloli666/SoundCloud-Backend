@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use tokio::time::Instant;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -18,11 +19,16 @@ use super::oauth::{
 const REFRESH_DUE_BUFFER: Duration = Duration::from_secs(5 * 60);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_LEASE_SECONDS: i32 = 60;
+const LEASE_WAIT: Duration = Duration::from_secs(12);
+const LEASE_POLL: Duration = Duration::from_millis(500);
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
 const RETRY_TRANSIENT_BASE_SECONDS: i32 = 30;
 const RETRY_TRANSIENT_MAX_SECONDS: i32 = 15 * 60;
 const RETRY_RATE_LIMIT_BASE_SECONDS: i32 = 5 * 60;
 const RETRY_RATE_LIMIT_MAX_SECONDS: i32 = 30 * 60;
+const OAUTH_APP_RETRY_SECONDS: i64 = 30 * 60;
+const OAUTH_APP_GONE: &str =
+    "The SoundCloud app of this login is no longer available, sign in again";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RefreshOutcome {
@@ -46,12 +52,24 @@ impl RefreshAttempt {
         let mut response = connection_response(self.connection.as_ref());
         match self.outcome {
             RefreshOutcome::ReauthorizationRequired => {
+                let app_is_gone = self.connection.as_ref().is_some_and(|connection| {
+                    connection.last_refresh_error_kind.as_deref()
+                        != Some("reauthorization_required")
+                });
+                let (code, message) = if app_is_gone {
+                    ("oauth_app_unavailable", OAUTH_APP_GONE)
+                } else {
+                    (
+                        "reauthorization_required",
+                        "SoundCloud repeatedly rejected the refresh token",
+                    )
+                };
                 response.state = SoundCloudConnectionState::ReauthorizationRequired;
                 response.can_use_soundcloud = false;
                 response.can_refresh = false;
-                response.error_code = Some("reauthorization_required".to_owned());
-                response.error_message =
-                    Some("SoundCloud repeatedly rejected the refresh token".to_owned());
+                response.retry_after_sec = None;
+                response.error_code = Some(code.to_owned());
+                response.error_message = Some(message.to_owned());
             }
             RefreshOutcome::NotConnected => {
                 response.state = SoundCloudConnectionState::NotConnected;
@@ -73,6 +91,22 @@ impl AuthService {
         self.valid_access_token(connection).await
     }
 
+    pub async fn get_lasting_access_token(&self, session_id: Uuid) -> AppResult<String> {
+        let connection = self
+            .get_connection_for_session(session_id)
+            .await?
+            .ok_or_else(AppError::soundcloud_reauthorization_required)?;
+        if !refresh_due(&connection) || !access_token_is_usable(&connection) {
+            return self.valid_access_token(connection).await;
+        }
+        let refreshed = self.refresh_connection_once(connection).await;
+        if refreshed.is_ok_and(|attempt| attempt.outcome == RefreshOutcome::ReauthorizationRequired)
+        {
+            return Err(AppError::soundcloud_reauthorization_required());
+        }
+        self.get_valid_access_token(session_id).await
+    }
+
     pub async fn get_immediately_usable_access_token(&self, session_id: Uuid) -> AppResult<String> {
         let connection = self
             .get_connection_for_session(session_id)
@@ -88,7 +122,21 @@ impl AuthService {
             return Ok(connection.access_token);
         }
 
-        let attempt = self.refresh_connection_once(connection).await?;
+        let connection_id = connection.id;
+        let wait_ends = Instant::now() + LEASE_WAIT;
+        let mut attempt = self.refresh_connection_once(connection).await?;
+        while attempt.outcome == RefreshOutcome::InProgress && Instant::now() < wait_ends {
+            tokio::time::sleep(LEASE_POLL).await;
+            let connection = self
+                .get_connection_by_id(connection_id)
+                .await?
+                .ok_or_else(AppError::soundcloud_reauthorization_required)?;
+            if access_token_is_usable(&connection) {
+                return Ok(connection.access_token);
+            }
+            attempt = self.refresh_connection_once(connection).await?;
+        }
+
         if let Some(connection) = attempt.connection.as_ref()
             && access_token_is_usable(connection)
             && !matches!(attempt.outcome, RefreshOutcome::NotConnected)
@@ -123,8 +171,7 @@ impl AuthService {
     }
 
     pub async fn refresh_soundcloud(&self, session_id: Uuid) -> AppResult<RefreshAttempt> {
-        let session = self
-            .get_auth_session(session_id)
+        self.get_auth_session(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
         let Some(connection) = self.get_connection_for_session(session_id).await? else {
@@ -133,9 +180,6 @@ impl AuthService {
                 connection: None,
             });
         };
-        if session.oauth_app_id.is_none() || session.oauth_app_active != Some(true) {
-            return Err(AppError::soundcloud_temporarily_unavailable_for(Some(1800)));
-        }
         if !refresh_due(&connection) {
             return Ok(attempt(RefreshOutcome::AlreadyFresh, connection));
         }
@@ -209,6 +253,18 @@ impl AuthService {
         if lease_active(&connection) {
             return Ok(attempt(RefreshOutcome::InProgress, connection));
         }
+        let credentials = match self.credentials_for_connection(&connection).await {
+            Ok(credentials) => credentials,
+            Err(AppError::NotFound(_)) => {
+                if self.oauth_apps.count_active().await? == 0 {
+                    return Err(AppError::soundcloud_temporarily_unavailable_for(Some(
+                        OAUTH_APP_RETRY_SECONDS,
+                    )));
+                }
+                return Ok(attempt(RefreshOutcome::ReauthorizationRequired, connection));
+            }
+            Err(error) => return Err(error),
+        };
         if retry_pending(&connection) {
             return Ok(attempt(retry_outcome(&connection), connection));
         }
@@ -230,26 +286,6 @@ impl AuthService {
             return self.refresh_race_outcome(connection.id).await;
         };
 
-        let credentials = match self.credentials_for_connection(&claimed).await {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                warn!(connection = %claimed.id, %error, "OAuth credentials lookup failed");
-                let retry_seconds = retry_delay(
-                    &claimed,
-                    RETRY_TRANSIENT_BASE_SECONDS,
-                    RETRY_TRANSIENT_MAX_SECONDS,
-                );
-                self.record_retryable_failure(
-                    &claimed,
-                    lease_id,
-                    "temporarily_unavailable",
-                    "OAuth credentials are temporarily unavailable",
-                    retry_seconds,
-                )
-                .await?;
-                return self.refresh_race_outcome(claimed.id).await;
-            }
-        };
         let app_key = oauth_app_key(&credentials.client_id);
         let oauth_app_id = claimed
             .oauth_app_id
@@ -557,16 +593,17 @@ impl AuthService {
 
 pub fn auth_session_response(session: &AuthSession) -> SoundCloudConnectionResponse {
     let status = session.connection_status();
-    connection_status_response(status.as_ref())
+    connection_status_response(status.as_ref(), session.any_oauth_app_active)
 }
 
 fn connection_response(connection: Option<&SoundCloudConnection>) -> SoundCloudConnectionResponse {
     let status = connection.map(SoundCloudConnectionStatus::from);
-    connection_status_response(status.as_ref())
+    connection_status_response(status.as_ref(), false)
 }
 
 fn connection_status_response(
     connection: Option<&SoundCloudConnectionStatus>,
+    any_oauth_app_active: bool,
 ) -> SoundCloudConnectionResponse {
     let Some(connection) = connection else {
         return SoundCloudConnectionResponse {
@@ -596,8 +633,12 @@ fn connection_status_response(
     );
     let retry_is_pending = refresh_retry_pending(connection.retry_at);
     let token_is_rejected = connection.last_refresh_error_kind.as_deref() == Some("token_rejected");
+    let rejected_for_good =
+        connection.last_refresh_error_kind.as_deref() == Some("reauthorization_required");
+    let token_is_usable = expires_in > 0 && !token_is_rejected && !rejected_for_good;
     let refresh_is_due = expires_in <= REFRESH_DUE_BUFFER.as_secs() as i64 || token_is_rejected;
     let source_is_available = connection.has_refresh_credentials;
+    let source_is_gone = !source_is_available && !token_is_usable && any_oauth_app_active;
     let retry_after = if lease_is_active {
         connection.refresh_lease_expires_at
     } else if retry_is_pending {
@@ -606,8 +647,7 @@ fn connection_status_response(
         None
     }
     .map(|retry_at| seconds_until(retry_at, now));
-    let state = if connection.last_refresh_error_kind.as_deref() == Some("reauthorization_required")
-    {
+    let state = if rejected_for_good || source_is_gone {
         SoundCloudConnectionState::ReauthorizationRequired
     } else if !source_is_available {
         SoundCloudConnectionState::RetryLater
@@ -622,6 +662,10 @@ fn connection_status_response(
     };
 
     let active_error = match &state {
+        SoundCloudConnectionState::ReauthorizationRequired if !rejected_for_good => Some((
+            "oauth_app_unavailable".to_owned(),
+            OAUTH_APP_GONE.to_owned(),
+        )),
         SoundCloudConnectionState::RetryLater if !source_is_available => Some((
             "oauth_app_unavailable".to_owned(),
             "The SoundCloud connection configuration is temporarily unavailable".to_owned(),
@@ -639,17 +683,22 @@ fn connection_status_response(
         )),
         _ => None,
     };
+    let retry_after = match &state {
+        SoundCloudConnectionState::ReauthorizationRequired => None,
+        SoundCloudConnectionState::RetryLater if !source_is_available => {
+            retry_after.or(Some(OAUTH_APP_RETRY_SECONDS))
+        }
+        _ => retry_after,
+    };
 
     SoundCloudConnectionResponse {
         state,
-        can_use_soundcloud: expires_in > 0
-            && !token_is_rejected
-            && connection.last_refresh_error_kind.as_deref() != Some("reauthorization_required"),
+        can_use_soundcloud: token_is_usable,
         can_refresh: source_is_available
             && refresh_is_due
             && !lease_is_active
             && !retry_is_pending
-            && connection.last_refresh_error_kind.as_deref() != Some("reauthorization_required"),
+            && !rejected_for_good,
         soundcloud_user_id: Some(connection.soundcloud_user_id.clone()),
         soundcloud_urn: Some(crate::common::sc_ids::user_urn(
             &connection.soundcloud_user_id,
@@ -658,7 +707,7 @@ fn connection_status_response(
         expires_in_sec: Some(expires_in),
         last_attempt_at: connection.last_refresh_attempt_at,
         last_success_at: connection.last_refresh_success_at,
-        retry_after_sec: retry_after.or_else(|| (!source_is_available).then_some(1800)),
+        retry_after_sec: retry_after,
         error_code: active_error.as_ref().map(|(code, _)| code.clone()),
         error_message: active_error.map(|(_, message)| message),
     }

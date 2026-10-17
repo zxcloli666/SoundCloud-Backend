@@ -2,6 +2,8 @@ pub mod callback_page;
 pub mod dto;
 pub mod handlers;
 pub mod health;
+#[cfg(test)]
+mod lease_wait_tests;
 pub mod link_service;
 #[cfg(test)]
 mod login_app_tests;
