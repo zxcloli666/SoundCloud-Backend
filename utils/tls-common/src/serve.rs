@@ -8,13 +8,10 @@ use std::time::Duration;
 use axum::Router;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
-use rustls::ServerConfig;
-use rustls_acme::caches::DirCache;
-use rustls_acme::AcmeConfig;
-use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use crate::acceptor::{ConnectInfoAcceptor, TrustedProxies};
+use crate::acme::certificates_acceptor;
 use crate::config::{Http2Ping, ProxyProtocolConfig, TlsConfig};
 use crate::redirect::redirect_router;
 use crate::shutdown::shutdown_signal;
@@ -26,19 +23,23 @@ pub async fn serve(cfg: TlsConfig, app: Router) {
         warn!("failed to create ACME cache dir {:?}: {}", cfg.cache_dir, e);
     }
 
-    let mut state = AcmeConfig::new(cfg.domains.clone())
-        .contact_push(format!("mailto:{}", cfg.email))
-        .cache(DirCache::new(cfg.cache_dir.clone()))
-        .directory_lets_encrypt(!cfg.staging)
-        .state();
-
-    let mut rustls_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_cert_resolver(state.resolver());
-    rustls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    let certificates = if cfg.cert_per_domain {
+        cfg.domains
+            .iter()
+            .map(|d| vec![d.to_ascii_lowercase()])
+            .collect()
+    } else {
+        vec![cfg.domains.clone()]
+    };
     let trusted = trusted_proxies(&cfg.proxy).await;
     let https_acceptor = ConnectInfoAcceptor {
-        inner: state.axum_acceptor(Arc::new(rustls_config)),
+        inner: certificates_acceptor(
+            certificates,
+            &cfg.email,
+            cfg.cache_dir.clone(),
+            cfg.staging,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        ),
         proxy_protocol: cfg.proxy.enabled,
         proxy_trusted: trusted.clone(),
     };
@@ -48,22 +49,14 @@ pub async fn serve(cfg: TlsConfig, app: Router) {
         proxy_trusted: trusted,
     };
 
-    tokio::spawn(async move {
-        while let Some(res) = state.next().await {
-            match res {
-                Ok(ok) => info!("acme event: {:?}", ok),
-                Err(err) => error!("acme error: {:?}", err),
-            }
-        }
-    });
-
     let https_addr = SocketAddr::from(([0, 0, 0, 0], cfg.https_port));
     let http_addr = SocketAddr::from(([0, 0, 0, 0], cfg.http_port));
     let ping = Http2Ping::from_env();
 
     info!(
-        "TLS: {} domain(s), https=:{} http=:{} redirect={} staging={} proxy_protocol={} h2_ping={:?}",
+        "TLS: {} domain(s), cert_per_domain={} https=:{} http=:{} redirect={} staging={} proxy_protocol={} h2_ping={:?}",
         cfg.domains.len(),
+        cfg.cert_per_domain,
         cfg.https_port,
         cfg.http_port,
         cfg.http_redirect,
