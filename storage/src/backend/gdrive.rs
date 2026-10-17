@@ -381,10 +381,10 @@ impl GdriveBackend {
 
     async fn access_token(&self) -> Result<String, BackendError> {
         let mut g = self.token.lock().await;
-        if let Some(cached) = &*g {
-            if cached.expires_at > SystemTime::now() + TOKEN_REFRESH_LEEWAY {
-                return Ok(cached.value.clone());
-            }
+        if let Some(cached) = &*g
+            && cached.expires_at > SystemTime::now() + TOKEN_REFRESH_LEEWAY
+        {
+            return Ok(cached.value.clone());
         }
         let new = match &self.auth {
             AuthState::ServiceAccount(sa) => self.exchange_jwt(sa).await?,

@@ -341,10 +341,10 @@ pub async fn dir_size_bytes(path: &str) -> std::io::Result<u64> {
             let ft = entry.file_type().await?;
             if ft.is_dir() {
                 stack.push(entry.path());
-            } else if ft.is_file() {
-                if let Ok(meta) = entry.metadata().await {
-                    total = total.saturating_add(meta.len());
-                }
+            } else if ft.is_file()
+                && let Ok(meta) = entry.metadata().await
+            {
+                total = total.saturating_add(meta.len());
             }
         }
     }
