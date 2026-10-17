@@ -220,9 +220,63 @@ async fn a_fresh_token_stays_usable_while_its_app_is_inactive(pool: PgPool) -> a
     let auth = auth(&pool)?;
 
     let token = auth.get_valid_access_token(SESSION).await?;
+    let upload_token = auth.get_lasting_access_token(SESSION).await?;
     let refreshed = auth.refresh_soundcloud(SESSION).await?;
 
     assert_eq!(token, "access");
+    assert_eq!(upload_token, "access");
     assert_eq!(refreshed.outcome, RefreshOutcome::AlreadyFresh);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_upload_refreshes_a_token_about_to_expire_and_keeps_it_when_soundcloud_fails(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    add_app(&pool, APP, true).await?;
+    connect(&pool, Some(APP), 2, None).await?;
+
+    let token = auth(&pool)?.get_lasting_access_token(SESSION).await?;
+
+    assert_eq!(token, "access");
+    let generation: i64 =
+        sqlx::query_scalar("SELECT refresh_generation FROM soundcloud_connections WHERE id = $1")
+            .bind(CONNECTION)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(generation, GENERATION + 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_upload_asks_for_a_new_login_when_a_token_about_to_expire_has_no_app(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    add_app(&pool, APP, false).await?;
+    add_app(&pool, SPARE_APP, true).await?;
+    connect(&pool, Some(APP), 2, None).await?;
+    let auth = auth(&pool)?;
+
+    let upload_token = auth.get_lasting_access_token(SESSION).await;
+    let token = auth.get_valid_access_token(SESSION).await?;
+
+    assert!(matches!(
+        upload_token,
+        Err(AppError::SoundCloudReauthorizationRequired)
+    ));
+    assert_eq!(token, "access");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn without_any_active_app_an_upload_keeps_a_token_about_to_expire(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    add_app(&pool, APP, false).await?;
+    connect(&pool, Some(APP), 2, None).await?;
+
+    let token = auth(&pool)?.get_lasting_access_token(SESSION).await?;
+
+    assert_eq!(token, "access");
     Ok(())
 }

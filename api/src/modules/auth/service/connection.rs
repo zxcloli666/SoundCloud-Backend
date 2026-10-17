@@ -91,6 +91,22 @@ impl AuthService {
         self.valid_access_token(connection).await
     }
 
+    pub async fn get_lasting_access_token(&self, session_id: Uuid) -> AppResult<String> {
+        let connection = self
+            .get_connection_for_session(session_id)
+            .await?
+            .ok_or_else(AppError::soundcloud_reauthorization_required)?;
+        if !refresh_due(&connection) || !access_token_is_usable(&connection) {
+            return self.valid_access_token(connection).await;
+        }
+        let refreshed = self.refresh_connection_once(connection).await;
+        if refreshed.is_ok_and(|attempt| attempt.outcome == RefreshOutcome::ReauthorizationRequired)
+        {
+            return Err(AppError::soundcloud_reauthorization_required());
+        }
+        self.get_valid_access_token(session_id).await
+    }
+
     pub async fn get_immediately_usable_access_token(&self, session_id: Uuid) -> AppResult<String> {
         let connection = self
             .get_connection_for_session(session_id)

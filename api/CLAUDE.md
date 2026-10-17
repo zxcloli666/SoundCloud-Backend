@@ -238,7 +238,8 @@ SC-пути запрашивают токен через `ctx.with_access_token(
 `soundcloud_reauthorization_required` (при наличии другого активного приложения), без записи в БД;
 `GET /auth/soundcloud` тогда отдаёт `reauthorization_required` с `error_code` `oauth_app_unavailable`.
 Без единого активного приложения — 502 `soundcloud_temporarily_unavailable` с Retry-After 1800.
-Запрос токена ждёт чужую аренду обновления до 12 с, загрузка трека берёт токен до приёма файла.
+Запрос токена ждёт чужую аренду обновления до 12 с. Загрузка трека берёт токен до приёма файла и
+обновляет его заранее, если до истечения меньше 5 минут; если приложение подключения ушло, сразу 409.
 
 Контракт фронтенда: [docs/frontend-api-rewrite.md](../docs/frontend-api-rewrite.md).
 
