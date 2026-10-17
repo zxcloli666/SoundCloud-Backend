@@ -22,6 +22,7 @@ holds AS (
 ),
 rows AS (
     SELECT queued.dead,
+           queued.dead AND queued.failed_at > now() - interval '30 days' AS recent_dead,
            queued.retry_count,
            queued.action_type IN (
                'like_track', 'unlike_track', 'like_playlist', 'unlike_playlist',
@@ -46,7 +47,7 @@ SELECT count(*) FILTER (
            WHERE dead OR (retry_count > 0 AND delayed_until IS NULL)
        ) AS "failed!",
        count(*) FILTER (WHERE delayed_until IS NOT NULL) AS "delayed!",
-       count(*) FILTER (WHERE dead AND NOT healed) AS "dead!",
+       count(*) FILTER (WHERE recent_dead AND NOT healed) AS "dead!",
        ceil(extract(epoch FROM min(delayed_until) - now()))::bigint AS retry_in_sec,
        (
            (

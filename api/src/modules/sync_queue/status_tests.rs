@@ -175,6 +175,26 @@ async fn dead_playlist_edits_count_as_dead_dead_likes_as_failing_dead_comments_n
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn edits_that_died_over_a_month_ago_are_not_counted_as_dead(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let service = service(&pg)?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, dead, failed_at, retry_count) VALUES
+             ('9', 'playlist_update', 'soundcloud:playlists:1', true, now() - interval '40 days', 5),
+             ('9', 'playlist_create', 'new:1', true, now() - interval '1 day', 5)",
+    )
+    .execute(&pg)
+    .await?;
+
+    let status = service.status_for_user("9").await?;
+
+    assert_eq!(status.dead_count, 1);
+    assert_eq!(status.failed_count, 2);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn needs_relogin_only_when_a_new_login_can_help(pg: PgPool) -> anyhow::Result<()> {
     let service = service(&pg)?;
     let retired = oauth_app(&pg, false).await?;
@@ -279,7 +299,7 @@ async fn dead_rows(pg: &PgPool) -> anyhow::Result<Vec<(String, bool)>> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn retry_revives_only_dead_rows_counted_as_dead_after_two_minutes(
+async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_month(
     pg: PgPool,
 ) -> anyhow::Result<()> {
     let service = service(&pg)?;
@@ -292,7 +312,8 @@ async fn retry_revives_only_dead_rows_counted_as_dead_after_two_minutes(
              ('11', 'playlist_update', 'soundcloud:playlists:5', true, now() - interval '5 minutes', 5, 'HTTP 500', 'infinity', 1),
              ('11', 'track_update', 'soundcloud:tracks:6', true, now() - interval '30 seconds', 5, 'HTTP 500', 'infinity', 1),
              ('11', 'like_track', 'soundcloud:tracks:7', true, now() - interval '5 minutes', 5, 'HTTP 404', 'infinity', 1),
-             ('11', 'comment', 'soundcloud:tracks:8', true, now() - interval '5 minutes', 5, 'HTTP 502', 'infinity', 1)",
+             ('11', 'comment', 'soundcloud:tracks:8', true, now() - interval '5 minutes', 5, 'HTTP 502', 'infinity', 1),
+             ('11', 'playlist_delete', 'soundcloud:playlists:9', true, now() - interval '40 days', 5, 'HTTP 500', 'infinity', 1)",
     )
     .execute(&pg)
     .await?;
@@ -317,6 +338,7 @@ async fn retry_revives_only_dead_rows_counted_as_dead_after_two_minutes(
             ("comment soundcloud:tracks:8".to_owned(), true),
             ("like_track soundcloud:tracks:7".to_owned(), true),
             ("playlist_create new:a".to_owned(), false),
+            ("playlist_delete soundcloud:playlists:9".to_owned(), true),
             ("playlist_update soundcloud:playlists:5".to_owned(), false),
             ("track_update soundcloud:tracks:6".to_owned(), true),
         ]

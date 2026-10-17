@@ -4,6 +4,7 @@ WITH picked AS (
     WHERE user_id = ANY ($1)
       AND dead
       AND failed_at < now() - interval '2 minutes'
+      AND failed_at > now() - interval '30 days'
       AND action_type NOT IN (
           'comment', 'like_track', 'unlike_track', 'like_playlist', 'unlike_playlist',
           'follow_user', 'unfollow_user'
