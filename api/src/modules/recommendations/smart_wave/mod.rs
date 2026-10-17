@@ -2,6 +2,7 @@ pub mod blocked;
 pub mod cursor;
 pub mod graph;
 pub mod rank;
+pub mod session;
 pub mod signals;
 pub mod track_arm;
 
@@ -26,11 +27,13 @@ use crate::qdrant::collections;
 use cursor::{SeedKind, WaveCursor};
 use graph::GraphSeed;
 use rank::TrackMeta;
+use session::SessionFeedback;
 use signals::UserSignals;
 
 const ARTIST_CAP_IN_WINDOW: usize = 2;
 const MERT_POOL: usize = 400;
 const GRAPH_FLOOR: f32 = 0.12;
+const CALM_NEG_RATE: f32 = 0.3;
 const CONTENT_FLOOR: f32 = 0.55;
 const SEED_MOOD_WEIGHT: f32 = 0.7;
 const GRAPH_ARTISTS: usize = 160;
@@ -40,6 +43,10 @@ const SEED_LIKES_USER: usize = 14;
 const SEED_SUPERLIKES_USER: usize = FREE_LIMIT as usize;
 const TASTE_LIKES: usize = 80;
 const SEED_SERVED_FORWARD: usize = 8;
+const SEED_LIKED_NOW: usize = 4;
+const QDRANT_NEGATIVES: usize = 40;
+const SESSION_PULL_USER: f32 = 0.4;
+const SESSION_PULL_SEEDED: f32 = 0.25;
 
 pub enum SmartWaveSeed<'a> {
     User,
@@ -94,12 +101,14 @@ pub async fn build(
     };
     let mut wave_cursor =
         cursor::load_or_new(&svc.redis, owner, req.cursor_token, seed_kind, &seed_key).await;
+    let session = SessionFeedback::from_signals(&signals, &wave_cursor);
+    let session_ids = session.track_ids();
 
-    let mert_seeds_raw = pick_mert_seeds(&req.seed, &signals, &wave_cursor);
+    let mert_seeds_raw = pick_mert_seeds(&req.seed, &signals, &wave_cursor, &session);
     let boosted = superliked_ids(&signals);
     let seed_boost = mert_boost(&req.seed, &boosted);
     let exclude = build_exclude(&signals, &wave_cursor, &req.seed, &hidden_listen);
-    let negative_raw = negative_ids_for_qdrant(&signals);
+    let negative_raw = negative_ids_for_qdrant(&signals, &session);
 
     let (mert_seeds, negative_ids) = tokio::join!(
         filter_indexed(&svc.pg, &mert_seeds_raw),
@@ -116,10 +125,17 @@ pub async fn build(
         filter.as_ref(),
         MERT_POOL,
     );
-    let (graph_res, mert) = tokio::join!(graph_fut, mert_fut);
-    let disliked_set: HashSet<Uuid> = graph_res.disliked_artists.iter().copied().collect();
+    let (graph_res, mert, session_meta) =
+        tokio::join!(graph_fut, mert_fut, load_track_meta(&svc.pg, &session_ids));
+    let mut affinity = graph_res.affinity;
+    let mut disliked_set: HashSet<Uuid> = graph_res.disliked_artists.iter().copied().collect();
+    let seed_artist = match &req.seed {
+        SmartWaveSeed::Artist(a, _) => Some(*a),
+        SmartWaveSeed::User | SmartWaveSeed::Track(_) => None,
+    };
+    session.steer_artists(&session_meta, seed_artist, &mut affinity, &mut disliked_set);
 
-    let top_artists = top_affinity_artists(&graph_res.affinity, GRAPH_ARTISTS);
+    let top_artists = top_affinity_artists(&affinity, GRAPH_ARTISTS);
     let graph_tracks = graph::collect_artist_tracks(
         &svc.pg,
         &top_artists,
@@ -155,15 +171,22 @@ pub async fn build(
         SmartWaveSeed::Track(t) => vec![*t],
         SmartWaveSeed::Artist(_, tracks) => tracks.iter().take(20).copied().collect(),
     };
+    let session_pull = match &req.seed {
+        SmartWaveSeed::User => SESSION_PULL_USER,
+        SmartWaveSeed::Track(_) | SmartWaveSeed::Artist(..) => SESSION_PULL_SEEDED,
+    };
+    let vector_ids: Vec<u64> = cand_ids.iter().chain(session_ids.iter()).copied().collect();
     let centroids_fut = mood_centroids(svc, req.sc_user_id, &mood_seed_ids, &liked_ids, &boosted);
     let cands_vecs_fut = async {
         tokio::join!(
-            svc.retrieve_vectors(collections::TRACKS_MERT, &cand_ids),
-            svc.retrieve_vectors(collections::TRACKS_CLAP, &cand_ids),
-            svc.retrieve_vectors(collections::TRACKS_LYRICS, &cand_ids),
+            svc.retrieve_vectors(collections::TRACKS_MERT, &vector_ids),
+            svc.retrieve_vectors(collections::TRACKS_CLAP, &vector_ids),
+            svc.retrieve_vectors(collections::TRACKS_LYRICS, &vector_ids),
         )
     };
     let (taste, (cm, cc, cl)) = tokio::join!(centroids_fut, cands_vecs_fut);
+    let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
+    let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let cands: Vec<rank::Candidate> = artist_of
         .into_iter()
         .map(|(tid, artist)| {
@@ -173,10 +196,15 @@ pub async fn build(
                 sim(&taste.c, cc.get(&key)),
                 sim(&taste.l, cl.get(&key)),
             ]);
+            let near_skip = [
+                sim(&skipped.m, cm.get(&key)),
+                sim(&skipped.c, cc.get(&key)),
+                sim(&skipped.l, cl.get(&key)),
+            ];
             rank::Candidate {
                 sc_track_id: tid,
                 artist,
-                content,
+                content: session::away_from_skips(content, &near_skip),
             }
         })
         .collect();
@@ -184,12 +212,12 @@ pub async fn build(
 
     let picked = rank::rank_and_pick(
         &cands,
-        &graph_res.affinity,
+        &affinity,
         &disliked_set,
         &wave_cursor,
         req.limit * 2,
         ARTIST_CAP_IN_WINDOW,
-        GRAPH_FLOOR,
+        graph_floor(wave_cursor.neg_rate()),
         CONTENT_FLOOR,
     );
 
@@ -198,6 +226,7 @@ pub async fn build(
         .filter_tracks_by_language(&ids_after, req.languages)
         .await;
 
+    let known_positives = session::positive_ids(&signals);
     let mut tracks: Vec<RecommendResult> = Vec::with_capacity(req.limit);
     for p in &picked {
         if tracks.len() >= req.limit {
@@ -217,6 +246,9 @@ pub async fn build(
             features: None,
         });
         wave_cursor.mark_served(p.sc_track_id, p.artist);
+        if known_positives.contains(&p.sc_track_id) {
+            wave_cursor.mark_known_positive(p.sc_track_id);
+        }
     }
 
     let handle = cursor::save(&svc.redis, owner, &wave_cursor)
@@ -229,7 +261,10 @@ pub async fn build(
         kind = ?seed_kind,
         served_total = wave_cursor.served,
         returned = tracks.len(),
-        graph = graph_res.affinity.len(),
+        liked_now = session.positives.len(),
+        skipped_now = session.negatives.len(),
+        neg_rate = wave_cursor.neg_rate(),
+        graph = affinity.len(),
         graph_tracks = graph_tracks.len(),
         mert_pool = mert.len(),
         taste = !taste.m.is_empty(),
@@ -244,7 +279,7 @@ pub async fn build(
 }
 
 pub async fn record_feedback(
-    svc: &RecommendationsService,
+    redis: &RedisPool,
     sc_user_id: &str,
     cursor_token: &str,
     negatives: usize,
@@ -255,17 +290,10 @@ pub async fn record_feedback(
     } else {
         sc_user_id
     };
-    let mut wave_cursor = cursor::load_or_new(
-        &svc.redis,
-        owner,
-        Some(cursor_token),
-        SeedKind::User,
-        sc_user_id,
-    )
-    .await;
+    let mut wave_cursor = cursor::read(redis, owner, cursor_token).await?;
     wave_cursor.record_outcomes(negatives, positives);
-    let handle = cursor::save(&svc.redis, owner, &wave_cursor).await?;
-    cursor::register_handle(&svc.redis, owner, &wave_cursor).await;
+    let handle = cursor::save(redis, owner, &wave_cursor).await?;
+    cursor::register_handle(redis, owner, &wave_cursor).await;
     Some(handle)
 }
 
@@ -313,28 +341,49 @@ fn build_exclude(
     excl
 }
 
-fn pick_mert_seeds(seed: &SmartWaveSeed, signals: &UserSignals, cursor: &WaveCursor) -> Vec<u64> {
+fn pick_mert_seeds(
+    seed: &SmartWaveSeed,
+    signals: &UserSignals,
+    cursor: &WaveCursor,
+    session: &SessionFeedback,
+) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
     let fresh = signals.fresh_likes.iter();
+    let liked_now = session.positives.iter().take(SEED_LIKED_NOW);
     match seed {
         SmartWaveSeed::Track(t) => {
             out.push(*t);
+            for t in liked_now {
+                push_seed(&mut out, *t);
+            }
             push_parsed(&mut out, fresh.take(5), usize::MAX);
         }
         SmartWaveSeed::Artist(_, tracks) => {
             for t in tracks.iter().take(8) {
                 push_seed(&mut out, *t);
             }
+            for t in liked_now {
+                push_seed(&mut out, *t);
+            }
             push_parsed(&mut out, fresh.take(3), usize::MAX);
         }
         SmartWaveSeed::User => {
+            for t in liked_now {
+                push_seed(&mut out, *t);
+            }
             let superliked = signals.superliked.iter().take(SEED_SUPERLIKES_USER);
             push_parsed(&mut out, superliked, usize::MAX);
             push_parsed(&mut out, fresh, SEED_LIKES_USER);
             push_parsed(&mut out, signals.recent_played.iter(), SEED_LIKES_USER);
         }
     }
-    for t in cursor.seen_tracks.iter().rev().take(SEED_SERVED_FORWARD) {
+    let served_forward = cursor
+        .seen_tracks
+        .iter()
+        .rev()
+        .filter(|t| !session.negatives.contains(t))
+        .take(SEED_SERVED_FORWARD);
+    for t in served_forward {
         push_seed(&mut out, *t);
     }
     out
@@ -389,21 +438,20 @@ fn seed_weight(id: &str, boosted: &HashSet<u64>) -> f32 {
     }
 }
 
-fn negative_ids_for_qdrant(signals: &UserSignals) -> Vec<u64> {
+fn negative_ids_for_qdrant(signals: &UserSignals, session: &SessionFeedback) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
-    for id in signals
-        .disliked_ids
-        .iter()
-        .chain(signals.recent_skips.iter())
-    {
-        if let Ok(n) = id.parse::<u64>() {
-            out.push(n);
-        }
+    for id in session.negatives.iter().take(QDRANT_NEGATIVES) {
+        push_seed(&mut out, *id);
     }
-    out.sort_unstable();
-    out.dedup();
-    out.truncate(40);
+    let half = out.len() + (QDRANT_NEGATIVES - out.len()) / 2;
+    push_parsed(&mut out, signals.recent_skips.iter(), half);
+    push_parsed(&mut out, signals.disliked_ids.iter(), QDRANT_NEGATIVES);
+    push_parsed(&mut out, signals.recent_skips.iter(), QDRANT_NEGATIVES);
     out
+}
+
+fn graph_floor(neg_rate: f32) -> f32 {
+    GRAPH_FLOOR * (1.0 - (neg_rate - CALM_NEG_RATE).max(0.0))
 }
 
 const TASTE_TTL_SECS: u64 = 300;
@@ -785,7 +833,12 @@ mod tests {
         };
         let cursor = WaveCursor::new(SeedKind::User, "17".into());
 
-        let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor);
+        let seeds = pick_mert_seeds(
+            &SmartWaveSeed::User,
+            &signals,
+            &cursor,
+            &SessionFeedback::default(),
+        );
 
         assert_eq!(seeds.len(), SEED_LIKES_USER);
         assert_eq!(&seeds[..4], &[900, 901, 12, 10]);
@@ -802,7 +855,12 @@ mod tests {
         };
         let cursor = WaveCursor::new(SeedKind::User, "17".into());
 
-        let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor);
+        let seeds = pick_mert_seeds(
+            &SmartWaveSeed::User,
+            &signals,
+            &cursor,
+            &SessionFeedback::default(),
+        );
 
         let expected: Vec<u64> = (900..910).chain(10..14).collect();
         assert_eq!(seeds, expected);
@@ -818,7 +876,7 @@ mod tests {
         let cursor = WaveCursor::new(SeedKind::Track, "t7".into());
         let seed = SmartWaveSeed::Track(7);
 
-        let seeds = pick_mert_seeds(&seed, &signals, &cursor);
+        let seeds = pick_mert_seeds(&seed, &signals, &cursor, &SessionFeedback::default());
         let boost = mert_boost(&seed, &superliked_ids(&signals));
         let weights: Vec<f32> = seeds
             .iter()
@@ -828,6 +886,223 @@ mod tests {
 
         assert_eq!(seeds, vec![7, 10, 11, 12, 13, 14]);
         assert!(weights[1..].iter().all(|weight| *weight < weights[0]));
+    }
+
+    fn served(seed_kind: SeedKind, ids: &[u64]) -> WaveCursor {
+        let mut cursor = WaveCursor::new(seed_kind, "17".into());
+        for id in ids {
+            cursor.mark_served(*id, None);
+        }
+        cursor
+    }
+
+    #[test]
+    fn what_you_liked_in_this_wave_leads_the_next_user_seeds() {
+        let signals = UserSignals {
+            superliked: vec!["900".into()],
+            fresh_likes: strings(10..=40),
+            recent_played: vec!["70".into()],
+            ..UserSignals::default()
+        };
+        let cursor = served(SeedKind::User, &[60, 70, 80]);
+        let session = SessionFeedback::from_signals(&signals, &cursor);
+
+        let seeds = pick_mert_seeds(&SmartWaveSeed::User, &signals, &cursor, &session);
+
+        assert_eq!(&seeds[..3], &[70, 900, 10]);
+        assert_eq!(seeds.len(), SEED_LIKES_USER + 2);
+    }
+
+    #[test]
+    fn a_track_wave_takes_what_you_liked_right_after_its_seed() {
+        let signals = UserSignals {
+            fresh_likes: strings(10..=20),
+            recent_played: vec!["70".into()],
+            ..UserSignals::default()
+        };
+        let cursor = served(SeedKind::Track, &[60, 70]);
+        let session = SessionFeedback::from_signals(&signals, &cursor);
+        let seed = SmartWaveSeed::Track(7);
+
+        let seeds = pick_mert_seeds(&seed, &signals, &cursor, &session);
+        let weights: Vec<f32> = seeds
+            .iter()
+            .enumerate()
+            .map(|(position, id)| {
+                track_arm::seed_weight(position, seeds.len(), *id, &HashSet::new())
+            })
+            .collect();
+
+        assert_eq!(&seeds[..3], &[7, 70, 10]);
+        assert!(weights[1..].iter().all(|weight| *weight < weights[0]));
+    }
+
+    #[test]
+    fn an_artist_wave_keeps_its_artist_first_and_then_what_you_liked() {
+        let signals = UserSignals {
+            fresh_likes: strings(10..=20),
+            recent_played: vec!["70".into()],
+            ..UserSignals::default()
+        };
+        let cursor = served(SeedKind::Artist, &[70]);
+        let session = SessionFeedback::from_signals(&signals, &cursor);
+        let top: Vec<u64> = (100..110).collect();
+        let seed = SmartWaveSeed::Artist(Uuid::from_u128(1), &top);
+
+        let seeds = pick_mert_seeds(&seed, &signals, &cursor, &session);
+
+        assert_eq!(&seeds[..8], &top[..8]);
+        assert_eq!(&seeds[8..10], &[70, 10]);
+    }
+
+    #[test]
+    fn a_skipped_track_never_seeds_the_next_page() {
+        let signals = UserSignals {
+            recent_skips: vec!["61".into()],
+            disliked_ids: vec!["62".into()],
+            ..UserSignals::default()
+        };
+        let cursor = served(SeedKind::Track, &[60, 61, 62, 63]);
+        let session = SessionFeedback::from_signals(&signals, &cursor);
+
+        let seeds = pick_mert_seeds(&SmartWaveSeed::Track(7), &signals, &cursor, &session);
+
+        assert_eq!(seeds, vec![7, 63, 60]);
+    }
+
+    #[test]
+    fn skips_of_this_wave_lead_the_qdrant_negatives_behind_any_number_of_dislikes() {
+        let signals = UserSignals {
+            disliked_ids: strings(1..=200),
+            recent_skips: strings(500..=560),
+            ..UserSignals::default()
+        };
+        let session = SessionFeedback {
+            negatives: vec![999],
+            ..SessionFeedback::default()
+        };
+
+        let negatives = negative_ids_for_qdrant(&signals, &session);
+
+        assert_eq!(negatives.len(), QDRANT_NEGATIVES);
+        assert_eq!(&negatives[..3], &[999, 500, 501]);
+        assert!(
+            negatives.contains(&1),
+            "the newest dislikes still push away"
+        );
+    }
+
+    #[test]
+    fn a_bad_run_leans_the_wave_on_the_artist_graph() {
+        assert!((graph_floor(0.0) - GRAPH_FLOOR).abs() < 1e-6);
+        assert!((graph_floor(CALM_NEG_RATE) - GRAPH_FLOOR).abs() < 1e-6);
+        assert!(graph_floor(0.8) < GRAPH_FLOOR * 0.6);
+        assert!(graph_floor(1.0) > 0.0);
+    }
+
+    fn candidates(
+        artist: u128,
+        ids: std::ops::RangeInclusive<u64>,
+        content: f32,
+    ) -> Vec<rank::Candidate> {
+        ids.map(|id| rank::Candidate {
+            sc_track_id: id,
+            artist: Some(Uuid::from_u128(artist)),
+            content,
+        })
+        .collect()
+    }
+
+    fn next_page(
+        cands: &[rank::Candidate],
+        signals: &UserSignals,
+        cursor: &mut WaveCursor,
+        limit: usize,
+    ) -> Vec<u64> {
+        let session = SessionFeedback::from_signals(signals, cursor);
+        let meta: HashMap<u64, TrackMeta> = cands
+            .iter()
+            .map(|c| {
+                let meta = TrackMeta {
+                    primary_artist: c.artist,
+                    storage_ok: true,
+                };
+                (c.sc_track_id, meta)
+            })
+            .collect();
+        let mut affinity: graph::Affinity = HashMap::from([
+            (Uuid::from_u128(1), 1.0),
+            (Uuid::from_u128(2), 0.5),
+            (Uuid::from_u128(3), 0.4),
+        ]);
+        let mut disliked = HashSet::new();
+        session.steer_artists(&meta, None, &mut affinity, &mut disliked);
+        let picked = rank::rank_and_pick(
+            cands,
+            &affinity,
+            &disliked,
+            cursor,
+            limit,
+            ARTIST_CAP_IN_WINDOW,
+            graph_floor(cursor.neg_rate()),
+            CONTENT_FLOOR,
+        );
+        for p in &picked {
+            cursor.mark_served(p.sc_track_id, None);
+        }
+        picked.iter().map(|p| p.sc_track_id).collect()
+    }
+
+    #[test]
+    fn the_next_page_drops_a_twice_skipped_artist_and_pulls_toward_a_liked_one() {
+        let cands: Vec<rank::Candidate> = [
+            candidates(1, 10..=13, 0.8),
+            candidates(2, 20..=22, 0.7),
+            candidates(3, 30..=33, 0.9),
+        ]
+        .concat();
+        let mut cursor = WaveCursor::new(SeedKind::User, "17".into());
+        let first = next_page(&cands, &UserSignals::default(), &mut cursor, 5);
+        assert_eq!(first, vec![10, 11, 30, 31, 20]);
+
+        let unchanged = next_page(&cands, &UserSignals::default(), &mut cursor.clone(), 3);
+        assert_eq!(unchanged, vec![12, 13, 32]);
+
+        let feedback = UserSignals {
+            recent_skips: vec!["10".into(), "11".into()],
+            fresh_likes: vec!["20".into()],
+            ..UserSignals::default()
+        };
+        let next = next_page(&cands, &feedback, &mut cursor, 3);
+        assert_eq!(next, vec![21, 22, 32]);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local Redis"]
+    async fn feedback_on_a_track_wave_keeps_that_wave_cursor() -> anyhow::Result<()> {
+        let redis = deadpool_redis::Config::from_url(
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
+        )
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+        let mut wave = WaveCursor::new(SeedKind::Track, "t7".into());
+        wave.mark_served(70, None);
+        let Some(handle) = cursor::save(&redis, "17", &wave).await else {
+            anyhow::bail!("redis is not reachable");
+        };
+        cursor::register_handle(&redis, "17", &wave).await;
+
+        let updated = record_feedback(&redis, "17", &handle, 1, 0).await;
+        let stored = cursor::read(&redis, "17", &handle).await;
+
+        assert_eq!(updated.as_deref(), Some(handle.as_str()));
+        let Some(stored) = stored else {
+            anyhow::bail!("the track wave cursor is gone after feedback");
+        };
+        assert_eq!(stored.seed_kind, SeedKind::Track);
+        assert!(stored.contains(70), "feedback dropped what the wave served");
+        assert!((stored.neg_rate() - 1.0).abs() < 1e-6);
+        assert_eq!(record_feedback(&redis, "17", "missing", 1, 0).await, None);
+        Ok(())
     }
 
     #[test]

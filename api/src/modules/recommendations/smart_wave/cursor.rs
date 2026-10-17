@@ -38,6 +38,8 @@ pub struct WaveCursor {
     pub seen_tracks: VecDeque<u64>,
     pub seen_artists: VecDeque<Uuid>,
     pub neg_flags: VecDeque<u8>,
+    #[serde(default)]
+    pub known_positives: VecDeque<u64>,
 }
 
 impl WaveCursor {
@@ -51,6 +53,7 @@ impl WaveCursor {
             seen_tracks: VecDeque::with_capacity(SEEN_TRACKS_CAP),
             seen_artists: VecDeque::with_capacity(ARTIST_WINDOW),
             neg_flags: VecDeque::with_capacity(NEG_WINDOW as usize),
+            known_positives: VecDeque::new(),
         }
     }
 
@@ -72,13 +75,33 @@ impl WaveCursor {
         }
     }
 
+    pub fn mark_known_positive(&mut self, sc_track_id: u64) {
+        push_capped(&mut self.known_positives, sc_track_id, SEEN_TRACKS_CAP);
+    }
+
     pub fn record_outcomes(&mut self, negatives: usize, positives: usize) {
+        let window = NEG_WINDOW as usize;
+        let total = negatives.saturating_add(positives);
+        let (negatives, positives) = if total > window {
+            let kept = (negatives as f64 / total as f64 * window as f64).round() as usize;
+            (kept, window - kept)
+        } else {
+            (negatives, positives)
+        };
         for _ in 0..negatives {
-            push_capped(&mut self.neg_flags, 1, NEG_WINDOW as usize);
+            push_capped(&mut self.neg_flags, 1, window);
         }
         for _ in 0..positives {
-            push_capped(&mut self.neg_flags, 0, NEG_WINDOW as usize);
+            push_capped(&mut self.neg_flags, 0, window);
         }
+    }
+
+    pub fn neg_rate(&self) -> f32 {
+        if self.neg_flags.is_empty() {
+            return 0.0;
+        }
+        let negatives = self.neg_flags.iter().filter(|flag| **flag == 1).count();
+        negatives as f32 / self.neg_flags.len() as f32
     }
 
     pub fn artist_count_in_window(&self, artist_id: Uuid) -> usize {
@@ -140,7 +163,7 @@ pub async fn save(redis: &RedisPool, owner: &str, cursor: &WaveCursor) -> Option
     Some(cursor.handle.clone())
 }
 
-async fn read(redis: &RedisPool, owner: &str, handle: &str) -> Option<WaveCursor> {
+pub async fn read(redis: &RedisPool, owner: &str, handle: &str) -> Option<WaveCursor> {
     let mut conn = redis.get().await.ok()?;
     let backref: Option<String> = conn
         .get(handle_lookup_key(owner, handle))
@@ -168,4 +191,42 @@ pub async fn register_handle(redis: &RedisPool, owner: &str, cursor: &WaveCursor
 
 fn handle_lookup_key(owner: &str, handle: &str) -> String {
     format!("smartwave:handle:{owner}:{handle}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_huge_feedback_batch_keeps_its_share_inside_the_window() {
+        let mut cursor = WaveCursor::new(SeedKind::User, "17".into());
+
+        cursor.record_outcomes(3_000_000_000, 1_000_000_000);
+
+        assert_eq!(cursor.neg_flags.len(), NEG_WINDOW as usize);
+        assert!((cursor.neg_rate() - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_cursor_saved_before_known_positives_still_loads() -> anyhow::Result<()> {
+        let saved = r#"{"handle":"ab","seed_kind":"Track","seed_key":"t7","served":1,
+            "seen_tracks":[70],"seen_artists":[],"neg_flags":[1]}"#;
+
+        let cursor: WaveCursor = serde_json::from_str(saved)?;
+
+        assert!(cursor.contains(70));
+        assert!(cursor.known_positives.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn the_negative_rate_reads_only_the_latest_outcomes() {
+        let mut cursor = WaveCursor::new(SeedKind::Track, "t7".into());
+        assert_eq!(cursor.neg_rate(), 0.0);
+
+        cursor.record_outcomes(20, 0);
+        cursor.record_outcomes(0, 10);
+
+        assert!((cursor.neg_rate() - 0.5).abs() < 1e-6);
+    }
 }
