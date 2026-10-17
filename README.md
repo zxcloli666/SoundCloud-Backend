@@ -37,7 +37,7 @@ qdrant `6333/6334`, nats `4222/8222`.
   streaming.
 - Аудио открывается по тикету. `GET {API}/tracks/{urn}/stream` с заголовком `x-session-id` проверяет доступ
   (удалён, приватный, премиум) и отвечает `307` на `{STREAMING}/stream/{urn}?ticket=…`. Без тикета
-  `/stream` отвечает `401`. `API` — `https://api.scnative.space` (премиум: `https://api-star.scnative.space`).
+  `/stream` отвечает `401`. `API` — `https://api.scnative.dev` (премиум: `https://api-star.scnative.dev`).
 - Тикет живёт 120 с, поэтому его берут заново на каждое открытие и повтор. URL с тикетом не кэшируют и не
   отдают плееру для переоткрытия: плеер получает API-адрес и заголовок.
 - `hq=true` добавляют только премиум-пользователям: без премиума streaming отвечает на HQ `403`.
