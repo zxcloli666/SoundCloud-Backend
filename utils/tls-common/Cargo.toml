@@ -11,7 +11,7 @@ socket2 = { version = "0.6", features = ["all"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "sync", "signal", "io-util", "time"] }
 tracing = "0.1"
 rustls = { version = "0.23", features = ["ring"] }
-rustls-acme = { version = "0.14", features = ["axum"] }
+rustls-acme = "0.15"
 time = "=0.3.47"
 axum-server = "0.7"
 hyper-util = { version = "0.1", features = ["server-auto", "service", "tokio"] }
