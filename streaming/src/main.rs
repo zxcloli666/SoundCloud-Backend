@@ -15,6 +15,7 @@ mod db;
 mod error;
 mod hq_upgrade;
 mod metrics;
+mod ready;
 mod sc_methods;
 mod stream;
 
@@ -41,6 +42,7 @@ pub struct AppState {
     pub cookies: Option<Arc<CookiesPool>>,
     pub storage: Arc<StorageClient>,
     pub decryptor: Option<Arc<decrypt::Engine>>,
+    pub readiness: ready::ReadyCache,
 }
 
 #[tokio::main]
@@ -162,6 +164,7 @@ async fn main() {
         cookies,
         storage,
         decryptor,
+        readiness: ready::ReadyCache::default(),
     };
 
     let cors = CorsLayer::new()
@@ -180,6 +183,7 @@ async fn main() {
         )
         .route("/internal/wvd", get(stream::internal::serve_wvd))
         .route("/health", get(|| async { "ok" }))
+        .route("/ready", get(ready::ready))
         .route("/metrics", get(serve_metrics))
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))

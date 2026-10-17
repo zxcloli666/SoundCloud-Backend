@@ -32,6 +32,7 @@ pub struct AppState {
     pub tmp_used_bytes: AtomicU64,
     /// Guards a lazy rescan of `{tmp}/source/` to recover from external cleanup.
     pub tmp_rescan_lock: tokio::sync::Mutex<Instant>,
+    pub readiness: tokio::sync::Mutex<Option<(Instant, routes::health::Readiness)>>,
     file_locks: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
 }
 
@@ -147,6 +148,7 @@ async fn main() {
         pipeline,
         tmp_used_bytes: AtomicU64::new(tmp_used_initial),
         tmp_rescan_lock: tokio::sync::Mutex::new(Instant::now()),
+        readiness: tokio::sync::Mutex::new(None),
         file_locks: Mutex::new(HashMap::new()),
     });
 
@@ -157,6 +159,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(routes::health::health))
+        .route("/ready", get(routes::health::ready))
         .route("/probe", get(tls_common::probe::probe))
         .route(
             "/upload",

@@ -29,6 +29,7 @@ pub struct Config {
     pub edge_wvd_dir: Option<String>,
     pub edge_wvd_token: Option<String>,
     pub edge_wvd_url: Option<String>,
+    pub ready_canary_track: Option<String>,
 }
 
 impl Config {
@@ -90,6 +91,10 @@ impl Config {
             edge_wvd_dir: env::var("SC_EDGE_WVD_DIR").ok().filter(|s| !s.is_empty()),
             edge_wvd_token: env::var("SC_EDGE_WVD_TOKEN").ok().filter(|s| !s.is_empty()),
             edge_wvd_url: env::var("SC_EDGE_WVD_URL").ok().filter(|s| !s.is_empty()),
+            ready_canary_track: env::var("READY_CANARY_TRACK")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         }
     }
 

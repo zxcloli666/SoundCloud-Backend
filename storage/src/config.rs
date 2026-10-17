@@ -97,6 +97,7 @@ pub struct Config {
     /// Должен совпадать с `STORAGE_PUBLIC_URL` в стриминге/бэке (обычно публичный домен сервиса).
     /// Пусто = публикация события skip'ается (нет читаемого URL для воркера).
     pub event_base_url: String,
+    pub ready_canary_key: Option<String>,
 }
 
 impl Config {
@@ -257,6 +258,10 @@ impl Config {
                 .unwrap_or_default()
                 .trim_end_matches('/')
                 .to_string(),
+            ready_canary_key: env::var("READY_CANARY_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
         }
     }
 }
