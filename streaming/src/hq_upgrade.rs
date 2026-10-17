@@ -177,6 +177,9 @@ impl Upgrader {
             Ok(None) => {}
             Err(e) => debug!(urn = %track_urn, "[hq-upgrade] anon resolve failed: {e}"),
         }
+        if !self.uq_live() {
+            return None;
+        }
         match self
             .cookies
             .as_ref()?
@@ -229,6 +232,27 @@ impl Upgrader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_queue_reaches_a_cookies_account_only_while_the_pool_is_alive() {
+        let source = crate::source_tree::read("src/hq_upgrade.rs");
+        let body = source
+            .split_once("async fn restricted_source(")
+            .expect("the upgrader still resolves restricted tracks")
+            .1;
+        let body = body.split_once("\n    }\n").expect("the function ends").0;
+        let gate = body
+            .find("if !self.uq_live()")
+            .expect("restricted_source no longer checks that the pool is alive");
+        let cookies = body
+            .find(".cookies")
+            .expect("restricted_source no longer reads cookies");
+        assert!(
+            gate < cookies,
+            "about a million queued tracks would each spend a cookies account request \
+             while those accounts are dead"
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn an_upgrade_that_never_finishes_frees_the_worker_for_the_next_track() {
