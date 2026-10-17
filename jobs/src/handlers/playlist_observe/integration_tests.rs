@@ -208,6 +208,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              sc_created_at timestamptz,
              sc_last_modified timestamptz,
              uploader_sc_user_id text,
+             deleted_at timestamptz,
              release_year smallint,
              release_date date,
              storage_state text NOT NULL DEFAULT 'none',

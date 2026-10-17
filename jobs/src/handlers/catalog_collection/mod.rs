@@ -194,13 +194,14 @@ impl CatalogCollectionHandler {
 }
 
 fn give_up_or_wait(snapshot: &state::Snapshot, error: JobError) -> JobError {
+    let on_first_page = snapshot.next_cursor.is_none();
     let age = Utc::now().signed_duration_since(snapshot.started_at);
     match error {
-        JobError::Permanent(error) if age >= NOT_FOUND_PATIENCE => {
+        JobError::Permanent(error) if on_first_page && age >= NOT_FOUND_PATIENCE => {
             failed_for_good(CollectionFailure::NotFound, error)
         }
         JobError::Permanent(error) => postpone(1800, error),
-        error if refused_as_forbidden(&error) && age >= FORBIDDEN_PATIENCE => {
+        error if on_first_page && refused_as_forbidden(&error) && age >= FORBIDDEN_PATIENCE => {
             failed_for_good(CollectionFailure::Forbidden, error)
         }
         error => error,

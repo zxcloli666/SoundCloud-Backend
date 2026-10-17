@@ -17,7 +17,8 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
         "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);
          CREATE TABLE soundcloud_connections (
              soundcloud_user_id text NOT NULL,
-             created_at timestamptz NOT NULL DEFAULT now()
+             created_at timestamptz NOT NULL DEFAULT now(),
+             last_refresh_success_at timestamptz
          );",
     )
     .execute(pool)
@@ -315,22 +316,26 @@ async fn a_successful_pass_clears_the_error(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
-async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
+async fn sign_out_the_owner(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO soundcloud_connections (soundcloud_user_id, created_at)
          VALUES ('42', now() - interval '40 days')",
     )
-    .execute(&pool)
+    .execute(pool)
     .await?;
     fail_for_good(
-        &pool,
+        pool,
         "liked-playlists:42:owner",
         "auth_required: owner must sign in again",
         "1 hour",
     )
-    .await?;
+    .await
+}
+
+#[sqlx::test(migrations = false)]
+async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    sign_out_the_owner(&pool).await?;
 
     for age in ["1 hour", "29 days"] {
         sqlx::query("UPDATE background_job_failures SET failed_at = now() - $1::interval")
@@ -348,6 +353,24 @@ async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<(
     )
     .execute(&pool)
     .await?;
+    let sync = ensure(&pool, CatalogCollection::LikedPlaylists, "42", true, 600).await?;
+
+    assert_eq!(sync.error_code, None);
+    assert!(sync.queued_since.is_some());
+    assert_eq!(queued(&pool).await?, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn signing_in_again_on_the_same_session_lifts_auth_required(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install(&pool).await?;
+    sign_out_the_owner(&pool).await?;
+    sqlx::query("UPDATE soundcloud_connections SET last_refresh_success_at = now()")
+        .execute(&pool)
+        .await?;
+
     let sync = ensure(&pool, CatalogCollection::LikedPlaylists, "42", true, 600).await?;
 
     assert_eq!(sync.error_code, None);

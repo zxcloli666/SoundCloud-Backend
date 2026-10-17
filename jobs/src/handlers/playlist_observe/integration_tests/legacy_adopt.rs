@@ -3,8 +3,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    RECONCILABLE, ensure_catalog, install_schema, journal_operation, membership_mutations,
-    membership_of, projection_of, reduce_with, seed_reconcilable_playlist, snapshot_of,
+    RECONCILABLE, RECONCILABLE_OWNER, ensure_catalog, install_schema, journal_operation,
+    membership_mutations, membership_of, projection_of, reduce_with, seed_reconcilable_playlist,
+    snapshot_of,
 };
 
 const EDITED: [&str; 4] = ["1", "5", "9", "7"];
@@ -109,5 +110,51 @@ async fn the_legacy_intents_close_once_soundcloud_has_the_tracks_and_the_edit_th
 
     assert_eq!(projection_of(&pool).await?, EDITED);
     assert_eq!(operation_sequences(&pool).await?, (1, 1));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_track_soundcloud_cannot_keep_does_not_hold_the_legacy_intents_open(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_edited_legacy_playlist(&pool).await?;
+    sqlx::query("UPDATE tracks SET deleted_at = now() WHERE sc_track_id = '9'")
+        .execute(&pool)
+        .await?;
+    reduce_with(&pool, &snapshot_of(&["1", "2", "7"]), true).await?;
+    assert_eq!(open_intents(&pool).await?, 1);
+
+    reduce_with(&pool, &snapshot_of(&["1", "5", "7"]), true).await?;
+
+    assert_eq!(open_intents(&pool).await?, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_private_track_of_the_owner_still_has_to_reach_soundcloud(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_edited_legacy_playlist(&pool).await?;
+    sqlx::query(
+        "UPDATE tracks SET sharing = 'private', uploader_sc_user_id = $1 WHERE sc_track_id = '5'",
+    )
+    .bind(RECONCILABLE_OWNER)
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "UPDATE tracks SET sharing = 'private', uploader_sc_user_id = '501' WHERE sc_track_id = '9'",
+    )
+    .execute(&pool)
+    .await?;
+
+    reduce_with(&pool, &snapshot_of(&["1", "2", "7"]), true).await?;
+    reduce_with(&pool, &snapshot_of(&["1", "2", "7"]), true).await?;
+
+    assert_eq!(projection_of(&pool).await?, EDITED);
+    assert_eq!(open_intents(&pool).await?, 1);
+
+    reduce_with(&pool, &snapshot_of(&["1", "5", "7"]), true).await?;
+
+    assert_eq!(open_intents(&pool).await?, 0);
     Ok(())
 }

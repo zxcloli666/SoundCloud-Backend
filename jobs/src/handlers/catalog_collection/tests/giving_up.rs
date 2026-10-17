@@ -25,6 +25,15 @@ fn started(ago: Duration) -> state::Snapshot {
     }
 }
 
+fn past_the_first_page(ago: Duration) -> state::Snapshot {
+    state::Snapshot {
+        next_cursor: Some("https://api-v2.soundcloud.com/users/42/likes?offset=2".to_owned()),
+        page_count: 3,
+        item_count: 600,
+        ..started(ago)
+    }
+}
+
 fn public_refusal(status: u16) -> JobError {
     public_error(sc_transport::ScError::Api {
         status,
@@ -77,6 +86,19 @@ fn a_forbidden_collection_gives_up_after_six_hours() {
     }
     for refused in [public_refusal(403), owner_refusal(StatusCode::FORBIDDEN)] {
         let waiting = give_up_or_wait(&started(Duration::hours(1)), refused);
+        assert_eq!(delay_of(&waiting), Some(1800));
+    }
+}
+
+#[test]
+fn a_refusal_on_a_later_page_waits_instead_of_dropping_the_pass() {
+    for refused in [
+        public_refusal(404),
+        public_refusal(403),
+        owner_refusal(StatusCode::NOT_FOUND),
+        owner_refusal(StatusCode::FORBIDDEN),
+    ] {
+        let waiting = give_up_or_wait(&past_the_first_page(Duration::hours(7)), refused);
         assert_eq!(delay_of(&waiting), Some(1800));
     }
 }
