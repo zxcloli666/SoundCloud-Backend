@@ -364,7 +364,7 @@ fn live_hq_order(is_premium: bool) -> [LiveHq; 3] {
     if is_premium {
         [LiveHq::Oauth, LiveHq::Restricted, LiveHq::Anon]
     } else {
-        [LiveHq::Restricted, LiveHq::Anon, LiveHq::Oauth]
+        [LiveHq::Anon, LiveHq::Restricted, LiveHq::Oauth]
     }
 }
 
@@ -764,8 +764,10 @@ mod tests {
     fn a_free_session_reads_public_sources_before_its_own_token() {
         assert_eq!(
             live_hq_order(false),
-            [LiveHq::Restricted, LiveHq::Anon, LiveHq::Oauth],
-            "free misses are mass reads; apiv1 is the last resort for them"
+            [LiveHq::Anon, LiveHq::Restricted, LiveHq::Oauth],
+            "most public tracks carry a plain aac_160k and none carry it both plain and encrypted, \
+             so anon first skips a second meta read and never pays for a license; free misses are \
+             mass reads, apiv1 is the last resort for them"
         );
         assert_eq!(
             live_hq_order(true),

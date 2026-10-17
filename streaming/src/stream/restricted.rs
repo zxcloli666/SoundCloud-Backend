@@ -192,6 +192,24 @@ mod tests {
     }
 
     #[test]
+    fn a_free_sq_decrypt_still_takes_aac_160k() {
+        let tcs = [
+            encrypted_preset("abr_sq", "sq", false),
+            encrypted_preset("aac_96k", "lq", false),
+            encrypted_preset("aac_160k", "sq", false),
+        ];
+        assert_eq!(
+            pick_encrypted(&tcs, false, quality::SQ)
+                .unwrap()
+                .preset
+                .as_deref(),
+            Some("aac_160k"),
+            "soundcloud answers an encrypted abr_sq with 404 and aac_96k costs the same license and \
+             decrypt, so this hq copy is served outside FREE_HQ_FETCHES on purpose"
+        );
+    }
+
+    #[test]
     fn a_low_quality_stream_is_only_the_last_resort() {
         let only_lq = [encrypted_preset("aac_96k", "lq", false)];
         assert_eq!(
