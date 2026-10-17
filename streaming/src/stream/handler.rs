@@ -5,10 +5,9 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
-use tokio::sync::OwnedSemaphorePermit;
 use tracing::{info, warn};
 
-use super::free_hq::{BUSY_RETRY_AFTER, Gate};
+use super::free_hq::{BUSY_RETRY_AFTER, FreeSlot, Gate};
 use super::quality;
 use super::sources::{
     UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
@@ -120,6 +119,7 @@ async fn stream_inner(
     if policy.private_only {
         return stream_private(
             &state,
+            &access.session_id,
             session.access_token.as_deref(),
             &track_urn,
             secret_token,
@@ -133,6 +133,7 @@ async fn stream_inner(
         state: &state,
         headers: &headers,
         track_urn: &track_urn,
+        session_id: &access.session_id,
         access_token: session.access_token.as_deref(),
         secret_token,
         is_premium,
@@ -148,7 +149,7 @@ async fn stream_inner(
     }
 }
 
-fn granted_tier(asked: Option<&str>, is_premium: bool) -> Option<&'static str> {
+pub(super) fn granted_tier(asked: Option<&str>, is_premium: bool) -> Option<&'static str> {
     let tier = quality::parse(asked?)?;
     if tier == quality::UQ && !is_premium {
         return Some(quality::HQ);
@@ -160,6 +161,7 @@ struct StreamRequest<'a> {
     state: &'a AppState,
     headers: &'a HeaderMap,
     track_urn: &'a str,
+    session_id: &'a str,
     access_token: Option<&'a str>,
     secret_token: Option<&'a str>,
     is_premium: bool,
@@ -376,6 +378,7 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
     let StreamRequest {
         state,
         track_urn,
+        session_id,
         access_token,
         secret_token,
         is_premium,
@@ -383,7 +386,8 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         ..
     } = *req;
 
-    let slot = match free_slot(state.free_hq.gate(track_urn, is_premium), tag, track_urn) {
+    let gate = state.free_hq.gate(track_urn, session_id, is_premium);
+    let slot = match free_slot(gate, tag, track_urn, "none") {
         Ok(slot) => slot,
         Err(answer) => return Ok(HqTry::Refused(answer)),
     };
@@ -435,21 +439,22 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
     Ok(HqTry::Missed)
 }
 
-fn free_slot(
+pub(super) fn free_slot(
     gate: Gate,
     tag: &str,
     track_urn: &str,
-) -> Result<Option<Arc<OwnedSemaphorePermit>>, AppError> {
+    source: &'static str,
+) -> Result<Option<Arc<FreeSlot>>, AppError> {
     match gate {
         Gate::Open(slot) => Ok(slot),
         Gate::Busy => {
-            info!("{tag} {track_urn} → every free hq slot is busy");
-            crate::metrics::record_source("none", "free_hq_busy");
+            info!("{tag} {track_urn} → no free hq slot for this session");
+            crate::metrics::record_source(source, "free_hq_busy");
             Err(AppError::FreeHqBusy(BUSY_RETRY_AFTER))
         }
         Gate::MissedLately => {
             info!("{tag} {track_urn} → had no hq lately");
-            crate::metrics::record_source("none", "free_hq_missed_lately");
+            crate::metrics::record_source(source, "free_hq_missed_lately");
             Err(AppError::NoStream)
         }
     }
@@ -481,6 +486,7 @@ async fn from_storage(req: &StreamRequest<'_>, tag: &str) -> Option<Response> {
 
 async fn stream_private(
     state: &AppState,
+    session_id: &str,
     access_token: Option<&str>,
     track_urn: &str,
     secret_token: Option<&str>,
@@ -488,6 +494,7 @@ async fn stream_private(
     is_premium: bool,
 ) -> Result<Response, AppError> {
     if high_quality
+        && let Gate::Open(_slot) = state.free_hq.gate(track_urn, session_id, is_premium)
         && let Some((data, content_type, quality)) = try_session_oauth(
             state,
             access_token,
@@ -718,7 +725,7 @@ mod tests {
     fn full_free_slots_ask_to_come_back_later_and_a_track_without_hq_steps_down() {
         const URN: &str = "soundcloud:tracks:1";
         let full = FreeHq::new(0);
-        let busy = free_slot(full.gate(URN, false), "[test]", URN)
+        let busy = free_slot(full.gate(URN, "session", false), "[test]", URN, "none")
             .unwrap_err()
             .into_response();
         assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -730,13 +737,16 @@ mod tests {
 
         let free = FreeHq::new(1);
         free.note_miss(URN);
-        let missed = free_slot(free.gate(URN, false), "[test]", URN)
+        let missed = free_slot(free.gate(URN, "session", false), "[test]", URN, "none")
             .unwrap_err()
             .into_response();
         assert_eq!(missed.status(), StatusCode::NOT_FOUND);
         assert!(missed.headers().get(header::RETRY_AFTER).is_none());
 
-        assert!(free_slot(full.gate(URN, true), "[test]", URN).is_ok_and(|slot| slot.is_none()));
+        assert!(
+            free_slot(full.gate(URN, "session", true), "[test]", URN, "none")
+                .is_ok_and(|slot| slot.is_none())
+        );
     }
 
     #[test]
@@ -773,6 +783,27 @@ mod tests {
                  are few and free traffic would put them on cooldown for everyone"
             );
         }
+    }
+
+    #[test]
+    fn a_private_track_asks_for_a_free_hq_slot_like_any_other() {
+        let source = include_str!("handler.rs");
+        let body = source
+            .split_once("async fn stream_private(")
+            .expect("the private path is still here")
+            .1;
+        let body = body.split_once("\n}\n").expect("the function ends").0;
+        let gate = body
+            .find("free_hq.gate(")
+            .expect("private hq goes through the free hq gate");
+        let hq = body
+            .find("try_session_oauth(")
+            .expect("private tracks still read the session token");
+        assert!(
+            gate < hq,
+            "a secret link with an hq ticket would reach SoundCloud past the free hq cap, \
+             and FREE_HQ_FETCHES=0 would not stop it"
+        );
     }
 
     #[test]

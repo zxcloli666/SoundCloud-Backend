@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use base64::Engine as _;
 use bytes::Bytes;
@@ -7,12 +7,13 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::OwnedSemaphorePermit;
 use tracing::{debug, info, warn};
 use wreq::Client;
 
-use super::free_hq::FreeHq;
-use super::handler::{DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id};
+use super::free_hq::{FreeHq, FreeSlot};
+use super::handler::{
+    DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id, free_slot, granted_tier,
+};
 use super::proxy::{fetch_get_bytes, fetch_get_json, fetch_get_text};
 use super::quality;
 use super::restricted::{Transcoding, build_transcoding_target};
@@ -59,6 +60,11 @@ struct Entry {
 }
 
 #[derive(serde::Deserialize)]
+pub struct DownloadQuery {
+    pub quality: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct ResolveResp {
     url: String,
     #[serde(rename = "licenseAuthToken")]
@@ -69,9 +75,11 @@ pub async fn download(
     state: State<AppState>,
     track_urn: Path<String>,
     headers: HeaderMap,
+    query: Query<DownloadQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
     let urn_for_log = track_urn.0.clone();
-    match tokio::time::timeout(DOWNLOAD_DEADLINE, download_inner(state, track_urn, headers)).await {
+    let inner = download_inner(state, track_urn, headers, query);
+    match tokio::time::timeout(DOWNLOAD_DEADLINE, inner).await {
         Ok(r) => r,
         Err(_) => {
             warn!("[download] {urn_for_log} → deadline {DOWNLOAD_DEADLINE:?} exceeded");
@@ -84,6 +92,7 @@ async fn download_inner(
     State(state): State<AppState>,
     Path(track_urn): Path<String>,
     headers: HeaderMap,
+    Query(query): Query<DownloadQuery>,
 ) -> Result<Json<DownloadResponse>, AppError> {
     let track_urn = super::storage::canonical_track_urn(&track_urn).ok_or(AppError::NotFound)?;
     let session_id = extract_download_session_id(&headers)?;
@@ -99,11 +108,19 @@ async fn download_inner(
         return Err(AppError::Forbidden);
     }
 
-    let mut entries = collect_entries(&state, &track_urn, is_premium).await;
-    let _slot = if is_premium {
-        None
-    } else {
-        cap_for_free(&state.free_hq, &track_urn, &mut entries)
+    let (entries, _slot) = match granted_tier(query.quality.as_deref(), is_premium) {
+        Some(tier) if !is_premium => {
+            free_tier_entries(&state, &track_urn, &session_id, tier).await?
+        }
+        _ => {
+            let mut entries = collect_entries(&state, &track_urn, is_premium).await;
+            let slot = if is_premium {
+                None
+            } else {
+                cap_for_free(&state.free_hq, &track_urn, &session_id, &mut entries)
+            };
+            (entries, slot)
+        }
     };
     if entries.is_empty() {
         warn!("[download] {track_urn} → no transcodings");
@@ -187,19 +204,43 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
     entries
 }
 
+async fn free_tier_entries(
+    state: &AppState,
+    track_urn: &str,
+    session_id: &str,
+    tier: &'static str,
+) -> Result<(Vec<Entry>, Option<Arc<FreeSlot>>), AppError> {
+    let slot = if tier == quality::SQ {
+        None
+    } else {
+        let gate = state.free_hq.download_gate(track_urn, session_id);
+        free_slot(gate, "[download]", track_urn, "download")?
+    };
+    let mut entries = collect_entries(state, track_urn, false).await;
+    let answered = !entries.is_empty();
+    entries.retain(|e| quality::of_transcoding(&e.t) == tier);
+    if tier == quality::HQ && answered && entries.is_empty() {
+        info!("[download] {track_urn} → no hq");
+        state.free_hq.note_miss(track_urn);
+        return Err(AppError::NoStream);
+    }
+    Ok((entries, slot))
+}
+
 fn cap_for_free(
     free_hq: &FreeHq,
     track_urn: &str,
+    session_id: &str,
     entries: &mut Vec<Entry>,
-) -> Option<OwnedSemaphorePermit> {
+) -> Option<Arc<FreeSlot>> {
     let above_sq = |e: &Entry| quality::rank(quality::of_transcoding(&e.t)) > 0;
     entries.retain(|e| quality::of_transcoding(&e.t) != quality::UQ);
     if !entries.iter().any(above_sq) {
         return None;
     }
-    let slot = free_hq.download_slot();
+    let slot = free_hq.download_slot(session_id);
     if slot.is_none() {
-        info!("[download] {track_urn} → every free hq slot is busy, sq only");
+        info!("[download] {track_urn} → no free hq slot for this session, sq only");
         crate::metrics::record_source("download", "free_hq_busy");
         entries.retain(|e| !above_sq(e));
     }
@@ -401,6 +442,7 @@ mod tests {
     use super::*;
 
     const URN: &str = "soundcloud:tracks:1";
+    const SESSION: &str = "session";
 
     fn entry(preset: &str, quality: &str) -> Entry {
         Entry {
@@ -436,12 +478,12 @@ mod tests {
         let free = FreeHq::new(1);
         let mut entries = all_tiers();
 
-        let slot = cap_for_free(&free, URN, &mut entries);
+        let slot = cap_for_free(&free, URN, SESSION, &mut entries);
 
         assert!(slot.is_some());
         assert_eq!(presets(&entries), ["aac_160k", "abr_sq"]);
         assert!(
-            free.download_slot().is_none(),
+            free.download_slot("another").is_none(),
             "the slot is held until the reply"
         );
     }
@@ -450,7 +492,7 @@ mod tests {
     fn with_no_free_slot_a_download_offers_sq_and_spends_no_license_above_it() {
         let mut entries = all_tiers();
 
-        assert!(cap_for_free(&FreeHq::new(0), URN, &mut entries).is_none());
+        assert!(cap_for_free(&FreeHq::new(0), URN, SESSION, &mut entries).is_none());
         assert_eq!(presets(&entries), ["abr_sq"]);
     }
 
@@ -459,9 +501,29 @@ mod tests {
         let free = FreeHq::new(1);
         let mut entries = vec![entry("abr_sq", "sq"), entry("aac_256k", "hq")];
 
-        assert!(cap_for_free(&free, URN, &mut entries).is_none());
+        assert!(cap_for_free(&free, URN, SESSION, &mut entries).is_none());
         assert_eq!(presets(&entries), ["abr_sq"]);
-        assert!(free.download_slot().is_some());
+        assert!(free.download_slot(SESSION).is_some());
+    }
+
+    #[test]
+    fn a_free_ask_above_sq_is_turned_away_before_soundcloud_hears_of_it() {
+        let body = include_str!("download.rs")
+            .split_once("async fn free_tier_entries(")
+            .expect("the free tier path is still here")
+            .1;
+        let body = body.split_once("\n}\n").expect("the function ends").0;
+        let gate = body
+            .find("free_slot(gate")
+            .expect("a free ask above sq waits for a slot");
+        let meta = body
+            .find("collect_entries(")
+            .expect("the free tier path still reads the track");
+        assert!(
+            gate < meta,
+            "with every slot busy the answer is 429 and costs SoundCloud nothing; reading the \
+             track first spends a meta request and an sq license on a reply nobody uses"
+        );
     }
 
     #[test]

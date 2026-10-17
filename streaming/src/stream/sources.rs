@@ -3,13 +3,12 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
-use bytes::Bytes;
-use futures::channel::mpsc::Sender;
+use bytes::{Bytes, BytesMut};
 use futures::stream::BoxStream;
-use futures::{SinkExt, StreamExt};
-use tokio::sync::OwnedSemaphorePermit;
+use futures::{Sink, SinkExt, StreamExt};
 use tracing::{info, warn};
 
+use super::free_hq::FreeSlot;
 use super::quality;
 use super::restricted::RestrictedSource;
 use crate::AppState;
@@ -171,7 +170,7 @@ pub(super) async fn try_restricted(
     at_least: &'static str,
     premium: bool,
     upload: UploadRule,
-    slot: Option<Arc<OwnedSemaphorePermit>>,
+    slot: Option<Arc<FreeSlot>>,
 ) -> Option<(Response, &'static str)> {
     let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
     let quality = src.quality;
@@ -242,35 +241,41 @@ enum Keeping {
     Whole,
 }
 
-fn decrypt_to_the_end(
-    stream: Decrypted,
-    keep: Option<Keep>,
-    slot: Option<Arc<OwnedSemaphorePermit>>,
-) -> Body {
+fn decrypt_to_the_end(stream: Decrypted, keep: Option<Keep>, slot: Option<Arc<FreeSlot>>) -> Body {
     let keeping = match (&keep, &slot) {
         (None, _) => Keeping::Nothing,
         (Some(_), None) => Keeping::WhileHeard,
         (Some(_), Some(_)) => Keeping::Whole,
     };
-    let (tx, rx) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
-    tokio::spawn(async move {
-        let _slot = slot;
-        let whole = pump(stream, tx, keeping).await;
-        if let (Some(keep), Some(whole)) = (keep, whole)
-            && whole.len() > 8192
-        {
-            keep(whole);
-        }
-    });
-    Body::from_stream(rx)
+    if slot.is_some() {
+        let (listener, heard) = futures::channel::mpsc::unbounded();
+        tokio::spawn(finish(pump(stream, listener, keeping), keep, slot));
+        return Body::from_stream(heard);
+    }
+    let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+    tokio::spawn(finish(pump(stream, listener, keeping), keep, slot));
+    Body::from_stream(heard)
 }
 
-async fn pump(
-    mut stream: Decrypted,
-    mut listener: Sender<Result<Bytes, decrypt::Error>>,
-    keeping: Keeping,
-) -> Option<Bytes> {
-    let mut kept = Vec::new();
+async fn finish(
+    pumped: impl Future<Output = Option<Bytes>>,
+    keep: Option<Keep>,
+    slot: Option<Arc<FreeSlot>>,
+) {
+    let whole = pumped.await;
+    drop(slot);
+    if let (Some(keep), Some(whole)) = (keep, whole)
+        && whole.len() > 8192
+    {
+        keep(whole);
+    }
+}
+
+async fn pump<L>(mut stream: Decrypted, mut listener: L, keeping: Keeping) -> Option<Bytes>
+where
+    L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
+{
+    let mut kept = BytesMut::new();
     let mut heard = true;
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
@@ -283,7 +288,7 @@ async fn pump(
             }
         };
         if keeping != Keeping::Nothing {
-            kept.push(chunk.clone());
+            kept.extend_from_slice(&chunk);
         }
         if heard && listener.send(Ok(chunk)).await.is_err() {
             if keeping != Keeping::Whole {
@@ -293,15 +298,7 @@ async fn pump(
         }
     }
     drop(listener);
-    (keeping != Keeping::Nothing).then(|| joined(kept))
-}
-
-fn joined(chunks: Vec<Bytes>) -> Bytes {
-    let mut whole = Vec::with_capacity(chunks.iter().map(Bytes::len).sum());
-    for chunk in chunks {
-        whole.extend_from_slice(&chunk);
-    }
-    Bytes::from(whole)
+    (keeping != Keeping::Nothing).then(|| kept.freeze())
 }
 
 pub(super) fn respond_with_data(
@@ -338,9 +335,27 @@ pub(super) fn data_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream::free_hq::{FreeHq, Gate};
+    use futures::channel::mpsc::Sender;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use tokio::sync::Semaphore;
+
+    const URN: &str = "soundcloud:tracks:1";
+
+    fn free_slot(free: &FreeHq) -> Arc<FreeSlot> {
+        let Gate::Open(Some(slot)) = free.gate(URN, "listener", false) else {
+            panic!("the slot was free");
+        };
+        slot
+    }
+
+    fn stored_copy() -> (Keep, tokio::sync::oneshot::Receiver<usize>) {
+        let (stored_tx, stored) = tokio::sync::oneshot::channel();
+        let keep: Keep = Box::new(move |whole: Bytes| {
+            let _ = stored_tx.send(whole.len());
+        });
+        (keep, stored)
+    }
 
     fn chunks(count: usize) -> Decrypted {
         futures::stream::iter((0..count).map(|_| Ok(Bytes::from_static(b"abcd")))).boxed()
@@ -404,7 +419,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_slow_listener_holds_the_decrypt_back() {
+    async fn without_a_slot_a_slow_listener_holds_the_decrypt_back() {
         let (stream, pulled) = counted(50);
         let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
         let decrypt = tokio::spawn(pump(stream, listener, Keeping::Nothing));
@@ -438,15 +453,15 @@ mod tests {
 
     #[tokio::test]
     async fn the_free_slot_comes_back_only_after_the_detached_decrypt_ends() {
-        let slots = Arc::new(Semaphore::new(1));
-        let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
+        let free = FreeHq::new(1);
         let (feed, segments) = futures::channel::mpsc::unbounded();
-        let (stored_tx, stored) = tokio::sync::oneshot::channel();
-        let keep: Keep = Box::new(move |whole: Bytes| {
-            let _ = stored_tx.send(whole.len());
-        });
+        let (keep, stored) = stored_copy();
 
-        drop(decrypt_to_the_end(segments.boxed(), Some(keep), Some(slot)));
+        drop(decrypt_to_the_end(
+            segments.boxed(),
+            Some(keep),
+            Some(free_slot(&free)),
+        ));
         for _ in 0..3 {
             feed.unbounded_send(Ok(Bytes::from(vec![0u8; 4096])))
                 .unwrap();
@@ -454,16 +469,39 @@ mod tests {
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(
-            slots.available_permits(),
-            0,
+        assert!(
+            matches!(free.gate(URN, "another", false), Gate::Busy),
             "the slot bounds decrypts nobody listens to; it must stay taken while one runs"
         );
 
         drop(feed);
         assert_eq!(stored.await.unwrap(), 3 * 4096);
-        let returned = tokio::time::timeout(Duration::from_secs(1), slots.acquire()).await;
-        assert!(returned.is_ok_and(|permit| permit.is_ok()));
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_slow_listener_does_not_hold_a_free_slot() {
+        let free = FreeHq::new(1);
+        let (keep, stored) = stored_copy();
+        let segments = futures::stream::iter((0..4).map(|_| Ok(Bytes::from(vec![7u8; 4096]))));
+
+        let body = decrypt_to_the_end(segments.boxed(), Some(keep), Some(free_slot(&free)));
+        let stored = tokio::time::timeout(Duration::from_secs(1), stored).await;
+
+        assert_eq!(
+            stored.ok().and_then(Result::ok),
+            Some(4 * 4096),
+            "a client behind a slow relay must not keep a free slot for its whole download"
+        );
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+        let heard = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(heard.len(), 4 * 4096);
     }
 
     #[test]
