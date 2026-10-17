@@ -76,12 +76,20 @@ due AS MATERIALIZED (
                waiting.star,
                row_number() OVER (
                    PARTITION BY waiting.paced
-                   ORDER BY waiting.star = $6 DESC, waiting.next_run_at, waiting.created_at, waiting.id
+                   ORDER BY waiting.star = $6 DESC,
+                            waiting.created_at > now() - interval '7 days' DESC,
+                            waiting.next_run_at,
+                            waiting.created_at,
+                            waiting.id
                ) AS turn
         FROM waiting
     ) AS ranked
     WHERE ranked.paced IS NULL OR ranked.turn = 1
-    ORDER BY ranked.star = $6 DESC, ranked.next_run_at, ranked.created_at, ranked.id
+    ORDER BY ranked.star = $6 DESC,
+             ranked.created_at > now() - interval '7 days' DESC,
+             ranked.next_run_at,
+             ranked.created_at,
+             ranked.id
     LIMIT $2
 ),
 candidates AS (

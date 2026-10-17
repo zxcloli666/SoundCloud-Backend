@@ -450,6 +450,34 @@ async fn the_writes_left_waiting_after_a_star_turn_show_up_per_group(
     Ok(())
 }
 
+#[sqlx::test(migrations = false)]
+async fn a_fresh_like_goes_before_a_month_old_backlog_and_star_still_goes_first(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('2'), ('3');
+         INSERT INTO subscriptions (user_urn, exp_date)
+         VALUES ('3', extract(epoch FROM now())::bigint + 3600);
+         INSERT INTO sync_queue (user_id, action_type, target_urn, created_at, next_run_at) VALUES
+             ('1', 'like_track', 'backlog-like', now() - interval '30 days', now() - interval '30 days'),
+             ('2', 'like_track', 'fresh-like', now(), now()),
+             ('3', 'like_track', 'star-backlog-like', now() - interval '30 days', now() - interval '30 days')",
+    )
+    .execute(&pool)
+    .await?;
+    let repository = repository(pool);
+
+    let star_turn = repository.claim_outside(8, &[], true).await?;
+    let regular_turn = repository.claim_outside(8, &[], false).await?;
+    let last_turn = repository.claim_outside(8, &[], false).await?;
+
+    assert_eq!(claimed_targets(&star_turn), ["star-backlog-like"]);
+    assert_eq!(claimed_targets(&regular_turn), ["fresh-like"]);
+    assert_eq!(claimed_targets(&last_turn), ["backlog-like"]);
+    Ok(())
+}
+
 async fn oauth_app(pool: &PgPool) -> anyhow::Result<Uuid> {
     let app = Uuid::now_v7();
     sqlx::query(
