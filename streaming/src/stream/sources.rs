@@ -4,8 +4,10 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::{Bytes, BytesMut};
+use futures::channel::mpsc::SendError;
 use futures::stream::BoxStream;
-use futures::{Sink, SinkExt, StreamExt};
+use futures::{FutureExt, Sink, SinkExt, StreamExt};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{info, warn};
 
 use super::free_hq::FreeSlot;
@@ -19,6 +21,8 @@ type Decrypted = BoxStream<'static, Result<Bytes, decrypt::Error>>;
 type Keep = Box<dyn FnOnce(Bytes) + Send>;
 
 const CHUNKS_IN_FLIGHT: usize = 2;
+const BYTES_IN_FLIGHT: usize = 16 << 20;
+const KEPT_AT_MOST: usize = 64 << 20;
 
 #[derive(Clone, Copy)]
 pub(super) struct UploadRule {
@@ -248,13 +252,29 @@ fn decrypt_to_the_end(stream: Decrypted, keep: Option<Keep>, slot: Option<Arc<Fr
         (Some(_), Some(_)) => Keeping::Whole,
     };
     if slot.is_some() {
+        let room = Arc::new(Semaphore::new(BYTES_IN_FLIGHT));
         let (listener, heard) = futures::channel::mpsc::unbounded();
+        let listener = listener.with(move |chunk| take_room(room.clone(), chunk).boxed());
         tokio::spawn(finish(pump(stream, listener, keeping), keep, slot));
-        return Body::from_stream(heard);
+        return Body::from_stream(heard.map(|(chunk, _room)| chunk));
     }
     let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
     tokio::spawn(finish(pump(stream, listener, keeping), keep, slot));
     Body::from_stream(heard)
+}
+
+async fn take_room(
+    room: Arc<Semaphore>,
+    chunk: Result<Bytes, decrypt::Error>,
+) -> Result<(Result<Bytes, decrypt::Error>, OwnedSemaphorePermit), SendError> {
+    let size = chunk
+        .as_ref()
+        .map_or(0, |chunk| chunk.len().min(BYTES_IN_FLIGHT));
+    let taken = room
+        .acquire_many_owned(size as u32)
+        .await
+        .expect("the room is never closed");
+    Ok((chunk, taken))
 }
 
 async fn finish(
@@ -271,7 +291,7 @@ async fn finish(
     }
 }
 
-async fn pump<L>(mut stream: Decrypted, mut listener: L, keeping: Keeping) -> Option<Bytes>
+async fn pump<L>(mut stream: Decrypted, mut listener: L, mut keeping: Keeping) -> Option<Bytes>
 where
     L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
 {
@@ -287,6 +307,13 @@ where
                 return None;
             }
         };
+        if keeping != Keeping::Nothing && kept.len() + chunk.len() > KEPT_AT_MOST {
+            keeping = Keeping::Nothing;
+            kept = BytesMut::new();
+            if !heard {
+                return None;
+            }
+        }
         if keeping != Keeping::Nothing {
             kept.extend_from_slice(&chunk);
         }
@@ -470,7 +497,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(
-            matches!(free.gate(URN, "another", false), Gate::Busy),
+            matches!(free.gate(URN, "another", false), Gate::Busy(_)),
             "the slot bounds decrypts nobody listens to; it must stay taken while one runs"
         );
 
@@ -502,6 +529,68 @@ mod tests {
         ));
         let heard = axum::body::to_bytes(body, usize::MAX).await.unwrap();
         assert_eq!(heard.len(), 4 * 4096);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_listener_holds_its_slot_rather_than_the_whole_track() {
+        let free = FreeHq::new(1);
+        let chunk = Bytes::from(vec![0u8; BYTES_IN_FLIGHT / 4]);
+        let segments = futures::stream::iter((0..8).map(move |_| Ok(chunk.clone()))).boxed();
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let segments = segments
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+
+        let body = decrypt_to_the_end(segments, None, Some(free_slot(&free)));
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            pulled.load(Ordering::SeqCst) <= 5,
+            "a listener that stopped reading must not make us buffer a whole mix"
+        );
+        assert!(matches!(free.gate(URN, "another", false), Gate::Busy(_)));
+
+        let mut heard = 0;
+        let mut body = body.into_data_stream();
+        while let Some(chunk) = body.next().await {
+            heard += chunk.unwrap().len();
+        }
+        assert_eq!(heard, 2 * BYTES_IN_FLIGHT);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            free.gate(URN, "another", false),
+            Gate::Open(Some(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_mix_too_long_to_keep_is_never_stored_and_stops_without_a_listener() {
+        let chunk = Bytes::from(vec![0u8; KEPT_AT_MOST / 4]);
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let stream = futures::stream::iter((0..6).map(move |_| Ok(chunk.clone())))
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+
+        assert!(
+            pump(stream, gone_listener(), Keeping::Whole)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            pulled.load(Ordering::SeqCst),
+            5,
+            "past the cap there is nothing to store, so nobody is left to decrypt for"
+        );
     }
 
     #[test]

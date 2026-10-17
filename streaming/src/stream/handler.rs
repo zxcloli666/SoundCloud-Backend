@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use tracing::{info, warn};
 
-use super::free_hq::{BUSY_RETRY_AFTER, FreeSlot, Gate};
+use super::free_hq::{FreeSlot, Gate};
 use super::quality;
 use super::sources::{
     UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
@@ -447,10 +447,10 @@ pub(super) fn free_slot(
 ) -> Result<Option<Arc<FreeSlot>>, AppError> {
     match gate {
         Gate::Open(slot) => Ok(slot),
-        Gate::Busy => {
+        Gate::Busy(wait) => {
             info!("{tag} {track_urn} → no free hq slot for this session");
             crate::metrics::record_source(source, "free_hq_busy");
-            Err(AppError::FreeHqBusy(BUSY_RETRY_AFTER))
+            Err(AppError::FreeHqBusy(wait))
         }
         Gate::MissedLately => {
             info!("{tag} {track_urn} → had no hq lately");
@@ -566,7 +566,7 @@ pub(crate) fn extract_stream_access(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream::free_hq::FreeHq;
+    use crate::stream::free_hq::{BUSY_RETRY_AFTER, FreeHq, SHUT_RETRY_AFTER};
     use axum::http::{HeaderValue, StatusCode, header};
 
     const SOURCES: [&str; 11] = [
@@ -724,15 +724,26 @@ mod tests {
     #[test]
     fn full_free_slots_ask_to_come_back_later_and_a_track_without_hq_steps_down() {
         const URN: &str = "soundcloud:tracks:1";
-        let full = FreeHq::new(0);
-        let busy = free_slot(full.gate(URN, "session", false), "[test]", URN, "none")
-            .unwrap_err()
-            .into_response();
-        assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = |free: &FreeHq| {
+            let busy = free_slot(free.gate(URN, "session", false), "[test]", URN, "none")
+                .unwrap_err()
+                .into_response();
+            assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+            busy.headers().get(header::RETRY_AFTER).unwrap().clone()
+        };
+
+        let free = FreeHq::new(1);
+        let _held = free.gate(URN, "another", false);
         assert_eq!(
-            busy.headers().get(header::RETRY_AFTER).unwrap(),
+            retry_after(&free),
             BUSY_RETRY_AFTER.as_secs().to_string().as_str(),
             "a 404 here makes clients ask hq again on the very next track"
+        );
+        let full = FreeHq::new(0);
+        assert_eq!(
+            retry_after(&full),
+            SHUT_RETRY_AFTER.as_secs().to_string().as_str(),
+            "with FREE_HQ_FETCHES=0 no slot ever opens; asking every 30 s only costs lookups"
         );
 
         let free = FreeHq::new(1);

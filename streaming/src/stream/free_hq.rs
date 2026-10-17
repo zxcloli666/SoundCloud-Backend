@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) const BUSY_RETRY_AFTER: Duration = Duration::from_secs(30);
+pub(crate) const SHUT_RETRY_AFTER: Duration = Duration::from_secs(600);
 const SLOTS_PER_SESSION: usize = 2;
 const MISS_KEPT_FOR: Duration = Duration::from_secs(15 * 60);
 const MISS_SWEEP_EVERY: Duration = Duration::from_secs(60);
@@ -16,7 +17,7 @@ pub struct FreeHq {
 
 pub(crate) enum Gate {
     Open(Option<Arc<FreeSlot>>),
-    Busy,
+    Busy(Duration),
     MissedLately,
 }
 
@@ -63,10 +64,6 @@ impl FreeHq {
         self.open(&self.downloads, track_urn, session)
     }
 
-    pub(crate) fn download_slot(&self, session: &str) -> Option<Arc<FreeSlot>> {
-        self.downloads.take(session)
-    }
-
     pub(crate) fn note_miss(&self, track_urn: &str) {
         self.note_miss_at(track_urn, Instant::now());
     }
@@ -77,7 +74,7 @@ impl FreeHq {
         }
         match pool.take(session) {
             Some(slot) => Gate::Open(Some(slot)),
-            None => Gate::Busy,
+            None => Gate::Busy(pool.retry_after()),
         }
     }
 
@@ -127,6 +124,14 @@ impl Pool {
             held: self.held.clone(),
         }))
     }
+
+    fn retry_after(&self) -> Duration {
+        if self.size == 0 {
+            SHUT_RETRY_AFTER
+        } else {
+            BUSY_RETRY_AFTER
+        }
+    }
 }
 
 impl Drop for FreeSlot {
@@ -161,9 +166,15 @@ mod tests {
     #[test]
     fn with_no_free_slots_a_free_session_is_turned_away_before_any_request() {
         let free = FreeHq::new(0);
-        assert!(matches!(free.gate(URN, ME, false), Gate::Busy));
-        assert!(matches!(free.download_gate(URN, ME), Gate::Busy));
-        assert!(free.download_slot(ME).is_none());
+        assert!(matches!(
+            free.gate(URN, ME, false),
+            Gate::Busy(SHUT_RETRY_AFTER)
+        ));
+        assert!(matches!(
+            free.download_gate(URN, ME),
+            Gate::Busy(SHUT_RETRY_AFTER)
+        ));
+        assert!(free.downloads.take(ME).is_none());
     }
 
     #[test]
@@ -172,7 +183,10 @@ mod tests {
         let Gate::Open(Some(held)) = free.gate(URN, ME, false) else {
             panic!("the only slot was free");
         };
-        assert!(matches!(free.gate(URN, YOU, false), Gate::Busy));
+        assert!(matches!(
+            free.gate(URN, YOU, false),
+            Gate::Busy(BUSY_RETRY_AFTER)
+        ));
         drop(held);
         assert!(matches!(free.gate(URN, YOU, false), Gate::Open(Some(_))));
     }
@@ -180,22 +194,22 @@ mod tests {
     #[test]
     fn streams_and_downloads_do_not_eat_each_other_slots() {
         let free = FreeHq::new(1);
-        let _download = free.download_slot(ME).expect("the download slot was free");
+        let _download = free.downloads.take(ME).expect("the download slot was free");
         assert!(matches!(free.gate(URN, ME, false), Gate::Open(Some(_))));
-        assert!(free.download_slot(YOU).is_none());
+        assert!(free.downloads.take(YOU).is_none());
     }
 
     #[test]
     fn one_session_cannot_hold_more_than_its_share_of_free_slots() {
         let free = FreeHq::new(8);
         let mine: Vec<_> = (0..SLOTS_PER_SESSION)
-            .map(|_| free.download_slot(ME).expect("a share is free"))
+            .map(|_| free.downloads.take(ME).expect("a share is free"))
             .collect();
 
-        assert!(free.download_slot(ME).is_none());
-        assert!(matches!(free.download_gate(URN, ME), Gate::Busy));
+        assert!(free.downloads.take(ME).is_none());
+        assert!(matches!(free.download_gate(URN, ME), Gate::Busy(_)));
         assert!(
-            free.download_slot(YOU).is_some(),
+            free.downloads.take(YOU).is_some(),
             "one busy client must not turn everybody else away"
         );
         assert!(
@@ -204,7 +218,7 @@ mod tests {
         );
 
         drop(mine);
-        assert!(free.download_slot(ME).is_some());
+        assert!(free.downloads.take(ME).is_some());
         assert!(
             free.downloads.held.lock().unwrap().by_session.is_empty(),
             "a session that let go of every slot leaves nothing behind"

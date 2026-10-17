@@ -108,19 +108,11 @@ async fn download_inner(
         return Err(AppError::Forbidden);
     }
 
-    let (entries, _slot) = match granted_tier(query.quality.as_deref(), is_premium) {
-        Some(tier) if !is_premium => {
-            free_tier_entries(&state, &track_urn, &session_id, tier).await?
-        }
-        _ => {
-            let mut entries = collect_entries(&state, &track_urn, is_premium).await;
-            let slot = if is_premium {
-                None
-            } else {
-                cap_for_free(&state.free_hq, &track_urn, &session_id, &mut entries)
-            };
-            (entries, slot)
-        }
+    let (entries, _slot) = if is_premium {
+        (collect_entries(&state, &track_urn, true).await, None)
+    } else {
+        let tier = free_tier(query.quality.as_deref());
+        free_tier_entries(&state, &track_urn, &session_id, tier).await?
     };
     if entries.is_empty() {
         warn!("[download] {track_urn} → no transcodings");
@@ -204,47 +196,38 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
     entries
 }
 
+fn free_tier(asked: Option<&str>) -> &'static str {
+    granted_tier(asked, false).unwrap_or(quality::SQ)
+}
+
 async fn free_tier_entries(
     state: &AppState,
     track_urn: &str,
     session_id: &str,
     tier: &'static str,
 ) -> Result<(Vec<Entry>, Option<Arc<FreeSlot>>), AppError> {
-    let slot = if tier == quality::SQ {
-        None
-    } else {
-        let gate = state.free_hq.download_gate(track_urn, session_id);
-        free_slot(gate, "[download]", track_urn, "download")?
-    };
+    let slot = take_slot(&state.free_hq, track_urn, session_id, tier)?;
     let mut entries = collect_entries(state, track_urn, false).await;
     let answered = !entries.is_empty();
     entries.retain(|e| quality::of_transcoding(&e.t) == tier);
-    if tier == quality::HQ && answered && entries.is_empty() {
-        info!("[download] {track_urn} → no hq");
-        state.free_hq.note_miss(track_urn);
+    if answered && entries.is_empty() {
+        info!("[download] {track_urn} → no {tier}");
         return Err(AppError::NoStream);
     }
     Ok((entries, slot))
 }
 
-fn cap_for_free(
+fn take_slot(
     free_hq: &FreeHq,
     track_urn: &str,
     session_id: &str,
-    entries: &mut Vec<Entry>,
-) -> Option<Arc<FreeSlot>> {
-    let above_sq = |e: &Entry| quality::rank(quality::of_transcoding(&e.t)) > 0;
-    entries.retain(|e| quality::of_transcoding(&e.t) != quality::UQ);
-    if !entries.iter().any(above_sq) {
-        return None;
+    tier: &str,
+) -> Result<Option<Arc<FreeSlot>>, AppError> {
+    if tier == quality::SQ {
+        return Ok(None);
     }
-    let slot = free_hq.download_slot(session_id);
-    if slot.is_none() {
-        info!("[download] {track_urn} → no free hq slot for this session, sq only");
-        crate::metrics::record_source("download", "free_hq_busy");
-        entries.retain(|e| !above_sq(e));
-    }
-    slot
+    let gate = free_hq.download_gate(track_urn, session_id);
+    free_slot(gate, "[download]", track_urn, "download")
 }
 
 async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
@@ -444,66 +427,39 @@ mod tests {
     const URN: &str = "soundcloud:tracks:1";
     const SESSION: &str = "session";
 
-    fn entry(preset: &str, quality: &str) -> Entry {
-        Entry {
-            t: serde_json::from_value(serde_json::json!({
-                "url": format!("https://api-v2.soundcloud.com/media/{URN}/{preset}/stream/hls"),
-                "preset": preset,
-                "quality": quality,
-            }))
-            .unwrap(),
-            client_id: "cid".into(),
-            track_auth: None,
-            headers: HashMap::new(),
-        }
-    }
-
-    fn all_tiers() -> Vec<Entry> {
-        vec![
-            entry("aac_256k", "hq"),
-            entry("aac_160k", "sq"),
-            entry("abr_sq", "sq"),
-        ]
-    }
-
-    fn presets(entries: &[Entry]) -> Vec<&str> {
-        entries
-            .iter()
-            .map(|e| e.t.preset.as_deref().unwrap_or(""))
-            .collect()
-    }
-
     #[test]
-    fn a_free_session_gets_hq_with_a_slot_and_never_uq() {
-        let free = FreeHq::new(1);
-        let mut entries = all_tiers();
+    fn a_free_download_without_quality_is_sq_and_waits_for_no_slot() {
+        let full = FreeHq::new(0);
 
-        let slot = cap_for_free(&free, URN, SESSION, &mut entries);
-
-        assert!(slot.is_some());
-        assert_eq!(presets(&entries), ["aac_160k", "abr_sq"]);
-        assert!(
-            free.download_slot("another").is_none(),
-            "the slot is held until the reply"
+        assert_eq!(
+            free_tier(None),
+            quality::SQ,
+            "8.5.1 and every sq ask of the new desktop send no quality and never play hq from it"
         );
+        assert!(
+            take_slot(&full, URN, SESSION, free_tier(None)).is_ok_and(|slot| slot.is_none()),
+            "old clients must not keep the hq slots busy for the ones that ask hq"
+        );
+        assert_eq!(free_tier(Some("sq")), quality::SQ);
+        assert_eq!(free_tier(Some("uq")), quality::HQ);
     }
 
     #[test]
-    fn with_no_free_slot_a_download_offers_sq_and_spends_no_license_above_it() {
-        let mut entries = all_tiers();
-
-        assert!(cap_for_free(&FreeHq::new(0), URN, SESSION, &mut entries).is_none());
-        assert_eq!(presets(&entries), ["abr_sq"]);
-    }
-
-    #[test]
-    fn a_track_with_nothing_above_sq_takes_no_slot() {
+    fn a_free_hq_download_needs_a_slot_and_reads_the_miss_list() {
         let free = FreeHq::new(1);
-        let mut entries = vec![entry("abr_sq", "sq"), entry("aac_256k", "hq")];
+        let held = take_slot(&free, URN, SESSION, quality::HQ).unwrap();
+        assert!(held.is_some());
+        assert!(matches!(
+            take_slot(&free, URN, "another", quality::HQ),
+            Err(AppError::FreeHqBusy(_))
+        ));
+        drop(held);
 
-        assert!(cap_for_free(&free, URN, SESSION, &mut entries).is_none());
-        assert_eq!(presets(&entries), ["abr_sq"]);
-        assert!(free.download_slot(SESSION).is_some());
+        free.note_miss(URN);
+        assert!(matches!(
+            take_slot(&free, URN, SESSION, quality::HQ),
+            Err(AppError::NoStream)
+        ));
     }
 
     #[test]
@@ -514,7 +470,7 @@ mod tests {
             .1;
         let body = body.split_once("\n}\n").expect("the function ends").0;
         let gate = body
-            .find("free_slot(gate")
+            .find("take_slot(")
             .expect("a free ask above sq waits for a slot");
         let meta = body
             .find("collect_entries(")
@@ -523,6 +479,11 @@ mod tests {
             gate < meta,
             "with every slot busy the answer is 429 and costs SoundCloud nothing; reading the \
              track first spends a meta request and an sq license on a reply nobody uses"
+        );
+        assert!(
+            !body.contains("note_miss"),
+            "anon meta alone does not know about apiv1 hq; only /stream, which tries every \
+             source, may mark a track as having no hq"
         );
     }
 
