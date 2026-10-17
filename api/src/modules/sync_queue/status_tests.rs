@@ -196,6 +196,25 @@ async fn edits_that_died_over_a_month_ago_count_neither_as_dead_nor_as_failing(
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_like_that_died_over_a_month_ago_still_counts_as_failing(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let service = service(&pg)?;
+    sqlx::query(
+        "INSERT INTO sync_queue (user_id, action_type, target_urn, dead, failed_at, retry_count)
+         VALUES ('9', 'like_track', 'soundcloud:tracks:1', true, now() - interval '40 days', 5)",
+    )
+    .execute(&pg)
+    .await?;
+
+    let status = service.status_for_user("9").await?;
+
+    assert_eq!(status.dead_count, 0);
+    assert_eq!(status.failed_count, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn needs_relogin_only_when_a_new_login_can_help(pg: PgPool) -> anyhow::Result<()> {
     let service = service(&pg)?;
     let retired = oauth_app(&pg, false).await?;
