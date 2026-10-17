@@ -239,3 +239,57 @@ async fn a_successful_genius_crawl_refreshes_both_cursors(pool: PgPool) -> anyho
     assert!(mb_crawled);
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_crawled_artist_with_an_unknown_id_is_not_a_short_named_local_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let z2: Uuid = sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, source) VALUES ('z²', 'z2', 'mb') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO artist_sc_accounts (artist_id, sc_user_id, role, source, verified)
+         VALUES ($1, '1211580634', 'main', 'mb_resolve', false)",
+    )
+    .bind(z2)
+    .execute(&pool)
+    .await?;
+    let oyg: Uuid = sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, genius_artist_id, source)
+         VALUES ('oyg', 'oyg', '111', 'genius') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let monarchy: Uuid = sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, source) VALUES ('Monarchy', 'monarchy', 'mb') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(
+        entities::artist_id(&pool, None, Some("222"), "Z2").await?,
+        None
+    );
+    assert_eq!(
+        entities::artist_id(&pool, None, Some("333"), "OYG").await?,
+        None
+    );
+    assert_eq!(
+        entities::artist_id(&pool, None, Some("444"), "MONARCHY").await?,
+        Some(monarchy)
+    );
+
+    let genius_ids: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT genius_artist_id FROM artists WHERE id = ANY($1) ORDER BY normalized_name",
+    )
+    .bind([monarchy, oyg, z2])
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        genius_ids,
+        [Some("444".to_owned()), Some("111".to_owned()), None]
+    );
+    Ok(())
+}

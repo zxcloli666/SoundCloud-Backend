@@ -4,6 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::error::CrawlResult;
+use crate::handlers::artist_names::{MIN_NAME_LENGTH, name_length};
 
 pub async fn artist_id(
     pool: &PgPool,
@@ -44,6 +45,18 @@ pub async fn artist_id(
     .await?
     {
         if mb_artist_id.is_some() || genius_artist_id.is_some() {
+            if name_length(&normalized) < MIN_NAME_LENGTH
+                && sqlx::query_file_scalar!(
+                    "queries/crawl/name_match_is_another_artist.sql",
+                    id,
+                    mb_artist_id,
+                    genius_artist_id
+                )
+                .fetch_one(pool)
+                .await?
+            {
+                return Ok(None);
+            }
             sqlx::query_file!(
                 "queries/crawl/update_artist_external_ids.sql",
                 id,
