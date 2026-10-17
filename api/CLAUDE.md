@@ -235,7 +235,9 @@ SC-пути запрашивают токен через `ctx.with_access_token(
 Успех, повторная авторизация и временная ошибка сбрасывают серию отказов.
 Таймауты, 429, 5xx и недоступная конфигурация OAuth сохраняют локальную сессию.
 Если OAuth-приложение подключения выключено или удалено, а токен уже не годится, ответ 409
-`soundcloud_reauthorization_required` (при наличии другого активного приложения), без записи в БД.
+`soundcloud_reauthorization_required` (при наличии другого активного приложения), без записи в БД;
+`GET /auth/soundcloud` тогда отдаёт `reauthorization_required` с `error_code` `oauth_app_unavailable`.
+Без единого активного приложения — 502 `soundcloud_temporarily_unavailable` с Retry-After 1800.
 Запрос токена ждёт чужую аренду обновления до 12 с, загрузка трека берёт токен до приёма файла.
 
 Контракт фронтенда: [docs/frontend-api-rewrite.md](../docs/frontend-api-rewrite.md).

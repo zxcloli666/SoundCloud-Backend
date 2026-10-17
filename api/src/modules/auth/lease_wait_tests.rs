@@ -192,12 +192,22 @@ async fn a_connection_without_an_app_asks_for_a_new_login(pool: PgPool) -> anyho
 async fn without_any_active_app_a_new_login_cannot_help(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, APP, false).await?;
     connect(&pool, Some(APP), -60, None).await?;
+    let auth = auth(&pool)?;
 
-    let token = auth(&pool)?.get_valid_access_token(SESSION).await;
+    let token = auth.get_valid_access_token(SESSION).await;
+    let refreshed = auth.refresh_soundcloud(SESSION).await;
 
     assert!(matches!(
         token,
-        Err(AppError::SoundCloudTemporarilyUnavailable { .. })
+        Err(AppError::SoundCloudTemporarilyUnavailable {
+            retry_after_sec: Some(1800)
+        })
+    ));
+    assert!(matches!(
+        refreshed,
+        Err(AppError::SoundCloudTemporarilyUnavailable {
+            retry_after_sec: Some(1800)
+        })
     ));
     Ok(())
 }
