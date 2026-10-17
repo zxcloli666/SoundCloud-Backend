@@ -201,9 +201,16 @@ fn proxy_target(
 }
 
 fn carries_credentials(headers: &HashMap<String, String>) -> bool {
-    headers.keys().any(|name| {
-        name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
+    headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("cookie")
+            || (name.eq_ignore_ascii_case("authorization") && !is_track_license(value))
     })
+}
+
+fn is_track_license(authorization: &str) -> bool {
+    authorization
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer "))
 }
 
 fn is_retryable_status(status: u16) -> bool {
@@ -591,10 +598,16 @@ mod tests {
 
     #[test]
     fn a_request_with_a_token_or_a_cookie_never_goes_to_a_user_desktop() {
-        for name in ["Authorization", "authorization", "Cookie", "COOKIE"] {
+        for (name, value) in [
+            ("Authorization", "OAuth 2-123-abc"),
+            ("authorization", "OAuth 2-123-abc"),
+            ("Authorization", "x"),
+            ("Cookie", "sc_anonymous_id=1; oauth_token=2"),
+            ("COOKIE", "x"),
+        ] {
             assert!(
-                carries_credentials(&headers(&[(name, "x")])),
-                "`{name}` would hand a token to whoever runs the relay"
+                carries_credentials(&headers(&[(name, value)])),
+                "`{name}: {value}` would hand an account to whoever runs the relay"
             );
         }
         assert!(!carries_credentials(&headers(&[])));
@@ -602,5 +615,20 @@ mod tests {
             "Accept",
             "application/json"
         )])));
+    }
+
+    #[test]
+    fn a_widevine_license_request_may_still_take_the_relay() {
+        for value in ["Bearer eyJ0eXAi.track.license", "bearer eyJ0eXAi"] {
+            assert!(
+                !carries_credentials(&headers(&[("Authorization", value)])),
+                "the license bearer is issued per track to any player, like track_authorization \
+                 in a public url; the relay already gets it through sc.hls_decrypt"
+            );
+        }
+        assert!(carries_credentials(&headers(&[
+            ("Authorization", "Bearer eyJ0eXAi"),
+            ("Cookie", "oauth_token=2"),
+        ])));
     }
 }
