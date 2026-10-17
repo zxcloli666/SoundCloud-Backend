@@ -175,7 +175,7 @@ async fn dead_playlist_edits_count_as_dead_dead_likes_as_failing_dead_comments_n
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn edits_that_died_over_a_month_ago_are_not_counted_as_dead(
+async fn edits_that_died_over_a_month_ago_count_neither_as_dead_nor_as_failing(
     pg: PgPool,
 ) -> anyhow::Result<()> {
     let service = service(&pg)?;
@@ -190,7 +190,8 @@ async fn edits_that_died_over_a_month_ago_are_not_counted_as_dead(
     let status = service.status_for_user("9").await?;
 
     assert_eq!(status.dead_count, 1);
-    assert_eq!(status.failed_count, 2);
+    assert_eq!(status.failed_count, 1);
+    assert_eq!(service.pending_and_failed("9").await?, (0, 1));
     Ok(())
 }
 
@@ -318,7 +319,9 @@ async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_
     .execute(&pg)
     .await?;
 
-    let one = service.revive("soundcloud:users:11", Some("new:a")).await?;
+    let one = service
+        .revive("soundcloud:users:11", Some("new:a"), &[])
+        .await?;
     let create: (bool, i32, Option<String>, bool, Option<i64>, bool) = sqlx::query_as(
         "SELECT dead, retry_count, last_error, failed_at IS NULL, remote_attempted_generation,
                 next_run_at <= now()
@@ -326,12 +329,11 @@ async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_
     )
     .fetch_one(&pg)
     .await?;
-    let rest = service.revive("11", None).await?;
+    let rest = service.revive("11", None, &[]).await?;
 
-    assert_eq!(one.count, 1);
+    assert_eq!(one, 1);
     assert_eq!(create, (false, 0, None, true, Some(1), true));
-    assert_eq!(rest.count, 1);
-    assert!(rest.reobserve.is_empty());
+    assert_eq!(rest, 1);
     assert_eq!(
         dead_rows(&pg).await?,
         [
@@ -348,7 +350,7 @@ async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn retry_drops_a_stale_membership_row_and_asks_for_a_fresh_read(
+async fn retry_drops_only_the_stale_membership_rows_whose_fresh_read_was_queued(
     pg: PgPool,
 ) -> anyhow::Result<()> {
     let service = service(&pg)?;
@@ -356,16 +358,31 @@ async fn retry_drops_a_stale_membership_row_and_asks_for_a_fresh_read(
         "INSERT INTO sync_queue (user_id, action_type, target_urn, payload, dead, failed_at, retry_count)
          VALUES ('12', 'playlist_membership', 'soundcloud:playlists:77',
                  '{\"tracks\": [\"1\"], \"fingerprint\": \"aa\", \"reconcile_generation\": 3}',
+                 true, now() - interval '5 minutes', 5),
+                ('12', 'playlist_membership', 'soundcloud:playlists:78',
+                 '{\"tracks\": [\"2\"], \"fingerprint\": \"bb\", \"reconcile_generation\": 4}',
                  true, now() - interval '5 minutes', 5)",
     )
     .execute(&pg)
     .await?;
 
-    let revived = service.revive("12", None).await?;
+    let memberships = service.dead_memberships("12", None).await?;
+    let revived = service
+        .revive("12", None, &["soundcloud:playlists:77".to_owned()])
+        .await?;
 
-    assert_eq!(revived.count, 1);
-    assert_eq!(revived.reobserve, ["soundcloud:playlists:77"]);
-    assert!(dead_rows(&pg).await?.is_empty());
+    assert_eq!(
+        memberships,
+        ["soundcloud:playlists:77", "soundcloud:playlists:78"]
+    );
+    assert_eq!(revived, 1);
+    assert_eq!(
+        dead_rows(&pg).await?,
+        [(
+            "playlist_membership soundcloud:playlists:78".to_owned(),
+            true
+        )]
+    );
     Ok(())
 }
 

@@ -29,7 +29,7 @@ dropped AS (
     USING picked
     WHERE queued.id = picked.id
       AND picked.action_type = 'playlist_membership'
-    RETURNING queued.target_urn
+      AND picked.target_urn = ANY ($3)
+    RETURNING queued.id
 )
-SELECT (SELECT count(*) FROM revived) + (SELECT count(*) FROM dropped) AS "revived!",
-       ARRAY(SELECT target_urn FROM dropped) AS "reobserve!"
+SELECT (SELECT count(*) FROM revived) + (SELECT count(*) FROM dropped) AS "revived!"

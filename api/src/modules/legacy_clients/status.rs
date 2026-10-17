@@ -33,12 +33,12 @@ pub(super) async fn read(
     let Some(sc_user_id) = session.and_then(|session| session.soundcloud_user_id) else {
         return Ok(SIGNED_OUT);
     };
-    let counts = sync_queue.status_for_user(&sc_user_id).await?;
+    let (pending, failed) = sync_queue.pending_and_failed(&sc_user_id).await?;
     Ok(OldAuthStatus {
         authenticated: true,
         token_state: "ok",
-        pending_sync_count: counts.pending_count,
-        failed_sync_count: counts.failed_count,
+        pending_sync_count: pending,
+        failed_sync_count: failed,
     })
 }
 

@@ -39,11 +39,6 @@ pub enum PlaylistCreateState {
     Failed,
 }
 
-pub struct Revived {
-    pub count: i64,
-    pub reobserve: Vec<String>,
-}
-
 impl SyncQueueService {
     pub async fn status_for_user(&self, sc_user_id: &str) -> AppResult<SyncCounts> {
         let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
@@ -89,21 +84,49 @@ impl SyncQueueService {
         Ok(counts)
     }
 
-    pub async fn revive(&self, sc_user_id: &str, target_urn: Option<&str>) -> AppResult<Revived> {
+    pub async fn pending_and_failed(&self, sc_user_id: &str) -> AppResult<(i64, i64)> {
         let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
-        let row = sqlx::query_file!(
-            "queries/sync_queue/service/revive_dead.sql",
+        let row = sqlx::query_file!("queries/sync_queue/service/pending_counts.sql", &variants)
+            .fetch_one(&self.pg)
+            .await?;
+        Ok((row.pending, row.failed))
+    }
+
+    pub async fn dead_memberships(
+        &self,
+        sc_user_id: &str,
+        target_urn: Option<&str>,
+    ) -> AppResult<Vec<String>> {
+        let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
+        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+        Ok(sqlx::query_file_scalar!(
+            "queries/sync_queue/service/dead_memberships.sql",
             &variants,
             target_urn
+        )
+        .fetch_all(&self.pg)
+        .await?)
+    }
+
+    pub async fn revive(
+        &self,
+        sc_user_id: &str,
+        target_urn: Option<&str>,
+        reread_memberships: &[String],
+    ) -> AppResult<i64> {
+        let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
+        let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+        let revived = sqlx::query_file_scalar!(
+            "queries/sync_queue/service/revive_dead.sql",
+            &variants,
+            target_urn,
+            reread_memberships
         )
         .fetch_one(&self.pg)
         .await?;
         self.forget_counts(&status_key(sc_user_id)).await;
-        Ok(Revived {
-            count: row.revived,
-            reobserve: row.reobserve,
-        })
+        Ok(revived)
     }
 
     async fn cached_counts(&self, key: &str) -> Option<SyncCounts> {

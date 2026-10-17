@@ -59,14 +59,20 @@ async fn retry_sync(
     body: Bytes,
 ) -> AppResult<Json<Value>> {
     let target_urn = retry_target(&body)?;
+    let memberships = st
+        .sync_queue
+        .dead_memberships(&ctx.sc_user_id, target_urn.as_deref())
+        .await?;
+    for playlist_urn in &memberships {
+        if !st.playlists.enqueue_edit_observation(playlist_urn).await {
+            return Err(AppError::internal("playlist re-read was not queued"));
+        }
+    }
     let revived = st
         .sync_queue
-        .revive(&ctx.sc_user_id, target_urn.as_deref())
+        .revive(&ctx.sc_user_id, target_urn.as_deref(), &memberships)
         .await?;
-    for playlist_urn in &revived.reobserve {
-        st.playlists.enqueue_edit_observation(playlist_urn).await;
-    }
-    Ok(Json(json!({ "revived": revived.count })))
+    Ok(Json(json!({ "revived": revived })))
 }
 
 fn retry_target(body: &[u8]) -> AppResult<Option<String>> {
