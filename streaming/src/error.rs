@@ -1,4 +1,6 @@
-use axum::http::StatusCode;
+use std::time::Duration;
+
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 #[derive(Debug, thiserror::Error)]
@@ -11,6 +13,8 @@ pub enum AppError {
     Forbidden,
     #[error("no stream available")]
     NoStream,
+    #[error("free hq busy")]
+    FreeHqBusy(Duration),
     #[error("timed out")]
     Timeout,
     #[error("internal: {0}")]
@@ -24,10 +28,17 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::NoStream => (StatusCode::NOT_FOUND, self.to_string()),
+            AppError::FreeHqBusy(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Timeout => (StatusCode::GATEWAY_TIMEOUT, self.to_string()),
             AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
-        (status, serde_json::json!({"error": msg}).to_string()).into_response()
+        let mut response = (status, serde_json::json!({"error": msg}).to_string()).into_response();
+        if let AppError::FreeHqBusy(wait) = self {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(wait.as_secs()));
+        }
+        response
     }
 }
 

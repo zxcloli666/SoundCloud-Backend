@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+pub(crate) const BUSY_RETRY_AFTER: Duration = Duration::from_secs(30);
 const MISS_KEPT_FOR: Duration = Duration::from_secs(60 * 60);
 const MISSES_AT_MOST: usize = 50_000;
 

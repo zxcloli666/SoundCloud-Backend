@@ -1,12 +1,14 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
+use tokio::sync::OwnedSemaphorePermit;
 use tracing::{info, warn};
 
-use super::free_hq::Gate;
+use super::free_hq::{BUSY_RETRY_AFTER, Gate};
 use super::quality;
 use super::sources::{
     UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
@@ -193,7 +195,7 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
     } else if tier == quality::HQ {
         match live_hq(req, tag).await? {
             HqTry::Served(response) => return Ok(response),
-            HqTry::Refused => return Err(AppError::NoStream),
+            HqTry::Refused(answer) => return Err(answer),
             HqTry::Missed => {}
         }
     } else {
@@ -367,7 +369,7 @@ fn live_hq_order(is_premium: bool) -> [LiveHq; 3] {
 enum HqTry {
     Served(Response),
     Missed,
-    Refused,
+    Refused(AppError),
 }
 
 async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> {
@@ -381,18 +383,9 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         ..
     } = *req;
 
-    let slot = match state.free_hq.gate(track_urn, is_premium) {
-        Gate::Open(slot) => slot,
-        Gate::Busy => {
-            info!("{tag} {track_urn} → every free hq slot is busy");
-            crate::metrics::record_source("none", "free_hq_busy");
-            return Ok(HqTry::Refused);
-        }
-        Gate::MissedLately => {
-            info!("{tag} {track_urn} → had no hq lately");
-            crate::metrics::record_source("none", "free_hq_missed_lately");
-            return Ok(HqTry::Refused);
-        }
+    let slot = match free_slot(state.free_hq.gate(track_urn, is_premium), tag, track_urn) {
+        Ok(slot) => slot,
+        Err(answer) => return Ok(HqTry::Refused(answer)),
     };
 
     for source in live_hq_order(is_premium) {
@@ -440,6 +433,26 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> 
         state.free_hq.note_miss(track_urn);
     }
     Ok(HqTry::Missed)
+}
+
+fn free_slot(
+    gate: Gate,
+    tag: &str,
+    track_urn: &str,
+) -> Result<Option<Arc<OwnedSemaphorePermit>>, AppError> {
+    match gate {
+        Gate::Open(slot) => Ok(slot),
+        Gate::Busy => {
+            info!("{tag} {track_urn} → every free hq slot is busy");
+            crate::metrics::record_source("none", "free_hq_busy");
+            Err(AppError::FreeHqBusy(BUSY_RETRY_AFTER))
+        }
+        Gate::MissedLately => {
+            info!("{tag} {track_urn} → had no hq lately");
+            crate::metrics::record_source("none", "free_hq_missed_lately");
+            Err(AppError::NoStream)
+        }
+    }
 }
 
 fn served(tag: &str, track_urn: &str, source: &'static str, quality: &str) {
@@ -546,7 +559,8 @@ pub(crate) fn extract_stream_access(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
+    use crate::stream::free_hq::FreeHq;
+    use axum::http::{HeaderValue, StatusCode, header};
 
     const SOURCES: [&str; 11] = [
         "cdn_proxy",
@@ -698,6 +712,31 @@ mod tests {
         assert_eq!(granted_tier(Some("hq"), true), Some(quality::HQ));
         assert_eq!(granted_tier(Some("lossless"), true), None);
         assert_eq!(granted_tier(None, false), None);
+    }
+
+    #[test]
+    fn full_free_slots_ask_to_come_back_later_and_a_track_without_hq_steps_down() {
+        const URN: &str = "soundcloud:tracks:1";
+        let full = FreeHq::new(0);
+        let busy = free_slot(full.gate(URN, false), "[test]", URN)
+            .unwrap_err()
+            .into_response();
+        assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            busy.headers().get(header::RETRY_AFTER).unwrap(),
+            BUSY_RETRY_AFTER.as_secs().to_string().as_str(),
+            "a 404 here makes clients ask hq again on the very next track"
+        );
+
+        let free = FreeHq::new(1);
+        free.note_miss(URN);
+        let missed = free_slot(free.gate(URN, false), "[test]", URN)
+            .unwrap_err()
+            .into_response();
+        assert_eq!(missed.status(), StatusCode::NOT_FOUND);
+        assert!(missed.headers().get(header::RETRY_AFTER).is_none());
+
+        assert!(free_slot(full.gate(URN, true), "[test]", URN).is_ok_and(|slot| slot.is_none()));
     }
 
     #[test]
