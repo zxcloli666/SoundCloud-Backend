@@ -4,19 +4,22 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::Bytes;
-use futures::StreamExt;
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::mpsc::Sender;
 use futures::stream::BoxStream;
+use futures::{SinkExt, StreamExt};
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::{info, warn};
 
 use super::quality;
 use super::restricted::RestrictedSource;
-use super::storage::StorageClient;
 use crate::AppState;
 use crate::error::AppError;
 
 pub(super) type Fetched = (Bytes, &'static str, &'static str);
+type Decrypted = BoxStream<'static, Result<Bytes, decrypt::Error>>;
+type Keep = Box<dyn FnOnce(Bytes) + Send>;
+
+const CHUNKS_IN_FLIGHT: usize = 2;
 
 #[derive(Clone, Copy)]
 pub(super) struct UploadRule {
@@ -215,9 +218,12 @@ pub(super) async fn try_restricted(
         }
     };
 
-    let keep = upload
-        .takes(quality)
-        .then(|| (state.storage.clone(), track_urn.to_string(), quality));
+    let keep = upload.takes(quality).then(|| {
+        let storage = state.storage.clone();
+        let urn = track_urn.to_string();
+        Box::new(move |whole: Bytes| storage.upload_in_background_with_quality(urn, whole, quality))
+            as Keep
+    });
     Some((
         Response::builder()
             .status(StatusCode::OK)
@@ -229,48 +235,73 @@ pub(super) async fn try_restricted(
     ))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Keeping {
+    Nothing,
+    WhileHeard,
+    Whole,
+}
+
 fn decrypt_to_the_end(
-    stream: BoxStream<'static, Result<Bytes, decrypt::Error>>,
-    keep: Option<(Arc<StorageClient>, String, &'static str)>,
+    stream: Decrypted,
+    keep: Option<Keep>,
     slot: Option<Arc<OwnedSemaphorePermit>>,
 ) -> Body {
-    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let keeping = match (&keep, &slot) {
+        (None, _) => Keeping::Nothing,
+        (Some(_), None) => Keeping::WhileHeard,
+        (Some(_), Some(_)) => Keeping::Whole,
+    };
+    let (tx, rx) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
     tokio::spawn(async move {
         let _slot = slot;
-        let whole = pump(stream, tx, keep.is_some()).await;
-        if let (Some((storage, urn, quality)), Some(whole)) = (keep, whole)
+        let whole = pump(stream, tx, keeping).await;
+        if let (Some(keep), Some(whole)) = (keep, whole)
             && whole.len() > 8192
         {
-            storage.upload_in_background_with_quality(urn, Bytes::from(whole), quality);
+            keep(whole);
         }
     });
     Body::from_stream(rx)
 }
 
 async fn pump(
-    mut stream: BoxStream<'static, Result<Bytes, decrypt::Error>>,
-    listener: UnboundedSender<Result<Bytes, decrypt::Error>>,
-    keeping: bool,
-) -> Option<Vec<u8>> {
+    mut stream: Decrypted,
+    mut listener: Sender<Result<Bytes, decrypt::Error>>,
+    keeping: Keeping,
+) -> Option<Bytes> {
     let mut kept = Vec::new();
+    let mut heard = true;
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(e) => {
-                let _ = listener.unbounded_send(Err(e));
+                if heard {
+                    let _ = listener.send(Err(e)).await;
+                }
                 return None;
             }
         };
-        if keeping {
+        if keeping != Keeping::Nothing {
             kept.push(chunk.clone());
         }
-        let listener_left = listener.unbounded_send(Ok(chunk)).is_err();
-        if listener_left && !keeping {
-            return None;
+        if heard && listener.send(Ok(chunk)).await.is_err() {
+            if keeping != Keeping::Whole {
+                return None;
+            }
+            heard = false;
         }
     }
     drop(listener);
-    keeping.then(|| kept.concat())
+    (keeping != Keeping::Nothing).then(|| joined(kept))
+}
+
+fn joined(chunks: Vec<Bytes>) -> Bytes {
+    let mut whole = Vec::with_capacity(chunks.iter().map(Bytes::len).sum());
+    for chunk in chunks {
+        whole.extend_from_slice(&chunk);
+    }
+    Bytes::from(whole)
 }
 
 pub(super) fn respond_with_data(
@@ -308,17 +339,33 @@ pub(super) fn data_response(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::Semaphore;
 
-    fn chunks(count: usize) -> BoxStream<'static, Result<Bytes, decrypt::Error>> {
+    fn chunks(count: usize) -> Decrypted {
         futures::stream::iter((0..count).map(|_| Ok(Bytes::from_static(b"abcd")))).boxed()
+    }
+
+    fn counted(count: usize) -> (Decrypted, Arc<AtomicUsize>) {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let stream = chunks(count)
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+        (stream, pulled)
+    }
+
+    fn gone_listener() -> Sender<Result<Bytes, decrypt::Error>> {
+        let (listener, gone) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+        drop(gone);
+        listener
     }
 
     #[tokio::test]
     async fn a_listener_that_leaves_early_still_leaves_a_whole_copy_for_storage() {
-        let (listener, gone) = futures::channel::mpsc::unbounded();
-        drop(gone);
-
-        let whole = pump(chunks(5), listener, true).await;
+        let whole = pump(chunks(5), gone_listener(), Keeping::Whole).await;
 
         assert_eq!(
             whole.map(|whole| whole.len()),
@@ -330,18 +377,47 @@ mod tests {
 
     #[tokio::test]
     async fn with_nothing_to_keep_the_decrypt_stops_when_the_listener_leaves() {
-        let pulled = Arc::new(AtomicUsize::new(0));
-        let counter = pulled.clone();
-        let stream = chunks(5)
-            .inspect(move |_| {
-                counter.fetch_add(1, Ordering::SeqCst);
-            })
-            .boxed();
-        let (listener, gone) = futures::channel::mpsc::unbounded();
-        drop(gone);
+        let (stream, pulled) = counted(5);
 
-        assert!(pump(stream, listener, false).await.is_none());
+        assert!(
+            pump(stream, gone_listener(), Keeping::Nothing)
+                .await
+                .is_none()
+        );
         assert_eq!(pulled.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn without_a_slot_the_copy_is_dropped_with_the_listener() {
+        let (stream, pulled) = counted(5);
+
+        assert!(
+            pump(stream, gone_listener(), Keeping::WhileHeard)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            pulled.load(Ordering::SeqCst),
+            1,
+            "only a decrypt holding a slot may run on with nobody listening"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_slow_listener_holds_the_decrypt_back() {
+        let (stream, pulled) = counted(50);
+        let (listener, heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
+        let decrypt = tokio::spawn(pump(stream, listener, Keeping::Nothing));
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            pulled.load(Ordering::SeqCst) <= CHUNKS_IN_FLIGHT + 2,
+            "a listener that does not read must not make us buffer the whole track"
+        );
+        drop(heard);
+        assert!(decrypt.await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -352,12 +428,42 @@ mod tests {
             Ok(Bytes::from_static(b"efgh")),
         ])
         .boxed();
-        let (listener, mut heard) = futures::channel::mpsc::unbounded();
+        let (listener, mut heard) = futures::channel::mpsc::channel(CHUNKS_IN_FLIGHT);
 
-        assert!(pump(stream, listener, true).await.is_none());
+        assert!(pump(stream, listener, Keeping::Whole).await.is_none());
         assert!(heard.next().await.is_some_and(|chunk| chunk.is_ok()));
         assert!(heard.next().await.is_some_and(|chunk| chunk.is_err()));
         assert!(heard.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_free_slot_comes_back_only_after_the_detached_decrypt_ends() {
+        let slots = Arc::new(Semaphore::new(1));
+        let slot = Arc::new(slots.clone().try_acquire_owned().unwrap());
+        let (feed, segments) = futures::channel::mpsc::unbounded();
+        let (stored_tx, stored) = tokio::sync::oneshot::channel();
+        let keep: Keep = Box::new(move |whole: Bytes| {
+            let _ = stored_tx.send(whole.len());
+        });
+
+        drop(decrypt_to_the_end(segments.boxed(), Some(keep), Some(slot)));
+        for _ in 0..3 {
+            feed.unbounded_send(Ok(Bytes::from(vec![0u8; 4096])))
+                .unwrap();
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            slots.available_permits(),
+            0,
+            "the slot bounds decrypts nobody listens to; it must stay taken while one runs"
+        );
+
+        drop(feed);
+        assert_eq!(stored.await.unwrap(), 3 * 4096);
+        let returned = tokio::time::timeout(Duration::from_secs(1), slots.acquire()).await;
+        assert!(returned.is_ok_and(|permit| permit.is_ok()));
     }
 
     #[test]
