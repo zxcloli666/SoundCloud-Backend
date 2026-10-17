@@ -143,7 +143,13 @@ pub fn pointing_in(at: usize, dimensions: u64) -> Vec<f32> {
 }
 
 pub async fn install_catalog(pg: &PgPool, tracks: &[TrackSeed]) -> anyhow::Result<()> {
-    for name in ARTISTS {
+    let mut names: Vec<&str> = ARTISTS.to_vec();
+    for track in tracks {
+        if !names.contains(&track.artist) {
+            names.push(track.artist);
+        }
+    }
+    for name in names {
         sqlx::query(
             "INSERT INTO artists (id, name, normalized_name, source, track_count_primary)
              VALUES ($1, $2, lower($2), 'test', 1)",

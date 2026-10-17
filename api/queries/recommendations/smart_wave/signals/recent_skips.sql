@@ -1,6 +1,7 @@
-SELECT sc_track_id
+SELECT sc_track_id AS id, (EXTRACT(EPOCH FROM created_at) * 1000000)::int8 AS "at!"
 FROM user_events
 WHERE sc_user_id = ANY ($1)
   AND event_type = 'skip'
+  AND weight < 0
   AND created_at > NOW() - make_interval(days => $2::int)
 ORDER BY created_at DESC LIMIT $3

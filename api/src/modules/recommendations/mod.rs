@@ -34,6 +34,8 @@ pub mod taste_modes;
 pub(crate) mod taste_vectors;
 #[cfg(test)]
 mod taste_vectors_live_tests;
+#[cfg(test)]
+mod wave_feedback_live_tests;
 
 pub use handlers::router;
 pub use s3_verifier::S3VerifierService;

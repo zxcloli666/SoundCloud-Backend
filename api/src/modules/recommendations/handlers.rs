@@ -341,7 +341,7 @@ async fn wave_feedback(
         }));
     }
     let new_cursor = smart_wave::record_feedback(
-        &st.recommendations,
+        &st.recommendations.redis,
         &ctx.sc_user_id,
         &body.cursor,
         body.negatives,
@@ -349,7 +349,7 @@ async fn wave_feedback(
     )
     .await;
     Ok(Json(WaveFeedbackResponse {
-        ok: true,
+        ok: new_cursor.is_some(),
         cursor: new_cursor,
     }))
 }

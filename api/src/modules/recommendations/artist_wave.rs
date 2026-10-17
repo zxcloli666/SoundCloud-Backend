@@ -171,17 +171,12 @@ impl RecommendationsService {
             merge_audio_pools(&mert_pool, &clap_pool, &lyrics_pool)
         };
 
-        let (wave_results, vibe_pool, neighbors_raw, deep_pool) =
+        let (wave, vibe_pool, neighbors_raw, deep_pool) =
             tokio::join!(wave_fut, vibe_fut, neighbors_fut, deep_fut);
 
         let mut builder = ClusterBuilder::new();
         builder.reserve(top_tracks.iter().cloned());
-        let wave_ids = wave_results
-            .iter()
-            .map(|result| super::clusters::recommend_id_str(&result.id))
-            .filter(|id| !id.is_empty())
-            .collect();
-        builder.push_observed("wave", wave_ids, &wave_results);
+        builder.push_wave(&wave);
 
         let essence_ids: Vec<String> = top_tracks.iter().take(per_cluster).cloned().collect();
         builder.push_reserved("essence", essence_ids);

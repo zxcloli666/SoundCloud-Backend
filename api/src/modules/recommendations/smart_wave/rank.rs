@@ -16,6 +16,7 @@ pub struct Candidate {
     pub sc_track_id: u64,
     pub artist: Option<Uuid>,
     pub content: f32,
+    pub skip_damp: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +52,7 @@ pub fn rank_and_pick(
             .and_then(|a| affinity.get(&a).copied())
             .unwrap_or(0.0);
         let graph_factor = graph_floor + (1.0 - graph_floor) * aff.clamp(0.0, 1.0);
-        let score = c.content * graph_factor;
+        let score = c.content * c.skip_damp * graph_factor;
         scored.push(RankedTrack {
             sc_track_id: c.sc_track_id,
             score,
@@ -101,6 +102,7 @@ mod tests {
             sc_track_id: id,
             artist: Some(Uuid::from_u128(artist)),
             content,
+            skip_damp: 1.0,
         }
     }
 
@@ -121,6 +123,19 @@ mod tests {
         let picked = rank_and_pick(&cands, &aff, &HashSet::new(), &cursor(), 5, 2, 0.12, 0.55);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].sc_track_id, 20);
+    }
+
+    #[test]
+    fn a_track_near_a_skip_sinks_but_the_content_floor_judges_only_its_fit() {
+        let aff: Affinity = HashMap::new();
+        let near_skip = Candidate {
+            skip_damp: 0.5,
+            ..cand(10, 1, 0.9)
+        };
+        let cands = vec![near_skip, cand(20, 2, 0.6)];
+        let picked = rank_and_pick(&cands, &aff, &HashSet::new(), &cursor(), 5, 2, 0.12, 0.55);
+        let order: Vec<u64> = picked.iter().map(|p| p.sc_track_id).collect();
+        assert_eq!(order, vec![20, 10]);
     }
 
     #[test]

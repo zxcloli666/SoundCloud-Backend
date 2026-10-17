@@ -11,21 +11,39 @@ const RECENT_SKIPS_LIMIT: i64 = 60;
 const RECENT_PLAYED_DAYS: i32 = 30;
 const RECENT_PLAYED_LIMIT: i64 = 200;
 
+#[derive(Debug, Clone)]
+pub struct Signal {
+    pub id: String,
+    pub at: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct UserSignals {
-    pub fresh_likes: Vec<String>,
-    pub superliked: Vec<String>,
-    pub disliked_ids: Vec<String>,
-    pub recent_skips: Vec<String>,
-    pub recent_played: Vec<String>,
+    pub fresh_likes: Vec<Signal>,
+    pub superliked: Vec<Signal>,
+    pub disliked_ids: Vec<Signal>,
+    pub recent_skips: Vec<Signal>,
+    pub recent_played: Vec<Signal>,
 }
 
 impl UserSignals {
     pub fn always_exclude(&self) -> Vec<String> {
-        let mut v = self.disliked_ids.clone();
+        let mut v: Vec<String> = self.disliked_ids.iter().map(|s| s.id.clone()).collect();
         v.sort();
         v.dedup();
         v
+    }
+
+    pub fn newest_at(&self) -> i64 {
+        self.fresh_likes
+            .iter()
+            .chain(&self.superliked)
+            .chain(&self.disliked_ids)
+            .chain(&self.recent_skips)
+            .chain(&self.recent_played)
+            .map(|signal| signal.at)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -59,8 +77,9 @@ pub(crate) async fn load_hidden_by_listen(pg: &PgPool, ids: &[String]) -> Vec<St
     .unwrap_or_default()
 }
 
-async fn load_fresh_likes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
-    let rows = sqlx::query_file_scalar!(
+async fn load_fresh_likes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Signal>> {
+    let rows = sqlx::query_file_as!(
+        Signal,
         "queries/recommendations/smart_wave/signals/fresh_likes.sql",
         ids,
         FRESH_LIKES_LIMIT
@@ -70,8 +89,9 @@ async fn load_fresh_likes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>>
     Ok(dedup_keep_order(rows))
 }
 
-async fn load_superliked(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
-    let rows = sqlx::query_file_scalar!(
+async fn load_superliked(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Signal>> {
+    let rows = sqlx::query_file_as!(
+        Signal,
         "queries/recommendations/smart_wave/signals/superlikes.sql",
         ids,
         SUPERLIKES_LIMIT
@@ -81,8 +101,9 @@ async fn load_superliked(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> 
     Ok(dedup_keep_order(rows))
 }
 
-async fn load_dislikes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
-    let rows = sqlx::query_file_scalar!(
+async fn load_dislikes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Signal>> {
+    let rows = sqlx::query_file_as!(
+        Signal,
         "queries/recommendations/smart_wave/signals/dislikes.sql",
         ids,
         DISLIKES_LIMIT
@@ -92,8 +113,9 @@ async fn load_dislikes(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
     Ok(dedup_keep_order(rows))
 }
 
-async fn load_recent_skips(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
-    let rows = sqlx::query_file_scalar!(
+async fn load_recent_skips(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Signal>> {
+    let rows = sqlx::query_file_as!(
+        Signal,
         "queries/recommendations/smart_wave/signals/recent_skips.sql",
         ids,
         RECENT_SKIPS_DAYS,
@@ -104,8 +126,9 @@ async fn load_recent_skips(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>
     Ok(dedup_keep_order(rows))
 }
 
-async fn load_recent_played(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String>> {
-    let rows = sqlx::query_file_scalar!(
+async fn load_recent_played(pg: &PgPool, ids: &[String]) -> AppResult<Vec<Signal>> {
+    let rows = sqlx::query_file_as!(
+        Signal,
         "queries/recommendations/smart_wave/signals/recent_played.sql",
         ids,
         RECENT_PLAYED_DAYS,
@@ -116,9 +139,9 @@ async fn load_recent_played(pg: &PgPool, ids: &[String]) -> AppResult<Vec<String
     Ok(rows)
 }
 
-fn dedup_keep_order(rows: Vec<String>) -> Vec<String> {
+fn dedup_keep_order(rows: Vec<Signal>) -> Vec<Signal> {
     let mut seen = std::collections::HashSet::new();
     rows.into_iter()
-        .filter(|id| seen.insert(id.clone()))
+        .filter(|signal| seen.insert(signal.id.clone()))
         .collect()
 }

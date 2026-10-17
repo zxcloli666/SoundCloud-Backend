@@ -131,7 +131,7 @@ impl RecommendationsService {
             }
         };
 
-        let (wave_results, same_artist, same_vibe_pool, featured_raw, fans_also_pool) = tokio::join!(
+        let (wave, same_artist, same_vibe_pool, featured_raw, fans_also_pool) = tokio::join!(
             wave_fut,
             same_artist_fut,
             same_vibe_fut,
@@ -143,12 +143,7 @@ impl RecommendationsService {
         let mut builder = ClusterBuilder::new();
         builder.reserve(std::iter::once(sc_track_id.to_string()));
         builder.reserve(everything_by_the_artist.iter().cloned());
-        let wave_ids = wave_results
-            .iter()
-            .map(|result| super::clusters::recommend_id_str(&result.id))
-            .filter(|id| !id.is_empty())
-            .collect();
-        builder.push_observed("wave", wave_ids, &wave_results);
+        builder.push_wave(&wave);
         builder.push_reserved("same_artist", same_artist_ids);
 
         let by_the_artist = self
