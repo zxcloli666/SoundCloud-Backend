@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::modules::auth::service::RefreshOutcome;
 use crate::modules::auth::{AuthHealthService, AuthService};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
@@ -154,13 +155,16 @@ async fn an_inactive_app_asks_for_a_new_login_instead_of_retrying(
     )
     .execute(&pool)
     .await?;
+    let auth = auth(&pool)?;
 
-    let token = auth(&pool)?.get_valid_access_token(SESSION).await;
+    let token = auth.get_valid_access_token(SESSION).await;
+    let refreshed = auth.refresh_soundcloud(SESSION).await?;
 
     assert!(matches!(
         token,
         Err(AppError::SoundCloudReauthorizationRequired)
     ));
+    assert_eq!(refreshed.outcome, RefreshOutcome::ReauthorizationRequired);
     let generation: i64 =
         sqlx::query_scalar("SELECT refresh_generation FROM soundcloud_connections WHERE id = $1")
             .bind(CONNECTION)
@@ -217,9 +221,11 @@ async fn a_fresh_token_stays_usable_while_its_app_is_inactive(pool: PgPool) -> a
 
     let token = auth.get_valid_access_token(SESSION).await?;
     let upload_token = auth.get_lasting_access_token(SESSION).await?;
+    let refreshed = auth.refresh_soundcloud(SESSION).await?;
 
     assert_eq!(token, "access");
     assert_eq!(upload_token, "access");
+    assert_eq!(refreshed.outcome, RefreshOutcome::AlreadyFresh);
     Ok(())
 }
 
