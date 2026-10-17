@@ -101,15 +101,19 @@ async fn restricted_source(
     state: &AppState,
     track_urn: &str,
     tag: &str,
-    hq_first: bool,
+    uq_first: bool,
+    premium: bool,
 ) -> Option<RestrictedSource> {
-    match state.anon.resolve_restricted(track_urn, hq_first).await {
+    match state.anon.resolve_restricted(track_urn, uq_first).await {
         Ok(Some(v)) => return Some(v),
         Ok(None) => {}
         Err(e) => warn!("{tag} {track_urn} restricted(anon) failed: {e}"),
     }
+    if !premium {
+        return None;
+    }
     let cookies = state.cookies.as_ref()?;
-    match cookies.resolve_restricted(track_urn, hq_first).await {
+    match cookies.resolve_restricted(track_urn, uq_first).await {
         Ok(Some(v)) => Some(v),
         Ok(None) => None,
         Err(e) => {
@@ -148,11 +152,12 @@ pub(super) async fn try_restricted(
     state: &AppState,
     track_urn: &str,
     tag: &str,
-    hq_first: bool,
     at_least: &'static str,
+    premium: bool,
     upload: UploadRule,
 ) -> Option<(Response, &'static str)> {
-    let src = restricted_source(state, track_urn, tag, hq_first).await?;
+    let uq_first = premium && at_least != quality::SQ;
+    let src = restricted_source(state, track_urn, tag, uq_first, premium).await?;
     let quality = src.quality;
     if quality::rank(quality) < quality::rank(at_least) {
         info!("{tag} {track_urn} restricted has only {quality}, wanted {at_least}");

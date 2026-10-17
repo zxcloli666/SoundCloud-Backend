@@ -32,6 +32,18 @@ pub fn rank(quality: &str) -> u8 {
     }
 }
 
+pub fn ceiling(is_premium: bool) -> &'static str {
+    if is_premium { UQ } else { HQ }
+}
+
+pub fn capped(wanted: &'static str, ceiling: &'static str) -> &'static str {
+    if rank(wanted) > rank(ceiling) {
+        ceiling
+    } else {
+        wanted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +72,20 @@ mod tests {
         assert!(rank(SQ) < rank(HQ));
         assert!(rank(HQ) < rank(UQ));
         assert_eq!(rank("anything"), rank(SQ));
+    }
+
+    #[test]
+    fn hq_is_free_and_uq_needs_star() {
+        assert_eq!(ceiling(false), HQ);
+        assert_eq!(ceiling(true), UQ);
+    }
+
+    #[test]
+    fn a_free_uq_request_is_served_as_hq() {
+        assert_eq!(capped(UQ, ceiling(false)), HQ);
+        assert_eq!(capped(HQ, ceiling(false)), HQ);
+        assert_eq!(capped(SQ, ceiling(false)), SQ);
+        assert_eq!(capped(UQ, ceiling(true)), UQ);
+        assert_eq!(capped(HQ, ceiling(true)), HQ);
     }
 }
