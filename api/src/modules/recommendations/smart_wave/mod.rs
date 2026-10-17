@@ -28,7 +28,7 @@ use cursor::{SeedKind, WaveCursor};
 use graph::GraphSeed;
 use rank::TrackMeta;
 use session::SessionFeedback;
-use signals::UserSignals;
+use signals::{Signal, UserSignals};
 
 const ARTIST_CAP_IN_WINDOW: usize = 2;
 const MERT_POOL: usize = 400;
@@ -101,6 +101,9 @@ pub async fn build(
     };
     let mut wave_cursor =
         cursor::load_or_new(&svc.redis, owner, req.cursor_token, seed_kind, &seed_key).await;
+    wave_cursor
+        .history_until
+        .get_or_insert_with(|| signals.newest_at());
     let session = SessionFeedback::from_signals(&signals, &wave_cursor);
     let session_ids = session.track_ids();
 
@@ -133,7 +136,8 @@ pub async fn build(
         SmartWaveSeed::Artist(a, _) => Some(*a),
         SmartWaveSeed::User | SmartWaveSeed::Track(_) => None,
     };
-    session.steer_artists(&session_meta, seed_artist, &mut affinity, &mut disliked_set);
+    let sunk_artists =
+        session.steer_artists(&session_meta, seed_artist, &mut affinity, &mut disliked_set);
 
     let top_artists = top_affinity_artists(&affinity, GRAPH_ARTISTS);
     let graph_tracks = graph::collect_artist_tracks(
@@ -187,27 +191,7 @@ pub async fn build(
     let (taste, (cm, cc, cl)) = tokio::join!(centroids_fut, cands_vecs_fut);
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
-    let cands: Vec<rank::Candidate> = artist_of
-        .into_iter()
-        .map(|(tid, artist)| {
-            let key = tid.to_string();
-            let content = geomean(&[
-                sim(&taste.m, cm.get(&key)),
-                sim(&taste.c, cc.get(&key)),
-                sim(&taste.l, cl.get(&key)),
-            ]);
-            let near_skip = [
-                sim(&skipped.m, cm.get(&key)),
-                sim(&skipped.c, cc.get(&key)),
-                sim(&skipped.l, cl.get(&key)),
-            ];
-            rank::Candidate {
-                sc_track_id: tid,
-                artist,
-                content: session::away_from_skips(content, &near_skip),
-            }
-        })
-        .collect();
+    let cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
     let cand_count = cands.len();
 
     let picked = rank::rank_and_pick(
@@ -226,7 +210,6 @@ pub async fn build(
         .filter_tracks_by_language(&ids_after, req.languages)
         .await;
 
-    let known_positives = session::positive_ids(&signals);
     let mut tracks: Vec<RecommendResult> = Vec::with_capacity(req.limit);
     for p in &picked {
         if tracks.len() >= req.limit {
@@ -246,9 +229,6 @@ pub async fn build(
             features: None,
         });
         wave_cursor.mark_served(p.sc_track_id, p.artist);
-        if known_positives.contains(&p.sc_track_id) {
-            wave_cursor.mark_known_positive(p.sc_track_id);
-        }
     }
 
     let handle = cursor::save(&svc.redis, owner, &wave_cursor)
@@ -304,7 +284,7 @@ pub async fn cluster_tracks(
     seed: SmartWaveSeed<'_>,
     limit: usize,
     hide_listened: bool,
-) -> Vec<RecommendResult> {
+) -> SmartWaveResponse {
     let req = SmartWaveRequest {
         sc_user_id,
         languages,
@@ -314,12 +294,51 @@ pub async fn cluster_tracks(
         hide_listened,
     };
     match Box::pin(build(svc, req)).await {
-        Ok(resp) => resp.tracks,
+        Ok(resp) => resp,
         Err(e) => {
             debug!(error = %e, "wave: cluster_tracks failed");
-            Vec::new()
+            SmartWaveResponse {
+                tracks: Vec::new(),
+                cursor: String::new(),
+            }
         }
     }
+}
+
+fn score_candidates(
+    artist_of: HashMap<u64, Option<Uuid>>,
+    taste: &TasteCentroids,
+    skipped: &TasteCentroids,
+    sunk_artists: &HashSet<Uuid>,
+    vectors: [&HashMap<String, Vec<f32>>; 3],
+) -> Vec<rank::Candidate> {
+    let [cm, cc, cl] = vectors;
+    artist_of
+        .into_iter()
+        .map(|(tid, artist)| {
+            let key = tid.to_string();
+            let fit = [
+                sim(&taste.m, cm.get(&key)),
+                sim(&taste.c, cc.get(&key)),
+                sim(&taste.l, cl.get(&key)),
+            ];
+            let near_skip = [
+                session::nearest_skip(&skipped.m, cm.get(&key)),
+                session::nearest_skip(&skipped.c, cc.get(&key)),
+                session::nearest_skip(&skipped.l, cl.get(&key)),
+            ];
+            let artist_damp = match artist {
+                Some(artist) if sunk_artists.contains(&artist) => session::SKIPPED_ARTIST_DAMP,
+                _ => 1.0,
+            };
+            rank::Candidate {
+                sc_track_id: tid,
+                artist,
+                content: geomean(&fit),
+                skip_damp: session::skip_damp(&fit, &near_skip) * artist_damp,
+            }
+        })
+        .collect()
 }
 
 fn build_exclude(
@@ -395,12 +414,12 @@ fn push_seed(out: &mut Vec<u64>, id: u64) {
     }
 }
 
-fn push_parsed<'a>(out: &mut Vec<u64>, ids: impl Iterator<Item = &'a String>, cap: usize) {
-    for id in ids {
+fn push_parsed<'a>(out: &mut Vec<u64>, signals: impl Iterator<Item = &'a Signal>, cap: usize) {
+    for signal in signals {
         if out.len() >= cap {
             break;
         }
-        if let Ok(n) = id.parse::<u64>() {
+        if let Ok(n) = signal.id.parse::<u64>() {
             push_seed(out, n);
         }
     }
@@ -410,7 +429,7 @@ fn superliked_ids(signals: &UserSignals) -> HashSet<u64> {
     signals
         .superliked
         .iter()
-        .filter_map(|id| id.parse::<u64>().ok())
+        .filter_map(|signal| signal.id.parse::<u64>().ok())
         .collect()
 }
 
@@ -439,14 +458,23 @@ fn seed_weight(id: &str, boosted: &HashSet<u64>) -> f32 {
 }
 
 fn negative_ids_for_qdrant(signals: &UserSignals, session: &SessionFeedback) -> Vec<u64> {
+    let earlier_skips: Vec<&Signal> = signals
+        .recent_skips
+        .iter()
+        .filter(|skip| {
+            skip.id
+                .parse::<u64>()
+                .is_ok_and(|id| !session.negatives.contains(&id))
+        })
+        .collect();
     let mut out: Vec<u64> = Vec::new();
-    for id in session.negatives.iter().take(QDRANT_NEGATIVES) {
-        push_seed(&mut out, *id);
-    }
-    let half = out.len() + (QDRANT_NEGATIVES - out.len()) / 2;
-    push_parsed(&mut out, signals.recent_skips.iter(), half);
+    push_parsed(
+        &mut out,
+        earlier_skips.iter().copied(),
+        QDRANT_NEGATIVES / 2,
+    );
     push_parsed(&mut out, signals.disliked_ids.iter(), QDRANT_NEGATIVES);
-    push_parsed(&mut out, signals.recent_skips.iter(), QDRANT_NEGATIVES);
+    push_parsed(&mut out, earlier_skips.iter().copied(), QDRANT_NEGATIVES);
     out
 }
 
@@ -819,16 +847,21 @@ mod tests {
         assert!(cross < 0.8, "modes not separated: cos={cross}");
     }
 
-    fn strings(range: std::ops::RangeInclusive<u64>) -> Vec<String> {
-        range.map(|id| id.to_string()).collect()
+    fn signals(ids: impl IntoIterator<Item = u64>) -> Vec<Signal> {
+        ids.into_iter()
+            .map(|id| Signal {
+                id: id.to_string(),
+                at: 1,
+            })
+            .collect()
     }
 
     #[test]
     fn superlikes_lead_the_user_seeds_within_the_same_budget() {
         let signals = UserSignals {
-            superliked: vec!["900".into(), "901".into(), "12".into()],
-            fresh_likes: strings(10..=40),
-            recent_played: strings(50..=60),
+            superliked: signals([900, 901, 12]),
+            fresh_likes: signals(10..=40),
+            recent_played: signals(50..=60),
             ..UserSignals::default()
         };
         let cursor = WaveCursor::new(SeedKind::User, "17".into());
@@ -847,10 +880,9 @@ mod tests {
 
     #[test]
     fn every_free_superlike_seeds_the_user_wave() {
-        let superliked = strings(900..=911);
         let signals = UserSignals {
-            superliked: superliked.clone(),
-            fresh_likes: strings(10..=40),
+            superliked: signals(900..=911),
+            fresh_likes: signals(10..=40),
             ..UserSignals::default()
         };
         let cursor = WaveCursor::new(SeedKind::User, "17".into());
@@ -869,8 +901,8 @@ mod tests {
     #[test]
     fn a_track_wave_keeps_its_seed_track_the_strongest() {
         let signals = UserSignals {
-            superliked: vec!["900".into(), "11".into()],
-            fresh_likes: strings(10..=20),
+            superliked: signals([900, 11]),
+            fresh_likes: signals(10..=20),
             ..UserSignals::default()
         };
         let cursor = WaveCursor::new(SeedKind::Track, "t7".into());
@@ -890,6 +922,7 @@ mod tests {
 
     fn served(seed_kind: SeedKind, ids: &[u64]) -> WaveCursor {
         let mut cursor = WaveCursor::new(seed_kind, "17".into());
+        cursor.history_until = Some(0);
         for id in ids {
             cursor.mark_served(*id, None);
         }
@@ -899,9 +932,9 @@ mod tests {
     #[test]
     fn what_you_liked_in_this_wave_leads_the_next_user_seeds() {
         let signals = UserSignals {
-            superliked: vec!["900".into()],
-            fresh_likes: strings(10..=40),
-            recent_played: vec!["70".into()],
+            superliked: signals([900]),
+            fresh_likes: signals(10..=40),
+            recent_played: signals([70]),
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::User, &[60, 70, 80]);
@@ -916,8 +949,8 @@ mod tests {
     #[test]
     fn a_track_wave_takes_what_you_liked_right_after_its_seed() {
         let signals = UserSignals {
-            fresh_likes: strings(10..=20),
-            recent_played: vec!["70".into()],
+            fresh_likes: signals(10..=20),
+            recent_played: signals([70]),
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Track, &[60, 70]);
@@ -940,8 +973,8 @@ mod tests {
     #[test]
     fn an_artist_wave_keeps_its_artist_first_and_then_what_you_liked() {
         let signals = UserSignals {
-            fresh_likes: strings(10..=20),
-            recent_played: vec!["70".into()],
+            fresh_likes: signals(10..=20),
+            recent_played: signals([70]),
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Artist, &[70]);
@@ -958,8 +991,8 @@ mod tests {
     #[test]
     fn a_skipped_track_never_seeds_the_next_page() {
         let signals = UserSignals {
-            recent_skips: vec!["61".into()],
-            disliked_ids: vec!["62".into()],
+            recent_skips: signals([61]),
+            disliked_ids: signals([62]),
             ..UserSignals::default()
         };
         let cursor = served(SeedKind::Track, &[60, 61, 62, 63]);
@@ -971,10 +1004,10 @@ mod tests {
     }
 
     #[test]
-    fn skips_of_this_wave_lead_the_qdrant_negatives_behind_any_number_of_dislikes() {
+    fn skips_of_this_wave_stay_out_of_the_qdrant_negatives() {
         let signals = UserSignals {
-            disliked_ids: strings(1..=200),
-            recent_skips: strings(500..=560),
+            disliked_ids: signals(1..=200),
+            recent_skips: signals([999].into_iter().chain(500..=560)),
             ..UserSignals::default()
         };
         let session = SessionFeedback {
@@ -985,7 +1018,11 @@ mod tests {
         let negatives = negative_ids_for_qdrant(&signals, &session);
 
         assert_eq!(negatives.len(), QDRANT_NEGATIVES);
-        assert_eq!(&negatives[..3], &[999, 500, 501]);
+        assert!(
+            !negatives.contains(&999),
+            "a skip of this wave would push its whole neighbourhood out of the pool"
+        );
+        assert_eq!(&negatives[..2], &[500, 501]);
         assert!(
             negatives.contains(&1),
             "the newest dislikes still push away"
@@ -1009,6 +1046,7 @@ mod tests {
             sc_track_id: id,
             artist: Some(Uuid::from_u128(artist)),
             content,
+            skip_damp: 1.0,
         })
         .collect()
     }
@@ -1019,6 +1057,9 @@ mod tests {
         cursor: &mut WaveCursor,
         limit: usize,
     ) -> Vec<u64> {
+        cursor
+            .history_until
+            .get_or_insert_with(|| signals.newest_at());
         let session = SessionFeedback::from_signals(signals, cursor);
         let meta: HashMap<u64, TrackMeta> = cands
             .iter()
@@ -1036,9 +1077,20 @@ mod tests {
             (Uuid::from_u128(3), 0.4),
         ]);
         let mut disliked = HashSet::new();
-        session.steer_artists(&meta, None, &mut affinity, &mut disliked);
+        let sunk = session.steer_artists(&meta, None, &mut affinity, &mut disliked);
+        let cands: Vec<rank::Candidate> = cands
+            .iter()
+            .map(|cand| rank::Candidate {
+                skip_damp: if cand.artist.is_some_and(|artist| sunk.contains(&artist)) {
+                    session::SKIPPED_ARTIST_DAMP
+                } else {
+                    1.0
+                },
+                ..cand.clone()
+            })
+            .collect();
         let picked = rank::rank_and_pick(
-            cands,
+            &cands,
             &affinity,
             &disliked,
             cursor,
@@ -1069,12 +1121,54 @@ mod tests {
         assert_eq!(unchanged, vec![12, 13, 32]);
 
         let feedback = UserSignals {
-            recent_skips: vec!["10".into(), "11".into()],
-            fresh_likes: vec!["20".into()],
+            recent_skips: signals([10, 11]),
+            fresh_likes: signals([20]),
             ..UserSignals::default()
         };
         let next = next_page(&cands, &feedback, &mut cursor, 3);
         assert_eq!(next, vec![21, 22, 32]);
+    }
+
+    #[test]
+    fn forty_skips_near_the_taste_still_fill_the_next_page() {
+        let session = SessionFeedback {
+            negatives: (1..=40).collect(),
+            ..SessionFeedback::default()
+        };
+        let sound: HashMap<String, Vec<f32>> = (1..=40)
+            .chain(100..=140)
+            .map(|id| (id.to_string(), vec![0.6, 0.8]))
+            .collect();
+        let none = HashMap::new();
+        let taste = TasteCentroids {
+            m: vec![vec![1.0, 0.0]],
+            ..TasteCentroids::default()
+        };
+        let artist_of: HashMap<u64, Option<Uuid>> = (100..=140)
+            .map(|id| (id, Some(Uuid::from_u128(u128::from(id)))))
+            .collect();
+
+        let skipped = session.skipped_vectors([&sound, &none, &none]);
+        let cands = score_candidates(
+            artist_of,
+            &taste,
+            &skipped,
+            &HashSet::new(),
+            [&sound, &none, &none],
+        );
+        let picked = rank::rank_and_pick(
+            &cands,
+            &HashMap::new(),
+            &HashSet::new(),
+            &WaveCursor::new(SeedKind::User, "17".into()),
+            20,
+            ARTIST_CAP_IN_WINDOW,
+            GRAPH_FLOOR,
+            CONTENT_FLOOR,
+        );
+
+        assert!(cands.iter().all(|cand| cand.skip_damp < 0.7));
+        assert_eq!(picked.len(), 20, "skips near the taste emptied the page");
     }
 
     #[tokio::test]
@@ -1090,6 +1184,11 @@ mod tests {
             anyhow::bail!("redis is not reachable");
         };
         cursor::register_handle(&redis, "17", &wave).await;
+        let ttl: i64 = redis.get().await?.ttl(wave.redis_key("17")).await?;
+        assert!(
+            ttl > 5 * 60 * 60,
+            "a wave cursor must outlive a page of full listens, it lives {ttl}s"
+        );
 
         let updated = record_feedback(&redis, "17", &handle, 1, 0).await;
         let stored = cursor::read(&redis, "17", &handle).await;

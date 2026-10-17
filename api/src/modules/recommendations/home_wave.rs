@@ -152,7 +152,7 @@ impl RecommendationsService {
             anti_centroid,
             bandit_stats,
             taste_pool,
-            wave_results,
+            wave,
         ) = tokio::join!(
             taste_modes_fut,
             clap_centroid_fut,
@@ -182,12 +182,7 @@ impl RecommendationsService {
 
         let mut builder = ClusterBuilder::new();
         builder.reserve(exclude_vec.iter().cloned());
-        let wave_ids = wave_results
-            .iter()
-            .map(|result| recommend_id_str(&result.id))
-            .filter(|id| !id.is_empty())
-            .collect();
-        builder.push_observed("wave", wave_ids, &wave_results);
+        builder.push_wave(&wave);
 
         let top_artists = self
             .load_top_artists_cluster(&sc_user_id, builder.taken(), NEIGHBORS_TOP_LIMIT)

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use uuid::Uuid;
 
-const TTL_SECS: u64 = 30 * 60;
+const TTL_SECS: u64 = 6 * 60 * 60;
 const SEEN_TRACKS_CAP: usize = 200;
 const ARTIST_WINDOW: usize = 30;
 const NEG_WINDOW: u8 = 20;
@@ -39,7 +39,7 @@ pub struct WaveCursor {
     pub seen_artists: VecDeque<Uuid>,
     pub neg_flags: VecDeque<u8>,
     #[serde(default)]
-    pub known_positives: VecDeque<u64>,
+    pub history_until: Option<i64>,
 }
 
 impl WaveCursor {
@@ -53,7 +53,7 @@ impl WaveCursor {
             seen_tracks: VecDeque::with_capacity(SEEN_TRACKS_CAP),
             seen_artists: VecDeque::with_capacity(ARTIST_WINDOW),
             neg_flags: VecDeque::with_capacity(NEG_WINDOW as usize),
-            known_positives: VecDeque::new(),
+            history_until: None,
         }
     }
 
@@ -73,10 +73,6 @@ impl WaveCursor {
         if let Some(a) = artist_id {
             push_capped(&mut self.seen_artists, a, ARTIST_WINDOW);
         }
-    }
-
-    pub fn mark_known_positive(&mut self, sc_track_id: u64) {
-        push_capped(&mut self.known_positives, sc_track_id, SEEN_TRACKS_CAP);
     }
 
     pub fn record_outcomes(&mut self, negatives: usize, positives: usize) {
@@ -208,14 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_saved_before_known_positives_still_loads() -> anyhow::Result<()> {
+    fn a_cursor_saved_by_the_previous_api_still_loads() -> anyhow::Result<()> {
         let saved = r#"{"handle":"ab","seed_kind":"Track","seed_key":"t7","served":1,
             "seen_tracks":[70],"seen_artists":[],"neg_flags":[1]}"#;
 
         let cursor: WaveCursor = serde_json::from_str(saved)?;
 
         assert!(cursor.contains(70));
-        assert!(cursor.known_positives.is_empty());
+        assert_eq!(cursor.history_until, None);
         Ok(())
     }
 

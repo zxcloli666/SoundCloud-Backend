@@ -1,4 +1,4 @@
-SELECT s.sc_track_id
+SELECT s.sc_track_id AS id, (EXTRACT(EPOCH FROM s.created_at) * 1000000)::int8 AS "at!"
 FROM user_superlikes s
 JOIN user_likes_tracks l
   ON l.user_id = s.user_id

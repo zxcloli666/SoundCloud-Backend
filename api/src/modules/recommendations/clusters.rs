@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::service::RecommendResult;
+use super::smart_wave::SmartWaveResponse;
 
 #[derive(Debug, Serialize)]
 pub struct ClusterResponse {
@@ -24,6 +25,8 @@ pub struct Cluster {
     pub track_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub neighbors: Option<Vec<ClusterNeighbor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,6 +90,7 @@ impl ClusterBuilder {
             id,
             track_ids,
             neighbors: None,
+            cursor: None,
         });
     }
 
@@ -112,6 +116,19 @@ impl ClusterBuilder {
         self.push(id, track_ids);
     }
 
+    pub fn push_wave(&mut self, wave: &SmartWaveResponse) {
+        let track_ids = wave
+            .tracks
+            .iter()
+            .map(|result| recommend_id_str(&result.id))
+            .filter(|id| !id.is_empty())
+            .collect();
+        self.push_observed("wave", track_ids, &wave.tracks);
+        if let Some(cluster) = self.clusters.last_mut().filter(|c| c.id == "wave") {
+            cluster.cursor = Some(wave.cursor.clone()).filter(|cursor| !cursor.is_empty());
+        }
+    }
+
     pub fn push_with_neighbors(&mut self, id: &'static str, neighbors: Vec<ClusterNeighbor>) {
         let mut on_this_shelf: HashSet<String> = HashSet::new();
         let neighbors: Vec<ClusterNeighbor> = neighbors
@@ -133,6 +150,7 @@ impl ClusterBuilder {
             id,
             track_ids,
             neighbors: Some(neighbors),
+            cursor: None,
         });
     }
 
@@ -176,6 +194,7 @@ impl ClusterBuilder {
                 id: c.id,
                 track_ids,
                 neighbors: neighbors.filter(|ns| !ns.is_empty()),
+                cursor: c.cursor,
             });
         }
         self.clusters = kept;
@@ -408,6 +427,42 @@ mod tests {
                     "track_ids": ["track"]
                 }]
             }))
+        );
+    }
+
+    #[test]
+    fn the_wave_shelf_carries_the_cursor_its_next_pages_continue() {
+        let wave = |cursor: &str| SmartWaveResponse {
+            tracks: vec![RecommendResult {
+                id: json!(5),
+                score: None,
+                payload: None,
+                artist: None,
+                genre: None,
+                playback_count: None,
+                features: None,
+            }],
+            cursor: cursor.to_owned(),
+        };
+        let mut builder = ClusterBuilder::new();
+        builder.push_wave(&wave("c0ffee"));
+        builder.push("same_vibe", ids(&["6", "7"]));
+        builder.drop_missing(&HashSet::from(["7".to_owned()]));
+        let mut failed = ClusterBuilder::new();
+        failed.push_wave(&wave(""));
+
+        assert_eq!(
+            serde_json::to_value(builder.finish()).ok(),
+            Some(json!({
+                "clusters": [
+                    {"id": "wave", "track_ids": ["5"], "cursor": "c0ffee"},
+                    {"id": "same_vibe", "track_ids": ["6"]}
+                ]
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(failed.finish()).ok(),
+            Some(json!({"clusters": [{"id": "wave", "track_ids": ["5"]}]}))
         );
     }
 

@@ -1,18 +1,20 @@
 use std::sync::Arc;
 
 use anyhow::Context;
+use deadpool_redis::redis::AsyncCommands;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::home_wave::HomeRequest;
 use super::live_fixture::{
-    LIKES, LISTENER, SPREAD, TrackSeed, install_all_vectors, install_catalog, likes_the_same_ten,
-    service,
+    LIKES, LISTENER, SPREAD, TrackSeed, dislike, install_all_vectors, install_catalog,
+    likes_the_same_ten, service,
 };
 use super::service::RecommendationsService;
 use super::smart_wave::graph::forget_user_affinity;
 use super::smart_wave::{self, SmartWaveRequest, SmartWaveSeed};
 
-const CROWD: [&str; 12] = [
+const CROWD: [&str; 24] = [
     "Aster",
     "Bellwether",
     "Cinder",
@@ -25,7 +27,20 @@ const CROWD: [&str; 12] = [
     "Juniper",
     "Kestrel",
     "Lantern",
+    "Meridian",
+    "Nettle",
+    "Orchard",
+    "Pewter",
+    "Quarry",
+    "Rookery",
+    "Saltmarsh",
+    "Thistle",
+    "Umber",
+    "Vesper",
+    "Willow",
+    "Yarrow",
 ];
+const SMALL_CROWD: usize = 12;
 const FIRST: u64 = 961_000;
 const PAGE: usize = 8;
 
@@ -35,6 +50,10 @@ fn sound_of(id: u64) -> u64 {
 
 fn of_sound(ids: &[u64], sound: u64) -> usize {
     ids.iter().filter(|id| sound_of(**id) == sound).count()
+}
+
+fn artist_of(id: u64, crowd: usize) -> &'static str {
+    CROWD[((id - FIRST) % crowd as u64) as usize]
 }
 
 async fn listened(
@@ -61,11 +80,14 @@ async fn listened(
     Ok(())
 }
 
-async fn listener_with_history(pg: &PgPool) -> anyhow::Result<Arc<RecommendationsService>> {
+async fn listener_with_history(
+    pg: &PgPool,
+    crowd: usize,
+) -> anyhow::Result<Arc<RecommendationsService>> {
     let tracks: Vec<TrackSeed> = (0..120)
         .map(|index| TrackSeed {
             sc_track_id: FIRST + index,
-            artist: CROWD[index as usize % CROWD.len()],
+            artist: artist_of(FIRST + index, crowd),
             plays: 5_000,
         })
         .collect();
@@ -153,7 +175,7 @@ fn least_heard_on(first: &[u64], unchanged: &[u64]) -> anyhow::Result<u64> {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn skipping_a_sound_takes_it_off_the_next_river_page(pg: PgPool) -> anyhow::Result<()> {
-    let service = listener_with_history(&pg).await?;
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
     let pages = twin_pages(&service, || SmartWaveSeed::User).await?;
     let coming = sound_of(pages.unchanged[0]);
     let skipped: Vec<u64> = pages
@@ -189,7 +211,7 @@ async fn skipping_a_sound_takes_it_off_the_next_river_page(pg: PgPool) -> anyhow
 async fn a_full_listen_pulls_the_next_river_page_toward_its_sound(
     pg: PgPool,
 ) -> anyhow::Result<()> {
-    let service = listener_with_history(&pg).await?;
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
     let pages = twin_pages(&service, || SmartWaveSeed::User).await?;
     let kept = least_heard_on(&pages.first, &pages.unchanged)?;
 
@@ -210,7 +232,7 @@ async fn a_full_listen_pulls_the_next_river_page_toward_its_sound(
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_full_listen_pulls_an_artist_wave_toward_its_sound(pg: PgPool) -> anyhow::Result<()> {
-    let service = listener_with_history(&pg).await?;
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
     let artist: Uuid = sqlx::query_scalar("SELECT id FROM artists WHERE name = $1")
         .bind(CROWD[4])
         .fetch_one(&pg)
@@ -236,7 +258,7 @@ async fn a_full_listen_pulls_an_artist_wave_toward_its_sound(pg: PgPool) -> anyh
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn feedback_keeps_a_track_wave_going_where_it_was(pg: PgPool) -> anyhow::Result<()> {
-    let service = listener_with_history(&pg).await?;
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
     let seed = FIRST + 3;
     let (first, cursor) = page(&service, SmartWaveSeed::Track(seed), None).await?;
 
@@ -248,6 +270,159 @@ async fn feedback_keeps_a_track_wave_going_where_it_was(pg: PgPool) -> anyhow::R
     assert!(
         next.iter().all(|id| !first.contains(id)),
         "the track wave started over after feedback: {first:?} then {next:?}"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Qdrant and Redis"]
+async fn a_run_of_skips_sinks_their_artists_on_the_next_track_wave_page(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
+    let seed = FIRST + 3;
+    let pages = twin_pages(&service, || SmartWaveSeed::Track(seed)).await?;
+    let skipped_artists: Vec<&str> = pages
+        .first
+        .iter()
+        .map(|id| artist_of(*id, SMALL_CROWD))
+        .collect();
+    let by_skipped = |ids: &[u64]| {
+        ids.iter()
+            .filter(|id| skipped_artists.contains(&artist_of(**id, SMALL_CROWD)))
+            .count()
+    };
+    assert!(
+        by_skipped(&pages.unchanged) > 0,
+        "no artist of the first page comes back on the control page: {:?} then {:?}",
+        pages.first,
+        pages.unchanged
+    );
+
+    for id in &pages.first {
+        listened(&pg, *id, "skip", -0.8, 0.1, 0).await?;
+    }
+    let mine = send_feedback(&service, &pages.mine, pages.first.len(), 0).await?;
+    let (next, _) = page(&service, SmartWaveSeed::Track(seed), Some(&mine)).await?;
+
+    assert_eq!(
+        next.len(),
+        PAGE,
+        "the track wave ran short after a run of skips"
+    );
+    assert!(
+        by_skipped(&next) < by_skipped(&pages.unchanged),
+        "skipping {:?} kept their artists on the next track wave page: {next:?}, without \
+         feedback {:?}",
+        pages.first,
+        pages.unchanged
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Qdrant and Redis"]
+async fn a_dislike_takes_its_artist_off_the_next_river_page(pg: PgPool) -> anyhow::Result<()> {
+    let service = listener_with_history(&pg, SMALL_CROWD).await?;
+    let pages = twin_pages(&service, || SmartWaveSeed::User).await?;
+    let disliked = pages
+        .first
+        .iter()
+        .copied()
+        .filter(|id| *id >= FIRST + LIKES)
+        .find(|id| {
+            let artist = artist_of(*id, SMALL_CROWD);
+            pages
+                .unchanged
+                .iter()
+                .any(|next| artist_of(*next, SMALL_CROWD) == artist)
+        })
+        .context("no artist of the first page comes back on the control page")?;
+
+    dislike(&pg, LISTENER, &disliked.to_string()).await?;
+    let mine = send_feedback(&service, &pages.mine, 1, 0).await?;
+    let (next, _) = page(&service, SmartWaveSeed::User, Some(&mine)).await?;
+
+    let artist = artist_of(disliked, SMALL_CROWD);
+    assert!(!next.is_empty(), "the river ran dry after a dislike");
+    assert!(
+        next.iter().all(|id| artist_of(*id, SMALL_CROWD) != artist),
+        "disliking {disliked} left {artist} on the next page: {next:?}, without feedback {:?}",
+        pages.unchanged
+    );
+    Ok(())
+}
+
+async fn home_shelf(service: &RecommendationsService) -> anyhow::Result<(Vec<u64>, String)> {
+    let home = Box::pin(service.home_wave(HomeRequest {
+        sc_user_id: LISTENER.to_owned(),
+        languages: None,
+        per_cluster: 6,
+        hide_listened: true,
+    }))
+    .await?;
+    let shelf = home
+        .clusters
+        .into_iter()
+        .find(|cluster| cluster.id == "wave")
+        .context("the home page has no wave shelf")?;
+    let cursor = shelf
+        .cursor
+        .context("the wave shelf came without a cursor")?;
+    let ids = shelf
+        .track_ids
+        .iter()
+        .filter_map(|id| id.parse().ok())
+        .collect();
+    Ok((ids, cursor))
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Qdrant and Redis"]
+async fn the_river_goes_on_from_the_home_wave_shelf_and_learns_from_it(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let service = listener_with_history(&pg, CROWD.len()).await?;
+    let (shelf, mine) = home_shelf(&service).await?;
+    let (twin, control) = home_shelf(&service).await?;
+    assert_eq!(shelf, twin, "two home loads must start alike");
+    let ttl: i64 = service
+        .redis
+        .get()
+        .await?
+        .ttl(format!("smartwave:handle:{LISTENER}:{mine}"))
+        .await?;
+    assert!(
+        ttl > 2 * 60 * 60,
+        "the shelf cursor expires before the river gets through its queue: {ttl}s"
+    );
+    let (unchanged, _) = page(&service, SmartWaveSeed::User, Some(&control)).await?;
+    let coming = sound_of(unchanged[0]);
+    let skipped: Vec<u64> = shelf
+        .iter()
+        .copied()
+        .filter(|id| sound_of(*id) == coming)
+        .collect();
+    assert!(
+        !skipped.is_empty(),
+        "the shelf has nothing of the sound the river plays next: {shelf:?}"
+    );
+
+    for id in &skipped {
+        listened(&pg, *id, "skip", -0.8, 0.1, 0).await?;
+    }
+    let (next, _) = page(&service, SmartWaveSeed::User, Some(&mine)).await?;
+
+    assert!(!next.is_empty(), "the river ran dry after the shelf");
+    assert!(
+        next.iter().all(|id| !shelf.contains(id)),
+        "the river repeated the shelf: {next:?}"
+    );
+    assert_eq!(
+        of_sound(&next, coming),
+        0,
+        "skips on the shelf {skipped:?} left their sound on the river: {next:?}, without them \
+         {unchanged:?}"
     );
     Ok(())
 }

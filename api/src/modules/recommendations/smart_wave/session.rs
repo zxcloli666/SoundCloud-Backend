@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
@@ -5,14 +6,16 @@ use uuid::Uuid;
 use super::cursor::WaveCursor;
 use super::graph::Affinity;
 use super::rank::TrackMeta;
-use super::signals::UserSignals;
+use super::signals::{Signal, UserSignals};
 use super::{
     TasteCentroids, blend_centroids, centroids_mean, geomean, mean_centroid, opt_to_centroids,
 };
+use crate::modules::centroids::normalize;
 
 const LIKED_ARTIST_AFFINITY: f32 = 0.8;
-const SKIPPED_ARTIST_DAMP: f32 = 0.5;
+pub const SKIPPED_ARTIST_DAMP: f32 = 0.5;
 const ARTIST_STRIKES_OUT: usize = 2;
+const SKIPS_TO_AVOID: usize = 8;
 
 #[derive(Debug, Default)]
 pub struct SessionFeedback {
@@ -23,34 +26,41 @@ pub struct SessionFeedback {
 
 impl SessionFeedback {
     pub fn from_signals(signals: &UserSignals, cursor: &WaveCursor) -> Self {
+        let since = cursor.history_until.unwrap_or(i64::MAX);
         let served: HashSet<u64> = cursor.seen_tracks.iter().copied().collect();
-        let known: HashSet<u64> = cursor.known_positives.iter().copied().collect();
-        let new_positive = |id: &u64| !known.contains(id);
         let mut decided: HashSet<u64> = HashSet::new();
         let mut session = Self::default();
-        for id in served_ids(&signals.disliked_ids, &served) {
+        for (id, _) in in_session(&signals.disliked_ids, since, &served) {
             if decided.insert(id) {
                 session.negatives.push(id);
                 session.disliked.push(id);
             }
         }
-        let liked = signals.superliked.iter().chain(signals.fresh_likes.iter());
-        for id in served_ids(liked, &served).into_iter().filter(new_positive) {
+        let liked = [
+            in_session(&signals.superliked, since, &served),
+            in_session(&signals.fresh_likes, since, &served),
+        ];
+        for (id, _) in liked.concat() {
             if decided.insert(id) {
                 session.positives.push(id);
             }
         }
-        for id in served_ids(&signals.recent_skips, &served) {
-            if decided.insert(id) {
-                session.negatives.push(id);
-            }
-        }
-        for id in served_ids(&signals.recent_played, &served)
+        let skips = in_session(&signals.recent_skips, since, &served)
             .into_iter()
-            .filter(new_positive)
-        {
-            if decided.insert(id) {
+            .map(|(id, at)| (id, at, false));
+        let full_plays = in_session(&signals.recent_played, since, &served)
+            .into_iter()
+            .map(|(id, at)| (id, at, true));
+        let mut listens: Vec<(u64, i64, bool)> = skips.chain(full_plays).collect();
+        listens.sort_by_key(|(_, at, _)| Reverse(*at));
+        for (id, _, played) in listens {
+            if !decided.insert(id) {
+                continue;
+            }
+            if played {
                 session.positives.push(id);
+            } else {
+                session.negatives.push(id);
             }
         }
         session
@@ -70,7 +80,7 @@ impl SessionFeedback {
         seed_artist: Option<Uuid>,
         affinity: &mut Affinity,
         disliked_artists: &mut HashSet<Uuid>,
-    ) {
+    ) -> HashSet<Uuid> {
         let artist_of = |id: &u64| meta.get(id).and_then(|m| m.primary_artist);
         let liked: HashSet<Uuid> = self.positives.iter().filter_map(artist_of).collect();
         let mut strikes: HashMap<Uuid, usize> = HashMap::new();
@@ -88,14 +98,16 @@ impl SessionFeedback {
             let weight = affinity.entry(artist).or_insert(0.0);
             *weight = weight.max(LIKED_ARTIST_AFFINITY);
         }
+        let mut sunk = HashSet::new();
         for (artist, count) in strikes {
             if count >= ARTIST_STRIKES_OUT && seed_artist != Some(artist) {
                 affinity.remove(&artist);
                 disliked_artists.insert(artist);
-            } else if let Some(weight) = affinity.get_mut(&artist) {
-                *weight *= SKIPPED_ARTIST_DAMP;
+            } else {
+                sunk.insert(artist);
             }
         }
+        sunk
     }
 
     pub(super) fn pull_taste(
@@ -128,40 +140,72 @@ impl SessionFeedback {
         &self,
         vectors: [&HashMap<String, Vec<f32>>; 3],
     ) -> TasteCentroids {
+        let latest = &self.negatives[..self.negatives.len().min(SKIPS_TO_AVOID)];
+        let unit = |vectors: &HashMap<String, Vec<f32>>| -> Vec<Vec<f32>> {
+            vectors_by_id(latest, vectors)
+                .into_values()
+                .map(|mut vector| {
+                    normalize(&mut vector);
+                    vector
+                })
+                .collect()
+        };
         let [m, c, l] = vectors;
         TasteCentroids {
-            m: vectors_by_id(&self.negatives, m).into_values().collect(),
-            c: vectors_by_id(&self.negatives, c).into_values().collect(),
-            l: vectors_by_id(&self.negatives, l).into_values().collect(),
+            m: unit(m),
+            c: unit(c),
+            l: unit(l),
         }
     }
 }
 
-pub fn positive_ids(signals: &UserSignals) -> HashSet<u64> {
-    signals
-        .superliked
-        .iter()
-        .chain(signals.fresh_likes.iter())
-        .chain(signals.recent_played.iter())
-        .filter_map(|id| id.parse::<u64>().ok())
-        .collect()
-}
-
-pub fn away_from_skips(content: f32, near_skip: &[Option<f32>]) -> f32 {
-    if !near_skip
-        .iter()
-        .flatten()
-        .any(|similarity| *similarity > 0.0)
-    {
-        return content;
+pub fn nearest_skip(skipped: &[Vec<f32>], vector: Option<&Vec<f32>>) -> Option<f32> {
+    if skipped.is_empty() {
+        return None;
     }
-    content * (content / geomean(near_skip)).min(1.0)
+    let vector = vector?;
+    let norm = dot(vector, vector).sqrt();
+    if norm == 0.0 {
+        return None;
+    }
+    skipped
+        .iter()
+        .map(|skip| dot(vector, skip) / norm)
+        .reduce(f32::max)
 }
 
-fn served_ids<'a>(ids: impl IntoIterator<Item = &'a String>, served: &HashSet<u64>) -> Vec<u64> {
-    ids.into_iter()
-        .filter_map(|id| id.parse::<u64>().ok())
-        .filter(|id| served.contains(id))
+pub fn skip_damp(taste: &[Option<f32>], near_skip: &[Option<f32>]) -> f32 {
+    let ratios: Vec<Option<f32>> = taste
+        .iter()
+        .zip(near_skip)
+        .map(|pair| match pair {
+            (Some(taste), Some(skip)) if *taste > 0.0 && *skip > 0.0 => Some(taste / skip),
+            _ => None,
+        })
+        .collect();
+    geomean(&ratios).min(1.0)
+}
+
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    let (a_chunks, a_rest) = a[..n].as_chunks::<8>();
+    let (b_chunks, b_rest) = b[..n].as_chunks::<8>();
+    let mut lanes = [0f32; 8];
+    for (a, b) in a_chunks.iter().zip(b_chunks) {
+        for ((lane, x), y) in lanes.iter_mut().zip(a).zip(b) {
+            *lane += x * y;
+        }
+    }
+    let rest: f32 = a_rest.iter().zip(b_rest).map(|(x, y)| x * y).sum();
+    lanes.iter().sum::<f32>() + rest
+}
+
+fn in_session(signals: &[Signal], since: i64, served: &HashSet<u64>) -> Vec<(u64, i64)> {
+    signals
+        .iter()
+        .filter(|signal| signal.at > since)
+        .filter_map(|signal| Some((signal.id.parse::<u64>().ok()?, signal.at)))
+        .filter(|(id, _)| served.contains(id))
         .collect()
 }
 
@@ -179,16 +223,26 @@ mod tests {
     use super::*;
     use crate::modules::recommendations::smart_wave::cursor::SeedKind;
 
+    const HISTORY: i64 = 1_000;
+    const EARLIER: i64 = HISTORY - 600;
+    const LATER: i64 = HISTORY + 60;
+
     fn served(ids: &[u64]) -> WaveCursor {
         let mut cursor = WaveCursor::new(SeedKind::User, "17".into());
+        cursor.history_until = Some(HISTORY);
         for id in ids {
             cursor.mark_served(*id, None);
         }
         cursor
     }
 
-    fn strings(ids: &[u64]) -> Vec<String> {
-        ids.iter().map(u64::to_string).collect()
+    fn at(time: i64, ids: &[u64]) -> Vec<Signal> {
+        ids.iter()
+            .map(|id| Signal {
+                id: id.to_string(),
+                at: time,
+            })
+            .collect()
     }
 
     fn meta(pairs: &[(u64, u128)]) -> HashMap<u64, TrackMeta> {
@@ -209,9 +263,9 @@ mod tests {
     #[test]
     fn only_what_this_wave_served_counts_as_session_feedback() {
         let signals = UserSignals {
-            fresh_likes: strings(&[1, 90]),
-            recent_skips: strings(&[2, 91]),
-            recent_played: strings(&[3]),
+            fresh_likes: at(LATER, &[1, 90]),
+            recent_skips: at(LATER, &[2, 91]),
+            recent_played: at(LATER, &[3]),
             ..UserSignals::default()
         };
 
@@ -223,31 +277,77 @@ mod tests {
     }
 
     #[test]
-    fn a_like_or_listen_from_before_the_track_was_served_is_not_session_feedback() {
+    fn what_happened_before_the_wave_started_is_not_session_feedback() {
         let signals = UserSignals {
-            fresh_likes: strings(&[1, 2]),
-            recent_skips: strings(&[1, 4]),
-            recent_played: strings(&[3]),
+            fresh_likes: [at(EARLIER, &[1]), at(LATER, &[2])].concat(),
+            recent_skips: at(EARLIER, &[1, 4]),
+            recent_played: at(EARLIER, &[3]),
             ..UserSignals::default()
         };
-        let mut cursor = served(&[1, 2, 3]);
-        cursor.mark_known_positive(1);
-        cursor.mark_known_positive(3);
+
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3, 4]));
+
+        assert_eq!(session.positives, vec![2]);
+        assert!(
+            session.negatives.is_empty(),
+            "an old skip of a served track counted: {:?}",
+            session.negatives
+        );
+    }
+
+    #[test]
+    fn a_wave_without_a_history_mark_has_no_session_yet() {
+        let signals = UserSignals {
+            recent_skips: at(LATER, &[1]),
+            ..UserSignals::default()
+        };
+        let mut cursor = served(&[1]);
+        cursor.history_until = None;
 
         let session = SessionFeedback::from_signals(&signals, &cursor);
 
-        assert_eq!(session.positives, vec![2]);
-        assert_eq!(session.negatives, vec![1]);
-        assert_eq!(positive_ids(&signals), HashSet::from([1, 2, 3]));
+        assert!(session.negatives.is_empty());
+    }
+
+    #[test]
+    fn the_latest_listen_of_a_track_decides_between_skip_and_full_play() {
+        let signals = UserSignals {
+            recent_skips: [
+                at(EARLIER, &[1]),
+                at(LATER + 20, &[2]),
+                at(LATER + 10, &[3]),
+            ]
+            .concat(),
+            recent_played: [at(LATER, &[1]), at(LATER + 10, &[2]), at(LATER + 20, &[3])].concat(),
+            ..UserSignals::default()
+        };
+
+        let session = SessionFeedback::from_signals(&signals, &served(&[1, 2, 3]));
+
+        assert_eq!(session.positives, vec![3, 1]);
+        assert_eq!(session.negatives, vec![2]);
+    }
+
+    #[test]
+    fn a_superlike_in_the_wave_counts_on_a_track_liked_long_before() {
+        let signals = UserSignals {
+            fresh_likes: at(EARLIER, &[1]),
+            superliked: at(LATER, &[1]),
+            ..UserSignals::default()
+        };
+
+        let session = SessionFeedback::from_signals(&signals, &served(&[1]));
+
+        assert_eq!(session.positives, vec![1]);
     }
 
     #[test]
     fn a_dislike_beats_a_like_and_a_like_beats_a_skip() {
         let signals = UserSignals {
-            disliked_ids: strings(&[1]),
-            fresh_likes: strings(&[1, 2]),
-            recent_skips: strings(&[2, 3]),
-            recent_played: strings(&[3]),
+            disliked_ids: at(LATER, &[1]),
+            fresh_likes: at(LATER, &[1, 2]),
+            recent_skips: at(LATER, &[2, 3]),
+            recent_played: at(LATER - 1, &[3]),
             ..UserSignals::default()
         };
 
@@ -268,15 +368,15 @@ mod tests {
         let mut affinity: Affinity = HashMap::from([(Uuid::from_u128(20), 0.6)]);
         let mut disliked = HashSet::new();
 
-        session.steer_artists(
-            &meta(&[(1, 10), (2, 20)]),
+        let sunk = session.steer_artists(
+            &meta(&[(1, 10), (2, 20), (3, 30)]),
             None,
             &mut affinity,
             &mut disliked,
         );
 
         assert!((affinity[&Uuid::from_u128(10)] - LIKED_ARTIST_AFFINITY).abs() < 1e-6);
-        assert!((affinity[&Uuid::from_u128(20)] - 0.3).abs() < 1e-6);
+        assert_eq!(sunk, HashSet::from([Uuid::from_u128(20)]));
         assert!(disliked.is_empty());
     }
 
@@ -319,7 +419,7 @@ mod tests {
         let mut affinity: Affinity = HashMap::from([(seed_artist, 1.0)]);
         let mut disliked = HashSet::new();
 
-        session.steer_artists(
+        let sunk = session.steer_artists(
             &meta(&[(1, 10), (2, 10)]),
             Some(seed_artist),
             &mut affinity,
@@ -327,7 +427,7 @@ mod tests {
         );
 
         assert!(disliked.is_empty());
-        assert!((affinity[&seed_artist] - SKIPPED_ARTIST_DAMP).abs() < 1e-6);
+        assert_eq!(sunk, HashSet::from([seed_artist]));
     }
 
     #[test]
@@ -350,13 +450,63 @@ mod tests {
     }
 
     #[test]
-    fn a_track_closer_to_a_skip_than_to_the_taste_sinks() {
-        let near = away_from_skips(0.8, &[Some(0.95), Some(0.95), None]);
-        let far = away_from_skips(0.8, &[Some(0.5), Some(0.6), None]);
-        let unknown = away_from_skips(0.8, &[None, None, None]);
+    fn only_the_latest_skips_are_compared_with_the_next_candidates() {
+        let session = SessionFeedback {
+            negatives: (1..=40).collect(),
+            ..SessionFeedback::default()
+        };
+        let vectors: HashMap<String, Vec<f32>> = (1..=40)
+            .map(|id| {
+                let vector = if id <= SKIPS_TO_AVOID as u64 {
+                    vec![3.0, 0.0]
+                } else {
+                    vec![0.0, 3.0]
+                };
+                (id.to_string(), vector)
+            })
+            .collect();
 
-        assert!(near < 0.7, "near a skip kept {near}");
-        assert!((far - 0.8).abs() < 1e-6);
-        assert!((unknown - 0.8).abs() < 1e-6);
+        let skipped = session.skipped_vectors([&vectors, &vectors, &HashMap::new()]);
+
+        assert_eq!(skipped.m.len(), SKIPS_TO_AVOID);
+        assert!(skipped.m.iter().all(|vector| vector[..] == [1.0, 0.0]));
+        assert!(skipped.l.is_empty());
+    }
+
+    #[test]
+    fn the_nearest_skip_is_a_cosine_over_any_length() {
+        let mut along = vec![0.0f32; 11];
+        along[10] = 1.0;
+        let mut across = vec![0.0f32; 11];
+        across[3] = 1.0;
+        let mut candidate = vec![0.0f32; 11];
+        candidate[10] = 4.0;
+        candidate[3] = 3.0;
+
+        let nearest = nearest_skip(&[along, across.clone()], Some(&candidate));
+
+        assert!(nearest.is_some_and(|similarity| (similarity - 0.8).abs() < 1e-6));
+        assert_eq!(nearest_skip(&[], Some(&candidate)), None);
+        assert_eq!(nearest_skip(&[across], None), None);
+    }
+
+    #[test]
+    fn a_track_closer_to_a_skip_than_to_the_taste_sinks() {
+        let taste = [Some(0.8), Some(0.8), None];
+
+        let near = skip_damp(&taste, &[Some(0.95), Some(0.95), None]);
+        let far = skip_damp(&taste, &[Some(0.5), Some(0.6), None]);
+        let unknown = skip_damp(&taste, &[None, None, None]);
+
+        assert!(near < 0.9, "near a skip kept {near}");
+        assert_eq!(far, 1.0);
+        assert_eq!(unknown, 1.0);
+    }
+
+    #[test]
+    fn a_skip_counts_only_in_the_spaces_the_taste_has_too() {
+        let damp = skip_damp(&[Some(0.8), None, None], &[Some(0.7), None, Some(0.99)]);
+
+        assert_eq!(damp, 1.0);
     }
 }
