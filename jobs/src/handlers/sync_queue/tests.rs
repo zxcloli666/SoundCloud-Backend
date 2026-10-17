@@ -521,6 +521,10 @@ async fn a_saved_pause_keeps_its_reason_and_restores_with_a_strike(
     repository
         .save_action_pause(app, "like_track", 600, 1, "subscription_required")
         .await?;
+    let restored = repository.action_pauses().await?;
+    repository
+        .save_action_pause(app, "like_track", 60, 2, "rate_limited")
+        .await?;
 
     let reason: String =
         sqlx::query_scalar("SELECT reason FROM sync_queue_action_pauses WHERE oauth_app_id = $1")
@@ -528,7 +532,6 @@ async fn a_saved_pause_keeps_its_reason_and_restores_with_a_strike(
             .fetch_one(&pool)
             .await?;
     assert_eq!(reason, "subscription_required");
-    let restored = repository.action_pauses().await?;
     assert_eq!(restored.len(), 1);
     assert!(restored[0].2 > 590 && restored[0].2 <= 600);
     assert!(restored[0].3 >= 1);

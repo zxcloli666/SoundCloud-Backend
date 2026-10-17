@@ -392,7 +392,7 @@ async fn a_listing_refused_for_the_token_is_read_again_with_the_renewed_one(
             format!(
                 "{} {}",
                 parts.next().unwrap_or_default(),
-                parts.last().unwrap_or_default()
+                parts.next_back().unwrap_or_default()
             )
         })
         .collect();

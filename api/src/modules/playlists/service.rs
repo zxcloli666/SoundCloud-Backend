@@ -95,6 +95,10 @@ impl PlaylistsService {
         }))
     }
 
+    pub async fn enqueue_edit_observation(&self, playlist_urn: &str) -> bool {
+        self.membership.enqueue_edit_observation(playlist_urn).await
+    }
+
     pub async fn get_by_id(
         &self,
         session_id: Uuid,

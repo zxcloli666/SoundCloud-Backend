@@ -80,10 +80,14 @@ pub fn find_created(
 
 fn listing_page(href: &str) -> Option<String> {
     let url = Url::parse(href).ok()?;
-    if url.path() != LISTING_PATH {
+    let opaque_collection = url.path() == "/collection"
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "cursor" && !value.is_empty());
+    if url.path() != LISTING_PATH && !opaque_collection {
         return None;
     }
-    Some(format!("{LISTING_PATH}?{}", url.query()?))
+    Some(format!("{}?{}", url.path(), url.query()?))
 }
 
 #[cfg(test)]
@@ -154,7 +158,16 @@ mod tests {
             Some("/me/playlists?cursor=abc&limit=50")
         );
         assert_eq!(
+            listing_page("https://api.soundcloud.com/collection?page_size=50&cursor=123")
+                .as_deref(),
+            Some("/collection?page_size=50&cursor=123")
+        );
+        assert_eq!(
             listing_page("https://api.soundcloud.com/users/1/playlists?cursor=abc"),
+            None
+        );
+        assert_eq!(
+            listing_page("https://api.soundcloud.com/collection?page_size=50"),
             None
         );
     }
