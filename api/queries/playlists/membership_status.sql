@@ -17,7 +17,19 @@ SELECT state.baseline_generation,
            FROM playlist_membership_operations AS operation
            WHERE operation.playlist_urn = state.playlist_urn
              AND operation.outcome = 'conflict'
-       ) AS "conflicted_operations!"
+       ) AS "conflicted_operations!",
+       state.reconcile_failure_streak,
+       state.last_error,
+       CASE WHEN state.sync_status = 'retry_wait'
+            THEN GREATEST(0, ceil(extract(epoch FROM COALESCE(state.next_reconcile_at, clock_timestamp()) - clock_timestamp())))::bigint
+            ELSE 0
+       END AS "retry_after_seconds!",
+       (
+           SELECT job.created_at
+           FROM background_jobs AS job
+           WHERE job.kind = 'playlists.observe_shadow'
+             AND job.dedup_key = state.playlist_urn
+       ) AS "queued_since?"
 FROM playlist_membership_state AS state
 LEFT JOIN playlist_remote_observations AS observation
   ON observation.playlist_urn = state.playlist_urn

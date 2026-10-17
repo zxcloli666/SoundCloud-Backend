@@ -299,13 +299,22 @@ async fn owner_followings_schedule_public_uploads_without_reviving_unfollows_or_
     .bind(Uuid::now_v7())
     .execute(&pool)
     .await?;
+    sqlx::query(
+        "INSERT INTO background_job_failures (id, kind, lane, dedup_key, payload, priority, generation, attempts, max_attempts, last_error, created_at, failed_at)
+        VALUES ($1, 'catalog.collection', 'core_bulk', 'owned-tracks:20:public', '{}', 5, 1, 1, 8,
+                'not_found: SoundCloud API error (status 404)', now() - interval '2 hours', now() - interval '1 hour')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await?;
     let snapshot = state::begin(&pool, &job, &payload)
         .await?
         .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
     let response = json!({"collection":[
         {"id":17,"urn":"soundcloud:users:17","username":"New"},
         {"id":18,"urn":"soundcloud:users:18","username":"Unfollowed"},
-        {"id":19,"urn":"soundcloud:users:19","username":"Fresh"}
+        {"id":19,"urn":"soundcloud:users:19","username":"Fresh"},
+        {"id":20,"urn":"soundcloud:users:20","username":"Deleted"}
     ]});
     writer
         .persist(
@@ -1218,3 +1227,5 @@ async fn an_owner_run_abandoned_by_apiv2_starts_over_on_the_owner_api(
     );
     Ok(())
 }
+
+mod giving_up;

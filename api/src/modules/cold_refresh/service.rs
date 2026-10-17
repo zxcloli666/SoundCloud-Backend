@@ -311,6 +311,8 @@ fn refreshing() -> CollectionSync {
     CollectionSync {
         status: "refreshing",
         last_completed_at: None,
+        queued_since: None,
+        error_code: None,
         retry_after_seconds: 5,
     }
 }
@@ -319,6 +321,8 @@ fn ready() -> CollectionSync {
     CollectionSync {
         status: "ready",
         last_completed_at: None,
+        queued_since: None,
+        error_code: None,
         retry_after_seconds: 0,
     }
 }

@@ -14,11 +14,44 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
     sqlx::raw_sql(
-        "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL)",
+        "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);
+         CREATE TABLE soundcloud_connections (
+             soundcloud_user_id text NOT NULL,
+             created_at timestamptz NOT NULL DEFAULT now(),
+             last_refresh_success_at timestamptz
+         );",
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn fail_for_good(
+    pool: &PgPool,
+    dedup_key: &str,
+    last_error: &str,
+    ago: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation, attempts, max_attempts,
+             last_error, created_at, failed_at
+         ) VALUES ($1, 'catalog.collection', 'core_bulk', $2, '{}', 15, 1, 1, 8,
+                   $3, now() - $4::interval, now() - $4::interval)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dedup_key)
+    .bind(last_error)
+    .bind(ago)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn queued(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar("SELECT count(*) FROM background_jobs")
+        .fetch_one(pool)
+        .await?)
 }
 
 #[sqlx::test(migrations = false)]
@@ -200,5 +233,167 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     .fetch_one(&pool)
     .await?;
     assert_eq!(owner, (20, 1));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_collection_that_failed_for_good_is_held_for_six_hours(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install(&pool).await?;
+    fail_for_good(
+        &pool,
+        "liked-tracks:42:public",
+        "not_found: SoundCloud API error (status 404)",
+        "1 hour",
+    )
+    .await?;
+
+    let sync = ensure(&pool, CatalogCollection::LikedTracks, "42", false, 600).await?;
+
+    assert_eq!(sync.status, "refreshing");
+    assert_eq!(sync.error_code, Some("not_found"));
+    assert_eq!(sync.queued_since, None);
+    assert!((17_990..=18_000).contains(&sync.retry_after_seconds));
+    assert_eq!(queued(&pool).await?, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn after_the_hold_the_collection_is_queued_again_and_still_reports_the_error(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install(&pool).await?;
+    fail_for_good(
+        &pool,
+        "liked-tracks:42:public",
+        "forbidden: SoundCloud API error (status 403)",
+        "8 hours",
+    )
+    .await?;
+    fail_for_good(
+        &pool,
+        "liked-tracks:42:public",
+        "not_found: SoundCloud API error (status 404)",
+        "7 hours",
+    )
+    .await?;
+
+    let sync = ensure(&pool, CatalogCollection::LikedTracks, "42", false, 600).await?;
+
+    assert_eq!(sync.error_code, Some("not_found"));
+    assert!(sync.queued_since.is_some());
+    assert_eq!(sync.retry_after_seconds, 5);
+    assert_eq!(queued(&pool).await?, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_successful_pass_clears_the_error(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    fail_for_good(
+        &pool,
+        "followings:42:owner",
+        "not_found: SoundCloud API error (status 404)",
+        "3 hours",
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, synced_at, complete)
+         VALUES ('42', 'followings', 'owner', $1, 1, $2, now() - interval '1 hour', true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await?;
+
+    let sync = ensure(&pool, CatalogCollection::Followings, "42", true, 600).await?;
+
+    assert_eq!(sync.status, "refreshing");
+    assert!(sync.last_completed_at.is_some());
+    assert_eq!(sync.error_code, None);
+    assert_eq!(queued(&pool).await?, 1);
+    Ok(())
+}
+
+async fn sign_out_the_owner(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO soundcloud_connections (soundcloud_user_id, created_at)
+         VALUES ('42', now() - interval '40 days')",
+    )
+    .execute(pool)
+    .await?;
+    fail_for_good(
+        pool,
+        "liked-playlists:42:owner",
+        "auth_required: owner must sign in again",
+        "1 hour",
+    )
+    .await
+}
+
+#[sqlx::test(migrations = false)]
+async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    sign_out_the_owner(&pool).await?;
+
+    for age in ["1 hour", "29 days"] {
+        sqlx::query("UPDATE background_job_failures SET failed_at = now() - $1::interval")
+            .bind(age)
+            .execute(&pool)
+            .await?;
+        let sync = ensure(&pool, CatalogCollection::LikedPlaylists, "42", true, 600).await?;
+        assert_eq!(sync.error_code, Some("auth_required"));
+        assert_eq!(sync.retry_after_seconds, 0);
+        assert_eq!(queued(&pool).await?, 0);
+    }
+
+    sqlx::query(
+        "INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('soundcloud:users:42')",
+    )
+    .execute(&pool)
+    .await?;
+    let sync = ensure(&pool, CatalogCollection::LikedPlaylists, "42", true, 600).await?;
+
+    assert_eq!(sync.error_code, None);
+    assert!(sync.queued_since.is_some());
+    assert_eq!(queued(&pool).await?, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn signing_in_again_on_the_same_session_lifts_auth_required(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install(&pool).await?;
+    sign_out_the_owner(&pool).await?;
+    sqlx::query("UPDATE soundcloud_connections SET last_refresh_success_at = now()")
+        .execute(&pool)
+        .await?;
+
+    let sync = ensure(&pool, CatalogCollection::LikedPlaylists, "42", true, 600).await?;
+
+    assert_eq!(sync.error_code, None);
+    assert!(sync.queued_since.is_some());
+    assert_eq!(queued(&pool).await?, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_queued_collection_reports_since_when(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    let first = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+    let created_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "UPDATE background_jobs SET created_at = now() - interval '20 minutes' RETURNING created_at",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let again = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
+
+    assert!(first.queued_since.is_some());
+    assert_eq!(again.queued_since, Some(created_at));
+    assert_eq!(again.error_code, None);
+    assert_eq!(queued(&pool).await?, 1);
     Ok(())
 }

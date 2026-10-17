@@ -67,6 +67,9 @@ pub async fn install(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!("../../../migrations/0057_background_jobs.sql"))
+        .execute(pool)
+        .await?;
     sqlx::raw_sql(include_str!(
         "../../../migrations/0077_playlist_membership_shadow.sql"
     ))

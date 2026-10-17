@@ -223,6 +223,19 @@ pub(super) fn owner_is_signed_out(error: &JobError) -> bool {
     )
 }
 
+pub(super) fn refused_as_forbidden(error: &JobError) -> bool {
+    let JobError::Postponed { error, .. } = error else {
+        return false;
+    };
+    matches!(
+        error.downcast_ref::<sc_transport::ScError>(),
+        Some(sc_transport::ScError::Api { status: 403, .. })
+    ) || matches!(
+        error.downcast_ref::<PlaylistReadError>(),
+        Some(PlaylistReadError::Api { status, .. }) if *status == wreq::StatusCode::FORBIDDEN
+    )
+}
+
 pub(super) fn postpone(seconds: i64, error: impl Into<anyhow::Error>) -> JobError {
     JobError::postponed(Duration::from_secs(seconds.clamp(1, 86400) as u64), error)
 }

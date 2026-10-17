@@ -10,6 +10,7 @@ use crate::error::AppResult;
 use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 const EDIT_PRIORITY: i16 = 30;
+const FAILURE_STREAK_LIMIT: i32 = 5;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,26 @@ pub struct PlaylistMembershipStatus {
     pub status: String,
     pub conflict_code: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
+    pub queued_since: Option<DateTime<Utc>>,
+    pub error_code: Option<&'static str>,
+    pub retry_after_seconds: i64,
+}
+
+fn playlist_error_code(
+    status: &str,
+    conflict_code: Option<&str>,
+    streak: i32,
+    last_error: Option<&str>,
+) -> Option<&'static str> {
+    match (status, conflict_code) {
+        ("auth_required", _) => Some("auth_required"),
+        (_, Some("remote_not_found")) => Some("not_found"),
+        ("retry_wait", _) if streak >= FAILURE_STREAK_LIMIT => match last_error {
+            Some("soundcloud_forbidden") => Some("forbidden"),
+            _ => Some("unavailable"),
+        },
+        _ => None,
+    }
 }
 
 fn membership_status(row: Option<MembershipStatusRow>) -> PlaylistMembershipStatus {
@@ -39,8 +60,17 @@ fn membership_status(row: Option<MembershipStatusRow>) -> PlaylistMembershipStat
             status: "unhydrated".to_owned(),
             conflict_code: None,
             observed_at: None,
+            queued_since: None,
+            error_code: None,
+            retry_after_seconds: 0,
         };
     };
+    let error_code = playlist_error_code(
+        &row.sync_status,
+        row.conflict_code.as_deref(),
+        row.reconcile_failure_streak,
+        row.last_error.as_deref(),
+    );
     PlaylistMembershipStatus {
         baseline_generation: row.baseline_generation,
         projection_revision: row.projection_revision,
@@ -52,6 +82,9 @@ fn membership_status(row: Option<MembershipStatusRow>) -> PlaylistMembershipStat
         status: row.sync_status,
         conflict_code: row.conflict_code,
         observed_at: row.observed_at,
+        queued_since: row.queued_since,
+        error_code,
+        retry_after_seconds: row.retry_after_seconds,
     }
 }
 
@@ -66,6 +99,10 @@ struct MembershipStatusRow {
     observed_at: Option<DateTime<Utc>>,
     pending_operations: i64,
     conflicted_operations: i64,
+    reconcile_failure_streak: i32,
+    last_error: Option<String>,
+    retry_after_seconds: i64,
+    queued_since: Option<DateTime<Utc>>,
 }
 
 pub struct PlaylistMembership {
@@ -322,6 +359,100 @@ mod tests {
         );
         assert_eq!(status.projection_track_count, 0);
         assert_eq!(status.pending_operations, 0);
+        assert_eq!(status.queued_since, None);
+        assert_eq!(status.error_code, None);
+        assert_eq!(status.retry_after_seconds, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_failing_read_is_named_only_once_its_streak_is_long() {
+        let forbidden = Some("soundcloud_forbidden");
+        assert_eq!(
+            playlist_error_code("retry_wait", None, 5, forbidden),
+            Some("forbidden")
+        );
+        assert_eq!(playlist_error_code("retry_wait", None, 2, forbidden), None);
+        assert_eq!(
+            playlist_error_code("retry_wait", None, 7, Some("soundcloud_rate_limited")),
+            Some("unavailable")
+        );
+        assert_eq!(
+            playlist_error_code("shadow_ready", None, 9, forbidden),
+            None
+        );
+    }
+
+    #[test]
+    fn a_signed_out_owner_and_a_deleted_playlist_have_their_own_codes() {
+        assert_eq!(
+            playlist_error_code(
+                "auth_required",
+                None,
+                1,
+                Some("soundcloud_reauthorization_required")
+            ),
+            Some("auth_required")
+        );
+        assert_eq!(
+            playlist_error_code(
+                "conflict",
+                Some("remote_not_found"),
+                1,
+                Some("soundcloud_playlist_not_found")
+            ),
+            Some("not_found")
+        );
+        assert_eq!(
+            playlist_error_code("conflict", Some("legacy_order_only"), 9, None),
+            None
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn status_reports_the_queued_read_and_a_retry_only_while_waiting_on_a_failure(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        test_schema::install(&pool).await?;
+        test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        let queued_at: DateTime<Utc> = sqlx::query_scalar(
+            "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+             VALUES ($1, 'playlists.observe_shadow', 'core_bulk', $2, '{}')
+             RETURNING created_at",
+        )
+        .bind(uuid::Uuid::now_v7())
+        .bind(PLAYLIST)
+        .fetch_one(&pool)
+        .await?;
+        sqlx::query(
+            "UPDATE playlist_membership_state
+             SET sync_status = 'unhydrated',
+                 next_reconcile_at = clock_timestamp() + interval '10 minutes'",
+        )
+        .execute(&pool)
+        .await?;
+
+        let unhydrated = membership_status(load_membership_status(&pool, PLAYLIST).await?);
+        assert_eq!(unhydrated.queued_since, Some(queued_at));
+        assert_eq!(unhydrated.retry_after_seconds, 0);
+        assert_eq!(unhydrated.error_code, None);
+
+        sqlx::query(
+            "UPDATE playlist_membership_state
+             SET sync_status = 'retry_wait',
+                 reconcile_failure_streak = 5,
+                 last_error = 'soundcloud_forbidden'",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("DELETE FROM background_jobs")
+            .execute(&pool)
+            .await?;
+
+        let waiting = membership_status(load_membership_status(&pool, PLAYLIST).await?);
+        assert!((599..=600).contains(&waiting.retry_after_seconds));
+        assert_eq!(waiting.error_code, Some("forbidden"));
+        assert_eq!(waiting.queued_since, None);
         Ok(())
     }
 }

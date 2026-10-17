@@ -6,16 +6,21 @@ mod writer;
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::{CatalogCollectionPayload, CatalogEntity};
+use backend_contracts::{CatalogCollectionPayload, CatalogEntity, CollectionFailure};
+use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::config::JobsConfig;
 use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
-use super::catalog_remote::{CatalogRemote, owner_is_signed_out, postpone, public_error};
+use super::catalog_remote::{
+    CatalogRemote, owner_is_signed_out, postpone, public_error, refused_as_forbidden,
+};
 
 const APIV2_DEADLINE: Duration = Duration::from_secs(25);
+const NOT_FOUND_PATIENCE: chrono::Duration = chrono::Duration::minutes(25);
+const FORBIDDEN_PATIENCE: chrono::Duration = chrono::Duration::hours(6);
 
 pub struct CatalogCollectionHandler {
     pool: PgPool,
@@ -66,8 +71,8 @@ impl CatalogCollectionHandler {
             Err(error) if payload.owner && owner_is_signed_out(&error) => {
                 return self.finish_without_owner(job, &payload, &snapshot).await;
             }
-            Err(JobError::Permanent(error)) => return Err(postpone(1800, error)),
-            result => result?,
+            Err(error) => return Err(give_up_or_wait(&snapshot, error)),
+            Ok(page) => page,
         };
         let Some(page) = page else {
             state::abandon_apiv2(&self.pool, job, &payload).await?;
@@ -93,8 +98,14 @@ impl CatalogCollectionHandler {
         payload: &CatalogCollectionPayload,
         snapshot: &state::Snapshot,
     ) -> JobResult {
+        if !payload.apiv2_first() {
+            return Err(failed_for_good(
+                CollectionFailure::AuthRequired,
+                "owner must sign in again",
+            ));
+        }
         let owner_api_start = page::owner_api_start(payload)?;
-        if payload.apiv2_first() && snapshot.next_cursor.as_deref() == Some(&owner_api_start) {
+        if snapshot.next_cursor.as_deref() == Some(&owner_api_start) {
             state::finish_unverified(&self.pool, job, payload).await?;
         }
         Ok(())
@@ -180,6 +191,25 @@ impl CatalogCollectionHandler {
         };
         page::parse(payload, value, false)
     }
+}
+
+fn give_up_or_wait(snapshot: &state::Snapshot, error: JobError) -> JobError {
+    let on_first_page = snapshot.next_cursor.is_none();
+    let age = Utc::now().signed_duration_since(snapshot.started_at);
+    match error {
+        JobError::Permanent(error) if on_first_page && age >= NOT_FOUND_PATIENCE => {
+            failed_for_good(CollectionFailure::NotFound, error)
+        }
+        JobError::Permanent(error) => postpone(1800, error),
+        error if on_first_page && refused_as_forbidden(&error) && age >= FORBIDDEN_PATIENCE => {
+            failed_for_good(CollectionFailure::Forbidden, error)
+        }
+        error => error,
+    }
+}
+
+fn failed_for_good(failure: CollectionFailure, detail: impl std::fmt::Display) -> JobError {
+    JobError::permanent(anyhow::Error::msg(failure.message(detail)))
 }
 
 #[cfg(test)]

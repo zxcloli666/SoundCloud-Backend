@@ -17,4 +17,11 @@ WHERE subject_id ~ '^[1-9][0-9]*$'
       WHERE s.subject_id = subjects.subject_id AND s.collection = 'owned-tracks'
         AND s.scope = 'public' AND s.synced_at BETWEEN now() - interval '5 minutes' AND now()
   )
+  AND NOT EXISTS (
+      SELECT 1 FROM background_job_failures f
+      WHERE f.kind = 'catalog.collection'
+        AND f.dedup_key = 'owned-tracks:' || subjects.subject_id || ':public'
+        AND f.failed_at > now() - interval '6 hours'
+        AND split_part(f.last_error, ':', 1) IN ('not_found', 'forbidden')
+  )
 ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING

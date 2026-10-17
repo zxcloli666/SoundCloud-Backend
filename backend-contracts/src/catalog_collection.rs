@@ -105,6 +105,34 @@ impl CatalogCollection {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollectionFailure {
+    AuthRequired,
+    NotFound,
+    Forbidden,
+}
+
+impl CollectionFailure {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthRequired => "auth_required",
+            Self::NotFound => "not_found",
+            Self::Forbidden => "forbidden",
+        }
+    }
+
+    pub fn message(self, detail: impl std::fmt::Display) -> String {
+        format!("{}: {detail}", self.as_str())
+    }
+
+    pub fn from_last_error(last_error: &str) -> Option<Self> {
+        let code = last_error.split(':').next()?;
+        [Self::AuthRequired, Self::NotFound, Self::Forbidden]
+            .into_iter()
+            .find(|failure| failure.as_str() == code)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogCollectionPayload {
@@ -208,6 +236,31 @@ mod tests {
             assert!(!payload.is_valid());
             payload.owner = false;
             assert!(payload.is_valid());
+        }
+    }
+
+    #[test]
+    fn a_failure_code_is_read_back_from_the_dead_letter_message() {
+        for failure in [
+            CollectionFailure::AuthRequired,
+            CollectionFailure::NotFound,
+            CollectionFailure::Forbidden,
+        ] {
+            let message = failure.message("SoundCloud API error (status 404)");
+            assert!(message.starts_with(&format!("{}: ", failure.as_str())));
+            assert_eq!(CollectionFailure::from_last_error(&message), Some(failure));
+            assert_eq!(
+                CollectionFailure::from_last_error(failure.as_str()),
+                Some(failure)
+            );
+        }
+        for other in [
+            "",
+            "collection has another page",
+            "job exceeded: 45s",
+            "not_found_x: y",
+        ] {
+            assert_eq!(CollectionFailure::from_last_error(other), None);
         }
     }
 
