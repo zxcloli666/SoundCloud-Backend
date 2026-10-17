@@ -46,13 +46,17 @@ pub(super) async fn try_session_oauth(
         client: &state.http_client,
         pg: &state.pg,
         proxy_url: &state.config.sc_proxy_url,
-        proxy_fallback: premium && state.config.sc_proxy_fallback,
+        proxy_fallback: may_go_direct(state.config.sc_proxy_fallback, premium, hq_only),
         fallback_session_count: state.config.sc_oauth_fallback_sessions,
     };
     let result =
         super::oauth::try_oauth_stream(&ctx, access_token, track_urn, secret_token, hq_only)
             .await?;
     Some((result.data, result.content_type, result.quality))
+}
+
+fn may_go_direct(allowed: bool, premium: bool, hq_only: bool) -> bool {
+    allowed && (premium || !hq_only)
 }
 
 pub(super) async fn try_cookies(
@@ -354,6 +358,14 @@ mod tests {
         assert!(heard.next().await.is_some_and(|chunk| chunk.is_ok()));
         assert!(heard.next().await.is_some_and(|chunk| chunk.is_err()));
         assert!(heard.next().await.is_none());
+    }
+
+    #[test]
+    fn a_free_session_reads_apiv1_directly_only_for_sq() {
+        assert!(!may_go_direct(true, false, true));
+        assert!(may_go_direct(true, false, false));
+        assert!(may_go_direct(true, true, true));
+        assert!(!may_go_direct(false, true, false));
     }
 
     #[test]
