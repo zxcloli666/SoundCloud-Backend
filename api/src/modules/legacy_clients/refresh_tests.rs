@@ -109,7 +109,7 @@ async fn the_sign_in_verdict_is_a_plain_coded_401_without_a_pause() -> anyhow::R
         json!({
             "statusCode": 401,
             "code": "soundcloud_reauthorization_required",
-            "message": "SoundCloud rejected the refresh token, sign in again",
+            "message": "The SoundCloud login of this session is no longer valid, sign in again",
             "error": "Unauthorized"
         })
     );

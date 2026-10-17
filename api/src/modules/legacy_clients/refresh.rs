@@ -56,7 +56,7 @@ fn reauthorization_required() -> AppError {
     AppError::coded(
         StatusCode::UNAUTHORIZED,
         "soundcloud_reauthorization_required",
-        "SoundCloud rejected the refresh token, sign in again",
+        "The SoundCloud login of this session is no longer valid, sign in again",
     )
 }
 
