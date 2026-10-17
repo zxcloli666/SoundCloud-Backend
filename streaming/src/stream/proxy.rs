@@ -200,6 +200,12 @@ fn proxy_target(
     (proxy_url.to_string(), headers)
 }
 
+fn carries_credentials(headers: &HashMap<String, String>) -> bool {
+    headers.keys().any(|name| {
+        name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
+    })
+}
+
 fn is_retryable_status(status: u16) -> bool {
     status == 421 || status == 429 || (500..=599).contains(&status)
 }
@@ -373,7 +379,10 @@ pub async fn fetch_get_validated(
     allow_direct: bool,
     validate: BodyValidator,
 ) -> FetchResult {
-    let relay = RELAY.get().cloned();
+    let relay = RELAY
+        .get()
+        .cloned()
+        .filter(|_| !carries_credentials(&extra));
     let proxy_set = !proxy_url.is_empty();
 
     if proxy_set {
@@ -486,7 +495,10 @@ pub async fn fetch_post_bytes(
     body: Vec<u8>,
 ) -> FetchResult {
     let validate = accept_non_empty();
-    let relay = RELAY.get().cloned();
+    let relay = RELAY
+        .get()
+        .cloned()
+        .filter(|_| !carries_credentials(&extra));
     if let Some(r) = relay {
         match via_relay_post(
             r,
@@ -564,4 +576,31 @@ pub async fn fetch_get_json<T: serde::de::DeserializeOwned + 'static>(
         fetch_get_validated(client, proxy_url, target_url, extra, allow_direct, validate).await?;
     let val = serde_json::from_slice(&bytes)?;
     Ok(val)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_request_with_a_token_or_a_cookie_never_goes_to_a_user_desktop() {
+        for name in ["Authorization", "authorization", "Cookie", "COOKIE"] {
+            assert!(
+                carries_credentials(&headers(&[(name, "x")])),
+                "`{name}` would hand a token to whoever runs the relay"
+            );
+        }
+        assert!(!carries_credentials(&headers(&[])));
+        assert!(!carries_credentials(&headers(&[(
+            "Accept",
+            "application/json"
+        )])));
+    }
 }
