@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
@@ -7,6 +6,7 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use tracing::{info, warn};
 
+use super::free_hq::Gate;
 use super::quality;
 use super::sources::{
     UploadRule, data_response, respond_with_data, try_anon, try_cookies, try_relay_track,
@@ -191,8 +191,10 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
             return respond_with_data(state, track_urn, r, upload);
         }
     } else if tier == quality::HQ {
-        if let Some(response) = live_hq(req, tag).await? {
-            return Ok(response);
+        match live_hq(req, tag).await? {
+            HqTry::Served(response) => return Ok(response),
+            HqTry::Refused => return Err(AppError::NoStream),
+            HqTry::Missed => {}
         }
     } else {
         if let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
@@ -277,7 +279,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
         {
             return Ok(response);
         }
-        if let Some(response) = live_hq(req, tag).await? {
+        if let HqTry::Served(response) = live_hq(req, tag).await? {
             return Ok(response);
         }
         if upload.cacheable
@@ -362,7 +364,13 @@ fn live_hq_order(is_premium: bool) -> [LiveHq; 3] {
     }
 }
 
-async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<Option<Response>, AppError> {
+enum HqTry {
+    Served(Response),
+    Missed,
+    Refused,
+}
+
+async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<HqTry, AppError> {
     let StreamRequest {
         state,
         track_urn,
@@ -373,15 +381,19 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<Option<Response>,
         ..
     } = *req;
 
-    let mut slot = None;
-    if !is_premium {
-        let Ok(permit) = state.free_hq.clone().try_acquire_owned() else {
+    let slot = match state.free_hq.gate(track_urn, is_premium) {
+        Gate::Open(slot) => slot,
+        Gate::Busy => {
             info!("{tag} {track_urn} → every free hq slot is busy");
             crate::metrics::record_source("none", "free_hq_busy");
-            return Ok(None);
-        };
-        slot = Some(Arc::new(permit));
-    }
+            return Ok(HqTry::Refused);
+        }
+        Gate::MissedLately => {
+            info!("{tag} {track_urn} → had no hq lately");
+            crate::metrics::record_source("none", "free_hq_missed_lately");
+            return Ok(HqTry::Refused);
+        }
+    };
 
     for source in live_hq_order(is_premium) {
         match source {
@@ -397,7 +409,7 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<Option<Response>,
                 .await
                 {
                     served(tag, track_urn, "oauth_hq", r.2);
-                    return respond_with_data(state, track_urn, r, upload).map(Some);
+                    return respond_with_data(state, track_urn, r, upload).map(HqTry::Served);
                 }
             }
             LiveHq::Restricted => {
@@ -413,18 +425,21 @@ async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<Option<Response>,
                 .await
                 {
                     served(tag, track_urn, "restricted_hq", q);
-                    return Ok(Some(r));
+                    return Ok(HqTry::Served(r));
                 }
             }
             LiveHq::Anon => {
                 if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
                     served(tag, track_urn, "anon_hq", r.2);
-                    return respond_with_data(state, track_urn, r, upload).map(Some);
+                    return respond_with_data(state, track_urn, r, upload).map(HqTry::Served);
                 }
             }
         }
     }
-    Ok(None)
+    if !is_premium {
+        state.free_hq.note_miss(track_urn);
+    }
+    Ok(HqTry::Missed)
 }
 
 fn served(tag: &str, track_urn: &str, source: &'static str, quality: &str) {

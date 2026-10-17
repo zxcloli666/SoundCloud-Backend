@@ -80,7 +80,7 @@ impl Config {
             free_hq_fetches: env::var("FREE_HQ_FETCHES")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(16),
+                .unwrap_or(8),
             sc_cookies: cookies,
             premium_only: env::var("PREMIUM_ONLY")
                 .map(|v| v == "true")

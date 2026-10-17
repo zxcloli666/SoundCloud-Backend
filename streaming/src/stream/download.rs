@@ -7,9 +7,11 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tokio::sync::OwnedSemaphorePermit;
 use tracing::{debug, info, warn};
 use wreq::Client;
 
+use super::free_hq::FreeHq;
 use super::handler::{DOWNLOAD_DEADLINE, check_is_premium, extract_download_session_id};
 use super::proxy::{fetch_get_bytes, fetch_get_json, fetch_get_text};
 use super::quality;
@@ -97,7 +99,12 @@ async fn download_inner(
         return Err(AppError::Forbidden);
     }
 
-    let entries = collect_entries(&state, &track_urn, is_premium).await;
+    let mut entries = collect_entries(&state, &track_urn, is_premium).await;
+    let _slot = if is_premium {
+        None
+    } else {
+        cap_for_free(&state.free_hq, &track_urn, &mut entries)
+    };
     if entries.is_empty() {
         warn!("[download] {track_urn} → no transcodings");
         return Err(AppError::NotFound);
@@ -178,6 +185,25 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
         "[download] {track_urn} sources: anon={anon_count}, cookies={cookies_count} ({cookies_status})"
     );
     entries
+}
+
+fn cap_for_free(
+    free_hq: &FreeHq,
+    track_urn: &str,
+    entries: &mut Vec<Entry>,
+) -> Option<OwnedSemaphorePermit> {
+    let above_sq = |e: &Entry| quality::rank(quality::of_transcoding(&e.t)) > 0;
+    entries.retain(|e| quality::of_transcoding(&e.t) != quality::UQ);
+    if !entries.iter().any(above_sq) {
+        return None;
+    }
+    let slot = free_hq.download_slot();
+    if slot.is_none() {
+        info!("[download] {track_urn} → every free hq slot is busy, sq only");
+        crate::metrics::record_source("download", "free_hq_busy");
+        entries.retain(|e| !above_sq(e));
+    }
+    slot
 }
 
 async fn resolve_entry(state: &AppState, entry: Entry) -> Option<Candidate> {
@@ -373,6 +399,70 @@ fn log_resolve_failure(msg: &str, stage: &str, preset: &str, protocol: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const URN: &str = "soundcloud:tracks:1";
+
+    fn entry(preset: &str, quality: &str) -> Entry {
+        Entry {
+            t: serde_json::from_value(serde_json::json!({
+                "url": format!("https://api-v2.soundcloud.com/media/{URN}/{preset}/stream/hls"),
+                "preset": preset,
+                "quality": quality,
+            }))
+            .unwrap(),
+            client_id: "cid".into(),
+            track_auth: None,
+            headers: HashMap::new(),
+        }
+    }
+
+    fn all_tiers() -> Vec<Entry> {
+        vec![
+            entry("aac_256k", "hq"),
+            entry("aac_160k", "sq"),
+            entry("abr_sq", "sq"),
+        ]
+    }
+
+    fn presets(entries: &[Entry]) -> Vec<&str> {
+        entries
+            .iter()
+            .map(|e| e.t.preset.as_deref().unwrap_or(""))
+            .collect()
+    }
+
+    #[test]
+    fn a_free_session_gets_hq_with_a_slot_and_never_uq() {
+        let free = FreeHq::new(1);
+        let mut entries = all_tiers();
+
+        let slot = cap_for_free(&free, URN, &mut entries);
+
+        assert!(slot.is_some());
+        assert_eq!(presets(&entries), ["aac_160k", "abr_sq"]);
+        assert!(
+            free.download_slot().is_none(),
+            "the slot is held until the reply"
+        );
+    }
+
+    #[test]
+    fn with_no_free_slot_a_download_offers_sq_and_spends_no_license_above_it() {
+        let mut entries = all_tiers();
+
+        assert!(cap_for_free(&FreeHq::new(0), URN, &mut entries).is_none());
+        assert_eq!(presets(&entries), ["abr_sq"]);
+    }
+
+    #[test]
+    fn a_track_with_nothing_above_sq_takes_no_slot() {
+        let free = FreeHq::new(1);
+        let mut entries = vec![entry("abr_sq", "sq"), entry("aac_256k", "hq")];
+
+        assert!(cap_for_free(&free, URN, &mut entries).is_none());
+        assert_eq!(presets(&entries), ["abr_sq"]);
+        assert!(free.download_slot().is_some());
+    }
 
     #[test]
     fn classify_status_parses_known_formats() {
