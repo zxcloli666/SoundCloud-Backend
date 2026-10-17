@@ -328,3 +328,41 @@ async fn a_trusted_account_stops_new_auto_matches(pool: PgPool) -> anyhow::Resul
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_namesake_with_a_transliterated_uploader_name_is_left_out(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let krovostok = seed_artist(&pool, "Кровосток").await?;
+    seed_account(&pool, krovostok, "900", "manual", true).await?;
+    let namesake = Uploader("901", "Кровосток (Krovostok)");
+
+    let track = enrich(
+        &pool,
+        "без шансов",
+        &namesake,
+        &heuristic("без шансов", &namesake),
+    )
+    .await?;
+
+    assert!(roles_of(&pool, track, krovostok).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn two_ideographs_are_a_full_name_and_one_is_short(pool: PgPool) -> anyhow::Result<()> {
+    let faye = seed_artist(&pool, "王菲").await?;
+    seed_account(&pool, faye, "910", "mb_resolve", false).await?;
+    let arashi = seed_artist(&pool, "嵐").await?;
+    seed_account(&pool, arashi, "920", "mb_resolve", false).await?;
+    let fan = Uploader("930", "asia archive");
+
+    let faye_title = "王菲 - 红豆";
+    let faye_track = enrich(&pool, faye_title, &fan, &heuristic(faye_title, &fan)).await?;
+    let arashi_title = "嵐 - Love so sweet";
+    let arashi_track = enrich(&pool, arashi_title, &fan, &heuristic(arashi_title, &fan)).await?;
+
+    assert_eq!(roles_of(&pool, faye_track, faye).await?, ["primary"]);
+    assert!(roles_of(&pool, arashi_track, arashi).await?.is_empty());
+    Ok(())
+}

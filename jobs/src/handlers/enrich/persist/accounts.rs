@@ -6,8 +6,18 @@ use crate::handlers::enrich::error::EnrichResult;
 use crate::handlers::enrich::resolver::{ArtistCandidate, CreditEvidence, ResolveSource};
 use catalog_normalize::{clean_artist_name, normalize_name};
 
-const MIN_NAME_MATCH_CHARS: usize = 4;
+const MIN_NAME_LENGTH: usize = 4;
 const REUPLOAD_THRESHOLD: i64 = 3;
+
+fn name_length(normalized: &str) -> usize {
+    normalized
+        .chars()
+        .map(|c| match c {
+            '\u{3040}'..='\u{30FF}' | '\u{3400}'..='\u{9FFF}' | '\u{20000}'..='\u{3134F}' => 2,
+            _ => 1,
+        })
+        .sum()
+}
 
 pub(super) async fn without_foreign_namesakes(
     tx: &mut Transaction<'_, Postgres>,
@@ -15,7 +25,7 @@ pub(super) async fn without_foreign_namesakes(
     uploader_sc_user_id: Option<&str>,
     uploader_username: Option<&str>,
 ) -> EnrichResult<Vec<ArtistCandidate>> {
-    let uploader_name = uploader_username.map(normalize_name);
+    let uploader_name = uploader_username.map(|name| normalize_name(&clean_artist_name(name)));
     let mut kept = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let name_only = candidate.mb_id.is_none()
@@ -27,7 +37,7 @@ pub(super) async fn without_foreign_namesakes(
                     | CreditEvidence::VerifiedAccount
             );
         let normalized = normalize_name(&clean_artist_name(&candidate.name));
-        let ambiguous = normalized.chars().count() < MIN_NAME_MATCH_CHARS
+        let ambiguous = name_length(&normalized) < MIN_NAME_LENGTH
             || uploader_name.as_deref() == Some(normalized.as_str());
         let held_by_other_accounts = name_only
             && ambiguous
@@ -61,8 +71,8 @@ pub(super) async fn maybe_auto_attach_sc_account(
 ) -> EnrichResult<()> {
     let uploader = normalize_name(uploader_username);
     let artist = normalize_name(artist_name);
-    let long_enough = uploader.chars().count() >= MIN_NAME_MATCH_CHARS
-        && artist.chars().count() >= MIN_NAME_MATCH_CHARS;
+    let long_enough =
+        name_length(&uploader) >= MIN_NAME_LENGTH && name_length(&artist) >= MIN_NAME_LENGTH;
     let names_agree = uploader.contains(&artist) || artist.contains(&uploader);
     if sc_user_id.is_empty() || !long_enough || !names_agree {
         return Ok(());

@@ -4,9 +4,17 @@ WITH trusted AS (SELECT account.artist_id,
                  WHERE account.verified
                     OR account.source IN ('mb_resolve', 'manual')
                  GROUP BY account.artist_id),
+     short_named AS (SELECT artist.id
+                     FROM artists AS artist
+                     WHERE artist.merged_into IS NULL
+                       AND char_length(artist.normalized_name) +
+                           char_length(regexp_replace(artist.normalized_name,
+                                                      '[^\u3040-\u30ff\u3400-\u9fff\U00020000-\U0003134f]', '',
+                                                      'g')) < 4),
      name_matched AS (SELECT account.artist_id,
                              array_agg(account.sc_user_id || ':' || account.role
                                        ORDER BY account.sc_user_id) AS accounts,
+                             array_agg(account.sc_user_id)              AS ids,
                              bool_or(account.role IN ('main', 'demo'))  AS shown
                       FROM artist_sc_accounts AS account
                       WHERE account.source = 'auto_match'
@@ -34,10 +42,11 @@ WITH trusted AS (SELECT account.artist_id,
                                        ON credit.artist_id = trusted.artist_id
                                            AND credit.role = 'primary'
                                   JOIN tracks AS track ON track.id = credit.track_id
+                                  LEFT JOIN short_named ON short_named.id = artist.id
                          WHERE artist.merged_into IS NULL
                            AND credit.evidence IN ('uploader_name', 'title_heuristic', 'ai_inference',
                                                    'metadata_field', 'unattributed')
-                           AND (credit.evidence = 'uploader_name' OR char_length(artist.normalized_name) < 4)
+                           AND (credit.evidence = 'uploader_name' OR short_named.id IS NOT NULL)
                            AND NOT track.is_cover
                            AND track.superseded_by IS NULL
                            AND track.uploader_sc_user_id IS NOT NULL
@@ -58,17 +67,21 @@ WITH trusted AS (SELECT account.artist_id,
                                  WHEN name_matched.shown AND trusted.artist_id IS NOT NULL
                                      THEN 'auto_match_main_beside_trusted' END,
                              CASE
-                                 WHEN name_matched.artist_id IS NOT NULL AND char_length(artist.normalized_name) < 4
+                                 WHEN name_matched.artist_id IS NOT NULL AND short_named.id IS NOT NULL
                                      THEN 'auto_match_on_short_name' END,
                              CASE
                                  WHEN artist.sc_user_id IS NOT NULL AND NOT artist.sc_user_id = ANY (trusted.accounts)
                                      THEN 'link_not_trusted' END,
+                             CASE
+                                 WHEN trusted.artist_id IS NULL AND artist.sc_user_id = ANY (name_matched.ids)
+                                     THEN 'link_from_name_match' END,
                              CASE WHEN foreign_avatar.artist_id IS NOT NULL THEN 'avatar_of_untrusted_account' END,
                              CASE WHEN foreign_credits.artist_id IS NOT NULL THEN 'foreign_name_only_primaries' END
                              ], NULL)                           AS reasons
                   FROM artists AS artist
                            LEFT JOIN trusted ON trusted.artist_id = artist.id
                            LEFT JOIN name_matched ON name_matched.artist_id = artist.id
+                           LEFT JOIN short_named ON short_named.id = artist.id
                            LEFT JOIN foreign_avatar ON foreign_avatar.artist_id = artist.id
                            LEFT JOIN foreign_credits ON foreign_credits.artist_id = artist.id
                   WHERE artist.merged_into IS NULL
