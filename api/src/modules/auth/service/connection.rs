@@ -171,7 +171,8 @@ impl AuthService {
     }
 
     pub async fn refresh_soundcloud(&self, session_id: Uuid) -> AppResult<RefreshAttempt> {
-        self.get_auth_session(session_id)
+        let session = self
+            .get_auth_session(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
         let Some(connection) = self.get_connection_for_session(session_id).await? else {
@@ -180,6 +181,11 @@ impl AuthService {
                 connection: None,
             });
         };
+        if session.oauth_app_id.is_none() || session.oauth_app_active != Some(true) {
+            return Err(AppError::soundcloud_temporarily_unavailable_for(Some(
+                OAUTH_APP_RETRY_SECONDS,
+            )));
+        }
         if !refresh_due(&connection) {
             return Ok(attempt(RefreshOutcome::AlreadyFresh, connection));
         }

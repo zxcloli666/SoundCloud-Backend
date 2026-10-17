@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -18,6 +18,9 @@ const THROTTLED: Uuid = Uuid::from_u128(0xa4);
 const STALLED: Uuid = Uuid::from_u128(0xa5);
 const LEASED: Uuid = Uuid::from_u128(0xa6);
 const UNLINKED: Uuid = Uuid::from_u128(0xa7);
+const APP_OFF: Uuid = Uuid::from_u128(0xa8);
+const APP_OFF_FRESH: Uuid = Uuid::from_u128(0xa9);
+const APP_REMOVED: Uuid = Uuid::from_u128(0xaa);
 const UNKNOWN: Uuid = Uuid::from_u128(0xff);
 
 #[sqlx::test(migrations = "./migrations")]
@@ -55,6 +58,54 @@ async fn every_session_gets_the_old_verdict_here_and_keeps_its_own_on_the_new_pa
             .into_response()
             .status();
         assert_eq!((old, new), (old_path, new_path), "session {session}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_login_whose_app_is_off_or_removed_keeps_the_old_502_with_a_half_hour_pause(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri, active)
+         VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'off', 'off-client', 'secret', 'http://127.0.0.1/', false);
+         INSERT INTO soundcloud_connections
+             (id, soundcloud_user_id, oauth_app_id, access_token, refresh_token, expires_at, scope)
+         VALUES
+             ('00000000-0000-0000-0000-0000000000c8', '23', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              'a', 'r', now() - interval '1 hour', ''),
+             ('00000000-0000-0000-0000-0000000000c9', '24', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              'a', 'r', now() + interval '1 hour', ''),
+             ('00000000-0000-0000-0000-0000000000ca', '25', NULL,
+              'a', 'r', now() - interval '1 hour', '');
+         INSERT INTO sessions (id, soundcloud_connection_id) VALUES
+             ('00000000-0000-0000-0000-0000000000a8', '00000000-0000-0000-0000-0000000000c8'),
+             ('00000000-0000-0000-0000-0000000000a9', '00000000-0000-0000-0000-0000000000c9'),
+             ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000ca');",
+    )
+    .execute(&pool)
+    .await?;
+    let auth = auth(&pool)?;
+
+    for session in [APP_OFF, APP_OFF_FRESH, APP_REMOVED] {
+        let old = answer(session, auth.refresh_soundcloud(session).await).into_response();
+        let new = auth
+            .refresh_soundcloud(session)
+            .await
+            .map(refresh_response)
+            .into_response();
+        for response in [old, new] {
+            let retry_after = response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok());
+            assert_eq!(
+                (response.status(), retry_after),
+                (StatusCode::BAD_GATEWAY, Some("1800")),
+                "session {session}"
+            );
+        }
     }
     Ok(())
 }
