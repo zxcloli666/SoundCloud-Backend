@@ -210,31 +210,90 @@ async fn a_short_name_in_a_strangers_title_is_not_a_primary_but_a_feature_stays(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
-async fn an_external_credit_still_reaches_a_short_named_artist(pool: PgPool) -> anyhow::Result<()> {
-    let z2 = seed_z2(&pool).await?;
-    let stranger = Uploader("1072135747", "owari");
-    let resolved = ResolveResult {
+fn on_genius(name: &str, genius_id: &str) -> ResolveResult {
+    ResolveResult {
         source: ResolveSource::Genius,
         confidence: 0.85,
         primary: vec![
             ArtistCandidate {
-                name: "z²".to_owned(),
-                genius_id: Some("3184042".to_owned()),
+                name: name.to_owned(),
+                genius_id: Some(genius_id.to_owned()),
                 ..Default::default()
             }
             .attributed(ResolveSource::Genius, 0.85, CreditEvidence::ExternalId),
         ],
         ..Default::default()
-    };
+    }
+}
 
-    let track = enrich(&pool, "z² - night", &stranger, &resolved).await?;
+async fn genius_id_of(pool: &PgPool, artist_id: Uuid) -> anyhow::Result<Option<String>> {
+    let genius_id = sqlx::query_scalar("SELECT genius_artist_id FROM artists WHERE id = $1")
+        .bind(artist_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(genius_id)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_external_credit_by_id_still_reaches_a_short_named_artist(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let z2 = seed_z2(&pool).await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '3184042' WHERE id = $1")
+        .bind(z2)
+        .execute(&pool)
+        .await?;
+    let stranger = Uploader("1072135747", "owari");
+
+    let track = enrich(&pool, "z² - night", &stranger, &on_genius("z²", "3184042")).await?;
 
     assert_eq!(roles_of(&pool, track, z2).await?, ["primary"]);
     assert_eq!(
         primary_of(&pool, track).await?,
         (Some(z2), "reupload".to_owned())
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_unknown_external_artist_with_a_short_name_is_not_the_local_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let z2 = seed_z2(&pool).await?;
+    let oyg = seed_artist(&pool, "oyg").await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '111' WHERE id = $1")
+        .bind(oyg)
+        .execute(&pool)
+        .await?;
+    let stranger = Uploader("1072135747", "owari");
+
+    let z2_title = "Z2 - night";
+    let z2_track = enrich(&pool, z2_title, &stranger, &on_genius("Z2", "222")).await?;
+    let oyg_title = "OYG - night";
+    let oyg_track = enrich(&pool, oyg_title, &stranger, &on_genius("OYG", "333")).await?;
+
+    assert!(roles_of(&pool, z2_track, z2).await?.is_empty());
+    assert!(roles_of(&pool, oyg_track, oyg).await?.is_empty());
+    assert_eq!(primary_of(&pool, z2_track).await?.0, None);
+    assert_eq!(genius_id_of(&pool, z2).await?, None);
+    assert_eq!(genius_id_of(&pool, oyg).await?.as_deref(), Some("111"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_artists_own_upload_takes_an_unknown_external_credit(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let z2 = seed_z2(&pool).await?;
+    let home = Uploader(Z2_HOME, "z²");
+
+    let track = enrich(&pool, "night drive", &home, &on_genius("z²", "222")).await?;
+
+    assert_eq!(
+        primary_of(&pool, track).await?,
+        (Some(z2), "original".to_owned())
+    );
+    assert_eq!(genius_id_of(&pool, z2).await?.as_deref(), Some("222"));
     Ok(())
 }
 

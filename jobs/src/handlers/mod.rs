@@ -2,6 +2,7 @@ mod account_walk;
 mod admin_maintenance;
 mod ai_store;
 mod apiv1_pace;
+mod artist_names;
 mod attribution;
 mod catalog;
 mod catalog_collection;

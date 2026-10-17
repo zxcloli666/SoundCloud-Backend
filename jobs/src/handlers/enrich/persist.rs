@@ -5,6 +5,7 @@ mod accounts;
 mod tests;
 
 use sqlx::{PgPool, Postgres, Transaction};
+use tracing::debug;
 use uuid::Uuid;
 
 use self::accounts::{
@@ -13,6 +14,7 @@ use self::accounts::{
 };
 use super::error::EnrichResult;
 use super::resolver::{AlbumCandidate, ArtistCandidate, Credit, ResolveResult, ResolveSource};
+use crate::handlers::artist_names::{MIN_NAME_LENGTH, name_length};
 use catalog_normalize::{clean_artist_name, normalize_name, normalize_title};
 
 pub struct PersistOutcome {
@@ -41,10 +43,10 @@ pub async fn apply(
         )
         .await?
     };
-    let primary_ids = upsert_artists(&mut tx, &primaries).await?;
-    let featured_ids = upsert_artists(&mut tx, &res.featured).await?;
-    let producer_ids = upsert_artists(&mut tx, &res.producers).await?;
-    let remixer_ids = upsert_artists(&mut tx, &res.remixers).await?;
+    let primary_ids = upsert_artists(&mut tx, &primaries, uploader_sc_user_id).await?;
+    let featured_ids = upsert_artists(&mut tx, &res.featured, uploader_sc_user_id).await?;
+    let producer_ids = upsert_artists(&mut tx, &res.producers, uploader_sc_user_id).await?;
+    let remixer_ids = upsert_artists(&mut tx, &res.remixers, uploader_sc_user_id).await?;
 
     let prior_count: i64 =
         sqlx::query_file_scalar!("queries/enrich/persist/count_track_artists.sql", track_id)
@@ -101,7 +103,16 @@ pub async fn apply(
     };
 
     let album_id = if let Some(album) = res.album.as_ref() {
-        Some(upsert_album(&mut tx, album, res.source, res.confidence).await?)
+        Some(
+            upsert_album(
+                &mut tx,
+                album,
+                res.source,
+                res.confidence,
+                uploader_sc_user_id,
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -195,6 +206,7 @@ async fn calibrate_confidence(
 async fn upsert_artists(
     tx: &mut Transaction<'_, Postgres>,
     candidates: &[ArtistCandidate],
+    uploader_sc_user_id: Option<&str>,
 ) -> EnrichResult<Vec<(Uuid, Credit)>> {
     let mut credited: Vec<(Uuid, Credit)> = Vec::with_capacity(candidates.len());
     for c in candidates {
@@ -207,15 +219,19 @@ async fn upsert_artists(
             continue;
         }
         let credit = c.credit();
-        let id = upsert_one_artist(
+        let Some(id) = upsert_one_artist(
             tx,
             &cleaned,
             &normalized,
             c,
             credit.source,
             credit.confidence,
+            uploader_sc_user_id,
         )
-        .await?;
+        .await?
+        else {
+            continue;
+        };
         match credited.iter_mut().find(|(known, _)| *known == id) {
             Some((_, held)) => {
                 if stronger(&credit, held) {
@@ -242,7 +258,8 @@ async fn upsert_one_artist(
     cand: &ArtistCandidate,
     source: ResolveSource,
     confidence: f32,
-) -> EnrichResult<Uuid> {
+    uploader_sc_user_id: Option<&str>,
+) -> EnrichResult<Option<Uuid>> {
     if let Some(mb_id) = cand.mb_id.as_deref() {
         let existing: Option<Uuid> =
             sqlx::query_file_scalar!("queries/enrich/persist/artist_by_mb_id.sql", mb_id)
@@ -250,7 +267,7 @@ async fn upsert_one_artist(
                 .await?;
         if let Some(id) = existing {
             maybe_promote(tx, id, cand, source, confidence).await?;
-            return resolve_merged(tx, id).await;
+            return resolve_merged(tx, id).await.map(Some);
         }
     }
 
@@ -261,7 +278,7 @@ async fn upsert_one_artist(
                 .await?;
         if let Some(id) = existing {
             maybe_promote(tx, id, cand, source, confidence).await?;
-            return resolve_merged(tx, id).await;
+            return resolve_merged(tx, id).await.map(Some);
         }
     }
 
@@ -272,8 +289,28 @@ async fn upsert_one_artist(
     .fetch_optional(&mut **tx)
     .await?;
     if let Some(id) = existing {
+        let external_id_unmatched = cand.mb_id.is_some() || cand.genius_id.is_some();
+        if external_id_unmatched
+            && name_length(normalized) < MIN_NAME_LENGTH
+            && sqlx::query_file_scalar!(
+                "queries/enrich/persist/name_match_is_another_artist.sql",
+                id,
+                cand.mb_id.as_deref(),
+                cand.genius_id.as_deref(),
+                uploader_sc_user_id
+            )
+            .fetch_one(&mut **tx)
+            .await?
+        {
+            debug!(
+                artist = %name,
+                uploader = ?uploader_sc_user_id,
+                "external artist kept off a same-named artist with its own identity"
+            );
+            return Ok(None);
+        }
         maybe_promote(tx, id, cand, source, confidence).await?;
-        return resolve_merged(tx, id).await;
+        return resolve_merged(tx, id).await.map(Some);
     }
 
     let inserted: (Uuid,) = sqlx::query_as(
@@ -289,7 +326,7 @@ async fn upsert_one_artist(
     .bind(confidence)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(inserted.0)
+    Ok(Some(inserted.0))
 }
 
 async fn maybe_promote(
@@ -377,6 +414,7 @@ async fn upsert_album(
     album: &AlbumCandidate,
     source: ResolveSource,
     confidence: f32,
+    uploader_sc_user_id: Option<&str>,
 ) -> EnrichResult<Uuid> {
     if let Some(mb_id) = album.mb_id.as_deref() {
         let existing: Option<Uuid> =
@@ -420,8 +458,16 @@ async fn upsert_album(
         if n.is_empty() {
             None
         } else {
-            let id = upsert_one_artist(tx, pa.name.trim(), &n, pa, source, confidence).await?;
-            Some(id)
+            upsert_one_artist(
+                tx,
+                pa.name.trim(),
+                &n,
+                pa,
+                source,
+                confidence,
+                uploader_sc_user_id,
+            )
+            .await?
         }
     } else {
         None

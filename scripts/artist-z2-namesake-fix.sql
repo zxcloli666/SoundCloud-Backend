@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+\if :{?apply}
+\else
+\set apply off
+\endif
 
 BEGIN;
 
@@ -7,7 +11,14 @@ FROM artist_sc_accounts AS account
 WHERE account.artist_id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc'
 ORDER BY account.sc_user_id;
 
-SELECT artist.sc_user_id, artist.avatar_url
+SELECT artist.sc_user_id,
+       artist.avatar_url,
+       (SELECT replace(track.uploader_avatar_url, '-large.', '-t500x500.')
+        FROM tracks AS track
+        WHERE track.uploader_sc_user_id = '1211580634'
+          AND track.uploader_avatar_url LIKE '%/avatars-%'
+        ORDER BY track.updated_at DESC
+        LIMIT 1) AS latest_home_upload_avatar
 FROM artists AS artist
 WHERE artist.id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc';
 
@@ -60,13 +71,7 @@ WHERE artist_id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc'
 
 UPDATE artists
 SET sc_user_id = '1211580634',
-    avatar_url = COALESCE((SELECT replace(track.uploader_avatar_url, '-large.', '-t500x500.')
-                           FROM tracks AS track
-                           WHERE track.uploader_sc_user_id = '1211580634'
-                             AND track.uploader_avatar_url LIKE '%/avatars-%'
-                           ORDER BY track.updated_at DESC
-                           LIMIT 1),
-                          'https://i1.sndcdn.com/avatars-0nqZTr2cOae7fdHx-z56c8Q-t500x500.jpg'),
+    avatar_url = 'https://i1.sndcdn.com/avatars-0nqZTr2cOae7fdHx-z56c8Q-t500x500.jpg',
     updated_at = now()
 WHERE id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc';
 
@@ -125,7 +130,7 @@ WHERE credit.artist_id = '6cbf3702-d84e-4d0a-a713-e5cec09c7bfc'
 GROUP BY credit.role
 ORDER BY credit.role;
 
-\if :{?apply}
+\if :apply
 COMMIT;
 \else
 ROLLBACK;

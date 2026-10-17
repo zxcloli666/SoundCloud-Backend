@@ -2,22 +2,12 @@ use sqlx::{Postgres, Transaction};
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::handlers::artist_names::{MIN_NAME_LENGTH, name_length};
 use crate::handlers::enrich::error::EnrichResult;
 use crate::handlers::enrich::resolver::{ArtistCandidate, CreditEvidence, ResolveSource};
 use catalog_normalize::{clean_artist_name, normalize_name};
 
-const MIN_NAME_LENGTH: usize = 4;
 const REUPLOAD_THRESHOLD: i64 = 3;
-
-fn name_length(normalized: &str) -> usize {
-    normalized
-        .chars()
-        .map(|c| match c {
-            '\u{3040}'..='\u{30FF}' | '\u{3400}'..='\u{9FFF}' | '\u{20000}'..='\u{3134F}' => 2,
-            _ => 1,
-        })
-        .sum()
-}
 
 pub(super) async fn without_foreign_namesakes(
     tx: &mut Transaction<'_, Postgres>,
