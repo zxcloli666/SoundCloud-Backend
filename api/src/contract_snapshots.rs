@@ -34,6 +34,12 @@ fn sync() -> CollectionSync {
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         ),
+        queued_since: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-09-12T11:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        error_code: Some("not_found"),
         retry_after_seconds: 5,
     }
 }
@@ -76,6 +82,8 @@ fn a_collection_page_passes_soundcloud_cards_through_untouched() {
             "sync": {
                 "status": "refreshing",
                 "lastCompletedAt": "2026-09-12T10:00:00Z",
+                "queuedSince": "2026-09-12T11:30:00Z",
+                "errorCode": "not_found",
                 "retryAfterSeconds": 5
             }
         })
@@ -88,6 +96,8 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
         CollectionSync {
             status: "ready",
             last_completed_at: None,
+            queued_since: None,
+            error_code: None,
             retry_after_seconds: 0,
         },
         0,
@@ -106,6 +116,8 @@ fn an_empty_collection_page_keeps_every_field_and_a_null_completion() {
             "sync": {
                 "status": "ready",
                 "lastCompletedAt": null,
+                "queuedSince": null,
+                "errorCode": null,
                 "retryAfterSeconds": 0
             }
         })
@@ -173,6 +185,13 @@ fn playlist_membership_status_stays_camel_case_with_every_counter() {
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         ),
+        queued_since: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-09-12T10:05:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        error_code: None,
+        retry_after_seconds: 0,
     };
 
     assert_eq!(
@@ -187,9 +206,38 @@ fn playlist_membership_status_stays_camel_case_with_every_counter() {
             "conflictedOperations": 0,
             "status": "shadow_ready",
             "conflictCode": null,
-            "observedAt": "2026-09-12T10:00:00Z"
+            "observedAt": "2026-09-12T10:00:00Z",
+            "queuedSince": "2026-09-12T10:05:00Z",
+            "errorCode": null,
+            "retryAfterSeconds": 0
         })
     );
+}
+
+#[test]
+fn a_failing_playlist_read_reports_its_code_and_wait() {
+    let status = PlaylistMembershipStatus {
+        baseline_generation: 1,
+        projection_revision: 1,
+        projection_track_count: 13,
+        last_operation_sequence: 0,
+        committed_operation_sequence: 0,
+        pending_operations: 0,
+        conflicted_operations: 0,
+        status: "retry_wait".to_owned(),
+        conflict_code: None,
+        observed_at: None,
+        queued_since: None,
+        error_code: Some("forbidden"),
+        retry_after_seconds: 1800,
+    };
+
+    let served = wire(&status);
+
+    assert_eq!(served["status"], json!("retry_wait"));
+    assert_eq!(served["queuedSince"], json!(null));
+    assert_eq!(served["errorCode"], json!("forbidden"));
+    assert_eq!(served["retryAfterSeconds"], json!(1800));
 }
 
 #[test]

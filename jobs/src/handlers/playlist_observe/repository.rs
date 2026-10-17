@@ -622,19 +622,26 @@ impl PlaylistObserveRepository {
                 operations: Vec::new(),
             });
         }
-        sqlx::query_file!(
-            "queries/playlist_observe/abandon_legacy_intents.sql",
-            &capture.playlist_urn
-        )
-        .execute(&mut **transaction)
-        .await?;
+        let remote: HashSet<&str> = snapshot.track_ids.iter().map(String::as_str).collect();
+        let soundcloud_has_local_tracks = local_track_ids
+            .iter()
+            .all(|track_id| remote.contains(track_id.as_str()));
+        let reason = if soundcloud_has_local_tracks {
+            sqlx::query_file!(
+                "queries/playlist_observe/abandon_legacy_intents.sql",
+                &capture.playlist_urn
+            )
+            .execute(&mut **transaction)
+            .await?;
+            "the edited local playlist replaced its unresolved legacy intents"
+        } else {
+            "the edited local playlist is kept over its legacy intents until SoundCloud has its tracks"
+        };
         Ok(Reconciliation {
             run_decision: "shadow_ready",
             state_status: "shadow_ready",
             conflict_code: None,
-            reason: Some(
-                "the edited local playlist replaced its unresolved legacy intents".to_owned(),
-            ),
+            reason: Some(reason.to_owned()),
             projection: Some(candidate),
             candidate_fingerprint: Some(candidate_fingerprint),
             committed_through_sequence: locked.committed_operation_sequence,

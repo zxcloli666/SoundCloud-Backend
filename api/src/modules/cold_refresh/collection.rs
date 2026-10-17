@@ -1,6 +1,6 @@
 use backend_contracts::{
-    CatalogCollection, CatalogCollectionPayload, CatalogEntity, JobKind, STAR_PRIORITY_BONUS,
-    Versioned,
+    CatalogCollection, CatalogCollectionPayload, CatalogEntity, CollectionFailure, JobKind,
+    STAR_PRIORITY_BONUS, Versioned,
 };
 use chrono::{DateTime, Utc};
 use serde::ser::SerializeStruct;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::cache::ListPageResult;
 use crate::common::pagination::last_page;
-use crate::common::sc_ids::extract_sc_id;
+use crate::common::sc_ids::{extract_sc_id, user_id_variants};
 use crate::error::{AppError, AppResult};
 
 use super::VIEWER_PRIORITY;
@@ -23,6 +23,8 @@ const OWNER_PRIORITY: i16 = 20;
 pub struct CollectionSync {
     pub status: &'static str,
     pub last_completed_at: Option<DateTime<Utc>>,
+    pub queued_since: Option<DateTime<Utc>>,
+    pub error_code: Option<&'static str>,
     pub retry_after_seconds: u64,
 }
 
@@ -99,9 +101,28 @@ pub(super) async fn ensure(
         let age = Utc::now().signed_duration_since(at).num_seconds();
         age >= 0 && age as u64 <= ttl
     });
+    if fresh {
+        return Ok(CollectionSync {
+            status: "ready",
+            last_completed_at: synced_at,
+            queued_since: None,
+            error_code: None,
+            retry_after_seconds: 0,
+        });
+    }
     let key = payload.dedup_key();
-    let mut retry_after_seconds = 0;
-    if !fresh {
+    let failure = sqlx::query_file!(
+        "queries/cold_refresh/collection_failure.sql",
+        &key,
+        synced_at,
+        &user_id_variants(&payload.subject_id)
+    )
+    .fetch_optional(pool)
+    .await?;
+    let held = failure
+        .as_ref()
+        .is_some_and(|failure| failure.hold_seconds != Some(0));
+    if !held {
         let star_candidates = if collection.subject() == CatalogEntity::User {
             vec![payload.subject_id.clone()]
         } else {
@@ -128,16 +149,21 @@ pub(super) async fn ensure(
         )
         .execute(pool)
         .await?;
-        retry_after_seconds =
-            sqlx::query_file_scalar!("queries/cold_refresh/collection_retry_after.sql", &key)
-                .fetch_optional(pool)
-                .await?
-                .unwrap_or(5)
-                .clamp(5, 1800) as u64;
     }
+    let job = sqlx::query_file!("queries/cold_refresh/collection_job.sql", &key)
+        .fetch_optional(pool)
+        .await?;
+    let retry_after_seconds = match &failure {
+        Some(failure) if held => failure.hold_seconds.unwrap_or(0),
+        _ => job.as_ref().map_or(5, |job| job.retry_after_seconds),
+    };
     Ok(CollectionSync {
-        status: if fresh { "ready" } else { "refreshing" },
+        status: "refreshing",
         last_completed_at: synced_at,
-        retry_after_seconds,
+        queued_since: job.map(|job| job.created_at),
+        error_code: failure
+            .and_then(|failure| CollectionFailure::from_last_error(&failure.code))
+            .map(CollectionFailure::as_str),
+        retry_after_seconds: retry_after_seconds.max(0) as u64,
     })
 }
