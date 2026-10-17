@@ -103,7 +103,7 @@ impl SyncQueueRepository {
         Ok(())
     }
 
-    pub async fn clear_action_pause(
+    pub async fn clear_action_pauses(
         &self,
         oauth_app_id: uuid::Uuid,
         action_type: &str,

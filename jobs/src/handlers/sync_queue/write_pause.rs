@@ -100,9 +100,8 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         Admission::Probe
     }
 
-    pub fn succeeded(&self, key: &K, spacing: Option<Duration>) -> bool {
+    pub fn succeeded(&self, key: &K, spacing: Option<Duration>) {
         let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
-        let was_refused = paused.get(key).is_some_and(|pause| pause.strikes > 0);
         match spacing {
             Some(spacing) => {
                 paused.insert(
@@ -118,7 +117,6 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
                 paused.remove(key);
             }
         }
-        was_refused
     }
 
     pub fn remaining_seconds(&self, key: &K) -> Option<i64> {
@@ -244,8 +242,8 @@ mod tests {
         expire(&pauses, &"likes");
         assert_eq!(pauses.admit(&"likes"), Admission::Probe);
         assert_eq!(pauses.pause_longer_each_time("likes", 60), (960, 5));
-        assert!(pauses.succeeded(&"likes", None));
-        assert!(!pauses.succeeded(&"likes", None));
+        pauses.succeeded(&"likes", None);
+        assert_eq!(pauses.admit(&"likes"), Admission::Open);
     }
 
     #[test]
@@ -274,7 +272,7 @@ mod tests {
 
         assert_eq!(pauses.admit(&"likes"), Admission::Probe);
         assert!(matches!(pauses.admit(&"likes"), Admission::Paused(_)));
-        assert!(pauses.succeeded(&"likes", None));
+        pauses.succeeded(&"likes", None);
         assert_eq!(pauses.admit(&"likes"), Admission::Open);
     }
 

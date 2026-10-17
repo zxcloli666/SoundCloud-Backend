@@ -26,39 +26,58 @@ pub enum ActionError {
     UnknownAction(String),
 }
 
+pub enum Remote {
+    Written(Value),
+    TargetMissing,
+}
+
+const CLOSED_WHEN_TARGET_IS_MISSING: [&str; 8] = [
+    "like_track",
+    "unlike_track",
+    "like_playlist",
+    "unlike_playlist",
+    "follow_user",
+    "unfollow_user",
+    "playlist_delete",
+    "track_delete",
+];
+
 pub async fn execute_remote(
     client: &SoundCloudClient,
     mutation: &ClaimedMutation,
     access_token: &str,
-) -> Result<Value, ActionError> {
+) -> Result<Remote, ActionError> {
     let target = &mutation.target_urn;
-    let result = match mutation.action_type.as_str() {
-        "like_track" => done_if_missing(
+    let response = match mutation.action_type.as_str() {
+        "like_track" => {
             client
                 .post(&format!("/likes/tracks/{target}"), access_token, None)
-                .await,
-            target,
-        )?,
-        "unlike_track" => {
-            delete_remote(client, &format!("/likes/tracks/{target}"), access_token).await?
+                .await
         }
-        "like_playlist" => done_if_missing(
+        "unlike_track" => {
+            client
+                .delete(&format!("/likes/tracks/{target}"), access_token)
+                .await
+        }
+        "like_playlist" => {
             client
                 .post(&format!("/likes/playlists/{target}"), access_token, None)
-                .await,
-            target,
-        )?,
-        "unlike_playlist" => {
-            delete_remote(client, &format!("/likes/playlists/{target}"), access_token).await?
+                .await
         }
-        "follow_user" => done_if_missing(
+        "unlike_playlist" => {
+            client
+                .delete(&format!("/likes/playlists/{target}"), access_token)
+                .await
+        }
+        "follow_user" => {
             client
                 .put(&format!("/me/followings/{target}"), access_token, None)
-                .await,
-            target,
-        )?,
+                .await
+        }
         "unfollow_user" => {
-            delete_remote(client, &format!("/me/followings/{target}"), access_token).await?
+            client
+                .delete(&format!("/me/followings/{target}"), access_token)
+                .await
         }
         "playlist_create" => {
             client
@@ -67,10 +86,12 @@ pub async fn execute_remote(
                     access_token,
                     Some(required_payload(mutation)?),
                 )
-                .await?
+                .await
         }
         "playlist_delete" => {
-            delete_remote(client, &format!("/playlists/{target}"), access_token).await?
+            client
+                .delete(&format!("/playlists/{target}"), access_token)
+                .await
         }
         "track_update" => {
             let update = catalog_ingest::TrackUpdate::parse(required_payload(mutation)?)
@@ -81,9 +102,13 @@ pub async fn execute_remote(
                     access_token,
                     Some(update.body()),
                 )
-                .await?
+                .await
         }
-        "track_delete" => delete_remote(client, &format!("/tracks/{target}"), access_token).await?,
+        "track_delete" => {
+            client
+                .delete(&format!("/tracks/{target}"), access_token)
+                .await
+        }
         "playlist_update" => {
             let update = catalog_ingest::PlaylistUpdate::parse(required_payload(mutation)?)
                 .map_err(ActionError::InvalidPayload)?;
@@ -93,7 +118,7 @@ pub async fn execute_remote(
                     access_token,
                     Some(update.body()),
                 )
-                .await?
+                .await
         }
         membership::ACTION_TYPE => {
             let apply = membership::MembershipApply::parse(required_payload(mutation)?)
@@ -120,7 +145,7 @@ pub async fn execute_remote(
                     access_token,
                     Some(&apply.body()),
                 )
-                .await?
+                .await
         }
         "comment" => {
             client
@@ -129,11 +154,20 @@ pub async fn execute_remote(
                     access_token,
                     Some(required_payload(mutation)?),
                 )
-                .await?
+                .await
         }
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     };
-    Ok(result)
+    match response {
+        Err(SoundCloudError::Api {
+            status: wreq::StatusCode::NOT_FOUND | wreq::StatusCode::GONE,
+            ..
+        }) if CLOSED_WHEN_TARGET_IS_MISSING.contains(&mutation.action_type.as_str()) => {
+            tracing::info!(%target, "soundcloud has no such target, the write is closed");
+            Ok(Remote::TargetMissing)
+        }
+        response => Ok(Remote::Written(response?)),
+    }
 }
 
 pub async fn apply_local(
@@ -263,37 +297,6 @@ pub async fn apply_local(
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     }
     Ok(())
-}
-
-async fn delete_remote(
-    client: &SoundCloudClient,
-    path: &str,
-    access_token: &str,
-) -> Result<Value, ActionError> {
-    match client.delete(path, access_token).await {
-        Ok(value) => Ok(value),
-        Err(SoundCloudError::Api {
-            status: wreq::StatusCode::NOT_FOUND | wreq::StatusCode::GONE,
-            ..
-        }) => Ok(Value::Null),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn done_if_missing(
-    result: Result<Value, SoundCloudError>,
-    target: &str,
-) -> Result<Value, ActionError> {
-    match result {
-        Err(SoundCloudError::Api {
-            status: wreq::StatusCode::NOT_FOUND | wreq::StatusCode::GONE,
-            ..
-        }) => {
-            tracing::info!(%target, "soundcloud has no such target, the write is closed");
-            Ok(Value::Null)
-        }
-        result => Ok(result?),
-    }
 }
 
 fn required_payload(mutation: &ClaimedMutation) -> Result<&Value, ActionError> {

@@ -22,7 +22,9 @@ pub async fn confirm(
         .as_ref()
         .and_then(|payload| payload.pointer("/playlist/title"))
         .and_then(Value::as_str)
-        .ok_or(ActionError::InvalidPayload("playlist title is missing"))?;
+        .ok_or(ActionError::InvalidPayload(
+            "playlist title is missing, the created playlist cannot be looked up",
+        ))?;
     let mut listing = Vec::new();
     let mut next = Some(FIRST_PAGE.to_owned());
     for _ in 0..MAX_PAGES {

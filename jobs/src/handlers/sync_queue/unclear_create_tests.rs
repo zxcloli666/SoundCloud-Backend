@@ -153,7 +153,10 @@ fn listed() -> Reply {
     )
 }
 
-fn handler(pool: &PgPool, address: std::net::SocketAddr) -> anyhow::Result<SyncQueueHandler> {
+pub(super) fn handler(
+    pool: &PgPool,
+    address: std::net::SocketAddr,
+) -> anyhow::Result<SyncQueueHandler> {
     let config = SyncQueueConfig {
         api_url: format!("http://{address}/").parse()?,
         proxy_url: None,
@@ -205,7 +208,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(FakeSoundCloud, SyncQueueHandle
     Ok((fake, handler))
 }
 
-async fn run(pool: &PgPool, handler: &SyncQueueHandler) -> anyhow::Result<()> {
+pub(super) async fn run(pool: &PgPool, handler: &SyncQueueHandler) -> anyhow::Result<()> {
     sqlx::query("UPDATE sync_queue SET next_run_at = now()")
         .execute(pool)
         .await?;
@@ -215,7 +218,7 @@ async fn run(pool: &PgPool, handler: &SyncQueueHandler) -> anyhow::Result<()> {
         .await?
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("the create was not claimed"))?;
+        .ok_or_else(|| anyhow::anyhow!("the write was not claimed"))?;
     handler.execute(mutation).await
 }
 
@@ -419,6 +422,31 @@ async fn five_unclear_posts_park_the_create(pool: PgPool) -> anyhow::Result<()> 
         [
             "POST", "GET", "POST", "GET", "POST", "GET", "POST", "GET", "POST"
         ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unclear_create_without_a_title_is_parked_at_once(pool: PgPool) -> anyhow::Result<()> {
+    let (fake, handler) = setup(&pool).await?;
+    sqlx::query("UPDATE sync_queue SET payload = '{\"playlist\": {\"sharing\": \"private\"}}'")
+        .execute(&pool)
+        .await?;
+    fake.create_replies([Reply::Status(StatusCode::BAD_GATEWAY)]);
+
+    run(&pool, &handler).await?;
+    run(&pool, &handler).await?;
+
+    let last_error: Option<String> = sqlx::query_scalar("SELECT last_error FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(row(&pool).await?, Some((5, true, true)));
+    assert_eq!(fake.methods(), ["POST"]);
+    assert_eq!(
+        last_error.as_deref(),
+        Some(
+            "invalid sync action payload: playlist title is missing, the created playlist cannot be looked up"
+        )
     );
     Ok(())
 }

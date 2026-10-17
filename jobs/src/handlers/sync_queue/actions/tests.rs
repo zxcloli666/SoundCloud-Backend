@@ -75,7 +75,7 @@ async fn a_like_or_follow_of_a_missing_target_is_done_but_a_missing_playlist_edi
             ("follow_user", "soundcloud:users:410"),
         ] {
             let done = execute_remote(&client, &mutation(action, target, None), "token").await?;
-            assert!(done.is_null(), "{action} {target}");
+            assert!(matches!(done, Remote::TargetMissing), "{action} {target}");
         }
         let edit = mutation(
             "playlist_update",
@@ -122,11 +122,14 @@ async fn remote_deletion_accepts_absence_but_preserves_authorization_and_server_
     });
     let client = SoundCloudClient::new(&config(address)?)?;
     let result: anyhow::Result<()> = async {
-        for status in [204, 404, 410] {
-            assert!(delete_remote(&client, &format!("/tracks/{status}"), "token").await?.is_null());
+        let deleted = execute_remote(&client, &mutation("track_delete", "204", None), "token").await?;
+        assert!(matches!(deleted, Remote::Written(Value::Null)));
+        for status in ["404", "410"] {
+            let missing = execute_remote(&client, &mutation("track_delete", status, None), "token").await?;
+            assert!(matches!(missing, Remote::TargetMissing), "{status}");
         }
         for status in [401, 429, 503] {
-            let error = delete_remote(&client, &format!("/tracks/{status}"), "token").await;
+            let error = execute_remote(&client, &mutation("track_delete", &status.to_string(), None), "token").await;
             assert!(matches!(error, Err(ActionError::SoundCloud(SoundCloudError::Api { status: actual, .. })) if actual.as_u16() == status));
         }
         Ok(())

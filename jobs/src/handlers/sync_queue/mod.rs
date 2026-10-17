@@ -5,6 +5,8 @@ mod create_check;
 mod model;
 #[cfg(test)]
 mod playlist_tests;
+#[cfg(test)]
+mod refusal_tests;
 mod repository;
 mod storage;
 #[cfg(test)]
@@ -24,7 +26,7 @@ use crate::config::JobsConfig;
 use crate::handlers::star_priority::{Round, Turns};
 use crate::queue::{JobError, JobResult};
 
-use self::actions::ActionError;
+use self::actions::{ActionError, Remote};
 use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
 use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
@@ -235,61 +237,67 @@ impl SyncQueueHandler {
             self.repository.release(&mutation).await?;
             return Ok(());
         }
-        let remote_result = match actions::execute_remote(&self.client, &mutation, &token.value)
-            .await
-        {
-            Ok(result) => {
-                if let Some(oauth_app_id) = token.oauth_app_id {
-                    let reopened = self.write_pauses.succeeded(
+        let (remote, oauth_app_id) =
+            match actions::execute_remote(&self.client, &mutation, &token.value).await {
+                Ok(remote) => (remote, token.oauth_app_id),
+                Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                    let refreshed = match self
+                        .connections
+                        .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
+                        .await
+                    {
+                        Ok(token) => token,
+                        Err(error) => {
+                            self.record_connection_failure(&mutation, &error).await?;
+                            return Ok(());
+                        }
+                    };
+                    match actions::execute_remote(&self.client, &mutation, &refreshed.value).await {
+                        Ok(remote) => (remote, refreshed.oauth_app_id),
+                        Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                            self.connections
+                                .reject_for_later(&mutation.user_id, &refreshed.value)
+                                .await?;
+                            self.postpone_before_post(
+                                &mutation,
+                                "SoundCloud rejected the refreshed access token",
+                                RATE_LIMIT_RETRY_SECONDS,
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            self.pause_writes_when_refused(
+                                &mutation,
+                                &error,
+                                refreshed.oauth_app_id,
+                            )
+                            .await;
+                            self.record_action_failure(&mutation, &error).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id)
+                        .await;
+                    self.record_action_failure(&mutation, &error).await?;
+                    return Ok(());
+                }
+            };
+        let remote_result = match remote {
+            Remote::Written(result) => {
+                if let Some(oauth_app_id) = oauth_app_id {
+                    self.write_pauses.succeeded(
                         &(oauth_app_id, mutation.action_type.clone()),
                         self.spacing(&mutation.action_type),
                     );
-                    if reopened {
-                        self.forget_pause(oauth_app_id, &mutation.action_type).await;
-                    }
+                    self.forget_pauses(oauth_app_id, &mutation.action_type)
+                        .await;
                 }
                 result
             }
-            Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                let refreshed = match self
-                    .connections
-                    .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
-                    .await
-                {
-                    Ok(token) => token,
-                    Err(error) => {
-                        self.record_connection_failure(&mutation, &error).await?;
-                        return Ok(());
-                    }
-                };
-                match actions::execute_remote(&self.client, &mutation, &refreshed.value).await {
-                    Ok(result) => result,
-                    Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                        self.connections
-                            .reject_for_later(&mutation.user_id, &refreshed.value)
-                            .await?;
-                        self.postpone_before_post(
-                            &mutation,
-                            "SoundCloud rejected the refreshed access token",
-                            RATE_LIMIT_RETRY_SECONDS,
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                    Err(error) => {
-                        self.pause_writes_when_refused(&mutation, &error, refreshed.oauth_app_id)
-                            .await;
-                        self.record_action_failure(&mutation, &error).await?;
-                        return Ok(());
-                    }
-                }
-            }
-            Err(error) => {
-                self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id)
-                    .await;
-                self.record_action_failure(&mutation, &error).await?;
-                return Ok(());
-            }
+            Remote::TargetMissing => serde_json::Value::Null,
         };
         if !self
             .repository
@@ -346,6 +354,12 @@ impl SyncQueueHandler {
                 } else {
                     self.repository.release(mutation).await?;
                 }
+                Ok(None)
+            }
+            Err(error @ ActionError::InvalidPayload(_)) => {
+                self.repository
+                    .park(mutation, SYNC_QUEUE_MAX_RETRIES, &error.to_string())
+                    .await?;
                 Ok(None)
             }
             Err(error) => {
@@ -415,13 +429,13 @@ impl SyncQueueHandler {
         }
     }
 
-    async fn forget_pause(&self, oauth_app_id: uuid::Uuid, action_type: &str) {
+    async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, action_type: &str) {
         let cleared = self
             .repository
-            .clear_action_pause(oauth_app_id, action_type)
+            .clear_action_pauses(oauth_app_id, action_type)
             .await;
         if let Err(error) = cleared {
-            warn!(%error, "a lifted action pause was not removed from the database");
+            warn!(%error, "lifted action pauses were not removed from the database");
         }
     }
 
