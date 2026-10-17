@@ -68,7 +68,11 @@ fn is_full_encrypted(t: &Transcoding) -> bool {
         && !t.snipped.unwrap_or(false)
 }
 
-fn pick_encrypted(transcodings: &[Transcoding], hq_first: bool) -> Option<&Transcoding> {
+pub(crate) fn pick_encrypted<'a>(
+    transcodings: &'a [Transcoding],
+    uq_first: bool,
+    at_least: &str,
+) -> Option<&'a Transcoding> {
     let full: Vec<&Transcoding> = transcodings
         .iter()
         .filter(|t| is_full_encrypted(t))
@@ -80,24 +84,20 @@ fn pick_encrypted(transcodings: &[Transcoding], hq_first: bool) -> Option<&Trans
             .filter(|t| allow_uq || quality::of_transcoding(t) != quality::UQ)
             .max_by_key(|t| quality::rank(quality::of_transcoding(t)))
     };
-    best(hq_first)
+    best(uq_first)
         .or_else(|| best(true))
         .or_else(|| full.first().copied())
+        .filter(|t| quality::rank(quality::of_transcoding(t)) >= quality::rank(at_least))
 }
 
 pub(crate) async fn resolve(
     client: &Client,
     proxy_url: &str,
-    transcodings: &[Transcoding],
+    tc: &Transcoding,
     client_id: &str,
     track_auth: Option<&str>,
     headers: HashMap<String, String>,
-    hq_first: bool,
 ) -> Result<Option<RestrictedSource>, BoxErr> {
-    let tc = match pick_encrypted(transcodings, hq_first) {
-        Some(t) => t,
-        None => return Ok(None),
-    };
     let content_type =
         content_type_from_mime(tc.format.as_ref().and_then(|f| f.mime_type.as_deref()));
     let quality = quality::of_transcoding(tc);
@@ -148,10 +148,10 @@ mod tests {
     #[test]
     fn a_snipped_preview_is_never_served_as_the_whole_track() {
         let previews = [encrypted("hq", true), encrypted("sq", true)];
-        assert!(pick_encrypted(&previews, true).is_none());
+        assert!(pick_encrypted(&previews, true, quality::SQ).is_none());
 
         let mixed = [encrypted("hq", true), encrypted("sq", false)];
-        let picked = pick_encrypted(&mixed, true).unwrap();
+        let picked = pick_encrypted(&mixed, true, quality::SQ).unwrap();
         assert_eq!(picked.quality.as_deref(), Some("sq"));
         assert_eq!(picked.snipped, Some(false));
     }
@@ -163,7 +163,7 @@ mod tests {
             encrypted_preset("aac_96k", "lq", false),
             encrypted_preset("aac_160k", "sq", false),
         ];
-        let picked = pick_encrypted(&tcs, true).unwrap();
+        let picked = pick_encrypted(&tcs, true, quality::SQ).unwrap();
         assert_eq!(picked.preset.as_deref(), Some("aac_160k"));
         assert_eq!(quality::of_transcoding(picked), quality::HQ);
     }
@@ -176,11 +176,17 @@ mod tests {
             encrypted_preset("abr_sq", "sq", false),
         ];
         assert_eq!(
-            pick_encrypted(&tcs, false).unwrap().preset.as_deref(),
+            pick_encrypted(&tcs, false, quality::HQ)
+                .unwrap()
+                .preset
+                .as_deref(),
             Some("aac_160k")
         );
         assert_eq!(
-            pick_encrypted(&tcs, true).unwrap().preset.as_deref(),
+            pick_encrypted(&tcs, true, quality::HQ)
+                .unwrap()
+                .preset
+                .as_deref(),
             Some("aac_256k")
         );
     }
@@ -189,8 +195,28 @@ mod tests {
     fn a_low_quality_stream_is_only_the_last_resort() {
         let only_lq = [encrypted_preset("aac_96k", "lq", false)];
         assert_eq!(
-            pick_encrypted(&only_lq, true).unwrap().preset.as_deref(),
+            pick_encrypted(&only_lq, true, quality::SQ)
+                .unwrap()
+                .preset
+                .as_deref(),
             Some("aac_96k")
+        );
+    }
+
+    #[test]
+    fn a_track_below_the_wanted_tier_is_dropped_before_any_request() {
+        let sq_only = [
+            encrypted_preset("abr_sq", "sq", false),
+            encrypted_preset("aac_96k", "lq", false),
+        ];
+        assert!(pick_encrypted(&sq_only, false, quality::HQ).is_none());
+        assert!(pick_encrypted(&sq_only, true, quality::HQ).is_none());
+        assert_eq!(
+            pick_encrypted(&sq_only, false, quality::SQ)
+                .unwrap()
+                .preset
+                .as_deref(),
+            Some("abr_sq")
         );
     }
 }

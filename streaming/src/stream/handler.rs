@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
@@ -121,6 +122,7 @@ async fn stream_inner(
             &track_urn,
             secret_token,
             hq,
+            is_premium,
         )
         .await;
     }
@@ -146,7 +148,10 @@ async fn stream_inner(
 
 fn granted_tier(asked: Option<&str>, is_premium: bool) -> Option<&'static str> {
     let tier = quality::parse(asked?)?;
-    Some(quality::capped(tier, quality::ceiling(is_premium)))
+    if tier == quality::UQ && !is_premium {
+        return Some(quality::HQ);
+    }
+    Some(tier)
 }
 
 struct StreamRequest<'a> {
@@ -179,34 +184,30 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
     } = *req;
 
     if tier == quality::UQ {
-        let uq_live = req.uq_live();
-        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true).await {
+        if req.uq_live()
+            && let Some(r) = try_cookies(state, track_urn, tag, true, is_premium).await
+        {
             served(tag, track_urn, "cookies_hq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
     } else if tier == quality::HQ {
-        if let Some(r) = try_session_oauth(state, access_token, track_urn, secret_token, true).await
-        {
-            served(tag, track_urn, "oauth_hq", r.2);
-            return respond_with_data(state, track_urn, r, upload);
-        }
-        if let Some((r, q)) =
-            try_restricted(state, track_urn, tag, quality::HQ, is_premium, upload).await
-        {
-            served(tag, track_urn, "restricted_hq", q);
-            return Ok(r);
-        }
-        if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
-            served(tag, track_urn, "anon_hq", r.2);
-            return respond_with_data(state, track_urn, r, upload);
+        if let Some(response) = live_hq(req, tag).await? {
+            return Ok(response);
         }
     } else {
         if let Some(r) = try_relay_track(state, track_urn, quality::SQ).await {
             served(tag, track_urn, "relay_track", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if let Some(r) =
-            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        if let Some(r) = try_session_oauth(
+            state,
+            access_token,
+            track_urn,
+            secret_token,
+            false,
+            is_premium,
+        )
+        .await
         {
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
@@ -215,12 +216,12 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if is_premium && let Some(r) = try_cookies(state, track_urn, tag, false).await {
+        if let Some(r) = try_cookies(state, track_urn, tag, false, is_premium).await {
             served(tag, track_urn, "cookies_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
         if let Some((r, q)) =
-            try_restricted(state, track_urn, tag, quality::SQ, is_premium, upload).await
+            try_restricted(state, track_urn, tag, quality::SQ, is_premium, upload, None).await
         {
             served(tag, track_urn, "restricted_sq", q);
             return Ok(r);
@@ -265,7 +266,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
     }
 
     if hq {
-        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true).await {
+        if uq_live && let Some(r) = try_cookies(state, track_urn, tag, true, is_premium).await {
             served(tag, track_urn, "cookies_hq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -276,20 +277,8 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
         {
             return Ok(response);
         }
-        if let Some(r) = try_session_oauth(state, access_token, track_urn, secret_token, true).await
-        {
-            served(tag, track_urn, "oauth_hq", r.2);
-            return respond_with_data(state, track_urn, r, upload);
-        }
-        if let Some((r, q)) =
-            try_restricted(state, track_urn, tag, quality::HQ, is_premium, upload).await
-        {
-            served(tag, track_urn, "restricted_hq", q);
-            return Ok(r);
-        }
-        if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
-            served(tag, track_urn, "anon_hq", r.2);
-            return respond_with_data(state, track_urn, r, upload);
+        if let Some(response) = live_hq(req, tag).await? {
+            return Ok(response);
         }
         if upload.cacheable
             && stored < quality::rank(quality::HQ)
@@ -297,8 +286,15 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
         {
             return Ok(response);
         }
-        if let Some(r) =
-            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        if let Some(r) = try_session_oauth(
+            state,
+            access_token,
+            track_urn,
+            secret_token,
+            false,
+            is_premium,
+        )
+        .await
         {
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
@@ -307,7 +303,7 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if is_premium && let Some(r) = try_cookies(state, track_urn, tag, false).await {
+        if let Some(r) = try_cookies(state, track_urn, tag, false, is_premium).await {
             served(tag, track_urn, "cookies_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
@@ -316,8 +312,15 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             return respond_with_data(state, track_urn, r, upload);
         }
     } else {
-        if let Some(r) =
-            try_session_oauth(state, access_token, track_urn, secret_token, false).await
+        if let Some(r) = try_session_oauth(
+            state,
+            access_token,
+            track_urn,
+            secret_token,
+            false,
+            is_premium,
+        )
+        .await
         {
             served(tag, track_urn, "oauth_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
@@ -326,14 +329,14 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
             served(tag, track_urn, "anon", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
-        if is_premium && let Some(r) = try_cookies(state, track_urn, tag, false).await {
+        if let Some(r) = try_cookies(state, track_urn, tag, false, is_premium).await {
             served(tag, track_urn, "cookies_sq", r.2);
             return respond_with_data(state, track_urn, r, upload);
         }
     }
 
     if let Some((r, q)) =
-        try_restricted(state, track_urn, tag, quality::SQ, is_premium, upload).await
+        try_restricted(state, track_urn, tag, quality::SQ, is_premium, upload, None).await
     {
         served(tag, track_urn, "restricted_sq", q);
         return Ok(r);
@@ -342,6 +345,86 @@ async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppEr
     warn!("{tag} {track_urn} → no stream available");
     crate::metrics::record_source("none", "exhausted");
     Err(AppError::NoStream)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveHq {
+    Oauth,
+    Restricted,
+    Anon,
+}
+
+fn live_hq_order(is_premium: bool) -> [LiveHq; 3] {
+    if is_premium {
+        [LiveHq::Oauth, LiveHq::Restricted, LiveHq::Anon]
+    } else {
+        [LiveHq::Restricted, LiveHq::Anon, LiveHq::Oauth]
+    }
+}
+
+async fn live_hq(req: &StreamRequest<'_>, tag: &str) -> Result<Option<Response>, AppError> {
+    let StreamRequest {
+        state,
+        track_urn,
+        access_token,
+        secret_token,
+        is_premium,
+        upload,
+        ..
+    } = *req;
+
+    let mut slot = None;
+    if !is_premium {
+        let Ok(permit) = state.free_hq.clone().try_acquire_owned() else {
+            info!("{tag} {track_urn} → every free hq slot is busy");
+            crate::metrics::record_source("none", "free_hq_busy");
+            return Ok(None);
+        };
+        slot = Some(Arc::new(permit));
+    }
+
+    for source in live_hq_order(is_premium) {
+        match source {
+            LiveHq::Oauth => {
+                if let Some(r) = try_session_oauth(
+                    state,
+                    access_token,
+                    track_urn,
+                    secret_token,
+                    true,
+                    is_premium,
+                )
+                .await
+                {
+                    served(tag, track_urn, "oauth_hq", r.2);
+                    return respond_with_data(state, track_urn, r, upload).map(Some);
+                }
+            }
+            LiveHq::Restricted => {
+                if let Some((r, q)) = try_restricted(
+                    state,
+                    track_urn,
+                    tag,
+                    quality::HQ,
+                    is_premium,
+                    upload,
+                    slot.clone(),
+                )
+                .await
+                {
+                    served(tag, track_urn, "restricted_hq", q);
+                    return Ok(Some(r));
+                }
+            }
+            LiveHq::Anon => {
+                if let Some(r) = try_anon(state, track_urn, tag, quality::HQ).await {
+                    served(tag, track_urn, "anon_hq", r.2);
+                    return respond_with_data(state, track_urn, r, upload).map(Some);
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn served(tag: &str, track_urn: &str, source: &'static str, quality: &str) {
@@ -374,15 +457,30 @@ async fn stream_private(
     track_urn: &str,
     secret_token: Option<&str>,
     high_quality: bool,
+    is_premium: bool,
 ) -> Result<Response, AppError> {
     if high_quality
-        && let Some((data, content_type, quality)) =
-            try_session_oauth(state, access_token, track_urn, secret_token, true).await
+        && let Some((data, content_type, quality)) = try_session_oauth(
+            state,
+            access_token,
+            track_urn,
+            secret_token,
+            true,
+            is_premium,
+        )
+        .await
     {
         return data_response(data, content_type, quality);
     }
-    if let Some((data, content_type, quality)) =
-        try_session_oauth(state, access_token, track_urn, secret_token, false).await
+    if let Some((data, content_type, quality)) = try_session_oauth(
+        state,
+        access_token,
+        track_urn,
+        secret_token,
+        false,
+        is_premium,
+    )
+    .await
     {
         return data_response(data, content_type, quality);
     }
@@ -588,47 +686,39 @@ mod tests {
     }
 
     #[test]
-    fn a_free_session_never_reaches_a_cookies_account() {
-        let handler = crate::source_tree::read("src/stream/handler.rs");
-        let cascade = handler
-            .split_once("#[cfg(test)]")
-            .expect("the tests sit below the code")
-            .0;
-        let calls: Vec<&str> = cascade
-            .lines()
-            .filter(|line| line.contains("try_cookies(state"))
-            .collect();
-        assert!(calls.len() >= 4, "the scan lost the cookies calls");
-        for line in calls {
+    fn a_free_session_reads_public_sources_before_its_own_token() {
+        assert_eq!(
+            live_hq_order(false),
+            [LiveHq::Restricted, LiveHq::Anon, LiveHq::Oauth],
+            "free misses are mass reads; apiv1 is the last resort for them"
+        );
+        assert_eq!(
+            live_hq_order(true),
+            [LiveHq::Oauth, LiveHq::Restricted, LiveHq::Anon]
+        );
+    }
+
+    #[test]
+    fn only_star_reaches_a_cookies_account() {
+        let sources = crate::source_tree::read("src/stream/sources.rs");
+        for entrance in ["async fn try_cookies(", "async fn restricted_source("] {
+            let body = sources
+                .split_once(entrance)
+                .unwrap_or_else(|| panic!("{entrance} is gone"))
+                .1;
+            let body = body.split_once("\n}\n").expect("the function ends").0;
+            let gate = body
+                .find("if !premium")
+                .unwrap_or_else(|| panic!("{entrance} does not check star"));
+            let cookies = body
+                .find("state.cookies")
+                .unwrap_or_else(|| panic!("{entrance} no longer reads cookies"));
             assert!(
-                line.contains("is_premium &&") || line.contains("uq_live"),
-                "`{}` asks a cookies account without checking star; those accounts are few \
-                 and free traffic would put them on cooldown for everyone",
-                line.trim()
+                gate < cookies,
+                "{entrance} reaches a cookies account before it checks star; those accounts \
+                 are few and free traffic would put them on cooldown for everyone"
             );
         }
-        let uq_live = cascade
-            .split_once("fn uq_live(")
-            .expect("uq_live is still here")
-            .1;
-        let uq_live = uq_live.split_once('}').expect("uq_live ends").0;
-        assert!(uq_live.contains("self.is_premium"));
-
-        let sources = crate::source_tree::read("src/stream/sources.rs");
-        let restricted = sources
-            .split_once("async fn restricted_source(")
-            .expect("restricted_source is still here")
-            .1;
-        let gate = restricted
-            .find("if !premium")
-            .expect("restricted checks star");
-        let cookies = restricted
-            .find("state.cookies")
-            .expect("restricted still falls back");
-        assert!(
-            gate < cookies,
-            "restricted reaches cookies before it checks star"
-        );
     }
 
     #[test]

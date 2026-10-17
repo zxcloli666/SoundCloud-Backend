@@ -218,7 +218,8 @@ impl CookiesClient {
     pub(crate) async fn resolve_restricted(
         &self,
         track_urn: &str,
-        hq_first: bool,
+        uq_first: bool,
+        at_least: &str,
     ) -> Result<Option<super::restricted::RestrictedSource>, Box<dyn std::error::Error + Send + Sync>>
     {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
@@ -245,14 +246,16 @@ impl CookiesClient {
         if !tcs.iter().any(is_full) {
             return Err(PREVIEWS_ONLY.into());
         }
+        let Some(tc) = super::restricted::pick_encrypted(&tcs, uq_first, at_least) else {
+            return Ok(None);
+        };
         super::restricted::resolve(
             &self.client,
             &self.proxy_url,
-            &tcs,
+            tc,
             &client_id,
             sound.track_authorization.as_deref(),
             self.auth_headers(),
-            hq_first,
         )
         .await
     }

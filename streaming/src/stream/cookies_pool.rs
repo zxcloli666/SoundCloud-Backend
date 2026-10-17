@@ -172,11 +172,14 @@ impl CookiesPool {
     pub(crate) async fn resolve_restricted(
         self: &Arc<Self>,
         track_urn: &str,
-        hq_first: bool,
+        uq_first: bool,
+        at_least: &'static str,
     ) -> Result<Option<RestrictedSource>, BoxErr> {
         let source = self
             .try_rotate(true, |client| async move {
-                client.resolve_restricted(track_urn, hq_first).await
+                client
+                    .resolve_restricted(track_urn, uq_first, at_least)
+                    .await
             })
             .await?;
         if let Some(found) = &source {

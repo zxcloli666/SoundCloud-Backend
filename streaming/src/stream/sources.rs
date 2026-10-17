@@ -1,12 +1,18 @@
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;
 use bytes::Bytes;
 use futures::StreamExt;
+use futures::channel::mpsc::UnboundedSender;
+use futures::stream::BoxStream;
+use tokio::sync::OwnedSemaphorePermit;
 use tracing::{info, warn};
 
 use super::quality;
 use super::restricted::RestrictedSource;
+use super::storage::StorageClient;
 use crate::AppState;
 use crate::error::AppError;
 
@@ -27,18 +33,20 @@ impl UploadRule {
     }
 }
 
-async fn try_oauth(
+pub(super) async fn try_session_oauth(
     state: &AppState,
-    access_token: &str,
+    access_token: Option<&str>,
     track_urn: &str,
     secret_token: Option<&str>,
     hq_only: bool,
+    premium: bool,
 ) -> Option<Fetched> {
+    let access_token = access_token?;
     let ctx = super::oauth::OauthCtx {
         client: &state.http_client,
         pg: &state.pg,
         proxy_url: &state.config.sc_proxy_url,
-        proxy_fallback: state.config.sc_proxy_fallback,
+        proxy_fallback: premium && state.config.sc_proxy_fallback,
         fallback_session_count: state.config.sc_oauth_fallback_sessions,
     };
     let result =
@@ -47,23 +55,16 @@ async fn try_oauth(
     Some((result.data, result.content_type, result.quality))
 }
 
-pub(super) async fn try_session_oauth(
-    state: &AppState,
-    access_token: Option<&str>,
-    track_urn: &str,
-    secret_token: Option<&str>,
-    hq_only: bool,
-) -> Option<Fetched> {
-    let access_token = access_token?;
-    try_oauth(state, access_token, track_urn, secret_token, hq_only).await
-}
-
 pub(super) async fn try_cookies(
     state: &AppState,
     track_urn: &str,
     tag: &str,
     hq_only: bool,
+    premium: bool,
 ) -> Option<Fetched> {
+    if !premium {
+        return None;
+    }
     let cookies_client = state.cookies.as_ref()?;
     match cookies_client.get_stream(track_urn, hq_only).await {
         Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
@@ -101,10 +102,15 @@ async fn restricted_source(
     state: &AppState,
     track_urn: &str,
     tag: &str,
-    uq_first: bool,
+    at_least: &'static str,
     premium: bool,
 ) -> Option<RestrictedSource> {
-    match state.anon.resolve_restricted(track_urn, uq_first).await {
+    let uq_first = premium && at_least != quality::SQ;
+    match state
+        .anon
+        .resolve_restricted(track_urn, uq_first, at_least)
+        .await
+    {
         Ok(Some(v)) => return Some(v),
         Ok(None) => {}
         Err(e) => warn!("{tag} {track_urn} restricted(anon) failed: {e}"),
@@ -113,7 +119,10 @@ async fn restricted_source(
         return None;
     }
     let cookies = state.cookies.as_ref()?;
-    match cookies.resolve_restricted(track_urn, uq_first).await {
+    match cookies
+        .resolve_restricted(track_urn, uq_first, at_least)
+        .await
+    {
         Ok(Some(v)) => Some(v),
         Ok(None) => None,
         Err(e) => {
@@ -155,14 +164,10 @@ pub(super) async fn try_restricted(
     at_least: &'static str,
     premium: bool,
     upload: UploadRule,
+    slot: Option<Arc<OwnedSemaphorePermit>>,
 ) -> Option<(Response, &'static str)> {
-    let uq_first = premium && at_least != quality::SQ;
-    let src = restricted_source(state, track_urn, tag, uq_first, premium).await?;
+    let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
     let quality = src.quality;
-    if quality::rank(quality) < quality::rank(at_least) {
-        info!("{tag} {track_urn} restricted has only {quality}, wanted {at_least}");
-        return None;
-    }
 
     if let (Some(wvd_url), Some(wvd_token)) = (
         state.config.edge_wvd_url.as_deref(),
@@ -191,11 +196,10 @@ pub(super) async fn try_restricted(
     }
 
     let engine = state.decryptor.as_ref()?;
-    let fetcher: std::sync::Arc<dyn decrypt::Fetcher> =
-        std::sync::Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-            client: state.http_client.clone(),
-            proxy_url: state.config.sc_proxy_url.clone(),
-        });
+    let fetcher: Arc<dyn decrypt::Fetcher> = Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
+        client: state.http_client.clone(),
+        proxy_url: state.config.sc_proxy_url.clone(),
+    });
     let stream = match engine
         .process_stream(&src.manifest, &src.token, fetcher)
         .await
@@ -207,46 +211,62 @@ pub(super) async fn try_restricted(
         }
     };
 
-    if !upload.takes(quality) {
-        return Some((
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", src.content_type)
-                .header("x-audio-quality", quality)
-                .body(Body::from_stream(stream))
-                .unwrap(),
-            quality,
-        ));
-    }
-
-    let acc = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    let acc_w = acc.clone();
-    let storage = state.storage.clone();
-    let urn = track_urn.to_string();
-    let teed = stream
-        .map(move |chunk| {
-            if let Ok(b) = &chunk {
-                acc_w.lock().unwrap().extend_from_slice(b);
-            }
-            chunk
-        })
-        .chain(futures::stream::once(async move {
-            let data = std::mem::take(&mut *acc.lock().unwrap());
-            if data.len() > 8192 {
-                storage.upload_in_background_with_quality(urn, Bytes::from(data), quality);
-            }
-            Ok::<_, decrypt::Error>(Bytes::new())
-        }));
-
+    let keep = upload
+        .takes(quality)
+        .then(|| (state.storage.clone(), track_urn.to_string(), quality));
     Some((
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", src.content_type)
             .header("x-audio-quality", quality)
-            .body(Body::from_stream(teed))
+            .body(decrypt_to_the_end(stream, keep, slot))
             .unwrap(),
         quality,
     ))
+}
+
+fn decrypt_to_the_end(
+    stream: BoxStream<'static, Result<Bytes, decrypt::Error>>,
+    keep: Option<(Arc<StorageClient>, String, &'static str)>,
+    slot: Option<Arc<OwnedSemaphorePermit>>,
+) -> Body {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    tokio::spawn(async move {
+        let _slot = slot;
+        let whole = pump(stream, tx, keep.is_some()).await;
+        if let (Some((storage, urn, quality)), Some(whole)) = (keep, whole)
+            && whole.len() > 8192
+        {
+            storage.upload_in_background_with_quality(urn, Bytes::from(whole), quality);
+        }
+    });
+    Body::from_stream(rx)
+}
+
+async fn pump(
+    mut stream: BoxStream<'static, Result<Bytes, decrypt::Error>>,
+    listener: UnboundedSender<Result<Bytes, decrypt::Error>>,
+    keeping: bool,
+) -> Option<Vec<u8>> {
+    let mut kept = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                let _ = listener.unbounded_send(Err(e));
+                return None;
+            }
+        };
+        if keeping {
+            kept.push(chunk.clone());
+        }
+        let listener_left = listener.unbounded_send(Ok(chunk)).is_err();
+        if listener_left && !keeping {
+            return None;
+        }
+    }
+    drop(listener);
+    keeping.then(|| kept.concat())
 }
 
 pub(super) fn respond_with_data(
@@ -283,6 +303,58 @@ pub(super) fn data_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn chunks(count: usize) -> BoxStream<'static, Result<Bytes, decrypt::Error>> {
+        futures::stream::iter((0..count).map(|_| Ok(Bytes::from_static(b"abcd")))).boxed()
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_leaves_early_still_leaves_a_whole_copy_for_storage() {
+        let (listener, gone) = futures::channel::mpsc::unbounded();
+        drop(gone);
+
+        let whole = pump(chunks(5), listener, true).await;
+
+        assert_eq!(
+            whole.map(|whole| whole.len()),
+            Some(20),
+            "the desktop drops the slower of /download and /stream; the decrypt we already \
+             paid for must still reach storage"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_nothing_to_keep_the_decrypt_stops_when_the_listener_leaves() {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let stream = chunks(5)
+            .inspect(move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })
+            .boxed();
+        let (listener, gone) = futures::channel::mpsc::unbounded();
+        drop(gone);
+
+        assert!(pump(stream, listener, false).await.is_none());
+        assert_eq!(pulled.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_decrypt_that_breaks_halfway_is_never_kept() {
+        let stream = futures::stream::iter([
+            Ok(Bytes::from_static(b"abcd")),
+            Err(decrypt::Error::Fetch("segment 2".into())),
+            Ok(Bytes::from_static(b"efgh")),
+        ])
+        .boxed();
+        let (listener, mut heard) = futures::channel::mpsc::unbounded();
+
+        assert!(pump(stream, listener, true).await.is_none());
+        assert!(heard.next().await.is_some_and(|chunk| chunk.is_ok()));
+        assert!(heard.next().await.is_some_and(|chunk| chunk.is_err()));
+        assert!(heard.next().await.is_none());
+    }
 
     #[test]
     fn storage_only_gets_a_copy_better_than_the_one_it_keeps() {

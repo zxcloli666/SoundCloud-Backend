@@ -41,6 +41,7 @@ pub struct AppState {
     pub cookies: Option<Arc<CookiesPool>>,
     pub storage: Arc<StorageClient>,
     pub decryptor: Option<Arc<decrypt::Engine>>,
+    pub free_hq: Arc<tokio::sync::Semaphore>,
 }
 
 #[tokio::main]
@@ -162,6 +163,11 @@ async fn main() {
         cookies,
         storage,
         decryptor,
+        free_hq: Arc::new(tokio::sync::Semaphore::new(
+            config
+                .free_hq_fetches
+                .min(tokio::sync::Semaphore::MAX_PERMITS),
+        )),
     };
 
     let cors = CorsLayer::new()

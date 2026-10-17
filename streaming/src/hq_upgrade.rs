@@ -152,9 +152,7 @@ impl Upgrader {
             return Ok(false);
         }
 
-        if let Some(src) = self.restricted_source(track_urn).await
-            && quality::rank(src.quality) > quality::rank(quality::SQ)
-        {
+        if let Some(src) = self.restricted_source(track_urn).await {
             let data = self.decrypt_all(&src).await?;
             return Ok(self.upload(track_urn, data, src.quality));
         }
@@ -170,7 +168,11 @@ impl Upgrader {
     }
 
     async fn restricted_source(&self, track_urn: &str) -> Option<RestrictedSource> {
-        match self.anon.resolve_restricted(track_urn, true).await {
+        match self
+            .anon
+            .resolve_restricted(track_urn, true, quality::HQ)
+            .await
+        {
             Ok(Some(v)) => return Some(v),
             Ok(None) => {}
             Err(e) => debug!(urn = %track_urn, "[hq-upgrade] anon resolve failed: {e}"),
@@ -178,7 +180,7 @@ impl Upgrader {
         match self
             .cookies
             .as_ref()?
-            .resolve_restricted(track_urn, true)
+            .resolve_restricted(track_urn, true, quality::HQ)
             .await
         {
             Ok(v) => v,
