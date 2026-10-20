@@ -77,6 +77,10 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     pool(db, core_share(db.pool_max), connect_opts(db)?).await
 }
 
+pub async fn connect_pool(db: &DatabaseCfg, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+    pool(db, max_connections, connect_opts(db)?).await
+}
+
 pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let db = &cfg.database;
     let opts =

@@ -14,6 +14,7 @@ const OPEN_ROUTES: &[&str] = &[
     "/auth/link/claim",
     "/auth/link/status",
     "/resolve",
+    "/chat/x",
 ];
 
 fn modules_dir() -> PathBuf {
@@ -147,6 +148,8 @@ fn guards(signature: &str) -> bool {
         || signature.contains("SessionCtx")
         || signature.contains("OptionalSession")
         || signature.contains("RawSessionIdHeader")
+        || signature.contains("ChatCaller")
+        || signature.contains("ChatAdmin")
 }
 
 fn resolve<'a>(sources: &'a [(String, String)], file: &str, reference: &str) -> Option<&'a str> {

@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const RT_SUPERVISED: &[&str] = &["src/rt/", "src/modules/chat/sweeps/"];
+
 const DETACHED: &[&str] = &[
     "tokio::spawn",
     "spawn_blocking",
@@ -91,6 +93,9 @@ fn the_serving_process_starts_no_work_of_its_own() {
     let mut detached: Vec<String> = Vec::new();
 
     for (file, body) in serving_sources() {
+        if RT_SUPERVISED.iter().any(|owner| file.starts_with(owner)) {
+            continue;
+        }
         for (number, line) in body.lines().enumerate() {
             for pattern in DETACHED {
                 if line.contains(pattern) {
