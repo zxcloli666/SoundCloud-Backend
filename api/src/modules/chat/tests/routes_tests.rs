@@ -8,6 +8,19 @@ use crate::modules::chat::test_support::{caller, offline_chat_state};
 
 const CONV: &str = "0192e5c5-1a2b-7c3d-8e4f-5a6b7c8d9e0f";
 
+const FILLED: &[&str] = &[
+    "/chat/requests",
+    "/invites",
+    "/chat/settings",
+    "/chat/blocks/",
+    "/chat/reports",
+    "/chat/users/",
+];
+
+fn filled(uri: &str) -> bool {
+    FILLED.iter().any(|path| uri.contains(path))
+}
+
 fn inner_routes() -> Vec<(&'static str, String)> {
     vec![
         ("GET", "/chat/config".into()),
@@ -81,6 +94,7 @@ fn admin_routes() -> Vec<(&'static str, String)> {
         ("POST", "/chat-admin/unlist/ABC123".into()),
         ("POST", "/chat-admin/rewrap".into()),
         ("GET", "/chat-admin/stats".into()),
+        ("GET", "/chat-admin/metrics".into()),
         ("POST", "/chat-admin/loadtest/seed".into()),
         ("POST", "/chat-admin/loadtest/purge".into()),
     ]
@@ -112,7 +126,7 @@ async fn answer(
 #[tokio::test]
 async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
     let router = inner().with_state(offline_chat_state(true));
-    for (method, uri) in inner_routes() {
+    for (method, uri) in inner_routes().into_iter().filter(|(_, uri)| !filled(uri)) {
         assert_eq!(
             answer(&router, method, &uri, true).await,
             (
@@ -137,14 +151,14 @@ async fn an_inner_route_without_a_resolved_caller_is_a_server_fault_not_a_pass()
 }
 
 #[tokio::test]
-async fn every_admin_route_is_closed_until_the_token_check_lands() {
+async fn every_admin_route_is_closed_without_the_token_file() {
     let router: axum::Router = public(offline_chat_state(true));
     for (method, uri) in admin_routes() {
         assert_eq!(
             answer(&router, method, &uri, false).await,
             (
-                StatusCode::NOT_IMPLEMENTED,
-                json!({"error": "chat_unimplemented"})
+                StatusCode::UNAUTHORIZED,
+                json!({"error": "chat_admin_unauthorized"})
             ),
             "{method} {uri}"
         );
