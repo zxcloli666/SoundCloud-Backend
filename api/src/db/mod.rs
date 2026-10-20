@@ -8,7 +8,7 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 155;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 157;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
@@ -75,6 +75,10 @@ async fn pool(
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let db = &cfg.database;
     pool(db, core_share(db.pool_max), connect_opts(db)?).await
+}
+
+pub async fn connect_pool(db: &DatabaseCfg, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+    pool(db, max_connections, connect_opts(db)?).await
 }
 
 pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {

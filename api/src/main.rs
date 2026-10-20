@@ -29,6 +29,7 @@ mod qdrant;
 mod query_surface_tests;
 mod redis;
 mod router;
+mod rt;
 mod sc;
 #[cfg(test)]
 #[path = "sc_surface_tests.rs"]
@@ -79,6 +80,11 @@ async fn main() {
     tls_common::init_crypto();
     telemetry::init();
     metrics::init();
+
+    if rt::role() == rt::Role::Rt {
+        rt::run().await;
+        return;
+    }
 
     let config = Arc::new(AppConfig::from_env());
     info!(port = config.port, "backend starting");

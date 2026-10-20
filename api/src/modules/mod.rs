@@ -4,6 +4,7 @@ pub mod auras;
 pub mod auth;
 pub mod blocked_artists;
 pub mod centroids;
+pub mod chat;
 pub mod cold_refresh;
 pub mod collab;
 pub mod discover;

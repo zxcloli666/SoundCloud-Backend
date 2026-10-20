@@ -50,6 +50,15 @@ pub struct SoundcloudCfg {
     pub proxy_fallback: bool,
 }
 
+impl SoundcloudCfg {
+    pub(crate) fn from_env() -> Self {
+        Self {
+            proxy_url: env_str("SC_PROXY_URL", ""),
+            proxy_fallback: env_str("SC_PROXY_FALLBACK", "") == "true",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DatabaseCfg {
     pub url: String,
@@ -123,7 +132,7 @@ pub struct AdmissionCfg {
 }
 
 impl AdmissionCfg {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let login = admission_limit("AUTH_LOGIN", 15, 300);
         let link_create = admission_limit("AUTH_LINK_CREATE", 30, 600);
         let resolve = admission_limit("RESOLVE", 60, 1200);
@@ -212,7 +221,7 @@ fn compose_url(user: &str, pass: &str, host: &str, port: u16, name: &str) -> Str
     )
 }
 
-fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<DatabaseCfg> {
+pub(crate) fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<DatabaseCfg> {
     let key = |name: &str| format!("{prefix}{name}");
 
     let url = match env_opt(&key("DATABASE_URL")) {
@@ -271,10 +280,7 @@ impl AppConfig {
         Self {
             port: env_u16("PORT", 3000),
 
-            soundcloud: SoundcloudCfg {
-                proxy_url: env_str("SC_PROXY_URL", ""),
-                proxy_fallback: env_str("SC_PROXY_FALLBACK", "") == "true",
-            },
+            soundcloud: SoundcloudCfg::from_env(),
 
             database,
 
@@ -338,29 +344,29 @@ impl AppConfig {
     }
 }
 
-fn env_str(key: &str, default: &str) -> String {
+pub(crate) fn env_str(key: &str, default: &str) -> String {
     env_opt(key).unwrap_or_else(|| default.to_string())
 }
 
-fn env_opt(key: &str) -> Option<String> {
+pub(crate) fn env_opt(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
 }
 
-fn env_u16(key: &str, default: u16) -> u16 {
+pub(crate) fn env_u16(key: &str, default: u16) -> u16 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
 
-fn env_u32(key: &str, default: u32) -> u32 {
+pub(crate) fn env_u32(key: &str, default: u32) -> u32 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
 
-fn env_u64(key: &str, default: u64) -> u64 {
+pub(crate) fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())

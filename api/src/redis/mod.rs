@@ -19,14 +19,25 @@ fn bounded(pool: Option<PoolConfig>) -> PoolConfig {
 }
 
 pub fn connect(cfg: &AppConfig) -> Result<Pool, deadpool_redis::CreatePoolError> {
-    let mut rcfg = Config::from_url(&cfg.redis.url);
+    connect_url(&cfg.redis.url)
+}
+
+pub fn connect_admission(cfg: &AppConfig) -> Result<Pool, deadpool_redis::CreatePoolError> {
+    connect_admission_url(&cfg.redis.url, cfg.admission.max_in_flight)
+}
+
+pub fn connect_url(url: &str) -> Result<Pool, deadpool_redis::CreatePoolError> {
+    let mut rcfg = Config::from_url(url);
     rcfg.pool = Some(bounded(rcfg.pool.take()));
     rcfg.create_pool(Some(Runtime::Tokio1))
 }
 
-pub fn connect_admission(cfg: &AppConfig) -> Result<Pool, deadpool_redis::CreatePoolError> {
-    let mut rcfg = Config::from_url(&cfg.redis.url);
-    rcfg.pool = Some(bounded(Some(PoolConfig::new(cfg.admission.max_in_flight))));
+pub fn connect_admission_url(
+    url: &str,
+    max_in_flight: usize,
+) -> Result<Pool, deadpool_redis::CreatePoolError> {
+    let mut rcfg = Config::from_url(url);
+    rcfg.pool = Some(bounded(Some(PoolConfig::new(max_in_flight))));
     rcfg.create_pool(Some(Runtime::Tokio1))
 }
 

@@ -1,9 +1,8 @@
 use axum::http::StatusCode;
 
-use crate::common::admission::{AdmissionRejection, Endpoint};
+use crate::common::admission::{AdmissionRejection, Endpoint, PublicAdmission};
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
 
 fn codes(endpoint: Endpoint) -> (&'static str, &'static str) {
     match endpoint {
@@ -33,8 +32,12 @@ fn refusal(endpoint: Endpoint, rejection: AdmissionRejection) -> AppError {
     }
 }
 
-pub async fn admit(st: &AppState, ctx: &SessionCtx, endpoint: Endpoint) -> AppResult<()> {
-    st.admission
+pub async fn admit(
+    admission: &PublicAdmission,
+    ctx: &SessionCtx,
+    endpoint: Endpoint,
+) -> AppResult<()> {
+    admission
         .check_session(endpoint, ctx.session_id)
         .await
         .map_err(|rejection| refusal(endpoint, rejection))

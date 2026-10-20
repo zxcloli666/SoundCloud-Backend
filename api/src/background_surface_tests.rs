@@ -1,6 +1,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const RT_SUPERVISED: &[&str] = &["src/rt/", "src/modules/chat/sweeps/"];
+
+const RT_ENTRIES: &[&str] = &["sweeps::spawn", "chat::routes", "rt::run"];
+
+const MUSIC_STATE: &[&str] = &[
+    "AppState",
+    "BackgroundJobs",
+    "background_jobs",
+    "CollabJobs",
+    "crate::router::build",
+];
+
 const DETACHED: &[&str] = &[
     "tokio::spawn",
     "spawn_blocking",
@@ -91,6 +103,9 @@ fn the_serving_process_starts_no_work_of_its_own() {
     let mut detached: Vec<String> = Vec::new();
 
     for (file, body) in serving_sources() {
+        if RT_SUPERVISED.iter().any(|owner| file.starts_with(owner)) {
+            continue;
+        }
         for (number, line) in body.lines().enumerate() {
             for pattern in DETACHED {
                 if line.contains(pattern) {
@@ -106,6 +121,33 @@ fn the_serving_process_starts_no_work_of_its_own() {
          to jobs, where it has a lease, a retry budget and somewhere to report failure. A task \
          spawned here dies with the request and nobody learns it never ran:\n  {}",
         detached.join("\n  ")
+    );
+}
+
+#[test]
+fn chat_work_starts_only_in_the_rt_role_and_the_rt_role_builds_no_music_state() {
+    let mut leaks: Vec<String> = Vec::new();
+
+    for (file, body) in serving_sources() {
+        let in_rt = file.starts_with("src/rt/");
+        for pattern in RT_ENTRIES {
+            if body.contains(pattern) && !in_rt && !(file == "src/main.rs" && *pattern == "rt::run")
+            {
+                leaks.push(format!("{file} reaches {pattern} outside src/rt"));
+            }
+        }
+        for pattern in MUSIC_STATE {
+            if in_rt && body.contains(pattern) {
+                leaks.push(format!("{file} touches {pattern}"));
+            }
+        }
+    }
+
+    assert!(
+        leaks.is_empty(),
+        "chat sweeps and chat routes run only under API_ROLE=rt, and chat-api never builds the \
+         music router, its state or its jobs:\n  {}",
+        leaks.join("\n  ")
     );
 }
 

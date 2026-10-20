@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::extract::FromRef;
 use sqlx::PgPool;
 
 use crate::background_jobs::{BackgroundJobs, CollabJobs};
@@ -32,7 +33,7 @@ use crate::modules::tracks::TracksService;
 use crate::modules::users::UsersService;
 use crate::sc::ScReadService;
 
-#[derive(Clone)]
+#[derive(Clone, FromRef)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub pg: PgPool,
