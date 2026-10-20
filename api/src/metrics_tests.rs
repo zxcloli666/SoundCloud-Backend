@@ -65,6 +65,25 @@ fn a_storm_of_unrouted_paths_mints_one_series_not_a_thousand() {
 }
 
 #[test]
+#[allow(deprecated)]
+fn a_repeated_series_finds_its_registry_entry_instead_of_adding_one() {
+    use std::hash::{BuildHasher, BuildHasherDefault};
+
+    let key = metrics::Key::from_parts(
+        REQUEST_DURATION,
+        vec![metrics::Label::new("route", "/tracks/{urn}")],
+    );
+    let stored = BuildHasherDefault::<metrics::KeyHasher>::default().hash_one(&key);
+
+    assert_eq!(
+        stored,
+        key.get_hash(),
+        "the registry stores a series under one hash and looks it up under another, \
+         so every call adds an entry that is never freed"
+    );
+}
+
+#[test]
 fn a_soundcloud_failure_is_counted_by_class_and_its_retry_after_is_kept() {
     init();
     record_sc_failure(&AppError::ScApi {
