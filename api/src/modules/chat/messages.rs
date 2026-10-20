@@ -1,14 +1,26 @@
+pub mod fanout;
+pub mod gate;
+pub mod page;
+pub mod redact;
+pub mod rules;
+pub mod store;
+pub mod system;
+
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::modules::chat::body::ChatPath;
-use crate::modules::chat::model::MessageView;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
+use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
+use crate::modules::chat::conversations::DeleteScope;
+use crate::modules::chat::limits::{self, Bucket};
+use crate::modules::chat::members::access;
+use crate::modules::chat::model::{MessageRow, MessageView};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
 
 pub const PAGE_ROWS_MAX: usize = 200;
 pub const PAGE_BYTES_MAX: usize = 256 * 1024;
@@ -32,6 +44,16 @@ pub struct SendAnswer {
     pub expires_at: Option<i64>,
 }
 
+impl From<&MessageRow> for SendAnswer {
+    fn from(row: &MessageRow) -> Self {
+        Self {
+            seq: row.seq,
+            ts: row.created_at.timestamp_millis(),
+            expires_at: row.expires_at.map(|at| at.timestamp_millis()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HistoryQuery {
     pub after: Option<i64>,
@@ -45,26 +67,69 @@ pub struct HistoryPage {
     pub more: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteMessageQuery {
+    #[serde(rename = "for")]
+    pub scope: DeleteScope,
+}
+
 pub async fn send(
-    _caller: ChatCaller,
-    State(_chat): State<Arc<ChatState>>,
-    ChatPath(_conversation): ChatPath<Uuid>,
+    caller: ChatCaller,
+    State(chat): State<Arc<ChatState>>,
+    ChatPath(conversation): ChatPath<Uuid>,
+    ChatJson(input): ChatJson<SendMessage>,
 ) -> ChatResult<Json<SendAnswer>> {
-    Err(ChatError::Unimplemented)
+    if chat.config.send_paused {
+        return Err(ChatError::SendPaused);
+    }
+    let device = caller.device.as_ref().ok_or(ChatError::Invalid)?.id;
+    let outgoing = rules::outgoing(input)?;
+    limits::admit(&chat, Bucket::Send, &caller.user_id).await?;
+    let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
+    rules::may_post(&access, outgoing.class)?;
+    gate::peer_open(&access)?;
+    if let Some(peer) = access.peer.as_deref()
+        && blocks::blocked_between(&chat, &caller.user_id, peer).await?
+    {
+        return Err(ChatError::Unavailable);
+    }
+    gate::request_room(&chat.pg, &access, outgoing.class).await?;
+    let target = match outgoing.target_seq {
+        Some(seq) => store::target(&chat.pg, conversation, seq).await?,
+        None => None,
+    };
+    let inherited =
+        rules::inherited_expiry(outgoing.class, &caller.user_id, target.as_ref(), Utc::now())?;
+    let row = store::store(&chat.pg, &access, device, &outgoing, inherited).await?;
+    fanout::publish(&chat, std::slice::from_ref(&row), &access.recipients).await?;
+    Ok(Json(SendAnswer::from(&row)))
 }
 
 pub async fn history(
-    _caller: ChatCaller,
-    State(_chat): State<Arc<ChatState>>,
-    ChatPath(_conversation): ChatPath<Uuid>,
+    caller: ChatCaller,
+    State(chat): State<Arc<ChatState>>,
+    ChatPath(conversation): ChatPath<Uuid>,
+    ChatQuery(query): ChatQuery<HistoryQuery>,
 ) -> ChatResult<Json<HistoryPage>> {
-    Err(ChatError::Unimplemented)
+    limits::admit(&chat, Bucket::ReadMessages, &caller.user_id).await?;
+    let access = access::load(&chat.pg, conversation, &caller.user_id)
+        .await?
+        .readable()?;
+    let cap = page::byte_cap(caller.tier, caller.max_bytes);
+    Ok(Json(page::read(&chat.pg, &access, &query, cap).await?))
 }
 
 pub async fn delete(
-    _caller: ChatCaller,
-    State(_chat): State<Arc<ChatState>>,
-    ChatPath((_conversation, _seq)): ChatPath<(Uuid, i64)>,
+    caller: ChatCaller,
+    State(chat): State<Arc<ChatState>>,
+    ChatPath((conversation, seq)): ChatPath<(Uuid, i64)>,
+    ChatQuery(query): ChatQuery<DeleteMessageQuery>,
 ) -> ChatResult<StatusCode> {
-    Err(ChatError::Unimplemented)
+    if query.scope != DeleteScope::Everyone {
+        return Err(ChatError::Invalid);
+    }
+    let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
+    let rows = redact::for_everyone(&chat.pg, &access, seq).await?;
+    fanout::publish(&chat, &rows, &access.recipients).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
