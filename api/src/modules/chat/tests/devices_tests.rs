@@ -1,0 +1,572 @@
+use axum::http::StatusCode;
+use chat_wire::bind::make_bind;
+use chat_wire::prost::Message;
+use serde_json::{Value, json};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use super::bind::claim;
+use super::test_support::{
+    DeviceKeys, age, call, caller, conversation, desktop, enroll, rekey_pending, session, state,
+};
+use super::{alerts, lookup};
+use crate::modules::chat::ChatError;
+use crate::modules::chat::caller::CallerDevice;
+
+const USER: &str = "7001";
+
+async fn status_of(pool: &PgPool, device: Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM chat.devices WHERE id = $1")
+        .bind(device)
+        .fetch_one(pool)
+        .await
+        .expect("a device")
+}
+
+async fn session_exists(pool: &PgPool, session: Uuid) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)")
+        .bind(session)
+        .fetch_one(pool)
+        .await
+        .expect("a probe")
+}
+
+fn error(answer: &Value) -> &str {
+    answer["error"].as_str().unwrap_or_default()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
+    let chat = state(&pool);
+    let bare = session(&pool, USER, None).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, bare, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::UNAUTHORIZED, "chat_relogin_required")
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
+    let chat = state(&pool);
+    let keys = DeviceKeys::new();
+    let mut bind = make_bind(&keys.id.to_string(), &keys.auth_seed, &keys.box_pub, 1);
+    bind.box_pub = DeviceKeys::new().box_pub.to_vec();
+    let forged = session(&pool, USER, Some(bind.encode_to_vec())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, forged, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::UNAUTHORIZED, "chat_relogin_required")
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_mismatched_bind_is_refused(pool: PgPool) {
+    let chat = state(&pool);
+    let first = enroll(&chat, &pool, USER).await;
+    let other = DeviceKeys::new();
+    let bound_elsewhere = session(&pool, USER, Some(other.bind())).await;
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, bound_elsewhere, Some(&first.row)),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::CONFLICT, "chat_session_bound_other"),
+        "a device cannot register on a session bound to another device"
+    );
+
+    let mut swapped = DeviceKeys::new();
+    swapped.id = first.keys.id;
+    let reused_id = session(&pool, USER, Some(swapped.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, reused_id, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::CONFLICT, "chat_session_bound_other"),
+        "a known device id with other keys is somebody else"
+    );
+
+    let stranger = DeviceKeys::new();
+    let foreign = session(&pool, "7999", Some(stranger.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, foreign, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::CONFLICT, "chat_session_bound_other"),
+        "a session of another SoundCloud user never registers for this one"
+    );
+
+    assert_eq!(
+        claim(Some(&other.bind()), first.keys.id),
+        Err(ChatError::SessionBoundOther)
+    );
+    assert_eq!(claim(None, first.keys.id), Err(ChatError::ReloginRequired));
+    assert_eq!(status_of(&pool, first.keys.id).await, "active");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
+    let chat = state(&pool);
+    let first = enroll(&chat, &pool, USER).await;
+    let chat_id = conversation(&pool, "direct", &[USER, "7002"]).await;
+    sqlx::query("UPDATE chat.conversations SET rekey = false")
+        .execute(&pool)
+        .await
+        .expect("a reset");
+
+    let relogin = session(&pool, USER, Some(first.keys.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, relogin, Some(&first.row)),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["id"], json!(first.keys.id));
+    assert_eq!(answer["current"], json!(true));
+
+    let moved = lookup(&chat, first.keys.id)
+        .await
+        .expect("a lookup")
+        .expect("a device");
+    assert_eq!(moved.session_id, relogin);
+    assert_eq!(moved.created_at, first.row.created_at);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM chat.devices")
+        .fetch_one(&pool)
+        .await
+        .expect("a count");
+    assert_eq!(count, 1);
+    assert!(
+        !rekey_pending(&pool, chat_id).await,
+        "the same device coming back is not a new reader"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
+    let chat = state(&pool);
+    let direct = conversation(&pool, "direct", &[USER, "7002"]).await;
+    let group = conversation(&pool, "group", &[USER, "7002", "7003"]).await;
+    let left = conversation(&pool, "group", &[USER, "7003"]).await;
+    let foreign = conversation(&pool, "direct", &["7002", "7003"]).await;
+    sqlx::query(
+        "UPDATE chat.members SET state = 'left' WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(left)
+    .bind(USER)
+    .execute(&pool)
+    .await
+    .expect("a departure");
+
+    enroll(&chat, &pool, USER).await;
+
+    assert!(rekey_pending(&pool, direct).await);
+    assert!(rekey_pending(&pool, group).await);
+    assert!(!rekey_pending(&pool, left).await);
+    assert!(!rekey_pending(&pool, foreign).await);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_session_keeps_one_device(pool: PgPool) {
+    let chat = state(&pool);
+    let first = enroll(&chat, &pool, USER).await;
+    let second = DeviceKeys::new();
+    sqlx::query("UPDATE sessions SET chat_bind = $2 WHERE id = $1")
+        .bind(first.session)
+        .bind(second.bind())
+        .execute(&pool)
+        .await
+        .expect("a rebind");
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, first.session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(status_of(&pool, first.keys.id).await, "revoked");
+    assert_eq!(status_of(&pool, second.id).await, "active");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
+    let chat = state(&pool);
+    for _ in 0..10 {
+        enroll(&chat, &pool, USER).await;
+    }
+    let extra = DeviceKeys::new();
+    let extra_session = session(&pool, USER, Some(extra.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(USER, extra_session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::TOO_MANY_REQUESTS, "chat_request_limit")
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_malformed_device_description_is_refused(pool: PgPool) {
+    let chat = state(&pool);
+    let keys = DeviceKeys::new();
+    let bound = session(&pool, USER, Some(keys.bind())).await;
+    for body in [
+        json!({"platform": "", "name": "Mac", "app_version": "8.7.0"}),
+        json!({"platform": "mac os", "name": "Mac", "app_version": "8.7.0"}),
+        json!({"platform": "macos", "name": "  ", "app_version": "8.7.0"}),
+        json!({"platform": "macos", "name": "Mac\n", "app_version": "8.7.0", "caps": ["a b"]}),
+        json!({"platform": "macos", "name": "x".repeat(65), "app_version": "8.7.0"}),
+    ] {
+        let (status, answer) = call(
+            &chat,
+            caller(USER, bound, None),
+            "POST",
+            "/chat/devices",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (status, error(&answer)),
+            (StatusCode::BAD_REQUEST, "chat_invalid"),
+            "{body}"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
+    let chat = state(&pool);
+    let older = enroll(&chat, &pool, USER).await;
+    let older_row = age(&chat, &pool, &older.row, 2).await;
+    let younger = enroll(&chat, &pool, USER).await;
+
+    for path in [
+        format!("/chat/devices/{}", older.keys.id),
+        format!("/chat/devices/{}/not-me", older.keys.id),
+    ] {
+        let method = if path.ends_with("not-me") {
+            "POST"
+        } else {
+            "DELETE"
+        };
+        let (status, answer) = call(
+            &chat,
+            caller(USER, younger.session, Some(&younger.row)),
+            method,
+            &path,
+            None,
+        )
+        .await;
+        assert_eq!(
+            (status, error(&answer)),
+            (StatusCode::FORBIDDEN, "chat_too_young"),
+            "{method} {path}"
+        );
+    }
+    assert_eq!(status_of(&pool, older.keys.id).await, "active");
+    assert!(session_exists(&pool, older.session).await);
+
+    let (status, _) = call(
+        &chat,
+        caller(USER, older.session, Some(&older_row)),
+        "DELETE",
+        &format!("/chat/devices/{}", younger.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status_of(&pool, younger.keys.id).await, "revoked");
+    assert!(
+        !session_exists(&pool, younger.session).await,
+        "removing a device ends its session"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
+    let chat = state(&pool);
+    let older = enroll(&chat, &pool, USER).await;
+    age(&chat, &pool, &older.row, 200).await;
+    let younger = enroll(&chat, &pool, USER).await;
+    let seasoned = age(&chat, &pool, &younger.row, 73).await;
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, younger.session, Some(&seasoned)),
+        "POST",
+        &format!("/chat/devices/{}/not-me", older.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::FORBIDDEN, "chat_too_young"),
+        "not me is only for devices that came later"
+    );
+
+    let (status, _) = call(
+        &chat,
+        caller(USER, younger.session, Some(&seasoned)),
+        "DELETE",
+        &format!("/chat/devices/{}", older.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status_of(&pool, older.keys.id).await, "revoked");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
+    let chat = state(&pool);
+    let mine = enroll(&chat, &pool, USER).await;
+    let mine_row = age(&chat, &pool, &mine.row, 1).await;
+    let intruder = enroll(&chat, &pool, USER).await;
+    let chat_id = conversation(&pool, "direct", &[USER, "7002"]).await;
+
+    let (status, _) = call(
+        &chat,
+        caller(USER, mine.session, Some(&mine_row)),
+        "POST",
+        &format!("/chat/devices/{}/not-me", intruder.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status_of(&pool, intruder.keys.id).await, "revoked");
+    assert!(!session_exists(&pool, intruder.session).await);
+    assert!(
+        rekey_pending(&pool, chat_id).await,
+        "a revoked reader rotates the keys"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
+    let chat = state(&pool);
+    let older = enroll(&chat, &pool, USER).await;
+    let fresh_older = age(&chat, &pool, &older.row, 5).await;
+    let newer = enroll(&chat, &pool, USER).await;
+    let confirm = format!("/chat/devices/{}/confirm", newer.keys.id);
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, older.session, Some(&fresh_older)),
+        "POST",
+        &confirm,
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::FORBIDDEN, "chat_too_young")
+    );
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, newer.session, Some(&newer.row)),
+        "POST",
+        &format!("/chat/devices/{}/confirm", older.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::FORBIDDEN, "chat_too_young")
+    );
+
+    let seasoned = age(&chat, &pool, &older.row, 100).await;
+    assert_eq!(
+        alerts(&chat, USER, &CallerDevice::from(&seasoned))
+            .await
+            .expect("alerts")
+            .iter()
+            .map(|alert| alert.id)
+            .collect::<Vec<_>>(),
+        vec![newer.keys.id],
+        "the older device is asked about the newer one"
+    );
+    let (status, _) = call(
+        &chat,
+        caller(USER, older.session, Some(&seasoned)),
+        "POST",
+        &confirm,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, listed) = call(
+        &chat,
+        caller(USER, newer.session, Some(&newer.row)),
+        "GET",
+        "/chat/devices",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let newer_view = listed
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|device| device["id"] == json!(newer.keys.id))
+        .expect("the newer device");
+    assert_eq!(newer_view["history_unlocked"], json!(true));
+    assert_eq!(newer_view["current"], json!(true));
+    assert!(
+        alerts(&chat, USER, &CallerDevice::from(&seasoned))
+            .await
+            .expect("alerts")
+            .is_empty()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
+    let chat = state(&pool);
+    let device = enroll(&chat, &pool, USER).await;
+    let (status, _) = call(
+        &chat,
+        caller(USER, device.session, Some(&device.row)),
+        "GET",
+        "/chat/devices",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(chat.devices.row(device.keys.id).is_some());
+    assert!(chat.devices.user(USER).is_some());
+
+    let (status, _) = call(
+        &chat,
+        caller(USER, device.session, Some(&device.row)),
+        "DELETE",
+        "/chat/devices/me",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(chat.devices.user(USER).is_none());
+    let cached = chat.devices.row(device.keys.id);
+    assert!(cached.is_none_or(|row| row.status == "revoked"));
+    let seen = lookup(&chat, device.keys.id)
+        .await
+        .expect("a lookup")
+        .expect("a device");
+    assert_eq!(seen.status, "revoked");
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, device.session, Some(&device.row)),
+        "GET",
+        "/chat/devices",
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::UNAUTHORIZED, "chat_device_revoked")
+    );
+    assert!(
+        session_exists(&pool, device.session).await,
+        "logging out of chat leaves the music session to the app"
+    );
+
+    let (status, answer) = call(
+        &chat,
+        caller(USER, device.session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::UNAUTHORIZED, "chat_device_revoked"),
+        "a revoked device never comes back with the same keys"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
+    let chat = state(&pool);
+    let bare = session(&pool, USER, None).await;
+    let (status, _) = call(
+        &chat,
+        caller(USER, bare, None),
+        "DELETE",
+        "/chat/devices/me",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn another_users_device_is_not_found(pool: PgPool) {
+    let chat = state(&pool);
+    let mine = enroll(&chat, &pool, USER).await;
+    let theirs = enroll(&chat, &pool, "7002").await;
+    for (method, path) in [
+        ("DELETE", format!("/chat/devices/{}", theirs.keys.id)),
+        ("POST", format!("/chat/devices/{}/confirm", theirs.keys.id)),
+        ("POST", format!("/chat/devices/{}/not-me", theirs.keys.id)),
+    ] {
+        let (status, answer) = call(
+            &chat,
+            caller(USER, mine.session, Some(&mine.row)),
+            method,
+            &path,
+            None,
+        )
+        .await;
+        assert_eq!(
+            (status, error(&answer)),
+            (StatusCode::NOT_FOUND, "chat_not_found"),
+            "{method} {path}"
+        );
+    }
+    assert_eq!(status_of(&pool, theirs.keys.id).await, "active");
+}
