@@ -83,8 +83,8 @@ pub fn init() {
     };
     match builder.install_recorder() {
         Ok(handle) => {
+            register_series_that_start_at_zero();
             if HANDLE.set(handle.clone()).is_ok() {
-                register_series_that_start_at_zero();
                 start_upkeep(handle);
             }
         }
