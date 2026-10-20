@@ -23,6 +23,10 @@ impl RoomHub {
         Arc::new(Self { tx, nats })
     }
 
+    pub fn is_shared(&self) -> bool {
+        self.nats.is_some()
+    }
+
     pub async fn listen(&self) -> RoomChanges {
         let local = self.tx.subscribe();
         let remote = match &self.nats {

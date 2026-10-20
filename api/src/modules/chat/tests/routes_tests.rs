@@ -112,7 +112,10 @@ async fn answer(
 #[tokio::test]
 async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
     let router = inner().with_state(offline_chat_state(true));
-    for (method, uri) in inner_routes() {
+    let unfilled = inner_routes()
+        .into_iter()
+        .filter(|(_, uri)| !uri.starts_with("/chat/rooms/"));
+    for (method, uri) in unfilled {
         assert_eq!(
             answer(&router, method, &uri, true).await,
             (
