@@ -153,7 +153,7 @@ impl Upgrader {
             && let Some(pool) = &self.cookies
             && let Ok(Some(result)) = pool.get_stream(track_urn, true).await
         {
-            return Ok(self.upload(track_urn, result.data.to_vec(), result.quality));
+            return Ok(self.upload(track_urn, result.data, result.quality));
         }
         if stored != quality::SQ {
             return Ok(false);
@@ -165,7 +165,7 @@ impl Upgrader {
         }
 
         match self.anon.get_stream(track_urn, quality::HQ).await {
-            Ok(Some(result)) => Ok(self.upload(track_urn, result.data.to_vec(), result.quality)),
+            Ok(Some(result)) => Ok(self.upload(track_urn, result.data, result.quality)),
             Ok(None) => Ok(false),
             Err(e) => {
                 debug!(urn = %track_urn, "[hq-upgrade] anon stream failed: {e}");
@@ -204,7 +204,7 @@ impl Upgrader {
     async fn decrypt_all(
         &self,
         src: &RestrictedSource,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
         let fetcher: Arc<dyn decrypt::Fetcher> =
             Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
                 client: self.http_client.clone(),
@@ -219,19 +219,17 @@ impl Upgrader {
         while let Some(chunk) = stream.next().await {
             buf.extend_from_slice(&chunk?);
         }
-        Ok(buf)
+        buf.shrink_to_fit();
+        Ok(Bytes::from(buf))
     }
 
-    fn upload(&self, track_urn: &str, data: Vec<u8>, quality: &'static str) -> bool {
+    fn upload(&self, track_urn: &str, data: Bytes, quality: &'static str) -> bool {
         if data.len() < 32 * 1024 {
             debug!(urn = %track_urn, bytes = data.len(), "[hq-upgrade] too small, skipping");
             return false;
         }
-        self.storage.upload_in_background_with_quality(
-            track_urn.to_string(),
-            Bytes::from(data),
-            quality,
-        );
+        self.storage
+            .upload_in_background_with_quality(track_urn.to_string(), data, quality);
         true
     }
 }
