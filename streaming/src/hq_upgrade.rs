@@ -100,14 +100,21 @@ impl Upgrader {
     }
 
     async fn run_batch(&self, stored: &'static str, tiers: &[UpgradeTier]) {
-        if !self.storage.has_free_upload_slot() {
+        if !self.storage.has_room_for_background_uploads() {
             debug!(
                 stored,
-                "[hq-upgrade] every storage upload slot is busy, waiting for the next tick"
+                "[hq-upgrade] storage uploads are busy, waiting for the next tick"
             );
             return;
         }
         for urn in self.pick(stored, tiers).await {
+            if !self.storage.has_room_for_background_uploads() {
+                debug!(
+                    stored,
+                    "[hq-upgrade] storage uploads filled up, the rest waits for its cooldown"
+                );
+                break;
+            }
             tokio::time::sleep(PER_TRACK_GAP).await;
             let outcome =
                 within_deadline(UPGRADE_DEADLINE, &urn, self.upgrade_one(&urn, stored)).await;

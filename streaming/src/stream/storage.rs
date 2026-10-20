@@ -52,8 +52,8 @@ impl StorageClient {
         !self.base_url.is_empty() && !self.auth_token.is_empty()
     }
 
-    pub fn has_free_upload_slot(&self) -> bool {
-        self.uploads.any_free()
+    pub fn has_room_for_background_uploads(&self) -> bool {
+        self.uploads.half_free()
     }
 
     pub fn track_filename(track_urn: &str) -> Option<String> {

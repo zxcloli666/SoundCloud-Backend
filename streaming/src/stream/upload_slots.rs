@@ -19,8 +19,8 @@ impl UploadSlots {
         }
     }
 
-    pub fn any_free(&self) -> bool {
-        lock(&self.running).len() < self.size
+    pub fn half_free(&self) -> bool {
+        lock(&self.running).len() * 2 <= self.size
     }
 
     pub fn take(&self, track_urn: &str) -> Option<UploadSlot> {
@@ -59,10 +59,10 @@ mod tests {
             .collect();
 
         assert_eq!(held.len(), 8, "92 of 100 uploads had to be skipped");
-        assert!(!slots.any_free());
+        assert!(!slots.half_free());
 
         drop(held);
-        assert!(slots.any_free());
+        assert!(slots.half_free());
         assert!(
             lock(&slots.running).is_empty(),
             "a finished upload must not leave its track behind"
@@ -92,6 +92,22 @@ mod tests {
             second.is_some(),
             "the duplicate must not have used up the last slot"
         );
-        assert!(!slots.any_free());
+        assert!(!slots.half_free());
+    }
+
+    #[test]
+    fn background_work_stops_once_played_tracks_hold_half_the_slots() {
+        let slots = UploadSlots::new(8);
+        let mut held: Vec<UploadSlot> = (0..4)
+            .filter_map(|id| slots.take(&format!("soundcloud:tracks:{id}")))
+            .collect();
+        assert!(slots.half_free());
+
+        held.extend(slots.take("soundcloud:tracks:4"));
+        assert!(!slots.half_free());
+        assert!(
+            slots.take("soundcloud:tracks:5").is_some(),
+            "a played track still gets one of the slots background work leaves alone"
+        );
     }
 }
