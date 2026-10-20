@@ -100,6 +100,13 @@ impl Upgrader {
     }
 
     async fn run_batch(&self, stored: &'static str, tiers: &[UpgradeTier]) {
+        if !self.storage.has_free_upload_slot() {
+            debug!(
+                stored,
+                "[hq-upgrade] every storage upload slot is busy, waiting for the next tick"
+            );
+            return;
+        }
         for urn in self.pick(stored, tiers).await {
             tokio::time::sleep(PER_TRACK_GAP).await;
             let outcome =

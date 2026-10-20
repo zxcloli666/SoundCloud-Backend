@@ -6,14 +6,17 @@ use bytes::Bytes;
 use entity_ref::{EntityKind, EntityRef};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wreq::Client;
 
+use super::upload_slots::UploadSlots;
 use crate::config::Config;
 use crate::db::postgres::PgPool;
 
 const UNAVAILABLE_THRESHOLD: u32 = 3;
 const UNAVAILABLE_COOLDOWN_MS: u64 = 60_000;
+const UPLOADS_AT_ONCE: usize = 8;
+const UPLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 pub const PASSTHROUGH_IDLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub struct StorageClient {
@@ -26,6 +29,7 @@ pub struct StorageClient {
     pg: PgPool,
     consecutive_unavailable: Arc<AtomicU32>,
     unavailable_until: Arc<AtomicU64>,
+    uploads: UploadSlots,
 }
 
 impl StorageClient {
@@ -40,11 +44,16 @@ impl StorageClient {
             pg,
             consecutive_unavailable: Arc::new(AtomicU32::new(0)),
             unavailable_until: Arc::new(AtomicU64::new(0)),
+            uploads: UploadSlots::new(UPLOADS_AT_ONCE),
         }
     }
 
     pub fn enabled(&self) -> bool {
         !self.base_url.is_empty() && !self.auth_token.is_empty()
+    }
+
+    pub fn has_free_upload_slot(&self) -> bool {
+        self.uploads.any_free()
     }
 
     pub fn track_filename(track_urn: &str) -> Option<String> {
@@ -158,6 +167,10 @@ impl StorageClient {
         if !self.enabled() || self.is_temporarily_unavailable() {
             return;
         }
+        let Some(slot) = self.uploads.take(&track_urn) else {
+            debug!("[storage] {filename} skipped: already uploading or all slots busy");
+            return;
+        };
 
         let client = self.client.clone();
         let upload_url = self.upload_url.clone();
@@ -167,6 +180,7 @@ impl StorageClient {
         let until = self.unavailable_until.clone();
 
         tokio::spawn(async move {
+            let _slot = slot;
             let id = match pg.insert_cdn_track(&track_urn, &cdn_path, "pending").await {
                 Ok(id) => id,
                 Err(e) => {
@@ -327,7 +341,7 @@ pub(crate) async fn upload_to_storage(
     quality: &str,
     expected_duration_ms: Option<i64>,
 ) -> Result<(), UploadError> {
-    let file_part = wreq::multipart::Part::bytes(data.to_vec())
+    let file_part = wreq::multipart::Part::stream_with_length(data.clone(), data.len() as u64)
         .file_name("audio")
         .mime_str("audio/mpeg")
         .map_err(|e| UploadError::Transport(e.into()))?;
@@ -344,7 +358,7 @@ pub(crate) async fn upload_to_storage(
         .post(format!("{base_url}/upload"))
         .header("Authorization", format!("Bearer {auth_token}"))
         .multipart(form)
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(UPLOAD_BUDGET)
         .send()
         .await
         .map_err(|e| UploadError::Transport(e.into()))?;
@@ -388,7 +402,85 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn};
+    use bytes::Bytes;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn, upload_to_storage};
+
+    fn declared_length(head: &str) -> Option<usize> {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
+    }
+
+    async fn storage_that_reads_one_upload(listener: TcpListener) -> (String, Vec<u8>) {
+        let (mut socket, _) = listener.accept().await.expect("the upload connects");
+        let mut request = Vec::new();
+        let mut chunk = vec![0_u8; 64 * 1024];
+        let (head, body_start) = loop {
+            let read = socket
+                .read(&mut chunk)
+                .await
+                .expect("the upload is readable");
+            assert!(read > 0, "the upload ended before its headers");
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break (
+                    String::from_utf8_lossy(&request[..end]).into_owned(),
+                    end + 4,
+                );
+            }
+        };
+        let length = declared_length(&head).expect("the upload declares its length");
+        while request.len() < body_start + length {
+            let read = socket
+                .read(&mut chunk)
+                .await
+                .expect("the upload is readable");
+            assert!(read > 0, "the upload ended before its declared length");
+            request.extend_from_slice(&chunk[..read]);
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .expect("the answer is written");
+        (head, request.split_off(body_start))
+    }
+
+    #[tokio::test]
+    async fn an_upload_streams_the_whole_track_under_a_declared_length() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port is free");
+        let address = listener.local_addr().expect("the listener has an address");
+        let storage = tokio::spawn(storage_that_reads_one_upload(listener));
+        let track = Bytes::from(vec![7_u8; 3 << 20]);
+        let client = wreq::Client::builder().build().expect("the client builds");
+
+        let outcome = upload_to_storage(
+            &client,
+            &format!("http://{address}"),
+            "token",
+            "soundcloud_tracks_1",
+            &track,
+            "hq",
+            Some(180_000),
+        )
+        .await;
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (head, body) = storage.await.expect("the storage stub finished");
+        assert_eq!(declared_length(&head), Some(body.len()));
+        assert_eq!(
+            body.iter().filter(|&&byte| byte == 7).count(),
+            track.len(),
+            "the multipart body must carry every byte of the track"
+        );
+    }
 
     #[test]
     fn canonical_urn_maps_to_canonical_filename() {
