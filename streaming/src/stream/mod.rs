@@ -1,6 +1,7 @@
 pub mod anon;
 #[cfg(test)]
 mod body_timeout_tests;
+mod breaker;
 pub mod cookies;
 pub mod cookies_pool;
 pub mod decrypt_fetch;

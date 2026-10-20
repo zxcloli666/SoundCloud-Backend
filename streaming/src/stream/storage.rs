@@ -5,16 +5,14 @@ use axum::response::Response;
 use bytes::Bytes;
 use entity_ref::{EntityKind, EntityRef};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 use wreq::Client;
 
+use super::breaker::Breaker;
 use super::upload_slots::UploadSlots;
 use crate::config::Config;
 use crate::db::postgres::PgPool;
 
-const UNAVAILABLE_THRESHOLD: u32 = 3;
-const UNAVAILABLE_COOLDOWN_MS: u64 = 60_000;
 const UPLOADS_AT_ONCE: usize = 8;
 const UPLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 pub const PASSTHROUGH_IDLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
@@ -27,8 +25,8 @@ pub struct StorageClient {
     upload_url: String,
     auth_token: String,
     pg: PgPool,
-    consecutive_unavailable: Arc<AtomicU32>,
-    unavailable_until: Arc<AtomicU64>,
+    reads: Breaker,
+    uploads_failing: Arc<Breaker>,
     uploads: UploadSlots,
 }
 
@@ -42,8 +40,8 @@ impl StorageClient {
             upload_url: config.storage_upload_url.trim_end_matches('/').to_string(),
             auth_token: config.storage_token.clone(),
             pg,
-            consecutive_unavailable: Arc::new(AtomicU32::new(0)),
-            unavailable_until: Arc::new(AtomicU64::new(0)),
+            reads: Breaker::default(),
+            uploads_failing: Arc::default(),
             uploads: UploadSlots::new(UPLOADS_AT_ONCE),
         }
     }
@@ -76,8 +74,7 @@ impl StorageClient {
     }
 
     fn is_temporarily_unavailable(&self) -> bool {
-        let until = self.unavailable_until.load(Ordering::Relaxed);
-        until > 0 && now_ms() < until
+        self.reads.is_open()
     }
 
     pub async fn try_serve(&self, track_urn: &str) -> Option<String> {
@@ -164,7 +161,7 @@ impl StorageClient {
             warn!("[storage] refusing upload for non-canonical urn: {track_urn:?}");
             return;
         };
-        if !self.enabled() || self.is_temporarily_unavailable() {
+        if !self.enabled() || self.uploads_failing.is_open() {
             return;
         }
         let Some(slot) = self.uploads.take(&track_urn) else {
@@ -176,8 +173,7 @@ impl StorageClient {
         let upload_url = self.upload_url.clone();
         let auth_token = self.auth_token.clone();
         let pg = self.pg.clone();
-        let consec = self.consecutive_unavailable.clone();
-        let until = self.unavailable_until.clone();
+        let failing = self.uploads_failing.clone();
 
         tokio::spawn(async move {
             let _slot = slot;
@@ -202,8 +198,7 @@ impl StorageClient {
             .await
             {
                 Ok(()) => {
-                    consec.store(0, Ordering::Relaxed);
-                    until.store(0, Ordering::Relaxed);
+                    failing.succeed();
                     let _ = pg.update_cdn_track_status(&id, "ok").await;
                     info!(
                         "[storage] uploaded {} {} ({:.1} MB)",
@@ -213,21 +208,14 @@ impl StorageClient {
                     );
                 }
                 Err(UploadError::Rejected { status, body }) => {
-                    consec.store(0, Ordering::Relaxed);
-                    until.store(0, Ordering::Relaxed);
+                    failing.succeed();
                     info!("[storage] upload rejected for {filename} ({status}): {body}");
                     let st = settle_failed_status(&client, &verify_target).await;
                     let _ = pg.update_cdn_track_status(&id, st).await;
                 }
                 Err(e) => {
-                    let prev = consec.fetch_add(1, Ordering::Relaxed);
-                    let cur_until = until.load(Ordering::Relaxed);
-                    if prev + 1 >= UNAVAILABLE_THRESHOLD && now_ms() >= cur_until {
-                        until.store(now_ms() + UNAVAILABLE_COOLDOWN_MS, Ordering::Relaxed);
-                        warn!(
-                            "[storage] breaker opened after {} upload failures",
-                            prev + 1
-                        );
+                    if let Some(failures) = failing.fail() {
+                        warn!("[storage] uploads paused after {failures} upload failures");
                     }
                     warn!("[storage] upload failed for {filename}: {e}");
                     let st = settle_failed_status(&client, &verify_target).await;
@@ -270,16 +258,12 @@ impl StorageClient {
     }
 
     fn mark_available(&self) {
-        self.consecutive_unavailable.store(0, Ordering::Relaxed);
-        self.unavailable_until.store(0, Ordering::Relaxed);
+        self.reads.succeed();
     }
 
     fn mark_unavailable(&self) {
-        let prev = self.consecutive_unavailable.fetch_add(1, Ordering::Relaxed);
-        if prev + 1 >= UNAVAILABLE_THRESHOLD && !self.is_temporarily_unavailable() {
-            self.unavailable_until
-                .store(now_ms() + UNAVAILABLE_COOLDOWN_MS, Ordering::Relaxed);
-            warn!("[storage] breaker opened after {} failures", prev + 1);
+        if let Some(failures) = self.reads.fail() {
+            warn!("[storage] breaker opened after {failures} failures");
         }
     }
 }
@@ -391,13 +375,6 @@ pub fn is_canonical_track_urn(track_urn: &str) -> bool {
 
 pub fn canonical_track_urn(input: &str) -> Option<String> {
     entity_ref::track_urn(input)
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 #[cfg(test)]
