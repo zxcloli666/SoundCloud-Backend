@@ -169,6 +169,26 @@ jobs:
       - name: Gateway
         run: cargo check --manifest-path gateway/Cargo.toml --all-targets
 
+  yanked:
+    name: Yanked crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Lockfiles
+        run: |
+          failed=0
+          for lock in $(git ls-files '*Cargo.lock'); do
+            cargo deny --manifest-path "$(dirname "$lock")/Cargo.toml" --config deny.toml --locked check -W vulnerability advisories || failed=1
+          done
+          exit "$failed"
+
   worker:
     name: Worker
     runs-on: ubuntu-latest
