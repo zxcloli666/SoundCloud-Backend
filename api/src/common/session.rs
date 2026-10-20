@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use uuid::Uuid;
 
 use crate::common::uuid::parse_uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::AuthService;
-use crate::state::AppState;
 
 #[derive(Clone)]
 pub struct SessionCtx {
@@ -26,21 +25,22 @@ impl SessionCtx {
     }
 }
 
-impl FromRequestParts<AppState> for SessionCtx {
+impl<S> FromRequestParts<S> for SessionCtx
+where
+    Arc<AuthService>: FromRef<S>,
+    S: Send + Sync,
+{
     type Rejection = AppError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let auth = Arc::<AuthService>::from_ref(state);
         let raw = extract_session_id(parts)
             .ok_or_else(|| AppError::unauthorized("Missing or malformed x-session-id header"))?;
 
         let session_id = parse_uuid(&raw)
             .ok_or_else(|| AppError::unauthorized("Missing or malformed x-session-id header"))?;
 
-        let session = state
-            .auth
+        let session = auth
             .get_session(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
@@ -53,7 +53,7 @@ impl FromRequestParts<AppState> for SessionCtx {
         Ok(SessionCtx {
             session_id,
             sc_user_id,
-            auth: state.auth.clone(),
+            auth,
         })
     }
 }
@@ -61,20 +61,22 @@ impl FromRequestParts<AppState> for SessionCtx {
 #[derive(Clone, Default)]
 pub struct OptionalSession(pub Option<SessionCtx>);
 
-impl FromRequestParts<AppState> for OptionalSession {
+impl<S> FromRequestParts<S> for OptionalSession
+where
+    Arc<AuthService>: FromRef<S>,
+    S: Send + Sync,
+{
     type Rejection = AppError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let auth = Arc::<AuthService>::from_ref(state);
         let Some(raw) = extract_session_id(parts) else {
             return Ok(OptionalSession(None));
         };
         let Some(session_id) = parse_uuid(&raw) else {
             return Ok(OptionalSession(None));
         };
-        let Ok(Some(session)) = state.auth.get_session(session_id).await else {
+        let Ok(Some(session)) = auth.get_session(session_id).await else {
             return Ok(OptionalSession(None));
         };
         let Some(raw) = session.soundcloud_user_id else {
@@ -84,20 +86,17 @@ impl FromRequestParts<AppState> for OptionalSession {
         Ok(OptionalSession(Some(SessionCtx {
             session_id,
             sc_user_id,
-            auth: state.auth.clone(),
+            auth,
         })))
     }
 }
 
 pub struct RawSessionIdHeader(pub Option<String>);
 
-impl FromRequestParts<AppState> for RawSessionIdHeader {
+impl<S: Send + Sync> FromRequestParts<S> for RawSessionIdHeader {
     type Rejection = AppError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(RawSessionIdHeader(extract_session_id(parts)))
     }
 }
