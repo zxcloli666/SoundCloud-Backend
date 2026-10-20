@@ -47,17 +47,11 @@ pub async fn ensure_conversation(chat: &ChatState, opened: &OpenedChat) -> ChatR
     Ok(())
 }
 
-pub async fn last_seq(chat: &ChatState, conversation: Uuid) -> i64 {
+pub async fn last_seq(chat: &ChatState, conversation: Uuid) -> ChatResult<i64> {
     let seq = sqlx::query_file_scalar!("queries/chat/rooms/last_seq.sql", conversation)
         .fetch_optional(&chat.pg)
-        .await;
-    match seq {
-        Ok(seq) => seq.unwrap_or(0),
-        Err(error) => {
-            warn!(%conversation, %error, "room chat position is unknown, history opens from the start");
-            0
-        }
-    }
+        .await?;
+    Ok(seq.unwrap_or(0))
 }
 
 pub async fn keep_alive(chat: &ChatState, conversation: Uuid) {

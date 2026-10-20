@@ -51,7 +51,7 @@ impl RoomsService {
         let from_seq = if known {
             0
         } else {
-            self.chat_last_seq(&room).await
+            self.chat_last_seq(&room).await?
         };
         let now = now_ms();
         let member = Member::new(user_id, profile, now).reading_from(from_seq);

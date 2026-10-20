@@ -198,7 +198,9 @@ async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow:
     for guest in &guests[1..] {
         bench.rooms().store.forget(&code, guest).await?;
     }
-    let before = bridge::last_seq(&bench.chat, conversation).await;
+    let before = bridge::last_seq(&bench.chat, conversation)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     assert_eq!(before, 1, "the track row");
     let late = someone();
     bench

@@ -58,10 +58,12 @@ impl RoomsService {
             .filter(|room| room.chat_id == Some(conversation)))
     }
 
-    pub(super) async fn chat_last_seq(&self, room: &Room) -> i64 {
-        match (self.chat(), room.chat_id) {
-            (Some(chat), Some(conversation)) => bridge::last_seq(&chat, conversation).await,
-            _ => 0,
-        }
+    pub(super) async fn chat_last_seq(&self, room: &Room) -> AppResult<i64> {
+        let (Some(chat), Some(conversation)) = (self.chat(), room.chat_id) else {
+            return Ok(0);
+        };
+        bridge::last_seq(&chat, conversation)
+            .await
+            .map_err(|_| AppError::service_unavailable("The room chat is busy, try again"))
     }
 }
