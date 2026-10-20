@@ -233,13 +233,13 @@ async fn call(
 async fn plain_rooms_run_on_rt_with_the_generic_session(pool: PgPool) -> anyhow::Result<()> {
     let redis = crate::redis::connect_url(&redis_url())?;
     let app = app(chat_state(pool.clone(), redis, true), &redis_url());
-    let host = session_for(&pool, "101").await?;
-    let guest = session_for(&pool, "202").await?;
+    let host = session_for(&pool, "9101").await?;
+    let guest = session_for(&pool, "9202").await?;
 
     let (status, room) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;
     assert_eq!(status, StatusCode::CREATED, "{room}");
     let code = room["code"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(room["hostId"], "101");
+    assert_eq!(room["hostId"], "9101");
 
     let (status, room) = call(
         &app,
