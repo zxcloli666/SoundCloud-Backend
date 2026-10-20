@@ -3,6 +3,8 @@ use uuid::Uuid;
 
 use super::HealthState;
 
+static RENDERING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn metered(name: &'static str, pool: &PgPool) -> crate::metrics::MeteredPool {
     crate::metrics::MeteredPool {
         name,
@@ -36,6 +38,7 @@ async fn enqueue(pool: &PgPool, lane: &str, leased: bool, attempts: i32) -> anyh
 async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
     pool: PgPool,
 ) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
     crate::metrics::init();
     enqueue(&pool, "core_bulk", false, 0).await?;
     enqueue(&pool, "core_bulk", false, 2).await?;
@@ -66,6 +69,7 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
 
 #[sqlx::test(migrations = "../api/migrations")]
 async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
     crate::metrics::init();
     let metered = [metered("queue", &pool), metered("maintenance", &pool)];
 
@@ -92,6 +96,7 @@ async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> any
 async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     pool: PgPool,
 ) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
     crate::metrics::init();
     pool.close().await;
 
@@ -111,6 +116,7 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
 
 #[sqlx::test(migrations = "../api/migrations")]
 async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
     crate::metrics::init();
     crate::metrics::record_execution(
         "catalog.refresh",
@@ -173,6 +179,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
 
 #[sqlx::test(migrations = "../api/migrations")]
 async fn an_empty_queue_still_reports_every_lane(pool: PgPool) -> anyhow::Result<()> {
+    let _alone = RENDERING.lock().await;
     crate::metrics::init();
 
     let Some(body) = crate::metrics::render(&pool, &[]).await else {
