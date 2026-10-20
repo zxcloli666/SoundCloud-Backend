@@ -46,7 +46,17 @@ impl LinkService {
         mode: &str,
         source_session_id: Option<Uuid>,
     ) -> AppResult<CreateLinkResult> {
+        self.create_bound(mode, source_session_id, None).await
+    }
+
+    pub async fn create_bound(
+        &self,
+        mode: &str,
+        source_session_id: Option<Uuid>,
+        chat_bind: Option<&[u8]>,
+    ) -> AppResult<CreateLinkResult> {
         validate_mode(mode, source_session_id)?;
+        let chat_bind = chat_bind.filter(|_| mode == "pull");
         if let Some(session_id) = source_session_id {
             let session = self
                 .auth
@@ -70,7 +80,8 @@ impl LinkService {
             claim_token,
             mode,
             source_session_id,
-            expires_at
+            expires_at,
+            chat_bind
         )
         .fetch_one(&self.pool)
         .await?;
@@ -86,6 +97,15 @@ impl LinkService {
         &self,
         claim_token: &str,
         caller_session_id: Option<Uuid>,
+    ) -> AppResult<ClaimResult> {
+        self.claim_bound(claim_token, caller_session_id, None).await
+    }
+
+    pub async fn claim_bound(
+        &self,
+        claim_token: &str,
+        caller_session_id: Option<Uuid>,
+        claim_bind: Option<&[u8]>,
     ) -> AppResult<ClaimResult> {
         let mut transaction = self.pool.begin().await?;
         let link = sqlx::query_file_as!(
@@ -127,12 +147,20 @@ impl LinkService {
         let connection_id = source
             .soundcloud_connection_id
             .ok_or_else(AppError::soundcloud_reauthorization_required)?;
+        let target_bind = match link.mode.as_str() {
+            "pull" => sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link.id)
+                .fetch_optional(&mut *transaction)
+                .await?
+                .flatten(),
+            _ => claim_bind.map(<[u8]>::to_vec),
+        };
 
         let target_session_id = Uuid::new_v4();
         sqlx::query_file!(
             "queries/auth/link_service/insert_target_session.sql",
             target_session_id,
-            connection_id
+            connection_id,
+            target_bind.as_deref()
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -140,7 +168,8 @@ impl LinkService {
             "queries/auth/link_service/mark_claimed.sql",
             link.id,
             source_session_id,
-            target_session_id
+            target_session_id,
+            target_bind.as_deref()
         )
         .execute(&mut *transaction)
         .await?;
@@ -154,6 +183,14 @@ impl LinkService {
     }
 
     pub async fn get_status(&self, link_request_id: Uuid) -> AppResult<LinkStatusResult> {
+        self.get_status_for(link_request_id, |_| false).await
+    }
+
+    pub async fn get_status_for(
+        &self,
+        link_request_id: Uuid,
+        owns_bind: impl Fn(&[u8]) -> bool,
+    ) -> AppResult<LinkStatusResult> {
         let link = sqlx::query_file_as!(
             LinkRequestRow,
             "queries/auth/link_service/by_id.sql",
@@ -178,15 +215,35 @@ impl LinkService {
             });
         }
 
-        let session_id = (link.mode == "pull" && link.status == "claimed")
-            .then_some(link.target_session_id)
-            .flatten();
+        let session_id = match link.target_session_id {
+            Some(session_id)
+                if link.mode == "pull"
+                    && link.status == "claimed"
+                    && self.shows_session(link.id, owns_bind).await? =>
+            {
+                Some(session_id)
+            }
+            _ => None,
+        };
         Ok(LinkStatusResult {
             status: link.status,
             mode: link.mode,
             session_id,
             error: link.error,
         })
+    }
+
+    async fn shows_session(
+        &self,
+        link_request_id: Uuid,
+        owns_bind: impl Fn(&[u8]) -> bool,
+    ) -> AppResult<bool> {
+        let chat_bind =
+            sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link_request_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        Ok(chat_bind.as_deref().is_none_or(owns_bind))
     }
 }
 
