@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::db::postgres::PgPool;
 
 const UPLOADS_AT_ONCE: usize = 8;
-const UPLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+const UPLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(300);
 pub const PASSTHROUGH_IDLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub struct StorageClient {
