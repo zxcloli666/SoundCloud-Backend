@@ -63,6 +63,7 @@ const DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 3
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 const KIND_SNAPSHOT_TTL: Duration = Duration::from_secs(45);
+const UPKEEP_EVERY: Duration = Duration::from_secs(5);
 
 pub fn init() {
     if HANDLE.get().is_some() {
@@ -82,11 +83,26 @@ pub fn init() {
     };
     match builder.install_recorder() {
         Ok(handle) => {
-            if HANDLE.set(handle).is_ok() {
+            if HANDLE.set(handle.clone()).is_ok() {
                 register_series_that_start_at_zero();
+                start_upkeep(handle);
             }
         }
         Err(error) => tracing::warn!(%error, "metrics recorder unavailable"),
+    }
+}
+
+fn start_upkeep(handle: PrometheusHandle) {
+    let started = std::thread::Builder::new()
+        .name("metrics-upkeep".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(UPKEEP_EVERY);
+                handle.run_upkeep();
+            }
+        });
+    if let Err(error) = started {
+        tracing::warn!(%error, "metrics upkeep did not start");
     }
 }
 
