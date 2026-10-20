@@ -7,6 +7,8 @@ use chat_wire::prost::Message;
 use chat_wire::proto::{Bind, Envelope, Header, Inner, InnerResponse};
 use chat_wire::seal::{RequestSealer, ResponseKey, open_request};
 use chat_wire::sign::{public_key, request_string, sign_request, verify_request};
+use hpke::kem::X25519HkdfSha256;
+use hpke::{Kem, Serializable};
 use serde_json::Value;
 
 fn vector(name: &str) -> Value {
@@ -28,6 +30,11 @@ fn uuid(value: &Value) -> [u8; 16] {
         .expect("uuid hex")
         .try_into()
         .expect("16 bytes")
+}
+
+fn ephemeral_secret(case: &Value) -> [u8; 32] {
+    let (secret, _) = X25519HkdfSha256::derive_keypair(&bytes(&case["ikm_e"]));
+    secret.to_bytes().into()
 }
 
 fn text(value: &Value) -> String {
@@ -91,6 +98,7 @@ fn every_request_vector_seals_signs_and_opens_to_the_recorded_bytes() {
         )
         .expect("sealer");
         assert_eq!(sealer.enc(), &array::<32>(&case["enc"]), "{name}");
+        assert_eq!(ephemeral_secret(case), array::<32>(&case["sk_e"]), "{name}");
 
         let mut inner = inner_of(case);
         sign_request(&signer, &mut inner, sealer.enc());
@@ -304,6 +312,7 @@ fn the_ck_vector_wraps_and_seals_byte_for_byte() {
     assert!(ck::unwrap(&kek, kek_v + 1, &conv, epoch, &wrapped).is_err());
 
     let box_secret = array::<32>(&vector["box_secret"]);
+    assert_eq!(ephemeral_secret(&vector), array::<32>(&vector["sk_e"]));
     assert_eq!(
         ck::seal_info(&conv, epoch, &device),
         bytes(&vector["seal_info"])
@@ -385,6 +394,27 @@ fn the_text_vector_carries_the_described_envelope() {
     assert_eq!(
         envelope.embeds[0].urn,
         text(&description["embeds"][0]["urn"])
+    );
+}
+
+#[test]
+fn the_meta_vector_is_group_meta_sealed_as_class_meta() {
+    let vector = vector("msg.json");
+    let case = vector["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|case| case["name"] == "meta")
+        .expect("a meta case");
+    assert_eq!(case["class"], "meta");
+    let envelope = Envelope::decode(bytes(&case["plaintext"]).as_slice()).expect("decodes");
+    let Some(chat_wire::proto::envelope::Body::Meta(meta)) = &envelope.body else {
+        panic!("the meta case carries a Meta body");
+    };
+    assert_eq!(meta.title, text(&case["envelope"]["meta"]["title"]));
+    assert_eq!(
+        meta.description,
+        text(&case["envelope"]["meta"]["description"])
     );
 }
 

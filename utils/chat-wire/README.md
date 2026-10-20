@@ -128,6 +128,6 @@ body = nonce[24] || XChaCha20-Poly1305(CK_epoch, padded Envelope,
 | `request.json` | three requests (sync, history on pro, sealed login with a bind): keys, `ikm_e`, signature string, `Inner` bytes, envelope, `k_resp`, a sealed answer |
 | `bind.json` | bind signature string, signature and protobuf bytes |
 | `ck.json` | CK wrap under a KEK and CK seal to a device |
-| `msg.json` | padded envelopes and message bodies for a text and a reaction |
+| `msg.json` | padded envelopes and message bodies for a text, a reaction and group meta |
 
 The keys in the vectors are test keys, never the pinned ones. `cargo test` replays every file (`tests/vectors.rs`).
