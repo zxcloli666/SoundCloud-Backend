@@ -39,7 +39,9 @@ pub fn state(pg: PgPool) -> Arc<ChatState> {
 
 pub fn state_on(pg: PgPool, db: u8) -> Arc<ChatState> {
     let redis = crate::redis::connect_url(&redis_db(db)).expect("a redis pool");
-    chat_state(pg, redis, true)
+    let chat = chat_state(pg, redis, true);
+    chat.rooms.install_chat(&chat);
+    chat
 }
 
 pub fn user() -> String {
@@ -148,21 +150,22 @@ pub async fn room(chat: &ChatState, host: &str, conversation: Uuid) -> anyhow::R
         name: host.to_owned(),
         avatar_url: None,
     };
-    let room = Room::new(
+    let mut room = Room::new(
         code.clone(),
         Member::new(host, &profile, now_ms()),
         false,
         now_ms(),
     );
-    RoomStore::new(chat.redis.clone())
+    room.chat_id = Some(conversation);
+    let store = RoomStore::new(chat.redis.clone());
+    store
         .insert(&room)
         .await
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-    sqlx::query("UPDATE chat.conversations SET room_ref = $2 WHERE id = $1")
-        .bind(conversation)
-        .bind(&code)
-        .execute(&chat.pg)
-        .await?;
+    store
+        .index_chat(conversation, &code)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     Ok(room)
 }
 

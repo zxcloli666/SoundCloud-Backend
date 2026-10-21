@@ -2,8 +2,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::modules::chat::rooms::diff::{departed, rows};
-use crate::modules::chat::rooms::{fanout, system};
-use crate::modules::chat::{ChatResult, ChatState};
+use crate::modules::chat::rooms::system;
+use crate::modules::chat::{ChatResult, ChatState, sync};
 use crate::modules::rooms::model::Room;
 use crate::modules::rooms::service::{Cause, OpenedChat};
 
@@ -26,7 +26,7 @@ pub async fn after_change(chat: &ChatState, before: &Room, after: &Room, cause: 
     let outcome = async {
         let seq = system::post(chat, conversation, &rows, rekey).await?;
         match seq {
-            Some(seq) => fanout::bump(chat, conversation, seq, &users).await,
+            Some(seq) => sync::bump::conversation(chat, conversation, seq, &users).await,
             None => Ok(()),
         }
     };

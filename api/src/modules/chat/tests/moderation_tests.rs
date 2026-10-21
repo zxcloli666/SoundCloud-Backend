@@ -19,6 +19,7 @@ use crate::modules::chat::moderation::testing::{
 };
 use crate::modules::chat::moderation::{AUDIT_ADMIN, BANS_PER_HOUR};
 use crate::modules::chat::reports::{FileReport, file_with, load};
+use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::users;
 
 const REPORTER: &str = "1001";
@@ -738,7 +739,7 @@ async fn a_removed_message_is_announced_to_every_member_as_gone(pool: PgPool) {
     let id = report(&dm, REPORTER, (spam, spam), None).await;
     moderate(&dm.chat, &dm.keys, id).await.expect("moderated");
 
-    let gone = crate::modules::chat::sweeps::hooks::gone_member(dm.conversation, &[spam]);
+    let gone = Change::GoneMessages(dm.conversation, vec![spam]).member();
     let mut conn = redis.get().await.expect("a redis connection");
     for member in [REPORTER, TARGET] {
         let score: Option<f64> = redis::cmd("ZSCORE")

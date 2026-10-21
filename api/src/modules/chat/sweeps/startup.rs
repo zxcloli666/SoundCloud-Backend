@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::modules::chat::sweeps::hooks;
-use crate::modules::chat::{ChatResult, ChatState, rt_keys};
+use crate::modules::chat::rooms::lookup::room_of_chat;
+use crate::modules::chat::{ChatResult, ChatState, rt_keys, sync};
 
 pub const REBUMP_CHUNK: usize = 256;
 
@@ -63,7 +63,7 @@ pub async fn rebump(chat: &ChatState) -> ChatResult<u64> {
         let mut recipients = recipients(chat, &lagging).await?;
         for row in lagging {
             let users = recipients.remove(&row.id).unwrap_or_default();
-            hooks::bump(chat, row.id, row.last_seq, &users).await?;
+            sync::bump::conversation(chat, row.id, row.last_seq, &users).await?;
         }
     }
     metrics::counter!("chat_rebump_total").increment(rebumped);
@@ -106,7 +106,7 @@ async fn recipients(chat: &ChatState, rows: &[&Recent]) -> ChatResult<HashMap<Uu
         }
     }
     for row in rows.iter().filter(|row| row.kind == ROOM) {
-        if let Some(room) = hooks::room_of_chat(chat, row.id).await? {
+        if let Some(room) = room_of_chat(chat, row.id).await? {
             found.insert(
                 row.id,
                 room.members

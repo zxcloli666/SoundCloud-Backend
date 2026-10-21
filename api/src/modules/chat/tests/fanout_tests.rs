@@ -7,7 +7,6 @@ use uuid::Uuid;
 use super::*;
 use crate::modules::chat::ChatState;
 use crate::modules::chat::rt_keys::{self, DELTAS_KEPT};
-use crate::modules::chat::sweeps::hooks;
 use crate::modules::chat::test_support::chat_state;
 
 fn redis_url() -> String {
@@ -88,7 +87,7 @@ async fn a_send_bump_and_a_sweep_bump_share_one_version_layout() -> anyhow::Resu
     let mut conn = chat.redis.get().await?;
     let first: i64 = conn.hget(rt_keys::version(&users[0]), "v").await?;
     drop(conn);
-    hooks::messages_gone(&chat, conversation, &[1], &users)
+    crate::modules::chat::sync::bump::messages_gone(&chat, conversation, &[1], &users)
         .await
         .expect("a sweep bump");
     bump(&chat, conversation, 2, &users)

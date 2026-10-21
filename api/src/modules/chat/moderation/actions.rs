@@ -3,9 +3,8 @@ use uuid::Uuid;
 
 use crate::modules::chat::moderation::decide::Ban;
 use crate::modules::chat::reports::EVIDENCE_KEEP_DAYS;
-use crate::modules::chat::sweeps::hooks;
 use crate::modules::chat::users::{self, Restriction, Scope};
-use crate::modules::chat::{ChatResult, ChatState};
+use crate::modules::chat::{ChatResult, ChatState, sync};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Closing {
@@ -58,7 +57,7 @@ async fn announce(chat: &ChatState, conversation: Uuid, removed: &[i64]) -> Chat
     let members = sqlx::query_file_scalar!("queries/chat/reports/live_members.sql", conversation)
         .fetch_all(&chat.pg)
         .await?;
-    hooks::messages_gone(chat, conversation, removed, &members).await
+    sync::bump::messages_gone(chat, conversation, removed, &members).await
 }
 
 pub async fn ban(chat: &ChatState, user_id: &str, ban: Ban) -> ChatResult<Option<Restriction>> {

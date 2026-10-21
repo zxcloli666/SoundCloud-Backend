@@ -1,6 +1,5 @@
 pub mod bridge;
 pub mod diff;
-pub mod fanout;
 mod handlers;
 pub mod lookup;
 mod refusal;

@@ -5,9 +5,9 @@ use uuid::Uuid;
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::sweeps::budget::Budget;
 use crate::modules::chat::sweeps::expired::by_conversation;
-use crate::modules::chat::sweeps::hooks::gone_member;
 use crate::modules::chat::sweeps::marks::{conversation_of, digest, read_marks_prefix, seqs};
 use crate::modules::chat::sweeps::schedule::Sweep;
+use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::test_support::offline_chat_state;
 
 #[test]
@@ -25,7 +25,7 @@ fn expired_rows_are_grouped_per_conversation_in_seq_order() {
 fn gone_entries_name_the_conversation_and_its_seqs() {
     let conversation = Uuid::from_u128(7);
     assert_eq!(
-        gone_member(conversation, &[3, 4, 10]),
+        Change::GoneMessages(conversation, vec![3, 4, 10]).member(),
         format!("gone:{conversation}:3,4,10")
     );
 }

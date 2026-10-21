@@ -4,8 +4,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::modules::chat::sweeps::budget::Budget;
-use crate::modules::chat::sweeps::{gauges, hooks};
-use crate::modules::chat::{ChatResult, ChatState};
+use crate::modules::chat::sweeps::gauges;
+use crate::modules::chat::{ChatResult, ChatState, sync};
 
 pub const BATCH_ROWS: i64 = 5_000;
 pub const EVERY_SECS: u64 = 60;
@@ -70,7 +70,7 @@ async fn announce(chat: &ChatState, gone: BTreeMap<Uuid, Vec<i64>>) -> ChatResul
         }
         for conversation in chunk {
             let users = recipients.remove(conversation).unwrap_or_default();
-            hooks::messages_gone(chat, *conversation, &gone[conversation], &users).await?;
+            sync::bump::messages_gone(chat, *conversation, &gone[conversation], &users).await?;
         }
     }
     Ok(())

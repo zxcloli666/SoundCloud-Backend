@@ -4,9 +4,9 @@ use serde_json::Value;
 use crate::common::sc_ids::{EntityKind, require_ref};
 use crate::modules::chat::rooms::lookup::RoomChatMember;
 use crate::modules::chat::rooms::system::{self, Authored, SuggestedTrack, SystemRow};
-use crate::modules::chat::rooms::{bridge, fanout, refusal};
+use crate::modules::chat::rooms::{bridge, refusal};
 use crate::modules::chat::rt_keys;
-use crate::modules::chat::{ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, sync};
 use crate::modules::rooms::listing::{image, text};
 
 pub const MAX_SNAPSHOT_BYTES: usize = 3 * 1024;
@@ -110,5 +110,5 @@ pub async fn suggest_track(
         .iter()
         .map(|m| m.user_id.clone())
         .collect();
-    fanout::bump(chat, opened.conversation_id, seq, &members).await
+    sync::bump::conversation(chat, opened.conversation_id, seq, &members).await
 }

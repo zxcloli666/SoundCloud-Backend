@@ -3,6 +3,7 @@ use std::time::Duration;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::sweeps::{hooks, purge};
 use crate::modules::chat::{ChatResult, ChatState, rt_keys};
 
@@ -63,7 +64,7 @@ async fn reap_room(chat: &ChatState, code: &str, since: i64) -> ChatResult<bool>
 }
 
 async fn reap_chat(chat: &ChatState, conversation: Uuid, since: i64) -> ChatResult<bool> {
-    match hooks::room_of_chat(chat, conversation).await? {
+    match room_of_chat(chat, conversation).await? {
         Some(room) if hooks::room_seen_since(chat, &room.code, since).await? => Ok(false),
         Some(room) => {
             hooks::end_room(chat, &room.code).await?;
