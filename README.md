@@ -29,6 +29,11 @@ podman compose -f docker-compose-dev.yml up -d
 Порты: API `3000`, jobs health `3001`, streaming `8080`, storage `3002`, postgres `5432`, redis `6379`,
 qdrant `6333/6334`, nats `4222/8222`.
 
+Чат: `chat-api` (`API_ROLE=rt`) на `3010`, `redis-rt` на `6380`, вход для десктопов `edge` на `8000`
+(`/chat/` и `/rooms` идут в `chat-api`, остальное в `api`). Ключи создает `chat-keys` в томе `chat_keys`,
+токен админки `dev-chat-admin` (или `CHAT_ADMIN_TOKEN`). OCK в dev - тестовый ключ из
+`utils/chat-wire/vectors/request.json` (pub `dde33290...2d4d`), dev-десктоп должен пинить его как версию 1.
+
 ## Клиентский контракт стриминга (v9)
 
 Для сторонних клиентов (например, `okeydw/SoundCloud-Android`):

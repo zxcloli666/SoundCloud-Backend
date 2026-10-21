@@ -97,6 +97,33 @@ services:
       timeout: 3s
       retries: 5
 
+  redis-rt:
+    image: docker.io/library/redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  chat-keys:
+    image: docker.io/library/alpine:3.20
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        cd /keys
+        [ -s ock-1 ] || echo 66842626e4763cce2b75991a3e967c29bcc9f02395a3f0115981eb59ab3e4d8e | xxd -r -p > ock-1
+        [ -s kek-1 ] || head -c 32 /dev/urandom > kek-1
+        [ -s reports-kek-1 ] || head -c 32 /dev/urandom > reports-kek-1
+        [ -s chat-admin-token ] || printf '%s' "${CHAT_ADMIN_TOKEN:-dev-chat-admin}" > chat-admin-token
+        chmod 0444 ock-1 kek-1 reports-kek-1 chat-admin-token
+    volumes:
+      - chat_keys:/keys
+
   jobs-migrate:
     build:
       context: .
@@ -358,7 +385,66 @@ services:
       redis:
         condition: service_healthy
 
+  chat-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 20s
+    ports:
+      - "3010:3000"
+    environment:
+      API_ROLE: rt
+      PORT: 3000
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_USERNAME: soundcloud
+      DATABASE_PASSWORD: soundcloud
+      DATABASE_NAME: soundcloud_desktop
+      PG_POOL_MAX: 4
+      REDIS_URL: redis://redis:6379
+      REDIS_RT_URL: redis://redis-rt:6379
+      SC_PROXY_URL: ${SC_PROXY_URL:-}
+      SC_PROXY_FALLBACK: ${SC_PROXY_FALLBACK:-false}
+      CHAT_ENABLED: "true"
+      CHAT_ACCESS: ${CHAT_ACCESS:-all}
+      CHAT_BETA_USERS: ${CHAT_BETA_USERS:-}
+      CHAT_KEYS_DIR: /run/secrets/chat
+      CHAT_OCK_CURRENT: "1"
+      CHAT_KEK_CURRENT: "1"
+      CHAT_REPORTS_KEK_CURRENT: "1"
+      CHAT_LOADTEST: ${CHAT_LOADTEST:-off}
+      CHAT_MOD_AI_ENABLED: "false"
+      RUST_LOG: ${CHAT_RUST_LOG:-info,api=debug,sqlx=warn}
+    volumes:
+      - chat_keys:/run/secrets/chat:ro
+    depends_on:
+      jobs-migrate:
+        condition: service_completed_successfully
+      chat-keys:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-rt:
+        condition: service_healthy
+
+  edge:
+    image: docker.io/library/haproxy:3.0-alpine
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ops/dev/edge.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      api:
+        condition: service_started
+      chat-api:
+        condition: service_started
+
 volumes:
+  chat_keys:
   pgdata:
   ops_pgdata:
   qdrant_data:
