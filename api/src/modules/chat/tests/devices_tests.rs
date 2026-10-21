@@ -6,14 +6,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::test_support::{
-    DeviceKeys, age, call, caller, conversation, desktop, enroll, fresh_device_budget,
+    DeviceKeys, age, call, caller, conversation, desktop, enroll, fresh_device_budget, fresh_user,
     rekey_pending, session, state,
 };
 use super::{lookup, touch};
 use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::{ChatState, rt_keys};
-
-const USER: &str = "7001";
 
 async fn status_of(pool: &PgPool, device: Uuid) -> String {
     sqlx::query_scalar("SELECT status FROM chat.devices WHERE id = $1")
@@ -38,11 +36,12 @@ fn error(answer: &Value) -> &str {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let bare = session(&pool, USER, None).await;
+    let bare = session(&pool, &user, None).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, bare, None),
+        caller(&user, bare, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -57,14 +56,15 @@ async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
     let keys = DeviceKeys::new();
     let mut bind = make_bind(&keys.id.to_string(), &keys.auth_seed, &keys.box_pub, 1);
     bind.box_pub = DeviceKeys::new().box_pub.to_vec();
-    let forged = session(&pool, USER, Some(bind.encode_to_vec())).await;
+    let forged = session(&pool, &user, Some(bind.encode_to_vec())).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, forged, None),
+        caller(&user, forged, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -79,14 +79,15 @@ async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_mismatched_bind_is_refused(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let first = enroll(&chat, &pool, USER).await;
+    let first = enroll(&chat, &pool, &user).await;
     let other = DeviceKeys::new();
-    let bound_elsewhere = session(&pool, USER, Some(other.bind())).await;
+    let bound_elsewhere = session(&pool, &user, Some(other.bind())).await;
 
     let (status, answer) = call(
         &chat,
-        caller(USER, bound_elsewhere, Some(&first.row)),
+        caller(&user, bound_elsewhere, Some(&first.row)),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -100,10 +101,10 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
 
     let mut swapped = DeviceKeys::new();
     swapped.id = first.keys.id;
-    let reused_id = session(&pool, USER, Some(swapped.bind())).await;
+    let reused_id = session(&pool, &user, Some(swapped.bind())).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, reused_id, None),
+        caller(&user, reused_id, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -119,7 +120,7 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
     let foreign = session(&pool, "7999", Some(stranger.bind())).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, foreign, None),
+        caller(&user, foreign, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -137,18 +138,19 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let first = enroll(&chat, &pool, USER).await;
-    let chat_id = conversation(&pool, "direct", &[USER, "7002"]).await;
+    let first = enroll(&chat, &pool, &user).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), "7002"]).await;
     sqlx::query("UPDATE chat.conversations SET rekey = false")
         .execute(&pool)
         .await
         .expect("a reset");
 
-    let relogin = session(&pool, USER, Some(first.keys.bind())).await;
+    let relogin = session(&pool, &user, Some(first.keys.bind())).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, relogin, Some(&first.row)),
+        caller(&user, relogin, Some(&first.row)),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -178,21 +180,22 @@ async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let direct = conversation(&pool, "direct", &[USER, "7002"]).await;
-    let group = conversation(&pool, "group", &[USER, "7002", "7003"]).await;
-    let left = conversation(&pool, "group", &[USER, "7003"]).await;
+    let direct = conversation(&pool, "direct", &[user.as_str(), "7002"]).await;
+    let group = conversation(&pool, "group", &[user.as_str(), "7002", "7003"]).await;
+    let left = conversation(&pool, "group", &[user.as_str(), "7003"]).await;
     let foreign = conversation(&pool, "direct", &["7002", "7003"]).await;
     sqlx::query(
         "UPDATE chat.members SET state = 'left' WHERE conversation_id = $1 AND user_id = $2",
     )
     .bind(left)
-    .bind(USER)
+    .bind(&user)
     .execute(&pool)
     .await
     .expect("a departure");
 
-    enroll(&chat, &pool, USER).await;
+    enroll(&chat, &pool, &user).await;
 
     assert!(rekey_pending(&pool, direct).await);
     assert!(rekey_pending(&pool, group).await);
@@ -203,8 +206,9 @@ async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_session_keeps_one_device(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let first = enroll(&chat, &pool, USER).await;
+    let first = enroll(&chat, &pool, &user).await;
     let second = DeviceKeys::new();
     sqlx::query("UPDATE sessions SET chat_bind = $2 WHERE id = $1")
         .bind(first.session)
@@ -215,7 +219,7 @@ async fn a_session_keeps_one_device(pool: PgPool) {
 
     let (status, answer) = call(
         &chat,
-        caller(USER, first.session, None),
+        caller(&user, first.session, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -229,15 +233,16 @@ async fn a_session_keeps_one_device(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
     for _ in 0..10 {
-        enroll(&chat, &pool, USER).await;
+        enroll(&chat, &pool, &user).await;
     }
     let extra = DeviceKeys::new();
-    let extra_session = session(&pool, USER, Some(extra.bind())).await;
+    let extra_session = session(&pool, &user, Some(extra.bind())).await;
     let (status, answer) = call(
         &chat,
-        caller(USER, extra_session, None),
+        caller(&user, extra_session, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -252,9 +257,10 @@ async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_malformed_device_description_is_refused(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
     let keys = DeviceKeys::new();
-    let bound = session(&pool, USER, Some(keys.bind())).await;
+    let bound = session(&pool, &user, Some(keys.bind())).await;
     for body in [
         json!({"platform": "", "name": "Mac", "app_version": "8.7.0"}),
         json!({"platform": "mac os", "name": "Mac", "app_version": "8.7.0"}),
@@ -264,7 +270,7 @@ async fn a_malformed_device_description_is_refused(pool: PgPool) {
     ] {
         let (status, answer) = call(
             &chat,
-            caller(USER, bound, None),
+            caller(&user, bound, None),
             "POST",
             "/chat/devices",
             Some(body.clone()),
@@ -281,10 +287,11 @@ async fn a_malformed_device_description_is_refused(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let older = enroll(&chat, &pool, USER).await;
+    let older = enroll(&chat, &pool, &user).await;
     let older_row = age(&chat, &pool, &older.row, 2).await;
-    let younger = enroll(&chat, &pool, USER).await;
+    let younger = enroll(&chat, &pool, &user).await;
 
     for path in [
         format!("/chat/devices/{}", older.keys.id),
@@ -297,7 +304,7 @@ async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
         };
         let (status, answer) = call(
             &chat,
-            caller(USER, younger.session, Some(&younger.row)),
+            caller(&user, younger.session, Some(&younger.row)),
             method,
             &path,
             None,
@@ -314,7 +321,7 @@ async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
 
     let (status, _) = call(
         &chat,
-        caller(USER, older.session, Some(&older_row)),
+        caller(&user, older.session, Some(&older_row)),
         "DELETE",
         &format!("/chat/devices/{}", younger.keys.id),
         None,
@@ -331,15 +338,16 @@ async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let older = enroll(&chat, &pool, USER).await;
+    let older = enroll(&chat, &pool, &user).await;
     age(&chat, &pool, &older.row, 200).await;
-    let younger = enroll(&chat, &pool, USER).await;
+    let younger = enroll(&chat, &pool, &user).await;
     let seasoned = age(&chat, &pool, &younger.row, 73).await;
 
     let (status, answer) = call(
         &chat,
-        caller(USER, younger.session, Some(&seasoned)),
+        caller(&user, younger.session, Some(&seasoned)),
         "POST",
         &format!("/chat/devices/{}/not-me", older.keys.id),
         None,
@@ -353,7 +361,7 @@ async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
 
     let (status, _) = call(
         &chat,
-        caller(USER, younger.session, Some(&seasoned)),
+        caller(&user, younger.session, Some(&seasoned)),
         "DELETE",
         &format!("/chat/devices/{}", older.keys.id),
         None,
@@ -366,15 +374,16 @@ async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let mine = enroll(&chat, &pool, USER).await;
+    let mine = enroll(&chat, &pool, &user).await;
     let mine_row = age(&chat, &pool, &mine.row, 1).await;
-    let intruder = enroll(&chat, &pool, USER).await;
-    let chat_id = conversation(&pool, "direct", &[USER, "7002"]).await;
+    let intruder = enroll(&chat, &pool, &user).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), "7002"]).await;
 
     let (status, _) = call(
         &chat,
-        caller(USER, mine.session, Some(&mine_row)),
+        caller(&user, mine.session, Some(&mine_row)),
         "POST",
         &format!("/chat/devices/{}/not-me", intruder.keys.id),
         None,
@@ -392,15 +401,16 @@ async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let older = enroll(&chat, &pool, USER).await;
+    let older = enroll(&chat, &pool, &user).await;
     let fresh_older = age(&chat, &pool, &older.row, 5).await;
-    let newer = enroll(&chat, &pool, USER).await;
+    let newer = enroll(&chat, &pool, &user).await;
     let confirm = format!("/chat/devices/{}/confirm", newer.keys.id);
 
     let (status, answer) = call(
         &chat,
-        caller(USER, older.session, Some(&fresh_older)),
+        caller(&user, older.session, Some(&fresh_older)),
         "POST",
         &confirm,
         None,
@@ -413,7 +423,7 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
 
     let (status, answer) = call(
         &chat,
-        caller(USER, newer.session, Some(&newer.row)),
+        caller(&user, newer.session, Some(&newer.row)),
         "POST",
         &format!("/chat/devices/{}/confirm", older.keys.id),
         None,
@@ -427,7 +437,7 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
     let seasoned = age(&chat, &pool, &older.row, 100).await;
     let (status, _) = call(
         &chat,
-        caller(USER, older.session, Some(&seasoned)),
+        caller(&user, older.session, Some(&seasoned)),
         "POST",
         &confirm,
         None,
@@ -437,7 +447,7 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
 
     let (status, listed) = call(
         &chat,
-        caller(USER, newer.session, Some(&newer.row)),
+        caller(&user, newer.session, Some(&newer.row)),
         "GET",
         "/chat/devices",
         None,
@@ -457,11 +467,12 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
+    let device = enroll(&chat, &pool, &user).await;
     let (status, _) = call(
         &chat,
-        caller(USER, device.session, Some(&device.row)),
+        caller(&user, device.session, Some(&device.row)),
         "GET",
         "/chat/devices",
         None,
@@ -469,18 +480,18 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(chat.devices.row(device.keys.id).is_some());
-    assert!(chat.devices.user(USER).is_some());
+    assert!(chat.devices.user(&user).is_some());
 
     let (status, _) = call(
         &chat,
-        caller(USER, device.session, Some(&device.row)),
+        caller(&user, device.session, Some(&device.row)),
         "DELETE",
         "/chat/devices/me",
         None,
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(chat.devices.user(USER).is_none());
+    assert!(chat.devices.user(&user).is_none());
     let cached = chat.devices.row(device.keys.id);
     assert!(cached.is_none_or(|row| row.status == "revoked"));
     let seen = lookup(&chat, device.keys.id)
@@ -491,7 +502,7 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
 
     let (status, answer) = call(
         &chat,
-        caller(USER, device.session, Some(&device.row)),
+        caller(&user, device.session, Some(&device.row)),
         "GET",
         "/chat/devices",
         None,
@@ -508,7 +519,7 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
 
     let (status, answer) = call(
         &chat,
-        caller(USER, device.session, None),
+        caller(&user, device.session, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
@@ -524,11 +535,12 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let bare = session(&pool, USER, None).await;
+    let bare = session(&pool, &user, None).await;
     let (status, _) = call(
         &chat,
-        caller(USER, bare, None),
+        caller(&user, bare, None),
         "DELETE",
         "/chat/devices/me",
         None,
@@ -540,8 +552,9 @@ async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn another_users_device_is_not_found(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let mine = enroll(&chat, &pool, USER).await;
+    let mine = enroll(&chat, &pool, &user).await;
     let theirs = enroll(&chat, &pool, "7002").await;
     for (method, path) in [
         ("DELETE", format!("/chat/devices/{}", theirs.keys.id)),
@@ -550,7 +563,7 @@ async fn another_users_device_is_not_found(pool: PgPool) {
     ] {
         let (status, answer) = call(
             &chat,
-            caller(USER, mine.session, Some(&mine.row)),
+            caller(&user, mine.session, Some(&mine.row)),
             method,
             &path,
             None,
@@ -568,8 +581,9 @@ async fn another_users_device_is_not_found(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
+    let device = enroll(&chat, &pool, &user).await;
     touch(&chat, &device.row).await.expect("a quiet touch");
     let cached = lookup(&chat, device.keys.id)
         .await
@@ -584,7 +598,7 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
     .execute(&pool)
     .await
     .expect("an idle device");
-    chat.devices.forget(USER, &[device.keys.id]);
+    chat.devices.forget(&user, &[device.keys.id]);
     let idle = lookup(&chat, device.keys.id)
         .await
         .expect("a lookup")

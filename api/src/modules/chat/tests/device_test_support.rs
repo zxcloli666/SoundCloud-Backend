@@ -52,6 +52,10 @@ pub fn state(pool: &PgPool) -> Arc<ChatState> {
     chat_state(pool.clone(), redis(), true)
 }
 
+pub fn fresh_user() -> String {
+    format!("9{:010}", rand::random::<u32>())
+}
+
 pub async fn fresh_device_budget(chat: &ChatState, user: &str) {
     let mut conn = chat.redis.get().await.expect("a redis connection");
     let _: i64 = redis::cmd("DEL")

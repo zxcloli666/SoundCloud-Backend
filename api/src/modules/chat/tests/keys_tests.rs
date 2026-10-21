@@ -7,12 +7,11 @@ use super::conversation_key;
 use super::rotate::{ensure_current, rotate};
 use crate::modules::chat::b64;
 use crate::modules::chat::devices::test_support::{
-    Enrolled, age, call, caller, conversation, enroll, rekey_pending, state,
+    Enrolled, age, call, caller, conversation, enroll, fresh_user, rekey_pending, state,
 };
 use crate::modules::chat::model::DeviceRow;
 use crate::modules::chat::{ChatCaller, ChatState};
 
-const USER: &str = "7101";
 const PEER: &str = "7102";
 
 struct Opened {
@@ -81,9 +80,10 @@ async fn backdate_keys(pool: &PgPool, conversation: Uuid, hours: i32) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let chat_id = conversation(&pool, "direct", &[USER, PEER]).await;
-    let device = enroll(&chat, &pool, USER).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), PEER]).await;
+    let device = enroll(&chat, &pool, &user).await;
 
     let (status, answer) = keys(&chat, &device, &device.row, chat_id, 0).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
@@ -114,19 +114,20 @@ async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn only_members_get_keys(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
+    let device = enroll(&chat, &pool, &user).await;
     let foreign = conversation(&pool, "direct", &[PEER, "7103"]).await;
-    let left = conversation(&pool, "group", &[USER, PEER]).await;
+    let left = conversation(&pool, "group", &[user.as_str(), PEER]).await;
     sqlx::query(
         "UPDATE chat.members SET state = 'kicked' WHERE conversation_id = $1 AND user_id = $2",
     )
     .bind(left)
-    .bind(USER)
+    .bind(&user)
     .execute(&pool)
     .await
     .expect("a kick");
-    let gone = conversation(&pool, "group", &[USER, PEER]).await;
+    let gone = conversation(&pool, "group", &[user.as_str(), PEER]).await;
     sqlx::query("UPDATE chat.conversations SET deleted_at = now() WHERE id = $1")
         .bind(gone)
         .execute(&pool)
@@ -155,15 +156,16 @@ async fn only_members_get_keys(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let old = enroll(&chat, &pool, USER).await;
+    let old = enroll(&chat, &pool, &user).await;
     let old_row = age(&chat, &pool, &old.row, 300).await;
-    let chat_id = conversation(&pool, "direct", &[USER, PEER]).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), PEER]).await;
     let (_, before) = keys(&chat, &old, &old_row, chat_id, 0).await;
     assert_eq!(epochs(&opened(&old, chat_id, &before)), vec![0]);
     backdate_keys(&pool, chat_id, 200).await;
 
-    let new = enroll(&chat, &pool, USER).await;
+    let new = enroll(&chat, &pool, &user).await;
     assert!(rekey_pending(&pool, chat_id).await);
     let (status, locked) = keys(&chat, &new, &new.row, chat_id, 0).await;
     assert_eq!(status, StatusCode::OK, "{locked}");
@@ -197,14 +199,15 @@ async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let old = enroll(&chat, &pool, USER).await;
+    let old = enroll(&chat, &pool, &user).await;
     let old_row = age(&chat, &pool, &old.row, 300).await;
-    let chat_id = conversation(&pool, "direct", &[USER, PEER]).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), PEER]).await;
     keys(&chat, &old, &old_row, chat_id, 0).await;
     backdate_keys(&pool, chat_id, 200).await;
 
-    let new = enroll(&chat, &pool, USER).await;
+    let new = enroll(&chat, &pool, &user).await;
     let (_, locked) = keys(&chat, &new, &new.row, chat_id, 0).await;
     assert_eq!(epochs(&opened(&new, chat_id, &locked)), vec![1]);
 
@@ -220,6 +223,7 @@ async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
     let group = conversation(&pool, "group", &[PEER, "7103"]).await;
     ensure_current(&chat, group).await.expect("the first key");
@@ -228,12 +232,12 @@ async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(poo
     }
     backdate_keys(&pool, group, 200).await;
 
-    let new = enroll(&chat, &pool, USER).await;
+    let new = enroll(&chat, &pool, &user).await;
     sqlx::query(
         "INSERT INTO chat.members (conversation_id, user_id, state) VALUES ($1, $2, 'active')",
     )
     .bind(group)
-    .bind(USER)
+    .bind(&user)
     .execute(&pool)
     .await
     .expect("a late join");
@@ -251,10 +255,11 @@ async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(poo
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
+    let device = enroll(&chat, &pool, &user).await;
     let row = age(&chat, &pool, &device.row, 100).await;
-    let group = conversation(&pool, "group", &[PEER, USER]).await;
+    let group = conversation(&pool, "group", &[PEER, user.as_str()]).await;
     for _ in 0..3 {
         rotate(&chat, group).await.expect("a rotation");
     }
@@ -269,7 +274,7 @@ async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
         "UPDATE chat.members SET joined_epoch = 2 WHERE conversation_id = $1 AND user_id = $2",
     )
     .bind(group)
-    .bind(USER)
+    .bind(&user)
     .execute(&pool)
     .await
     .expect("a join epoch");
@@ -291,8 +296,9 @@ async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let chat_id = conversation(&pool, "group", &[USER, PEER]).await;
+    let chat_id = conversation(&pool, "group", &[user.as_str(), PEER]).await;
     assert_eq!(ensure_current(&chat, chat_id).await, Ok(0));
     assert_eq!(ensure_current(&chat, chat_id).await, Ok(0));
     sqlx::query("UPDATE chat.conversations SET rekey = true WHERE id = $1")
@@ -320,10 +326,11 @@ async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
+    let device = enroll(&chat, &pool, &user).await;
     let row = age(&chat, &pool, &device.row, 100).await;
-    let chat_id = conversation(&pool, "group", &[USER, PEER]).await;
+    let chat_id = conversation(&pool, "group", &[user.as_str(), PEER]).await;
     for _ in 0..5 {
         rotate(&chat, chat_id).await.expect("a rotation");
     }
@@ -344,9 +351,10 @@ async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn a_revoked_device_gets_no_keys(pool: PgPool) {
+    let user = fresh_user();
     let chat = state(&pool);
-    let device = enroll(&chat, &pool, USER).await;
-    let chat_id = conversation(&pool, "direct", &[USER, PEER]).await;
+    let device = enroll(&chat, &pool, &user).await;
+    let chat_id = conversation(&pool, "direct", &[user.as_str(), PEER]).await;
     crate::modules::chat::devices::revoke(&chat, &device.row)
         .await
         .expect("a revoke");
@@ -357,7 +365,7 @@ async fn a_revoked_device_gets_no_keys(pool: PgPool) {
     );
     let (status, answer) = call(
         &chat,
-        caller(USER, device.session, None),
+        caller(&user, device.session, None),
         "GET",
         &format!("/chat/conversations/{chat_id}/keys"),
         None,
