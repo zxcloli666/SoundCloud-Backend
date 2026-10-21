@@ -122,12 +122,15 @@ pub async fn baseline(command: &str, window: Duration) -> Option<f64> {
 
 pub fn error_rate_crossed(stats: &Stats, limit: f64) -> Option<String> {
     let now = stats.elapsed_ms();
-    if let Some(restart) = stats.restart_ms()
-        && now < restart + RESTART_GRACE.as_millis() as u64
-    {
-        return None;
+    let mut span = ERROR_WINDOW.as_millis() as u64;
+    if let Some(restart) = stats.restart_ms() {
+        let calm = restart + RESTART_GRACE.as_millis() as u64;
+        if now < calm {
+            return None;
+        }
+        span = span.min(now - calm);
     }
-    let (ok, errors) = stats.window(ERROR_WINDOW.as_millis() as u64);
+    let (ok, errors) = stats.window(span);
     let total = ok + errors;
     if total < ERROR_MIN_REQUESTS {
         return None;

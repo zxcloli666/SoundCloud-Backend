@@ -49,3 +49,35 @@ fn the_error_rate_needs_enough_requests() {
     stats.mark_restart();
     assert_eq!(error_rate_crossed(&stats, 0.01), None);
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_restart_burst_never_counts_once_the_grace_is_over() {
+    let stats = Stats::new(&["direct".to_owned()]);
+    stats.mark_restart();
+    tokio::time::advance(Duration::from_secs(3)).await;
+    stats.tick();
+    for _ in 0..2_000 {
+        stats.ok(0, None);
+        stats.error(0, "connect");
+    }
+    tokio::time::advance(Duration::from_secs(2)).await;
+    stats.tick();
+    tokio::time::advance(Duration::from_secs(56)).await;
+    stats.tick();
+    assert_eq!(error_rate_crossed(&stats, 0.01), None);
+    for _ in 0..3_000 {
+        stats.ok(0, None);
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    stats.tick();
+    assert_eq!(error_rate_crossed(&stats, 0.01), None);
+    for _ in 0..3_000 {
+        stats.ok(0, None);
+    }
+    for _ in 0..100 {
+        stats.error(0, "timeout");
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    stats.tick();
+    assert!(error_rate_crossed(&stats, 0.01).is_some());
+}
