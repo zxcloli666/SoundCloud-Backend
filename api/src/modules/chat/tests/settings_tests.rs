@@ -4,7 +4,8 @@ use sqlx::PgPool;
 use super::{DmPolicy, SettingsPatch, UserSettings, load, save, show, update};
 use crate::modules::chat::ChatError;
 use crate::modules::chat::body::ChatJson;
-use crate::modules::chat::moderation::testing::state;
+use crate::modules::chat::moderation::testing::{state, state_with};
+use crate::modules::chat::sync::prefs::Prefs;
 use crate::modules::chat::test_support::caller;
 
 #[sqlx::test(migrations = "./migrations")]
@@ -86,11 +87,23 @@ async fn the_settings_page_lists_blocks_and_refuses_an_empty_change(pool: PgPool
         .err(),
         Some(ChatError::Invalid)
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_saved_change_reaches_the_sync_prefs_at_once(pool: PgPool) {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let redis = crate::redis::connect_url(&url).expect("a redis pool");
+    let chat = state_with(pool, redis, None);
+    chat.hub.prefs.remember("101", Prefs::default());
+
     let changed = update(
         caller(),
-        State(chat),
+        State(chat.clone()),
         ChatJson(SettingsPatch {
             dm_policy: Some(DmPolicy::Nobody),
+            read_receipts: Some(false),
+            presence_share: Some(true),
             ..SettingsPatch::default()
         }),
     )
@@ -98,6 +111,15 @@ async fn the_settings_page_lists_blocks_and_refuses_an_empty_change(pool: PgPool
     .expect("updated")
     .0;
     assert_eq!(changed.dm_policy, DmPolicy::Nobody);
+    assert_eq!(
+        chat.hub.prefs.known("101"),
+        Some(Prefs {
+            read_receipts: false,
+            typing: true,
+            presence_share: true,
+        })
+    );
+    assert_eq!(chat.hub.prefs.sharing("101"), Some(true));
 }
 
 #[test]

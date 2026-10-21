@@ -135,6 +135,7 @@ jobs:
           cargo test --bin api --locked -- --ignored modules::chat::limits::tests modules::chat::moderation::tests modules::chat::reports::tests modules::chat::admin::tests
           cargo test --bin api --locked modules::chat::sync::tests -- --ignored --skip soak_tests
           cargo test --bin api --locked modules::chat::synthetic::tests -- --ignored
+          cargo test --bin api --locked -- --ignored modules::chat::devices::tests modules::chat::keys::tests modules::chat::invites::tests modules::chat::settings::tests
           cargo test --bin api --locked recommendations::service::qdrant_io::live_tests -- --ignored --test-threads=1
 
       - name: Clippy

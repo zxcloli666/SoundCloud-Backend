@@ -79,7 +79,8 @@ impl Bucket {
             Bucket::Create | Bucket::Invite => &HOURLY_30,
             Bucket::Request | Bucket::Report => &DAILY_20,
             Bucket::Device => &DAILY_5,
-            Bucket::ReadMessages | Bucket::ReadKeys | Bucket::ReadCard => &MINUTE_60,
+            Bucket::ReadMessages => &MINUTE_60,
+            Bucket::ReadKeys | Bucket::ReadCard => &FIRST_SYNC,
             Bucket::ReadList => &MINUTE_10,
             Bucket::Preview => &MINUTE_30,
         }
@@ -126,6 +127,10 @@ const HOURLY_30: [Window; 1] = [Window::new("1h", 30, HOUR)];
 const DAILY_20: [Window; 1] = [Window::new("1d", 20, DAY)];
 const DAILY_5: [Window; 1] = [Window::new("1d", 5, DAY)];
 const MINUTE_60: [Window; 1] = [Window::new("1m", 60, MINUTE)];
+const FIRST_SYNC: [Window; 2] = [
+    Window::new("1m", 1_200, MINUTE),
+    Window::new("1h", 4_000, HOUR),
+];
 const MINUTE_30: [Window; 1] = [Window::new("1m", 30, MINUTE)];
 const MINUTE_10: [Window; 1] = [Window::new("1m", 10, MINUTE)];
 const NEWCOMER_REQUESTS: Window = Window::new("1d:new", 10, DAY);

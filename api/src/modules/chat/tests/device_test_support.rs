@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::modules::chat::caller::CallerDevice;
 use crate::modules::chat::model::{DeviceRow, Tier};
 use crate::modules::chat::test_support::chat_state;
-use crate::modules::chat::{ChatCaller, ChatState, devices, routes};
+use crate::modules::chat::{ChatCaller, ChatState, devices, routes, rt_keys};
 
 pub struct DeviceKeys {
     pub id: Uuid,
@@ -43,12 +43,22 @@ pub struct Enrolled {
     pub row: DeviceRow,
 }
 
-pub fn offline_redis() -> deadpool_redis::Pool {
-    crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool")
+pub fn redis() -> deadpool_redis::Pool {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    crate::redis::connect_url(&url).expect("a redis pool")
 }
 
 pub fn state(pool: &PgPool) -> Arc<ChatState> {
-    chat_state(pool.clone(), offline_redis(), true)
+    chat_state(pool.clone(), redis(), true)
+}
+
+pub async fn fresh_device_budget(chat: &ChatState, user: &str) {
+    let mut conn = chat.redis.get().await.expect("a redis connection");
+    let _: i64 = redis::cmd("DEL")
+        .arg(rt_keys::limit("device:1d", user))
+        .query_async(&mut conn)
+        .await
+        .expect("a reset device budget");
 }
 
 pub async fn session(pool: &PgPool, user: &str, bind: Option<Vec<u8>>) -> Uuid {
@@ -125,6 +135,7 @@ pub fn desktop() -> Value {
 }
 
 pub async fn enroll(chat: &Arc<ChatState>, pool: &PgPool, user: &str) -> Enrolled {
+    fresh_device_budget(chat, user).await;
     let keys = DeviceKeys::new();
     let session = session(pool, user, Some(keys.bind())).await;
     let (status, answer) = call(

@@ -7,11 +7,13 @@ use uuid::Uuid;
 
 use super::bind::claim;
 use super::test_support::{
-    DeviceKeys, age, call, caller, conversation, desktop, enroll, rekey_pending, session, state,
+    DeviceKeys, age, call, caller, conversation, desktop, enroll, fresh_device_budget,
+    rekey_pending, session, state,
 };
 use super::{alerts, lookup, touch};
-use crate::modules::chat::ChatError;
 use crate::modules::chat::caller::CallerDevice;
+use crate::modules::chat::sync::changes::Change;
+use crate::modules::chat::{ChatError, ChatState, rt_keys};
 
 const USER: &str = "7001";
 
@@ -36,6 +38,7 @@ fn error(answer: &Value) -> &str {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
     let chat = state(&pool);
     let bare = session(&pool, USER, None).await;
@@ -54,6 +57,7 @@ async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
     let chat = state(&pool);
     let keys = DeviceKeys::new();
@@ -75,6 +79,7 @@ async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_mismatched_bind_is_refused(pool: PgPool) {
     let chat = state(&pool);
     let first = enroll(&chat, &pool, USER).await;
@@ -137,6 +142,7 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
     let chat = state(&pool);
     let first = enroll(&chat, &pool, USER).await;
@@ -177,6 +183,7 @@ async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
     let chat = state(&pool);
     let direct = conversation(&pool, "direct", &[USER, "7002"]).await;
@@ -201,6 +208,7 @@ async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_session_keeps_one_device(pool: PgPool) {
     let chat = state(&pool);
     let first = enroll(&chat, &pool, USER).await;
@@ -226,6 +234,7 @@ async fn a_session_keeps_one_device(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
     let chat = state(&pool);
     for _ in 0..10 {
@@ -248,6 +257,7 @@ async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_malformed_device_description_is_refused(pool: PgPool) {
     let chat = state(&pool);
     let keys = DeviceKeys::new();
@@ -276,6 +286,7 @@ async fn a_malformed_device_description_is_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
     let chat = state(&pool);
     let older = enroll(&chat, &pool, USER).await;
@@ -325,6 +336,7 @@ async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
     let chat = state(&pool);
     let older = enroll(&chat, &pool, USER).await;
@@ -359,6 +371,7 @@ async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
     let chat = state(&pool);
     let mine = enroll(&chat, &pool, USER).await;
@@ -384,6 +397,7 @@ async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
     let chat = state(&pool);
     let older = enroll(&chat, &pool, USER).await;
@@ -464,6 +478,7 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;
@@ -530,6 +545,7 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
     let chat = state(&pool);
     let bare = session(&pool, USER, None).await;
@@ -545,6 +561,7 @@ async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn another_users_device_is_not_found(pool: PgPool) {
     let chat = state(&pool);
     let mine = enroll(&chat, &pool, USER).await;
@@ -572,6 +589,7 @@ async fn another_users_device_is_not_found(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;
@@ -601,4 +619,109 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
         .expect("a lookup")
         .expect("a device");
     assert!(seen.last_seen_at > idle.last_seen_at);
+}
+
+async fn devices_delta(chat: &ChatState, user: &str) -> Option<f64> {
+    let mut conn = chat.redis.get().await.expect("a redis connection");
+    redis::cmd("ZSCORE")
+        .arg(rt_keys::deltas(user))
+        .arg(Change::Devices.member())
+        .query_async(&mut conn)
+        .await
+        .expect("a score")
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn every_device_change_moves_the_devices_delta(pool: PgPool) {
+    let chat = state(&pool);
+    let user = format!("dev-{}", Uuid::now_v7().simple());
+    let older = enroll(&chat, &pool, &user).await;
+    let registered = devices_delta(&chat, &user)
+        .await
+        .expect("a register leaves a delta");
+    let older_row = age(&chat, &pool, &older.row, 100).await;
+    let newer = enroll(&chat, &pool, &user).await;
+    let added = devices_delta(&chat, &user).await.expect("a delta");
+    assert!(added > registered);
+
+    let (status, _) = call(
+        &chat,
+        caller(&user, older.session, Some(&older_row)),
+        "POST",
+        &format!("/chat/devices/{}/confirm", newer.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let confirmed = devices_delta(&chat, &user).await.expect("a delta");
+    assert!(confirmed > added);
+
+    let (status, _) = call(
+        &chat,
+        caller(&user, older.session, Some(&older_row)),
+        "POST",
+        &format!("/chat/devices/{}/not-me", newer.keys.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let disowned = devices_delta(&chat, &user).await.expect("a delta");
+    assert!(disowned > confirmed);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn five_new_devices_a_day_and_a_relogin_is_not_one(pool: PgPool) {
+    let chat = state(&pool);
+    let user = format!("dev-{}", Uuid::now_v7().simple());
+    fresh_device_budget(&chat, &user).await;
+    let mut first = None;
+    for _ in 0..5 {
+        let keys = DeviceKeys::new();
+        let session = session(&pool, &user, Some(keys.bind())).await;
+        let (status, answer) = call(
+            &chat,
+            caller(&user, session, None),
+            "POST",
+            "/chat/devices",
+            Some(desktop()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        first.get_or_insert((keys, session));
+    }
+    let extra = DeviceKeys::new();
+    let extra_session = session(&pool, &user, Some(extra.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(&user, extra_session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(
+        (status, error(&answer)),
+        (StatusCode::TOO_MANY_REQUESTS, "chat_request_limit")
+    );
+
+    let (keys, _) = first.expect("a first device");
+    let relogin = session(&pool, &user, Some(keys.bind())).await;
+    let (status, answer) = call(
+        &chat,
+        caller(&user, relogin, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let known: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat.users WHERE user_id = $1)")
+            .bind(&user)
+            .fetch_one(&pool)
+            .await
+            .expect("a probe");
+    assert!(known, "a register records the chat user");
 }

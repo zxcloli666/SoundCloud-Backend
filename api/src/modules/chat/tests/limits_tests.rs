@@ -38,6 +38,23 @@ fn every_bucket_has_windows_and_distinct_keys() {
     assert_eq!(Bucket::ReadList.windows()[0].limit, 10);
 }
 
+#[test]
+fn a_fresh_device_syncs_keys_and_cards_for_the_largest_account_in_a_minute() {
+    let largest = crate::modules::chat::conversations::create::CONVERSATIONS_MAX as u64;
+    for bucket in [Bucket::ReadKeys, Bucket::ReadCard] {
+        let minute = bucket
+            .windows()
+            .iter()
+            .find(|window| window.label == "1m")
+            .expect("a minute window");
+        assert!(minute.limit >= largest, "{bucket:?}");
+        assert!(
+            bucket.windows().iter().any(|window| window.label == "1h"),
+            "{bucket:?}"
+        );
+    }
+}
+
 fn chat() -> Arc<ChatState> {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
     let redis = crate::redis::connect_url(&url).expect("a redis pool");

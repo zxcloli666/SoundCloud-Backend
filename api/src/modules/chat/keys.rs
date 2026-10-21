@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::modules::chat::body::{ChatPath, ChatQuery};
 use crate::modules::chat::caller::CallerDevice;
 use crate::modules::chat::kek::wire_epoch;
+use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::model::DeviceRow;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, devices, history_gate};
 
@@ -42,6 +43,7 @@ pub async fn list(
     ChatQuery(query): ChatQuery<KeysQuery>,
 ) -> ChatResult<Json<Vec<SealedKey>>> {
     let device = devices::require(&chat, &caller).await?;
+    limits::admit(&chat, Bucket::ReadKeys, &caller.user_id).await?;
     let access = access::access(&chat, conversation, &caller.user_id).await?;
     if access.needs_key {
         rotate::ensure_current(&chat, conversation).await?;

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::modules::chat::blocks::{self, BlockedView};
 use crate::modules::chat::body::ChatJson;
+use crate::modules::chat::sync::prefs::{self, Prefs};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, users};
 
 pub const BLOCKED_SHOWN: i64 = 500;
@@ -132,6 +133,12 @@ pub async fn update(
         return Err(ChatError::Invalid);
     }
     let settings = save(&chat, &caller.user_id, &patch).await?;
+    let prefs = Prefs {
+        read_receipts: settings.read_receipts,
+        typing: settings.typing,
+        presence_share: settings.presence_share,
+    };
+    prefs::changed(&chat, &caller.user_id, prefs).await?;
     Ok(Json(view(&chat, &caller.user_id, settings).await?))
 }
 

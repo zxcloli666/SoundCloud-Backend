@@ -79,6 +79,7 @@ async fn backdate_keys(pool: &PgPool, conversation: Uuid, hours: i32) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
     let chat = state(&pool);
     let chat_id = conversation(&pool, "direct", &[USER, PEER]).await;
@@ -111,6 +112,7 @@ async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn only_members_get_keys(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;
@@ -151,6 +153,7 @@ async fn only_members_get_keys(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
     let chat = state(&pool);
     let old = enroll(&chat, &pool, USER).await;
@@ -192,6 +195,7 @@ async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
     let chat = state(&pool);
     let old = enroll(&chat, &pool, USER).await;
@@ -214,6 +218,7 @@ async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(pool: PgPool) {
     let chat = state(&pool);
     let group = conversation(&pool, "group", &[PEER, "7103"]).await;
@@ -244,6 +249,7 @@ async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(poo
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;
@@ -283,6 +289,7 @@ async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
     let chat = state(&pool);
     let chat_id = conversation(&pool, "group", &[USER, PEER]).await;
@@ -311,6 +318,7 @@ async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;
@@ -334,6 +342,7 @@ async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
 async fn a_revoked_device_gets_no_keys(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;

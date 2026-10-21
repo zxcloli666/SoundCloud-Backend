@@ -17,7 +17,7 @@ use crate::modules::chat::body::{ChatJson, ChatPath};
 use crate::modules::chat::caller::CallerDevice;
 use crate::modules::chat::history_gate::is_unlocked;
 use crate::modules::chat::model::{DeviceRow, DeviceStatus, DeviceView};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, sync};
 
 pub use cache::DeviceCache;
 
@@ -102,7 +102,7 @@ pub async fn confirm(
         return Err(ChatError::TooYoung);
     }
     store::unlock_history(&chat.pg, target.id).await?;
-    changed(&chat, &target.user_id, &[target.id]);
+    changed(&chat, &target.user_id, &[target.id]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -176,7 +176,7 @@ pub async fn revoke(chat: &ChatState, row: &DeviceRow) -> ChatResult<bool> {
         store::rekey_user(&mut *tx, &row.user_id).await?;
     }
     tx.commit().await?;
-    changed(chat, &row.user_id, &[row.id]);
+    changed(chat, &row.user_id, &[row.id]).await?;
     Ok(revoked)
 }
 
@@ -235,9 +235,9 @@ async fn sign_out(chat: &ChatState, target: &DeviceRow) -> ChatResult<()> {
     })
 }
 
-fn changed(chat: &ChatState, user_id: &str, ids: &[Uuid]) {
+async fn changed(chat: &ChatState, user_id: &str, ids: &[Uuid]) -> ChatResult<()> {
     chat.devices.forget(user_id, ids);
-    chat.hub.wake(user_id);
+    sync::bump::devices(chat, user_id).await
 }
 
 #[cfg(test)]

@@ -13,9 +13,12 @@ use uuid::Uuid;
 
 use crate::modules::chat::body::ChatPath;
 use crate::modules::chat::limits::{self, Bucket};
-use crate::modules::chat::model::GROUP_MEMBERS_MAX;
+use crate::modules::chat::members::access::{self, GroupSettings};
+use crate::modules::chat::members::changes::{self, Change};
+use crate::modules::chat::messages::system::{self, SystemEvent};
+use crate::modules::chat::model::{GROUP_MEMBERS_MAX, MessageRow};
 use crate::modules::chat::users::{self, Scope};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, epochs};
 
 pub const DEFAULT_TTL_SECS: i64 = 7 * 86_400;
 pub const MIN_TTL_SECS: i64 = 300;
@@ -41,6 +44,23 @@ pub struct InviteView {
 pub struct JoinAnswer {
     pub conversation_id: Uuid,
     pub joined: bool,
+}
+
+pub struct Entry {
+    pub answer: JoinAnswer,
+    pub announced: Option<MessageRow>,
+}
+
+impl Entry {
+    fn stayed(conversation_id: Uuid) -> Self {
+        Self {
+            answer: JoinAnswer {
+                conversation_id,
+                joined: false,
+            },
+            announced: None,
+        }
+    }
 }
 
 pub async fn create(
@@ -123,14 +143,25 @@ pub async fn join(
     ChatPath(token): ChatPath<String>,
 ) -> ChatResult<Json<JoinAnswer>> {
     limits::admit(&chat, Bucket::Create, &caller.user_id).await?;
-    let answer = join_with(&chat, &caller.user_id, &token).await?;
-    if answer.joined {
-        chat.hub.wake(&caller.user_id);
+    let entry = join_with(&chat, &caller.user_id, &token).await?;
+    if let Some(row) = entry.announced {
+        announce(&chat, &caller.user_id, row).await?;
     }
-    Ok(Json(answer))
+    Ok(Json(entry.answer))
 }
 
-pub async fn join_with(chat: &ChatState, user_id: &str, token: &str) -> ChatResult<JoinAnswer> {
+async fn announce(chat: &ChatState, user_id: &str, row: MessageRow) -> ChatResult<()> {
+    let joined = access::load(&chat.pg, row.conversation_id, user_id).await?;
+    let change = Change {
+        rows: vec![row],
+        recipients: joined.recipients.clone(),
+        requests: vec![user_id.to_owned()],
+        ..Change::default()
+    };
+    changes::publish(chat, &joined, change).await
+}
+
+pub async fn join_with(chat: &ChatState, user_id: &str, token: &str) -> ChatResult<Entry> {
     let hash = parse_token(token).ok_or(ChatError::NotFound)?;
     let invite = sqlx::query_file!("queries/chat/invites/find.sql", hash.as_slice())
         .fetch_optional(&chat.pg)
@@ -144,12 +175,7 @@ pub async fn join_with(chat: &ChatState, user_id: &str, token: &str) -> ChatResu
     .fetch_optional(&chat.pg)
     .await?;
     match state.as_deref() {
-        Some("active") => {
-            return Ok(JoinAnswer {
-                conversation_id: invite.conversation_id,
-                joined: false,
-            });
-        }
+        Some("active") => return Ok(Entry::stayed(invite.conversation_id)),
         Some("banned") => return Err(ChatError::Unavailable),
         _ => {}
     }
@@ -160,13 +186,17 @@ pub async fn join_with(chat: &ChatState, user_id: &str, token: &str) -> ChatResu
     if blocks::blocked_between(chat, user_id, &invite.created_by).await? {
         return Err(ChatError::Unavailable);
     }
-    Ok(JoinAnswer {
-        conversation_id: admit_member(chat, &hash, user_id).await?,
-        joined: true,
+    let row = admit_member(chat, &hash, user_id).await?;
+    Ok(Entry {
+        answer: JoinAnswer {
+            conversation_id: row.conversation_id,
+            joined: true,
+        },
+        announced: Some(row),
     })
 }
 
-async fn admit_member(chat: &ChatState, hash: &[u8; 32], user_id: &str) -> ChatResult<Uuid> {
+async fn admit_member(chat: &ChatState, hash: &[u8; 32], user_id: &str) -> ChatResult<MessageRow> {
     let mut tx = chat.pg.begin().await?;
     let used = sqlx::query_file!("queries/chat/invites/consume.sql", hash.as_slice())
         .fetch_optional(&mut *tx)
@@ -179,22 +209,35 @@ async fn admit_member(chat: &ChatState, hash: &[u8; 32], user_id: &str) -> ChatR
     if group.member_count as usize >= GROUP_MEMBERS_MAX {
         return Err(ChatError::Unavailable);
     }
+    let hidden = !GroupSettings::of(&group.settings).history_visible;
+    let joined_epoch = if hidden {
+        group.key_epoch.saturating_add(1)
+    } else {
+        0
+    };
     sqlx::query_file_scalar!(
         "queries/chat/invites/add_member.sql",
         used.conversation_id,
         user_id,
         group.last_seq,
-        group.key_epoch,
+        joined_epoch,
         used.created_by
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(ChatError::Unavailable)?;
+    if hidden {
+        epochs::mark_rekey_in(&mut tx, used.conversation_id).await?;
+    }
+    let event = SystemEvent::Joined {
+        actor: user_id.to_owned(),
+    };
+    let row = system::insert(&mut tx, used.conversation_id, &event, None).await?;
     sqlx::query_file!("queries/chat/invites/recount.sql", used.conversation_id)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(used.conversation_id)
+    Ok(row)
 }
 
 async fn require_group_admin(

@@ -3,12 +3,13 @@ use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{CreateInvite, create_with, join_with, parse_token, revoke};
-use crate::modules::chat::ChatError;
+use super::{CreateInvite, create_with, join, join_with, parse_token, revoke};
 use crate::modules::chat::body::ChatPath;
-use crate::modules::chat::moderation::testing::{conversation, state};
+use crate::modules::chat::moderation::testing::{conversation, state, state_with};
+use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::test_support::caller;
 use crate::modules::chat::users::{self, Scope};
+use crate::modules::chat::{ChatError, rt_keys};
 
 async fn member(pool: &PgPool, conversation: Uuid, user: &str) -> Option<(String, bool, i64)> {
     sqlx::query_as(
@@ -107,7 +108,17 @@ async fn a_link_adds_an_accepted_member_and_runs_out_of_uses(pool: PgPool) {
     .expect("a link");
 
     let joined = join_with(&chat, "5", &link.token).await.expect("joined");
-    assert_eq!((joined.conversation_id, joined.joined), (group, true));
+    assert_eq!(
+        (joined.answer.conversation_id, joined.answer.joined),
+        (group, true)
+    );
+    let announced = joined.announced.expect("a joined row");
+    assert_eq!((announced.seq, announced.class.as_str()), (41, "system"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(announced.body.as_deref().unwrap_or_default())
+            .expect("system json"),
+        serde_json::json!({"kind": "joined", "actor": "5"})
+    );
     assert_eq!(
         member(&pool, group, "5").await,
         Some(("active".to_owned(), true, 40))
@@ -116,7 +127,8 @@ async fn a_link_adds_an_accepted_member_and_runs_out_of_uses(pool: PgPool) {
     let again = join_with(&chat, "5", &link.token)
         .await
         .expect("already in");
-    assert!(!again.joined);
+    assert!(!again.answer.joined);
+    assert!(again.announced.is_none());
     assert_eq!(
         join_with(&chat, "6", &link.token).await.err(),
         Some(ChatError::NotFound)
@@ -272,6 +284,78 @@ async fn a_link_dies_with_its_maker_admin_rights(pool: PgPool) {
         join_with(&chat, "7", &kept.token)
             .await
             .expect("a join")
+            .answer
             .joined
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_link_into_a_hidden_history_group_starts_a_new_epoch(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    let group = conversation(&pool, "group", &[("101", true), ("2", true)]).await;
+    sqlx::query(
+        "UPDATE chat.conversations SET key_epoch = 3, settings = '{\"history_visible\": false}' WHERE id = $1",
+    )
+    .bind(group)
+    .execute(&pool)
+    .await
+    .expect("hidden history");
+    let link = create_with(&chat, "101", group, &CreateInvite::default())
+        .await
+        .expect("a link");
+
+    join_with(&chat, "5", &link.token).await.expect("joined");
+    let (joined_epoch, rekey): (i32, bool) = sqlx::query_as(
+        "SELECT m.joined_epoch, c.rekey FROM chat.members m
+         JOIN chat.conversations c ON c.id = m.conversation_id
+         WHERE m.conversation_id = $1 AND m.user_id = '5'",
+    )
+    .bind(group)
+    .fetch_one(&pool)
+    .await
+    .expect("a member");
+    assert_eq!((joined_epoch, rekey), (4, true));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_link_join_reaches_every_member_and_the_joiner_requests(pool: PgPool) {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let redis = crate::redis::connect_url(&url).expect("a redis pool");
+    let chat = state_with(pool.clone(), redis.clone(), None);
+    let run = Uuid::now_v7().simple().to_string();
+    let (owner, other, joiner) = (
+        format!("inv-{run}-a"),
+        format!("inv-{run}-b"),
+        format!("inv-{run}-c"),
+    );
+    let group = conversation(&pool, "group", &[(&owner, true), (&other, true)]).await;
+    let link = create_with(&chat, &owner, group, &CreateInvite::default())
+        .await
+        .expect("a link");
+
+    let mut as_joiner = caller();
+    as_joiner.user_id = joiner.clone();
+    let answer = join(as_joiner, State(chat.clone()), ChatPath(link.token.clone()))
+        .await
+        .expect("joined");
+    assert!(answer.0.joined);
+
+    let mut conn = redis.get().await.expect("a redis connection");
+    for user in [&owner, &other, &joiner] {
+        let score: Option<f64> = redis::cmd("ZSCORE")
+            .arg(rt_keys::deltas(user))
+            .arg(Change::Conversation(group).member())
+            .query_async(&mut conn)
+            .await
+            .expect("a score");
+        assert!(score.is_some(), "{user}");
+    }
+    let requests: Option<f64> = redis::cmd("ZSCORE")
+        .arg(rt_keys::deltas(&joiner))
+        .arg(Change::Requests.member())
+        .query_async(&mut conn)
+        .await
+        .expect("a score");
+    assert!(requests.is_some());
 }

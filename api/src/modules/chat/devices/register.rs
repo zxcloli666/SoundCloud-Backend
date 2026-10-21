@@ -1,11 +1,12 @@
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::modules::chat::devices::RegisterDevice;
 use crate::modules::chat::devices::bind::{BoundDevice, bound_device};
 use crate::modules::chat::devices::store::{self, NewDevice, SessionMove};
+use crate::modules::chat::devices::{RegisterDevice, changed, lookup};
+use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::model::{DEVICES_MAX, DeviceRow, Tier};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, users};
 
 const PLATFORM_MAX: usize = 32;
 const NAME_MAX: usize = 64;
@@ -25,11 +26,14 @@ pub async fn register(
 ) -> ChatResult<DeviceRow> {
     let request = validated(request)?;
     let bound = session_device(chat, caller).await?;
+    if lookup(chat, bound.id).await?.is_none() {
+        limits::admit(chat, Bucket::Device, &caller.user_id).await?;
+    }
+    users::touch(chat, &caller.user_id).await?;
     let enrolled = enroll(chat, caller, &bound, &request).await?;
     let mut touched = enrolled.evicted;
     touched.push(enrolled.row.id);
-    chat.devices.forget(&caller.user_id, &touched);
-    chat.hub.wake(&caller.user_id);
+    changed(chat, &caller.user_id, &touched).await?;
     Ok(enrolled.row)
 }
 
