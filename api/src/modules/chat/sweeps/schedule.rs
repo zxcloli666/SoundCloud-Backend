@@ -9,6 +9,7 @@ use crate::modules::chat::sweeps::{
 };
 
 pub const TICK: Duration = Duration::from_secs(1);
+pub const STARTUP_RETRY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sweep {
@@ -56,7 +57,8 @@ impl Sweep {
 pub struct Sweeper {
     marks: marks::Flusher,
     due: [Instant; Sweep::ALL.len()],
-    leading: bool,
+    pub(super) started: bool,
+    pub(super) startup_due: Instant,
 }
 
 impl Sweeper {
@@ -64,24 +66,18 @@ impl Sweeper {
         Self {
             marks: marks::Flusher::new(),
             due: [Instant::now(); Sweep::ALL.len()],
-            leading: false,
+            started: false,
+            startup_due: Instant::now(),
         }
     }
 
     pub async fn tick(&mut self, chat: &ChatState, leading: bool) {
-        let took_lead = leading && !self.leading;
-        self.leading = leading;
         if !leading {
+            self.started = false;
             return;
         }
-        if took_lead {
-            match startup::run_once(chat).await {
-                Ok(rebumped) => gauges::done("startup", rebumped),
-                Err(error) => {
-                    gauges::failed("startup");
-                    tracing::warn!(code = error.code(), "chat sweep startup failed");
-                }
-            }
+        if !self.started {
+            self.start(chat).await;
         }
         for (index, sweep) in Sweep::ALL.into_iter().enumerate() {
             if chat.shutdown.is_cancelled() {
@@ -92,6 +88,23 @@ impl Sweeper {
             }
             self.due[index] = Instant::now() + sweep.every();
             self.run(chat, sweep).await;
+        }
+    }
+
+    async fn start(&mut self, chat: &ChatState) {
+        if Instant::now() < self.startup_due {
+            return;
+        }
+        match startup::run_once(chat).await {
+            Ok(rebumped) => {
+                gauges::done("startup", rebumped);
+                self.started = true;
+            }
+            Err(error) => {
+                gauges::failed("startup");
+                tracing::warn!(code = error.code(), "chat sweep startup failed");
+                self.startup_due = Instant::now() + STARTUP_RETRY;
+            }
         }
     }
 
@@ -131,13 +144,11 @@ pub async fn run(chat: Arc<ChatState>) {
             _ = chat.shutdown.cancelled() => return,
             _ = tokio::time::sleep(TICK) => {}
         }
-        let leading = match leader::hold(&chat).await {
-            Ok(held) => held,
+        match leader::hold(&chat).await {
+            Ok(held) => sweeper.tick(&chat, held).await,
             Err(error) => {
                 tracing::warn!(code = error.code(), "chat sweep lease is unknown");
-                false
             }
-        };
-        sweeper.tick(&chat, leading).await;
+        }
     }
 }
