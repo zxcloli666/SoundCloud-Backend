@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::modules::chat::model::MessageRow;
 use crate::modules::chat::sync::answer::{Assembled, Inputs, assemble};
 use crate::modules::chat::sync::changes::{Change, Delta, Versions};
-use crate::modules::chat::sync::seats::ConversationState;
+use crate::modules::chat::sync::seats::{ConversationState, Seat};
 
 const VERSION: u64 = 1_000;
 
@@ -75,15 +75,16 @@ impl Fixture {
 }
 
 fn state(id: Uuid, kind: &str, last_seq: i64, member: Option<&str>) -> ConversationState {
+    let seat = match member {
+        Some("active" | "invited") => Seat::Live { floor: 0 },
+        _ => Seat::Gone,
+    };
     ConversationState {
         id,
         kind: kind.to_owned(),
         last_seq,
         key_epoch: 2,
-        deleted: false,
-        state: member.map(str::to_owned),
-        joined_seq: member.map(|_| 0),
-        hidden_before_seq: member.map(|_| 0),
+        seat,
     }
 }
 
@@ -162,11 +163,7 @@ fn a_conversation_the_client_never_listed_comes_as_a_header() {
 fn history_hidden_for_the_viewer_is_never_sent() {
     let mut fixture = Fixture::new();
     let chat = fixture.live("group", 6);
-    fixture
-        .states
-        .get_mut(&chat)
-        .expect("a state")
-        .hidden_before_seq = Some(4);
+    fixture.states.get_mut(&chat).expect("a state").seat = Seat::Live { floor: 4 };
     fixture.known.insert(chat, 1);
     fixture.messages(chat, 1..=6, 10);
     fixture.changed(VERSION, Change::Conversation(chat));
@@ -193,22 +190,25 @@ fn expired_rows_are_never_served() {
 }
 
 #[test]
-fn left_deleted_and_vanished_conversations_are_gone_and_rooms_wait() {
+fn left_deleted_vanished_and_departed_room_conversations_are_gone() {
     let mut fixture = Fixture::new();
     let left = Uuid::now_v7();
     fixture
         .states
         .insert(left, state(left, "group", 3, Some("left")));
     let deleted = fixture.live("group", 3);
-    fixture.states.get_mut(&deleted).expect("a state").deleted = true;
+    fixture.states.get_mut(&deleted).expect("a state").seat = Seat::Gone;
     let vanished = Uuid::now_v7();
-    let room = Uuid::now_v7();
-    fixture.states.insert(room, state(room, "room", 3, None));
+    let departed = Uuid::now_v7();
+    fixture
+        .states
+        .insert(departed, state(departed, "room", 3, None));
+    let room = fixture.live("room", 3);
     let invited = Uuid::now_v7();
     fixture
         .states
         .insert(invited, state(invited, "direct", 1, Some("invited")));
-    for (index, id) in [left, deleted, vanished, room, invited]
+    for (index, id) in [left, deleted, vanished, departed, room, invited]
         .into_iter()
         .enumerate()
     {
@@ -216,9 +216,9 @@ fn left_deleted_and_vanished_conversations_are_gone_and_rooms_wait() {
     }
 
     let built = fixture.run();
-    assert_eq!(built.answer.gone, vec![left, deleted, vanished]);
+    assert_eq!(built.answer.gone, vec![left, deleted, vanished, departed]);
     let listed: Vec<Uuid> = built.answer.convs.iter().map(|entry| entry.id).collect();
-    assert_eq!(listed, vec![invited]);
+    assert_eq!(listed, vec![room, invited]);
     assert_eq!(built.answer.pos, VERSION);
 }
 
@@ -281,7 +281,7 @@ fn the_focused_conversation_leads_the_answer_once() {
     fixture.changed(VERSION, Change::Conversation(focus));
 
     let built = fixture.run();
-    assert!(built.focus_live);
+    assert_eq!(built.focus_live, Some(true));
     let listed: Vec<Uuid> = built.answer.convs.iter().map(|entry| entry.id).collect();
     assert_eq!(listed, vec![focus, other]);
 }
@@ -297,7 +297,32 @@ fn a_focus_on_a_conversation_the_viewer_left_is_reported_gone() {
     fixture.include_focus = true;
 
     let built = fixture.run();
-    assert!(!built.focus_live);
+    assert_eq!(built.focus_live, Some(false));
     assert_eq!(built.answer.gone, vec![focus]);
     assert_eq!(built.answer.pos, VERSION);
+}
+
+#[test]
+fn a_change_to_the_focused_chat_rechecks_the_focus_without_a_focus_wake() {
+    let mut fixture = Fixture::new();
+    let focus = Uuid::now_v7();
+    fixture
+        .states
+        .insert(focus, state(focus, "group", 2, Some("kicked")));
+    fixture.focus = Some(focus);
+    fixture.changed(VERSION, Change::Conversation(focus));
+
+    let built = fixture.run();
+    assert_eq!(built.focus_live, Some(false));
+    assert_eq!(built.answer.gone, vec![focus]);
+}
+
+#[test]
+fn an_unrelated_change_leaves_the_focus_unchecked() {
+    let mut fixture = Fixture::new();
+    let other = fixture.live("group", 1);
+    fixture.focus = Some(Uuid::now_v7());
+    fixture.changed(VERSION, Change::Conversation(other));
+
+    assert_eq!(fixture.run().focus_live, None);
 }

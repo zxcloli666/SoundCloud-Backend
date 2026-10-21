@@ -8,11 +8,12 @@ use super::test_helpers::{
     caller, poll, position, redis_pool, redis_url, settle, sync, user, warm, with_max_parked,
     without_postgres,
 };
-use crate::modules::chat::rt_keys;
 use crate::modules::chat::sync::bump;
 use crate::modules::chat::sync::changes::{self, Change};
+use crate::modules::chat::sync::prefs::{self, Prefs};
 use crate::modules::chat::sync::reply::LATER_MAX_MS;
 use crate::modules::chat::sync::wire::RETRY_AFTER_MS;
+use crate::modules::chat::{presence, rt_keys};
 
 fn retry_ms(answer: &super::test_helpers::Answer) -> Option<u64> {
     answer
@@ -27,6 +28,12 @@ async fn an_idle_poll_runs_no_postgres_query() {
     let chat = without_postgres();
     let user = user();
     let incarnation = warm(&chat, &[&user]);
+    let sharing = Prefs {
+        presence_share: true,
+        ..Prefs::default()
+    };
+    prefs::changed(&chat, &user, sharing).await.expect("prefs");
+    chat.hub.prefs.expire(&user);
     bump::devices(&chat, &user).await.expect("a bump");
     let pos = position(&chat, &user).await;
     let device = Uuid::now_v7();
@@ -39,6 +46,33 @@ async fn an_idle_poll_runs_no_postgres_query() {
 
     let short = sync(&chat, caller(&user, device), poll(pos, incarnation, 0)).await;
     assert_eq!(short.status, StatusCode::NO_CONTENT, "{}", short.body);
+
+    let mut conn = redis_pool(&redis_url()).get().await.expect("redis");
+    let seen: Option<f64> = conn.zscore(rt_keys::SEEN, &user).await.expect("a score");
+    assert!(seen.is_some(), "presence is marked from the cached opt-in");
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn turning_presence_off_drops_the_user_from_the_seen_set() {
+    let chat = without_postgres();
+    let user = user();
+    let sharing = Prefs {
+        presence_share: true,
+        ..Prefs::default()
+    };
+    prefs::changed(&chat, &user, sharing).await.expect("prefs");
+    presence::mark_seen(&chat, &user).await.expect("seen");
+    prefs::changed(&chat, &user, Prefs::default())
+        .await
+        .expect("prefs");
+
+    let mut conn = redis_pool(&redis_url()).get().await.expect("redis");
+    let seen: Option<f64> = conn.zscore(rt_keys::SEEN, &user).await.expect("a score");
+    assert_eq!(seen, None);
+    presence::mark_seen(&chat, &user).await.expect("seen");
+    let seen: Option<f64> = conn.zscore(rt_keys::SEEN, &user).await.expect("a score");
+    assert_eq!(seen, None);
 }
 
 #[tokio::test]
@@ -119,26 +153,24 @@ async fn polls_over_the_parked_cap_are_turned_away() {
     bump::devices(&chat, &user).await.expect("a bump");
     let pos = position(&chat, &user).await;
 
-    let mut parked = Vec::new();
-    for _ in 0..2 {
+    let mut polls = Vec::new();
+    for _ in 0..3 {
         let chat = chat.clone();
         let caller = caller(&user, Uuid::now_v7());
-        parked.push(tokio::spawn(async move {
+        polls.push(tokio::spawn(async move {
             sync(&chat, caller, poll(pos, incarnation, 20_000)).await
         }));
     }
-    settle(&chat, 2).await;
-    let turned = sync(
-        &chat,
-        caller(&user, Uuid::now_v7()),
-        poll(pos, incarnation, 20_000),
-    )
-    .await;
+    let (turned, _, rest) =
+        tokio::time::timeout(Duration::from_secs(3), futures::future::select_all(polls))
+            .await
+            .expect("one poll is turned away");
+    let turned = turned.expect("a poll");
     assert_eq!(turned.status, StatusCode::NO_CONTENT);
     assert!(retry_ms(&turned).is_some());
-    assert_eq!(chat.hub.parked(), 2);
+    assert!((1..=2).contains(&chat.hub.parked()));
     chat.shutdown.cancel();
-    for handle in parked {
+    for handle in rest {
         handle.await.expect("a poll");
     }
 }

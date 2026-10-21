@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::{Instant, advance, timeout};
 use uuid::Uuid;
 
-use crate::modules::chat::hub::{COALESCE, ChatHub};
+use crate::modules::chat::hub::{COALESCE, ChatHub, Focus};
 
 const QUIET: Duration = Duration::from_millis(50);
 
@@ -156,10 +156,13 @@ async fn presence_is_marked_at_most_once_a_minute_per_user() {
 #[tokio::test(start_paused = true)]
 async fn a_verified_focus_belongs_to_one_device() {
     let hub = ChatHub::new();
-    let conversation = Uuid::now_v7();
+    let focus = Focus {
+        conversation: Uuid::now_v7(),
+        live: true,
+    };
     assert_eq!(hub.focus_of("101", device(1)), None);
-    hub.set_focus("101", device(1), Some(conversation));
-    assert_eq!(hub.focus_of("101", device(1)), Some(conversation));
+    hub.set_focus("101", device(1), Some(focus));
+    assert_eq!(hub.focus_of("101", device(1)), Some(focus));
     assert_eq!(hub.focus_of("101", device(2)), None);
     hub.set_focus("101", device(1), None);
     assert_eq!(hub.focus_of("101", device(1)), None);

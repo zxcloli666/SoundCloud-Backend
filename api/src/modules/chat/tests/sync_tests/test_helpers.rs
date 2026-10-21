@@ -202,6 +202,30 @@ pub async fn messages(
     }
 }
 
+pub async fn device(pool: &PgPool, user_id: &str, status: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO chat.devices (id, user_id, session_id, status, auth_pub, box_pub, platform, name, app_version, tier)
+         VALUES ($1, $2, $3, $4, '\\x01', '\\x02', 'macos', 'Mac', '9.0.0', 'direct')",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(Uuid::now_v7())
+    .bind(status)
+    .execute(pool)
+    .await
+    .expect("a device");
+    id
+}
+
+pub async fn revoke(pool: &PgPool, device: Uuid) {
+    sqlx::query("UPDATE chat.devices SET status = 'revoked', revoked_at = now() WHERE id = $1")
+        .bind(device)
+        .execute(pool)
+        .await
+        .expect("a revoke");
+}
+
 pub async fn last_seq(pool: &PgPool, conversation: Uuid) -> i64 {
     sqlx::query_scalar("SELECT last_seq FROM chat.conversations WHERE id = $1")
         .bind(conversation)
