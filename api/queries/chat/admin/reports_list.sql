@@ -15,5 +15,6 @@ SELECT id,
 FROM chat.reports
 WHERE ($1::text = 'all' OR state = $1)
   AND created_at < $2
-ORDER BY created_at DESC
+  AND ($4::uuid IS NULL OR (created_at, id) < (SELECT c.created_at, c.id FROM chat.reports c WHERE c.id = $4))
+ORDER BY created_at DESC, id DESC
 LIMIT $3

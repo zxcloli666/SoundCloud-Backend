@@ -75,6 +75,8 @@ fn admin_routes() -> Vec<(&'static str, String)> {
         ("GET", "/chat-admin/reports".into()),
         ("GET", format!("/chat-admin/reports/{CONV}")),
         ("POST", format!("/chat-admin/reports/{CONV}")),
+        ("GET", format!("/chat-admin/reports/{CONV}/audit")),
+        ("POST", format!("/chat-admin/reports/{CONV}/restore")),
         ("GET", "/chat-admin/restrictions".into()),
         ("POST", "/chat-admin/restrictions".into()),
         ("DELETE", format!("/chat-admin/messages/{CONV}/5")),

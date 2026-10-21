@@ -9,9 +9,9 @@ use uuid::Uuid;
 
 use super::auth::token_matches;
 use super::reports::{AdminDecision, Resolve, apply, detail};
+use super::restore::restore_with;
 use super::rewrap::rewrap_with;
 use super::router;
-use crate::modules::chat::ChatState;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::moderation::testing::{
     ADMIN_TOKEN, TestKeys, audit_actions, body_of, conversation, conversation_key, post, state,
@@ -19,6 +19,7 @@ use crate::modules::chat::moderation::testing::{
 use crate::modules::chat::reports::{FileReport, file_with, load};
 use crate::modules::chat::test_support::offline_chat_state;
 use crate::modules::chat::users;
+use crate::modules::chat::{ChatError, ChatState};
 
 async fn call(
     chat: &Arc<ChatState>,
@@ -422,4 +423,148 @@ async fn an_admin_unlist_hides_a_public_room_even_from_its_host(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     chat.rooms.end(&code).await.expect("the room ends");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_restore_puts_back_only_removed_target_messages_in_the_report(pool: PgPool) {
+    let keys = TestKeys::default();
+    let chat = state(pool.clone(), None);
+    let (id, dm, seq) = filed(&pool, &chat, &keys).await;
+    let original = body_of(&pool, dm, seq).await.expect("a body");
+    let mut uphold = resolve(AdminDecision::Uphold);
+    uphold.delete_seqs = vec![seq];
+    apply(&chat, "owner", id, &uphold).await.expect("upheld");
+    assert!(body_of(&pool, dm, seq).await.is_none());
+
+    assert_eq!(
+        restore_with(&chat, &keys, "owner", id, &[seq + 1]).await,
+        Err(ChatError::Invalid)
+    );
+    assert_eq!(
+        restore_with(&chat, &keys, "owner", id, &[]).await,
+        Err(ChatError::Invalid)
+    );
+    let restored = restore_with(&chat, &keys, "owner", id, &[seq])
+        .await
+        .expect("restored");
+    assert_eq!(restored.restored, vec![seq]);
+    assert_eq!(body_of(&pool, dm, seq).await, Some(original));
+    assert_eq!(
+        restore_with(&chat, &keys, "owner", id, &[seq])
+            .await
+            .expect("nothing left")
+            .restored,
+        Vec::<i64>::new()
+    );
+    let rows = audit_actions(&pool, &audit::report(id)).await;
+    let restore = rows
+        .iter()
+        .find(|row| row.1 == "restore")
+        .expect("a restore row");
+    assert_eq!(restore.2["seqs"], json!([seq]));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_restore_leaves_a_message_its_sender_deleted_for_everyone(pool: PgPool) {
+    let keys = TestKeys::default();
+    let chat = state(pool.clone(), None);
+    let (id, dm, seq) = filed(&pool, &chat, &keys).await;
+    sqlx::query("UPDATE chat.messages SET body = NULL WHERE conversation_id = $1 AND seq = $2")
+        .bind(dm)
+        .bind(seq)
+        .execute(&pool)
+        .await
+        .expect("a delete");
+    sqlx::query(
+        "INSERT INTO chat.messages (conversation_id, seq, client_id, sender_user, class, epoch, target_seq, body)
+         VALUES ($1, $2 + 1, $3, '72', 'system', 0, $2, '{\"kind\":\"deleted\",\"actor\":\"72\"}')",
+    )
+    .bind(dm)
+    .bind(seq)
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("a deleted row");
+
+    let restored = restore_with(&chat, &keys, "owner", id, &[seq])
+        .await
+        .expect("an answer");
+    assert!(restored.restored.is_empty());
+    assert!(body_of(&pool, dm, seq).await.is_none());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_report_trail_shows_linked_rows_without_a_decrypt(pool: PgPool) {
+    let keys = TestKeys::default();
+    let chat = state(pool.clone(), None);
+    let (id, _, seq) = filed(&pool, &chat, &keys).await;
+    let mut uphold = resolve(AdminDecision::Uphold);
+    uphold.delete_seqs = vec![seq];
+    uphold.ban_days = Some(2);
+    apply(&chat, "owner", id, &uphold).await.expect("upheld");
+
+    let (status, trail, _) = call(
+        &chat,
+        "GET",
+        &format!("/chat-admin/reports/{id}/audit"),
+        Some(ADMIN_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{trail}");
+    assert_eq!(trail["report"]["id"], id.to_string());
+    assert!(trail.get("lines").is_none());
+    let actions: Vec<&str> = trail["audit"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter_map(|row| row["action"].as_str())
+        .collect();
+    assert_eq!(actions, vec!["delete_messages", "ban", "actioned"]);
+    let decrypts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM chat.admin_audit WHERE action = 'decrypt'")
+            .fetch_one(&pool)
+            .await
+            .expect("a count");
+    assert_eq!(decrypts, 0);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_report_list_pages_on_a_report_cursor(pool: PgPool) {
+    let keys = TestKeys::default();
+    let chat = state(pool.clone(), None);
+    let mut filed_ids = Vec::new();
+    for _ in 0..3 {
+        filed_ids.push(filed(&pool, &chat, &keys).await.0);
+    }
+    sqlx::query("UPDATE chat.reports SET created_at = '2026-10-01T00:00:00Z'")
+        .execute(&pool)
+        .await
+        .expect("one instant");
+    let page = |cursor: Option<String>| {
+        let chat = chat.clone();
+        async move {
+            let uri = match cursor {
+                Some(id) => format!("/chat-admin/reports?limit=2&before_id={id}"),
+                None => "/chat-admin/reports?limit=2".to_owned(),
+            };
+            let (status, listed, _) = call(&chat, "GET", &uri, Some(ADMIN_TOKEN), None).await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed
+                .as_array()
+                .expect("a page")
+                .iter()
+                .map(|row| row["id"].as_str().expect("an id").to_owned())
+                .collect::<Vec<String>>()
+        }
+    };
+    let first = page(None).await;
+    assert_eq!(first.len(), 2);
+    let second = page(first.last().cloned()).await;
+    assert_eq!(second.len(), 1);
+    let mut seen: Vec<String> = first.into_iter().chain(second).collect();
+    seen.sort();
+    let mut expected: Vec<String> = filed_ids.iter().map(Uuid::to_string).collect();
+    expected.sort();
+    assert_eq!(seen, expected);
 }

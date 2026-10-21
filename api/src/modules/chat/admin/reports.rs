@@ -25,6 +25,7 @@ pub const BAN_DAYS_MAX: i64 = 3_650;
 pub struct ListQuery {
     pub state: Option<String>,
     pub before: Option<i64>,
+    pub before_id: Option<Uuid>,
     pub limit: Option<i64>,
 }
 
@@ -61,6 +62,12 @@ pub struct ReportDetail {
     pub audit: Vec<AuditView>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportTrail {
+    pub report: ReportSummary,
+    pub audit: Vec<AuditView>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AdminDecision {
@@ -93,12 +100,19 @@ pub async fn list(
     }
     let before = query
         .before
+        .filter(|_| query.before_id.is_none())
         .and_then(|ms| Utc.timestamp_millis_opt(ms).single())
         .unwrap_or_else(|| Utc::now() + chrono::Duration::seconds(1));
     let limit = query.limit.unwrap_or(50).clamp(1, PAGE_MAX);
-    let rows = sqlx::query_file!("queries/chat/admin/reports_list.sql", state, before, limit)
-        .fetch_all(&chat.pg)
-        .await?;
+    let rows = sqlx::query_file!(
+        "queries/chat/admin/reports_list.sql",
+        state,
+        before,
+        limit,
+        query.before_id
+    )
+    .fetch_all(&chat.pg)
+    .await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| ReportSummary {
@@ -127,6 +141,18 @@ pub async fn show(
     ChatPath(id): ChatPath<Uuid>,
 ) -> ChatResult<Json<ReportDetail>> {
     Ok(Json(detail(&chat, &chat.keks, &admin.admin, id).await?))
+}
+
+pub async fn trail(
+    _: ChatAdmin,
+    State(chat): State<Arc<ChatState>>,
+    ChatPath(id): ChatPath<Uuid>,
+) -> ChatResult<Json<ReportTrail>> {
+    let report = reports::load(&chat, id).await?.ok_or(ChatError::NotFound)?;
+    Ok(Json(ReportTrail {
+        report: summary(&report),
+        audit: audit_rows(&chat, id).await?,
+    }))
 }
 
 pub async fn detail(
@@ -272,6 +298,7 @@ async fn audit_rows(chat: &ChatState, id: Uuid) -> ChatResult<Vec<AuditView>> {
     let rows = sqlx::query_file!(
         "queries/chat/admin/report_audits.sql",
         audit::report(id),
+        id.to_string(),
         AUDIT_SHOWN
     )
     .fetch_all(&chat.pg)

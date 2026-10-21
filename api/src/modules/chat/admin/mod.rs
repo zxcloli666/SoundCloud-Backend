@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auth;
 pub mod messages;
 pub mod reports;
+pub mod restore;
 pub mod restrictions;
 pub mod rewrap;
 pub mod rooms;
@@ -21,6 +22,8 @@ pub fn router<S>(chat: Arc<ChatState>) -> Router<S> {
             "/chat-admin/reports/{id}",
             get(reports::show).post(reports::resolve),
         )
+        .route("/chat-admin/reports/{id}/audit", get(reports::trail))
+        .route("/chat-admin/reports/{id}/restore", post(restore::restore))
         .route(
             "/chat-admin/restrictions",
             get(restrictions::list).post(restrictions::restrict),
