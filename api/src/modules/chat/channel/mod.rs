@@ -28,6 +28,7 @@ pub const SEALED_AUTH_PATHS: [&str; 5] = [
 ];
 
 pub const CONFIG_PATH: &str = "/chat/config";
+pub const DEVICES_PATH: &str = "/chat/devices";
 pub const WORK_PERMITS: usize = 2_048;
 
 pub struct Channel {

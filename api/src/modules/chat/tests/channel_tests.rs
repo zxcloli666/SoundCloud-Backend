@@ -814,3 +814,43 @@ async fn a_sealed_push_link_binds_the_new_session_only_when_the_bound_source_mad
     assert_eq!(bound_keys(&pool, target).await?, None);
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_bound_session_without_a_device_reaches_only_config_and_registration(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let user = format!("9{}", rand::random::<u32>());
+    let device = Device::new();
+    let session = session_for(&pool, &user, Some(&device)).await?;
+    let app: Router = routes::public(beta_for(chat_state(pool.clone(), redis()?, true), &user));
+    let ask = |method: &str, path: &str, body: &str| {
+        let mut inner = from_device(call(method, path, ""), session, &device);
+        inner.body = body.as_bytes().to_vec();
+        seal(inner, &device.seed)
+    };
+
+    for (method, path) in [
+        ("GET", "/chat/conversations"),
+        ("POST", "/chat/sync"),
+        ("GET", "/chat/settings"),
+        ("GET", "/chat/requests"),
+        ("DELETE", "/chat/devices/me"),
+    ] {
+        assert_eq!(
+            exchange(&app, &ask(method, path, "")).await,
+            error(ChatError::DeviceRevoked),
+            "{method} {path}"
+        );
+    }
+    let (status, config) = exchange(&app, &ask("GET", "/chat/config", "")).await;
+    assert_eq!(status, 200, "{config}");
+
+    let register = json!({"platform": "linux", "name": "test", "app_version": "0.0.0"});
+    let (status, registered) =
+        exchange(&app, &ask("POST", "/chat/devices", &register.to_string())).await;
+    assert_eq!(status, 200, "{registered}");
+    let (status, listed) = exchange(&app, &ask("GET", "/chat/conversations", "")).await;
+    assert_eq!(status, 200, "{listed}");
+    Ok(())
+}

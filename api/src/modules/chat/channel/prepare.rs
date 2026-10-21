@@ -8,7 +8,9 @@ use crate::modules::chat::caller::{Resolved, resolve};
 use crate::modules::chat::channel::answer::error_answer;
 use crate::modules::chat::channel::dispatch::{dispatch, inner_request};
 use crate::modules::chat::channel::sealed_auth::SealedAuth;
-use crate::modules::chat::channel::{CONFIG_PATH, Channel, clock, is_sealed_auth, replay};
+use crate::modules::chat::channel::{
+    CONFIG_PATH, Channel, DEVICES_PATH, clock, is_sealed_auth, replay,
+};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub async fn answer(channel: &Channel, opened: &OpenedRequest) -> InnerResponse {
@@ -38,7 +40,7 @@ async fn prepare(channel: &Channel, opened: &OpenedRequest) -> ChatResult<Reques
         }
         let resolved = resolve(chat, &inner, &opened.enc).await?;
         replay::claim(chat, &opened.enc).await?;
-        admit(chat, &inner.path, &resolved)?;
+        admit(chat, &inner.method, &inner.path, &resolved)?;
         extensions.insert(resolved.caller);
         if let Some(bind) = resolved.bind {
             extensions.insert(bind);
@@ -47,7 +49,7 @@ async fn prepare(channel: &Channel, opened: &OpenedRequest) -> ChatResult<Reques
     inner_request(inner, extensions)
 }
 
-fn admit(chat: &ChatState, path: &str, resolved: &Resolved) -> ChatResult<()> {
+fn admit(chat: &ChatState, method: &str, path: &str, resolved: &Resolved) -> ChatResult<()> {
     if path == CONFIG_PATH {
         return Ok(());
     }
@@ -57,5 +59,12 @@ fn admit(chat: &ChatState, path: &str, resolved: &Resolved) -> ChatResult<()> {
     if !chat.config.opens_for(&resolved.caller.user_id) {
         return Err(ChatError::Disabled);
     }
+    if resolved.caller.device.is_none() && !registers(method, path) {
+        return Err(ChatError::DeviceRevoked);
+    }
     Ok(())
+}
+
+fn registers(method: &str, path: &str) -> bool {
+    path == DEVICES_PATH && matches!(method, "GET" | "POST")
 }
