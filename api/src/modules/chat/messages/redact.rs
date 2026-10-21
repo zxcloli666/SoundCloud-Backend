@@ -12,7 +12,7 @@ pub async fn for_everyone(pg: &PgPool, access: &Access, seq: i64) -> ChatResult<
     if access.state != MemberState::Active {
         return Err(ChatError::NotMember);
     }
-    let target = store::target(pg, access.conversation, seq)
+    let target = store::visible_target(pg, access, Some(seq))
         .await?
         .ok_or(ChatError::NotFound)?;
     if target.class != Class::Post.as_str() {
@@ -44,7 +44,15 @@ pub async fn for_everyone(pg: &PgPool, access: &Access, seq: i64) -> ChatResult<
     let event = SystemEvent::Deleted {
         actor: access.user_id.clone(),
     };
-    rows.push(system::insert(&mut tx, access.conversation, &event, Some(seq)).await?);
+    let deleted = system::insert_until(
+        &mut tx,
+        access.conversation,
+        &event,
+        Some(seq),
+        target.expires_at,
+    )
+    .await?;
+    rows.push(deleted);
     tx.commit().await?;
     Ok(rows)
 }

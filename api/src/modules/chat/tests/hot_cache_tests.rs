@@ -49,6 +49,8 @@ fn a_contiguous_tail_answers_everything_after_a_seq() {
 fn a_seq_older_than_the_tail_falls_back_to_postgres() {
     let cache = cache_with(10..=12);
     assert!(cache.after(CONV, 8).is_none());
+    assert!(cache.after(CONV, i64::MIN).is_none());
+    assert!(cache.after(CONV, i64::MAX).is_none());
     assert_eq!(
         seqs(&cache.after(CONV, 9).expect("covered")),
         vec![10, 11, 12]

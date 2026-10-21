@@ -2,6 +2,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::modules::chat::ChatResult;
+use crate::modules::chat::members::access::GroupSettings;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::model::{MemberRole, MemberState};
 
@@ -36,6 +37,25 @@ impl Joining {
 pub struct Joined {
     pub user_id: String,
     pub state: MemberState,
+}
+
+pub struct Locked {
+    pub last_seq: i64,
+    pub key_epoch: i32,
+    pub settings: GroupSettings,
+}
+
+pub async fn lock(conn: &mut PgConnection, conversation: Uuid) -> ChatResult<Option<Locked>> {
+    Ok(
+        sqlx::query_file!("queries/chat/conversations/lock.sql", conversation)
+            .fetch_optional(&mut *conn)
+            .await?
+            .map(|row| Locked {
+                last_seq: row.last_seq,
+                key_epoch: row.key_epoch,
+                settings: GroupSettings::of(&row.settings),
+            }),
+    )
 }
 
 pub async fn join_many(
@@ -147,6 +167,19 @@ pub async fn set_role(
     .fetch_optional(&mut *conn)
     .await?
     .is_some())
+}
+
+pub async fn step_down(
+    conn: &mut PgConnection,
+    conversation: Uuid,
+    owner: &str,
+) -> ChatResult<bool> {
+    Ok(
+        sqlx::query_file_scalar!("queries/chat/members/step_down.sql", conversation, owner)
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_some(),
+    )
 }
 
 pub async fn standing(

@@ -30,7 +30,13 @@ async fn a_dm_is_one_conversation_from_either_side(pool: PgPool) -> ChatResult<(
     );
     let created = direct(&pool, "101", first).await?;
     let again = plan_direct(&pool, "202", "101").await?;
-    assert_eq!(again, DirectPlan::Existing(created.id));
+    assert_eq!(
+        again,
+        DirectPlan::Existing {
+            id: created.id,
+            peer: "101".to_owned()
+        }
+    );
     assert_eq!(direct(&pool, "202", again).await?.id, created.id);
     let total: i64 =
         sqlx::query_scalar("SELECT count(*) FROM chat.conversations WHERE kind = 'direct'")
@@ -109,9 +115,14 @@ async fn a_declined_dm_reopens_only_for_the_one_who_comes_back(pool: PgPool) -> 
     sqlx::query("UPDATE chat.members SET state = 'left' WHERE user_id = '202'")
         .execute(&pool)
         .await?;
-    direct(&pool, "101", plan_direct(&pool, "101", "202").await?).await?;
+    let stays = direct(&pool, "101", plan_direct(&pool, "101", "202").await?).await?;
+    assert_eq!(stays.recipients, vec!["101".to_owned()]);
     assert_eq!(access_of(&pool, id, "202").await.state, MemberState::Left);
-    direct(&pool, "202", plan_direct(&pool, "202", "101").await?).await?;
+    let comes_back = direct(&pool, "202", plan_direct(&pool, "202", "101").await?).await?;
+    assert_eq!(
+        comes_back.recipients,
+        vec!["202".to_owned(), "101".to_owned()]
+    );
     let back = access_of(&pool, id, "202").await;
     assert_eq!((back.state, back.accepted), (MemberState::Active, true));
     Ok(())

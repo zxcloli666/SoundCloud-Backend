@@ -45,13 +45,14 @@ impl HotCache {
     pub fn after(&self, conversation: Uuid, seq: i64) -> Option<Vec<MessageRow>> {
         let tail = self.tails.get(&conversation)?;
         let first = tail.rows.first()?.seq;
-        if seq + 1 < first {
+        let next = seq.checked_add(1)?;
+        if next < first {
             return None;
         }
         let now = Utc::now();
         let mut rows = Vec::new();
         let newer = tail.rows.iter().filter(|row| row.seq > seq);
-        for (expected, row) in (seq + 1..).zip(newer) {
+        for (expected, row) in (next..).zip(newer) {
             if row.seq != expected {
                 return None;
             }

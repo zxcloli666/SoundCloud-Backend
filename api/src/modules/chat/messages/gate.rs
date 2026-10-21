@@ -2,6 +2,7 @@ use chat_wire::msg::Class;
 use sqlx::PgPool;
 
 use crate::modules::chat::members::access::Access;
+use crate::modules::chat::messages::rules::Outgoing;
 use crate::modules::chat::model::{ConversationKind, MemberState};
 use crate::modules::chat::requests::MESSAGES_BEFORE_ACCEPT;
 use crate::modules::chat::{ChatError, ChatResult};
@@ -16,14 +17,15 @@ pub fn peer_open(access: &Access) -> ChatResult<()> {
     }
 }
 
-pub async fn request_room(pg: &PgPool, access: &Access, class: Class) -> ChatResult<()> {
-    if class != Class::Post || access.peer_state != Some(MemberState::Invited) {
+pub async fn request_room(pg: &PgPool, access: &Access, out: &Outgoing) -> ChatResult<()> {
+    if out.class != Class::Post || access.peer_state != Some(MemberState::Invited) {
         return Ok(());
     }
     let sent = sqlx::query_file_scalar!(
         "queries/chat/messages/posts_by.sql",
         access.conversation,
-        access.user_id
+        access.user_id,
+        out.client_id
     )
     .fetch_one(pg)
     .await?;

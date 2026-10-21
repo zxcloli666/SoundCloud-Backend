@@ -54,10 +54,7 @@ pub async fn send(
 ) -> ChatResult<MessageRow> {
     let access = access::load(pg, conversation, user).await?;
     rules::may_post(&access, out.class)?;
-    let target = match out.target_seq {
-        Some(seq) => store::target(pg, conversation, seq).await?,
-        None => None,
-    };
+    let target = store::visible_target(pg, &access, out.target_seq).await?;
     let inherited = rules::inherited_expiry(out.class, user, target.as_ref(), chrono::Utc::now())?;
     store::store(pg, &access, DEVICE, out, inherited).await
 }

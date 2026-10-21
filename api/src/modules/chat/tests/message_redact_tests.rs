@@ -2,7 +2,9 @@ use chat_wire::msg::Class;
 use sqlx::PgPool;
 
 use super::*;
-use crate::modules::chat::conversations::fixtures::{access_of, dm, group, outgoing, post, send};
+use crate::modules::chat::conversations::fixtures::{
+    access_of, dm, exec, group, outgoing, post, send,
+};
 
 async fn body_of(pool: &PgPool, conversation: uuid::Uuid, seq: i64) -> Option<Vec<u8>> {
     sqlx::query_scalar("SELECT body FROM chat.messages WHERE conversation_id = $1 AND seq = $2")
@@ -107,6 +109,53 @@ async fn system_rows_and_missing_rows_are_not_deletable(pool: PgPool) -> ChatRes
     );
     assert_eq!(
         for_everyone(&pool, &access, 99).await.err(),
+        Some(ChatError::NotFound)
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_trace_of_a_disappearing_post_goes_with_it(pool: PgPool) -> ChatResult<()> {
+    let id = dm(&pool, "101", "202", MemberState::Active).await;
+    exec(
+        &pool,
+        "UPDATE chat.conversations SET ttl_s = 3600 WHERE id = $1",
+        id,
+    )
+    .await;
+    let target = post(&pool, id, "101").await;
+    let rows = for_everyone(&pool, &access_of(&pool, id, "101").await, target.seq).await?;
+    let marker = rows.last().expect("a system row");
+    assert_eq!(marker.class, "system");
+    assert_eq!(marker.expires_at, target.expires_at);
+    let stored: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT expires_at FROM chat.messages WHERE conversation_id = $1 AND seq = $2",
+    )
+    .bind(id)
+    .bind(marker.seq)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        stored.map(|at| at.timestamp_micros()),
+        target.expires_at.map(|at| at.timestamp_micros())
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn hidden_history_cannot_be_deleted_for_everyone(pool: PgPool) -> ChatResult<()> {
+    let id = dm(&pool, "101", "202", MemberState::Active).await;
+    let old = post(&pool, id, "101").await;
+    exec(
+        &pool,
+        "UPDATE chat.members SET hidden_before_seq = 1 WHERE conversation_id = $1 AND user_id = '101'",
+        id,
+    )
+    .await;
+    assert_eq!(
+        for_everyone(&pool, &access_of(&pool, id, "101").await, old.seq)
+            .await
+            .err(),
         Some(ChatError::NotFound)
     );
     Ok(())

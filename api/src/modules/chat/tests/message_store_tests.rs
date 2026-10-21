@@ -301,21 +301,26 @@ async fn the_first_post_accepts_the_membership(pool: PgPool) -> ChatResult<()> {
 #[sqlx::test(migrations = "./migrations")]
 async fn a_request_holds_three_posts_until_accepted(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Invited).await;
+    let mut last = None;
     for _ in 0..3 {
         let access = access_of(&pool, id, "101").await;
+        let out = outgoing(Class::Post, 0, None);
         gate::peer_open(&access)?;
-        gate::request_room(&pool, &access, Class::Post).await?;
-        post(&pool, id, "101").await;
+        gate::request_room(&pool, &access, &out).await?;
+        last = Some((send(&pool, id, "101", &out).await?, out));
     }
     let access = access_of(&pool, id, "101").await;
     assert_eq!(
-        gate::request_room(&pool, &access, Class::Post).await,
+        gate::request_room(&pool, &access, &outgoing(Class::Post, 0, None)).await,
         Err(ChatError::RequestLimit)
     );
     assert_eq!(
-        gate::request_room(&pool, &access, Class::React).await,
+        gate::request_room(&pool, &access, &outgoing(Class::React, 0, Some(1))).await,
         Ok(())
     );
+    let (third, resent) = last.expect("three posts");
+    gate::request_room(&pool, &access, &resent).await?;
+    assert_eq!(send(&pool, id, "101", &resent).await?.seq, third.seq);
     exec(
         &pool,
         "UPDATE chat.members SET state = 'left' WHERE conversation_id = $1 AND user_id = '202'",
@@ -324,5 +329,35 @@ async fn a_request_holds_three_posts_until_accepted(pool: PgPool) -> ChatResult<
     .await;
     let declined = access_of(&pool, id, "101").await;
     assert_eq!(gate::peer_open(&declined), Err(ChatError::Unavailable));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn hidden_history_cannot_be_a_target(pool: PgPool) -> ChatResult<()> {
+    let id = dm(&pool, "101", "202", MemberState::Active).await;
+    let old = post(&pool, id, "101").await;
+    exec(
+        &pool,
+        "UPDATE chat.members SET hidden_before_seq = 1 WHERE conversation_id = $1 AND user_id = '202'",
+        id,
+    )
+    .await;
+    for class in [Class::React, Class::Pin] {
+        assert_eq!(
+            send(&pool, id, "202", &outgoing(class, 0, Some(old.seq)))
+                .await
+                .err(),
+            Some(ChatError::NotFound),
+            "{class:?}"
+        );
+    }
+    let fresh = post(&pool, id, "101").await;
+    send(
+        &pool,
+        id,
+        "202",
+        &outgoing(Class::React, 0, Some(fresh.seq)),
+    )
+    .await?;
     Ok(())
 }

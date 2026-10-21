@@ -226,8 +226,9 @@ pub async fn set_ttl(
     let ttl_s = ttl::checked(input.ttl_s)?;
     let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
     let row = ttl::set(&chat.pg, &access, ttl_s).await?;
-    if let Some(row) = &row {
-        fanout::publish(&chat, std::slice::from_ref(row), &access.recipients).await?;
+    match &row {
+        Some(row) => fanout::publish(&chat, std::slice::from_ref(row), &access.recipients).await?,
+        None => fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?,
     }
     Ok(Json(TtlAnswer {
         ttl_s,

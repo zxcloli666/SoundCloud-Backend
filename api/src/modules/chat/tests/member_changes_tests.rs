@@ -274,3 +274,80 @@ async fn only_the_owner_changes_roles_and_can_hand_over(pool: PgPool) -> ChatRes
     assert_eq!(state_of(&pool, id, "101").await.0, "admin");
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_add_joins_at_the_seq_of_its_own_commit(pool: PgPool) -> ChatResult<()> {
+    let id = group(&pool, "101", &[]).await;
+    exec(
+        &pool,
+        "UPDATE chat.conversations SET settings = '{\"history_visible\": false}' WHERE id = $1",
+        id,
+    )
+    .await;
+    let stale = access_of(&pool, id, "101").await;
+    exec(
+        &pool,
+        "UPDATE chat.conversations SET last_seq = 7, key_epoch = 2 WHERE id = $1",
+        id,
+    )
+    .await;
+    add(&pool, &stale, vec![("202".to_owned(), MemberState::Active)]).await?;
+    let (joined_seq, joined_epoch): (i64, i32) = sqlx::query_as(
+        "SELECT joined_seq, joined_epoch FROM chat.members WHERE conversation_id = $1 AND user_id = '202'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!((joined_seq, joined_epoch), (7, 3));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn racing_adds_never_pass_the_cap(pool: PgPool) -> ChatResult<()> {
+    let id = group(&pool, "101", &[]).await;
+    let owner = access_of(&pool, id, "101").await;
+    let batch = |from: u32| -> Vec<(String, MemberState)> {
+        (from..from + 100)
+            .map(|n| (n.to_string(), MemberState::Active))
+            .collect()
+    };
+    let (left, right) = tokio::join!(
+        add(&pool, &owner, batch(5_000)),
+        add(&pool, &owner, batch(6_000))
+    );
+    let passed = [left.is_ok(), right.is_ok()];
+    assert_eq!(passed.iter().filter(|ok| **ok).count(), 1);
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat.members WHERE conversation_id = $1 AND state = 'active'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(live, 101);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn two_handovers_at_once_leave_one_owner(pool: PgPool) -> ChatResult<()> {
+    let id = group(
+        &pool,
+        "101",
+        &[("202", MemberState::Active), ("303", MemberState::Active)],
+    )
+    .await;
+    let owner = access_of(&pool, id, "101").await;
+    let (left, right) = tokio::join!(
+        set_role(&pool, &owner, "202", MemberRole::Owner),
+        set_role(&pool, &owner, "303", MemberRole::Owner)
+    );
+    assert_eq!(u8::from(left.is_ok()) + u8::from(right.is_ok()), 1);
+    let owners: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat.members WHERE conversation_id = $1 AND role = 'owner'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(owners, 1);
+    assert_eq!(state_of(&pool, id, "101").await.0, "admin");
+    Ok(())
+}

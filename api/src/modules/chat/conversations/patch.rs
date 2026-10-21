@@ -149,3 +149,7 @@ pub async fn apply_mine(pg: &PgPool, access: &Access, patch: MyPatch) -> ChatRes
     .ok_or(ChatError::NotMember)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/conversation_patch_tests.rs"]
+mod tests;

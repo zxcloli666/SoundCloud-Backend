@@ -161,18 +161,15 @@ pub async fn set_role(
     }
     let mut change = Change::to(actor.recipients.clone());
     let mut tx = pg.begin().await?;
+    if role == MemberRole::Owner
+        && !members::step_down(&mut tx, actor.conversation, &actor.user_id).await?
+    {
+        tx.rollback().await?;
+        return Err(ChatError::NotMember);
+    }
     if !members::set_role(&mut tx, actor.conversation, target, role).await? {
         tx.rollback().await?;
         return Err(ChatError::NotFound);
-    }
-    if role == MemberRole::Owner {
-        members::set_role(
-            &mut tx,
-            actor.conversation,
-            &actor.user_id,
-            MemberRole::Admin,
-        )
-        .await?;
     }
     let event = SystemEvent::Role {
         actor: actor.user_id.clone(),
@@ -241,12 +238,16 @@ pub async fn add(
     if joining.is_empty() {
         return Ok(change);
     }
-    let joined_epoch = if actor.settings.history_visible {
-        0
-    } else {
-        actor.key_epoch + 1
-    };
     let mut tx = pg.begin().await?;
+    let locked = members::lock(&mut tx, actor.conversation)
+        .await?
+        .ok_or(ChatError::NotFound)?;
+    let hidden = !locked.settings.history_visible;
+    let joined_epoch = if hidden {
+        locked.key_epoch.saturating_add(1)
+    } else {
+        0
+    };
     let live = members::live_total(&mut tx, actor.conversation).await?;
     if usize::try_from(live).unwrap_or(usize::MAX) + joining.len() > GROUP_MEMBERS_MAX {
         tx.rollback().await?;
@@ -255,7 +256,7 @@ pub async fn add(
     let joined = members::join_many(
         &mut tx,
         actor.conversation,
-        actor.last_seq,
+        locked.last_seq,
         joined_epoch,
         &actor.user_id,
         &joining,
@@ -265,7 +266,7 @@ pub async fn add(
         tx.rollback().await?;
         return Ok(change);
     }
-    if !actor.settings.history_visible {
+    if hidden {
         epochs::mark_rekey_in(&mut tx, actor.conversation).await?;
     }
     let targets: Vec<String> = joined.into_iter().map(|one| one.user_id).collect();

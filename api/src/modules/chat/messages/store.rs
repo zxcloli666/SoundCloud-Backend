@@ -23,6 +23,17 @@ pub async fn target(pg: &PgPool, conversation: Uuid, seq: i64) -> ChatResult<Opt
     )
 }
 
+pub async fn visible_target(
+    pg: &PgPool,
+    access: &Access,
+    seq: Option<i64>,
+) -> ChatResult<Option<Target>> {
+    match seq {
+        Some(seq) if seq > access.history_floor() => target(pg, access.conversation, seq).await,
+        _ => Ok(None),
+    }
+}
+
 pub async fn existing(
     pg: &PgPool,
     conversation: Uuid,

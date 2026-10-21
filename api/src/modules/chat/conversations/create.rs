@@ -18,7 +18,10 @@ pub const META_MAX: usize = 8 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirectPlan {
-    Existing(Uuid),
+    Existing {
+        id: Uuid,
+        peer: String,
+    },
     New {
         peer: String,
         peer_state: MemberState,
@@ -119,7 +122,10 @@ async fn find_dm(pg: &PgPool, key: &str) -> ChatResult<Option<Uuid>> {
 
 pub async fn plan_direct(pg: &PgPool, user: &str, peer: &str) -> ChatResult<DirectPlan> {
     if let Some(id) = find_dm(pg, &dm_key(user, peer)).await? {
-        return Ok(DirectPlan::Existing(id));
+        return Ok(DirectPlan::Existing {
+            id,
+            peer: peer.to_owned(),
+        });
     }
     let placed = contacts::placements(pg, user, &[peer.to_owned()])
         .await?
@@ -132,7 +138,7 @@ pub async fn plan_direct(pg: &PgPool, user: &str, peer: &str) -> ChatResult<Dire
     })
 }
 
-pub async fn reopen(pg: &PgPool, conversation: Uuid, user: &str) -> ChatResult<()> {
+pub async fn reopen(pg: &PgPool, conversation: Uuid, user: &str) -> ChatResult<bool> {
     let mut conn = pg.acquire().await?;
     members::activate(
         &mut conn,
@@ -140,13 +146,12 @@ pub async fn reopen(pg: &PgPool, conversation: Uuid, user: &str) -> ChatResult<(
         user,
         &[MemberState::Invited, MemberState::Left],
     )
-    .await?;
-    Ok(())
+    .await
 }
 
 pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Created> {
     let (peer, peer_state) = match plan {
-        DirectPlan::Existing(id) => return existing_direct(pg, id, user).await,
+        DirectPlan::Existing { id, peer } => return existing_direct(pg, id, user, peer).await,
         DirectPlan::New { peer, peer_state } => (peer, peer_state),
     };
     let key = dm_key(user, &peer);
@@ -166,7 +171,7 @@ pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Cre
         let id = find_dm(pg, &key)
             .await?
             .ok_or(ChatError::Busy { retry_ms: 200 })?;
-        return existing_direct(pg, id, user).await;
+        return existing_direct(pg, id, user, peer).await;
     }
     let joining = [
         Joining::creator(user, MemberRole::Member),
@@ -182,12 +187,15 @@ pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Cre
     })
 }
 
-async fn existing_direct(pg: &PgPool, id: Uuid, user: &str) -> ChatResult<Created> {
-    reopen(pg, id, user).await?;
+async fn existing_direct(pg: &PgPool, id: Uuid, user: &str, peer: String) -> ChatResult<Created> {
+    let mut recipients = vec![user.to_owned()];
+    if reopen(pg, id, user).await? {
+        recipients.push(peer);
+    }
     Ok(Created {
         id,
         rows: Vec::new(),
-        recipients: vec![user.to_owned()],
+        recipients,
     })
 }
 

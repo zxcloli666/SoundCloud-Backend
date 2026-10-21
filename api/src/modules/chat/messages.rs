@@ -93,11 +93,8 @@ pub async fn send(
     {
         return Err(ChatError::Unavailable);
     }
-    gate::request_room(&chat.pg, &access, outgoing.class).await?;
-    let target = match outgoing.target_seq {
-        Some(seq) => store::target(&chat.pg, conversation, seq).await?,
-        None => None,
-    };
+    gate::request_room(&chat.pg, &access, &outgoing).await?;
+    let target = store::visible_target(&chat.pg, &access, outgoing.target_seq).await?;
     let inherited =
         rules::inherited_expiry(outgoing.class, &caller.user_id, target.as_ref(), Utc::now())?;
     let row = store::store(&chat.pg, &access, device, &outgoing, inherited).await?;
@@ -130,6 +127,10 @@ pub async fn delete(
     }
     let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
     let rows = redact::for_everyone(&chat.pg, &access, seq).await?;
-    fanout::publish(&chat, &rows, &access.recipients).await?;
+    if rows.is_empty() {
+        fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?;
+    } else {
+        fanout::publish(&chat, &rows, &access.recipients).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }

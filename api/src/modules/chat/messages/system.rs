@@ -1,4 +1,5 @@
 use chat_wire::msg::Class;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -70,6 +71,16 @@ pub async fn insert(
     event: &SystemEvent,
     target_seq: Option<i64>,
 ) -> ChatResult<MessageRow> {
+    insert_until(conn, conversation, event, target_seq, None).await
+}
+
+pub async fn insert_until(
+    conn: &mut PgConnection,
+    conversation: Uuid,
+    event: &SystemEvent,
+    target_seq: Option<i64>,
+    expires_at: Option<DateTime<Utc>>,
+) -> ChatResult<MessageRow> {
     let body = serde_json::to_vec(event).map_err(|_| ChatError::Internal)?;
     let advanced = sqlx::query_file!("queries/chat/messages/advance_system.sql", conversation)
         .fetch_optional(&mut *conn)
@@ -86,7 +97,7 @@ pub async fn insert(
         target_seq,
         body: Some(body),
         created_at: advanced.at,
-        expires_at: None,
+        expires_at,
     };
     sqlx::query_file!(
         "queries/chat/messages/insert.sql",
