@@ -111,14 +111,13 @@ pub async fn link_create(
     State(chat): State<Arc<ChatState>>,
     ChatJson(body): ChatJson<LinkCreateBody>,
 ) -> AuthResult<LinkCreated> {
-    let created = match body.mode.as_str() {
-        "pull" => {
-            chat.link
-                .create_bound("pull", None, Some(&auth.bind))
-                .await?
-        }
-        mode => chat.link.create_bound(mode, auth.session_id, None).await?,
-    };
+    let source = auth.session_id.filter(|_| body.mode != "pull");
+    let created = chat
+        .link
+        .create_bound(&body.mode, source, Some(&auth.bind), |stored| {
+            auth.keys.owns(stored)
+        })
+        .await?;
     Ok(Json(LinkCreated {
         link_request_id: created.link_request_id,
         claim_token: created.claim_token,
@@ -134,7 +133,12 @@ pub async fn link_claim(
 ) -> AuthResult<LinkClaimed> {
     let claimed = chat
         .link
-        .claim_bound(&body.claim_token, auth.session_id, Some(&auth.bind))
+        .claim_bound(
+            &body.claim_token,
+            auth.session_id,
+            Some(&auth.bind),
+            |stored| auth.keys.owns(stored),
+        )
         .await?;
     Ok(Json(LinkClaimed {
         session_id: claimed.session_id,

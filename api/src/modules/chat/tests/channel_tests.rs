@@ -657,9 +657,9 @@ async fn a_sealed_relogin_targets_the_current_session(pool: PgPool) -> anyhow::R
 async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    let source = session_for(&pool, "4107", None).await?;
-    let chat = chat_state(pool.clone(), redis()?, true);
-    let app: Router = routes::public(chat.clone());
+    let holder = Device::new();
+    let source = session_for(&pool, "4107", Some(&holder)).await?;
+    let app: Router = routes::public(chat_state(pool.clone(), redis()?, true));
     let fresh = Device::new();
     let mut create = with_bind(call("POST", "/auth/link/create", ""), &fresh);
     create.body = br#"{"mode":"pull"}"#.to_vec();
@@ -681,7 +681,16 @@ async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
         .unwrap_or_default()
         .to_owned();
 
-    let claimed = chat.link.claim(&token, Some(source)).await?;
+    let mut claim = from_session(
+        with_bind(call("POST", "/auth/link/claim", ""), &holder),
+        source,
+    );
+    claim.body = json!({"claimToken": token}).to_string().into_bytes();
+    let (status, claimed) = exchange(&app, &seal(claim, &holder.seed)).await;
+    assert_eq!(status, 200, "{claimed}");
+    let target: Uuid = claimed["sessionId"].as_str().unwrap_or_default().parse()?;
+    assert_eq!(bound_keys(&pool, target).await?, Some(fresh.keys()));
+
     let poll = |device: &Device| {
         seal(
             with_bind(
@@ -694,7 +703,7 @@ async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
     let (status, mine) = exchange(&app, &poll(&fresh)).await;
     assert_eq!(status, 200, "{mine}");
     assert_eq!(mine["status"], "claimed");
-    assert_eq!(mine["sessionId"], claimed.session_id.to_string());
+    assert_eq!(mine["sessionId"], target.to_string());
 
     let (_, theirs) = exchange(&app, &poll(&Device::new())).await;
     assert_eq!(theirs["status"], "claimed");
@@ -702,32 +711,62 @@ async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_push_claim_binds_the_new_session_to_the_claiming_device(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let source = session_for(&pool, "4108", None).await?;
-    let chat = chat_state(pool.clone(), redis()?, true);
-    let app: Router = routes::public(chat.clone());
-    let created = chat.link.create("push", Some(source)).await?;
-    let fresh = Device::new();
-    let mut claim = with_bind(call("POST", "/auth/link/claim", ""), &fresh);
-    claim.body = json!({"claimToken": created.claim_token})
-        .to_string()
-        .into_bytes();
+fn from_session(mut inner: Inner, session: Uuid) -> Inner {
+    inner.session_id = Some(session.to_string());
+    inner
+}
 
-    let (status, claimed) = exchange(&app, &seal(claim, &fresh.seed)).await;
+async fn bound_keys(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<CallerBind>> {
+    let bound: Option<Vec<u8>> = sqlx::query_scalar("SELECT chat_bind FROM sessions WHERE id = $1")
+        .bind(session)
+        .fetch_one(pool)
+        .await?;
+    Ok(bound.as_deref().and_then(CallerBind::decode))
+}
+
+async fn push_claimed(app: &Router, token: &str, fresh: &Device) -> anyhow::Result<Uuid> {
+    let mut claim = with_bind(call("POST", "/auth/link/claim", ""), fresh);
+    claim.body = json!({"claimToken": token}).to_string().into_bytes();
+    let (status, claimed) = exchange(app, &seal(claim, &fresh.seed)).await;
     assert_eq!(status, 200, "{claimed}");
     assert_eq!(claimed["mode"], "push");
-    let target: Uuid = claimed["sessionId"].as_str().unwrap_or_default().parse()?;
-    let bound: Option<Vec<u8>> = sqlx::query_scalar("SELECT chat_bind FROM sessions WHERE id = $1")
-        .bind(target)
-        .fetch_one(&pool)
-        .await?;
-    assert_eq!(
-        bound.as_deref().and_then(CallerBind::decode),
-        Some(fresh.keys())
-    );
+    Ok(claimed["sessionId"].as_str().unwrap_or_default().parse()?)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_sealed_push_link_binds_the_new_session_only_when_the_bound_source_made_it(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let holder = Device::new();
+    let source = session_for(&pool, "4108", Some(&holder)).await?;
+    let chat = chat_state(pool.clone(), redis()?, true);
+    let app: Router = routes::public(chat.clone());
+    let push_from = |signer: &Device| {
+        let mut create = from_session(
+            with_bind(call("POST", "/auth/link/create", ""), signer),
+            source,
+        );
+        create.body = br#"{"mode":"push"}"#.to_vec();
+        seal(create, &signer.seed)
+    };
+
+    let (status, created) = exchange(&app, &push_from(&holder)).await;
+    assert_eq!(status, 200, "{created}");
+    let token = created["claimToken"].as_str().unwrap_or_default();
+    let fresh = Device::new();
+    let target = push_claimed(&app, token, &fresh).await?;
+    assert_eq!(bound_keys(&pool, target).await?, Some(fresh.keys()));
+
+    let thief = Device::new();
+    let (status, stolen) = exchange(&app, &push_from(&thief)).await;
+    assert_eq!(status, 200, "{stolen}");
+    let token = stolen["claimToken"].as_str().unwrap_or_default();
+    let target = push_claimed(&app, token, &thief).await?;
+    assert_eq!(bound_keys(&pool, target).await?, None);
+
+    let plain = chat.link.create("push", Some(source)).await?;
+    let target = push_claimed(&app, &plain.claim_token, &thief).await?;
+    assert_eq!(bound_keys(&pool, target).await?, None);
     Ok(())
 }

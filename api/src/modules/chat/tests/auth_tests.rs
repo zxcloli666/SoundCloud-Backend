@@ -271,16 +271,32 @@ async fn a_plain_login_still_works_unchanged(pool: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
+async fn bound_of(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<Vec<u8>>> {
+    Ok(session_state(pool, session).await?.1)
+}
+
 #[sqlx::test(migrations = "./migrations")]
-async fn a_pull_link_gives_the_new_session_the_bind_of_the_device_that_asked(
+async fn a_pull_link_claimed_by_the_bound_source_gives_the_new_session_the_asking_bind(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let chat = state(&pool)?;
-    let source = session_for(&pool, "5106", Some(&bind())).await?;
+    let source_bind = bind();
+    let source = session_for(&pool, "5106", Some(&source_bind)).await?;
     let fresh = bind();
-    let created = chat.link.create_bound("pull", None, Some(&fresh)).await?;
+    let created = chat
+        .link
+        .create_bound("pull", None, Some(&fresh), |_| false)
+        .await?;
 
-    let claimed = chat.link.claim(&created.claim_token, Some(source)).await?;
+    let claimed = chat
+        .link
+        .claim_bound(
+            &created.claim_token,
+            Some(source),
+            Some(&source_bind),
+            owns(&source_bind),
+        )
+        .await?;
 
     assert_eq!(
         session_state(&pool, claimed.session_id).await?,
@@ -297,7 +313,48 @@ async fn a_pull_link_gives_the_new_session_the_bind_of_the_device_that_asked(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_push_link_gives_the_new_session_the_bind_of_the_claiming_device(
+async fn a_pull_link_claimed_by_a_session_id_alone_leaves_the_new_session_unbound(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let chat = state(&pool)?;
+    let source_bind = bind();
+    let source = session_for(&pool, "5109", Some(&source_bind)).await?;
+    let thief = bind();
+    let fresh = bind();
+
+    let plain = chat
+        .link
+        .create_bound("pull", None, Some(&fresh), |_| false)
+        .await?;
+    let claimed = chat.link.claim(&plain.claim_token, Some(source)).await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
+    let mine = chat
+        .link
+        .get_status_for(plain.link_request_id, owns(&fresh))
+        .await?;
+    assert_eq!(mine.session_id, Some(claimed.session_id));
+    let theirs = chat.link.get_status(plain.link_request_id).await?;
+    assert_eq!(theirs.session_id, None);
+
+    let forged = chat
+        .link
+        .create_bound("pull", None, Some(&fresh), |_| false)
+        .await?;
+    let claimed = chat
+        .link
+        .claim_bound(
+            &forged.claim_token,
+            Some(source),
+            Some(&thief),
+            owns(&thief),
+        )
+        .await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_push_link_from_the_bound_source_gives_the_new_session_the_claiming_bind(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let chat = state(&pool)?;
@@ -305,26 +362,20 @@ async fn a_push_link_gives_the_new_session_the_bind_of_the_claiming_device(
     let source = session_for(&pool, "5107", Some(&source_bind)).await?;
     let created = chat
         .link
-        .create_bound("push", Some(source), Some(&source_bind))
+        .create_bound("push", Some(source), Some(&source_bind), owns(&source_bind))
         .await?;
     let fresh = bind();
 
     let claimed = chat
         .link
-        .claim_bound(&created.claim_token, None, Some(&fresh))
+        .claim_bound(&created.claim_token, None, Some(&fresh), owns(&fresh))
         .await?;
 
     assert_eq!(claimed.mode, "push");
     assert_eq!(
         session_state(&pool, claimed.session_id).await?,
-        ("5107".to_owned(), Some(fresh.clone()))
+        ("5107".to_owned(), Some(fresh))
     );
-    let recorded: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT chat_bind FROM link_requests WHERE id = $1")
-            .bind(created.link_request_id)
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(recorded, Some(fresh));
     let status = chat.link.get_status(created.link_request_id).await?;
     assert_eq!(
         (status.status.as_str(), status.session_id),
@@ -334,16 +385,62 @@ async fn a_push_link_gives_the_new_session_the_bind_of_the_claiming_device(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_plain_push_claim_leaves_the_new_session_unbound(pool: PgPool) -> anyhow::Result<()> {
+async fn a_push_link_from_a_session_id_alone_leaves_the_new_session_unbound(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let chat = state(&pool)?;
-    let source = session_for(&pool, "5108", Some(&bind())).await?;
-    let created = chat.link.create("push", Some(source)).await?;
+    let source_bind = bind();
+    let source = session_for(&pool, "5108", Some(&source_bind)).await?;
+    let thief = bind();
 
-    let claimed = chat.link.claim(&created.claim_token, None).await?;
+    let plain = chat.link.create("push", Some(source)).await?;
+    let claimed = chat
+        .link
+        .claim_bound(&plain.claim_token, None, Some(&thief), owns(&thief))
+        .await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
 
-    assert_eq!(
-        session_state(&pool, claimed.session_id).await?,
-        ("5108".to_owned(), None)
-    );
+    let forged = chat
+        .link
+        .create_bound("push", Some(source), Some(&thief), owns(&thief))
+        .await?;
+    let claimed = chat
+        .link
+        .claim_bound(&forged.claim_token, None, Some(&thief), owns(&thief))
+        .await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
+
+    let proven = chat
+        .link
+        .create_bound("push", Some(source), Some(&source_bind), owns(&source_bind))
+        .await?;
+    let claimed = chat.link.claim(&proven.claim_token, None).await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_push_link_is_not_bound_once_the_source_was_bound_again(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let chat = state(&pool)?;
+    let source_bind = bind();
+    let source = session_for(&pool, "5110", Some(&source_bind)).await?;
+    let created = chat
+        .link
+        .create_bound("push", Some(source), Some(&source_bind), owns(&source_bind))
+        .await?;
+    sqlx::query("UPDATE sessions SET chat_bind = $2 WHERE id = $1")
+        .bind(source)
+        .bind(bind())
+        .execute(&pool)
+        .await?;
+    let fresh = bind();
+
+    let claimed = chat
+        .link
+        .claim_bound(&created.claim_token, None, Some(&fresh), owns(&fresh))
+        .await?;
+    assert_eq!(bound_of(&pool, claimed.session_id).await?, None);
     Ok(())
 }

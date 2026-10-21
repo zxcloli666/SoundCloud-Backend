@@ -46,17 +46,18 @@ impl LinkService {
         mode: &str,
         source_session_id: Option<Uuid>,
     ) -> AppResult<CreateLinkResult> {
-        self.create_bound(mode, source_session_id, None).await
+        self.create_bound(mode, source_session_id, None, |_| false)
+            .await
     }
 
     pub async fn create_bound(
         &self,
         mode: &str,
         source_session_id: Option<Uuid>,
-        chat_bind: Option<&[u8]>,
+        caller_bind: Option<&[u8]>,
+        owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<CreateLinkResult> {
         validate_mode(mode, source_session_id)?;
-        let chat_bind = chat_bind.filter(|_| mode == "pull");
         if let Some(session_id) = source_session_id {
             let session = self
                 .auth
@@ -67,6 +68,11 @@ impl LinkService {
                 return Err(AppError::soundcloud_reauthorization_required());
             }
         }
+        let chat_bind = match (mode, caller_bind) {
+            (_, None) => None,
+            ("pull", Some(bind)) => Some(bind.to_vec()),
+            (_, Some(_)) => self.source_proof(source_session_id, owns_bind).await?,
+        };
 
         let mut bytes = [0; 24];
         rand::thread_rng().fill_bytes(&mut bytes);
@@ -98,14 +104,16 @@ impl LinkService {
         claim_token: &str,
         caller_session_id: Option<Uuid>,
     ) -> AppResult<ClaimResult> {
-        self.claim_bound(claim_token, caller_session_id, None).await
+        self.claim_bound(claim_token, caller_session_id, None, |_| false)
+            .await
     }
 
     pub async fn claim_bound(
         &self,
         claim_token: &str,
         caller_session_id: Option<Uuid>,
-        claim_bind: Option<&[u8]>,
+        caller_bind: Option<&[u8]>,
+        owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<ClaimResult> {
         let mut transaction = self.pool.begin().await?;
         let link = sqlx::query_file_as!(
@@ -147,12 +155,17 @@ impl LinkService {
         let connection_id = source
             .soundcloud_connection_id
             .ok_or_else(AppError::soundcloud_reauthorization_required)?;
-        let target_bind = match link.mode.as_str() {
-            "pull" => sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link.id)
+        let link_bind =
+            sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link.id)
                 .fetch_optional(&mut *transaction)
                 .await?
-                .flatten(),
-            _ => claim_bind.map(<[u8]>::to_vec),
+                .flatten();
+        let source_bind = source.chat_bind.as_deref();
+        let target_bind = match link.mode.as_str() {
+            "pull" => link_bind.filter(|_| source_bind.is_some_and(&owns_bind)),
+            _ => caller_bind
+                .filter(|_| link_bind.is_some() && link_bind.as_deref() == source_bind)
+                .map(<[u8]>::to_vec),
         };
 
         let target_session_id = Uuid::new_v4();
@@ -168,8 +181,7 @@ impl LinkService {
             "queries/auth/link_service/mark_claimed.sql",
             link.id,
             source_session_id,
-            target_session_id,
-            target_bind.as_deref()
+            target_session_id
         )
         .execute(&mut *transaction)
         .await?;
@@ -244,6 +256,22 @@ impl LinkService {
                 .await?
                 .flatten();
         Ok(chat_bind.as_deref().is_none_or(owns_bind))
+    }
+
+    async fn source_proof(
+        &self,
+        source_session_id: Option<Uuid>,
+        owns_bind: impl Fn(&[u8]) -> bool,
+    ) -> AppResult<Option<Vec<u8>>> {
+        let Some(session_id) = source_session_id else {
+            return Ok(None);
+        };
+        let stored =
+            sqlx::query_file_scalar!("queries/auth/link_service/session_bind.sql", session_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        Ok(stored.filter(|bind| owns_bind(bind)))
     }
 }
 
