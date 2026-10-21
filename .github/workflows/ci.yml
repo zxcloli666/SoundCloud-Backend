@@ -128,6 +128,7 @@ jobs:
           cargo test --manifest-path ../utils/redact/Cargo.toml --all-targets --locked
           cargo test --all-targets --locked
           cargo test --locked common::admission::tests -- --ignored
+          cargo test --bin api --locked rooms -- --ignored
           cargo test --bin api --locked recommendations::service::qdrant_io::live_tests -- --ignored --test-threads=1
 
       - name: Clippy
