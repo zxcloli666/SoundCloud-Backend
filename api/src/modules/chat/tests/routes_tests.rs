@@ -109,8 +109,11 @@ async fn answer(
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
-fn filled_by_a_lane(uri: &str) -> bool {
-    uri == "/chat/sync" || uri.ends_with("/typing")
+fn still_stubbed(uri: &str) -> bool {
+    !uri.starts_with("/chat/devices")
+        && !uri.contains("/keys")
+        && uri != "/chat/sync"
+        && !uri.ends_with("/typing")
 }
 
 #[tokio::test]
@@ -118,7 +121,7 @@ async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
     let router = inner().with_state(offline_chat_state(true));
     for (method, uri) in inner_routes()
         .into_iter()
-        .filter(|(_, uri)| !filled_by_a_lane(uri))
+        .filter(|(_, uri)| still_stubbed(uri))
     {
         assert_eq!(
             answer(&router, method, &uri, true).await,

@@ -68,3 +68,11 @@ pub async fn suggest(
 pub async fn chat_of_room(_chat: &ChatState, _code: &str) -> ChatResult<Option<Uuid>> {
     Err(ChatError::Unimplemented)
 }
+
+pub async fn member_from_seq(
+    _chat: &ChatState,
+    _conversation: Uuid,
+    _user_id: &str,
+) -> ChatResult<Option<i64>> {
+    Err(ChatError::Unimplemented)
+}
