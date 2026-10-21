@@ -59,7 +59,7 @@ migrate() {
 }
 
 start_containers() {
-  podman rm -f "${CONTAINERS[@]}" > /dev/null 2>&1 || true
+  podman rm -f -v "${CONTAINERS[@]}" > /dev/null 2>&1 || true
   podman run -d --name chat-it-redis-rt -p "127.0.0.1:$REDIS_RT_PORT:6379" "$REDIS_IMAGE" redis-server --save '' --appendonly no > /dev/null
   podman run -d --name chat-it-redis -p "127.0.0.1:$REDIS_PORT:6379" "$REDIS_IMAGE" redis-server --save '' --appendonly no > /dev/null
   podman run -d --name chat-it-ai -p "127.0.0.1:$AI_PORT:8080" \
@@ -134,7 +134,7 @@ case "${1:-}" in
     ;;
   down)
     stop_api
-    podman rm -f "${CONTAINERS[@]}" > /dev/null 2>&1 || true
+    podman rm -f -v "${CONTAINERS[@]}" > /dev/null 2>&1 || true
     psql_in -d postgres -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" < /dev/null || true
     rm -rf "$STATE"
     ;;
