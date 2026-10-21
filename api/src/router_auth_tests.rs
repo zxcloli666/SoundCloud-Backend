@@ -150,6 +150,7 @@ fn guards(signature: &str) -> bool {
         || signature.contains("RawSessionIdHeader")
         || signature.contains("ChatCaller")
         || signature.contains("ChatAdmin")
+        || signature.contains("MetricsReader")
 }
 
 fn resolve<'a>(sources: &'a [(String, String)], file: &str, reference: &str) -> Option<&'a str> {
