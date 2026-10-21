@@ -79,6 +79,7 @@ async fn main() {
     tls_common::init_crypto();
 
     telemetry::init();
+
     metrics::init();
 
     let config = Arc::new(AppConfig::from_env());
