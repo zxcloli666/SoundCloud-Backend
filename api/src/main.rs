@@ -77,6 +77,7 @@ use crate::state::AppState;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     tls_common::init_crypto();
+
     telemetry::init();
     metrics::init();
 
