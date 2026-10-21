@@ -134,6 +134,7 @@ jobs:
           cargo test --bin api --locked -- --ignored modules::chat::messages::fanout::tests modules::chat::conversations::route_tests::wired
           cargo test --bin api --locked -- --ignored modules::chat::limits::tests modules::chat::moderation::tests modules::chat::reports::tests modules::chat::admin::tests
           cargo test --bin api --locked modules::chat::sync::tests -- --ignored --skip soak_tests
+          cargo test --bin api --locked modules::chat::synthetic::tests -- --ignored
           cargo test --bin api --locked recommendations::service::qdrant_io::live_tests -- --ignored --test-threads=1
 
       - name: Clippy
@@ -321,3 +322,27 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --manifest-path utils/chat-wire/Cargo.toml --all-targets --locked -- -D warnings
+
+  chat-load:
+    name: Chat load harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: scripts/chat-load -> target
+          key: chat-load
+
+      - name: Format
+        run: cargo fmt --manifest-path scripts/chat-load/Cargo.toml --check
+
+      - name: Tests
+        run: cargo test --manifest-path scripts/chat-load/Cargo.toml --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --manifest-path scripts/chat-load/Cargo.toml --all-targets --locked -- -D warnings
