@@ -44,7 +44,7 @@ pub enum RecommendedAction {
 
 impl Verdict {
     pub fn parse(raw: &str) -> Option<Self> {
-        let verdict: Verdict = serde_json::from_str(raw.trim()).ok()?;
+        let verdict: Verdict = serde_json::from_str(unfenced(raw.trim())).ok()?;
         verdict.well_formed().then_some(verdict)
     }
 
@@ -55,6 +55,17 @@ impl Verdict {
             && self.rationale.chars().count() <= RATIONALE_CHARS_MAX
             && !(self.genuine && self.category == Category::None)
     }
+}
+
+fn unfenced(raw: &str) -> &str {
+    let Some(opened) = raw.strip_prefix("```") else {
+        return raw;
+    };
+    let opened = opened.strip_prefix("json").unwrap_or(opened);
+    if !opened.starts_with(['\n', '\r']) {
+        return raw;
+    }
+    opened.strip_suffix("```").map_or(raw, str::trim)
 }
 
 pub fn schema() -> Value {

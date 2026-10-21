@@ -66,7 +66,10 @@ class Handler(BaseHTTPRequestHandler):
         if not schema.get("strict"):
             return self.answer(400, {"error": "strict json schema expected"})
         prompt = request["messages"][-1]["content"]
-        content = json.dumps(judge(prompt))
+        verdict = judge(prompt)
+        content = json.dumps(verdict)
+        if verdict["genuine"]:
+            content = f"```json\n{content}\n```"
         self.answer(
             200,
             {

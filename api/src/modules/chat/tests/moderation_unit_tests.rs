@@ -144,8 +144,14 @@ fn only_a_strict_verdict_counts() {
     let good = r#"{"genuine":true,"category":"spam","severity":"low","recommended_action":"delete","confidence":0.9,"quote_seq":[3],"rationale":"ad"}"#;
     assert!(Verdict::parse(good).is_some());
     assert!(Verdict::parse(&format!("  {good}\n")).is_some());
+    assert!(Verdict::parse(&format!("```json\n{good}\n```")).is_some());
+    assert!(Verdict::parse(&format!("```\r\n{good}\r\n```\n")).is_some());
     for broken in [
-        format!("```json\n{good}\n```"),
+        format!("```json\n{good}"),
+        format!("```json\n{good}\n```\nThe report is genuine."),
+        format!("Here it is:\n```json\n{good}\n```"),
+        format!("```json {good} ```"),
+        format!("```json\n```json\n{good}\n```\n```"),
         good.replace("\"rationale\":\"ad\"", "\"rationale\":\"ad\",\"extra\":1"),
         good.replace("0.9", "1.5"),
         good.replace("\"spam\"", "\"politics\""),
