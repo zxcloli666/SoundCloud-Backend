@@ -227,6 +227,15 @@ fn room_refusals_become_chat_errors() {
         ChatError::Busy { retry_ms: 500 }
     );
     assert_eq!(refusal(AppError::internal("x")), ChatError::Internal);
+    let mut room = room();
+    for id in ["2", "3"] {
+        room.set_moderator("1", id, true).unwrap();
+    }
+    room.join(member("5", 50)).unwrap();
+    room.set_moderator("1", "5", true).unwrap();
+    room.join(member("6", 60)).unwrap();
+    let full = room.set_moderator("1", "6", true).unwrap_err();
+    assert_eq!(refusal(full), ChatError::Invalid);
 }
 
 fn someone() -> String {

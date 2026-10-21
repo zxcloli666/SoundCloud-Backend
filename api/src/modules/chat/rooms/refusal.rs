@@ -6,14 +6,16 @@ use crate::modules::chat::ChatError;
 const RETRY_MS: u64 = 500;
 
 pub fn refusal(error: AppError) -> ChatError {
-    if matches!(
-        error,
+    match error {
         AppError::Coded {
             code: "room_not_member",
             ..
-        }
-    ) {
-        return ChatError::NotMember;
+        } => return ChatError::NotMember,
+        AppError::Coded {
+            code: "room_moderators_full",
+            ..
+        } => return ChatError::Invalid,
+        _ => {}
     }
     match error.status() {
         StatusCode::NOT_FOUND => ChatError::NotFound,
