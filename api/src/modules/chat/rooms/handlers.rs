@@ -3,8 +3,9 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
 
 use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
 use crate::modules::chat::limits::{self, Bucket};
@@ -12,6 +13,7 @@ use crate::modules::chat::rooms::system::SuggestedTrack;
 use crate::modules::chat::rooms::{bridge, refusal, suggest::suggest_track};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 use crate::modules::rooms::model::{SettingsPatch, normalize_code};
+use crate::modules::rooms::service::{RoomPreview, RoomView};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct KickQuery {
@@ -34,21 +36,21 @@ pub struct SuggestBody {
     pub track: Value,
 }
 
-fn code_of(raw: &str) -> ChatResult<String> {
-    normalize_code(raw).ok_or(ChatError::NotFound)
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RoomChatView {
+    pub conversation_id: Uuid,
+    pub from_seq: i64,
 }
 
-fn as_json<T: serde::Serialize>(value: &T) -> ChatResult<Json<Value>> {
-    serde_json::to_value(value)
-        .map(Json)
-        .map_err(|_| ChatError::Internal)
+fn code_of(raw: &str) -> ChatResult<String> {
+    normalize_code(raw).ok_or(ChatError::NotFound)
 }
 
 pub async fn chat(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
     ChatPath(code): ChatPath<String>,
-) -> ChatResult<Json<Value>> {
+) -> ChatResult<Json<RoomChatView>> {
     let code = code_of(&code)?;
     let opened = chat
         .rooms
@@ -56,17 +58,17 @@ pub async fn chat(
         .await
         .map_err(refusal)?;
     bridge::ensure_conversation(&chat, &opened).await?;
-    Ok(Json(json!({
-        "conversation_id": opened.conversation_id,
-        "from_seq": opened.from_seq,
-    })))
+    Ok(Json(RoomChatView {
+        conversation_id: opened.conversation_id,
+        from_seq: opened.from_seq,
+    }))
 }
 
 pub async fn preview(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
     ChatPath(code): ChatPath<String>,
-) -> ChatResult<Json<Value>> {
+) -> ChatResult<Json<RoomPreview>> {
     let code = code_of(&code)?;
     limits::admit(&chat, Bucket::Preview, &caller.user_id).await?;
     let preview = chat
@@ -75,7 +77,7 @@ pub async fn preview(
         .await
         .map_err(refusal)?
         .ok_or(ChatError::NotFound)?;
-    as_json(preview.as_ref())
+    Ok(Json(preview.as_ref().clone()))
 }
 
 pub async fn remove_member(
@@ -122,13 +124,13 @@ pub async fn settings(
     State(chat): State<Arc<ChatState>>,
     ChatPath(code): ChatPath<String>,
     ChatJson(patch): ChatJson<SettingsPatch>,
-) -> ChatResult<Json<Value>> {
+) -> ChatResult<Json<RoomView>> {
     let view = chat
         .rooms
         .configure(&code_of(&code)?, &caller.user_id, &patch)
         .await
         .map_err(refusal)?;
-    as_json(&view)
+    Ok(Json(view))
 }
 
 pub async fn suggest(

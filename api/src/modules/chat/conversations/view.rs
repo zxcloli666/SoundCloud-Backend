@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::modules::chat::conversations::keys::peer_of;
+use crate::modules::chat::members::access::GroupSettings;
 use crate::modules::chat::{ChatError, ChatResult};
 
 const PAGE_FRAME: usize = r#"{"items":[],"next_cursor":""}"#.len() + UUID_TEXT_LEN;
@@ -53,7 +54,7 @@ pub struct ConversationView {
     #[serde(with = "crate::modules::chat::b64::option")]
     pub meta_ct: Option<Vec<u8>>,
     pub meta_epoch: Option<i32>,
-    pub settings: Value,
+    pub settings: GroupSettings,
     pub member_count: i32,
     pub ttl_s: Option<i32>,
     pub room_ref: Option<String>,
@@ -98,7 +99,7 @@ impl ListedRow {
             key_epoch: self.key_epoch,
             meta_ct: self.meta_ct,
             meta_epoch: self.meta_epoch,
-            settings: self.settings,
+            settings: GroupSettings::of(&self.settings),
             member_count: self.member_count,
             ttl_s: self.ttl_s,
             room_ref: self.room_ref,

@@ -249,6 +249,10 @@ mod wired {
         assert_eq!(view["ttl_s"], 86_400);
         assert_eq!(view["peer"], "202");
         assert_eq!(view["me"]["state"], "active");
+        assert_eq!(
+            view["settings"],
+            json!({"admins_only": false, "history_visible": true})
+        );
         Ok(())
     }
 
