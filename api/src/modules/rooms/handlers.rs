@@ -57,6 +57,8 @@ struct CreateBody {
     profile: Profile,
     #[serde(default)]
     public: bool,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,7 +85,14 @@ async fn create(
 ) -> AppResult<(StatusCode, Json<RoomView>)> {
     admit(&admission, &ctx, Endpoint::RoomCreate).await?;
     let profile = account_profile(&pg, &ctx.sc_user_id, body.profile).await?;
-    let room = rooms.create(&ctx.sc_user_id, &profile, body.public).await?;
+    let room = rooms
+        .create(
+            &ctx.sc_user_id,
+            &profile,
+            body.public,
+            body.title.as_deref(),
+        )
+        .await?;
     Ok((StatusCode::CREATED, Json(room)))
 }
 
@@ -112,7 +121,9 @@ async fn join(
     let code = code_of(&code)?;
     admit(&admission, &ctx, Endpoint::RoomJoin).await?;
     let profile = account_profile(&pg, &ctx.sc_user_id, profile).await?;
-    Ok(Json(rooms.join(&code, &ctx.sc_user_id, &profile).await?))
+    Ok(Json(
+        rooms.join(&code, &ctx.sc_user_id, &profile, &pg).await?,
+    ))
 }
 
 async fn leave(
@@ -163,6 +174,7 @@ async fn list_public(
     let collection: Vec<&PublicRoom> = listed
         .iter()
         .filter(|room| room.host_id != ctx.sc_user_id && !blocked.contains(&room.host_id))
+        .filter(|room| !room.banned.contains(&ctx.sc_user_id))
         .collect();
     Ok(Json(json!({ "collection": collection })))
 }
@@ -179,7 +191,7 @@ async fn join_public(
     let profile = account_profile(&pg, &ctx.sc_user_id, profile).await?;
     Ok(Json(
         rooms
-            .join_public(&host_id, &ctx.sc_user_id, &profile)
+            .join_public(&host_id, &ctx.sc_user_id, &profile, &pg)
             .await?,
     ))
 }

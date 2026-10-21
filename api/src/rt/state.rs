@@ -92,6 +92,7 @@ pub async fn build(config: &RtConfig) -> RtState {
         pg: chat_pg,
         redis: redis_rt,
     });
+    rooms.install_chat(&chat);
 
     RtState {
         pg,
