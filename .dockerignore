@@ -7,4 +7,9 @@
 !**/.env.example
 **/__pycache__
 **/*.pyc
+**/*.iml
+**/*.md
 _internal
+backend-contracts/Cargo.lock
+utils/*/Cargo.lock
+utils/*/tests

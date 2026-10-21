@@ -1,18 +1,35 @@
-FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:5c1a1732ac3f77635b24d397ceb67b4d9ea61de348f68c0aa54a79fd01e65c69 AS builder
+FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:5c1a1732ac3f77635b24d397ceb67b4d9ea61de348f68c0aa54a79fd01e65c69 AS toolchain
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
 
-COPY --from=tls-common . /build/utils/tls-common
-COPY --from=sc-fingerprint . /build/utils/sc-fingerprint
-COPY --from=entity-ref . /build/utils/entity-ref
+FROM scratch AS sources
+COPY scripts/cargo-skeleton.sh /scripts/cargo-skeleton.sh
+COPY utils/entity-ref /utils/entity-ref
+COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/tls-common /utils/tls-common
+COPY storage/Cargo.toml storage/Cargo.lock /storage/
+COPY storage/src /storage/src
 
-WORKDIR /build/storage
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main(){}" > src/main.rs && cargo build --release && rm -rf src
+FROM toolchain AS skeleton
+COPY --from=sources / ./
+RUN sh scripts/cargo-skeleton.sh /skeleton storage utils
 
-COPY src ./src
-RUN touch src/main.rs && cargo build --release
+FROM toolchain AS public
+COPY --from=skeleton /skeleton ./
+RUN cargo build --release --manifest-path storage/Cargo.toml
+
+FROM public AS own
+COPY --from=sources /utils ./utils
+RUN find utils -type f -exec touch {} + \
+    && cargo build --release --manifest-path storage/Cargo.toml
+
+FROM own AS app
+COPY --from=sources /storage/Cargo.toml ./storage/Cargo.toml
+COPY --from=sources /storage/src ./storage/src
+RUN find storage -type f -not -path 'storage/target/*' -exec touch {} + \
+    && cargo build --release --manifest-path storage/Cargo.toml
 
 FROM mirror.gcr.io/library/debian:bookworm-slim
 
@@ -22,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/storage/target/release/storage /usr/local/bin/storage
+COPY --from=app /build/storage/target/release/storage /usr/local/bin/storage
 
 ENV PORT=3000 \
     ADMIN_TOKEN="" \

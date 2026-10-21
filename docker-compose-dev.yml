@@ -187,15 +187,8 @@ services:
 
   streaming:
     build:
-      context: ./streaming
-      additional_contexts:
-        tls-common: ./utils/tls-common
-        sc-fingerprint: ./utils/sc-fingerprint
-        call: ./utils/call
-        decrypt: ./utils/decrypt
-        decrypt-client: ./utils/decrypt-client
-        stream-ticket: ./utils/stream-ticket
-        entity-ref: ./utils/entity-ref
+      context: .
+      dockerfile: streaming/Dockerfile
     restart: unless-stopped
     stop_grace_period: 3s
     ports:
@@ -224,11 +217,8 @@ services:
 
   storage:
     build:
-      context: ./storage
-      additional_contexts:
-        tls-common: ./utils/tls-common
-        sc-fingerprint: ./utils/sc-fingerprint
-        entity-ref: ./utils/entity-ref
+      context: .
+      dockerfile: storage/Dockerfile
     restart: unless-stopped
     stop_grace_period: 3s
     ports:

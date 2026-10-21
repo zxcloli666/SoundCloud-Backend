@@ -11,26 +11,47 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 
-FROM toolchain AS skeleton
-COPY scripts/cargo-skeleton.sh /usr/local/bin/cargo-skeleton
-COPY backend-contracts ./backend-contracts
-COPY utils ./utils
-COPY jobs ./jobs
-RUN cargo-skeleton /skeleton jobs backend-contracts utils
+FROM scratch AS sources
+COPY scripts/cargo-skeleton.sh /scripts/cargo-skeleton.sh
+COPY backend-contracts /backend-contracts
+COPY utils/call /utils/call
+COPY utils/catalog-ingest /utils/catalog-ingest
+COPY utils/catalog-match /utils/catalog-match
+COPY utils/catalog-normalize /utils/catalog-normalize
+COPY utils/catalog-sources /utils/catalog-sources
+COPY utils/entity-ref /utils/entity-ref
+COPY utils/redact /utils/redact
+COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/sc-transport /utils/sc-transport
+COPY utils/tls-common /utils/tls-common
+COPY jobs/Cargo.toml jobs/Cargo.lock /jobs/
+COPY jobs/src /jobs/src
+COPY jobs/queries /jobs/queries
+COPY api/migrations /api/migrations
+COPY api/migrations-ops /api/migrations-ops
+COPY api/queries /api/queries
 
-FROM toolchain AS dependencies
+FROM toolchain AS skeleton
+COPY --from=sources / ./
+RUN sh scripts/cargo-skeleton.sh /skeleton jobs backend-contracts utils
+
+FROM toolchain AS public
 COPY --from=skeleton /skeleton ./
 RUN cargo build --release --manifest-path jobs/Cargo.toml
 
-FROM dependencies AS builder
-COPY backend-contracts ./backend-contracts
-COPY utils ./utils
-COPY jobs ./jobs
-COPY api/migrations ./api/migrations
-COPY api/migrations-ops ./api/migrations-ops
-COPY api/queries ./api/queries
+FROM public AS own
+COPY --from=sources /backend-contracts ./backend-contracts
+COPY --from=sources /utils ./utils
+RUN find backend-contracts utils -type f -exec touch {} + \
+    && cargo build --release --manifest-path jobs/Cargo.toml
+
+FROM own AS app
+COPY --from=sources /jobs/Cargo.toml ./jobs/Cargo.toml
+COPY --from=sources /jobs/src ./jobs/src
+COPY --from=sources /jobs/queries ./jobs/queries
+COPY --from=sources /api ./api
 ARG APP_VERSION
-RUN find jobs backend-contracts utils -name '*.rs' -not -path '*/target/*' -exec touch {} + \
+RUN find jobs api -type f -not -path 'jobs/target/*' -exec touch {} + \
     && pg_ctlcluster "$(ls /etc/postgresql)" main start \
     && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
     && su postgres -c "createdb -O scd scd" \
@@ -46,8 +67,8 @@ RUN apt-get update \
     && useradd --system --uid 10001 --create-home jobs \
     && install -d -o jobs -g jobs -m 0750 /snapshots
 
-COPY --from=builder /build/jobs/target/release/jobs /usr/local/bin/jobs
-COPY --from=builder /build/jobs/target/release/migrate /usr/local/bin/migrate
+COPY --from=app /build/jobs/target/release/jobs /usr/local/bin/jobs
+COPY --from=app /build/jobs/target/release/migrate /usr/local/bin/migrate
 
 USER jobs
 EXPOSE 3001
