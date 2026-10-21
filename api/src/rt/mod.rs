@@ -14,6 +14,7 @@ pub async fn run() {
     info!(port = config.port, "chat-api starting");
     let state = state::build(&config).await;
     chat::sweeps::spawn(state.chat.clone());
+    tokio::spawn(chat::moderation::task::run(state.chat.clone()));
     let shutdown = state.chat.shutdown.clone();
     let draining = shutdown.clone();
     tokio::spawn(async move {
