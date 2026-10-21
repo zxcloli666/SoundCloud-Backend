@@ -81,7 +81,8 @@ pub async fn messages_gone(
     deltas(chat, None, &members, recipients).await
 }
 
-pub async fn devices_revoked(chat: &ChatState, user_id: &str, _ids: &[Uuid]) -> ChatResult<()> {
+pub async fn devices_revoked(chat: &ChatState, user_id: &str, ids: &[Uuid]) -> ChatResult<()> {
+    chat.devices.forget(user_id, ids);
     let members = [DEVICES_CHANGE.to_owned()];
     deltas(chat, None, &members, &[user_id.to_owned()]).await
 }

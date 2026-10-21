@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::support::{conversation, deltas, member, ok, state, user};
+use crate::modules::chat::devices::lookup;
 use crate::modules::chat::sweeps::devices;
 
 async fn session(pg: &PgPool, user: &str) -> anyhow::Result<Uuid> {
@@ -65,8 +66,14 @@ async fn devices_whose_session_is_gone_for_an_hour_are_revoked(pg: PgPool) -> an
     let group = conversation(&pg, "group", &owner).await?;
     member(&pg, group, &owner, "active").await?;
 
+    let cached = ok(lookup(&chat, stale).await)?.expect("a device row");
+    assert_eq!(cached.status, "active");
+
     assert_eq!(ok(devices::run_once(&chat).await)?, 1);
 
+    assert!(chat.devices.row(stale).is_none(), "the cache forgets it");
+    let fresh = ok(lookup(&chat, stale).await)?.expect("a device row");
+    assert_eq!(fresh.status, "revoked");
     assert_eq!(status(&pg, stale).await?, ("revoked".to_owned(), true));
     for kept in [recent, signed_in, load_test] {
         assert_eq!(status(&pg, kept).await?, ("active".to_owned(), false));
