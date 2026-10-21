@@ -13,6 +13,7 @@ use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks}
 pub const MESSAGES_BEFORE_ACCEPT: i64 = 3;
 pub const SESSION_MIN_AGE_SECS: i32 = 3_600;
 pub const REQUESTS_SHOWN: i64 = 200;
+pub const REQUEST_ROW_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Landing {
@@ -58,9 +59,16 @@ pub async fn list(
     )
     .fetch_all(&chat.pg)
     .await?;
-    let requests: Vec<RequestView> = rows
-        .into_iter()
-        .map(|row| RequestView {
+    let count = rows.len();
+    let mut left = caller.max_bytes as usize;
+    let mut requests = Vec::with_capacity(count);
+    for row in rows {
+        let cost = REQUEST_ROW_BYTES + row.meta_ct.as_ref().map_or(0, |meta| meta.len() * 4 / 3);
+        if cost > left {
+            break;
+        }
+        left -= cost;
+        requests.push(RequestView {
             conversation_id: row.id,
             kind: row.kind,
             from: row.from_user,
@@ -70,9 +78,8 @@ pub async fn list(
             member_count: row.member_count,
             meta_ct: row.meta_ct,
             meta_epoch: row.meta_epoch,
-        })
-        .collect();
-    let count = requests.len();
+        });
+    }
     Ok(Json(RequestsView { requests, count }))
 }
 

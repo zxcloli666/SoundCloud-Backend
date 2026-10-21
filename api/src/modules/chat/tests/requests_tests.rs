@@ -233,4 +233,11 @@ async fn requests_list_pending_chats_without_blocked_senders(pool: PgPool) {
     let from: Vec<&str> = shown.requests.iter().map(|r| r.from.as_str()).collect();
     assert!(from.contains(&"7") && from.contains(&"8"));
     assert_eq!(count(&chat, "101").await.expect("read"), 2);
+
+    let tight = ChatCaller {
+        max_bytes: 300,
+        ..caller()
+    };
+    let squeezed = list(tight, State(chat.clone())).await.expect("requests").0;
+    assert_eq!((squeezed.count, squeezed.requests.len()), (2, 1));
 }

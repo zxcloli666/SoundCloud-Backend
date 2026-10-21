@@ -171,7 +171,7 @@ async fn visible_from(chat: &ChatState, reporter: &str, conversation: Uuid) -> C
             )
             .fetch_optional(&chat.pg)
             .await?
-            .filter(|member| member.state == "active")
+            .filter(|member| matches!(member.state.as_str(), "active" | "invited"))
             .ok_or(ChatError::NotMember)?;
             Ok(member.joined_seq)
         }

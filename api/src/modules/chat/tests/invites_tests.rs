@@ -224,3 +224,54 @@ async fn an_expired_link_or_a_deleted_group_is_gone(pool: PgPool) {
         Some(ChatError::NotFound)
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_link_dies_with_its_maker_admin_rights(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    let group = conversation(&pool, "group", &[("101", true), ("102", true)]).await;
+    sqlx::query(
+        "UPDATE chat.members SET role = 'admin' WHERE conversation_id = $1 AND user_id = '102'",
+    )
+    .bind(group)
+    .execute(&pool)
+    .await
+    .expect("an admin");
+    let demoted = create_with(&chat, "102", group, &CreateInvite::default())
+        .await
+        .expect("a link");
+    let kicked = create_with(&chat, "102", group, &CreateInvite::default())
+        .await
+        .expect("a link");
+    let kept = create_with(&chat, "101", group, &CreateInvite::default())
+        .await
+        .expect("a link");
+
+    sqlx::query(
+        "UPDATE chat.members SET role = 'member' WHERE conversation_id = $1 AND user_id = '102'",
+    )
+    .bind(group)
+    .execute(&pool)
+    .await
+    .expect("a demotion");
+    assert_eq!(
+        join_with(&chat, "7", &demoted.token).await.err(),
+        Some(ChatError::NotFound)
+    );
+    sqlx::query(
+        "UPDATE chat.members SET role = 'admin', state = 'kicked' WHERE conversation_id = $1 AND user_id = '102'",
+    )
+    .bind(group)
+    .execute(&pool)
+    .await
+    .expect("a kick");
+    assert_eq!(
+        join_with(&chat, "7", &kicked.token).await.err(),
+        Some(ChatError::NotFound)
+    );
+    assert!(
+        join_with(&chat, "7", &kept.token)
+            .await
+            .expect("a join")
+            .joined
+    );
+}

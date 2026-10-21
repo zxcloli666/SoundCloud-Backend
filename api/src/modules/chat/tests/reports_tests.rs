@@ -179,3 +179,69 @@ async fn a_reporter_weighs_by_age_and_loses_weight_after_false_reports(pool: PgP
     }
     assert_eq!(reporter_weight(&chat, "51").await.expect("a weight"), 0.0);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_recipient_of_a_message_request_reports_it_before_accepting(pool: PgPool) {
+    let keys = TestKeys::default();
+    let chat = state(pool.clone(), None);
+    let request = conversation(&pool, "direct", &[("61", true), ("62", false)]).await;
+    let ck = conversation_key(&pool, &keys, request).await;
+    let spam = post(&pool, request, &ck, "61", "cheap followers").await;
+
+    let filed = file_with(&chat, &keys, "62", &input(request, spam, spam))
+        .await
+        .expect("a filed report");
+    let row = load(&chat, filed.id).await.expect("a load").expect("a row");
+    assert_eq!(
+        (row.reporter.as_str(), row.target_user.as_str()),
+        ("62", "61")
+    );
+
+    sqlx::query(
+        "UPDATE chat.members SET state = 'left' WHERE conversation_id = $1 AND user_id = '62'",
+    )
+    .bind(request)
+    .execute(&pool)
+    .await
+    .expect("a decline");
+    assert_eq!(
+        file_with(&chat, &keys, "62", &input(request, spam, spam))
+            .await
+            .err(),
+        Some(ChatError::NotMember)
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn evidence_seals_and_opens_with_the_real_kek_ring(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    let dm = conversation(&pool, "direct", &[("91", true), ("92", true)]).await;
+    let ck: [u8; 32] = chat_wire::random_bytes().expect("a ck");
+    sqlx::query(
+        "INSERT INTO chat.conversation_keys (conversation_id, epoch, wrapped, kek_version)
+         VALUES ($1, 0, $2, $3)",
+    )
+    .bind(dm)
+    .bind(chat.keks.wrap(dm, 0, &ck).expect("a wrapped ck"))
+    .bind(chat.keks.current() as i16)
+    .execute(&pool)
+    .await
+    .expect("a conversation key");
+    let seq = post(&pool, dm, &ck, "92", "sealed by the ring").await;
+
+    let filed = file_with(&chat, &chat.keks, "91", &input(dm, seq, seq))
+        .await
+        .expect("a report");
+    let row = load(&chat, filed.id).await.expect("read").expect("a row");
+    let version = row.evidence_kek_version.expect("a version") as u16;
+    assert_eq!(version, chat.keks.reports_current());
+    let sealed = row.evidence.expect("evidence");
+    let bundle = evidence::open(&chat.keks, version, &sealed).expect("evidence opens");
+    assert_eq!(
+        evidence::lines(&bundle)
+            .last()
+            .map(|line| line.text.as_str()),
+        Some("sealed by the ring")
+    );
+    assert!(evidence::open(&TestKeys::default(), version, &sealed).is_err());
+}
