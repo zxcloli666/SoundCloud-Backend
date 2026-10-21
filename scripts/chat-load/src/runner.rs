@@ -183,7 +183,13 @@ pub async fn run(args: RunArgs) -> anyhow::Result<bool> {
     ));
     tokio::spawn(interrupt(abort.clone(), stats.clone()));
     if let (Some(command), Some(at)) = (args.restart_cmd.clone(), plan.schedule.restart()) {
-        tokio::spawn(restart(command, start + at, stats.clone(), stop.clone()));
+        tokio::spawn(restart(
+            command,
+            start + at,
+            stats.clone(),
+            abort.clone(),
+            stop.clone(),
+        ));
     }
     if !plan.schedule.worst.is_zero() {
         tokio::spawn(worst_case(
@@ -296,18 +302,32 @@ async fn interrupt(abort: Arc<Abort>, stats: Arc<Stats>) {
     }
 }
 
-async fn restart(command: String, at: Instant, stats: Arc<Stats>, stop: CancellationToken) {
+async fn restart(
+    command: String,
+    at: Instant,
+    stats: Arc<Stats>,
+    abort: Arc<Abort>,
+    stop: CancellationToken,
+) {
     tokio::select! {
         () = stop.cancelled() => return,
         () = sleep_until(at) => {}
     }
     println!("[{:>5}s] restart: {command}", stats.elapsed_ms() / 1_000);
     stats.mark_restart();
-    let ran = Command::new("sh").arg("-c").arg(&command).status().await;
+    let failure = match Command::new("sh").arg("-c").arg(&command).status().await {
+        Ok(status) if status.success() => None,
+        Ok(status) => Some(format!("the restart command failed: {status}")),
+        Err(error) => Some(format!("the restart command did not run: {error}")),
+    };
     println!(
-        "[{:>5}s] restart finished: {ran:?}",
-        stats.elapsed_ms() / 1_000
+        "[{:>5}s] restart finished: {}",
+        stats.elapsed_ms() / 1_000,
+        failure.as_deref().unwrap_or("ok")
     );
+    if let Some(reason) = failure {
+        abort.trip(stats.elapsed_ms(), reason);
+    }
 }
 
 async fn worst_case(shared: Arc<Shared>, at: Instant, stop: CancellationToken) {
