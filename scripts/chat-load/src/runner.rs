@@ -6,7 +6,6 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use tokio::process::Command;
-use tokio::sync::Notify;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -149,7 +148,6 @@ pub async fn run(args: RunArgs) -> anyhow::Result<bool> {
             run_id: rand::random(),
         },
         all_parked: AtomicBool::new(false),
-        park_now: Notify::new(),
         clock: Arc::new(Clock::default()),
     });
     let abort = Arc::new(Abort::default());
@@ -318,9 +316,8 @@ async fn worst_case(shared: Arc<Shared>, at: Instant, stop: CancellationToken) {
         () = sleep_until(at) => {}
     }
     println!(
-        "[{:>5}s] worst case: every online device parks",
+        "[{:>5}s] worst case: every online device parks from its next sync",
         shared.stats.elapsed_ms() / 1_000
     );
     shared.all_parked.store(true, Ordering::Relaxed);
-    shared.park_now.notify_waiters();
 }

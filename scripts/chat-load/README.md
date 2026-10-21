@@ -50,7 +50,7 @@ chat-load fake-pro --bind 0.0.0.0:8080
 | `--step-secs`, `--spread-secs` | `240`, `60` | step length, how long a step takes to bring its devices up |
 | `--hold-secs` | `900` | hold at the last step |
 | `--restart-cmd`, `--restart-at-secs` | none, `600` | run once at this second of the hold, record the reconnect curve |
-| `--worst-secs` | `300` | after the hold every device parks |
+| `--worst-secs` | `300` | after the hold every device parks from its next sync, so the switch spreads over one short-sync period |
 | `--parked-share`, `--focus-share` | `0.3`, `0.5` | parked (visible window) devices, and how many of them focus their chat |
 | `--hold-ms`, `--short-every-secs` | `20000`, `60` | parked hold (15 s on pro), short sync period |
 | `--send-every-secs`, `--type-every-secs` | `300`, `120` | 0 turns it off |

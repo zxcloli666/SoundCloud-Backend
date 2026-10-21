@@ -6,7 +6,6 @@ use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde_json::{Value, json};
-use tokio::sync::Notify;
 use tokio::time::{Instant, sleep, sleep_until};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -34,7 +33,6 @@ pub struct Shared {
     pub stats: Arc<Stats>,
     pub behavior: Behavior,
     pub all_parked: AtomicBool,
-    pub park_now: Notify,
     pub clock: Arc<Clock>,
 }
 
@@ -213,15 +211,8 @@ impl Device {
                 ),
                 _ => wait,
             };
-            if wait.is_zero() {
-                continue;
-            }
-            match parked {
-                true => sleep(wait).await,
-                false => tokio::select! {
-                    () = sleep(wait) => {}
-                    () = self.shared.park_now.notified() => {}
-                },
+            if !wait.is_zero() {
+                sleep(wait).await;
             }
         }
     }
