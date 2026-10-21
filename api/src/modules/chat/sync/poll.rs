@@ -1,7 +1,7 @@
 use tokio::time::{Instant, sleep, sleep_until};
 use uuid::Uuid;
 
-use crate::modules::chat::hub::Parked;
+use crate::modules::chat::hub::{Focus, Parked};
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::sync::answer::{self, Ask};
 use crate::modules::chat::sync::bucket::OVER_BUDGET_WAIT;
@@ -10,7 +10,7 @@ use crate::modules::chat::sync::incarnation;
 use crate::modules::chat::sync::plan::Plan;
 use crate::modules::chat::sync::reply::SyncReply;
 use crate::modules::chat::sync::wire::SyncRequest;
-use crate::modules::chat::{ChatCaller, ChatResult, ChatState};
+use crate::modules::chat::{ChatCaller, ChatResult, ChatState, devices};
 
 const ANSWERS: &str = "chat_poll_answers_total";
 const PARKED: &str = "chat_parked_polls";
@@ -65,12 +65,15 @@ impl Poll<'_> {
 
     async fn answer(&self) -> ChatResult<SyncReply> {
         let hub = &self.chat.hub;
-        let verified = hub.focus_of(self.user_id(), self.device);
-        let new_focus = self.request.focus.is_some() && self.request.focus != verified;
-        if self.request.focus.is_none() && verified.is_some() {
+        let checked = hub.focus_of(self.user_id(), self.device);
+        let new_focus = self.request.focus.is_some()
+            && self.request.focus != checked.map(|focus| focus.conversation);
+        if self.request.focus.is_none() && checked.is_some() {
             hub.set_focus(self.user_id(), self.device, None);
         }
-        let parked_focus = self.request.focus.filter(|_| !new_focus);
+        let parked_focus = checked
+            .filter(|focus| focus.live && !new_focus)
+            .map(|focus| focus.conversation);
         let mut parked = hub.park(self.user_id(), self.device, parked_focus);
         if self.chat.shutdown.is_cancelled() {
             return Ok(SyncReply::later());
@@ -128,6 +131,7 @@ impl Poll<'_> {
             }
             let look = self.look(signal.focus).await?;
             if !matches!(look, Look::Quiet) {
+                devices::require(self.chat, self.caller).await?;
                 return self.reply(look, signal.focus, signal.woken).await;
             }
         }
@@ -173,11 +177,13 @@ impl Poll<'_> {
                     budget: self.plan.budget,
                 };
                 let built = answer::build(self.chat, &ask, &changes, self.incarnation).await?;
-                if include_focus {
+                if let Some(live) = built.focus_live {
                     self.chat.hub.set_focus(
                         self.user_id(),
                         self.device,
-                        self.request.focus.filter(|_| built.focus_live),
+                        self.request
+                            .focus
+                            .map(|conversation| Focus { conversation, live }),
                     );
                 }
                 SyncReply::Answer(Box::new(built.answer))

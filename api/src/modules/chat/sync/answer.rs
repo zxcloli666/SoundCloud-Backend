@@ -22,7 +22,7 @@ pub struct Ask<'a> {
 
 pub struct Built {
     pub answer: SyncAnswer,
-    pub focus_live: bool,
+    pub focus_live: Option<bool>,
 }
 
 pub struct Inputs<'a> {
@@ -42,7 +42,7 @@ pub struct Assembled {
     pub answer: SyncAnswer,
     pub wants_devices: bool,
     pub wants_requests: bool,
-    pub focus_live: bool,
+    pub focus_live: Option<bool>,
 }
 
 pub async fn reset(
@@ -70,22 +70,12 @@ pub async fn build(
     changes: &Changes,
     incarnation: Uuid,
 ) -> ChatResult<Built> {
-    let mut ids: Vec<Uuid> = changes
-        .deltas
-        .iter()
-        .filter_map(|delta| match delta.change {
-            Change::Conversation(id) => Some(id),
-            _ => None,
-        })
-        .chain(ask.focus.filter(|_| ask.include_focus))
-        .collect();
-    ids.sort();
-    ids.dedup();
+    let ids = answer_order(ask, &changes.deltas);
     let states = seats::load(chat, ask.user_id, &ids).await?;
     let known: HashMap<Uuid, i64> = ask.known.iter().copied().collect();
-    let wanted: Vec<Fetch> = states
-        .values()
-        .filter_map(|state| fetch_for(state, &known))
+    let wanted: Vec<Fetch> = ids
+        .iter()
+        .filter_map(|id| fetch_for(states.get(id)?, &known))
         .collect();
     let rows = rows::fetch(chat, &wanted, ask.budget).await?;
     let mut assembled = assemble(&Inputs {
@@ -114,8 +104,21 @@ pub async fn build(
     })
 }
 
+fn answer_order(ask: &Ask<'_>, deltas: &[Delta]) -> Vec<Uuid> {
+    let focus = ask.focus.filter(|_| ask.include_focus);
+    let mut seen = HashSet::new();
+    focus
+        .into_iter()
+        .chain(deltas.iter().filter_map(|delta| match delta.change {
+            Change::Conversation(id) => Some(id),
+            _ => None,
+        }))
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
 fn fetch_for(state: &ConversationState, known: &HashMap<Uuid, i64>) -> Option<Fetch> {
-    let Seat::Live { floor } = state.seat() else {
+    let Seat::Live { floor } = state.seat else {
         return None;
     };
     let after = (*known.get(&state.id)?).max(floor);
@@ -131,16 +134,17 @@ async fn decorate(
     states: &HashMap<Uuid, ConversationState>,
     answer: &mut SyncAnswer,
 ) -> ChatResult<()> {
-    let with_marks: Vec<Uuid> = answer
-        .convs
-        .iter()
-        .map(|entry| entry.id)
-        .filter(|id| Some(*id) == ask.focus || states.get(id).is_some_and(|s| s.is_direct()))
-        .collect();
+    let (with_marks, own_only): (Vec<Uuid>, Vec<Uuid>) =
+        answer.convs.iter().map(|entry| entry.id).partition(|id| {
+            Some(*id) == ask.focus || states.get(id).is_some_and(|s| s.is_direct())
+        });
     let mut marks = marks::read(chat, ask.user_id, &with_marks).await?;
+    let mut own = marks::own(chat, ask.user_id, &own_only).await?;
     for entry in &mut answer.convs {
         if let Some(found) = marks.remove(&entry.id) {
             entry.marks = found;
+        } else if let Some(mine) = own.remove(&entry.id) {
+            entry.marks = vec![mine];
         }
         if Some(entry.id) == ask.focus {
             entry.typing = typing::typing_in(chat, entry.id)
@@ -171,13 +175,13 @@ pub fn assemble(inputs: &Inputs<'_>) -> Assembled {
         wants_devices: false,
         wants_requests: false,
     };
-    let focus_live = match inputs.focus.filter(|_| inputs.include_focus) {
-        Some(focus) => {
-            assembly.conversation(focus);
-            matches!(seat_of(inputs.states, focus), Seat::Live { .. })
-        }
-        None => false,
-    };
+    let focus_live = inputs
+        .focus
+        .filter(|focus| inputs.include_focus || mentioned(inputs.deltas, *focus))
+        .map(|focus| matches!(seat_of(inputs.states, focus), Seat::Live { .. }));
+    if let Some(focus) = inputs.focus.filter(|_| inputs.include_focus) {
+        assembly.conversation(focus);
+    }
     let mut processed = false;
     let mut complete = true;
     for group in inputs
@@ -235,7 +239,6 @@ impl Assembly<'_> {
         }
         let state = self.inputs.states.get(&id);
         match seat_of(self.inputs.states, id) {
-            Seat::Unknown => {}
             Seat::Gone => {
                 self.answer.gone.push(id);
                 self.spend(bytes::GONE);
@@ -295,6 +298,12 @@ impl Assembly<'_> {
             .remaining
             .saturating_sub(isize::try_from(cost).unwrap_or(isize::MAX));
     }
+}
+
+fn mentioned(deltas: &[Delta], conversation: Uuid) -> bool {
+    deltas
+        .iter()
+        .any(|delta| delta.change == Change::Conversation(conversation))
 }
 
 fn expired(row: &MessageRow, now: DateTime<Utc>) -> bool {

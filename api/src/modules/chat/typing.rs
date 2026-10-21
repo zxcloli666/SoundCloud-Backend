@@ -8,8 +8,9 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::modules::chat::body::ChatPath;
+use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::sync::shards::Shards;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rt_keys};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rooms, rt_keys};
 
 pub const TYPING_REPEAT: Duration = Duration::from_secs(2);
 
@@ -81,7 +82,7 @@ pub async fn typing(
     if chat.hub.typing.repeated(conversation, &caller.user_id, now) {
         return Ok(StatusCode::NO_CONTENT);
     }
-    let shares = sqlx::query_file_scalar!(
+    let target = sqlx::query_file!(
         "queries/chat/sync/typing_member.sql",
         conversation,
         caller.user_id
@@ -89,7 +90,17 @@ pub async fn typing(
     .fetch_optional(&chat.pg)
     .await?
     .ok_or(ChatError::NotMember)?;
-    if !shares {
+    let member = if target.kind == ConversationKind::Room.as_str() {
+        rooms::member_from_seq(&chat, conversation, &caller.user_id)
+            .await?
+            .is_some()
+    } else {
+        target.member
+    };
+    if !member {
+        return Err(ChatError::NotMember);
+    }
+    if !target.typing || target.blocked {
         return Ok(StatusCode::NO_CONTENT);
     }
     {

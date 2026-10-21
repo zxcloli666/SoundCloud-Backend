@@ -18,6 +18,12 @@ const SLOT_IDLE: Duration = Duration::from_secs(30);
 const PRUNE_EVERY: u64 = 256;
 const WAKES_COALESCED: &str = "chat_wakes_coalesced_total";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Focus {
+    pub conversation: Uuid,
+    pub live: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Signal {
     pub at: Option<Instant>,
@@ -68,7 +74,7 @@ struct ParkedPoll {
 struct DeviceSlot {
     id: Uuid,
     bucket: Bucket,
-    focus: Option<Uuid>,
+    focus: Option<Focus>,
 }
 
 #[derive(Clone)]
@@ -228,7 +234,7 @@ impl ChatHub {
         slot.device(device, now).bucket.take(now)
     }
 
-    pub fn focus_of(&self, user_id: &str, device: Uuid) -> Option<Uuid> {
+    pub fn focus_of(&self, user_id: &str, device: Uuid) -> Option<Focus> {
         let users = self.users.lock(user_id);
         users
             .get(user_id)?
@@ -238,7 +244,7 @@ impl ChatHub {
             .focus
     }
 
-    pub fn set_focus(&self, user_id: &str, device: Uuid, focus: Option<Uuid>) {
+    pub fn set_focus(&self, user_id: &str, device: Uuid, focus: Option<Focus>) {
         let now = Instant::now();
         let mut users = self.users.lock(user_id);
         let slot = users

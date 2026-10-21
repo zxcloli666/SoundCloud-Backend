@@ -25,3 +25,16 @@ FROM (
       AND outgoing.wanted_state
 ) contact (user_id)
 JOIN chat.users u ON u.user_id = contact.user_id AND u.presence_share
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM chat.blocks b
+    WHERE (b.user_id = $1 AND b.blocked_user = contact.user_id)
+       OR (b.user_id = contact.user_id AND b.blocked_user = $1)
+)
+  AND NOT EXISTS (
+    SELECT 1
+    FROM user_blocked_artists x
+    WHERE x.kind = 'user'
+      AND ((x.sc_user_id = $1 AND contact.user_id = ANY (x.sc_user_ids))
+        OR (x.sc_user_id = contact.user_id AND $1 = ANY (x.sc_user_ids)))
+)

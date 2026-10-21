@@ -99,24 +99,66 @@ pub async fn record(chat: &ChatState, user_id: &str, request: &SyncRequest) -> C
         let mut conn = chat.redis.get().await?;
         call.invoke_async(&mut conn).await?
     };
-    let mut touched: Vec<Uuid> = changed
+    let moved: Vec<&Wanted> = changed
         .iter()
         .filter_map(|index| marks.get(index.checked_sub(1)?))
-        .map(|entry| entry.conversation)
         .collect();
-    touched.dedup();
-    for conversation in touched {
-        match targets
+    for (conversation, kinds) in moved
+        .chunk_by(|left, right| left.conversation == right.conversation)
+        .map(|group| (group[0].conversation, group))
+    {
+        let peer = targets
             .get(&conversation)
-            .and_then(|target| target.peer.as_ref())
-        {
-            Some(peer) => {
-                bump::conversation(chat, conversation, 0, std::slice::from_ref(peer)).await?
-            }
-            None => chat.hub.wake_focus(conversation, user_id),
+            .and_then(|target| target.peer.clone());
+        if peer.is_none() {
+            chat.hub.wake_focus(conversation, user_id);
         }
+        let read = kinds.iter().any(|entry| entry.mark == Mark::Read);
+        let recipients: Vec<String> = peer
+            .into_iter()
+            .chain(read.then(|| user_id.to_owned()))
+            .collect();
+        bump::conversation(chat, conversation, 0, &recipients).await?;
     }
     Ok(())
+}
+
+pub async fn own(
+    chat: &ChatState,
+    viewer: &str,
+    conversations: &[Uuid],
+) -> ChatResult<HashMap<Uuid, PeerMark>> {
+    if conversations.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut pipe = redis::pipe();
+    for conversation in conversations {
+        pipe.hget(rt_keys::read_marks(*conversation), viewer);
+        pipe.hget(rt_keys::delivered_marks(*conversation), viewer);
+    }
+    let replies: Vec<Option<i64>> = {
+        let mut conn = chat.redis.get().await?;
+        pipe.query_async(&mut conn).await?
+    };
+    let (pairs, _) = replies.as_chunks::<2>();
+    Ok(conversations
+        .iter()
+        .zip(pairs)
+        .filter_map(|(conversation, [read, delivered])| {
+            let read_seq = read.unwrap_or(0);
+            let delivered_seq = delivered.unwrap_or(0).max(read_seq);
+            (delivered_seq > 0).then(|| {
+                (
+                    *conversation,
+                    PeerMark {
+                        user_id: viewer.to_owned(),
+                        read_seq,
+                        delivered_seq,
+                    },
+                )
+            })
+        })
+        .collect())
 }
 
 pub async fn read(

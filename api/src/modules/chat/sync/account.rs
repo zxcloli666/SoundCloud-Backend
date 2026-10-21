@@ -1,31 +1,20 @@
+use chrono::Utc;
 use uuid::Uuid;
 
-use crate::modules::chat::model::{DeviceStatus, DeviceView};
+use crate::modules::chat::model::DeviceView;
 use crate::modules::chat::sync::changes;
-use crate::modules::chat::{ChatResult, ChatState};
+use crate::modules::chat::{ChatResult, ChatState, devices};
 
 pub async fn devices(
     chat: &ChatState,
     user_id: &str,
     current: Uuid,
 ) -> ChatResult<Vec<DeviceView>> {
-    let rows = sqlx::query_file!("queries/chat/sync/devices.sql", user_id)
-        .fetch_all(&chat.pg)
-        .await?;
+    let now = Utc::now();
+    let rows = devices::live_of(chat, user_id).await?;
     Ok(rows
-        .into_iter()
-        .map(|row| DeviceView {
-            id: row.id,
-            platform: row.platform,
-            name: row.name,
-            app_version: row.app_version,
-            tier: row.tier,
-            status: DeviceStatus::Active,
-            created_at: row.created_at.timestamp_millis(),
-            last_seen_at: row.last_seen_at.timestamp_millis(),
-            history_unlocked: row.history_unlocked,
-            current: row.id == current,
-        })
+        .iter()
+        .map(|row| devices::view(row, Some(current), now))
         .collect())
 }
 

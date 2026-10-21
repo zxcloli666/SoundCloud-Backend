@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use redis::AsyncCommands;
 
 use crate::modules::chat::sync::prefs;
 use crate::modules::chat::{ChatResult, ChatState, rt_keys};
@@ -17,7 +18,7 @@ pub async fn touch(chat: &ChatState, user_id: &str) {
 }
 
 pub async fn mark_seen(chat: &ChatState, user_id: &str) -> ChatResult<()> {
-    if !prefs::of(chat, user_id).await?.presence_share {
+    if !prefs::shares_presence(chat, user_id).await? {
         return Ok(());
     }
     let now = Utc::now().timestamp_millis();
@@ -32,6 +33,12 @@ pub async fn mark_seen(chat: &ChatState, user_id: &str) -> ChatResult<()> {
         .ignore()
         .query_async(&mut conn)
         .await?;
+    Ok(())
+}
+
+pub async fn forget(chat: &ChatState, user_id: &str) -> ChatResult<()> {
+    let mut conn = chat.redis.get().await?;
+    let _: i64 = conn.zrem(rt_keys::SEEN, user_id).await?;
     Ok(())
 }
 
