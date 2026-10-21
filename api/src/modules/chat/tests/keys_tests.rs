@@ -214,6 +214,36 @@ async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(pool: PgPool) {
+    let chat = state(&pool);
+    let group = conversation(&pool, "group", &[PEER, "7103"]).await;
+    ensure_current(&chat, group).await.expect("the first key");
+    for _ in 0..2 {
+        rotate(&chat, group).await.expect("a rotation");
+    }
+    backdate_keys(&pool, group, 200).await;
+
+    let new = enroll(&chat, &pool, USER).await;
+    sqlx::query(
+        "INSERT INTO chat.members (conversation_id, user_id, state) VALUES ($1, $2, 'active')",
+    )
+    .bind(group)
+    .bind(USER)
+    .execute(&pool)
+    .await
+    .expect("a late join");
+    assert!(!rekey_pending(&pool, group).await);
+
+    let (status, answer) = keys(&chat, &new, &new.row, group, 0).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        epochs(&opened(&new, group, &answer)),
+        vec![2],
+        "new messages flow at once, older epochs wait for the gate"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
     let chat = state(&pool);
     let device = enroll(&chat, &pool, USER).await;

@@ -29,7 +29,7 @@ pub async fn first_visible_epoch(
         conversation,
         device.created_at
     )
-    .fetch_one(&chat.pg)
+    .fetch_optional(&chat.pg)
     .await?;
     Ok(first.unwrap_or(NOTHING_VISIBLE))
 }

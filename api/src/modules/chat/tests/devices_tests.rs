@@ -9,7 +9,7 @@ use super::bind::claim;
 use super::test_support::{
     DeviceKeys, age, call, caller, conversation, desktop, enroll, rekey_pending, session, state,
 };
-use super::{alerts, lookup};
+use super::{alerts, lookup, touch};
 use crate::modules::chat::ChatError;
 use crate::modules::chat::caller::CallerDevice;
 
@@ -569,4 +569,36 @@ async fn another_users_device_is_not_found(pool: PgPool) {
         );
     }
     assert_eq!(status_of(&pool, theirs.keys.id).await, "active");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
+    let chat = state(&pool);
+    let device = enroll(&chat, &pool, USER).await;
+    touch(&chat, &device.row).await.expect("a quiet touch");
+    let cached = lookup(&chat, device.keys.id)
+        .await
+        .expect("a lookup")
+        .expect("a device");
+    assert_eq!(cached.last_seen_at, device.row.last_seen_at);
+
+    sqlx::query(
+        "UPDATE chat.devices SET last_seen_at = now() - interval '11 minutes' WHERE id = $1",
+    )
+    .bind(device.keys.id)
+    .execute(&pool)
+    .await
+    .expect("an idle device");
+    chat.devices.forget(USER, &[device.keys.id]);
+    let idle = lookup(&chat, device.keys.id)
+        .await
+        .expect("a lookup")
+        .expect("a device");
+    touch(&chat, &idle).await.expect("a touch");
+    assert!(chat.devices.row(device.keys.id).is_none());
+    let seen = lookup(&chat, device.keys.id)
+        .await
+        .expect("a lookup")
+        .expect("a device");
+    assert!(seen.last_seen_at > idle.last_seen_at);
 }
