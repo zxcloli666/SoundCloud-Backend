@@ -506,7 +506,7 @@ async fn session_devices(
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
-async fn presence_lists_only_sharing_contacts_seen_recently(pool: PgPool) {
+async fn presence_shows_only_sharing_contacts_seen_recently(pool: PgPool) {
     let chat = with_postgres(&pool);
     let (alice, bob, carol, dave, erin) = (user(), user(), user(), user(), user());
     for (person, shares) in [
@@ -539,13 +539,26 @@ async fn presence_lists_only_sharing_contacts_seen_recently(pool: PgPool) {
         presence::mark_seen(&chat, person).await.expect("seen");
     }
 
-    let mut expected = vec![bob.clone(), dave.clone()];
-    expected.sort();
-    assert_eq!(
-        presence::online_contacts(&chat, &alice)
+    for (person, online) in [(&bob, true), (&dave, true), (&carol, false), (&erin, false)] {
+        let shown = presence::of_contact(&chat, &alice, person)
             .await
-            .expect("contacts"),
-        expected
+            .expect("presence");
+        assert_eq!(
+            shown.as_ref().map(|seen| seen.online),
+            online.then_some(true),
+            "{person}"
+        );
+    }
+    sqlx::query("UPDATE chat.users SET presence_share = false WHERE user_id = $1")
+        .bind(&bob)
+        .execute(&pool)
+        .await
+        .expect("settings");
+    assert_eq!(
+        presence::of_contact(&chat, &alice, &bob)
+            .await
+            .expect("presence"),
+        None
     );
 }
 
@@ -714,11 +727,17 @@ async fn presence_is_hidden_between_blocked_contacts(pool: PgPool) {
         presence::mark_seen(&chat, person).await.expect("seen");
     }
 
-    assert_eq!(
-        presence::online_contacts(&chat, &alice)
+    assert!(
+        presence::of_contact(&chat, &alice, &bob)
             .await
-            .expect("contacts"),
-        vec![bob.clone()]
+            .expect("presence")
+            .is_some_and(|seen| seen.online)
+    );
+    assert_eq!(
+        presence::of_contact(&chat, &alice, &carol)
+            .await
+            .expect("presence"),
+        None
     );
 }
 

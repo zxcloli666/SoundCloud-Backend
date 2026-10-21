@@ -6,6 +6,7 @@ pub async fn ensure_current(chat: &ChatState, conversation: Uuid) -> ChatResult<
     advance(chat, conversation, false).await
 }
 
+#[cfg(test)]
 pub async fn rotate(chat: &ChatState, conversation: Uuid) -> ChatResult<i32> {
     advance(chat, conversation, true).await
 }

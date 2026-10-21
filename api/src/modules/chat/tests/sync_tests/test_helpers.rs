@@ -226,14 +226,6 @@ pub async fn revoke(pool: &PgPool, device: Uuid) {
         .expect("a revoke");
 }
 
-pub async fn last_seq(pool: &PgPool, conversation: Uuid) -> i64 {
-    sqlx::query_scalar("SELECT last_seq FROM chat.conversations WHERE id = $1")
-        .bind(conversation)
-        .fetch_one(pool)
-        .await
-        .expect("a conversation")
-}
-
 pub async fn incarnation(pool: &PgPool) -> Uuid {
     sqlx::query_scalar("SELECT incarnation FROM chat.meta WHERE id = 1")
         .fetch_one(pool)

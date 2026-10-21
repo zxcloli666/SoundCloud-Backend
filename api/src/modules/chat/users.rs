@@ -7,7 +7,9 @@ use serde::Serialize;
 
 use crate::modules::chat::body::ChatPath;
 use crate::modules::chat::limits::{self, Bucket};
-use crate::modules::chat::requests::{self, Landing};
+use crate::modules::chat::members::contacts;
+use crate::modules::chat::model::MemberState;
+use crate::modules::chat::presence::{self, PresenceView};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
 
 pub const USER_ID_MAX: usize = 32;
@@ -140,6 +142,7 @@ pub struct CardView {
     pub blocked: bool,
     pub contact: bool,
     pub can_message: &'static str,
+    pub presence: Option<PresenceView>,
 }
 
 pub async fn card(
@@ -159,8 +162,8 @@ pub async fn card_for(chat: &ChatState, viewer: &str, user: &str) -> ChatResult<
         .fetch_optional(&chat.pg)
         .await?;
     let blocked = blocks::blocked_by(chat, viewer, user).await?;
-    let relation = requests::relation(chat, user, viewer).await?;
-    let landing = requests::evaluate(chat, viewer, user).await?;
+    let relation = contacts::relation(&chat.pg, viewer, user).await?;
+    let landing = contacts::landing(chat, viewer, user, relation).await?;
     let (username, avatar_url, permalink_url, verified) = match profile {
         Some(row) => (
             Some(row.username),
@@ -179,10 +182,11 @@ pub async fn card_for(chat: &ChatState, viewer: &str, user: &str) -> ChatResult<
         blocked,
         contact: relation.contact,
         can_message: match landing {
-            Landing::Direct => "direct",
-            Landing::Request => "request",
-            Landing::Unavailable => "unavailable",
+            Some(MemberState::Active) => "direct",
+            Some(_) => "request",
+            None => "unavailable",
         },
+        presence: presence::of_contact(chat, viewer, user).await?,
     })
 }
 

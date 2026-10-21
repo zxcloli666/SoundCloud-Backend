@@ -3,7 +3,6 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub const ROOMS_TTL: Duration = Duration::from_secs(6 * 3_600);
 pub const VERSION_TTL: Duration = Duration::from_secs(7 * 86_400);
 pub const DELTAS_KEPT: isize = 256;
 pub const TYPING_TTL: Duration = Duration::from_secs(6);

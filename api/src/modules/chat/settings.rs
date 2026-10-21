@@ -28,7 +28,7 @@ impl DmPolicy {
         }
     }
 
-    fn parse(raw: &str) -> Self {
+    pub fn parse(raw: &str) -> Self {
         match raw {
             "everyone" => DmPolicy::Everyone,
             "nobody" => DmPolicy::Nobody,

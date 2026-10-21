@@ -5,7 +5,6 @@ use crate::modules::chat::caller::CallerDevice;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub const UNLOCK_AFTER_HOURS: i64 = 72;
-pub const ALERT_HOURS: [i64; 3] = [0, 24, 48];
 pub const NOTHING_VISIBLE: i32 = i32::MAX;
 
 pub fn seasoned(created_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {

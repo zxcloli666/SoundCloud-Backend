@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::bridge;
 use super::diff::{departed, rows};
-use super::lookup::{chat_of_room, gate_send};
+use super::lookup::{gate_send, room_of_chat};
 use super::member_from_seq;
 use super::refusal;
 use super::system::SuggestedTrack;
@@ -325,7 +325,12 @@ async fn a_room_is_moderated_through_the_sealed_routes(pg: PgPool) -> anyhow::Re
     assert_eq!(status, StatusCode::OK, "{opened}");
     assert_eq!(opened["from_seq"], 0);
     let conversation: Uuid = serde_json::from_value(opened["conversation_id"].clone())?;
-    assert_eq!(chat_of_room(&chat, &code).await, Ok(Some(conversation)));
+    assert_eq!(
+        room_of_chat(&chat, conversation)
+            .await
+            .map(|room| room.map(|room| room.code)),
+        Ok(Some(code.clone()))
+    );
     assert_eq!(
         member_from_seq(&chat, conversation, &guest).await,
         Ok(Some(0))

@@ -2,7 +2,7 @@ use sqlx::PgPool;
 
 use super::*;
 use crate::modules::chat::conversations::create;
-use crate::modules::chat::conversations::fixtures::{access_of, dm, group, post, seqs};
+use crate::modules::chat::conversations::fixtures::{access_of, dm, group, post, seqs, ttl_of};
 use crate::modules::chat::members::access;
 
 #[test]
@@ -32,7 +32,7 @@ async fn any_dm_member_sets_the_timer_and_a_system_row_says_so(pool: PgPool) -> 
         body,
         serde_json::json!({"kind": "ttl", "actor": "202", "ttl_s": 86_400})
     );
-    assert_eq!(access_of(&pool, id, "101").await.ttl_s, Some(86_400));
+    assert_eq!(ttl_of(&pool, id).await, Some(86_400));
     Ok(())
 }
 
@@ -47,7 +47,7 @@ async fn the_same_timer_twice_writes_one_row(pool: PgPool) -> ChatResult<()> {
     let body: serde_json::Value =
         serde_json::from_slice(off.body.as_deref().expect("json")).expect("system json");
     assert_eq!(body["ttl_s"], serde_json::Value::Null);
-    assert_eq!(access_of(&pool, id, "101").await.ttl_s, None);
+    assert_eq!(ttl_of(&pool, id).await, None);
     Ok(())
 }
 

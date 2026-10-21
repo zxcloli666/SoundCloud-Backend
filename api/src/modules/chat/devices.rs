@@ -143,21 +143,6 @@ pub async fn live_of(chat: &ChatState, user_id: &str) -> ChatResult<Arc<Vec<Devi
     Ok(rows)
 }
 
-pub async fn alerts(
-    chat: &ChatState,
-    user_id: &str,
-    viewer: &CallerDevice,
-) -> ChatResult<Vec<DeviceView>> {
-    let now = Utc::now();
-    let rows = live_of(chat, user_id).await?;
-    Ok(rows
-        .iter()
-        .filter(|row| row.created_at > viewer.created_at)
-        .filter(|row| !is_unlocked(row.created_at, row.history_unlocked_at.is_some(), now))
-        .map(|row| view(row, Some(viewer.id), now))
-        .collect())
-}
-
 pub async fn require(chat: &ChatState, caller: &ChatCaller) -> ChatResult<DeviceRow> {
     let device = caller.device.as_ref().ok_or(ChatError::DeviceRevoked)?;
     let row = lookup(chat, device.id)

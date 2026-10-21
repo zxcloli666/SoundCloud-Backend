@@ -36,6 +36,22 @@ pub async fn access_of(pg: &PgPool, conversation: Uuid, user: &str) -> Access {
         .expect("a member")
 }
 
+pub async fn key_epoch(pg: &PgPool, conversation: Uuid) -> i32 {
+    sqlx::query_scalar("SELECT key_epoch FROM chat.conversations WHERE id = $1")
+        .bind(conversation)
+        .fetch_one(pg)
+        .await
+        .expect("a conversation")
+}
+
+pub async fn ttl_of(pg: &PgPool, conversation: Uuid) -> Option<i32> {
+    sqlx::query_scalar("SELECT ttl_s FROM chat.conversations WHERE id = $1")
+        .bind(conversation)
+        .fetch_one(pg)
+        .await
+        .expect("a conversation")
+}
+
 pub fn outgoing(class: Class, epoch: i32, target_seq: Option<i64>) -> Outgoing {
     Outgoing {
         client_id: Uuid::now_v7(),
@@ -60,7 +76,7 @@ pub async fn send(
 }
 
 pub async fn post(pg: &PgPool, conversation: Uuid, user: &str) -> MessageRow {
-    let epoch = access_of(pg, conversation, user).await.key_epoch;
+    let epoch = key_epoch(pg, conversation).await;
     send(pg, conversation, user, &outgoing(Class::Post, epoch, None))
         .await
         .expect("a post")

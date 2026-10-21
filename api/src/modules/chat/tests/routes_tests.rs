@@ -8,19 +8,6 @@ use crate::modules::chat::test_support::{caller, offline_chat_state};
 
 const CONV: &str = "0192e5c5-1a2b-7c3d-8e4f-5a6b7c8d9e0f";
 
-const FILLED: &[&str] = &[
-    "/chat/requests",
-    "/invites",
-    "/chat/settings",
-    "/chat/blocks/",
-    "/chat/reports",
-    "/chat/users/",
-];
-
-fn filled(uri: &str) -> bool {
-    FILLED.iter().any(|path| uri.contains(path))
-}
-
 fn inner_routes() -> Vec<(&'static str, String)> {
     vec![
         ("GET", "/chat/config".into()),
@@ -121,41 +108,6 @@ async fn answer(
         .await
         .expect("a body");
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
-}
-
-fn filled_by_conversations_lane(uri: &str) -> bool {
-    uri.strip_prefix("/chat/conversations").is_some_and(|rest| {
-        !rest.contains("/keys") && !rest.contains("/typing") && !rest.contains("/invites")
-    })
-}
-
-fn still_stubbed(uri: &str) -> bool {
-    uri != "/chat/config"
-        && !uri.starts_with("/auth/")
-        && !uri.starts_with("/chat/devices")
-        && !uri.contains("/keys")
-        && !uri.starts_with("/chat/rooms/")
-        && !filled_by_conversations_lane(uri)
-        && uri != "/chat/sync"
-        && !uri.ends_with("/typing")
-}
-
-#[tokio::test]
-async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
-    let router = inner().with_state(offline_chat_state(true));
-    for (method, uri) in inner_routes()
-        .into_iter()
-        .filter(|(_, uri)| still_stubbed(uri) && !filled(uri))
-    {
-        assert_eq!(
-            answer(&router, method, &uri, true).await,
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                json!({"error": "chat_unimplemented"})
-            ),
-            "{method} {uri}"
-        );
-    }
 }
 
 #[tokio::test]

@@ -74,42 +74,6 @@ pub struct DeviceRow {
 }
 
 #[derive(Clone, Debug)]
-pub struct ConversationRow {
-    pub id: Uuid,
-    pub kind: String,
-    pub dm_key: Option<String>,
-    pub room_ref: Option<String>,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub last_seq: i64,
-    pub last_at: DateTime<Utc>,
-    pub key_epoch: i32,
-    pub rekey: bool,
-    pub meta_ct: Option<Vec<u8>>,
-    pub meta_epoch: Option<i32>,
-    pub member_count: i32,
-    pub ttl_s: Option<i32>,
-    pub deleted_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemberRow {
-    pub conversation_id: Uuid,
-    pub user_id: String,
-    pub role: String,
-    pub state: String,
-    pub accepted: bool,
-    pub joined_seq: i64,
-    pub joined_epoch: i32,
-    pub last_read_seq: i64,
-    pub muted_until: Option<DateTime<Utc>>,
-    pub notify: String,
-    pub pinned_at: Option<DateTime<Utc>>,
-    pub archived: bool,
-    pub hidden_before_seq: i64,
-}
-
-#[derive(Clone, Debug)]
 pub struct MessageRow {
     pub conversation_id: Uuid,
     pub seq: i64,

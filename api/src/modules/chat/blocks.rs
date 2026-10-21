@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -61,6 +62,23 @@ pub async fn blocked_between(chat: &ChatState, user: &str, other: &str) -> ChatR
         sqlx::query_file_scalar!("queries/chat/blocks/between.sql", user, other)
             .fetch_one(&chat.pg)
             .await?,
+    )
+}
+
+pub async fn blocked_among(
+    chat: &ChatState,
+    user: &str,
+    others: &[String],
+) -> ChatResult<HashSet<String>> {
+    if others.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(
+        sqlx::query_file_scalar!("queries/chat/blocks/among.sql", user, others)
+            .fetch_all(&chat.pg)
+            .await?
+            .into_iter()
+            .collect(),
     )
 }
 

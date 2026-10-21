@@ -71,6 +71,7 @@ pub async fn list(
     Ok(Json(sealed))
 }
 
+#[cfg(test)]
 pub async fn conversation_key(
     chat: &ChatState,
     conversation: Uuid,

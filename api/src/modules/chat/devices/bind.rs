@@ -24,14 +24,6 @@ pub fn bound_device(chat_bind: Option<&[u8]>) -> ChatResult<BoundDevice> {
     })
 }
 
-pub fn claim(chat_bind: Option<&[u8]>, device_id: Uuid) -> ChatResult<BoundDevice> {
-    let bound = bound_device(chat_bind)?;
-    if bound.id != device_id {
-        return Err(ChatError::SessionBoundOther);
-    }
-    Ok(bound)
-}
-
 impl BoundDevice {
     pub fn holds(&self, auth_pub: &[u8], box_pub: &[u8]) -> bool {
         self.auth_pub.as_slice() == auth_pub && self.box_pub.as_slice() == box_pub

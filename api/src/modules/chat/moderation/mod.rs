@@ -22,6 +22,7 @@ use tokio::sync::{Notify, Semaphore};
 use uuid::Uuid;
 
 use crate::modules::chat::admin::audit;
+use crate::modules::chat::members::contacts;
 use crate::modules::chat::moderation::client::{AiAnswer, AiClient, sha256_hex};
 use crate::modules::chat::moderation::decide::Injection;
 use crate::modules::chat::moderation::evidence::Line;
@@ -29,7 +30,7 @@ use crate::modules::chat::moderation::keys::ChatKeys;
 use crate::modules::chat::moderation::prompt::Case;
 use crate::modules::chat::moderation::verdict::Verdict;
 use crate::modules::chat::reports::{self, ReportRow};
-use crate::modules::chat::{ChatError, ChatResult, ChatState, requests};
+use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub const AUDIT_ADMIN: &str = "ai-moderator";
 pub const CALLS_IN_FLIGHT: usize = 4;
@@ -132,7 +133,7 @@ impl Moderator {
             target_seqs: &seqs,
             reporter_history: history::reporter(chat, &report.reporter).await?,
             target_history: history::target(chat, &report.target_user).await?,
-            contacts: requests::relation(chat, &report.reporter, &report.target_user)
+            contacts: contacts::relation(&chat.pg, &report.reporter, &report.target_user)
                 .await?
                 .contact,
         };

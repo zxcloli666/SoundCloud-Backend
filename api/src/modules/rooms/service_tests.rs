@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::modules::chat::rooms::bridge;
-use crate::modules::chat::rooms::lookup::recipients;
+use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::test_support::chat_state;
 use crate::modules::rooms::model::{MAX_MEMBERS, SettingsPatch};
@@ -231,9 +231,16 @@ async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow:
         rows.last().map(|row| row["user_id"].clone()),
         Some(json!(late))
     );
-    let mut heard = recipients(&bench.chat, conversation)
+    let mut heard: Vec<String> = room_of_chat(&bench.chat, conversation)
         .await
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .map(|room| {
+            room.members
+                .into_iter()
+                .map(|member| member.user_id)
+                .collect()
+        })
+        .unwrap_or_default();
     heard.sort();
     let mut expected = vec![host.clone(), stayed.clone(), late.clone()];
     expected.sort();

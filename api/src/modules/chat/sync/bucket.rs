@@ -31,8 +31,4 @@ impl Bucket {
         self.tokens -= 1.0;
         true
     }
-
-    pub fn is_full(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.at) >= REFILL_WINDOW
-    }
 }

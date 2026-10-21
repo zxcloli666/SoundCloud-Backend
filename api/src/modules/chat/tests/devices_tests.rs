@@ -5,15 +5,13 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::bind::claim;
 use super::test_support::{
     DeviceKeys, age, call, caller, conversation, desktop, enroll, fresh_device_budget,
     rekey_pending, session, state,
 };
-use super::{alerts, lookup, touch};
-use crate::modules::chat::caller::CallerDevice;
+use super::{lookup, touch};
 use crate::modules::chat::sync::changes::Change;
-use crate::modules::chat::{ChatError, ChatState, rt_keys};
+use crate::modules::chat::{ChatState, rt_keys};
 
 const USER: &str = "7001";
 
@@ -133,11 +131,6 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
         "a session of another SoundCloud user never registers for this one"
     );
 
-    assert_eq!(
-        claim(Some(&other.bind()), first.keys.id),
-        Err(ChatError::SessionBoundOther)
-    );
-    assert_eq!(claim(None, first.keys.id), Err(ChatError::ReloginRequired));
     assert_eq!(status_of(&pool, first.keys.id).await, "active");
 }
 
@@ -432,16 +425,6 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
     );
 
     let seasoned = age(&chat, &pool, &older.row, 100).await;
-    assert_eq!(
-        alerts(&chat, USER, &CallerDevice::from(&seasoned))
-            .await
-            .expect("alerts")
-            .iter()
-            .map(|alert| alert.id)
-            .collect::<Vec<_>>(),
-        vec![newer.keys.id],
-        "the older device is asked about the newer one"
-    );
     let (status, _) = call(
         &chat,
         caller(USER, older.session, Some(&seasoned)),
@@ -469,12 +452,6 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
         .expect("the newer device");
     assert_eq!(newer_view["history_unlocked"], json!(true));
     assert_eq!(newer_view["current"], json!(true));
-    assert!(
-        alerts(&chat, USER, &CallerDevice::from(&seasoned))
-            .await
-            .expect("alerts")
-            .is_empty()
-    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

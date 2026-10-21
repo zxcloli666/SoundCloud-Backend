@@ -5,7 +5,7 @@ use sqlx::PgPool;
 
 use super::*;
 use crate::modules::chat::conversations::fixtures::{
-    access_of, dm, exec, group, outgoing, post, send, seqs,
+    access_of, dm, exec, group, key_epoch, outgoing, post, send, seqs,
 };
 use crate::modules::chat::messages::gate;
 use crate::modules::chat::model::MemberState;
@@ -87,14 +87,14 @@ async fn a_pending_rekey_turns_the_epoch_once(pool: PgPool) -> ChatResult<()> {
     .await;
     let stale = send(&pool, id, "101", &outgoing(Class::Post, 0, None)).await;
     assert_eq!(stale.err(), Some(ChatError::EpochStale));
-    assert_eq!(access_of(&pool, id, "101").await.key_epoch, 1);
+    assert_eq!(key_epoch(&pool, id).await, 1);
     assert_eq!(
         send(&pool, id, "202", &outgoing(Class::Post, 0, None))
             .await
             .err(),
         Some(ChatError::EpochStale)
     );
-    assert_eq!(access_of(&pool, id, "101").await.key_epoch, 1);
+    assert_eq!(key_epoch(&pool, id).await, 1);
     let fresh = send(&pool, id, "101", &outgoing(Class::Post, 1, None)).await?;
     assert_eq!((fresh.seq, fresh.epoch), (2, 1));
     Ok(())
@@ -115,7 +115,7 @@ async fn an_epoch_turns_after_10k_messages_or_30_days(pool: PgPool) -> ChatResul
             .err(),
         Some(ChatError::EpochStale)
     );
-    assert_eq!(access_of(&pool, id, "101").await.key_epoch, 1);
+    assert_eq!(key_epoch(&pool, id).await, 1);
     send(&pool, id, "101", &outgoing(Class::Post, 1, None)).await?;
     exec(
         &pool,
@@ -129,7 +129,7 @@ async fn an_epoch_turns_after_10k_messages_or_30_days(pool: PgPool) -> ChatResul
             .err(),
         Some(ChatError::EpochStale)
     );
-    assert_eq!(access_of(&pool, id, "101").await.key_epoch, 2);
+    assert_eq!(key_epoch(&pool, id).await, 2);
     Ok(())
 }
 
@@ -142,7 +142,7 @@ async fn a_future_epoch_is_stale_and_turns_nothing(pool: PgPool) -> ChatResult<(
             .err(),
         Some(ChatError::EpochStale)
     );
-    assert_eq!(access_of(&pool, id, "101").await.key_epoch, 0);
+    assert_eq!(key_epoch(&pool, id).await, 0);
     assert_eq!(seqs(&pool, id).await, Vec::<i64>::new());
     Ok(())
 }

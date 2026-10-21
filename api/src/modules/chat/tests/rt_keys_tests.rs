@@ -49,7 +49,6 @@ fn the_replay_key_is_the_first_half_of_the_enc_digest() {
 #[test]
 fn every_ttl_is_set() {
     for ttl in [
-        ROOMS_TTL,
         VERSION_TTL,
         TYPING_TTL,
         MARKS_TTL,

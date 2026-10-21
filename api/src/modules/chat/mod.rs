@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod admin;
 pub mod auth_bind;
 pub mod b64;

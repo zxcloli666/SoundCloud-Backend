@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -9,7 +9,7 @@ use crate::modules::chat::model::{ConversationKind, MemberRole, MemberState};
 use crate::modules::chat::rooms::lookup::{RoomChatMember, room_of_chat};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupSettings {
     #[serde(default)]
     pub admins_only: bool,
@@ -42,9 +42,7 @@ pub struct Access {
     pub user_id: String,
     pub kind: ConversationKind,
     pub peer: Option<String>,
-    pub key_epoch: i32,
     pub last_seq: i64,
-    pub ttl_s: Option<i32>,
     pub settings: GroupSettings,
     pub role: MemberRole,
     pub state: MemberState,
@@ -124,9 +122,7 @@ pub async fn load(pg: &PgPool, conversation: Uuid, user_id: &str) -> ChatResult<
             _ => None,
         },
         kind,
-        key_epoch: row.key_epoch,
         last_seq: row.last_seq,
-        ttl_s: row.ttl_s,
         settings: GroupSettings::of(&row.settings),
         role: roles::role(&row.role)?,
         state: roles::state(&row.state)?,
@@ -161,9 +157,7 @@ async fn load_room(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatR
         user_id: user_id.to_owned(),
         kind: ConversationKind::Room,
         peer: None,
-        key_epoch: row.key_epoch,
         last_seq: row.last_seq,
-        ttl_s: None,
         settings: GroupSettings::default(),
         role: if member.can_moderate() {
             MemberRole::Admin

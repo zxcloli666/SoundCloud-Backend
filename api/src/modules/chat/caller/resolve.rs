@@ -114,6 +114,12 @@ async fn device(
     if row.status != "active" {
         return Err(ChatError::DeviceRevoked);
     }
+    if let Err(error) = devices::touch(chat, &row).await {
+        tracing::debug!(
+            code = error.code(),
+            "a device last seen time was not written"
+        );
+    }
     Ok(Some(CallerDevice::from(&row)))
 }
 

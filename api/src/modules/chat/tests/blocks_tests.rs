@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use sqlx::PgPool;
 
-use super::{BLOCKS_MAX, block, blocked_between, blocked_by, list, unblock};
+use super::{BLOCKS_MAX, block, blocked_among, blocked_between, blocked_by, list, unblock};
 use crate::modules::chat::ChatError;
 use crate::modules::chat::body::ChatPath;
 use crate::modules::chat::moderation::testing::state;
@@ -77,4 +77,43 @@ async fn odd_targets_and_a_full_list_are_refused(pool: PgPool) {
     block(caller(), State(chat), ChatPath("7".to_owned()))
         .await
         .expect("an existing block is still fine");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn one_query_finds_every_blocked_user_of_a_group(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    sqlx::query(
+        "INSERT INTO chat.blocks (user_id, blocked_user) VALUES ('101', '2'), ('3', '101')",
+    )
+    .execute(&pool)
+    .await
+    .expect("chat blocks");
+    sqlx::query(
+        "INSERT INTO user_blocked_artists (sc_user_id, kind, target_id, name, sc_user_ids)
+         VALUES ('101', 'user', '4', 'x', ARRAY['4'])",
+    )
+    .execute(&pool)
+    .await
+    .expect("a music block");
+    let wanted: Vec<String> = ["2", "3", "4", "5"].map(str::to_owned).to_vec();
+    let mut blocked: Vec<String> = blocked_among(&chat, "101", &wanted)
+        .await
+        .expect("read")
+        .into_iter()
+        .collect();
+    blocked.sort();
+    assert_eq!(blocked, ["2", "3", "4"]);
+    for other in &wanted {
+        assert_eq!(
+            blocked.contains(other),
+            blocked_between(&chat, "101", other).await.expect("read"),
+            "{other}"
+        );
+    }
+    assert!(
+        blocked_among(&chat, "101", &[])
+            .await
+            .expect("read")
+            .is_empty()
+    );
 }

@@ -4,25 +4,9 @@ use sqlx::PgPool;
 
 use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::model::MemberState;
+use crate::modules::chat::settings::DmPolicy;
 use crate::modules::chat::users::{self, Scope};
 use crate::modules::chat::{ChatResult, ChatState, blocks};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DmPolicy {
-    Everyone,
-    Following,
-    Nobody,
-}
-
-impl DmPolicy {
-    fn parse(raw: &str) -> Self {
-        match raw {
-            "everyone" => DmPolicy::Everyone,
-            "nobody" => DmPolicy::Nobody,
-            _ => DmPolicy::Following,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Relation {
@@ -71,6 +55,32 @@ pub async fn relations(
         .collect())
 }
 
+pub async fn relation(pg: &PgPool, user: &str, other: &str) -> ChatResult<Relation> {
+    Ok(relations(pg, user, &[other.to_owned()])
+        .await?
+        .remove(other)
+        .unwrap_or_default())
+}
+
+pub async fn landing(
+    chat: &ChatState,
+    sender: &str,
+    recipient: &str,
+    relation: Relation,
+) -> ChatResult<Option<MemberState>> {
+    if sender == recipient {
+        return Ok(Some(MemberState::Active));
+    }
+    if blocks::blocked_between(chat, sender, recipient).await? {
+        return Ok(None);
+    }
+    let policy = policies(&chat.pg, &[recipient.to_owned()])
+        .await?
+        .remove(recipient)
+        .unwrap_or(DmPolicy::Following);
+    Ok(placement(relation, policy))
+}
+
 pub async fn placements(
     pg: &PgPool,
     user: &str,
@@ -96,13 +106,11 @@ pub async fn unblocked(
     user: &str,
     wanted: Vec<String>,
 ) -> ChatResult<Vec<String>> {
-    let mut open = Vec::with_capacity(wanted.len());
-    for other in wanted {
-        if !blocks::blocked_between(chat, user, &other).await? {
-            open.push(other);
-        }
-    }
-    Ok(open)
+    let blocked = blocks::blocked_among(chat, user, &wanted).await?;
+    Ok(wanted
+        .into_iter()
+        .filter(|other| !blocked.contains(other))
+        .collect())
 }
 
 pub async fn admit_invites(

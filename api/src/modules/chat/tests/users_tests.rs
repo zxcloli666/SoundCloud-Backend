@@ -108,6 +108,7 @@ async fn a_card_shows_the_profile_and_how_the_viewer_can_write(pool: PgPool) {
     assert!(stranger.verified);
     assert!(!stranger.contact && !stranger.blocked);
     assert_eq!(stranger.can_message, "unavailable");
+    assert_eq!(stranger.presence, None);
 
     sqlx::query("INSERT INTO chat.users (user_id, dm_policy) VALUES ('62', 'everyone')")
         .execute(&pool)

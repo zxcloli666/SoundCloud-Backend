@@ -40,11 +40,6 @@ impl RoomChatMember {
     }
 }
 
-pub async fn chat_of_room(chat: &ChatState, code: &str) -> ChatResult<Option<Uuid>> {
-    let room = chat.rooms.find(code).await.map_err(refusal)?;
-    Ok(room.and_then(|room| room.chat_id))
-}
-
 pub async fn room_of_chat(chat: &ChatState, conversation: Uuid) -> ChatResult<Option<Room>> {
     chat.rooms.room_by_chat(conversation).await.map_err(refusal)
 }
@@ -56,13 +51,6 @@ pub async fn member_of_chat(
 ) -> ChatResult<Option<RoomChatMember>> {
     let room = room_of_chat(chat, conversation).await?;
     Ok(room.and_then(|room| RoomChatMember::of(&room, user_id, now_ms())))
-}
-
-pub async fn recipients(chat: &ChatState, conversation: Uuid) -> ChatResult<Vec<String>> {
-    let room = room_of_chat(chat, conversation).await?;
-    Ok(room
-        .map(|room| room.members.into_iter().map(|m| m.user_id).collect())
-        .unwrap_or_default())
 }
 
 pub async fn gate_send(
