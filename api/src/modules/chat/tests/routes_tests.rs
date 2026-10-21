@@ -136,6 +136,8 @@ fn still_stubbed(uri: &str) -> bool {
         && !uri.contains("/keys")
         && !uri.starts_with("/chat/rooms/")
         && !filled_by_conversations_lane(uri)
+        && uri != "/chat/sync"
+        && !uri.ends_with("/typing")
 }
 
 #[tokio::test]

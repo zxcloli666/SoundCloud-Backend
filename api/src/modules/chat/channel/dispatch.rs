@@ -1,12 +1,13 @@
 use axum::body::{Body, to_bytes};
 use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
-use axum::http::{Extensions, HeaderMap, Method, Request, StatusCode, Uri};
+use axum::http::{Extensions, HeaderMap, HeaderName, Method, Request, StatusCode, Uri};
 use axum::response::Response;
 use chat_wire::proto::{Header, Inner, InnerResponse};
 use tower::ServiceExt;
 
 use crate::modules::chat::channel::Channel;
 use crate::modules::chat::channel::answer::error_answer;
+use crate::modules::chat::sync::wire::RETRY_AFTER_MS;
 use crate::modules::chat::{ChatError, ChatResult};
 
 pub const ANSWER_MAX: usize = 1024 * 1024;
@@ -60,14 +61,18 @@ async fn inner_response(response: Response) -> InnerResponse {
 }
 
 fn kept_headers(headers: &HeaderMap) -> Vec<Header> {
-    [CONTENT_TYPE, RETRY_AFTER]
-        .iter()
-        .filter_map(|name| {
-            let value = headers.get(name)?.to_str().ok()?;
-            Some(Header {
-                name: name.as_str().to_owned(),
-                value: value.to_owned(),
-            })
+    [
+        CONTENT_TYPE,
+        RETRY_AFTER,
+        HeaderName::from_static(RETRY_AFTER_MS),
+    ]
+    .iter()
+    .filter_map(|name| {
+        let value = headers.get(name)?.to_str().ok()?;
+        Some(Header {
+            name: name.as_str().to_owned(),
+            value: value.to_owned(),
         })
-        .collect()
+    })
+    .collect()
 }
