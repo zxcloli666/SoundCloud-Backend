@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::modules::chat::model::MessageRow;
-use crate::modules::chat::sweeps::hooks;
+use crate::modules::chat::sync::bump as sync_bump;
 use crate::modules::chat::{ChatResult, ChatState};
 
 pub async fn publish(
@@ -24,7 +24,14 @@ pub async fn bump(
     seq: i64,
     recipients: &[String],
 ) -> ChatResult<()> {
-    hooks::bump(chat, conversation, seq, recipients).await
+    sync_bump::conversation(chat, conversation, seq, recipients).await
+}
+
+pub async fn requests(chat: &ChatState, users: &[String]) -> ChatResult<()> {
+    for user in users {
+        sync_bump::requests(chat, user).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

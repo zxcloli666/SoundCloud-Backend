@@ -70,7 +70,9 @@ async fn the_recipient_policy_decides_where_a_stranger_lands(pool: PgPool) -> Ch
     dm_policy(&pool, "202", "everyone").await;
     let plan = plan_direct(&pool, "101", "202").await?;
     assert!(plan.is_request());
-    let id = direct(&pool, "101", plan).await?.id;
+    let created = direct(&pool, "101", plan).await?;
+    assert_eq!(created.requests, vec!["202".to_owned()]);
+    let id = created.id;
     let members = members_of(&pool, id).await;
     assert_eq!(
         members,
@@ -123,6 +125,7 @@ async fn a_declined_dm_reopens_only_for_the_one_who_comes_back(pool: PgPool) -> 
         comes_back.recipients,
         vec!["202".to_owned(), "101".to_owned()]
     );
+    assert_eq!(comes_back.requests, vec!["202".to_owned()]);
     let back = access_of(&pool, id, "202").await;
     assert_eq!((back.state, back.accepted), (MemberState::Active, true));
     Ok(())

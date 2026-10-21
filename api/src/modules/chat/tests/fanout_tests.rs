@@ -7,6 +7,7 @@ use uuid::Uuid;
 use super::*;
 use crate::modules::chat::ChatState;
 use crate::modules::chat::rt_keys::{self, DELTAS_KEPT};
+use crate::modules::chat::sweeps::hooks;
 use crate::modules::chat::test_support::chat_state;
 
 fn redis_url() -> String {
@@ -98,6 +99,20 @@ async fn a_send_bump_and_a_sweep_bump_share_one_version_layout() -> anyhow::Resu
     assert!(last > first, "{last} after {first}");
     let seq: i64 = conn.get(rt_keys::conversation_seq(conversation)).await?;
     assert_eq!(seq, 2);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_request_change_reaches_every_named_user() -> anyhow::Result<()> {
+    let chat = state();
+    let users = users();
+    requests(&chat, &users).await.expect("a requests bump");
+    let mut conn = chat.redis.get().await?;
+    for user in &users {
+        let score: Option<f64> = conn.zscore(rt_keys::deltas(user), "requests").await?;
+        assert!(score.is_some(), "{user}");
+    }
     Ok(())
 }
 

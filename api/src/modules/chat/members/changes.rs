@@ -18,6 +18,7 @@ pub struct Change {
     pub recipients: Vec<String>,
     pub added: Vec<String>,
     pub deleted: bool,
+    pub requests: Vec<String>,
 }
 
 impl Change {
@@ -49,9 +50,13 @@ pub async fn leave(pg: &PgPool, access: &Access) -> ChatResult<Change> {
         tx.rollback().await?;
         return Ok(change);
     };
+    if access.state == MemberState::Invited {
+        change.requests.push(me.to_owned());
+    }
     if members::recount(&mut tx, access.conversation).await? == 0 {
         change.deleted = remove::shred(&mut tx, access.conversation).await?;
         tx.commit().await?;
+        change.requests = change.recipients.clone();
         return Ok(change);
     }
     if role == MemberRole::Owner {
@@ -123,6 +128,9 @@ pub async fn remove(pg: &PgPool, access: &Access, target: &str, ban: bool) -> Ch
     }
     if LIVE.contains(&state) {
         epochs::mark_rekey_in(&mut tx, actor.conversation).await?;
+    }
+    if state == MemberState::Invited {
+        change.requests.push(target.to_owned());
     }
     let event = if ban {
         SystemEvent::Banned {
@@ -204,6 +212,7 @@ pub async fn accept(pg: &PgPool, access: &Access) -> ChatResult<Change> {
             _ => Err(ChatError::NotMember),
         };
     }
+    change.requests.push(me.to_owned());
     if access.is_group() {
         let event = SystemEvent::Joined {
             actor: me.to_owned(),
@@ -231,7 +240,10 @@ pub async fn decline(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     if declined.is_none() && access.state != MemberState::Left {
         return Err(ChatError::NotMember);
     }
-    Ok(Change::to(vec![me.to_owned()]))
+    Ok(Change {
+        requests: vec![me.to_owned()],
+        ..Change::to(vec![me.to_owned()])
+    })
 }
 
 pub async fn add(
@@ -277,6 +289,11 @@ pub async fn add(
     if hidden {
         epochs::mark_rekey_in(&mut tx, actor.conversation).await?;
     }
+    change.requests = joined
+        .iter()
+        .filter(|one| one.state == MemberState::Invited)
+        .map(|one| one.user_id.clone())
+        .collect();
     let targets: Vec<String> = joined.into_iter().map(|one| one.user_id).collect();
     let event = SystemEvent::Added {
         actor: actor.user_id.clone(),
@@ -294,15 +311,17 @@ pub async fn add(
 
 pub async fn publish(chat: &ChatState, access: &Access, change: Change) -> ChatResult<()> {
     if change.rows.is_empty() {
-        return fanout::bump(
+        fanout::bump(
             chat,
             access.conversation,
             access.last_seq,
             &change.recipients,
         )
-        .await;
+        .await?;
+    } else {
+        fanout::publish(chat, &change.rows, &change.recipients).await?;
     }
-    fanout::publish(chat, &change.rows, &change.recipients).await
+    fanout::requests(chat, &change.requests).await
 }
 
 #[cfg(test)]

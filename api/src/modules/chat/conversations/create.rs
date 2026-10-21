@@ -68,6 +68,7 @@ pub struct Created {
     pub id: Uuid,
     pub rows: Vec<MessageRow>,
     pub recipients: Vec<String>,
+    pub requests: Vec<String>,
 }
 
 pub fn single_peer(user: &str, members: &[String], synthetic: bool) -> ChatResult<String> {
@@ -180,22 +181,31 @@ pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Cre
     members::join_many(&mut tx, id, 0, 0, user, &joining).await?;
     members::recount(&mut tx, id).await?;
     tx.commit().await?;
+    let requests = if peer_state == MemberState::Invited {
+        vec![peer.clone()]
+    } else {
+        Vec::new()
+    };
     Ok(Created {
         id,
         rows: Vec::new(),
         recipients: vec![user.to_owned(), peer],
+        requests,
     })
 }
 
 async fn existing_direct(pg: &PgPool, id: Uuid, user: &str, peer: String) -> ChatResult<Created> {
     let mut recipients = vec![user.to_owned()];
+    let mut requests = Vec::new();
     if reopen(pg, id, user).await? {
         recipients.push(peer);
+        requests.push(user.to_owned());
     }
     Ok(Created {
         id,
         rows: Vec::new(),
         recipients,
+        requests,
     })
 }
 
@@ -206,6 +216,7 @@ pub async fn saved(pg: &PgPool, user: &str) -> ChatResult<Created> {
             id,
             rows: Vec::new(),
             recipients: vec![user.to_owned()],
+            requests: Vec::new(),
         });
     }
     let id = Uuid::now_v7();
@@ -219,6 +230,7 @@ pub async fn saved(pg: &PgPool, user: &str) -> ChatResult<Created> {
             id,
             rows: Vec::new(),
             recipients: vec![user.to_owned()],
+            requests: Vec::new(),
         });
     }
     members::join_many(
@@ -236,6 +248,7 @@ pub async fn saved(pg: &PgPool, user: &str) -> ChatResult<Created> {
         id,
         rows: Vec::new(),
         recipients: vec![user.to_owned()],
+        requests: Vec::new(),
     })
 }
 
@@ -261,10 +274,16 @@ pub async fn group(
     let row = system::insert(&mut tx, id, &event, None).await?;
     members::recount(&mut tx, id).await?;
     tx.commit().await?;
+    let requests = joining
+        .iter()
+        .filter(|one| one.state == MemberState::Invited)
+        .map(|one| one.user_id.clone())
+        .collect();
     Ok(Created {
         id,
         rows: vec![row],
         recipients: joining.into_iter().map(|one| one.user_id).collect(),
+        requests,
     })
 }
 

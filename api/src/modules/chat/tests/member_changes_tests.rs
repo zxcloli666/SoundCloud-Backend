@@ -180,6 +180,7 @@ async fn an_invite_is_accepted_or_declined_once(pool: PgPool) -> ChatResult<()> 
     .await;
     let joined = accept(&pool, &access_of(&pool, id, "202").await).await?;
     assert_eq!(kinds(&joined), vec!["joined"]);
+    assert_eq!(joined.requests, vec!["202".to_owned()]);
     assert_eq!(access_of(&pool, id, "202").await.state, MemberState::Active);
     assert!(
         accept(&pool, &access_of(&pool, id, "202").await)
@@ -189,6 +190,7 @@ async fn an_invite_is_accepted_or_declined_once(pool: PgPool) -> ChatResult<()> 
     );
     let declined = decline(&pool, &access_of(&pool, id, "303").await).await?;
     assert!(declined.rows.is_empty());
+    assert_eq!(declined.requests, vec!["303".to_owned()]);
     assert_eq!(state_of(&pool, id, "303").await.1, "left");
     let members: i32 =
         sqlx::query_scalar("SELECT member_count FROM chat.conversations WHERE id = $1")
@@ -230,6 +232,7 @@ async fn adding_respects_the_200_cap_and_hidden_history(pool: PgPool) -> ChatRes
     )
     .await?;
     assert_eq!(kinds(&change), vec!["added"]);
+    assert_eq!(change.requests, vec!["303".to_owned()]);
     assert!(rekey_of(&pool, id).await);
     let (joined_seq, joined_epoch): (i64, i32) = sqlx::query_as(
         "SELECT joined_seq, joined_epoch FROM chat.members WHERE conversation_id = $1 AND user_id = '202'",

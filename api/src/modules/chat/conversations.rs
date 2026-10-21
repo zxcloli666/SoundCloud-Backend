@@ -122,6 +122,7 @@ pub async fn create(
     } else {
         fanout::publish(&chat, &created.rows, &created.recipients).await?;
     }
+    fanout::requests(&chat, &created.requests).await?;
     Ok(Json(view))
 }
 
@@ -195,10 +196,14 @@ pub async fn delete(
             fanout::bump(&chat, conversation, hidden, me).await?;
         }
         (DeleteScope::Everyone, _) => {
-            if remove::for_everyone(&chat.pg, &access).await? {
+            let deleted = remove::for_everyone(&chat.pg, &access).await?;
+            if deleted {
                 chat.hot.forget(conversation);
             }
             fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?;
+            if deleted {
+                fanout::requests(&chat, &access.recipients).await?;
+            }
         }
     }
     Ok(StatusCode::NO_CONTENT)
