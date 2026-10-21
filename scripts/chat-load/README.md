@@ -59,7 +59,7 @@ chat-load fake-pro
 | `--watch name=cmd` | none | abort check, see below |
 | `--chat-metrics-cmd`, `--abort-pool-wait-ms` | none, `200` | PG pool wait p99 from chat-api metrics |
 | `--music-metrics-cmd`, `--abort-music-rise`, `--baseline-secs` | none, `0.2`, `60` | backend p99 against a baseline taken before the ramp |
-| `--abort-error-rate` | `0.01` | harness error rate over 60 s with at least 1000 requests in it (60 s grace after the restart) |
+| `--abort-error-rate` | `0.01` | harness error rate over 60 s with at least 1000 requests in it (the 60 s after the restart are left out) |
 | `--report` | `chat-load-report.json` | final report |
 
 Routes: `direct` posts to `https://api.scnative.dev/chat/x`, relays to `https://api.<node>.relay.scnative.dev/chat/x`,
