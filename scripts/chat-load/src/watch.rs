@@ -240,6 +240,12 @@ async fn histograms_crossed(watcher: &Watcher, last: &mut Histograms) -> Option<
         Some(command) => sample(command, MUSIC_METRIC).await,
         None => None,
     };
+    if watcher.chat_metrics.is_some() && pool.is_none() {
+        eprintln!("chat metrics gave no {POOL_WAIT_METRIC} samples");
+    }
+    if watcher.music_metrics.is_some() && music.is_none() {
+        eprintln!("music metrics gave no {MUSIC_METRIC} samples");
+    }
     let mut crossed = None;
     if let (Some(before), Some(after)) = (&last.pool, &pool)
         && let Some(p99) = prom::quantile(before, after, 0.99)

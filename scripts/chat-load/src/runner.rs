@@ -125,7 +125,10 @@ pub async fn run(args: RunArgs) -> anyhow::Result<bool> {
                 args.baseline_secs
             );
             let baseline = watch::baseline(command, Duration::from_secs(args.baseline_secs)).await;
-            println!("music p99 baseline: {baseline:?} s");
+            match baseline {
+                Some(seconds) => println!("music p99 baseline: {:.0} ms", seconds * 1_000.0),
+                None => eprintln!("no music p99 baseline: the music check is off"),
+            }
             baseline
         }
         None => None,
