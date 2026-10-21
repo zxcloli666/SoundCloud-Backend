@@ -76,7 +76,7 @@ jobs:
           cache-workspace-crates: true
           cache-on-failure: true
           cache-directories: .ci-sha
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: 'true'
 
       - name: Source times
         run: sh scripts/ci-mtime.sh
@@ -146,7 +146,7 @@ jobs:
           cache-workspace-crates: true
           cache-on-failure: true
           cache-directories: .ci-sha
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: 'true'
 
       - name: Source times
         run: sh scripts/ci-mtime.sh
@@ -200,7 +200,7 @@ jobs:
           cache-workspace-crates: true
           cache-on-failure: true
           cache-directories: .ci-sha
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: 'true'
 
       - name: Source times
         run: sh scripts/ci-mtime.sh
@@ -357,7 +357,7 @@ jobs:
           cache-workspace-crates: true
           cache-on-failure: true
           cache-directories: .ci-sha
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: 'true'
 
       - name: Source times
         run: sh scripts/ci-mtime.sh
