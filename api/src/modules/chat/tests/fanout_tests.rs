@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::modules::chat::ChatState;
+use crate::modules::chat::rt_keys::{self, DELTAS_KEPT};
 use crate::modules::chat::test_support::chat_state;
 
 fn redis_url() -> String {
@@ -71,6 +72,32 @@ async fn a_bump_moves_every_recipient_and_never_lowers_the_seq() -> anyhow::Resu
         let ttl: i64 = conn.ttl(rt_keys::deltas(user)).await?;
         assert!(ttl > 0);
     }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_send_bump_and_a_sweep_bump_share_one_version_layout() -> anyhow::Result<()> {
+    let chat = state();
+    let conversation = Uuid::now_v7();
+    let users = users();
+    bump(&chat, conversation, 1, &users)
+        .await
+        .expect("a send bump");
+    let mut conn = chat.redis.get().await?;
+    let first: i64 = conn.hget(rt_keys::version(&users[0]), "v").await?;
+    drop(conn);
+    hooks::messages_gone(&chat, conversation, &[1], &users)
+        .await
+        .expect("a sweep bump");
+    bump(&chat, conversation, 2, &users)
+        .await
+        .expect("a send bump");
+    let mut conn = chat.redis.get().await?;
+    let last: i64 = conn.hget(rt_keys::version(&users[0]), "v").await?;
+    assert!(last > first, "{last} after {first}");
+    let seq: i64 = conn.get(rt_keys::conversation_seq(conversation)).await?;
+    assert_eq!(seq, 2);
     Ok(())
 }
 
