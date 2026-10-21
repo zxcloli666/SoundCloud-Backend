@@ -1,4 +1,4 @@
-FROM mirror.gcr.io/library/rust:1-bookworm AS builder
+FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:5c1a1732ac3f77635b24d397ceb67b4d9ea61de348f68c0aa54a79fd01e65c69 AS builder
 
 COPY --from=tls-common . /build/utils/tls-common
 

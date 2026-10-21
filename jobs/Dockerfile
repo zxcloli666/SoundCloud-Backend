@@ -1,4 +1,4 @@
-FROM mirror.gcr.io/library/rust:1.99-bookworm AS toolchain
+FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:5c1a1732ac3f77635b24d397ceb67b4d9ea61de348f68c0aa54a79fd01e65c69 AS toolchain
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler curl ca-certificates gnupg cmake clang libclang-dev pkg-config \
     && install -d /usr/share/postgresql-common/pgdg \
