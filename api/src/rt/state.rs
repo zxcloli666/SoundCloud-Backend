@@ -8,6 +8,7 @@ use crate::common::admission::PublicAdmission;
 use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
 use crate::modules::chat::ChatState;
 use crate::modules::chat::channel::ock::OckRing;
+use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
@@ -74,6 +75,7 @@ pub async fn build(config: &RtConfig) -> RtState {
             config.chat.reports_kek_current,
         )
         .expect("CHAT_KEYS_DIR must hold the current KEKs"),
+        devices: DeviceCache::new(),
         hub: ChatHub::new(),
         hot: HotCache::new(HOT_CACHE_BYTES),
         moderator: Moderator::new(

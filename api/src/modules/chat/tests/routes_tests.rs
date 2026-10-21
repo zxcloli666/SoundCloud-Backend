@@ -115,12 +115,18 @@ fn filled_by_conversations_lane(uri: &str) -> bool {
     })
 }
 
+fn still_stubbed(uri: &str) -> bool {
+    !uri.starts_with("/chat/devices")
+        && !uri.contains("/keys")
+        && !filled_by_conversations_lane(uri)
+}
+
 #[tokio::test]
 async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
     let router = inner().with_state(offline_chat_state(true));
     for (method, uri) in inner_routes()
         .into_iter()
-        .filter(|(_, uri)| !filled_by_conversations_lane(uri))
+        .filter(|(_, uri)| still_stubbed(uri))
     {
         assert_eq!(
             answer(&router, method, &uri, true).await,
