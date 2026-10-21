@@ -110,6 +110,7 @@ export CHAT_IT_RELAY=http://127.0.0.1:$RELAY_PORT
 export CHAT_IT_PSQL="podman exec -i $PG_CONTAINER psql -U $PG_USER -d $DB"
 export CHAT_IT_REDIS_RT="podman exec -i chat-it-redis-rt redis-cli"
 export CHAT_IT_ADMIN_TOKEN_FILE=$STATE/keys/chat-admin-token
+export CHAT_IT_LOG=$STATE/chat-api.log
 export SC_CHAT_DEV_OCK=1:$(vector ock_pub)
 EOF
 }
