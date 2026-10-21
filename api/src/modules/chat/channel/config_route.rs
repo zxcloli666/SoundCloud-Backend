@@ -7,10 +7,12 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::modules::chat::model::{DEVICES_MAX, DISAPPEARING_TTLS, GROUP_MEMBERS_MAX};
+use crate::modules::chat::sync::incarnation;
 use crate::modules::chat::{ChatCaller, ChatResult, ChatState};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatConfigView {
+    pub user_id: String,
     pub enabled: bool,
     pub access: &'static str,
     pub send_paused: bool,
@@ -48,9 +50,7 @@ pub async fn chat_config(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
 ) -> ChatResult<Json<ChatConfigView>> {
-    let incarnation = sqlx::query_file_scalar!("queries/chat/channel/incarnation.sql")
-        .fetch_one(&chat.pg)
-        .await?;
+    let incarnation = incarnation::current(&chat).await?;
     Ok(Json(ChatConfigView {
         enabled: chat.config.opens_for(&caller.user_id),
         access: chat.config.access.as_str(),
@@ -60,5 +60,6 @@ pub async fn chat_config(
         incarnation,
         ock_current: chat.ocks.current(),
         limits: ChatLimitsView::current(),
+        user_id: caller.user_id,
     }))
 }

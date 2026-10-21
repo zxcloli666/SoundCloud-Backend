@@ -427,6 +427,7 @@ async fn a_session_without_a_bind_reaches_only_the_config(pool: PgPool) -> anyho
     );
     let (status, view) = exchange(&app, &config).await;
     assert_eq!(status, 200, "{view}");
+    assert_eq!(view["user_id"], "4102");
     assert_eq!(view["enabled"], true);
     assert_eq!(view["access"], "beta");
     assert_eq!(view["send_paused"], false);
