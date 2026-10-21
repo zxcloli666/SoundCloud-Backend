@@ -41,6 +41,7 @@ impl EntityRef {
 
     pub fn parse(kind: EntityKind, input: &str) -> Option<Self> {
         let input = input.trim();
+
         match Self::parse_urn(input) {
             Some(parsed) => (parsed.kind == kind).then_some(parsed),
             None if input.contains(':') => None,
