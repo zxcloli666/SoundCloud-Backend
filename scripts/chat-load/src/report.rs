@@ -45,6 +45,7 @@ pub struct Verdict {
     pub wake_ok: bool,
     pub error_rate: f64,
     pub errors_ok: bool,
+    pub delivered_ok: bool,
     pub reconnect_s: Option<f64>,
     pub reconnect_ok: bool,
     pub aborted: bool,
@@ -227,6 +228,7 @@ pub fn build(stats: &Stats, context: Context) -> Report {
     };
     let wake_ok = total.wake.p99_ms < WAKE_P99_MAX_MS;
     let errors_ok = total.error_rate < ERROR_RATE_MAX;
+    let delivered_ok = total.sent == 0 || total.received > 0;
     let aborted = context.abort.is_some();
     Report {
         run_id: context.run_id,
@@ -239,10 +241,11 @@ pub fn build(stats: &Stats, context: Context) -> Report {
             wake_ok,
             error_rate: total.error_rate,
             errors_ok,
+            delivered_ok,
             reconnect_s,
             reconnect_ok,
             aborted,
-            passed: wake_ok && errors_ok && reconnect_ok && !aborted,
+            passed: wake_ok && errors_ok && delivered_ok && reconnect_ok && !aborted,
         },
         routes,
         total,
@@ -311,12 +314,13 @@ pub fn summary(report: &Report) -> String {
     }
     let verdict = &report.verdict;
     lines.push(format!(
-        "verdict: {} (wake p99 {} ms {}, errors {:.2}% {}, reconnect {} {})",
+        "verdict: {} (wake p99 {} ms {}, errors {:.2}% {}, delivery {}, reconnect {} {})",
         if verdict.passed { "PASS" } else { "FAIL" },
         verdict.wake_p99_ms,
         mark(verdict.wake_ok),
         verdict.error_rate * 100.0,
         mark(verdict.errors_ok),
+        if verdict.delivered_ok { "ok" } else { "none" },
         verdict
             .reconnect_s
             .map_or_else(|| "n/a".to_owned(), |s| format!("{s:.0} s")),
