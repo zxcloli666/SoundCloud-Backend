@@ -68,9 +68,12 @@ pub async fn moderate(chat: &ChatState, keys: &dyn ChatKeys, id: Uuid) -> ChatRe
                 let facts = Facts {
                     target_seqs: judgement.target_seqs,
                     injection: judgement.injection,
-                    repeat: history::repeat_offender(chat, &report.target_user, report.id).await?,
+                    repeat: history::repeat_offender(chat, &report).await?,
                 };
-                decide::decide(judgement.answer.verdict.as_ref(), &facts)
+                capped(
+                    chat,
+                    decide::decide(judgement.answer.verdict.as_ref(), &facts),
+                )
             }
             Err(error) => {
                 tracing::warn!(code = error.code(), "a chat report could not be examined");
@@ -81,6 +84,16 @@ pub async fn moderate(chat: &ChatState, keys: &dyn ChatKeys, id: Uuid) -> ChatRe
     apply(chat, &report, &decision).await?;
     metrics::counter!("chat_moderation_total", "decision" => decision.label()).increment(1);
     Ok(decision)
+}
+
+fn capped(chat: &ChatState, decision: Decision) -> Decision {
+    match decision {
+        Decision::Remove { ban, .. } if ban != Ban::None && !chat.moderator.allow_ban() => {
+            tracing::warn!("chat ai ban cap reached, the report waits in the admin queue");
+            Decision::Fallback("ban_cap")
+        }
+        decision => decision,
+    }
 }
 
 pub async fn apply(chat: &ChatState, report: &ReportRow, decision: &Decision) -> ChatResult<()> {
@@ -103,6 +116,7 @@ pub async fn apply(chat: &ChatState, report: &ReportRow, decision: &Decision) ->
                 json!({"conversation": report.conversation_id, "seqs": removed}),
             )
             .await?;
+            actions::announce_removed(chat, report.conversation_id, &removed).await;
             if let Some(restriction) = actions::ban(chat, &report.target_user, *ban).await? {
                 audit::record(
                     chat,

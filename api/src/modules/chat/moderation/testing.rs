@@ -281,6 +281,8 @@ pub enum FakeModel {
     Honest,
     Obedient,
     Sloppy,
+    BansEveryone,
+    Huge,
     FailsFirst(usize),
     AlwaysDown,
     Slow,
@@ -358,6 +360,13 @@ async fn complete(
         }
         FakeModel::Obedient => Some(obedient(&request).unwrap_or_else(|| honest(&request))),
         FakeModel::Sloppy => Some(sloppy(&request)),
+        FakeModel::Huge => Some("{".repeat(100_000)),
+        FakeModel::BansEveryone => Some(verdict(
+            true,
+            "illegal",
+            1.0,
+            target_seqs(&user_prompt(&request)),
+        )),
         FakeModel::Honest | FakeModel::FailsFirst(_) => Some(honest(&request)),
     };
     fake.probe.in_flight.fetch_sub(1, Ordering::SeqCst);

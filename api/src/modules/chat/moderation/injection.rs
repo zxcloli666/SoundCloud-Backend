@@ -1,3 +1,5 @@
+use crate::modules::chat::moderation::evidence::Line;
+
 const MARKERS: &[&str] = &[
     "ignore previous",
     "ignore all previous",
@@ -44,4 +46,13 @@ pub fn suspected<'a>(texts: impl IntoIterator<Item = &'a str>) -> bool {
         let squeezed = folded.split_whitespace().collect::<Vec<_>>().join(" ");
         MARKERS.iter().any(|marker| squeezed.contains(marker))
     })
+}
+
+pub fn suspected_outside(lines: &[Line], author: &str) -> bool {
+    suspected(
+        lines
+            .iter()
+            .filter(|line| line.sender != author)
+            .map(|line| line.text.as_str()),
+    )
 }

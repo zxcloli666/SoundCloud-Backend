@@ -173,8 +173,9 @@ pub async fn apply(
     {
         return Err(ChatError::Invalid);
     }
-    if input.decision != AdminDecision::Uphold
-        && (!input.delete_seqs.is_empty() || ban != Ban::None)
+    let acts = !input.delete_seqs.is_empty() || ban != Ban::None;
+    if (input.decision != AdminDecision::Uphold && acts)
+        || (input.lift_restriction && ban != Ban::None)
     {
         return Err(ChatError::Invalid);
     }
@@ -239,6 +240,7 @@ async fn uphold(
             json!({"conversation": report.conversation_id, "seqs": removed}),
         )
         .await?;
+        actions::announce_removed(chat, report.conversation_id, &removed).await;
     }
     if let Some(restriction) = actions::ban(chat, &report.target_user, ban).await? {
         audit::record(

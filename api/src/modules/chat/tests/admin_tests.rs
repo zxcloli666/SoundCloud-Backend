@@ -256,6 +256,21 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     let mut mixed = resolve(AdminDecision::Reject);
     mixed.ban_permanent = true;
     assert!(apply(&chat, "owner", id, &mixed).await.is_err());
+    let mut undone = resolve(AdminDecision::Uphold);
+    undone.ban_days = Some(1);
+    undone.lift_restriction = true;
+    assert!(apply(&chat, "owner", id, &undone).await.is_err());
+
+    let reopened_until: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT purge_after FROM chat.reports WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("a purge date");
+    assert!(
+        reopened_until
+            .is_some_and(|until| until > chrono::Utc::now() + chrono::Duration::days(179))
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -4,7 +4,7 @@ use chat_wire::proto::envelope::Body;
 use chat_wire::proto::{Embed, Envelope, Forwarded, Text};
 
 use crate::modules::chat::moderation::client::completions_url;
-use crate::modules::chat::moderation::decide::{Ban, Decision, Facts, decide};
+use crate::modules::chat::moderation::decide::{Ban, Decision, Facts, Injection, decide};
 use crate::modules::chat::moderation::evidence::Line;
 use crate::modules::chat::moderation::history::{ReporterHistory, TargetHistory};
 use crate::modules::chat::moderation::prompt::{Case, build};
@@ -26,7 +26,7 @@ fn verdict(genuine: bool, category: Category, confidence: f32, quotes: &[i64]) -
 fn facts(seqs: &[i64]) -> Facts {
     Facts {
         target_seqs: seqs.iter().copied().collect::<BTreeSet<i64>>(),
-        injection: false,
+        injection: Injection::default(),
         repeat: false,
     }
 }
@@ -103,12 +103,39 @@ fn the_model_cannot_point_actions_outside_the_reported_messages() {
         decide(Some(&verdict(true, Category::Spam, 1.0, &[])), &reported),
         Decision::Fallback("no_quote")
     );
-    let mut injected = facts(&[5]);
-    injected.injection = true;
+}
+
+#[test]
+fn an_injection_only_blocks_the_outcome_its_author_would_want() {
+    let spam = verdict(true, Category::Spam, 1.0, &[5]);
+    let clear = verdict(false, Category::None, 1.0, &[]);
+    let removed = Decision::Remove {
+        seqs: vec![5],
+        ban: Ban::None,
+    };
+    let mut by_target = facts(&[5]);
+    by_target.injection.outside_reporter = true;
     assert_eq!(
-        decide(Some(&verdict(false, Category::None, 1.0, &[])), &injected),
+        decide(Some(&clear), &by_target),
         Decision::Fallback("injection")
     );
+    assert_eq!(decide(Some(&spam), &by_target), removed);
+
+    let mut by_reporter = facts(&[5]);
+    by_reporter.injection.outside_target = true;
+    assert_eq!(
+        decide(Some(&spam), &by_reporter),
+        Decision::Fallback("injection")
+    );
+    assert_eq!(decide(Some(&clear), &by_reporter), Decision::Reject);
+
+    let mut both = facts(&[5]);
+    both.injection = Injection {
+        outside_reporter: true,
+        outside_target: true,
+    };
+    assert_eq!(decide(Some(&spam), &both), Decision::Fallback("injection"));
+    assert_eq!(decide(Some(&clear), &both), Decision::Fallback("injection"));
 }
 
 #[test]

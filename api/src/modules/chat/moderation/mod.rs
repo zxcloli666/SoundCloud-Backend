@@ -13,7 +13,9 @@ pub mod testing;
 pub mod text;
 pub mod verdict;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tokio::sync::{Notify, Semaphore};
@@ -21,6 +23,7 @@ use uuid::Uuid;
 
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::moderation::client::{AiAnswer, AiClient, sha256_hex};
+use crate::modules::chat::moderation::decide::Injection;
 use crate::modules::chat::moderation::evidence::Line;
 use crate::modules::chat::moderation::keys::ChatKeys;
 use crate::modules::chat::moderation::prompt::Case;
@@ -31,16 +34,21 @@ use crate::modules::chat::{ChatError, ChatResult, ChatState, requests};
 pub const AUDIT_ADMIN: &str = "ai-moderator";
 pub const CALLS_IN_FLIGHT: usize = 4;
 pub const CALL_TIMEOUT_SECS: u64 = 30;
+pub const BANS_PER_HOUR: usize = 10;
+pub const BANS_PER_DAY: usize = 50;
+const HOUR: Duration = Duration::from_secs(3_600);
+const DAY: Duration = Duration::from_secs(86_400);
 
 pub struct Moderator {
     client: AiClient,
     calls: Semaphore,
     wake: Notify,
+    bans: Mutex<VecDeque<Instant>>,
 }
 
 pub struct Judgement {
     pub answer: AiAnswer,
-    pub injection: bool,
+    pub injection: Injection,
     pub target_seqs: BTreeSet<i64>,
 }
 
@@ -50,7 +58,28 @@ impl Moderator {
             client,
             calls: Semaphore::new(CALLS_IN_FLIGHT),
             wake: Notify::new(),
+            bans: Mutex::new(VecDeque::with_capacity(BANS_PER_DAY)),
         }
+    }
+
+    pub fn allow_ban(&self) -> bool {
+        let now = Instant::now();
+        let mut bans = self.bans.lock().unwrap_or_else(PoisonError::into_inner);
+        while bans
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= DAY)
+        {
+            bans.pop_front();
+        }
+        let last_hour = bans
+            .iter()
+            .filter(|at| now.duration_since(**at) < HOUR)
+            .count();
+        if bans.len() >= BANS_PER_DAY || last_hour >= BANS_PER_HOUR {
+            return false;
+        }
+        bans.push_back(now);
+        true
     }
 
     pub fn ai_enabled(&self) -> bool {
@@ -89,12 +118,11 @@ impl Moderator {
             .filter(|line| line.class != "system")
             .map(|line| line.seq)
             .collect();
-        let injection = injection::suspected(
-            lines
-                .iter()
-                .map(|line| line.text.as_str())
-                .chain(report.comment.as_deref()),
-        );
+        let injection = Injection {
+            outside_reporter: injection::suspected_outside(&lines, &report.reporter),
+            outside_target: injection::suspected_outside(&lines, &report.target_user)
+                || injection::suspected(report.comment.as_deref()),
+        };
         let seqs: Vec<i64> = target_seqs.iter().copied().collect();
         let case = Case {
             reason: &report.reason,
@@ -146,7 +174,9 @@ impl Moderator {
                 "prompt_sha256": prompt_sha256,
                 "answer_sha256": answer.answer_sha256,
                 "verdict": answer.verdict,
-                "injection": injection,
+                "injection": injection.any(),
+                "injection_outside_reporter": injection.outside_reporter,
+                "injection_outside_target": injection.outside_target,
             }),
         )
         .await?;

@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::modules::chat::moderation::decide::Ban;
 use crate::modules::chat::reports::EVIDENCE_KEEP_DAYS;
+use crate::modules::chat::sweeps::hooks;
 use crate::modules::chat::users::{self, Restriction, Scope};
 use crate::modules::chat::{ChatResult, ChatState};
 
@@ -41,6 +42,25 @@ pub async fn remove_messages(
     Ok(removed)
 }
 
+pub async fn announce_removed(chat: &ChatState, conversation: Uuid, removed: &[i64]) {
+    if removed.is_empty() {
+        return;
+    }
+    if let Err(error) = announce(chat, conversation, removed).await {
+        tracing::warn!(
+            code = error.code(),
+            "removed chat messages were not announced"
+        );
+    }
+}
+
+async fn announce(chat: &ChatState, conversation: Uuid, removed: &[i64]) -> ChatResult<()> {
+    let members = sqlx::query_file_scalar!("queries/chat/reports/live_members.sql", conversation)
+        .fetch_all(&chat.pg)
+        .await?;
+    hooks::messages_gone(chat, conversation, removed, &members).await
+}
+
 pub async fn ban(chat: &ChatState, user_id: &str, ban: Ban) -> ChatResult<Option<Restriction>> {
     let until = match ban {
         Ban::None => return Ok(None),
@@ -71,8 +91,13 @@ pub async fn close_open(
 }
 
 pub async fn mark_judged(chat: &ChatState, report: Uuid, by: &str) -> ChatResult<()> {
-    sqlx::query_file!("queries/chat/reports/mark_judged.sql", report, by)
-        .execute(&chat.pg)
-        .await?;
+    sqlx::query_file!(
+        "queries/chat/reports/mark_judged.sql",
+        report,
+        by,
+        EVIDENCE_KEEP_DAYS as i32
+    )
+    .execute(&chat.pg)
+    .await?;
     Ok(())
 }

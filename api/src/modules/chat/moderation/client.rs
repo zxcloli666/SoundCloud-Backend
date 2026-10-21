@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
+use futures::StreamExt;
 use redact::Secret;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -16,6 +17,7 @@ pub const ATTEMPTS: u32 = 3;
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(CALL_TIMEOUT_SECS);
 pub const BACKOFF: Duration = Duration::from_secs(1);
 pub const ANSWER_TOKENS_MAX: u32 = 400;
+pub const ANSWER_BYTES_MAX: usize = 64 * 1024;
 
 pub struct AiClient {
     endpoint: Option<Endpoint>,
@@ -203,13 +205,38 @@ impl AiClient {
             );
             return Reply::Final;
         }
-        match response.json::<Value>().await {
+        let body = match capped_body(response).await {
+            Ok(body) => body,
+            Err(reply) => return reply,
+        };
+        match serde_json::from_slice::<Value>(&body) {
             Ok(answer) => answer["choices"][0]["message"]["content"]
                 .as_str()
                 .map_or(Reply::Final, |content| Reply::Content(content.to_owned())),
             Err(_) => Reply::Retry,
         }
     }
+}
+
+async fn capped_body(response: wreq::Response) -> Result<Vec<u8>, Reply> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > ANSWER_BYTES_MAX as u64)
+    {
+        tracing::warn!("moderation model answer is too large");
+        return Err(Reply::Final);
+    }
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| Reply::Retry)?;
+        if body.len() + chunk.len() > ANSWER_BYTES_MAX {
+            tracing::warn!("moderation model answer is too large");
+            return Err(Reply::Final);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn request_body(model: &str, prompt: &Prompt) -> Value {

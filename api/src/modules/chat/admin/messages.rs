@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::admin::auth::ChatAdmin;
 use crate::modules::chat::body::ChatPath;
+use crate::modules::chat::moderation::actions;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub async fn delete(
@@ -31,5 +32,6 @@ pub async fn delete(
         json!({"seqs": removed}),
     )
     .await?;
+    actions::announce_removed(&chat, conversation, &removed).await;
     Ok(StatusCode::NO_CONTENT)
 }

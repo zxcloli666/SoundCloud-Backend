@@ -1,6 +1,5 @@
-use uuid::Uuid;
-
 use crate::modules::chat::moderation::decide::REPEAT_WINDOW_DAYS;
+use crate::modules::chat::reports::ReportRow;
 use crate::modules::chat::{ChatResult, ChatState};
 
 pub const HISTORY_DAYS: i32 = 90;
@@ -49,12 +48,15 @@ pub async fn target(chat: &ChatState, user_id: &str) -> ChatResult<TargetHistory
     })
 }
 
-pub async fn repeat_offender(chat: &ChatState, user_id: &str, report: Uuid) -> ChatResult<bool> {
+pub async fn repeat_offender(chat: &ChatState, report: &ReportRow) -> ChatResult<bool> {
     Ok(sqlx::query_file_scalar!(
         "queries/chat/reports/repeat.sql",
-        user_id,
-        report,
-        REPEAT_WINDOW_DAYS as i32
+        report.target_user,
+        report.id,
+        REPEAT_WINDOW_DAYS as i32,
+        report.conversation_id,
+        report.seq_from,
+        report.seq_to
     )
     .fetch_one(&chat.pg)
     .await?)
