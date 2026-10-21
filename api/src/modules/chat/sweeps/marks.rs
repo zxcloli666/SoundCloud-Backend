@@ -10,6 +10,7 @@ use crate::modules::chat::{ChatResult, ChatState, rt_keys};
 pub const EVERY_SECS: u64 = 30;
 pub const SCAN_COUNT: usize = 1_000;
 pub const KEYS_PER_RUN: usize = 50_000;
+pub const SCANS_PER_RUN: usize = 200;
 pub const MARKS_PER_WRITE: usize = 1_000;
 pub const REMEMBERED: u64 = 200_000;
 pub const REMEMBER_FOR: Duration = Duration::from_secs(6 * 3_600);
@@ -40,9 +41,11 @@ impl Flusher {
         let prefix = read_marks_prefix();
         let pattern = format!("{prefix}*");
         let mut scanned = 0;
+        let mut scans = 0;
         let mut written = 0;
         loop {
             let (next, keys) = scan(chat, self.cursor, &pattern).await?;
+            scans += 1;
             scanned += keys.len();
             let conversations: Vec<Uuid> = keys
                 .iter()
@@ -50,7 +53,11 @@ impl Flusher {
                 .collect();
             written += self.flush(chat, &conversations).await?;
             self.cursor = next;
-            if next == 0 || scanned >= KEYS_PER_RUN || chat.shutdown.is_cancelled() {
+            if next == 0
+                || scanned >= KEYS_PER_RUN
+                || scans >= SCANS_PER_RUN
+                || chat.shutdown.is_cancelled()
+            {
                 break;
             }
         }
