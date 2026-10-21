@@ -1,0 +1,11 @@
+SELECT (SELECT count(*) FROM chat.users) AS "users!",
+       (SELECT count(*) FROM chat.devices WHERE status = 'active') AS "devices!",
+       (SELECT count(*) FROM chat.conversations WHERE deleted_at IS NULL AND kind = 'direct') AS "direct!",
+       (SELECT count(*) FROM chat.conversations WHERE deleted_at IS NULL AND kind = 'group') AS "groups!",
+       (SELECT count(*) FROM chat.conversations WHERE deleted_at IS NULL AND kind = 'room') AS "rooms!",
+       (SELECT count(*) FROM chat.reports WHERE state = 'open') AS "reports_open!",
+       (SELECT count(*) FROM chat.reports WHERE state = 'open' AND handled_by IS NULL) AS "reports_unjudged!",
+       (SELECT count(*) FROM chat.reports WHERE created_at > now() - interval '24 hours') AS "reports_day!",
+       (SELECT count(*) FROM chat.reports WHERE state = 'actioned' AND handled_at > now() - interval '24 hours') AS "actioned_day!",
+       (SELECT count(*) FROM chat.reports WHERE state = 'rejected' AND handled_at > now() - interval '24 hours') AS "rejected_day!",
+       (SELECT count(*) FROM chat.users WHERE restricted_until > now()) AS "restricted!"

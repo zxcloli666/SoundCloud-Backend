@@ -1,5 +1,6 @@
 mod config;
 mod router;
+mod serve;
 mod state;
 
 pub use config::{Role, role};
@@ -13,7 +14,9 @@ pub async fn run() {
     info!(port = config.port, "chat-api starting");
     let state = state::build(&config).await;
     chat::sweeps::spawn(state.chat.clone());
+    tokio::spawn(chat::moderation::task::run(state.chat.clone()));
     let shutdown = state.chat.shutdown.clone();
+    let draining = shutdown.clone();
     tokio::spawn(async move {
         tls_common::shutdown_signal().await;
         shutdown.cancel();
@@ -26,7 +29,7 @@ pub async fn run() {
     } else {
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.port));
         info!(%addr, "starting plain HTTP");
-        tls_common::serve_http(addr, tls_common::ProxyProtocolConfig::from_env(), app)
+        serve::plain(addr, app, draining)
             .await
             .expect("Server error");
     }

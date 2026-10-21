@@ -392,3 +392,118 @@ async fn a_room_born_public_changes_its_code_when_it_goes_private(
     .await?;
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_room_named_by_its_host_is_listed_by_that_name(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let host_id = format!("5{}", Uuid::now_v7().as_u128() % 1_000_000_000);
+    let host = session_for(&pool, &host_id).await?;
+    let guest = session_for(&pool, "515").await?;
+
+    let named = Some(json!({"name": "Host", "public": true, "title": "  Night\n shift  "}));
+    let (status, room) = call(&app, host, "POST", "/rooms", named).await?;
+    assert_eq!(status, StatusCode::CREATED, "{room}");
+    assert_eq!(room["title"], "Night shift");
+    assert_eq!(room["banned"], json!([]), "the host sees the ban list");
+    assert_eq!(room["chatId"], Value::Null);
+    assert_eq!(room["slowModeS"], 3);
+    let code = room["code"].as_str().unwrap_or_default().to_owned();
+
+    let (_, list) = call(&app, guest, "GET", "/rooms/public", None).await?;
+    let card = list["collection"]
+        .as_array()
+        .and_then(|rooms| rooms.iter().find(|room| room["hostId"] == host_id.as_str()))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(card["title"], "Night shift");
+    assert!(card.get("banned").is_none(), "{card}");
+
+    let join = format!("/rooms/public/{host_id}/members");
+    let (status, room) = call(&app, guest, "POST", &join, Some(json!({"name": "Guest"}))).await?;
+    assert_eq!(status, StatusCode::OK, "{room}");
+    assert!(room.get("banned").is_none(), "{room}");
+    assert!(room["members"][1].get("chatFromSeq").is_none(), "{room}");
+    call(
+        &app,
+        guest,
+        "DELETE",
+        &format!("/rooms/{code}/members/me"),
+        None,
+    )
+    .await?;
+    call(
+        &app,
+        host,
+        "DELETE",
+        &format!("/rooms/{code}/members/me"),
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn the_host_leaving_hands_the_room_to_the_guest(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let host = session_for(&pool, "616").await?;
+    let guest = session_for(&pool, "626").await?;
+    let (_, room) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;
+    let code = room["code"].as_str().unwrap_or_default().to_owned();
+    call(
+        &app,
+        guest,
+        "POST",
+        &format!("/rooms/{code}/members"),
+        Some(json!({"name": "Guest"})),
+    )
+    .await?;
+    call(
+        &app,
+        host,
+        "PUT",
+        &format!("/rooms/{code}/playback"),
+        Some(playing("42")),
+    )
+    .await?;
+
+    let (status, _) = call(
+        &app,
+        host,
+        "DELETE",
+        &format!("/rooms/{code}/members/me"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, room) = call(&app, guest, "GET", &format!("/rooms/{code}"), None).await?;
+    assert_eq!(status, StatusCode::OK, "{room}");
+    assert_eq!(room["hostId"], "626");
+    assert_eq!(room["code"], code.as_str());
+    assert_eq!(room["playback"]["trackUrn"], "soundcloud:tracks:42");
+    assert_eq!(room["members"].as_array().map(Vec::len), Some(1));
+    let (status, _) = call(&app, host, "GET", &format!("/rooms/{code}"), None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &app,
+        guest,
+        "PUT",
+        &format!("/rooms/{code}/playback"),
+        Some(playing("43")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "the new host drives the music");
+
+    call(
+        &app,
+        guest,
+        "DELETE",
+        &format!("/rooms/{code}/members/me"),
+        None,
+    )
+    .await?;
+    let (status, _) = call(&app, guest, "GET", &format!("/rooms/{code}"), None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    Ok(())
+}

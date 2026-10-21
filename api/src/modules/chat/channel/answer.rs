@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chat_wire::prost::Message;
@@ -7,6 +7,8 @@ use chat_wire::proto::{Header, InnerResponse};
 use chat_wire::seal::OpenedRequest;
 
 use crate::modules::chat::ChatError;
+
+const BUSY_RETRY_AFTER_S: &str = "1";
 
 pub fn error_answer(error: ChatError) -> InnerResponse {
     InnerResponse {
@@ -41,4 +43,17 @@ pub fn sealed(opened: &OpenedRequest, answer: InnerResponse) -> Response {
 
 pub fn bad_envelope() -> Response {
     (StatusCode::BAD_REQUEST, "bad envelope").into_response()
+}
+
+pub fn too_large() -> Response {
+    (StatusCode::PAYLOAD_TOO_LARGE, "envelope too large").into_response()
+}
+
+pub fn busy() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(RETRY_AFTER, BUSY_RETRY_AFTER_S)],
+        "busy",
+    )
+        .into_response()
 }

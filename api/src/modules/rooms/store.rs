@@ -1,7 +1,9 @@
 use deadpool_redis::Pool;
 use redis::{AsyncCommands, Script};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::chat::rt_keys::ROOMS_ALIVE;
 use crate::modules::rooms::model::{Room, new_code};
 
 pub const ROOM_TTL_SECS: i64 = 6 * 60 * 60;
@@ -51,6 +53,10 @@ fn seen_key(code: &str) -> String {
 
 fn moved_key(code: &str) -> String {
     format!("rooms:{code}:moved")
+}
+
+fn chat_key(chat_id: Uuid) -> String {
+    format!("rooms:chat:{chat_id}")
 }
 
 fn encode(room: &Room) -> AppResult<String> {
@@ -186,10 +192,56 @@ impl RoomStore {
         Ok(conn.get(moved_key(code)).await?)
     }
 
-    pub async fn delete(&self, code: &str) -> AppResult<()> {
+    pub async fn forget_room(&self, room: &Room) -> AppResult<()> {
+        let mut pipe = redis::pipe();
+        pipe.del(&[room_key(&room.code), seen_key(&room.code)])
+            .ignore()
+            .zrem(ROOMS_ALIVE, &room.code)
+            .ignore();
+        if let Some(chat_id) = room.chat_id {
+            pipe.del(chat_key(chat_id)).ignore();
+        }
         let mut conn = self.redis.get().await?;
-        let _: i64 = conn.del(&[room_key(code), seen_key(code)]).await?;
+        pipe.query_async::<()>(&mut conn).await?;
         Ok(())
+    }
+
+    pub async fn keep_alive(&self, room: &Room, now: i64) -> AppResult<()> {
+        let mut pipe = redis::pipe();
+        let forgotten = format!("({}", now - ROOM_TTL_SECS * 1_000);
+        pipe.expire(room_key(&room.code), ROOM_TTL_SECS)
+            .ignore()
+            .zadd(ROOMS_ALIVE, &room.code, now)
+            .ignore()
+            .zrembyscore(ROOMS_ALIVE, "-inf", forgotten)
+            .ignore()
+            .expire(ROOMS_ALIVE, ROOM_TTL_SECS)
+            .ignore();
+        if let Some(chat_id) = room.chat_id {
+            pipe.set_ex(chat_key(chat_id), &room.code, ROOM_TTL_SECS as u64)
+                .ignore();
+        }
+        let mut conn = self.redis.get().await?;
+        pipe.query_async::<()>(&mut conn).await?;
+        Ok(())
+    }
+
+    pub async fn forget_alive(&self, code: &str) -> AppResult<()> {
+        let mut conn = self.redis.get().await?;
+        let _: i64 = conn.zrem(ROOMS_ALIVE, code).await?;
+        Ok(())
+    }
+
+    pub async fn index_chat(&self, chat_id: Uuid, code: &str) -> AppResult<()> {
+        let mut conn = self.redis.get().await?;
+        conn.set_ex::<_, _, ()>(chat_key(chat_id), code, ROOM_TTL_SECS as u64)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn chat_code(&self, chat_id: Uuid) -> AppResult<Option<String>> {
+        let mut conn = self.redis.get().await?;
+        Ok(conn.get(chat_key(chat_id)).await?)
     }
 
     pub async fn touch(&self, code: &str, user_id: &str, now: i64) -> AppResult<()> {
