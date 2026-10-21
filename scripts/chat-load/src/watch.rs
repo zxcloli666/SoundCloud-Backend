@@ -10,7 +10,7 @@ use crate::prom::{self, Buckets};
 use crate::stats::Stats;
 
 pub const ERROR_WINDOW: Duration = Duration::from_secs(60);
-pub const ERROR_MIN_REQUESTS: u64 = 200;
+pub const ERROR_MIN_REQUESTS: u64 = 1_000;
 pub const RESTART_GRACE: Duration = Duration::from_secs(60);
 pub const PROM_WINDOW: Duration = Duration::from_secs(60);
 pub const STRIKES_MAX: u32 = 3;

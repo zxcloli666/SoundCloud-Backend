@@ -30,17 +30,18 @@ fn checks_are_named() {
 #[test]
 fn the_error_rate_needs_enough_requests() {
     let stats = Stats::new(&["direct".to_owned()]);
-    for _ in 0..100 {
+    for _ in 0..500 {
         stats.ok(0, None);
     }
-    stats.error(0, "timeout");
-    stats.error(0, "timeout");
+    for _ in 0..20 {
+        stats.error(0, "timeout");
+    }
     stats.tick();
     assert_eq!(error_rate_crossed(&stats, 0.01), None);
-    for _ in 0..300 {
+    for _ in 0..1_000 {
         stats.ok(0, None);
     }
-    for _ in 0..10 {
+    for _ in 0..30 {
         stats.error(0, "connect");
     }
     stats.tick();
