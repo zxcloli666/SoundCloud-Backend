@@ -167,6 +167,10 @@ Room chats, tag `type`:
 
 - `Text`: at most 4096 UTF-16 code units. `Span.start` and `Span.len` count UTF-16 code units. Kinds: bold, italic, code, spoiler, link (`url`), mention (`user_id`).
 - `Edit {target, text}`, `Delete {target}`, `Reaction {target, emoji, on}`, `Pin {target, on}`, `Meta`, `Suggest {track}`.
+- `reply_to`, `mentions[]`, `embeds[]` (3 at most), `forwarded_from`.
+- `Embed` is a sender-made snapshot of a track, playlist, user or room invite; receivers validate it (https `*.sndcdn.com` artwork only, 3 KB at most) and render it without requests.
+- `Attachment` field numbers are fixed now and filled in phase 2.
+- A body this build does not know decodes to no body. Show "update the app to see this message".
 
 Body kind to class:
 
@@ -178,10 +182,6 @@ Body kind to class:
 | `Pin` | `pin` | `target_seq` is a live `post`; admins only in groups and rooms |
 | `Meta` | `meta` | groups only, admins only, nil ids in the aad |
 | `Delete`, `Suggest` | none | never sent as an envelope: delete for everyone is `DELETE /chat/conversations/{id}/messages/{seq}?for=everyone`, a room suggestion is `POST /chat/rooms/{code}/suggest` |
-- `reply_to`, `mentions[]`, `embeds[]` (3 at most), `forwarded_from`.
-- `Embed` is a sender-made snapshot of a track, playlist, user or room invite; receivers validate it (https `*.sndcdn.com` artwork only, 3 KB at most) and render it without requests.
-- `Attachment` field numbers are fixed now and filled in phase 2.
-- A body this build does not know decodes to no body. Show "update the app to see this message".
 
 ## Vectors
 
