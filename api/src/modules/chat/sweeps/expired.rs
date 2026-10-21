@@ -11,6 +11,7 @@ pub const BATCH_ROWS: i64 = 5_000;
 pub const EVERY_SECS: u64 = 60;
 pub const BATCHES_PER_RUN: u32 = 20;
 pub const BATCH_PAUSE: Duration = Duration::from_millis(20);
+pub const CONVERSATIONS_PER_QUERY: usize = 200;
 
 pub async fn run_once(chat: &ChatState) -> ChatResult<u64> {
     let mut budget = Budget::new(BATCHES_PER_RUN);
@@ -55,23 +56,22 @@ async fn delete_batch(chat: &ChatState) -> ChatResult<Vec<(Uuid, i64)>> {
 }
 
 async fn announce(chat: &ChatState, gone: BTreeMap<Uuid, Vec<i64>>) -> ChatResult<()> {
-    if gone.is_empty() {
-        return Ok(());
-    }
     let ids: Vec<Uuid> = gone.keys().copied().collect();
-    let mut recipients: HashMap<Uuid, Vec<String>> = HashMap::new();
-    for row in sqlx::query_file!("queries/chat/sweeps/live_members.sql", &ids)
-        .fetch_all(&chat.pg)
-        .await?
-    {
-        recipients
-            .entry(row.conversation_id)
-            .or_default()
-            .push(row.user_id);
-    }
-    for (conversation, seqs) in gone {
-        let users = recipients.remove(&conversation).unwrap_or_default();
-        hooks::messages_gone(chat, conversation, &seqs, &users).await?;
+    for chunk in ids.chunks(CONVERSATIONS_PER_QUERY) {
+        let mut recipients: HashMap<Uuid, Vec<String>> = HashMap::new();
+        for row in sqlx::query_file!("queries/chat/sweeps/live_members.sql", chunk)
+            .fetch_all(&chat.pg)
+            .await?
+        {
+            recipients
+                .entry(row.conversation_id)
+                .or_default()
+                .push(row.user_id);
+        }
+        for conversation in chunk {
+            let users = recipients.remove(conversation).unwrap_or_default();
+            hooks::messages_gone(chat, *conversation, &gone[conversation], &users).await?;
+        }
     }
     Ok(())
 }

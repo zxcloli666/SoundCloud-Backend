@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::support::{conversation, count, deltas, member, messages, ok, state, user};
-use crate::modules::chat::sweeps::expired::{self, BATCH_ROWS};
+use crate::modules::chat::sweeps::expired::{self, BATCH_ROWS, CONVERSATIONS_PER_QUERY};
 
 const SEQS: &str = "SELECT count(*) FROM chat.messages WHERE conversation_id = $1";
 
@@ -77,5 +77,31 @@ async fn a_large_backlog_goes_in_primary_key_batches(pg: PgPool) -> anyhow::Resu
     assert_eq!(count(&pg, SEQS, dm).await?, 1);
     let announced = gone_seqs(&deltas(&chat, &owner).await?, dm);
     assert_eq!(announced, (1..=total).collect::<BTreeSet<i64>>());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn many_chats_in_one_batch_are_all_announced(pg: PgPool) -> anyhow::Result<()> {
+    let chat = state(pg.clone());
+    let wanted = 2 * CONVERSATIONS_PER_QUERY + 5;
+    let mut chats = Vec::new();
+    for _ in 0..wanted {
+        let owner = user();
+        let id = conversation(&pg, "group", &owner).await?;
+        member(&pg, id, &owner, "active").await?;
+        messages(&pg, id, 1..=1, Some("-1 second")).await?;
+        chats.push((id, owner));
+    }
+
+    assert_eq!(ok(expired::run_once(&chat).await)?, wanted as u64);
+
+    for (id, owner) in chats {
+        assert_eq!(
+            gone_seqs(&deltas(&chat, &owner).await?, id),
+            BTreeSet::from([1]),
+            "{id}"
+        );
+    }
     Ok(())
 }
