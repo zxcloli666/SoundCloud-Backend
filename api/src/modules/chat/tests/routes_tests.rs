@@ -124,7 +124,11 @@ async fn answer(
 }
 
 fn still_stubbed(uri: &str) -> bool {
-    !uri.starts_with("/chat/devices") && !uri.contains("/keys")
+    uri != "/chat/config"
+        && !uri.starts_with("/auth/")
+        && !uri.starts_with("/chat/devices")
+        && !uri.contains("/keys")
+        && !uri.starts_with("/chat/rooms/")
 }
 
 #[tokio::test]

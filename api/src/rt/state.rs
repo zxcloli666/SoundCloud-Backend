@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::common::admission::PublicAdmission;
 use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
 use crate::modules::chat::ChatState;
+use crate::modules::chat::caller::Callers;
 use crate::modules::chat::channel::ock::OckRing;
 use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
@@ -76,6 +77,7 @@ pub async fn build(config: &RtConfig) -> RtState {
         )
         .expect("CHAT_KEYS_DIR must hold the current KEKs"),
         devices: DeviceCache::new(),
+        callers: Callers::new(),
         hub: ChatHub::new(),
         hot: HotCache::new(HOT_CACHE_BYTES),
         moderator: Moderator::new(
@@ -90,6 +92,7 @@ pub async fn build(config: &RtConfig) -> RtState {
         pg: chat_pg,
         redis: redis_rt,
     });
+    rooms.install_chat(&chat);
 
     RtState {
         pg,

@@ -59,6 +59,23 @@ pub struct LoginStatusResult {
 struct StoredConnection {
     connection: SoundCloudConnection,
     orphan_candidate: Option<Uuid>,
+    same_user: bool,
+}
+
+struct SessionTarget<'a> {
+    attach_to: Option<Uuid>,
+    connection_id: Uuid,
+    chat_bind: Option<&'a [u8]>,
+}
+
+pub(crate) struct LoginIdentity<'a> {
+    pub soundcloud_user_id: &'a str,
+    pub username: Option<&'a str>,
+    pub profile: Option<&'a Value>,
+    pub oauth_app_id: Uuid,
+    pub token: &'a ScTokenResponse,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub observation: catalog_ingest::Observation,
 }
 
 struct ConnectionCredentials<'a> {
@@ -74,6 +91,23 @@ impl AuthService {
     pub async fn initiate_login(
         &self,
         existing_session_id: Option<Uuid>,
+    ) -> AppResult<LoginInitResult> {
+        self.create_login_request(existing_session_id, None).await
+    }
+
+    pub async fn initiate_bound_login(
+        &self,
+        existing_session_id: Option<Uuid>,
+        chat_bind: &[u8],
+    ) -> AppResult<LoginInitResult> {
+        self.create_login_request(existing_session_id, Some(chat_bind))
+            .await
+    }
+
+    async fn create_login_request(
+        &self,
+        existing_session_id: Option<Uuid>,
+        chat_bind: Option<&[u8]>,
     ) -> AppResult<LoginInitResult> {
         let code_verifier = base64_url(&random_bytes(32));
         let code_challenge = base64_url(Sha256::digest(code_verifier.as_bytes()).as_slice());
@@ -94,8 +128,8 @@ impl AuthService {
 
         sqlx::query(
             "INSERT INTO login_requests \
-                (id, state, code_verifier, oauth_app_id, target_session_id, status, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, 'pending', $6)",
+                (id, state, code_verifier, oauth_app_id, target_session_id, status, expires_at, chat_bind) \
+             VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)",
         )
         .bind(login_request_id)
         .bind(&state)
@@ -103,6 +137,7 @@ impl AuthService {
         .bind(&oauth_app_id)
         .bind(target_session_id)
         .bind(expires_at)
+        .bind(chat_bind)
         .execute(&self.pool)
         .await?;
 
@@ -289,7 +324,6 @@ impl AuthService {
             .and_then(|value| value.get("username"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let profile_ok = profile.is_some();
 
         let _ = sqlx::query_file!(
             "queries/auth/service/login_request_step_finalizing.sql",
@@ -300,14 +334,38 @@ impl AuthService {
 
         let expires_at = access_token_expiry(&token.access_token)
             .unwrap_or_else(|| Utc::now() + chrono::Duration::seconds(token.expires_in.max(1)));
+        self.finish_login(
+            &login_request,
+            LoginIdentity {
+                soundcloud_user_id: &soundcloud_user_id,
+                username: username.as_deref(),
+                profile: profile.as_ref(),
+                oauth_app_id,
+                token: &token,
+                expires_at,
+                observation,
+            },
+        )
+        .await?;
+
+        let _ = self.health.record_app_success(&app_key).await;
+        info!("Login completed");
+        Ok(())
+    }
+
+    pub(crate) async fn finish_login(
+        &self,
+        login_request: &LoginRequest,
+        identity: LoginIdentity<'_>,
+    ) -> AppResult<Uuid> {
         let mut transaction = self.pool.begin().await?;
 
-        if let Some(profile) = profile.as_ref() {
+        if let Some(profile) = identity.profile {
             catalog_ingest::upsert_profile_in(
                 &mut transaction,
-                &soundcloud_user_id,
+                identity.soundcloud_user_id,
                 profile,
-                observation,
+                identity.observation,
             )
             .await?;
         }
@@ -317,19 +375,29 @@ impl AuthService {
                 &mut transaction,
                 ConnectionCredentials {
                     target_session_id: login_request.target_session_id,
-                    soundcloud_user_id: &soundcloud_user_id,
-                    username: username.as_deref(),
-                    oauth_app_id,
-                    token: &token,
-                    expires_at,
+                    soundcloud_user_id: identity.soundcloud_user_id,
+                    username: identity.username,
+                    oauth_app_id: identity.oauth_app_id,
+                    token: identity.token,
+                    expires_at: identity.expires_at,
                 },
             )
             .await?;
+        let chat_bind = sqlx::query_file_scalar!(
+            "queries/auth/service/login_request_bind.sql",
+            login_request.id
+        )
+        .fetch_optional(&mut *transaction)
+        .await?
+        .flatten();
         let session_id = self
             .store_session(
                 &mut transaction,
-                login_request.target_session_id,
-                stored.connection.id,
+                SessionTarget {
+                    attach_to: login_request.target_session_id.filter(|_| stored.same_user),
+                    connection_id: stored.connection.id,
+                    chat_bind: chat_bind.as_deref(),
+                },
             )
             .await?;
 
@@ -346,8 +414,8 @@ impl AuthService {
             "queries/auth/service/login_request_completed.sql",
             login_request.id,
             session_id,
-            username,
-            profile_ok
+            identity.username,
+            identity.profile.is_some()
         )
         .fetch_optional(&mut *transaction)
         .await?;
@@ -357,10 +425,7 @@ impl AuthService {
             ));
         }
         transaction.commit().await?;
-
-        let _ = self.health.record_app_success(&app_key).await;
-        info!("Login completed");
-        Ok(())
+        Ok(session_id)
     }
 
     async fn store_connection(
@@ -422,6 +487,7 @@ impl AuthService {
             return Ok(StoredConnection {
                 connection,
                 orphan_candidate: None,
+                same_user: true,
             });
         }
 
@@ -442,20 +508,21 @@ impl AuthService {
         Ok(StoredConnection {
             connection,
             orphan_candidate: previous_connection_id,
+            same_user: false,
         })
     }
 
     async fn store_session(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
-        target_session_id: Option<Uuid>,
-        connection_id: Uuid,
+        target: SessionTarget<'_>,
     ) -> AppResult<Uuid> {
-        if let Some(session_id) = target_session_id {
+        if let Some(session_id) = target.attach_to {
             let updated = sqlx::query_file!(
                 "queries/auth/service/attach_session.sql",
                 session_id,
-                connection_id
+                target.connection_id,
+                target.chat_bind
             )
             .fetch_optional(&mut **transaction)
             .await?;
@@ -468,7 +535,8 @@ impl AuthService {
         sqlx::query_file!(
             "queries/auth/service/insert_session.sql",
             session_id,
-            connection_id
+            target.connection_id,
+            target.chat_bind
         )
         .fetch_one(&mut **transaction)
         .await?;
@@ -478,6 +546,15 @@ impl AuthService {
     pub async fn get_login_request_status(
         &self,
         login_request_id: Uuid,
+    ) -> AppResult<LoginStatusResult> {
+        self.login_request_status_for(login_request_id, |_| false)
+            .await
+    }
+
+    pub async fn login_request_status_for(
+        &self,
+        login_request_id: Uuid,
+        owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<LoginStatusResult> {
         let login_request = sqlx::query_file_as!(
             LoginRequest,
@@ -495,6 +572,12 @@ impl AuthService {
             return Ok(expired_login_status("Login request expired"));
         }
 
+        let session_id = match login_request.result_session_id {
+            Some(session_id) if self.shows_session(login_request.id, owns_bind).await? => {
+                Some(session_id)
+            }
+            _ => None,
+        };
         Ok(LoginStatusResult {
             status: if login_request.status == "processing" {
                 "pending".to_owned()
@@ -502,7 +585,7 @@ impl AuthService {
                 login_request.status
             },
             step: login_request.step,
-            session_id: login_request.result_session_id,
+            session_id,
             username: login_request.username,
             error: login_request.error,
             redirect_url: login_request.redirect_url,
@@ -510,6 +593,21 @@ impl AuthService {
                 .profile_ok
                 .map(|success| if success { "ok" } else { "failed" }.to_owned()),
         })
+    }
+
+    async fn shows_session(
+        &self,
+        login_request_id: Uuid,
+        owns_bind: impl Fn(&[u8]) -> bool,
+    ) -> AppResult<bool> {
+        let chat_bind = sqlx::query_file_scalar!(
+            "queries/auth/service/login_request_bind.sql",
+            login_request_id
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+        Ok(chat_bind.as_deref().is_none_or(owns_bind))
     }
 
     pub(super) async fn mark_request_failed(&self, id: Uuid, error: &str) -> AppResult<()> {

@@ -88,6 +88,14 @@ pub async fn devices_revoked(chat: &ChatState, user_id: &str, ids: &[Uuid]) -> C
 }
 
 pub async fn room_of_chat(chat: &ChatState, conversation: Uuid) -> ChatResult<Option<Room>> {
+    let indexed = chat
+        .rooms
+        .room_by_chat(conversation)
+        .await
+        .map_err(room_failure)?;
+    if indexed.is_some() {
+        return Ok(indexed);
+    }
     let code = sqlx::query_file_scalar!("queries/chat/sweeps/room_ref.sql", conversation)
         .fetch_optional(&chat.pg)
         .await?
@@ -110,18 +118,10 @@ pub async fn room_seen_since(chat: &ChatState, code: &str, since_ms: i64) -> Cha
 }
 
 pub async fn end_room(chat: &ChatState, code: &str) -> ChatResult<bool> {
-    let store = RoomStore::new(chat.redis.clone());
-    let Some(room) = store.load(code).await.map_err(room_failure)? else {
+    let Some(room) = chat.rooms.find(code).await.map_err(room_failure)? else {
         return Ok(false);
     };
-    store.delete(code).await.map_err(room_failure)?;
-    let mut conn = chat.redis.get().await?;
-    let _: i64 = redis::cmd("ZREM")
-        .arg(rt_keys::ROOMS_ALIVE)
-        .arg(code)
-        .query_async(&mut conn)
-        .await?;
-    drop(conn);
+    chat.rooms.end(code).await.map_err(room_failure)?;
     let members: Vec<String> = room.members.iter().map(|m| m.user_id.clone()).collect();
     let chats = sqlx::query_file_scalar!("queries/chat/sweeps/room_chats.sql", code)
         .fetch_all(&chat.pg)

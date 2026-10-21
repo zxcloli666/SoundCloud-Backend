@@ -82,10 +82,7 @@ pub fn inner() -> Router<Arc<ChatState>> {
 }
 
 pub fn public<S: Clone + Send + Sync + 'static>(chat: Arc<ChatState>) -> Router<S> {
-    let channel = Arc::new(Channel {
-        inner: inner().with_state(chat.clone()),
-        chat: chat.clone(),
-    });
+    let channel = Arc::new(Channel::new(chat.clone(), inner().with_state(chat.clone())));
     channel::router(channel).merge(admin::router(chat))
 }
 
