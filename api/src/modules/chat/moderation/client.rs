@@ -14,7 +14,7 @@ use crate::modules::chat::moderation::verdict::{self, Verdict};
 pub const KEY_FILE: &str = "mod-ai-key";
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (compatible; SoundCloudDesktop-ChatModeration/1.0; +https://getsoundcloud.app)";
-pub const ANSWER_TOKENS_MAX: u32 = 400;
+pub const ANSWER_TOKENS_MAX: u32 = 2_048;
 pub const ANSWER_BYTES_MAX: usize = 64 * 1024;
 
 pub struct AiClient {
