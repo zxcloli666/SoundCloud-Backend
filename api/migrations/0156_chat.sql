@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS chat.users (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE INDEX IF NOT EXISTS users_restricted ON chat.users (restricted_until) WHERE restricted_until IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS chat.devices (
     id uuid PRIMARY KEY,
     user_id text NOT NULL,
@@ -158,6 +160,7 @@ CREATE TABLE IF NOT EXISTS chat.reports (
 CREATE INDEX IF NOT EXISTS reports_open ON chat.reports (created_at) WHERE state = 'open';
 CREATE INDEX IF NOT EXISTS reports_target ON chat.reports (target_user, created_at);
 CREATE INDEX IF NOT EXISTS reports_purge ON chat.reports (purge_after) WHERE purge_after IS NOT NULL;
+CREATE INDEX IF NOT EXISTS reports_reporter ON chat.reports (reporter, created_at);
 
 CREATE TABLE IF NOT EXISTS chat.admin_audit (
     id uuid PRIMARY KEY,
@@ -167,3 +170,6 @@ CREATE TABLE IF NOT EXISTS chat.admin_audit (
     detail jsonb NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS admin_audit_target ON chat.admin_audit (target, created_at);
+CREATE INDEX IF NOT EXISTS admin_audit_report ON chat.admin_audit ((detail ->> 'report'), created_at) WHERE (detail ->> 'report') IS NOT NULL;
