@@ -133,7 +133,7 @@ volumes after.
 
 ## Night run (plan section 8)
 
-Generator `sc-worker1`, its worker stopped, `ulimit -n 200000`, `ip_local_port_range 10000 65535`.
+Generator `sc-worker1`, its worker stopped, `ulimit -n 200000`, `ip_local_port_range 10240 65535`.
 
 The checks and `--restart-cmd` call `ssh sc-main`, `sc-relay1` and `sc-relay2`, and sc-worker1 has
 neither these names nor keys: run the harness inside `ssh -A sc-worker1` with a temporary
@@ -148,10 +148,9 @@ or `api` binaries: the copy gets killed (exit 137), run them from the target dir
 3. Seed on main (the token never leaves the host), copy the layout to the generator:
 
 ```sh
-(umask 077; ssh sc-main 'ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}" $(docker ps -q --filter label=com.docker.compose.service=chat-api) | cut -d" " -f1);
-  curl -fsS -X POST -H "x-chat-admin-token: $(cat /srv/scd-secrets/chat/chat-admin-token)" -H "x-chat-admin-user: loadtest" \
-  -H "content-type: application/json" -d "{\"users\":20000,\"devices_per_user\":1,\"groups\":900}" \
-  http://$ip:3000/chat-admin/loadtest/seed' > layout.json)
+(umask 077; ssh sc-main 'printf "x-chat-admin-token: %s\nx-chat-admin-user: loadtest\n" "$(cat /srv/scd-secrets/chat/chat-admin-token)" |
+  curl -fsS -H @- -H "content-type: application/json" -d "{\"users\":20000,\"devices_per_user\":1,\"groups\":900}" \
+  http://127.0.0.1:3010/chat-admin/loadtest/seed' > layout.json)
 scp layout.json sc-worker1:
 ```
 
@@ -166,4 +165,6 @@ scp layout.json sc-worker1:
    `CHAT_LOADTEST=off` and recreate chat-api, `exempt.sh off`, start the worker, delete `layout.json`.
 
 Dry run before the night: the same with `--users 50 --groups 3` and
-`--steps 50 --step-secs 30 --hold-secs 120 --worst-secs 0`, flag on, no exemption, then purge.
+`--steps 50 --step-secs 30 --spread-secs 20 --hold-secs 120 --worst-secs 0`, no `--restart-cmd`, flag on,
+no exemption, then purge. The default 60 s spread is longer than a 30 s step and the restart at 600 s
+falls outside a 120 s hold: with either one the run refuses to start.
