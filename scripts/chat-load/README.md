@@ -135,6 +135,14 @@ volumes after.
 
 Generator `sc-worker1`, its worker stopped, `ulimit -n 200000`, `ip_local_port_range 10000 65535`.
 
+The checks and `--restart-cmd` call `ssh sc-main`, `sc-relay1` and `sc-relay2`, and sc-worker1 has
+neither these names nor keys: run the harness inside `ssh -A sc-worker1` with a temporary
+`~/.ssh/config` for the three names. Commands and the day-before list (live check runs, dry run,
+redis-rt and r2 budgets) are in Infra `docs/chat-ops.md`, night test section.
+
+Copy the Linux binary with `scp` straight from the target dir. On the Mac never `cp` the `chat-load`
+or `api` binaries: the copy gets killed (exit 137), run them from the target dir.
+
 1. `tools/loadtest/exempt.sh on 144.31.212.127` (Infra).
 2. `CHAT_LOADTEST=on` on chat-api, recreate it.
 3. Seed on main (the token never leaves the host), copy the layout to the generator:
