@@ -29,6 +29,12 @@ impl Change {
     }
 }
 
+async fn lock_chat(conn: &mut PgConnection, access: &Access) -> ChatResult<members::Locked> {
+    members::lock(conn, access.conversation)
+        .await?
+        .ok_or(ChatError::NotFound)
+}
+
 pub async fn leave(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     if !access.is_group() {
         return Err(ChatError::Invalid);
@@ -36,6 +42,7 @@ pub async fn leave(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     let me = access.user_id.as_str();
     let mut change = Change::to(access.recipients_with(me));
     let mut tx = pg.begin().await?;
+    lock_chat(&mut tx, access).await?;
     let Some(role) =
         members::set_state(&mut tx, access.conversation, me, MemberState::Left, &LIVE).await?
     else {
@@ -83,6 +90,7 @@ pub async fn remove(pg: &PgPool, access: &Access, target: &str, ban: bool) -> Ch
     }
     let mut change = Change::to(actor.recipients_with(target));
     let mut tx = pg.begin().await?;
+    lock_chat(&mut tx, &actor).await?;
     let (role, state) = members::standing(&mut tx, actor.conversation, target)
         .await?
         .ok_or(ChatError::NotFound)?;
@@ -161,6 +169,7 @@ pub async fn set_role(
     }
     let mut change = Change::to(actor.recipients.clone());
     let mut tx = pg.begin().await?;
+    lock_chat(&mut tx, &actor).await?;
     if role == MemberRole::Owner
         && !members::step_down(&mut tx, actor.conversation, &actor.user_id).await?
     {
@@ -187,6 +196,7 @@ pub async fn accept(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     let me = access.user_id.as_str();
     let mut change = Change::to(access.recipients.clone());
     let mut tx = pg.begin().await?;
+    lock_chat(&mut tx, access).await?;
     if !members::activate(&mut tx, access.conversation, me, &[MemberState::Invited]).await? {
         tx.rollback().await?;
         return match access.state {
@@ -239,12 +249,10 @@ pub async fn add(
         return Ok(change);
     }
     let mut tx = pg.begin().await?;
-    let locked = members::lock(&mut tx, actor.conversation)
-        .await?
-        .ok_or(ChatError::NotFound)?;
-    let hidden = !locked.settings.history_visible;
+    let chat_row = lock_chat(&mut tx, &actor).await?;
+    let hidden = !chat_row.settings.history_visible;
     let joined_epoch = if hidden {
-        locked.key_epoch.saturating_add(1)
+        chat_row.key_epoch.saturating_add(1)
     } else {
         0
     };
@@ -256,7 +264,7 @@ pub async fn add(
     let joined = members::join_many(
         &mut tx,
         actor.conversation,
-        locked.last_seq,
+        chat_row.last_seq,
         joined_epoch,
         &actor.user_id,
         &joining,
