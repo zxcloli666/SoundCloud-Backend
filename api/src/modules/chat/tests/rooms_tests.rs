@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use super::bridge;
 use super::diff::{departed, rows};
 use super::lookup::{chat_of_room, gate_send};
 use super::member_from_seq;
@@ -15,6 +16,7 @@ use super::refusal;
 use super::system::SuggestedTrack;
 use crate::error::AppError;
 use crate::modules::chat::caller::ChatCaller;
+use crate::modules::chat::devices::test_support::{Enrolled, call, caller, enroll};
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::test_support::chat_state;
 use crate::modules::chat::{ChatError, ChatState, routes, rt_keys};
@@ -433,5 +435,91 @@ async fn a_room_is_moderated_through_the_sealed_routes(pg: PgPool) -> anyhow::Re
         (status, body),
         (StatusCode::NOT_FOUND, json!({"error": "chat_not_found"}))
     );
+    Ok(())
+}
+
+fn room_epochs(answer: &Value) -> Vec<i64> {
+    answer
+        .as_array()
+        .map(|keys| {
+            keys.iter()
+                .filter_map(|key| key["epoch"].as_i64())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn room_keys(
+    chat: &Arc<ChatState>,
+    user: &str,
+    device: &Enrolled,
+    conversation: Uuid,
+) -> (StatusCode, Value) {
+    call(
+        chat,
+        caller(user, device.session, Some(&device.row)),
+        "GET",
+        &format!("/chat/conversations/{conversation}/keys"),
+        None,
+    )
+    .await
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn room_keys_follow_the_seats_of_the_room(pg: PgPool) -> anyhow::Result<()> {
+    let (chat, _) = bench(pg.clone())?;
+    let (host, guest, stranger, late) = (someone(), someone(), someone(), someone());
+    let code = chat
+        .rooms
+        .create(&host, &profile("Host"), false, None)
+        .await?
+        .code;
+    chat.rooms
+        .join(&code, &guest, &profile("Guest"), &chat.pg)
+        .await?;
+    let opened = chat.rooms.claim_chat(&code, &host).await?;
+    bridge::ensure_conversation(&chat, &opened)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    let conversation = opened.conversation_id;
+    let host_device = enroll(&chat, &pg, &host).await;
+    let guest_device = enroll(&chat, &pg, &guest).await;
+    let stranger_device = enroll(&chat, &pg, &stranger).await;
+
+    let (status, answer) = room_keys(&chat, &host, &host_device, conversation).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let first = room_epochs(&answer);
+    assert_eq!(first.len(), 1, "{answer}");
+    let (status, answer) = room_keys(&chat, &guest, &guest_device, conversation).await;
+    assert_eq!(
+        (status, room_epochs(&answer)),
+        (StatusCode::OK, first.clone())
+    );
+    let (status, answer) = room_keys(&chat, &stranger, &stranger_device, conversation).await;
+    assert_eq!(
+        (status, answer),
+        (StatusCode::FORBIDDEN, json!({"error": "chat_not_member"}))
+    );
+
+    chat.rooms.kick(&code, &host, &guest, false).await?;
+    let (status, answer) = room_keys(&chat, &guest, &guest_device, conversation).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    let (_, answer) = room_keys(&chat, &host, &host_device, conversation).await;
+    let rotated = room_epochs(&answer);
+    assert_eq!(rotated.first(), first.first(), "{answer}");
+    let newest = rotated.last().copied().unwrap_or_default();
+    assert!(newest > first[0], "a departure rotates the key: {answer}");
+
+    chat.rooms
+        .join(&code, &late, &profile("Late"), &chat.pg)
+        .await?;
+    let late_device = enroll(&chat, &pg, &late).await;
+    let (status, answer) = room_keys(&chat, &late, &late_device, conversation).await;
+    assert_eq!(
+        (status, room_epochs(&answer)),
+        (StatusCode::OK, vec![newest])
+    );
+    chat.rooms.end(&code).await?;
     Ok(())
 }
