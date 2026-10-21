@@ -33,7 +33,6 @@ use crate::modules::chat::{ChatError, ChatResult, ChatState, requests};
 
 pub const AUDIT_ADMIN: &str = "ai-moderator";
 pub const CALLS_IN_FLIGHT: usize = 4;
-pub const CALL_TIMEOUT_SECS: u64 = 30;
 pub const BANS_PER_HOUR: usize = 10;
 pub const BANS_PER_DAY: usize = 50;
 const HOUR: Duration = Duration::from_secs(3_600);
@@ -146,7 +145,7 @@ impl Moderator {
             &audit::report(report.id),
             json!({
                 "prompt_sha256": prompt_sha256,
-                "model": self.client.model(),
+                "models": self.client.models(),
                 "lines": lines.len(),
             }),
         )
@@ -161,8 +160,12 @@ impl Moderator {
         };
         drop(prompt);
         drop(lines);
-        metrics::counter!("chat_moderation_calls_total", "outcome" => answer.outcome.as_str())
-            .increment(1);
+        metrics::counter!(
+            "chat_moderation_calls_total",
+            "outcome" => answer.outcome.as_str(),
+            "model" => answer.model.clone().unwrap_or_else(|| "none".to_owned()),
+        )
+        .increment(1);
         audit::record(
             chat,
             AUDIT_ADMIN,
@@ -170,6 +173,7 @@ impl Moderator {
             &audit::report(report.id),
             json!({
                 "outcome": answer.outcome.as_str(),
+                "model": answer.model,
                 "attempts": answer.attempts,
                 "prompt_sha256": prompt_sha256,
                 "answer_sha256": answer.answer_sha256,

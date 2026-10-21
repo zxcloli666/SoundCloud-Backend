@@ -10,11 +10,12 @@ use uuid::Uuid;
 
 use crate::modules::chat::ChatState;
 use crate::modules::chat::admin::audit;
+use crate::modules::chat::moderation::client::USER_AGENT;
 use crate::modules::chat::moderation::decide::Decision;
 use crate::modules::chat::moderation::task::{moderate, run_once};
 use crate::modules::chat::moderation::testing::{
     AI_KEY, FakeAi, FakeModel, TestKeys, aged_user, audit_actions, body_of, conversation,
-    conversation_key, fake_ai, post, state,
+    conversation_key, fake_ai, fake_ai_models, offline_redis, post, state, state_models,
 };
 use crate::modules::chat::moderation::{AUDIT_ADMIN, BANS_PER_HOUR};
 use crate::modules::chat::reports::{FileReport, file_with, load};
@@ -528,30 +529,101 @@ async fn quotes_outside_the_reported_range_void_the_verdict(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_busy_model_is_retried_with_backoff(pool: PgPool) {
-    let ai = fake_ai(FakeModel::FailsFirst(2)).await;
-    let dm = dm(&pool, Some(&ai)).await;
+async fn a_failed_model_hands_the_report_to_the_next_one(pool: PgPool) {
+    for failing in [
+        FakeModel::AlwaysDown,
+        FakeModel::Slow,
+        FakeModel::Garbage,
+        FakeModel::Forbidden,
+    ] {
+        let ai = fake_ai_models(FakeModel::Honest, &[("fast", failing)]).await;
+        let mut dm = dm(&pool, Some(&ai)).await;
+        dm.chat = state_models(
+            pool.clone(),
+            offline_redis(),
+            Some(ai.url.as_str()),
+            &["fast", "google"],
+        );
+        let seq = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP views").await;
+        let id = report(&dm, REPORTER, (seq, seq), None).await;
+
+        assert!(
+            matches!(
+                moderate(&dm.chat, &dm.keys, id).await.expect("moderated"),
+                Decision::Remove { .. }
+            ),
+            "{failing:?}"
+        );
+        assert_eq!(ai.models_asked(), ["fast", "google"], "{failing:?}");
+        let rows = audit_actions(&pool, &audit::report(id)).await;
+        let prompt = rows
+            .iter()
+            .find(|(_, action, _)| action == "prompt")
+            .expect("a prompt row");
+        assert_eq!(prompt.2["models"], json!(["fast", "google"]));
+        let verdict = rows
+            .iter()
+            .find(|(_, action, _)| action == "verdict")
+            .expect("a verdict row");
+        assert_eq!(verdict.2["model"], "google", "{failing:?}");
+        assert_eq!(verdict.2["attempts"], 2, "{failing:?}");
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_first_model_that_answers_ends_the_list(pool: PgPool) {
+    let ai = fake_ai(FakeModel::Honest).await;
+    let mut dm = dm(&pool, Some(&ai)).await;
+    dm.chat = state_models(
+        pool.clone(),
+        offline_redis(),
+        Some(ai.url.as_str()),
+        &["fast", "google"],
+    );
     let seq = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP views").await;
     let id = report(&dm, REPORTER, (seq, seq), None).await;
 
-    assert!(matches!(
-        moderate(&dm.chat, &dm.keys, id).await.expect("moderated"),
-        Decision::Remove { .. }
-    ));
-    assert_eq!(ai.calls.load(Ordering::SeqCst), 3);
+    moderate(&dm.chat, &dm.keys, id).await.expect("moderated");
+    assert_eq!(ai.models_asked(), ["fast"]);
     let rows = audit_actions(&pool, &audit::report(id)).await;
     let verdict = rows
         .iter()
         .find(|(_, action, _)| action == "verdict")
         .expect("a verdict row");
-    assert_eq!(verdict.2["attempts"], 3);
+    assert_eq!(verdict.2["model"], "fast");
+    assert_eq!(verdict.2["attempts"], 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn every_model_call_names_a_user_agent(pool: PgPool) {
+    let ai = fake_ai(FakeModel::AlwaysDown).await;
+    let mut dm = dm(&pool, Some(&ai)).await;
+    dm.chat = state_models(
+        pool.clone(),
+        offline_redis(),
+        Some(ai.url.as_str()),
+        &["fast", "google"],
+    );
+    let seq = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP views").await;
+    let id = report(&dm, REPORTER, (seq, seq), None).await;
+
+    moderate(&dm.chat, &dm.keys, id).await.expect("moderated");
+    let agents = ai.user_agents.lock().expect("a lock").clone();
+    assert_eq!(agents, [USER_AGENT, USER_AGENT]);
+    assert!(USER_AGENT.starts_with("Mozilla/5.0 "));
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn a_dead_or_slow_model_leaves_the_report_to_rules_and_the_queue(pool: PgPool) {
     for model in [FakeModel::AlwaysDown, FakeModel::Slow] {
         let ai = fake_ai(model).await;
-        let dm = dm(&pool, Some(&ai)).await;
+        let mut dm = dm(&pool, Some(&ai)).await;
+        dm.chat = state_models(
+            pool.clone(),
+            offline_redis(),
+            Some(ai.url.as_str()),
+            &["fast", "google"],
+        );
         let seq = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP subs").await;
         let id = report(&dm, REPORTER, (seq, seq), None).await;
 
@@ -560,9 +632,16 @@ async fn a_dead_or_slow_model_leaves_the_report_to_rules_and_the_queue(pool: PgP
             Decision::Fallback("no_verdict"),
             "{model:?}"
         );
-        assert_eq!(ai.calls.load(Ordering::SeqCst), 3, "{model:?}");
+        assert_eq!(ai.calls.load(Ordering::SeqCst), 2, "{model:?}");
         assert_eq!(state_of(&pool, id).await.0, "open");
         assert!(body_of(&pool, dm.conversation, seq).await.is_some());
+        let rows = audit_actions(&pool, &audit::report(id)).await;
+        let verdict = rows
+            .iter()
+            .find(|(_, action, _)| action == "verdict")
+            .expect("a verdict row");
+        assert_eq!(verdict.2["outcome"], "unavailable", "{model:?}");
+        assert_eq!(verdict.2["model"], Value::Null, "{model:?}");
     }
 }
 

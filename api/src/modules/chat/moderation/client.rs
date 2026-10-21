@@ -8,27 +8,23 @@ use redact::Secret;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::modules::chat::config::ModerationConfig;
-use crate::modules::chat::moderation::CALL_TIMEOUT_SECS;
+use crate::modules::chat::config::{ModelChoice, ModerationConfig};
 use crate::modules::chat::moderation::verdict::{self, Verdict};
 
 pub const KEY_FILE: &str = "mod-ai-key";
-pub const ATTEMPTS: u32 = 3;
-pub const CALL_TIMEOUT: Duration = Duration::from_secs(CALL_TIMEOUT_SECS);
-pub const BACKOFF: Duration = Duration::from_secs(1);
+pub const USER_AGENT: &str =
+    "Mozilla/5.0 (compatible; SoundCloudDesktop-ChatModeration/1.0; +https://getsoundcloud.app)";
 pub const ANSWER_TOKENS_MAX: u32 = 400;
 pub const ANSWER_BYTES_MAX: usize = 64 * 1024;
 
 pub struct AiClient {
     endpoint: Option<Endpoint>,
     http: wreq::Client,
-    timeout: Duration,
-    backoff: Duration,
 }
 
 struct Endpoint {
     url: String,
-    model: String,
+    models: Vec<ModelChoice>,
     key: Secret<String>,
 }
 
@@ -61,41 +57,57 @@ impl Outcome {
 pub struct AiAnswer {
     pub verdict: Option<Verdict>,
     pub answer_sha256: Option<String>,
+    pub model: Option<String>,
     pub attempts: u32,
     pub outcome: Outcome,
 }
 
+impl AiAnswer {
+    fn failed(attempts: u32, outcome: Outcome, answer_sha256: Option<String>) -> Self {
+        Self {
+            verdict: None,
+            answer_sha256,
+            model: None,
+            attempts,
+            outcome,
+        }
+    }
+}
+
 enum Reply {
     Content(String),
-    Final,
-    Retry,
+    Refused,
+    Busy,
 }
 
 impl AiClient {
     pub fn load(config: &ModerationConfig, keys_dir: &Path) -> anyhow::Result<Self> {
         let http = wreq::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .user_agent(USER_AGENT)
             .build()
             .context("the moderation http client does not build")?;
         let mut client = Self {
             endpoint: None,
             http,
-            timeout: CALL_TIMEOUT,
-            backoff: BACKOFF,
         };
         if !config.enabled {
             return Ok(client);
         }
-        let (Some(url), Some(model)) = (config.url.clone(), config.model.clone()) else {
+        let Some(url) = config.url.clone() else {
             anyhow::bail!("CHAT_MOD_AI_ENABLED needs CHAT_MOD_AI_URL and CHAT_MOD_AI_MODEL");
         };
+        ensure!(
+            !config.models.is_empty(),
+            "CHAT_MOD_AI_ENABLED needs CHAT_MOD_AI_URL and CHAT_MOD_AI_MODEL"
+        );
         let key = fs::read_to_string(keys_dir.join(KEY_FILE))
             .with_context(|| format!("{KEY_FILE} is not readable"))?;
         let key = key.trim().to_owned();
         ensure!(!key.is_empty(), "{KEY_FILE} is empty");
         client.endpoint = Some(Endpoint {
             url: completions_url(&url),
-            model,
+            models: config.models.clone(),
             key: Secret::new(key),
         });
         Ok(client)
@@ -105,77 +117,56 @@ impl AiClient {
         self.endpoint.is_some()
     }
 
-    pub fn model(&self) -> Option<&str> {
-        self.endpoint
-            .as_ref()
-            .map(|endpoint| endpoint.model.as_str())
-    }
-
-    #[cfg(test)]
-    pub fn with_timing(mut self, timeout: Duration, backoff: Duration) -> Self {
-        self.timeout = timeout;
-        self.backoff = backoff;
-        self
+    pub fn models(&self) -> Vec<&str> {
+        self.endpoint.as_ref().map_or_else(Vec::new, |endpoint| {
+            endpoint
+                .models
+                .iter()
+                .map(|choice| choice.name.as_str())
+                .collect()
+        })
     }
 
     pub async fn verdict(&self, prompt: &Prompt) -> AiAnswer {
         let Some(endpoint) = &self.endpoint else {
-            return AiAnswer {
-                verdict: None,
-                answer_sha256: None,
-                attempts: 0,
-                outcome: Outcome::Disabled,
-            };
+            return AiAnswer::failed(0, Outcome::Disabled, None);
         };
-        let request = request_body(&endpoint.model, prompt);
-        for attempt in 1..=ATTEMPTS {
-            match self.call(endpoint, &request).await {
+        let mut attempts = 0;
+        let mut outcome = Outcome::Unavailable;
+        let mut answer_sha256 = None;
+        for choice in &endpoint.models {
+            attempts += 1;
+            let request = request_body(&choice.name, prompt);
+            match self.call(endpoint, choice, &request).await {
                 Reply::Content(content) => {
-                    let verdict = Verdict::parse(&content);
-                    return AiAnswer {
-                        outcome: if verdict.is_some() {
-                            Outcome::Answered
-                        } else {
-                            Outcome::Unparsable
-                        },
-                        verdict,
-                        answer_sha256: Some(sha256_hex(content.as_bytes())),
-                        attempts: attempt,
-                    };
+                    let sha = sha256_hex(content.as_bytes());
+                    if let Some(verdict) = Verdict::parse(&content) {
+                        return AiAnswer {
+                            verdict: Some(verdict),
+                            answer_sha256: Some(sha),
+                            model: Some(choice.name.clone()),
+                            attempts,
+                            outcome: Outcome::Answered,
+                        };
+                    }
+                    tracing::warn!(model = %choice.name, "moderation model answer is unparsable");
+                    outcome = Outcome::Unparsable;
+                    answer_sha256 = Some(sha);
                 }
-                Reply::Final => {
-                    return AiAnswer {
-                        verdict: None,
-                        answer_sha256: None,
-                        attempts: attempt,
-                        outcome: Outcome::Refused,
-                    };
-                }
-                Reply::Retry if attempt < ATTEMPTS => {
-                    tokio::time::sleep(self.pause(attempt)).await;
-                }
-                Reply::Retry => {}
+                Reply::Refused => outcome = Outcome::Refused,
+                Reply::Busy => outcome = Outcome::Unavailable,
             }
         }
-        AiAnswer {
-            verdict: None,
-            answer_sha256: None,
-            attempts: ATTEMPTS,
-            outcome: Outcome::Unavailable,
-        }
+        AiAnswer::failed(attempts, outcome, answer_sha256)
     }
 
-    fn pause(&self, attempt: u32) -> Duration {
-        let jitter = Duration::from_millis(u64::from(rand::random::<u16>() % 250));
-        self.backoff * 4u32.pow(attempt - 1) + jitter
-    }
-
-    async fn call(&self, endpoint: &Endpoint, request: &Value) -> Reply {
+    async fn call(&self, endpoint: &Endpoint, choice: &ModelChoice, request: &Value) -> Reply {
+        let model = choice.name.as_str();
         let sent = self
             .http
             .post(&endpoint.url)
             .bearer_auth(endpoint.key.expose())
-            .timeout(self.timeout)
+            .timeout(choice.timeout)
             .json(request)
             .send()
             .await;
@@ -189,21 +180,22 @@ impl AiClient {
                 } else {
                     "transport"
                 };
-                tracing::warn!(kind, "moderation model call failed");
-                return Reply::Retry;
+                tracing::warn!(model, kind, "moderation model call failed");
+                return Reply::Busy;
             }
         };
         let status = response.status();
         if status.as_u16() == 429 || status.is_server_error() {
-            tracing::warn!(status = status.as_u16(), "moderation model is busy");
-            return Reply::Retry;
+            tracing::warn!(model, status = status.as_u16(), "moderation model is busy");
+            return Reply::Busy;
         }
         if !status.is_success() {
             tracing::warn!(
+                model,
                 status = status.as_u16(),
                 "moderation model refused the call"
             );
-            return Reply::Final;
+            return Reply::Refused;
         }
         let body = match capped_body(response).await {
             Ok(body) => body,
@@ -212,8 +204,8 @@ impl AiClient {
         match serde_json::from_slice::<Value>(&body) {
             Ok(answer) => answer["choices"][0]["message"]["content"]
                 .as_str()
-                .map_or(Reply::Final, |content| Reply::Content(content.to_owned())),
-            Err(_) => Reply::Retry,
+                .map_or(Reply::Refused, |content| Reply::Content(content.to_owned())),
+            Err(_) => Reply::Busy,
         }
     }
 }
@@ -224,15 +216,15 @@ async fn capped_body(response: wreq::Response) -> Result<Vec<u8>, Reply> {
         .is_some_and(|length| length > ANSWER_BYTES_MAX as u64)
     {
         tracing::warn!("moderation model answer is too large");
-        return Err(Reply::Final);
+        return Err(Reply::Refused);
     }
     let mut stream = response.bytes_stream();
     let mut body = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| Reply::Retry)?;
+        let chunk = chunk.map_err(|_| Reply::Busy)?;
         if body.len() + chunk.len() > ANSWER_BYTES_MAX {
             tracing::warn!("moderation model answer is too large");
-            return Err(Reply::Final);
+            return Err(Reply::Refused);
         }
         body.extend_from_slice(&chunk);
     }

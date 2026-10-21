@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::modules::chat::config::ModerationConfig;
+use crate::modules::chat::config::{ModelChoice, ModerationConfig};
 use crate::modules::chat::moderation::Moderator;
 use crate::modules::chat::moderation::client::{AiClient, KEY_FILE};
 use crate::modules::chat::moderation::keys::ChatKeys;
@@ -24,6 +24,7 @@ use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub const AI_KEY: &str = "sk-test-moderation-key-7f3a9c";
 pub const ADMIN_TOKEN: &str = "admin-token-for-tests-41d2";
+pub const FAKE_MODEL: &str = "fake-moderator";
 
 pub struct TestKeys {
     pub kek_current: u16,
@@ -131,16 +132,29 @@ pub fn state(pg: PgPool, ai: Option<&str>) -> Arc<ChatState> {
 }
 
 pub fn state_with(pg: PgPool, redis: deadpool_redis::Pool, ai: Option<&str>) -> Arc<ChatState> {
+    state_models(pg, redis, ai, &[FAKE_MODEL])
+}
+
+pub fn state_models(
+    pg: PgPool,
+    redis: deadpool_redis::Pool,
+    ai: Option<&str>,
+    models: &[&str],
+) -> Arc<ChatState> {
     let mut chat = Arc::into_inner(chat_state(pg, redis, true)).expect("a fresh state");
     let dir = keys_dir();
     let moderation = ModerationConfig {
         enabled: ai.is_some(),
         url: ai.map(str::to_owned),
-        model: ai.map(|_| "fake-moderator".to_owned()),
+        models: models
+            .iter()
+            .map(|name| ModelChoice {
+                name: (*name).to_owned(),
+                timeout: Duration::from_millis(800),
+            })
+            .collect(),
     };
-    let client = AiClient::load(&moderation, &dir)
-        .expect("a moderation client")
-        .with_timing(Duration::from_millis(800), Duration::from_millis(20));
+    let client = AiClient::load(&moderation, &dir).expect("a moderation client");
     chat.moderator = Moderator::new(client);
     chat.config.moderation = moderation;
     chat.config.keys_dir = dir;
@@ -283,7 +297,8 @@ pub enum FakeModel {
     Sloppy,
     BansEveryone,
     Huge,
-    FailsFirst(usize),
+    Garbage,
+    Forbidden,
     AlwaysDown,
     Slow,
 }
@@ -296,14 +311,41 @@ pub struct FakeAi {
     pub peak: Arc<AtomicUsize>,
     pub authorization: Arc<Mutex<Vec<String>>>,
     pub requests: Arc<Mutex<Vec<Value>>>,
+    pub user_agents: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeAi {
+    pub fn models_asked(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .expect("a lock")
+            .iter()
+            .map(|request| request["model"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
 }
 
 struct Fake {
-    model: FakeModel,
+    models: Vec<(String, FakeModel)>,
+    fallback: FakeModel,
     probe: FakeAi,
 }
 
+impl Fake {
+    fn model_for(&self, request: &Value) -> FakeModel {
+        let asked = request["model"].as_str().unwrap_or_default();
+        self.models
+            .iter()
+            .find(|(name, _)| name == asked)
+            .map_or(self.fallback, |(_, model)| *model)
+    }
+}
+
 pub async fn fake_ai(model: FakeModel) -> FakeAi {
+    fake_ai_models(model, &[]).await
+}
+
+pub async fn fake_ai_models(fallback: FakeModel, models: &[(&str, FakeModel)]) -> FakeAi {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a fake ai port");
@@ -315,11 +357,16 @@ pub async fn fake_ai(model: FakeModel) -> FakeAi {
         peak: Arc::default(),
         authorization: Arc::default(),
         requests: Arc::default(),
+        user_agents: Arc::default(),
     };
     let app = Router::new()
         .route("/v1/chat/completions", axum::routing::post(complete))
         .with_state(Arc::new(Fake {
-            model,
+            models: models
+                .iter()
+                .map(|(name, model)| ((*name).to_owned(), *model))
+                .collect(),
+            fallback,
             probe: probe.clone(),
         }));
     tokio::spawn(async move {
@@ -335,12 +382,19 @@ async fn complete(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> axum::response::Response {
-    let call = fake.probe.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    fake.probe.calls.fetch_add(1, Ordering::SeqCst);
     let now = fake.probe.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     fake.probe.peak.fetch_max(now, Ordering::SeqCst);
     if let Some(value) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         fake.probe
             .authorization
+            .lock()
+            .expect("a lock")
+            .push(value.to_owned());
+    }
+    if let Some(value) = headers.get("user-agent").and_then(|v| v.to_str().ok()) {
+        fake.probe
+            .user_agents
             .lock()
             .expect("a lock")
             .push(value.to_owned());
@@ -351,9 +405,14 @@ async fn complete(
         .expect("a lock")
         .push(request.clone());
     tokio::time::sleep(Duration::from_millis(60)).await;
-    let answer = match fake.model {
-        FakeModel::AlwaysDown => None,
-        FakeModel::FailsFirst(failures) if call <= failures => None,
+    let model = fake.model_for(&request);
+    if model == FakeModel::Forbidden {
+        fake.probe.in_flight.fetch_sub(1, Ordering::SeqCst);
+        return (StatusCode::FORBIDDEN, "no").into_response();
+    }
+    let answer = match model {
+        FakeModel::AlwaysDown | FakeModel::Forbidden => None,
+        FakeModel::Garbage => Some("this is not a verdict".to_owned()),
         FakeModel::Slow => {
             tokio::time::sleep(Duration::from_secs(3)).await;
             Some(honest(&request))
@@ -367,7 +426,7 @@ async fn complete(
             1.0,
             target_seqs(&user_prompt(&request)),
         )),
-        FakeModel::Honest | FakeModel::FailsFirst(_) => Some(honest(&request)),
+        FakeModel::Honest => Some(honest(&request)),
     };
     fake.probe.in_flight.fetch_sub(1, Ordering::SeqCst);
     match answer {

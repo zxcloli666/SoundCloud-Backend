@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::config::{env_opt, env_str, env_u16, env_u32, env_u64};
 use crate::modules::chat::synthetic::is_synthetic;
@@ -36,11 +37,19 @@ pub struct ChatConfig {
     pub moderation: ModerationConfig,
 }
 
+pub const MODEL_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct ModerationConfig {
     pub enabled: bool,
     pub url: Option<String>,
-    pub model: Option<String>,
+    pub models: Vec<ModelChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub name: String,
+    pub timeout: Duration,
 }
 
 impl ChatConfig {
@@ -63,7 +72,10 @@ impl ChatConfig {
             moderation: ModerationConfig {
                 enabled: env_str("CHAT_MOD_AI_ENABLED", "false") == "true",
                 url: env_opt("CHAT_MOD_AI_URL"),
-                model: env_opt("CHAT_MOD_AI_MODEL"),
+                models: models(
+                    &env_str("CHAT_MOD_AI_MODEL", ""),
+                    &env_str("CHAT_MOD_AI_TIMEOUT_S", ""),
+                ),
             },
         }
     }
@@ -81,6 +93,22 @@ fn access(raw: &str) -> Access {
         "all" => Access::All,
         _ => Access::Beta,
     }
+}
+
+fn models(names: &str, timeouts: &str) -> Vec<ModelChoice> {
+    let mut timeouts = timeouts.split(',').map(str::trim);
+    names
+        .split(',')
+        .map(|name| (name.trim(), timeouts.next()))
+        .filter(|(name, _)| !name.is_empty())
+        .map(|(name, timeout)| ModelChoice {
+            name: name.to_owned(),
+            timeout: timeout
+                .and_then(|secs| secs.parse::<u64>().ok())
+                .filter(|secs| *secs > 0)
+                .map_or(MODEL_TIMEOUT_DEFAULT, Duration::from_secs),
+        })
+        .collect()
 }
 
 fn beta_users(raw: &str) -> HashSet<String> {

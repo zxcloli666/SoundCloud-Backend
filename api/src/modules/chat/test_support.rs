@@ -77,7 +77,7 @@ pub fn config(enabled: bool) -> ChatConfig {
         moderation: ModerationConfig {
             enabled: false,
             url: None,
-            model: None,
+            models: Vec::new(),
         },
     }
 }
