@@ -34,6 +34,10 @@ qdrant `6333/6334`, nats `4222/8222`.
 токен админки `dev-chat-admin` (или `CHAT_ADMIN_TOKEN`). OCK в dev - тестовый ключ из
 `utils/chat-wire/vectors/request.json` (pub `dde33290...2d4d`), dev-десктоп должен пинить его как версию 1.
 
+Сквозные тесты чата (1.T): `scripts/chat-it.sh up` поднимает чистую БД в `scd-pg`, `redis-rt`, музыкальный Redis,
+фейковый OpenAI-судью для модерации, nginx-релей и `chat-api` из debug-сборки, печатает переменные для
+`Desktop/utils/chat-core/tests/integration`. `scripts/chat-it.sh down` все убирает.
+
 ## Клиентский контракт стриминга (v9)
 
 Для сторонних клиентов (например, `okeydw/SoundCloud-Android`):
