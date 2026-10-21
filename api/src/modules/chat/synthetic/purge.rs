@@ -71,7 +71,7 @@ async fn drop_devices(chat: &ChatState) -> ChatResult<(u64, u64)> {
         }
         devices += count as u64;
         sessions += sessions::drop_all(chat, &ids).await?;
-        if (count as i64) < BATCH_ROWS {
+        if count == 0 {
             return Ok((devices, sessions));
         }
     }
