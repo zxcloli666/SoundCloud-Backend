@@ -2,10 +2,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::modules::chat::model::{DeviceView, MessageView};
+use crate::modules::chat::{ChatError, ChatResult};
 
 pub const HOLD_MAX_MS: u64 = 20_000;
 pub const HOLD_MAX_PRO_MS: u64 = 15_000;
 pub const KNOWN_MAX: usize = 64;
+pub const MARKS_MAX: usize = 64;
+pub const ANSWER_BYTES_MAX: u32 = 256 * 1024;
+pub const ANSWER_BYTES_MAX_PRO: u32 = 24 * 1024;
+pub const RETRY_AFTER_MS: &str = "retry-after-ms";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SyncRequest {
@@ -22,6 +27,28 @@ pub struct SyncRequest {
     pub read: Vec<(Uuid, i64)>,
     #[serde(default)]
     pub delivered: Vec<(Uuid, i64)>,
+}
+
+impl SyncRequest {
+    pub fn validate(&self) -> ChatResult<()> {
+        let Self {
+            known,
+            read,
+            delivered,
+            ..
+        } = self;
+        let too_many =
+            known.len() > KNOWN_MAX || read.len() > MARKS_MAX || delivered.len() > MARKS_MAX;
+        let negative = known
+            .iter()
+            .chain(read)
+            .chain(delivered)
+            .any(|(_, seq)| *seq < 0);
+        if too_many || negative {
+            return Err(ChatError::Invalid);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,7 +74,7 @@ pub struct SyncConversation {
     pub typing: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PeerMark {
     pub user_id: String,
     pub read_seq: i64,
