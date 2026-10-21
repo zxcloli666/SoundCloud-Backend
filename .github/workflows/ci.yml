@@ -18,8 +18,32 @@ env:
   DATABASE_URL: postgres://scd:dev@localhost:5432/scd
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.scope.outputs.api }}
+      jobs: ${{ steps.scope.outputs.jobs }}
+      services: ${{ steps.scope.outputs.services }}
+      prod: ${{ steps.scope.outputs.prod }}
+      yanked: ${{ steps.scope.outputs.yanked }}
+      worker: ${{ steps.scope.outputs.worker }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: sh scripts/ci-changes.sh >> "$GITHUB_OUTPUT"
+
   jobs:
     name: Jobs
+    needs: changes
+    if: needs.changes.outputs.jobs == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,9 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Toolchain
+        run: rustup toolchain install
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -50,6 +73,13 @@ jobs:
             backend-contracts -> target
             jobs -> target
           key: jobs
+          cache-workspace-crates: true
+          cache-on-failure: true
+          cache-directories: .ci-sha
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Source times
+        run: sh scripts/ci-mtime.sh
 
       - name: System packages
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client cmake clang libclang-dev pkg-config
@@ -72,8 +102,13 @@ jobs:
         working-directory: jobs
         run: cargo test --lib --locked indexing::result::live_tests -- --ignored --test-threads=1
 
+      - name: Source stamp
+        run: sh scripts/ci-mtime.sh stamp
+
   api:
     name: API
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -101,14 +136,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Toolchain
+        run: rustup toolchain install
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: api -> target
           key: api
+          cache-workspace-crates: true
+          cache-on-failure: true
+          cache-directories: .ci-sha
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Source times
+        run: sh scripts/ci-mtime.sh
 
       - name: System packages
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client cmake clang libclang-dev pkg-config
@@ -134,15 +175,19 @@ jobs:
         working-directory: api
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      - name: Source stamp
+        run: sh scripts/ci-mtime.sh stamp
+
   services:
     name: Streaming, storage, gateway
+    needs: changes
+    if: needs.changes.outputs.services == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Toolchain
+        run: rustup toolchain install
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -152,6 +197,13 @@ jobs:
             storage -> target
             gateway -> target
           key: services
+          cache-workspace-crates: true
+          cache-on-failure: true
+          cache-directories: .ci-sha
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Source times
+        run: sh scripts/ci-mtime.sh
 
       - name: Stream ticket
         run: |
@@ -169,13 +221,19 @@ jobs:
       - name: Gateway
         run: cargo check --manifest-path gateway/Cargo.toml --all-targets
 
+      - name: Source stamp
+        run: sh scripts/ci-mtime.sh stamp
+
   yanked:
     name: Yanked crates
+    needs: changes
+    if: needs.changes.outputs.yanked == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Toolchain
+        run: rustup toolchain install
 
       - uses: taiki-e/install-action@v2
         with:
@@ -191,6 +249,8 @@ jobs:
 
   worker:
     name: Worker
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -216,6 +276,7 @@ jobs:
           version: "0.12.10"
           enable-cache: true
           prune-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: worker/uv.lock
 
       - name: Lock is current
@@ -256,7 +317,8 @@ jobs:
 
   prod:
     name: Real call and decrypt crates
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.prod == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -282,12 +344,8 @@ jobs:
             decrypt
             decrypt-client
 
-      - name: Real crates
-        run: |
-          rm -rf utils/call utils/decrypt utils/decrypt-client
-          mv _internal/call _internal/decrypt _internal/decrypt-client utils/
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Toolchain
+        run: rustup toolchain install
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -296,6 +354,18 @@ jobs:
             jobs -> target
             streaming -> target
           key: prod
+          cache-workspace-crates: true
+          cache-on-failure: true
+          cache-directories: .ci-sha
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Source times
+        run: sh scripts/ci-mtime.sh
+
+      - name: Real crates
+        run: |
+          rm -rf utils/call utils/decrypt utils/decrypt-client
+          mv _internal/call _internal/decrypt _internal/decrypt-client utils/
 
       - name: System packages
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client protobuf-compiler cmake clang libclang-dev pkg-config
@@ -311,3 +381,6 @@ jobs:
 
       - name: Streaming
         run: cargo check --manifest-path streaming/Cargo.toml
+
+      - name: Source stamp
+        run: sh scripts/ci-mtime.sh stamp
