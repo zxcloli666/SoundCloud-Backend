@@ -78,48 +78,47 @@ jobs:
             image: api
             context: .
             file: api/Dockerfile
-            sources: api backend-contracts utils
-            internal: call
+            internal: |
+              call/Cargo.toml
+              call/crypto
+              call/lua-macros
+              call/proto
+              call/relay
             cache: scd-api:release
           - name: jobs
             image: jobs
             context: .
             file: jobs/Dockerfile
-            sources: jobs backend-contracts utils api/migrations api/migrations-ops api/queries
-            internal: call
+            internal: |
+              call/Cargo.toml
+              call/crypto
+              call/lua-macros
+              call/proto
+              call/relay
             cache: scd-jobs:release
           - name: streaming
             image: streaming
-            context: streaming
-            sources: streaming utils
+            context: .
+            file: streaming/Dockerfile
             internal: |
-              call
+              call/Cargo.toml
+              call/crypto
+              call/lua-macros
+              call/proto
+              call/relay
               decrypt
               decrypt-client
             cache: scd-streaming:release
-            build_contexts: |
-              tls-common=utils/tls-common
-              call=utils/call
-              decrypt=utils/decrypt
-              decrypt-client=utils/decrypt-client
-              stream-ticket=utils/stream-ticket
-              sc-fingerprint=utils/sc-fingerprint
-              entity-ref=utils/entity-ref
           - name: storage
             image: storage
-            context: storage
-            sources: storage utils
+            context: .
+            file: storage/Dockerfile
             cache: scd-storage:release
-            build_contexts: |
-              tls-common=utils/tls-common
-              sc-fingerprint=utils/sc-fingerprint
-              entity-ref=utils/entity-ref
           - name: gateway
             image: gateway
-            context: gateway
-            sources: gateway utils
+            context: .
+            file: gateway/Dockerfile
             cache: scd-gateway:release
-            build_contexts: tls-common=utils/tls-common
           - name: worker-cpu
             image: worker
             context: worker
@@ -163,7 +162,23 @@ jobs:
           repository: ${{ github.repository_owner }}/SoundCloud-Internal
           token: ${{ secrets.INTERNAL_PAT }}
           path: _internal
+          sparse-checkout-cone-mode: false
           sparse-checkout: ${{ matrix.internal }}
+
+      - name: Real call and decrypt crates
+        if: matrix.internal
+        env:
+          INTERNAL: ${{ matrix.internal }}
+        run: |
+          for path in $INTERNAL; do
+            rm -rf "utils/$path"
+            mkdir -p "utils/$(dirname "$path")"
+            mv "_internal/$path" "utils/$path"
+          done
+          if [ ! -d utils/call/proto ] || grep -q "call-relay disabled" utils/call/relay/src/lib.rs; then
+            echo "::error::utils/call is still the mock relay"
+            exit 1
+          fi
 
       - name: Names
         id: names
@@ -171,16 +186,19 @@ jobs:
           IMAGE: ${{ matrix.image }}
           SUFFIX: ${{ matrix.suffix }}
           SOURCES: ${{ matrix.sources }}
-          INTERNAL: ${{ matrix.internal }}
+          FILE: ${{ matrix.file }}
+          FLAVOR: ${{ matrix.flavor }}
           ONLY_VERSIONED: ${{ matrix.only_versioned }}
           EXTRA_TAGS: ${{ matrix.extra_tags }}
         run: |
           repo=$(echo "ghcr.io/$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          trees=$(
-            for entry in $SOURCES scripts/cargo-skeleton.sh .dockerignore .github/workflows/auto-build.yml; do git rev-parse "HEAD:$entry"; done
-            for entry in $INTERNAL; do git -C _internal rev-parse "HEAD:$entry"; done
-          )
-          source_tag="$repo/$IMAGE:src-$(echo "$trees" | sha256sum | cut -c1-16)$SUFFIX"
+          if [ -n "$SOURCES" ]; then
+            inputs=$(for entry in $SOURCES; do git rev-parse "HEAD:$entry"; done; echo "$FLAVOR")
+          else
+            docker buildx build --target sources --file "$FILE" --output "type=local,dest=$RUNNER_TEMP/inputs" .
+            inputs=$(cat "$FILE"; cd "$RUNNER_TEMP/inputs" && find . -type f -exec sha256sum {} + | sort -k2)
+          fi
+          source_tag="$repo/$IMAGE:src-$(echo "$inputs" | sha256sum | cut -c1-16)$SUFFIX"
           {
             echo "source=$source_tag"
             echo "tags<<EOF"
@@ -218,20 +236,6 @@ jobs:
           for tag in $TAGS; do tags+=(--tag "$tag"); done
           docker buildx imagetools create "${tags[@]}" "$SOURCE"
 
-      - name: Real call and decrypt crates
-        if: steps.built.outputs.found == 'false' && matrix.internal
-        env:
-          INTERNAL: ${{ matrix.internal }}
-        run: |
-          for crate in $INTERNAL; do
-            rm -rf "utils/$crate"
-            mv "_internal/$crate" "utils/$crate"
-          done
-          if [ ! -d utils/call/server ] || grep -q "call-relay disabled" utils/call/relay/src/lib.rs; then
-            echo "::error::utils/call is still the mock relay"
-            exit 1
-          fi
-
       - uses: jlumbroso/free-disk-space@v2.0.0
         if: steps.built.outputs.found == 'false' && matrix.free_disk
         with:
@@ -253,7 +257,6 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          build-contexts: ${{ matrix.build_contexts }}
           push: true
           provenance: false
           tags: |

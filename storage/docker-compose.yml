@@ -3,9 +3,8 @@ services:
   # Run: docker compose --profile local up -d
   storage-local:
     build:
-      context: .
-      additional_contexts:
-        tls-common: ../utils/tls-common
+      context: ..
+      dockerfile: storage/Dockerfile
     profiles: ["local"]
     restart: always
     ports:
@@ -39,9 +38,8 @@ services:
   # Run: docker compose --profile s3 up -d
   storage-s3:
     build:
-      context: .
-      additional_contexts:
-        tls-common: ../utils/tls-common
+      context: ..
+      dockerfile: storage/Dockerfile
     profiles: ["s3"]
     restart: always
     ports:

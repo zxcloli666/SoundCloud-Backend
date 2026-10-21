@@ -83,7 +83,7 @@ S3 wish — `:80` straight to SeaweedFS, only `:443` through us (certs still iss
     volumes: [acme:/var/cache/acme]
 ```
 
-`build-context` for local builds: `docker build --build-context tls-common=../utils/tls-common ./gateway`.
+Local build from the repository root: `docker build -f gateway/Dockerfile .`.
 
 ## Highload
 
