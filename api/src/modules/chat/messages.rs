@@ -85,8 +85,14 @@ pub async fn send(
     let device = caller.device.as_ref().ok_or(ChatError::Invalid)?.id;
     let outgoing = rules::outgoing(input)?;
     limits::admit(&chat, Bucket::Send, &caller.user_id).await?;
-    let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
+    let access = access::load_in(&chat, conversation, &caller.user_id).await?;
     rules::may_post(&access, outgoing.class)?;
+    if access.is_room()
+        && let Some(row) = gate::room(&chat, &access, &outgoing).await?
+    {
+        fanout::publish(&chat, std::slice::from_ref(&row), &access.recipients).await?;
+        return Ok(Json(SendAnswer::from(&row)));
+    }
     gate::peer_open(&access)?;
     if let Some(peer) = access.peer.as_deref()
         && blocks::blocked_between(&chat, &caller.user_id, peer).await?
@@ -109,7 +115,7 @@ pub async fn history(
     ChatQuery(query): ChatQuery<HistoryQuery>,
 ) -> ChatResult<Json<HistoryPage>> {
     limits::admit(&chat, Bucket::ReadMessages, &caller.user_id).await?;
-    let access = access::load(&chat.pg, conversation, &caller.user_id)
+    let access = access::load_in(&chat, conversation, &caller.user_id)
         .await?
         .readable()?;
     let cap = page::byte_cap(caller.tier, caller.max_bytes);
@@ -125,7 +131,7 @@ pub async fn delete(
     if query.scope != DeleteScope::Everyone {
         return Err(ChatError::Invalid);
     }
-    let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
+    let access = access::load_in(&chat, conversation, &caller.user_id).await?;
     let rows = redact::for_everyone(&chat.pg, &access, seq).await?;
     if rows.is_empty() {
         fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?;

@@ -3,9 +3,11 @@ use sqlx::PgPool;
 
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::rules::Outgoing;
-use crate::modules::chat::model::{ConversationKind, MemberState};
+use crate::modules::chat::messages::store;
+use crate::modules::chat::model::{ConversationKind, MemberState, MessageRow};
 use crate::modules::chat::requests::MESSAGES_BEFORE_ACCEPT;
-use crate::modules::chat::{ChatError, ChatResult};
+use crate::modules::chat::rooms::lookup;
+use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 pub fn peer_open(access: &Access) -> ChatResult<()> {
     if access.kind != ConversationKind::Direct {
@@ -33,4 +35,29 @@ pub async fn request_room(pg: &PgPool, access: &Access, out: &Outgoing) -> ChatR
         return Err(ChatError::RequestLimit);
     }
     Ok(())
+}
+
+pub async fn room(
+    chat: &ChatState,
+    access: &Access,
+    out: &Outgoing,
+) -> ChatResult<Option<MessageRow>> {
+    let gate = lookup::gate_send(
+        chat,
+        access.conversation,
+        &access.user_id,
+        out.class.as_str(),
+    );
+    let Err(refused) = gate.await else {
+        return Ok(None);
+    };
+    store::existing(
+        &chat.pg,
+        access.conversation,
+        out.client_id,
+        &access.user_id,
+    )
+    .await?
+    .map(Some)
+    .ok_or(refused)
 }

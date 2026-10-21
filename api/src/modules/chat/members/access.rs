@@ -6,7 +6,8 @@ use uuid::Uuid;
 use crate::modules::chat::conversations::keys::peer_of;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::model::{ConversationKind, MemberRole, MemberState};
-use crate::modules::chat::{ChatError, ChatResult};
+use crate::modules::chat::rooms::lookup::{RoomChatMember, room_of_chat};
+use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub struct GroupSettings {
@@ -85,12 +86,17 @@ impl Access {
         }
     }
 
+    pub fn is_room(&self) -> bool {
+        self.kind == ConversationKind::Room
+    }
+
+    pub fn moderates(&self) -> bool {
+        (self.is_group() || self.is_room()) && self.is_admin()
+    }
+
     pub fn history_floor(&self) -> i64 {
-        let joined = if self.is_group() && !self.settings.history_visible {
-            self.joined_seq
-        } else {
-            0
-        };
+        let from_join = self.is_room() || (self.is_group() && !self.settings.history_visible);
+        let joined = if from_join { self.joined_seq } else { 0 };
         joined.max(self.hidden_before_seq)
     }
 
@@ -128,5 +134,45 @@ pub async fn load(pg: &PgPool, conversation: Uuid, user_id: &str) -> ChatResult<
         hidden_before_seq: row.hidden_before_seq,
         peer_state: row.peer_state.as_deref().map(roles::state).transpose()?,
         recipients: row.recipients,
+    })
+}
+
+pub async fn load_in(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatResult<Access> {
+    match load(&chat.pg, conversation, user_id).await {
+        Err(ChatError::NotMember) => load_room(chat, conversation, user_id).await,
+        found => found,
+    }
+}
+
+async fn load_room(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatResult<Access> {
+    let row = sqlx::query_file!("queries/chat/members/room_access.sql", conversation)
+        .fetch_optional(&chat.pg)
+        .await?
+        .ok_or(ChatError::NotMember)?;
+    let room = room_of_chat(chat, conversation)
+        .await?
+        .ok_or(ChatError::NotMember)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let member = RoomChatMember::of(&room, user_id, now).ok_or(ChatError::NotMember)?;
+    Ok(Access {
+        conversation,
+        user_id: user_id.to_owned(),
+        kind: ConversationKind::Room,
+        peer: None,
+        key_epoch: row.key_epoch,
+        last_seq: row.last_seq,
+        ttl_s: None,
+        settings: GroupSettings::default(),
+        role: if member.can_moderate() {
+            MemberRole::Admin
+        } else {
+            MemberRole::Member
+        },
+        state: MemberState::Active,
+        accepted: true,
+        joined_seq: member.chat_from_seq,
+        hidden_before_seq: 0,
+        peer_state: None,
+        recipients: room.members.into_iter().map(|one| one.user_id).collect(),
     })
 }

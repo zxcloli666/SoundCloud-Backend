@@ -21,8 +21,7 @@ pub async fn for_everyone(pg: &PgPool, access: &Access, seq: i64) -> ChatResult<
     if target.expires_at.is_some_and(|at| at <= Utc::now()) {
         return Err(ChatError::NotFound);
     }
-    let moderated = access.is_group() && access.is_admin();
-    if target.sender_user != access.user_id && !moderated {
+    if target.sender_user != access.user_id && !access.moderates() {
         return Err(ChatError::NotMember);
     }
     if target.deleted {

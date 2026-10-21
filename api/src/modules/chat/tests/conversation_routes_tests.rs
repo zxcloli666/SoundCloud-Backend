@@ -193,10 +193,17 @@ mod wired {
     use sqlx::PgPool;
 
     use super::*;
-    use crate::modules::chat::conversations::fixtures::{dm, group, post};
+    use chat_wire::msg::Class;
+
+    use crate::modules::chat::ChatError;
+    use crate::modules::chat::conversations::fixtures::{DEVICE, dm, group, outgoing, post};
+    use crate::modules::chat::members::access;
+    use crate::modules::chat::messages::{HistoryPage, HistoryQuery, gate, page, rules, store};
     use crate::modules::chat::model::MemberState;
     use crate::modules::chat::rt_keys;
     use crate::modules::chat::test_support::chat_state;
+    use crate::modules::rooms::model::{Member, Profile, Room, new_code};
+    use crate::modules::rooms::store::RoomStore;
 
     fn redis_url() -> String {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
@@ -370,6 +377,135 @@ mod wired {
             (status, gone),
             (StatusCode::FORBIDDEN, json!({"error": "chat_not_member"}))
         );
+        Ok(())
+    }
+
+    fn seated(user: &str, from_seq: i64) -> Member {
+        let profile = Profile {
+            name: format!("User {user}"),
+            avatar_url: None,
+        };
+        Member {
+            chat_from_seq: from_seq,
+            ..Member::new(user, &profile, 10)
+        }
+    }
+
+    async fn room_chat(chat: &ChatState, host: &str, guest: &str, from_seq: i64) -> Uuid {
+        let id = Uuid::now_v7();
+        let code = new_code();
+        sqlx::query(
+            "INSERT INTO chat.conversations (id, kind, room_ref, created_by) VALUES ($1, 'room', $2, $3)",
+        )
+        .bind(id)
+        .bind(&code)
+        .bind(host)
+        .execute(&chat.pg)
+        .await
+        .expect("a room chat row");
+        let mut room = Room::new(code.clone(), seated(host, 0), false, 10);
+        room.members.push(seated(guest, from_seq));
+        room.chat_id = Some(id);
+        room.slow_mode_s = Some(60);
+        let store = RoomStore::new(chat.redis.clone());
+        assert!(store.insert(&room).await.expect("a stored room"));
+        store.index_chat(id, &code).await.expect("a chat index");
+        id
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    #[ignore = "requires a local Redis"]
+    async fn room_chats_take_their_seats_from_the_room(pool: PgPool) -> anyhow::Result<()> {
+        let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
+        let id = room_chat(&chat, "101", "202", 2).await;
+        assert_eq!(
+            access::load_in(&chat, id, "303").await.err(),
+            Some(ChatError::NotMember)
+        );
+        let host = access::load_in(&chat, id, "101").await.expect("the host");
+        let guest = access::load_in(&chat, id, "202").await.expect("a guest");
+        assert!(host.moderates() && !guest.moderates());
+        assert_eq!((guest.joined_seq, guest.history_floor()), (2, 2));
+        assert_eq!(guest.recipients, vec!["101".to_owned(), "202".to_owned()]);
+        for _ in 0..2 {
+            let out = outgoing(Class::Post, 0, None);
+            assert!(
+                gate::room(&chat, &host, &out)
+                    .await
+                    .expect("open")
+                    .is_none()
+            );
+            store::store(&pool, &host, DEVICE, &out, None)
+                .await
+                .expect("a host post");
+        }
+        let out = outgoing(Class::Post, 0, None);
+        assert!(
+            gate::room(&chat, &guest, &out)
+                .await
+                .expect("open")
+                .is_none()
+        );
+        let first = store::store(&pool, &guest, DEVICE, &out, None)
+            .await
+            .expect("a guest post");
+        assert_eq!(first.seq, 3);
+        let again = gate::room(&chat, &guest, &out).await.expect("a resend");
+        assert_eq!(again.map(|row| row.seq), Some(3));
+        assert!(matches!(
+            gate::room(&chat, &guest, &outgoing(Class::Post, 0, None)).await,
+            Err(ChatError::SlowMode { .. })
+        ));
+        assert_eq!(
+            rules::may_post(&guest, Class::Pin),
+            Err(ChatError::NotMember)
+        );
+        let newest = HistoryQuery {
+            after: None,
+            before: None,
+            limit: None,
+        };
+        let seqs = |page: HistoryPage| page.messages.iter().map(|row| row.seq).collect::<Vec<_>>();
+        assert_eq!(
+            seqs(
+                page::read(&pool, &guest, &newest, 1 << 20)
+                    .await
+                    .expect("a page")
+            ),
+            vec![3]
+        );
+        assert_eq!(
+            seqs(
+                page::read(&pool, &host, &newest, 1 << 20)
+                    .await
+                    .expect("a page")
+            ),
+            vec![1, 2, 3]
+        );
+        let messages = format!("/chat/conversations/{id}/messages");
+        let (status, _) = answer(
+            chat.clone(),
+            as_user("202"),
+            "DELETE",
+            &format!("{messages}/1?for=everyone"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, body) = answer(
+            chat.clone(),
+            as_user("101"),
+            "DELETE",
+            &format!("{messages}/3?for=everyone"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let cached = chat.hot.after(id, 2).expect("a cached tail");
+        assert_eq!(cached[0].body, None);
+        let mut conn = chat.redis.get().await?;
+        let told: Option<f64> = conn.zscore(rt_keys::deltas("202"), id.to_string()).await?;
+        assert!(told.is_some());
         Ok(())
     }
 }
