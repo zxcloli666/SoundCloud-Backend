@@ -10,6 +10,7 @@ pub const MAX_MUTE_SECS: u32 = 24 * 3_600;
 pub const MAX_SLOW_MODE_SECS: u32 = 600;
 pub const PUBLIC_SLOW_MODE_SECS: u32 = 3;
 const MAX_MUTED: usize = 200;
+const MAX_USER_ID_CHARS: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +55,13 @@ fn missing() -> AppError {
     )
 }
 
+fn plausible_user(id: &str) -> bool {
+    let digits = id.strip_prefix("lt:").unwrap_or(id);
+    id.len() <= MAX_USER_ID_CHARS
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn trim_front<T>(list: &mut Vec<T>, max: usize) {
     let overflow = list.len().saturating_sub(max);
     list.drain(..overflow);
@@ -90,6 +98,9 @@ impl Room {
         }
         if actor == target {
             return Err(not_allowed());
+        }
+        if !self.is_member(target) && !plausible_user(target) {
+            return Err(missing());
         }
         self.remove(target);
         if !self.is_banned(target) {

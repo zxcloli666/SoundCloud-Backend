@@ -88,6 +88,19 @@ fn the_ban_list_keeps_the_newest_entries() {
 }
 
 #[test]
+fn only_a_real_user_id_goes_on_the_ban_list() {
+    let mut room = room();
+    for junk in ["", "lt:", "abc", "1 2", &"9".repeat(4_096)] {
+        assert_eq!(
+            status(room.ban("1", junk).unwrap_err()),
+            StatusCode::NOT_FOUND
+        );
+    }
+    room.ban("1", "lt:42").unwrap();
+    assert_eq!(room.banned, ["lt:42"]);
+}
+
+#[test]
 fn a_mute_ends_on_time_and_can_be_lifted() {
     let mut room = room();
     room.mute("1", "2", 60, 1_000).unwrap();

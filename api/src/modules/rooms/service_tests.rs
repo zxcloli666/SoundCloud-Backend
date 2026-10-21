@@ -562,3 +562,68 @@ async fn room_json_from_the_old_api_is_served_and_upgraded(pg: PgPool) -> anyhow
     bench.rooms().end(&code).await?;
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_host_and_a_guest_leaving_at_once_end_the_room(pg: PgPool) -> anyhow::Result<()> {
+    let bench = Bench::new(pg)?;
+    for _ in 0..8 {
+        let (host, guest) = (someone(), someone());
+        let code = bench
+            .rooms()
+            .create(&host, &profile("Host"), false, None)
+            .await?
+            .code;
+        bench
+            .rooms()
+            .join(&code, &guest, &profile("Guest"), &bench.pg)
+            .await?;
+        let (host_left, guest_left) = tokio::join!(
+            bench.rooms().leave(&code, &host),
+            bench.rooms().leave(&code, &guest)
+        );
+        host_left?;
+        guest_left?;
+        assert!(
+            bench.rooms().find(&code).await?.is_none(),
+            "nobody is left in {code}"
+        );
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn an_unlisted_room_leaves_the_public_list_but_keeps_its_code(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let bench = Bench::new(pg)?;
+    let (host, by_code, by_list) = (someone(), someone(), someone());
+    let code = bench
+        .rooms()
+        .create(&host, &profile("Host"), true, None)
+        .await?
+        .code;
+    let listed = |rooms: &[crate::modules::rooms::listing::PublicRoom]| {
+        rooms.iter().any(|card| card.host_id == host)
+    };
+    assert!(listed(&bench.rooms().public_rooms().await?));
+
+    assert!(bench.rooms().unlist(&code).await?);
+    assert!(!listed(&bench.rooms().public_rooms().await?));
+    let hidden = bench
+        .rooms()
+        .join_public(&host, &by_list, &profile("Guest"), &bench.pg)
+        .await
+        .unwrap_err();
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    bench
+        .rooms()
+        .join(&code, &by_code, &profile("Guest"), &bench.pg)
+        .await?;
+    bench.rooms().view(&code, &host).await?;
+    assert!(!listed(&bench.rooms().public_rooms().await?));
+    assert!(!bench.rooms().unlist(&new_code()).await?);
+    bench.rooms().end(&code).await?;
+    Ok(())
+}

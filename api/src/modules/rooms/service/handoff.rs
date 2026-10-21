@@ -1,6 +1,19 @@
+use axum::http::StatusCode;
+
 use super::{Cause, ONLINE_WINDOW_MS, RoomsService, now_ms};
 use crate::error::{AppError, AppResult};
 use crate::modules::rooms::model::Room;
+
+const LEAVE_ATTEMPTS: usize = 4;
+const RACED: &str = "room_raced";
+
+fn raced() -> AppError {
+    AppError::coded(
+        StatusCode::CONFLICT,
+        RACED,
+        "The room changed too quickly, try again",
+    )
+}
 
 impl RoomsService {
     pub async fn leave(&self, code: &str, user_id: &str) -> AppResult<()> {
@@ -9,6 +22,16 @@ impl RoomsService {
             None => self.store.moved_to(code).await?,
         };
         let code = moved.as_deref().unwrap_or(code);
+        for _ in 0..LEAVE_ATTEMPTS {
+            match self.leave_once(code, user_id).await {
+                Err(AppError::Coded { code: RACED, .. }) => continue,
+                outcome => return outcome,
+            }
+        }
+        Err(raced())
+    }
+
+    async fn leave_once(&self, code: &str, user_id: &str) -> AppResult<()> {
         let Some(room) = self.store.load(code).await? else {
             return Ok(());
         };
@@ -23,7 +46,12 @@ impl RoomsService {
             return self.hand_off(&room, user_id).await;
         }
         let (_, left) = self
-            .apply(code, Cause::Member, |room| Ok(room.remove(user_id)))
+            .apply(code, Cause::Member, |room| {
+                if room.is_host(user_id) {
+                    return Err(raced());
+                }
+                Ok(room.remove(user_id))
+            })
             .await?;
         if left {
             self.store.forget(code, user_id).await?;
@@ -43,9 +71,7 @@ impl RoomsService {
                     room.remove(host);
                     return Ok(());
                 }
-                room.hand_off(host, &candidates)
-                    .map(drop)
-                    .ok_or_else(|| AppError::conflict("The room changed too quickly, try again"))
+                room.hand_off(host, &candidates).map(drop).ok_or_else(raced)
             })
             .await?;
         self.store.forget(&after.code, host).await?;

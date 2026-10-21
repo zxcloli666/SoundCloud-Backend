@@ -10,7 +10,7 @@ fn hidden() -> AppError {
 }
 
 fn refusal(room: &Room, user_id: &str, public_only: bool) -> Option<AppError> {
-    if public_only && !room.public {
+    if public_only && (!room.public || room.unlisted) {
         return Some(hidden());
     }
     if room.is_banned(user_id) {
