@@ -13,6 +13,7 @@ use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
 use crate::modules::chat::caller::{Callers, ChatCaller};
 use crate::modules::chat::channel::ock::OckRing;
 use crate::modules::chat::config::{Access, ModerationConfig};
+use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
@@ -47,6 +48,16 @@ pub fn hex_field(case: &Value, field: &str) -> Vec<u8> {
 
 pub fn vector_ock() -> OckSecret {
     OckSecret::from_bytes(&hex_field(&request_vector("sync"), "ock_secret")).expect("test ock")
+}
+
+pub fn test_keks() -> KekRing {
+    KekRing::new(
+        1,
+        1,
+        BTreeMap::from([(1, [0x4b; 32])]),
+        BTreeMap::from([(1, [0x52; 32])]),
+    )
+    .expect("a kek ring")
 }
 
 pub fn config(enabled: bool) -> ChatConfig {
@@ -88,7 +99,8 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
     let config = config(enabled);
     Arc::new(ChatState {
         ocks: OckRing::new(1, BTreeMap::from([(1, vector_ock())])).expect("a ring"),
-        keks: KekRing::load(&config.keys_dir, 1, 1).expect("a kek ring"),
+        keks: test_keks(),
+        devices: DeviceCache::new(),
         callers: Callers::new(),
         hub: ChatHub::new(),
         hot: HotCache::new(HOT_CACHE_BYTES),
