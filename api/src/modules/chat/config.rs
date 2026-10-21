@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::config::{env_opt, env_str, env_u16, env_u32, env_u64};
+use crate::modules::chat::synthetic::is_synthetic;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
@@ -68,7 +69,10 @@ impl ChatConfig {
     }
 
     pub fn opens_for(&self, user_id: &str) -> bool {
-        self.enabled && (self.access == Access::All || self.beta_users.contains(user_id))
+        self.enabled
+            && (self.access == Access::All
+                || self.beta_users.contains(user_id)
+                || (self.loadtest && is_synthetic(user_id)))
     }
 }
 

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::modules::chat::caller::{CallerBind, CallerDevice, ChatCaller, SessionEntry};
 use crate::modules::chat::model::Tier;
-use crate::modules::chat::{ChatError, ChatResult, ChatState, devices};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, devices, synthetic};
 
 pub const ANSWER_BYTES: u32 = 256 * 1024;
 pub const PRO_ANSWER_BYTES: u32 = 24 * 1024;
@@ -41,6 +41,9 @@ pub async fn resolve(chat: &ChatState, inner: &Inner, enc: &[u8; 32]) -> ChatRes
 async fn session_entry(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionEntry>> {
     chat.callers
         .cold(async {
+            if let Some(synthetic) = synthetic::session(chat, id).await? {
+                return Ok(Some(synthetic));
+            }
             let row = sqlx::query_file!("queries/auth/service/get_session_bind.sql", id)
                 .fetch_optional(&chat.pg)
                 .await?;
