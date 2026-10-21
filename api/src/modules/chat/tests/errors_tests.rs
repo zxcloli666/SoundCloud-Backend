@@ -82,3 +82,15 @@ fn every_code_is_prefixed_and_unique() {
     codes.dedup();
     assert_eq!(codes.len(), all.len());
 }
+
+#[test]
+fn a_busy_answer_spreads_the_retries_of_a_crowd() {
+    let waits: std::collections::HashSet<u64> = (0..200)
+        .map(|_| match ChatError::busy() {
+            ChatError::Busy { retry_ms } => retry_ms,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert!(waits.iter().all(|wait| (1_000..3_000).contains(wait)));
+    assert!(waits.len() > 50, "{} distinct waits", waits.len());
+}

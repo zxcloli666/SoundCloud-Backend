@@ -14,7 +14,8 @@ use super::rewrap::rewrap_with;
 use super::router;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::moderation::testing::{
-    ADMIN_TOKEN, TestKeys, audit_actions, body_of, conversation, conversation_key, post, state,
+    ADMIN_TOKEN, METRICS_TOKEN, TestKeys, audit_actions, body_of, conversation, conversation_key,
+    post, state,
 };
 use crate::modules::chat::reports::{FileReport, file_with, load};
 use crate::modules::chat::test_support::offline_chat_state;
@@ -111,6 +112,21 @@ async fn metrics_and_stats_answer_with_the_token(pool: PgPool) {
         call(&chat, "GET", "/chat-admin/metrics", Some(ADMIN_TOKEN), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(text.contains("api_pg_pool_connections"), "{text}");
+    assert!(text.contains("chat_cache_bytes{cache=\"hot\"}"), "{text}");
+
+    let (status, _, _) = call(
+        &chat,
+        "GET",
+        "/chat-admin/metrics",
+        Some(METRICS_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = call(&chat, "GET", "/chat-admin/stats", Some(METRICS_TOKEN), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = call(&chat, "GET", "/chat-admin/metrics", Some("wrong"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let (status, stats, _) = call(&chat, "GET", "/chat-admin/stats", Some(ADMIN_TOKEN), None).await;
     assert_eq!(status, StatusCode::OK, "{stats}");

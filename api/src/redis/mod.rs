@@ -36,8 +36,12 @@ pub fn connect_admission_url(
     url: &str,
     max_in_flight: usize,
 ) -> Result<Pool, deadpool_redis::CreatePoolError> {
+    connect_sized(url, max_in_flight)
+}
+
+pub fn connect_sized(url: &str, max_size: usize) -> Result<Pool, deadpool_redis::CreatePoolError> {
     let mut rcfg = Config::from_url(url);
-    rcfg.pool = Some(bounded(Some(PoolConfig::new(max_in_flight))));
+    rcfg.pool = Some(bounded(Some(PoolConfig::new(max_size))));
     rcfg.create_pool(Some(Runtime::Tokio1))
 }
 
@@ -51,6 +55,12 @@ mod tests {
         assert_eq!(pool.timeouts.wait, Some(POOL_WAIT));
         assert_eq!(pool.timeouts.create, Some(POOL_CREATE));
         assert_eq!(pool.timeouts.recycle, Some(POOL_RECYCLE));
+    }
+
+    #[test]
+    fn a_sized_pool_takes_the_given_size() {
+        let pool = connect_sized("redis://127.0.0.1:1", 256).expect("a lazy pool");
+        assert_eq!(pool.status().max_size, 256);
     }
 
     #[test]

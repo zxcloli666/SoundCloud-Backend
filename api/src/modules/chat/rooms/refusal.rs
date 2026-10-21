@@ -25,7 +25,7 @@ pub fn refusal(error: AppError) -> ChatError {
             ChatError::Busy { retry_ms: RETRY_MS }
         }
         _ => match error {
-            AppError::Redis(_) | AppError::RedisPool(_) => ChatError::Busy { retry_ms: RETRY_MS },
+            AppError::Redis(_) | AppError::RedisPool(_) => ChatError::busy(),
             other => {
                 tracing::error!(error = %other, "room request failed");
                 ChatError::Internal

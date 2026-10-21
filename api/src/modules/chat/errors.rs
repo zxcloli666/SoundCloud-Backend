@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 
 pub type ChatResult<T> = Result<T, ChatError>;
 
+pub const BUSY_TOTAL: &str = "chat_busy_total";
+pub const BUSY_RETRY_MS: u64 = 1_000;
+pub const BUSY_JITTER_MS: u64 = 2_000;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatError {
     NotMember,
@@ -31,6 +35,18 @@ pub enum ChatError {
 }
 
 impl ChatError {
+    pub fn busy() -> Self {
+        ChatError::Busy {
+            retry_ms: BUSY_RETRY_MS + rand::random::<u64>() % BUSY_JITTER_MS,
+        }
+    }
+
+    pub fn count_busy(&self) {
+        if matches!(self, ChatError::Busy { .. }) {
+            metrics::counter!(BUSY_TOTAL).increment(1);
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             ChatError::NotMember => "chat_not_member",
@@ -99,6 +115,7 @@ impl ChatError {
 
 impl IntoResponse for ChatError {
     fn into_response(self) -> Response {
+        self.count_busy();
         (self.status(), Json(self.body())).into_response()
     }
 }
@@ -113,14 +130,14 @@ impl From<sqlx::Error> for ChatError {
 impl From<deadpool_redis::PoolError> for ChatError {
     fn from(error: deadpool_redis::PoolError) -> Self {
         tracing::warn!(%error, "redis-rt pool is unavailable");
-        ChatError::Busy { retry_ms: 1_000 }
+        ChatError::busy()
     }
 }
 
 impl From<redis::RedisError> for ChatError {
     fn from(error: redis::RedisError) -> Self {
         tracing::warn!(%error, "redis-rt command failed");
-        ChatError::Busy { retry_ms: 1_000 }
+        ChatError::busy()
     }
 }
 

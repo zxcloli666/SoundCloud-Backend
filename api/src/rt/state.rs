@@ -15,6 +15,7 @@ use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
 use crate::modules::chat::moderation::Moderator;
 use crate::modules::chat::moderation::client::AiClient;
+use crate::modules::chat::route_metrics;
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::modules::rooms::{RoomHub, RoomsService};
 use crate::rt::config::RtConfig;
@@ -37,13 +38,17 @@ pub async fn build(config: &RtConfig) -> RtState {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before chat-api");
-    let chat_pg = db::connect_pool(&config.database, config.chat.pg_pool_max)
-        .await
-        .expect("Failed to connect the chat pool to PostgreSQL");
+    let chat_pg = db::connect_counted_pool(
+        &config.database,
+        config.chat.pg_pool_max,
+        route_metrics::pg_query,
+    )
+    .await
+    .expect("Failed to connect the chat pool to PostgreSQL");
 
     let music_redis = redis::connect_url(&config.redis_url).expect("Failed to create Redis pool");
-    let redis_rt =
-        redis::connect_url(&config.redis_rt_url).expect("Failed to create the redis-rt pool");
+    let redis_rt = redis::connect_sized(&config.redis_rt_url, config.redis_rt_pool_max)
+        .expect("Failed to create the redis-rt pool");
     let admission = PublicAdmission::new(
         redis::connect_admission_url(&config.redis_url, config.admission.max_in_flight)
             .expect("Failed to create admission Redis pool"),

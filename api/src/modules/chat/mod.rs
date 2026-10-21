@@ -25,6 +25,7 @@ pub mod presence;
 pub mod reports;
 pub mod requests;
 pub mod rooms;
+pub mod route_metrics;
 pub mod routes;
 pub mod rt_keys;
 pub mod settings;

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use chat_wire::msg::Class;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -79,24 +80,41 @@ pub async fn send(
     ChatPath(conversation): ChatPath<Uuid>,
     ChatJson(input): ChatJson<SendMessage>,
 ) -> ChatResult<Json<SendAnswer>> {
+    let class = Class::parse(&input.class).map_or("unknown", Class::as_str);
+    let sent = deliver(&chat, &caller, conversation, input).await;
+    metrics::counter!(
+        "chat_send_total",
+        "class" => class,
+        "result" => sent.as_ref().map_or_else(ChatError::code, |_| "ok"),
+    )
+    .increment(1);
+    sent.map(Json)
+}
+
+async fn deliver(
+    chat: &ChatState,
+    caller: &ChatCaller,
+    conversation: Uuid,
+    input: SendMessage,
+) -> ChatResult<SendAnswer> {
     if chat.config.send_paused {
         return Err(ChatError::SendPaused);
     }
     let device = caller.device.as_ref().ok_or(ChatError::Invalid)?.id;
     let outgoing = rules::outgoing(input)?;
-    limits::admit_send(&chat, &caller.user_id, conversation).await?;
-    let access = access::load_in(&chat, conversation, &caller.user_id).await?;
+    limits::admit_send(chat, &caller.user_id, conversation).await?;
+    let access = access::load_in(chat, conversation, &caller.user_id).await?;
     rules::may_post(&access, outgoing.class)?;
-    gate::sender_free(&chat, &access).await?;
+    gate::sender_free(chat, &access).await?;
     if access.is_room()
-        && let Some(row) = gate::room(&chat, &access, &outgoing).await?
+        && let Some(row) = gate::room(chat, &access, &outgoing).await?
     {
-        fanout::publish(&chat, std::slice::from_ref(&row), &access.recipients).await?;
-        return Ok(Json(SendAnswer::from(&row)));
+        fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
+        return Ok(SendAnswer::from(&row));
     }
     gate::peer_open(&access)?;
     if let Some(peer) = access.peer.as_deref()
-        && blocks::blocked_between(&chat, &caller.user_id, peer).await?
+        && blocks::blocked_between(chat, &caller.user_id, peer).await?
     {
         return Err(ChatError::Unavailable);
     }
@@ -105,8 +123,8 @@ pub async fn send(
     let inherited =
         rules::inherited_expiry(outgoing.class, &caller.user_id, target.as_ref(), Utc::now())?;
     let row = store::store(&chat.pg, &access, device, &outgoing, inherited).await?;
-    fanout::publish(&chat, std::slice::from_ref(&row), &access.recipients).await?;
-    Ok(Json(SendAnswer::from(&row)))
+    fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
+    Ok(SendAnswer::from(&row))
 }
 
 pub async fn history(

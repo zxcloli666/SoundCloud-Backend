@@ -15,6 +15,7 @@ use crate::modules::chat::ChatState;
 use crate::modules::chat::moderation::AUDIT_ADMIN;
 
 pub const TOKEN_FILE: &str = "chat-admin-token";
+pub const METRICS_TOKEN_FILE: &str = "chat-metrics-token";
 pub const TOKEN_HEADER: &str = "x-chat-admin-token";
 pub const ADMIN_HEADER: &str = "x-chat-admin-user";
 pub const ADMIN_NAME_MAX: usize = 64;
@@ -23,6 +24,8 @@ pub const UNNAMED_ADMIN: &str = "admin";
 pub struct ChatAdmin {
     pub admin: String,
 }
+
+pub struct MetricsReader;
 
 pub struct AdminRejection;
 
@@ -43,7 +46,7 @@ impl FromRequestParts<Arc<ChatState>> for ChatAdmin {
         parts: &mut Parts,
         chat: &Arc<ChatState>,
     ) -> Result<Self, Self::Rejection> {
-        let expected = expected_token(&chat.config.keys_dir).await;
+        let expected = token_in(&chat.config.keys_dir, TOKEN_FILE).await;
         let provided = provided_token(&parts.headers);
         if !token_matches(expected.as_deref(), provided) {
             return Err(AdminRejection);
@@ -54,10 +57,26 @@ impl FromRequestParts<Arc<ChatState>> for ChatAdmin {
     }
 }
 
-async fn expected_token(keys_dir: &Path) -> Option<String> {
-    let raw = tokio::fs::read_to_string(keys_dir.join(TOKEN_FILE))
-        .await
-        .ok()?;
+impl FromRequestParts<Arc<ChatState>> for MetricsReader {
+    type Rejection = AdminRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        chat: &Arc<ChatState>,
+    ) -> Result<Self, Self::Rejection> {
+        let provided = provided_token(&parts.headers);
+        for file in [METRICS_TOKEN_FILE, TOKEN_FILE] {
+            let expected = token_in(&chat.config.keys_dir, file).await;
+            if token_matches(expected.as_deref(), provided) {
+                return Ok(MetricsReader);
+            }
+        }
+        Err(AdminRejection)
+    }
+}
+
+async fn token_in(keys_dir: &Path, file: &str) -> Option<String> {
+    let raw = tokio::fs::read_to_string(keys_dir.join(file)).await.ok()?;
     let token = raw.trim();
     (!token.is_empty()).then(|| token.to_owned())
 }

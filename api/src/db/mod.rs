@@ -57,19 +57,21 @@ fn core_share(pool_max: u32) -> u32 {
         .max(1)
 }
 
-async fn pool(
-    cfg: &DatabaseCfg,
-    max_connections: u32,
-    opts: PgConnectOptions,
-) -> Result<PgPool, sqlx::Error> {
+fn options(cfg: &DatabaseCfg, max_connections: u32) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(cfg.acquire_timeout)
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
         .test_before_acquire(true)
-        .connect_with(opts)
-        .await
+}
+
+async fn pool(
+    cfg: &DatabaseCfg,
+    max_connections: u32,
+    opts: PgConnectOptions,
+) -> Result<PgPool, sqlx::Error> {
+    options(cfg, max_connections).connect_with(opts).await
 }
 
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
@@ -79,6 +81,24 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
 
 pub async fn connect_pool(db: &DatabaseCfg, max_connections: u32) -> Result<PgPool, sqlx::Error> {
     pool(db, max_connections, connect_opts(db)?).await
+}
+
+pub async fn connect_counted_pool(
+    db: &DatabaseCfg,
+    max_connections: u32,
+    on_use: fn(),
+) -> Result<PgPool, sqlx::Error> {
+    options(db, max_connections)
+        .after_connect(move |_, _| {
+            on_use();
+            Box::pin(async { Ok(()) })
+        })
+        .before_acquire(move |_, _| {
+            on_use();
+            Box::pin(async { Ok(true) })
+        })
+        .connect_with(connect_opts(db)?)
+        .await
 }
 
 pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {

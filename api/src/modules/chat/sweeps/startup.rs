@@ -66,7 +66,7 @@ pub async fn rebump(chat: &ChatState) -> ChatResult<u64> {
             sync::bump::conversation(chat, row.id, row.last_seq, &users).await?;
         }
     }
-    metrics::counter!("chat_rebump_total").increment(rebumped);
+    metrics::counter!("chat_bump_retry_total").increment(rebumped);
     Ok(rebumped)
 }
 

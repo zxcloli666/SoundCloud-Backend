@@ -7,7 +7,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-use crate::modules::chat::admin::auth::ChatAdmin;
+use crate::modules::chat::admin::auth::{ChatAdmin, MetricsReader};
 use crate::modules::chat::{ChatResult, ChatState};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -46,7 +46,14 @@ pub async fn stats(_: ChatAdmin, State(chat): State<Arc<ChatState>>) -> ChatResu
     }))
 }
 
-pub async fn metrics(_: ChatAdmin, State(chat): State<Arc<ChatState>>) -> Response {
+pub async fn metrics(_: MetricsReader, State(chat): State<Arc<ChatState>>) -> Response {
+    for (cache, bytes) in [
+        ("hot", chat.hot.bytes()),
+        ("sessions", chat.callers.bytes()),
+        ("devices", chat.devices.bytes()),
+    ] {
+        metrics::gauge!("chat_cache_bytes", "cache" => cache).set(bytes as f64);
+    }
     match crate::metrics::render(&chat.pg).await {
         Some(body) => (
             [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],

@@ -42,6 +42,10 @@ impl HotCache {
         }
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.tails.weighted_size()
+    }
+
     pub fn after(&self, conversation: Uuid, seq: i64) -> Option<Vec<MessageRow>> {
         let tail = self.tails.get(&conversation)?;
         let first = tail.rows.first()?.seq;

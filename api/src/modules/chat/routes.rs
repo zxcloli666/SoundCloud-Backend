@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::middleware;
 use axum::routing::{delete, get, post, put};
 
 use crate::modules::chat::channel::{self, Channel};
 use crate::modules::chat::{
     ChatState, admin, auth_bind, blocks, conversations, devices, invites, keys, members, messages,
-    reports, requests, rooms, settings, sync, typing, users,
+    reports, requests, rooms, route_metrics, settings, sync, typing, users,
 };
 
 pub fn inner() -> Router<Arc<ChatState>> {
@@ -79,6 +80,7 @@ pub fn inner() -> Router<Arc<ChatState>> {
         )
         .route("/chat/rooms/{code}/settings", put(rooms::settings))
         .route("/chat/rooms/{code}/suggest", post(rooms::suggest))
+        .route_layer(middleware::from_fn(route_metrics::track))
 }
 
 pub fn public<S: Clone + Send + Sync + 'static>(chat: Arc<ChatState>) -> Router<S> {

@@ -42,6 +42,10 @@ impl DeviceCache {
         }
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.rows.weighted_size() + self.users.weighted_size()
+    }
+
     pub fn row(&self, id: Uuid) -> Option<DeviceRow> {
         self.rows.get(&id)
     }

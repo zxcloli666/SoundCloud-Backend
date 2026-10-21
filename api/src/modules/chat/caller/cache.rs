@@ -12,7 +12,6 @@ pub const CALLER_TTL: Duration = Duration::from_secs(600);
 pub const SESSIONS_BYTES: u64 = 16 * 1024 * 1024;
 pub const COLD_LOOKUPS: usize = 16;
 pub const COLD_WAIT: Duration = Duration::from_millis(200);
-pub const COLD_RETRY_MS: u64 = 1_000;
 
 const ENTRY_OVERHEAD: u32 = 160;
 
@@ -39,6 +38,10 @@ impl Callers {
         }
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.sessions.weighted_size()
+    }
+
     pub fn session(&self, id: Uuid) -> Option<SessionEntry> {
         self.sessions.get(&id)
     }
@@ -52,11 +55,9 @@ impl Callers {
     }
 
     pub async fn cold<T>(&self, lookup: impl Future<Output = ChatResult<T>>) -> ChatResult<T> {
-        let busy = ChatError::Busy {
-            retry_ms: COLD_RETRY_MS,
-        };
+        metrics::counter!("chat_auth_cold_total").increment(1);
         let Ok(Ok(_permit)) = tokio::time::timeout(COLD_WAIT, self.cold.acquire()).await else {
-            return Err(busy);
+            return Err(ChatError::busy());
         };
         lookup.await
     }

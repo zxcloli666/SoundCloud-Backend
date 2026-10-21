@@ -25,6 +25,7 @@ use crate::modules::chat::{ChatError, ChatResult, ChatState};
 pub const AI_KEY: &str = "sk-test-moderation-key-7f3a9c";
 pub const ADMIN_TOKEN: &str = "admin-token-for-tests-41d2";
 pub const FAKE_MODEL: &str = "fake-moderator";
+pub const METRICS_TOKEN: &str = "metrics-token-for-tests-9c1e";
 
 pub struct TestKeys {
     pub kek_current: u16,
@@ -118,6 +119,11 @@ pub fn keys_dir() -> PathBuf {
             ADMIN_TOKEN,
         )
         .expect("a token file");
+        std::fs::write(
+            dir.join(crate::modules::chat::admin::auth::METRICS_TOKEN_FILE),
+            METRICS_TOKEN,
+        )
+        .expect("a metrics token file");
         dir
     })
     .clone()

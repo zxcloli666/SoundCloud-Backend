@@ -18,13 +18,13 @@ pub async fn unlist(
     let room = RoomStore::new(chat.redis.clone())
         .load(&code)
         .await
-        .map_err(|_| ChatError::Busy { retry_ms: 1_000 })?
+        .map_err(|_| ChatError::busy())?
         .ok_or(ChatError::NotFound)?;
     if !chat
         .rooms
         .unlist(&code)
         .await
-        .map_err(|_| ChatError::Busy { retry_ms: 1_000 })?
+        .map_err(|_| ChatError::busy())?
     {
         return Err(ChatError::NotFound);
     }

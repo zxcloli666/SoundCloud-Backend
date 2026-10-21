@@ -1,6 +1,8 @@
 use crate::config::{
-    AdmissionCfg, DatabaseCfg, SoundcloudCfg, database_from_env, env_str, env_u16,
+    AdmissionCfg, DatabaseCfg, SoundcloudCfg, database_from_env, env_str, env_u16, env_u32,
 };
+
+pub const REDIS_RT_POOL_MAX: u32 = 256;
 use crate::modules::chat::ChatConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub struct RtConfig {
     pub database: DatabaseCfg,
     pub redis_url: String,
     pub redis_rt_url: String,
+    pub redis_rt_pool_max: usize,
     pub admission: AdmissionCfg,
     pub soundcloud: SoundcloudCfg,
     pub chat: ChatConfig,
@@ -35,6 +38,7 @@ impl RtConfig {
                 .expect("core database config: default host is always present"),
             redis_url: env_str("REDIS_URL", "redis://localhost:6379"),
             redis_rt_url: env_str("REDIS_RT_URL", "redis://localhost:6379"),
+            redis_rt_pool_max: env_u32("REDIS_RT_POOL_MAX", REDIS_RT_POOL_MAX).max(1) as usize,
             admission: AdmissionCfg::from_env(),
             soundcloud: SoundcloudCfg::from_env(),
             chat: ChatConfig::from_env(),

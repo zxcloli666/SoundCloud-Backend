@@ -7,10 +7,12 @@ use chat_wire::proto::{Header, InnerResponse};
 use chat_wire::seal::OpenedRequest;
 
 use crate::modules::chat::ChatError;
+use crate::modules::chat::errors::BUSY_TOTAL;
 
 const BUSY_RETRY_AFTER_S: &str = "1";
 
 pub fn error_answer(error: ChatError) -> InnerResponse {
+    error.count_busy();
     InnerResponse {
         status: u32::from(error.status().as_u16()),
         headers: vec![Header {
@@ -50,6 +52,7 @@ pub fn too_large() -> Response {
 }
 
 pub fn busy() -> Response {
+    metrics::counter!(BUSY_TOTAL).increment(1);
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [(RETRY_AFTER, BUSY_RETRY_AFTER_S)],

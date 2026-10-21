@@ -13,6 +13,9 @@ pub async fn claim(chat: &ChatState, enc: &[u8; 32]) -> ChatResult<()> {
         .await?;
     match fresh {
         Some(_) => Ok(()),
-        None => Err(ChatError::Replay),
+        None => {
+            metrics::counter!("chat_replay_total").increment(1);
+            Err(ChatError::Replay)
+        }
     }
 }

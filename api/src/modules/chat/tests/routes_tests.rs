@@ -159,3 +159,19 @@ async fn a_malformed_path_id_is_a_chat_error() {
         (StatusCode::NOT_FOUND, json!({"error": "chat_not_found"}))
     );
 }
+
+#[tokio::test]
+async fn inner_routes_are_counted_by_their_pattern_not_by_the_channel_path() {
+    crate::metrics::init();
+    let router = inner().with_state(offline_chat_state(true));
+    answer(&router, "GET", "/chat/users/202/card", true).await;
+    let rendered = crate::metrics::render_for_tests().expect("a recorder");
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with("chat_inner_requests_total")
+                && line.contains("route=\"/chat/users/{id}/card\"")),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("route=\"/chat/users/202/card\""));
+}
