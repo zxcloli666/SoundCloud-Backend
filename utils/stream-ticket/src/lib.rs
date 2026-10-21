@@ -54,6 +54,7 @@ pub enum StreamTicketError {
 impl StreamTicketKey {
     pub fn from_base64(encoded: &str) -> Result<Self, StreamTicketError> {
         let encoded = encoded.trim();
+
         let bytes = STANDARD
             .decode(encoded)
             .or_else(|_| URL_SAFE_NO_PAD.decode(encoded))
