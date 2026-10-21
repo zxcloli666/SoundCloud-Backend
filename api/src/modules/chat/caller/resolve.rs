@@ -2,9 +2,7 @@ use chat_wire::proto::Inner;
 use chat_wire::sign::verify_request;
 use uuid::Uuid;
 
-use crate::modules::chat::caller::{
-    CallerBind, CallerDevice, ChatCaller, DeviceEntry, SessionEntry,
-};
+use crate::modules::chat::caller::{CallerBind, CallerDevice, ChatCaller, SessionEntry};
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::{ChatError, ChatResult, ChatState, devices};
 
@@ -100,27 +98,20 @@ async fn device(
     session: &SessionEntry,
     bind: &CallerBind,
 ) -> ChatResult<Option<CallerDevice>> {
-    let entry = match chat.callers.device(device_id) {
-        Some(entry) => entry,
+    let row = match chat.devices.row(device_id) {
+        Some(row) => row,
         None => match chat.callers.cold(devices::lookup(chat, device_id)).await? {
-            Some(row) => {
-                chat.callers.remember_device(&row);
-                DeviceEntry::from(&row)
-            }
+            Some(row) => row,
             None => return Ok(None),
         },
     };
-    if entry.user_id != session.user_id || entry.auth_pub != bind.auth_pub {
+    if row.user_id != session.user_id || row.auth_pub != bind.auth_pub {
         return Err(ChatError::SessionBoundOther);
     }
-    if entry.revoked {
+    if row.status != "active" {
         return Err(ChatError::DeviceRevoked);
     }
-    Ok(Some(CallerDevice {
-        id: device_id,
-        created_at: entry.created_at,
-        history_unlocked: entry.history_unlocked,
-    }))
+    Ok(Some(CallerDevice::from(&row)))
 }
 
 fn max_bytes(tier: Tier, asked: u32) -> u32 {

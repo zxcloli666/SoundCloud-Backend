@@ -23,7 +23,7 @@ use super::{Channel, router};
 use crate::modules::chat::caller::CallerBind;
 use crate::modules::chat::model::DeviceRow;
 use crate::modules::chat::test_support::{chat_state, offline_chat_state, vector_ock};
-use crate::modules::chat::{ChatError, ChatState, routes};
+use crate::modules::chat::{ChatError, ChatState, devices, routes};
 
 struct Device {
     id: Uuid,
@@ -193,6 +193,10 @@ async fn counting(pool: &PgPool, acquired: Arc<AtomicUsize>) -> anyhow::Result<P
         })
         .connect_with((*pool.connect_options()).clone())
         .await?)
+}
+
+fn remember(chat: &ChatState, row: DeviceRow) {
+    chat.devices.keep_row(chat.devices.stamp(), row);
 }
 
 fn beta_for(chat: Arc<ChatState>, user: &str) -> Arc<ChatState> {
@@ -388,8 +392,7 @@ async fn an_idle_request_runs_no_pg_query_on_a_warm_cache(pool: PgPool) -> anyho
         chat_state(counting(&pool, acquired.clone()).await?, redis()?, true),
         "4101",
     );
-    chat.callers
-        .remember_device(&device.row("4101", session, "active"));
+    remember(&chat, device.row("4101", session, "active"));
     let app: Router = routes::public(chat);
     let idle = || {
         seal(
@@ -472,8 +475,7 @@ async fn chat_stays_closed_to_users_outside_the_beta(pool: PgPool) -> anyhow::Re
     let device = Device::new();
     let session = session_for(&pool, "4103", Some(&device)).await?;
     let chat = chat_state(pool, redis()?, true);
-    chat.callers
-        .remember_device(&device.row("4103", session, "active"));
+    remember(&chat, device.row("4103", session, "active"));
     let app: Router = routes::public(chat);
 
     let config = seal(
@@ -498,8 +500,7 @@ async fn a_bound_session_answers_only_its_own_device(pool: PgPool) -> anyhow::Re
     let other = Device::new();
     let session = session_for(&pool, "4104", Some(&owner)).await?;
     let chat = beta_for(chat_state(pool, redis()?, true), "4104");
-    chat.callers
-        .remember_device(&owner.row("4104", session, "active"));
+    remember(&chat, owner.row("4104", session, "active"));
     let app: Router = routes::public(chat.clone());
     let idle = |device: &Device, signer: &Device| {
         seal(
@@ -521,15 +522,13 @@ async fn a_bound_session_answers_only_its_own_device(pool: PgPool) -> anyhow::Re
         error(ChatError::Invalid)
     );
 
-    chat.callers
-        .remember_device(&owner.row("4104", session, "revoked"));
+    remember(&chat, owner.row("4104", session, "revoked"));
     assert_eq!(
         exchange(&app, &idle(&owner, &owner)).await,
         error(ChatError::DeviceRevoked)
     );
 
-    chat.callers
-        .remember_device(&owner.row("4999", session, "active"));
+    remember(&chat, owner.row("4999", session, "active"));
     assert_eq!(
         exchange(&app, &idle(&owner, &owner)).await,
         error(ChatError::SessionBoundOther)
@@ -546,10 +545,8 @@ async fn a_relogin_with_new_keys_is_read_again_instead_of_refused(
     let after = Device::new();
     let session = session_for(&pool, "4105", Some(&before)).await?;
     let chat = beta_for(chat_state(pool.clone(), redis()?, true), "4105");
-    chat.callers
-        .remember_device(&before.row("4105", session, "active"));
-    chat.callers
-        .remember_device(&after.row("4105", session, "active"));
+    remember(&chat, before.row("4105", session, "active"));
+    remember(&chat, after.row("4105", session, "active"));
     let app: Router = routes::public(chat);
     let idle = |device: &Device| {
         seal(
@@ -575,6 +572,52 @@ async fn a_relogin_with_new_keys_is_read_again_instead_of_refused(
     assert_eq!(
         exchange(&app, &idle(&before)).await,
         error(ChatError::SessionBoundOther)
+    );
+    Ok(())
+}
+
+async fn registered(pool: &PgPool, row: &DeviceRow) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO chat.devices
+            (id, user_id, session_id, auth_pub, box_pub, platform, name, app_version, tier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(row.id)
+    .bind(&row.user_id)
+    .bind(row.session_id)
+    .bind(&row.auth_pub)
+    .bind(&row.box_pub)
+    .bind(&row.platform)
+    .bind(&row.name)
+    .bind(&row.app_version)
+    .bind(&row.tier)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_revoked_device_is_refused_on_its_next_request(pool: PgPool) -> anyhow::Result<()> {
+    let device = Device::new();
+    let session = session_for(&pool, "4109", Some(&device)).await?;
+    let row = device.row("4109", session, "active");
+    registered(&pool, &row).await?;
+    let chat = beta_for(chat_state(pool, redis()?, true), "4109");
+    let app: Router = routes::public(chat.clone());
+    let idle = || {
+        seal(
+            from_device(call("GET", "/chat/idle", ""), session, &device),
+            &device.seed,
+        )
+    };
+    assert_eq!(exchange(&app, &idle()).await, error(ChatError::NotFound));
+    assert!(chat.devices.row(device.id).is_some());
+
+    assert_eq!(devices::revoke(&chat, &row).await, Ok(true));
+    assert_eq!(
+        exchange(&app, &idle()).await,
+        error(ChatError::DeviceRevoked)
     );
     Ok(())
 }
