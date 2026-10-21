@@ -12,7 +12,7 @@ RUN apt-get update \
 WORKDIR /build
 
 FROM scratch AS sources
-COPY scripts/cargo-skeleton.sh /scripts/cargo-skeleton.sh
+COPY scripts/cargo-skeleton.sh scripts/build-db.sh /scripts/
 COPY backend-contracts /backend-contracts
 COPY utils/call /utils/call
 COPY utils/catalog-ingest /utils/catalog-ingest
@@ -42,22 +42,23 @@ RUN cargo build --release --manifest-path jobs/Cargo.toml
 FROM public AS own
 COPY --from=sources /backend-contracts ./backend-contracts
 COPY --from=sources /utils ./utils
+COPY --from=sources /api/migrations ./api/migrations
+COPY --from=sources /api/migrations-ops ./api/migrations-ops
+COPY --from=sources /scripts/build-db.sh ./scripts/build-db.sh
 RUN find backend-contracts utils -type f -exec touch {} + \
-    && cargo build --release --manifest-path jobs/Cargo.toml
+    && sh scripts/build-db.sh \
+    && DATABASE_URL=postgres://scd:dev@127.0.0.1:5432/scd cargo build --release --manifest-path jobs/Cargo.toml
 
 FROM own AS app
 COPY --from=sources /jobs/Cargo.toml ./jobs/Cargo.toml
 COPY --from=sources /jobs/src ./jobs/src
 COPY --from=sources /jobs/queries ./jobs/queries
-COPY --from=sources /api ./api
+COPY --from=sources /api/queries ./api/queries
 ARG APP_VERSION
-RUN find jobs api -type f -not -path 'jobs/target/*' -exec touch {} + \
-    && pg_ctlcluster "$(ls /etc/postgresql)" main start \
-    && su postgres -c "psql -v ON_ERROR_STOP=1 --command \"CREATE ROLE scd LOGIN SUPERUSER PASSWORD 'dev';\"" \
-    && su postgres -c "createdb -O scd scd" \
-    && for file in api/migrations/*.sql api/migrations-ops/*.sql; do PGPASSWORD=dev psql -h 127.0.0.1 -U scd -d scd -v ON_ERROR_STOP=1 -q -f "$file"; done \
+RUN find jobs api/queries -type f -not -path 'jobs/target/*' -exec touch {} + \
+    && sh scripts/build-db.sh \
     && if [ -n "$APP_VERSION" ]; then sed -i -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$APP_VERSION\"/" jobs/Cargo.toml; fi \
-    && DATABASE_URL=postgres://scd:dev@127.0.0.1:5432/scd cargo build --manifest-path jobs/Cargo.toml --release
+    && DATABASE_URL=postgres://scd:dev@127.0.0.1:5432/scd cargo build --release --manifest-path jobs/Cargo.toml
 
 FROM mirror.gcr.io/library/debian:bookworm-slim AS runtime
 
