@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::moderation::actions::{self, Closing};
+use crate::modules::chat::moderation::client::Outcome;
 use crate::modules::chat::moderation::decide::{self, Ban, Decision, Facts};
 use crate::modules::chat::moderation::keys::ChatKeys;
-use crate::modules::chat::moderation::{AUDIT_ADMIN, CALLS_IN_FLIGHT, history, rules};
+use crate::modules::chat::moderation::{AUDIT_ADMIN, CALLS_IN_FLIGHT, Judgement, history, rules};
 use crate::modules::chat::reports::{self, ReportRow};
 use crate::modules::chat::sweeps::leader;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
@@ -35,7 +36,8 @@ pub async fn run(chat: Arc<ChatState>) {
 }
 
 pub async fn run_once(chat: &ChatState, keys: &dyn ChatKeys) -> ChatResult<usize> {
-    let pending = sqlx::query_file_scalar!("queries/chat/reports/pending.sql", BATCH)
+    let waiting = chat.moderator.later.waiting();
+    let pending = sqlx::query_file_scalar!("queries/chat/reports/pending.sql", BATCH, &waiting)
         .fetch_all(&chat.pg)
         .await?;
     let results: Vec<ChatResult<Decision>> = futures::stream::iter(pending)
@@ -46,6 +48,7 @@ pub async fn run_once(chat: &ChatState, keys: &dyn ChatKeys) -> ChatResult<usize
     let mut done = 0;
     for result in results {
         match result {
+            Ok(Decision::Later) => {}
             Ok(_) => done += 1,
             Err(error) => tracing::warn!(code = error.code(), "a chat report was not moderated"),
         }
@@ -64,17 +67,7 @@ pub async fn moderate(chat: &ChatState, keys: &dyn ChatKeys, id: Uuid) -> ChatRe
         Decision::Fallback("rules_only")
     } else {
         match chat.moderator.examine(chat, keys, &report).await {
-            Ok(judgement) => {
-                let facts = Facts {
-                    target_seqs: judgement.target_seqs,
-                    injection: judgement.injection,
-                    repeat: history::repeat_offender(chat, &report).await?,
-                };
-                capped(
-                    chat,
-                    decide::decide(judgement.answer.verdict.as_ref(), &facts),
-                )
-            }
+            Ok(judgement) => judged(chat, &report, judgement).await?,
             Err(error) => {
                 tracing::warn!(code = error.code(), "a chat report could not be examined");
                 Decision::Fallback("unexamined")
@@ -82,8 +75,41 @@ pub async fn moderate(chat: &ChatState, keys: &dyn ChatKeys, id: Uuid) -> ChatRe
         }
     };
     apply(chat, &report, &decision).await?;
+    if decision != Decision::Later {
+        chat.moderator.later.forget(report.id);
+    }
     metrics::counter!("chat_moderation_total", "decision" => decision.label()).increment(1);
     Ok(decision)
+}
+
+async fn judged(
+    chat: &ChatState,
+    report: &ReportRow,
+    judgement: Judgement,
+) -> ChatResult<Decision> {
+    if judgement.answer.outcome == Outcome::Unavailable && postponed(chat, report.id) {
+        return Ok(Decision::Later);
+    }
+    let facts = Facts {
+        target_seqs: judgement.target_seqs,
+        injection: judgement.injection,
+        repeat: history::repeat_offender(chat, report).await?,
+    };
+    Ok(capped(
+        chat,
+        decide::decide(judgement.answer.verdict.as_ref(), &facts),
+    ))
+}
+
+fn postponed(chat: &ChatState, report: Uuid) -> bool {
+    let Some(delay) = chat.moderator.later.postpone(report) else {
+        return false;
+    };
+    tracing::info!(
+        retry_in_s = delay.as_secs(),
+        "the moderation models did not answer, the report is tried again later"
+    );
+    true
 }
 
 fn capped(chat: &ChatState, decision: Decision) -> Decision {
@@ -135,6 +161,7 @@ pub async fn apply(chat: &ChatState, report: &ReportRow, decision: &Decision) ->
                 audit::record(chat, AUDIT_ADMIN, "uphold", &target, json!({})).await?;
             }
         }
+        Decision::Later => {}
         Decision::Fallback(reason) => {
             rules::apply(chat, &report.target_user, report.id).await?;
             actions::mark_judged(chat, report.id, AUDIT_ADMIN).await?;

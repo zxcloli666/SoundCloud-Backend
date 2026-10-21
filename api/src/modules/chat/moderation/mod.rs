@@ -5,6 +5,7 @@ pub mod evidence;
 pub mod history;
 pub mod injection;
 pub mod keys;
+pub mod later;
 pub mod prompt;
 pub mod rules;
 pub mod task;
@@ -27,6 +28,7 @@ use crate::modules::chat::moderation::client::{AiAnswer, AiClient, sha256_hex};
 use crate::modules::chat::moderation::decide::Injection;
 use crate::modules::chat::moderation::evidence::Line;
 use crate::modules::chat::moderation::keys::ChatKeys;
+use crate::modules::chat::moderation::later::Later;
 use crate::modules::chat::moderation::prompt::Case;
 use crate::modules::chat::moderation::verdict::Verdict;
 use crate::modules::chat::reports::{self, ReportRow};
@@ -44,6 +46,7 @@ pub struct Moderator {
     calls: Semaphore,
     wake: Notify,
     bans: Mutex<VecDeque<Instant>>,
+    pub later: Later,
 }
 
 pub struct Judgement {
@@ -59,6 +62,7 @@ impl Moderator {
             calls: Semaphore::new(CALLS_IN_FLIGHT),
             wake: Notify::new(),
             bans: Mutex::new(VecDeque::with_capacity(BANS_PER_DAY)),
+            later: Later::default(),
         }
     }
 

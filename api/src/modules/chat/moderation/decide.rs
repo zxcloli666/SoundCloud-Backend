@@ -20,6 +20,7 @@ pub enum Decision {
     Reject,
     Remove { seqs: Vec<i64>, ban: Ban },
     Fallback(&'static str),
+    Later,
 }
 
 impl Decision {
@@ -28,6 +29,7 @@ impl Decision {
             Decision::Reject => "reject",
             Decision::Remove { .. } => "remove",
             Decision::Fallback(_) => "fallback",
+            Decision::Later => "later",
         }
     }
 }

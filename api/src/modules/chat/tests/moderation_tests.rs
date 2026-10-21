@@ -12,6 +12,7 @@ use crate::modules::chat::ChatState;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::moderation::client::USER_AGENT;
 use crate::modules::chat::moderation::decide::Decision;
+use crate::modules::chat::moderation::later::RETRY_DELAYS;
 use crate::modules::chat::moderation::task::{moderate, run_once};
 use crate::modules::chat::moderation::testing::{
     AI_KEY, FakeAi, FakeModel, TestKeys, aged_user, audit_actions, body_of, conversation,
@@ -615,7 +616,9 @@ async fn every_model_call_names_a_user_agent(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_dead_or_slow_model_leaves_the_report_to_rules_and_the_queue(pool: PgPool) {
+async fn a_dead_or_slow_model_is_asked_again_later_then_leaves_the_report_to_rules_and_the_queue(
+    pool: PgPool,
+) {
     for model in [FakeModel::AlwaysDown, FakeModel::Slow] {
         let ai = fake_ai(model).await;
         let mut dm = dm(&pool, Some(&ai)).await;
@@ -628,22 +631,74 @@ async fn a_dead_or_slow_model_leaves_the_report_to_rules_and_the_queue(pool: PgP
         let seq = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP subs").await;
         let id = report(&dm, REPORTER, (seq, seq), None).await;
 
+        for _ in RETRY_DELAYS {
+            assert_eq!(
+                moderate(&dm.chat, &dm.keys, id).await.expect("moderated"),
+                Decision::Later,
+                "{model:?}"
+            );
+            assert_eq!(state_of(&pool, id).await, ("open".to_owned(), None));
+        }
         assert_eq!(
             moderate(&dm.chat, &dm.keys, id).await.expect("moderated"),
             Decision::Fallback("no_verdict"),
             "{model:?}"
         );
-        assert_eq!(ai.calls.load(Ordering::SeqCst), 2, "{model:?}");
-        assert_eq!(state_of(&pool, id).await.0, "open");
+        assert_eq!(
+            ai.calls.load(Ordering::SeqCst),
+            2 * (RETRY_DELAYS.len() + 1),
+            "{model:?}"
+        );
+        assert_eq!(
+            state_of(&pool, id).await,
+            ("open".to_owned(), Some(AUDIT_ADMIN.to_owned()))
+        );
         assert!(body_of(&pool, dm.conversation, seq).await.is_some());
         let rows = audit_actions(&pool, &audit::report(id)).await;
-        let verdict = rows
+        let verdicts: Vec<&Value> = rows
             .iter()
-            .find(|(_, action, _)| action == "verdict")
-            .expect("a verdict row");
-        assert_eq!(verdict.2["outcome"], "unavailable", "{model:?}");
-        assert_eq!(verdict.2["model"], Value::Null, "{model:?}");
+            .filter(|(_, action, _)| action == "verdict")
+            .map(|(_, _, detail)| detail)
+            .collect();
+        assert_eq!(verdicts.len(), RETRY_DELAYS.len() + 1, "{model:?}");
+        assert!(
+            verdicts
+                .iter()
+                .all(|verdict| verdict["outcome"] == "unavailable" && verdict["model"].is_null()),
+            "{model:?}"
+        );
+        assert_eq!(
+            actions(&rows)
+                .iter()
+                .filter(|action| **action == "queue")
+                .count(),
+            1
+        );
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_report_waiting_for_its_retry_lets_newer_reports_through(pool: PgPool) {
+    let ai = fake_ai(FakeModel::AlwaysDown).await;
+    let dm = dm(&pool, Some(&ai)).await;
+    let first = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP likes").await;
+    let waiting = report(&dm, REPORTER, (first, first), None).await;
+
+    assert_eq!(run_once(&dm.chat, &dm.keys).await.expect("a pass"), 0);
+    assert_eq!(ai.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(dm.chat.moderator.later.waiting(), [waiting]);
+
+    let second = post(&pool, dm.conversation, &dm.ck, TARGET, "BUY CHEAP plays").await;
+    let newer = report(&dm, REPORTER, (second, second), None).await;
+    assert_eq!(run_once(&dm.chat, &dm.keys).await.expect("a pass"), 0);
+    assert_eq!(ai.calls.load(Ordering::SeqCst), 2);
+    let mut waiting_now = dm.chat.moderator.later.waiting();
+    waiting_now.sort();
+    let mut expected = vec![waiting, newer];
+    expected.sort();
+    assert_eq!(waiting_now, expected);
+    assert_eq!(run_once(&dm.chat, &dm.keys).await.expect("a pass"), 0);
+    assert_eq!(ai.calls.load(Ordering::SeqCst), 2);
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -7,6 +7,7 @@ use crate::modules::chat::moderation::client::completions_url;
 use crate::modules::chat::moderation::decide::{Ban, Decision, Facts, Injection, decide};
 use crate::modules::chat::moderation::evidence::Line;
 use crate::modules::chat::moderation::history::{ReporterHistory, TargetHistory};
+use crate::modules::chat::moderation::later::{Later, RETRY_DELAYS};
 use crate::modules::chat::moderation::prompt::{Case, build};
 use crate::modules::chat::moderation::verdict::{Category, RecommendedAction, Severity, Verdict};
 use crate::modules::chat::moderation::{injection, text};
@@ -326,4 +327,19 @@ fn group_meta_in_evidence_opens_under_nil_ids() {
         }],
     };
     assert_eq!(lines(&bundle)[0].text, "[group info] Night radio");
+}
+
+#[test]
+fn an_unanswered_report_waits_longer_each_time_and_then_gives_up() {
+    let later = Later::default();
+    let report = uuid::Uuid::now_v7();
+    for delay in RETRY_DELAYS {
+        assert_eq!(later.postpone(report), Some(delay));
+        assert_eq!(later.waiting(), [report]);
+    }
+    assert_eq!(later.postpone(report), None);
+    assert!(later.waiting().is_empty());
+    assert_eq!(later.postpone(report), Some(RETRY_DELAYS[0]));
+    later.forget(report);
+    assert!(later.waiting().is_empty());
 }
