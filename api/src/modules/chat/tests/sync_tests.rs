@@ -18,3 +18,6 @@ mod live_tests;
 
 #[path = "sync_tests/soak_tests.rs"]
 mod soak_tests;
+
+#[path = "sync_tests/sealed_tests.rs"]
+mod sealed_tests;
