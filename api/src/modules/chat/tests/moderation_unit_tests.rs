@@ -276,3 +276,54 @@ fn an_envelope_reads_as_one_line_of_text() {
     };
     assert_eq!(text::render(&long).chars().count(), text::LINE_CHARS_MAX);
 }
+
+#[test]
+fn group_meta_in_evidence_opens_under_nil_ids() {
+    use chat_wire::msg::{Class, MessageAad};
+    use chat_wire::proto::Meta;
+    use uuid::Uuid;
+
+    use crate::modules::chat::moderation::evidence::{Bundle, BundleKey, SealedMessage, lines};
+
+    let conversation = Uuid::now_v7();
+    let ck = [7u8; 32];
+    let envelope = Envelope {
+        v: 1,
+        body: Some(Body::Meta(Meta {
+            title: "Night".to_owned(),
+            description: "radio".to_owned(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let aad = MessageAad {
+        conv: conversation.into_bytes(),
+        epoch: 0,
+        sender_device: [0; 16],
+        client_id: [0; 16],
+        class: Class::Meta,
+    };
+    let body = chat_wire::msg::seal(&ck, &aad, [1; 24], &envelope).expect("sealed");
+    let bundle = Bundle {
+        v: 1,
+        conversation_id: conversation,
+        seq_from: 1,
+        seq_to: 1,
+        messages: vec![SealedMessage {
+            seq: 1,
+            sender: "5".to_owned(),
+            sender_device: Some(Uuid::now_v7()),
+            client_id: Uuid::now_v7(),
+            class: "meta".to_owned(),
+            epoch: 0,
+            target_seq: None,
+            ts: 0,
+            body,
+        }],
+        keys: vec![BundleKey {
+            epoch: 0,
+            ck: ck.to_vec(),
+        }],
+    };
+    assert_eq!(lines(&bundle)[0].text, "[group info] Night radio");
+}

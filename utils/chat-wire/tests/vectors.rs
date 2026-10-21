@@ -419,6 +419,24 @@ fn the_meta_vector_is_group_meta_sealed_as_class_meta() {
 }
 
 #[test]
+fn group_meta_is_sealed_under_nil_ids() {
+    let vector = vector("msg.json");
+    let cases = vector["cases"].as_array().expect("cases");
+    let named = |name: &str| {
+        cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .expect("a case")
+    };
+    let nil = named("meta_nil_ids");
+    assert_eq!(nil["class"], "meta");
+    assert_eq!(uuid(&nil["sender_device"]), [0; 16]);
+    assert_eq!(uuid(&nil["client_id"]), [0; 16]);
+    assert_eq!(nil["plaintext"], named("meta")["plaintext"]);
+    assert_ne!(nil["body"], named("meta")["body"]);
+}
+
+#[test]
 fn padding_lands_on_a_block_for_every_length() {
     for size in 0..1200 {
         let envelope = Envelope {

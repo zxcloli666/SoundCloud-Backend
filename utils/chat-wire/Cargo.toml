@@ -1,6 +1,6 @@
 [package]
 name = "chat-wire"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Wire format and crypto of the SoundCloud Desktop chat"

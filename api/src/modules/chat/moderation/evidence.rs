@@ -168,11 +168,15 @@ fn readable(conversation: Uuid, message: &SealedMessage, keys: &HashMap<i32, [u8
     let Ok(epoch) = u32::try_from(message.epoch) else {
         return UNREADABLE.to_owned();
     };
+    let (sender_device, client_id) = match class {
+        Class::Meta => (Uuid::nil(), Uuid::nil()),
+        _ => (message.sender_device.unwrap_or_default(), message.client_id),
+    };
     let aad = MessageAad {
         conv: conversation.into_bytes(),
         epoch,
-        sender_device: message.sender_device.unwrap_or_default().into_bytes(),
-        client_id: message.client_id.into_bytes(),
+        sender_device: sender_device.into_bytes(),
+        client_id: client_id.into_bytes(),
         class,
     };
     chat_wire::msg::open(ck, &aad, &message.body)
