@@ -360,7 +360,7 @@ where
             }
         }
         let _ = self.listener.close().await;
-        (self.keeping != Keeping::Nothing).then(|| self.kept.split().freeze())
+        (self.keeping != Keeping::Nothing).then(|| Bytes::copy_from_slice(&self.kept))
     }
 
     fn stop_keeping(&mut self) {

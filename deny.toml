@@ -1,0 +1,4 @@
+[advisories]
+yanked = "deny"
+unmaintained = "none"
+unsound = "none"

@@ -19,6 +19,8 @@ const POOL_WAIT_BUCKETS: &[f64] = &[
     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
+const UPKEEP_EVERY: Duration = Duration::from_secs(5);
+
 pub const UNMATCHED_ROUTE: &str = "unmatched";
 
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
@@ -41,9 +43,25 @@ pub fn init() {
     };
     match builder.install_recorder() {
         Ok(handle) => {
-            let _ = HANDLE.set(handle);
+            if HANDLE.set(handle.clone()).is_ok() {
+                start_upkeep(handle);
+            }
         }
         Err(error) => tracing::warn!(%error, "metrics recorder unavailable"),
+    }
+}
+
+fn start_upkeep(handle: PrometheusHandle) {
+    let started = std::thread::Builder::new()
+        .name("metrics-upkeep".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(UPKEEP_EVERY);
+                handle.run_upkeep();
+            }
+        });
+    if let Err(error) = started {
+        tracing::warn!(%error, "metrics upkeep did not start");
     }
 }
 

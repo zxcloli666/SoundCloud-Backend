@@ -232,15 +232,16 @@ impl PgPool {
         let id = Uuid::now_v7().to_string();
         let quality = "single";
         let client = self.connection().await?;
-        client
-            .execute(
+        let row = client
+            .query_one(
                 r#"INSERT INTO cdn_tracks (id, track_urn, quality, cdn_path, status, created_at, updated_at, last_accessed_at)
                    VALUES ($1::text::uuid, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $5, cdn_path = $4, updated_at = NOW()"#,
+                   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $5, cdn_path = $4, updated_at = NOW()
+                   RETURNING id"#,
                 &[&id, &track_urn, &quality, &cdn_path, &status],
             )
             .await?;
-        Ok(id)
+        Ok(row.get::<_, Uuid>(0).to_string())
     }
 
     pub async fn update_cdn_track_status(&self, id: &str, status: &str) -> Result<(), PgError> {
@@ -339,7 +340,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use super::{SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
+    use super::{PgPool, SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
 
     #[test]
     fn a_pool_that_cannot_serve_a_request_gives_up_instead_of_holding_it_forever() {
@@ -375,6 +376,40 @@ mod tests {
         );
         drop(held);
         assert!(pool.get().await.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a database with the latest API schema"]
+    async fn a_track_uploaded_again_is_marked_ok_on_the_row_it_already_has()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut pg = PgConfig::new();
+        pg.url = Some(std::env::var("STREAMING_SCHEMA_TEST_DATABASE_URL")?);
+        pg.pool = Some(pool_config(2, 5));
+        let pg = PgPool {
+            pool: pg.create_pool(Some(Runtime::Tokio1), NoTls)?,
+        };
+        let urn = format!("soundcloud:tracks:upsert-test-{}", Uuid::now_v7());
+
+        let first = pg.insert_cdn_track(&urn, "first.m4a", "pending").await?;
+        pg.update_cdn_track_status(&first, "ok").await?;
+        let again = pg.insert_cdn_track(&urn, "again.m4a", "pending").await?;
+        pg.update_cdn_track_status(&again, "ok").await?;
+        let cached = pg.find_cached_track(&urn).await?;
+
+        pg.pool
+            .get()
+            .await?
+            .execute("DELETE FROM cdn_tracks WHERE track_urn = $1", &[&urn])
+            .await?;
+        assert_eq!(
+            again, first,
+            "the second upload must report the row it updated"
+        );
+        assert!(
+            cached.is_some(),
+            "a track uploaded twice must still be served from storage"
+        );
         Ok(())
     }
 

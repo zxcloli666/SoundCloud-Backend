@@ -232,6 +232,7 @@ pub async fn download_hls(
         segment_urls = fresh_segments;
     }
 
+    buf.reserve(results.iter().flatten().map(Bytes::len).sum());
     for chunk in results.into_iter().flatten() {
         buf.extend_from_slice(&chunk);
     }

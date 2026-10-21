@@ -5,15 +5,16 @@ use axum::response::Response;
 use bytes::Bytes;
 use entity_ref::{EntityKind, EntityRef};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wreq::Client;
 
+use super::breaker::Breaker;
+use super::upload_slots::UploadSlots;
 use crate::config::Config;
 use crate::db::postgres::PgPool;
 
-const UNAVAILABLE_THRESHOLD: u32 = 3;
-const UNAVAILABLE_COOLDOWN_MS: u64 = 60_000;
+const UPLOADS_AT_ONCE: usize = 8;
+const UPLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(300);
 pub const PASSTHROUGH_IDLE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub struct StorageClient {
@@ -24,8 +25,9 @@ pub struct StorageClient {
     upload_url: String,
     auth_token: String,
     pg: PgPool,
-    consecutive_unavailable: Arc<AtomicU32>,
-    unavailable_until: Arc<AtomicU64>,
+    reads: Breaker,
+    uploads_failing: Arc<Breaker>,
+    uploads: UploadSlots,
 }
 
 impl StorageClient {
@@ -38,13 +40,18 @@ impl StorageClient {
             upload_url: config.storage_upload_url.trim_end_matches('/').to_string(),
             auth_token: config.storage_token.clone(),
             pg,
-            consecutive_unavailable: Arc::new(AtomicU32::new(0)),
-            unavailable_until: Arc::new(AtomicU64::new(0)),
+            reads: Breaker::default(),
+            uploads_failing: Arc::default(),
+            uploads: UploadSlots::new(UPLOADS_AT_ONCE),
         }
     }
 
     pub fn enabled(&self) -> bool {
         !self.base_url.is_empty() && !self.auth_token.is_empty()
+    }
+
+    pub fn has_room_for_background_uploads(&self) -> bool {
+        self.uploads.half_free()
     }
 
     pub fn track_filename(track_urn: &str) -> Option<String> {
@@ -67,8 +74,7 @@ impl StorageClient {
     }
 
     fn is_temporarily_unavailable(&self) -> bool {
-        let until = self.unavailable_until.load(Ordering::Relaxed);
-        until > 0 && now_ms() < until
+        self.reads.is_open()
     }
 
     pub async fn try_serve(&self, track_urn: &str) -> Option<String> {
@@ -155,18 +161,22 @@ impl StorageClient {
             warn!("[storage] refusing upload for non-canonical urn: {track_urn:?}");
             return;
         };
-        if !self.enabled() || self.is_temporarily_unavailable() {
+        if !self.enabled() || self.uploads_failing.is_open() {
             return;
         }
+        let Some(slot) = self.uploads.take(&track_urn) else {
+            debug!("[storage] {filename} skipped: already uploading or all slots busy");
+            return;
+        };
 
         let client = self.client.clone();
         let upload_url = self.upload_url.clone();
         let auth_token = self.auth_token.clone();
         let pg = self.pg.clone();
-        let consec = self.consecutive_unavailable.clone();
-        let until = self.unavailable_until.clone();
+        let failing = self.uploads_failing.clone();
 
         tokio::spawn(async move {
+            let _slot = slot;
             let id = match pg.insert_cdn_track(&track_urn, &cdn_path, "pending").await {
                 Ok(id) => id,
                 Err(e) => {
@@ -188,8 +198,7 @@ impl StorageClient {
             .await
             {
                 Ok(()) => {
-                    consec.store(0, Ordering::Relaxed);
-                    until.store(0, Ordering::Relaxed);
+                    failing.succeed();
                     let _ = pg.update_cdn_track_status(&id, "ok").await;
                     info!(
                         "[storage] uploaded {} {} ({:.1} MB)",
@@ -199,21 +208,14 @@ impl StorageClient {
                     );
                 }
                 Err(UploadError::Rejected { status, body }) => {
-                    consec.store(0, Ordering::Relaxed);
-                    until.store(0, Ordering::Relaxed);
+                    failing.succeed();
                     info!("[storage] upload rejected for {filename} ({status}): {body}");
                     let st = settle_failed_status(&client, &verify_target).await;
                     let _ = pg.update_cdn_track_status(&id, st).await;
                 }
                 Err(e) => {
-                    let prev = consec.fetch_add(1, Ordering::Relaxed);
-                    let cur_until = until.load(Ordering::Relaxed);
-                    if prev + 1 >= UNAVAILABLE_THRESHOLD && now_ms() >= cur_until {
-                        until.store(now_ms() + UNAVAILABLE_COOLDOWN_MS, Ordering::Relaxed);
-                        warn!(
-                            "[storage] breaker opened after {} upload failures",
-                            prev + 1
-                        );
+                    if let Some(failures) = failing.fail() {
+                        warn!("[storage] uploads paused after {failures} upload failures");
                     }
                     warn!("[storage] upload failed for {filename}: {e}");
                     let st = settle_failed_status(&client, &verify_target).await;
@@ -256,16 +258,12 @@ impl StorageClient {
     }
 
     fn mark_available(&self) {
-        self.consecutive_unavailable.store(0, Ordering::Relaxed);
-        self.unavailable_until.store(0, Ordering::Relaxed);
+        self.reads.succeed();
     }
 
     fn mark_unavailable(&self) {
-        let prev = self.consecutive_unavailable.fetch_add(1, Ordering::Relaxed);
-        if prev + 1 >= UNAVAILABLE_THRESHOLD && !self.is_temporarily_unavailable() {
-            self.unavailable_until
-                .store(now_ms() + UNAVAILABLE_COOLDOWN_MS, Ordering::Relaxed);
-            warn!("[storage] breaker opened after {} failures", prev + 1);
+        if let Some(failures) = self.reads.fail() {
+            warn!("[storage] breaker opened after {failures} failures");
         }
     }
 }
@@ -327,7 +325,7 @@ pub(crate) async fn upload_to_storage(
     quality: &str,
     expected_duration_ms: Option<i64>,
 ) -> Result<(), UploadError> {
-    let file_part = wreq::multipart::Part::bytes(data.to_vec())
+    let file_part = wreq::multipart::Part::stream_with_length(data.clone(), data.len() as u64)
         .file_name("audio")
         .mime_str("audio/mpeg")
         .map_err(|e| UploadError::Transport(e.into()))?;
@@ -344,7 +342,7 @@ pub(crate) async fn upload_to_storage(
         .post(format!("{base_url}/upload"))
         .header("Authorization", format!("Bearer {auth_token}"))
         .multipart(form)
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(UPLOAD_BUDGET)
         .send()
         .await
         .map_err(|e| UploadError::Transport(e.into()))?;
@@ -379,16 +377,87 @@ pub fn canonical_track_urn(input: &str) -> Option<String> {
     entity_ref::track_urn(input)
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn};
+    use bytes::Bytes;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn, upload_to_storage};
+
+    fn declared_length(head: &str) -> Option<usize> {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
+    }
+
+    async fn storage_that_reads_one_upload(listener: TcpListener) -> (String, Vec<u8>) {
+        let (mut socket, _) = listener.accept().await.expect("the upload connects");
+        let mut request = Vec::new();
+        let mut chunk = vec![0_u8; 64 * 1024];
+        let (head, body_start) = loop {
+            let read = socket
+                .read(&mut chunk)
+                .await
+                .expect("the upload is readable");
+            assert!(read > 0, "the upload ended before its headers");
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break (
+                    String::from_utf8_lossy(&request[..end]).into_owned(),
+                    end + 4,
+                );
+            }
+        };
+        let length = declared_length(&head).expect("the upload declares its length");
+        while request.len() < body_start + length {
+            let read = socket
+                .read(&mut chunk)
+                .await
+                .expect("the upload is readable");
+            assert!(read > 0, "the upload ended before its declared length");
+            request.extend_from_slice(&chunk[..read]);
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .expect("the answer is written");
+        (head, request.split_off(body_start))
+    }
+
+    #[tokio::test]
+    async fn an_upload_streams_the_whole_track_under_a_declared_length() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port is free");
+        let address = listener.local_addr().expect("the listener has an address");
+        let storage = tokio::spawn(storage_that_reads_one_upload(listener));
+        let track = Bytes::from(vec![7_u8; 3 << 20]);
+        let client = wreq::Client::builder().build().expect("the client builds");
+
+        let outcome = upload_to_storage(
+            &client,
+            &format!("http://{address}"),
+            "token",
+            "soundcloud_tracks_1",
+            &track,
+            "hq",
+            Some(180_000),
+        )
+        .await;
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (head, body) = storage.await.expect("the storage stub finished");
+        assert_eq!(declared_length(&head), Some(body.len()));
+        assert_eq!(
+            body.iter().filter(|&&byte| byte == 7).count(),
+            track.len(),
+            "the multipart body must carry every byte of the track"
+        );
+    }
 
     #[test]
     fn canonical_urn_maps_to_canonical_filename() {
