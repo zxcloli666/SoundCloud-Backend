@@ -368,3 +368,58 @@ async fn rewrap_moves_keys_and_evidence_to_the_current_versions(pool: PgPool) {
     assert_eq!(shown.lines.len(), 2);
     assert_eq!(audit_actions(&pool, "keys").await.len(), 1);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn an_admin_unlist_hides_a_public_room_even_from_its_host(pool: PgPool) {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let redis = crate::redis::connect_url(&url).expect("a redis pool");
+    let chat = crate::modules::chat::moderation::testing::state_with(pool.clone(), redis, None);
+    let host = format!("{}", u64::from(rand::random::<u32>()) + 3_000_000_000);
+    let profile = crate::modules::rooms::model::Profile {
+        name: "Host".to_owned(),
+        avatar_url: None,
+    };
+    let code = chat
+        .rooms
+        .create(&host, &profile, true, None)
+        .await
+        .expect("a public room")
+        .code;
+    let listed = |rooms: &[crate::modules::rooms::listing::PublicRoom]| {
+        rooms.iter().any(|card| card.host_id == host)
+    };
+    assert!(listed(&chat.rooms.public_rooms().await.expect("a listing")));
+
+    let uri = format!("/chat-admin/unlist/{code}");
+    let (status, _, _) = call(&chat, "POST", &uri, Some(ADMIN_TOKEN), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!listed(
+        &chat.rooms.public_rooms().await.expect("a listing")
+    ));
+    chat.rooms
+        .set_public(&code, &host, true)
+        .await
+        .expect("the host asks to open it");
+    assert!(!listed(
+        &chat.rooms.public_rooms().await.expect("a listing")
+    ));
+    let rows = audit_actions(&pool, &audit::room(&code)).await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.0.as_str(), row.1.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("owner", "unlist")]
+    );
+
+    let (status, _, _) = call(
+        &chat,
+        "POST",
+        "/chat-admin/unlist/ZZZZZZ",
+        Some(ADMIN_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    chat.rooms.end(&code).await.expect("the room ends");
+}

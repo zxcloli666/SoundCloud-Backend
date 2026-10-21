@@ -245,3 +245,72 @@ async fn evidence_seals_and_opens_with_the_real_kek_ring(pool: PgPool) {
     );
     assert!(evidence::open(&TestKeys::default(), version, &sealed).is_err());
 }
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_room_guest_reports_only_what_was_said_after_joining(pool: PgPool) {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let redis = crate::redis::connect_url(&url).expect("a redis pool");
+    let keys = TestKeys::default();
+    let chat = crate::modules::chat::moderation::testing::state_with(pool.clone(), redis, None);
+    chat.rooms.install_chat(&chat);
+    let host = format!("{}", u64::from(rand::random::<u32>()) + 3_000_000_000);
+    let guest = format!("{}", u64::from(rand::random::<u32>()) + 3_000_000_000);
+    let profile = crate::modules::rooms::model::Profile {
+        name: "Someone".to_owned(),
+        avatar_url: None,
+    };
+    let code = chat
+        .rooms
+        .create(&host, &profile, false, None)
+        .await
+        .expect("a room")
+        .code;
+    let room_chat = chat
+        .rooms
+        .claim_chat(&code, &host)
+        .await
+        .expect("a room chat")
+        .conversation_id;
+    sqlx::query(
+        "INSERT INTO chat.conversations (id, kind, room_ref, created_by) VALUES ($1, 'room', $2, $3)",
+    )
+    .bind(room_chat)
+    .bind(&code)
+    .bind(&host)
+    .execute(&pool)
+    .await
+    .expect("a room chat row");
+    let ck = conversation_key(&pool, &keys, room_chat).await;
+    let before = post(&pool, room_chat, &ck, &host, "said before the guest").await;
+    chat.rooms
+        .join(&code, &guest, &profile, &pool)
+        .await
+        .expect("the guest joins");
+    let after = post(&pool, room_chat, &ck, &host, "said to the guest").await;
+
+    assert_eq!(
+        file_with(&chat, &keys, &guest, &input(room_chat, before, before))
+            .await
+            .err(),
+        Some(ChatError::Invalid)
+    );
+    let filed = file_with(&chat, &keys, &guest, &input(room_chat, after, after))
+        .await
+        .expect("a report");
+    let row = load(&chat, filed.id).await.expect("read").expect("a row");
+    let bundle = evidence::open(&keys, 1, &row.evidence.expect("evidence")).expect("opens");
+    let texts: Vec<String> = evidence::lines(&bundle)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert_eq!(texts.last().map(String::as_str), Some("said to the guest"));
+    assert!(!texts.iter().any(|text| text.contains("before the guest")));
+    assert_eq!(
+        file_with(&chat, &keys, "4242", &input(room_chat, after, after))
+            .await
+            .err(),
+        Some(ChatError::NotMember)
+    );
+    chat.rooms.end(&code).await.expect("the room ends");
+}

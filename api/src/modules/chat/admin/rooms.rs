@@ -20,19 +20,20 @@ pub async fn unlist(
         .await
         .map_err(|_| ChatError::Busy { retry_ms: 1_000 })?
         .ok_or(ChatError::NotFound)?;
-    let was_public = room.public;
-    if was_public {
-        chat.rooms
-            .set_public(&code, &room.host_id, false)
-            .await
-            .map_err(|_| ChatError::Busy { retry_ms: 1_000 })?;
+    if !chat
+        .rooms
+        .unlist(&code)
+        .await
+        .map_err(|_| ChatError::Busy { retry_ms: 1_000 })?
+    {
+        return Err(ChatError::NotFound);
     }
     audit::record(
         &chat,
         &admin.admin,
         "unlist",
         &audit::room(&code),
-        json!({"host": room.host_id, "was_public": was_public}),
+        json!({"host": room.host_id, "was_public": room.public, "was_unlisted": room.unlisted}),
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)

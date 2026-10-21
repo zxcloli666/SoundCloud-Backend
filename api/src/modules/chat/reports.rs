@@ -11,7 +11,7 @@ use crate::modules::chat::body::ChatJson;
 use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::moderation::evidence::{self, StoredMessage};
 use crate::modules::chat::moderation::keys::ChatKeys;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, users};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rooms, users};
 
 pub const CONTEXT_MESSAGES: i64 = 10;
 pub const EVIDENCE_KEEP_DAYS: i64 = 180;
@@ -175,14 +175,9 @@ async fn visible_from(chat: &ChatState, reporter: &str, conversation: Uuid) -> C
             .ok_or(ChatError::NotMember)?;
             Ok(member.joined_seq)
         }
-        "room" => {
-            let code = found.room_ref.ok_or(ChatError::NotMember)?;
-            chat.rooms
-                .view(&code, reporter)
-                .await
-                .map_err(|_| ChatError::NotMember)?;
-            Ok(0)
-        }
+        "room" => rooms::member_from_seq(chat, conversation, reporter)
+            .await?
+            .ok_or(ChatError::NotMember),
         _ => Err(ChatError::Invalid),
     }
 }
