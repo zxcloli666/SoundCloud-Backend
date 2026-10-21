@@ -55,7 +55,7 @@ pub struct PurgeArgs {
 
 #[derive(Args)]
 pub struct FakeProArgs {
-    #[arg(long, default_value = "0.0.0.0:8080")]
+    #[arg(long, default_value = "127.0.0.1:8080")]
     pub bind: SocketAddr,
 }
 

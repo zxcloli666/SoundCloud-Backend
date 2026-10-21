@@ -37,7 +37,7 @@ podman run --rm -v "$PWD/../..":/src -w /src mirror.gcr.io/library/rust:1-bookwo
 chat-load seed --admin http://chat-api:3000 --token-file token --users 20000 --groups 900 --out layout.json
 chat-load run --layout layout.json [flags]
 chat-load purge --admin http://chat-api:3000 --token-file token
-chat-load fake-pro --bind 0.0.0.0:8080
+chat-load fake-pro
 ```
 
 `run` exits 0 on PASS, 3 on FAIL or abort. Main flags (defaults are the night plan):
@@ -89,7 +89,7 @@ Every 10 s a status line (online, parked, req/s, errors, sent, received, deliver
 `chat_busy`, ...), `wake` (delivered to a poll that was parked when the message was sent), `catchup`
 (delivered on a later poll, short-sync devices land here), call latency, the reconnect curve after
 the restart (parked polls back to 95%, share of devices that talked to the new process at 5..180 s)
-and a 5 s timeline. Verdict: wake p99 under 2 s, errors under 1%, back within 60 s after the restart.
+and a 5 s timeline. Verdict: wake p99 under 2 s, errors under 1%, at least one message delivered when any was sent, back within 60 s after the restart. A `--restart-cmd` that fails aborts the run.
 chat-api CPU and RSS, relay CPU and music p99 come from the checks and Grafana.
 
 ## Local run (podman, 5k devices)
@@ -116,7 +116,7 @@ chat-api and its memory measures connection buffers, not chat. The harness runs 
 on `lt-net`:
 
 ```sh
-chat-load fake-pro --bind 0.0.0.0:8080 &
+chat-load fake-pro &
 chat-load seed --admin http://lt-chat-api:3000 --token-file /keys/chat-admin-token --users 5000 --groups 220 --out layout.json
 chat-load run --layout layout.json --ock-pub dde332903df0f9e9fbc91a814131b5bcea28b46f5728e2a7e28700ed4a6c2d4d \
   --direct http://lt-edge:8000 --relay r1=http://lt-edge:8000 --relay r2=http://lt-edge:8000 \
@@ -140,10 +140,10 @@ Generator `sc-worker1`, its worker stopped, `ulimit -n 200000`, `ip_local_port_r
 3. Seed on main (the token never leaves the host), copy the layout to the generator:
 
 ```sh
-ssh sc-main 'ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}" $(docker ps -q --filter label=com.docker.compose.service=chat-api) | cut -d" " -f1);
+(umask 077; ssh sc-main 'ip=$(docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}" $(docker ps -q --filter label=com.docker.compose.service=chat-api) | cut -d" " -f1);
   curl -fsS -X POST -H "x-chat-admin-token: $(cat /srv/scd-secrets/chat/chat-admin-token)" -H "x-chat-admin-user: loadtest" \
   -H "content-type: application/json" -d "{\"users\":20000,\"devices_per_user\":1,\"groups\":900}" \
-  http://$ip:3000/chat-admin/loadtest/seed' > layout.json && chmod 600 layout.json
+  http://$ip:3000/chat-admin/loadtest/seed' > layout.json)
 scp layout.json sc-worker1:
 ```
 
