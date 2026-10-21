@@ -28,8 +28,9 @@ use crate::modules::chat::conversations::view::{ConversationPage, ConversationVi
 use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::members::{access, changes, contacts};
 use crate::modules::chat::messages::fanout;
-use crate::modules::chat::model::{ConversationKind, MemberState};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
+use crate::modules::chat::model::ConversationKind;
+use crate::modules::chat::users::{self, Scope};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, requests};
 
 pub const LIST_ROWS_MAX: usize = 200;
 pub const LIST_BYTES_MAX: usize = 128 * 1024;
@@ -96,24 +97,22 @@ pub async fn create(
     let user = caller.user_id.as_str();
     let wanted = create::wanted(user, input, chat.config.loadtest)?;
     limits::admit(&chat, Bucket::Create, user).await?;
+    if wanted != Wanted::Saved {
+        users::check(&chat, user, Scope::All).await?;
+    }
     let created = match wanted {
         Wanted::Saved => create::saved(&chat.pg, user).await?,
         Wanted::Direct(peer) => {
             if blocks::blocked_between(&chat, user, &peer).await? {
                 return Err(ChatError::Unavailable);
             }
-            create_direct(&chat, user, &peer).await?
+            create_direct(&chat, &caller, &peer).await?
         }
         Wanted::Group { members, meta } => {
             create::under_cap(&chat.pg, user).await?;
             let open = contacts::unblocked(&chat, user, members).await?;
             let placed = contacts::placements(&chat.pg, user, &open).await?;
-            if placed
-                .iter()
-                .any(|(_, state)| *state == MemberState::Invited)
-            {
-                limits::admit(&chat, Bucket::Invite, user).await?;
-            }
+            contacts::admit_invites(&chat, user, &placed).await?;
             create::group(&chat.pg, user, placed, meta).await?
         }
     };
@@ -126,15 +125,25 @@ pub async fn create(
     Ok(Json(view))
 }
 
-async fn create_direct(chat: &ChatState, user: &str, peer: &str) -> ChatResult<Created> {
+async fn create_direct(chat: &ChatState, caller: &ChatCaller, peer: &str) -> ChatResult<Created> {
+    let user = caller.user_id.as_str();
     let plan = create::plan_direct(&chat.pg, user, peer).await?;
     if matches!(plan, DirectPlan::New { .. }) {
         create::under_cap(&chat.pg, user).await?;
     }
     if plan.is_request() {
-        limits::admit(chat, Bucket::Request, user).await?;
+        admit_request(chat, caller).await?;
     }
     create::direct(&chat.pg, user, plan).await
+}
+
+pub async fn admit_request(chat: &ChatState, caller: &ChatCaller) -> ChatResult<()> {
+    users::check(chat, &caller.user_id, Scope::DmNew).await?;
+    if requests::session_is_young(chat, caller.session_id).await? {
+        return Err(ChatError::TooYoung);
+    }
+    let newcomer = users::newcomer(chat, &caller.user_id).await?;
+    limits::admit_request(chat, &caller.user_id, newcomer).await
 }
 
 pub async fn show(

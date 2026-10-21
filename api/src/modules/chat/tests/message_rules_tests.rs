@@ -31,6 +31,7 @@ fn access(kind: ConversationKind, role: MemberRole) -> Access {
         hidden_before_seq: 0,
         peer_state: None,
         recipients: vec!["101".to_owned()],
+        public_room: false,
     }
 }
 
@@ -107,6 +108,20 @@ fn pins_need_a_group_admin_but_not_in_a_dm() {
     );
     assert_eq!(may_post(&dm, Class::Pin), Ok(()));
     assert_eq!(may_post(&group_member, Class::React), Ok(()));
+}
+
+#[test]
+fn room_moderators_pin_and_guests_read_from_their_seat() {
+    let guest = Access {
+        joined_seq: 7,
+        ..access(ConversationKind::Room, MemberRole::Member)
+    };
+    let moderator = access(ConversationKind::Room, MemberRole::Admin);
+    assert_eq!(may_post(&guest, Class::Pin), Err(ChatError::NotMember));
+    assert_eq!(may_post(&moderator, Class::Pin), Ok(()));
+    assert_eq!(may_post(&guest, Class::Meta), Err(ChatError::Invalid));
+    assert_eq!(guest.history_floor(), 7);
+    assert!(moderator.moderates() && !guest.moderates());
 }
 
 #[test]

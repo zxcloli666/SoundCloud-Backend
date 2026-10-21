@@ -281,3 +281,30 @@ async fn the_list_pages_by_cursor_and_skips_left_chats(pool: PgPool) -> ChatResu
     assert!(tight.next_cursor.is_some());
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_user_held_from_strangers_starts_no_request_and_invites_no_one(
+    pool: PgPool,
+) -> ChatResult<()> {
+    let redis = crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool");
+    let chat = crate::modules::chat::test_support::chat_state(pool.clone(), redis, true);
+    sqlx::query(
+        "INSERT INTO chat.users (user_id, restricted_until, restriction_scope)
+         VALUES ('101', now() + interval '1 day', '{dm_new}')",
+    )
+    .execute(&pool)
+    .await?;
+    let caller = crate::modules::chat::test_support::caller();
+    assert!(matches!(
+        crate::modules::chat::conversations::admit_request(&chat, &caller).await,
+        Err(ChatError::Muted { .. })
+    ));
+    let friends = vec![("202".to_owned(), MemberState::Active)];
+    contacts::admit_invites(&chat, "101", &friends).await?;
+    let strangers = vec![("303".to_owned(), MemberState::Invited)];
+    assert!(matches!(
+        contacts::admit_invites(&chat, "101", &strangers).await,
+        Err(ChatError::Muted { .. })
+    ));
+    Ok(())
+}

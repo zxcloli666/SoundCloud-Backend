@@ -361,3 +361,37 @@ async fn hidden_history_cannot_be_a_target(pool: PgPool) -> ChatResult<()> {
     .await?;
     Ok(())
 }
+
+async fn restrict(pool: &PgPool, user: &str, scope: &str) {
+    sqlx::query(
+        "INSERT INTO chat.users (user_id, restricted_until, restriction_scope)
+         VALUES ($1, now() + interval '1 day', ARRAY[$2])
+         ON CONFLICT (user_id) DO UPDATE SET restriction_scope = EXCLUDED.restriction_scope",
+    )
+    .bind(user)
+    .bind(scope)
+    .execute(pool)
+    .await
+    .expect("a restriction");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_restricted_sender_is_muted_where_the_scope_says(pool: PgPool) -> ChatResult<()> {
+    let redis = crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool");
+    let chat = crate::modules::chat::test_support::chat_state(pool.clone(), redis, true);
+    let open = dm(&pool, "101", "202", MemberState::Active).await;
+    let request = dm(&pool, "101", "303", MemberState::Invited).await;
+    restrict(&pool, "101", "dm_new").await;
+    gate::sender_free(&chat, &access_of(&pool, open, "101").await).await?;
+    assert!(matches!(
+        gate::sender_free(&chat, &access_of(&pool, request, "101").await).await,
+        Err(ChatError::Muted { .. })
+    ));
+    restrict(&pool, "101", "all").await;
+    assert!(matches!(
+        gate::sender_free(&chat, &access_of(&pool, open, "101").await).await,
+        Err(ChatError::Muted { .. })
+    ));
+    gate::sender_free(&chat, &access_of(&pool, open, "202").await).await?;
+    Ok(())
+}

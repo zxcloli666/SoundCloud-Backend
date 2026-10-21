@@ -53,6 +53,7 @@ pub struct Access {
     pub hidden_before_seq: i64,
     pub peer_state: Option<MemberState>,
     pub recipients: Vec<String>,
+    pub public_room: bool,
 }
 
 impl Access {
@@ -134,6 +135,7 @@ pub async fn load(pg: &PgPool, conversation: Uuid, user_id: &str) -> ChatResult<
         hidden_before_seq: row.hidden_before_seq,
         peer_state: row.peer_state.as_deref().map(roles::state).transpose()?,
         recipients: row.recipients,
+        public_room: false,
     })
 }
 
@@ -173,6 +175,7 @@ async fn load_room(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatR
         joined_seq: member.chat_from_seq,
         hidden_before_seq: 0,
         peer_state: None,
+        public_room: room.public,
         recipients: room.members.into_iter().map(|one| one.user_id).collect(),
     })
 }

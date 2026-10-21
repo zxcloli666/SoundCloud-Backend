@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
 use crate::modules::chat::conversations::create::group_members;
-use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::model::{MemberRole, MemberState};
+use crate::modules::chat::users::{self, Scope};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -85,14 +85,10 @@ pub async fn add(
         .active()?
         .admin()?;
     let wanted = group_members(user, &input.users, chat.config.loadtest)?;
+    users::check(&chat, user, Scope::All).await?;
     let open = contacts::unblocked(&chat, user, wanted).await?;
     let placed = contacts::placements(&chat.pg, user, &open).await?;
-    if placed
-        .iter()
-        .any(|(_, state)| *state == MemberState::Invited)
-    {
-        limits::admit(&chat, Bucket::Invite, user).await?;
-    }
+    contacts::admit_invites(&chat, user, &placed).await?;
     let change = changes::add(&chat.pg, &access, placed).await?;
     let added = change.added.clone();
     changes::publish(&chat, &access, change).await?;

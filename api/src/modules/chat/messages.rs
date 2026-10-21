@@ -84,9 +84,10 @@ pub async fn send(
     }
     let device = caller.device.as_ref().ok_or(ChatError::Invalid)?.id;
     let outgoing = rules::outgoing(input)?;
-    limits::admit(&chat, Bucket::Send, &caller.user_id).await?;
+    limits::admit_send(&chat, &caller.user_id, conversation).await?;
     let access = access::load_in(&chat, conversation, &caller.user_id).await?;
     rules::may_post(&access, outgoing.class)?;
+    gate::sender_free(&chat, &access).await?;
     if access.is_room()
         && let Some(row) = gate::room(&chat, &access, &outgoing).await?
     {

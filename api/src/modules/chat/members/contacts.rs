@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use sqlx::PgPool;
 
+use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::model::MemberState;
+use crate::modules::chat::users::{self, Scope};
 use crate::modules::chat::{ChatResult, ChatState, blocks};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +103,21 @@ pub async fn unblocked(
         }
     }
     Ok(open)
+}
+
+pub async fn admit_invites(
+    chat: &ChatState,
+    user: &str,
+    placed: &[(String, MemberState)],
+) -> ChatResult<()> {
+    if !placed
+        .iter()
+        .any(|(_, state)| *state == MemberState::Invited)
+    {
+        return Ok(());
+    }
+    users::check(chat, user, Scope::DmNew).await?;
+    limits::admit(chat, Bucket::Invite, user).await
 }
 
 #[cfg(test)]

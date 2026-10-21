@@ -508,4 +508,53 @@ mod wired {
         assert!(told.is_some());
         Ok(())
     }
+
+    #[sqlx::test(migrations = "./migrations")]
+    #[ignore = "requires a local Redis"]
+    async fn a_dm_send_goes_through_every_gate_once(pool: PgPool) -> anyhow::Result<()> {
+        let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
+        let id = dm(&pool, "101", "202", MemberState::Active).await;
+        let messages = format!("/chat/conversations/{id}/messages");
+        let body = json!({
+            "client_id": Uuid::now_v7(),
+            "class": "post",
+            "epoch": 0,
+            "body": "AQID"
+        });
+        let (status, first) = answer(
+            chat.clone(),
+            as_user("101"),
+            "POST",
+            &messages,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        let (status, again) =
+            answer(chat.clone(), as_user("101"), "POST", &messages, Some(body)).await;
+        assert_eq!(
+            (status, again["seq"].clone()),
+            (StatusCode::OK, first["seq"].clone())
+        );
+        let (status, page) = answer(chat.clone(), as_user("202"), "GET", &messages, None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["messages"][0]["seq"], first["seq"]);
+        sqlx::query(
+            "INSERT INTO chat.users (user_id, restricted_until, restriction_scope)
+             VALUES ('101', now() + interval '1 day', '{all}')",
+        )
+        .execute(&pool)
+        .await?;
+        let (status, muted) = answer(
+            chat,
+            as_user("101"),
+            "POST",
+            &messages,
+            Some(json!({"client_id": Uuid::now_v7(), "class": "post", "epoch": 0, "body": "AQID"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{muted}");
+        assert_eq!(muted["error"], "chat_muted");
+        Ok(())
+    }
 }
