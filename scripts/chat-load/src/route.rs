@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, bail};
-use chat_wire::proto::Tier;
+use sc_chat_wire::proto::Tier;
 
 pub const DEFAULT_ORIGIN: &str = "https://api.scnative.dev";
 pub const DEFAULT_RELAYS: [(&str, &str); 2] = [

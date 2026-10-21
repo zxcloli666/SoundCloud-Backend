@@ -1,6 +1,6 @@
-use chat_wire::bind::make_bind;
-use chat_wire::prost::Message;
 use chrono::Utc;
+use sc_chat_wire::bind::make_bind;
+use sc_chat_wire::prost::Message;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -88,9 +88,9 @@ async fn devices(users: &[String], per_user: u32) -> ChatResult<Vec<SeededDevice
 }
 
 fn device(user: &str, ts_ms: u64) -> ChatResult<SeededDevice> {
-    let auth_seed: [u8; 32] = chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
-    let box_secret: [u8; 32] = chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
-    let box_pub = chat_wire::ck::box_public(&box_secret).map_err(|_| ChatError::Internal)?;
+    let auth_seed: [u8; 32] = sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
+    let box_secret: [u8; 32] = sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
+    let box_pub = sc_chat_wire::ck::box_public(&box_secret).map_err(|_| ChatError::Internal)?;
     let id = Uuid::now_v7();
     let bind = make_bind(&id.to_string(), &auth_seed, &box_pub, ts_ms);
     Ok(SeededDevice {

@@ -216,7 +216,7 @@ async fn the_recipient_of_a_message_request_reports_it_before_accepting(pool: Pg
 async fn evidence_seals_and_opens_with_the_real_kek_ring(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let dm = conversation(&pool, "direct", &[("91", true), ("92", true)]).await;
-    let ck: [u8; 32] = chat_wire::random_bytes().expect("a ck");
+    let ck: [u8; 32] = sc_chat_wire::random_bytes().expect("a ck");
     sqlx::query(
         "INSERT INTO chat.conversation_keys (conversation_id, epoch, wrapped, kek_version)
          VALUES ($1, 0, $2, $3)",

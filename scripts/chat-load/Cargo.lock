@@ -288,33 +288,17 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
- "chat-wire",
  "clap",
  "hdrhistogram",
  "hex",
  "rand 0.8.8",
  "reqwest",
+ "sc-chat-wire",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "uuid",
-]
-
-[[package]]
-name = "chat-wire"
-version = "0.1.1"
-dependencies = [
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hex",
- "hpke",
- "prost",
- "prost-build",
- "protox",
- "sha2",
- "thiserror",
 ]
 
 [[package]]
@@ -1686,6 +1670,23 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "sc-chat-wire"
+version = "0.1.1"
+source = "git+https://github.com/zxcloli666/SoundCloud-Core?tag=sc-chat-wire-v0.1.1#cac73b4fcbafb03b8549338395d3f532f24980f6"
+dependencies = [
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "hpke",
+ "prost",
+ "prost-build",
+ "protox",
+ "sha2",
+ "thiserror",
+]
 
 [[package]]
 name = "scopeguard"

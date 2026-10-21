@@ -133,7 +133,7 @@ async fn a_seed_builds_users_devices_and_chats_that_work_through_the_sealed_chan
     assert_eq!(keys.status, 200, "{}", keys.body);
     let sealed = crate::modules::chat::b64::decode(keys.body[0]["sealed"].as_str().expect("a key"))
         .expect("base64");
-    chat_wire::ck::open_for_device(
+    sc_chat_wire::ck::open_for_device(
         &device.box_secret,
         conversation.as_bytes(),
         0,

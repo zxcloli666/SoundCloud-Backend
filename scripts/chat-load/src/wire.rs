@@ -1,8 +1,8 @@
 use anyhow::Context;
-use chat_wire::prost::Message;
-use chat_wire::proto::{Inner, InnerResponse, Tier};
-use chat_wire::seal::{RequestSealer, ResponseKey};
-use chat_wire::sign::sign_request;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::{Inner, InnerResponse, Tier};
+use sc_chat_wire::seal::{RequestSealer, ResponseKey};
+use sc_chat_wire::sign::sign_request;
 
 use crate::layout::Identity;
 
@@ -14,8 +14,8 @@ pub struct Ock {
 
 impl Ock {
     pub fn pinned(version: u8) -> anyhow::Result<Self> {
-        let public = chat_wire::ock::pinned(version)
-            .with_context(|| format!("ock-{version} is not pinned in chat-wire"))?;
+        let public = sc_chat_wire::ock::pinned(version)
+            .with_context(|| format!("ock-{version} is not pinned in sc-chat-wire"))?;
         Ok(Self {
             version,
             public: *public,
@@ -64,7 +64,7 @@ pub fn seal(
         max_bytes,
         ..Inner::default()
     };
-    let ikm: [u8; 32] = chat_wire::random_bytes().context("no randomness")?;
+    let ikm: [u8; 32] = sc_chat_wire::random_bytes().context("no randomness")?;
     let sealer = RequestSealer::new(ock.version, &ock.public, ikm).context("bad ock key")?;
     sign_request(&identity.auth_seed, &mut inner, sealer.enc());
     let sealed = sealer

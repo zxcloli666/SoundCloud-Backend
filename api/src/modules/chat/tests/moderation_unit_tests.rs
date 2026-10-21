@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use chat_wire::proto::envelope::Body;
-use chat_wire::proto::{Embed, Envelope, Forwarded, Text};
+use sc_chat_wire::proto::envelope::Body;
+use sc_chat_wire::proto::{Embed, Envelope, Forwarded, Text};
 
 use crate::modules::chat::moderation::client::completions_url;
 use crate::modules::chat::moderation::decide::{Ban, Decision, Facts, Injection, decide};
@@ -286,8 +286,8 @@ fn an_envelope_reads_as_one_line_of_text() {
 
 #[test]
 fn group_meta_in_evidence_opens_under_nil_ids() {
-    use chat_wire::msg::{Class, MessageAad};
-    use chat_wire::proto::Meta;
+    use sc_chat_wire::msg::{Class, MessageAad};
+    use sc_chat_wire::proto::Meta;
     use uuid::Uuid;
 
     use crate::modules::chat::moderation::evidence::{Bundle, BundleKey, SealedMessage, lines};
@@ -310,7 +310,7 @@ fn group_meta_in_evidence_opens_under_nil_ids() {
         client_id: [0; 16],
         class: Class::Meta,
     };
-    let body = chat_wire::msg::seal(&ck, &aad, [1; 24], &envelope).expect("sealed");
+    let body = sc_chat_wire::msg::seal(&ck, &aad, [1; 24], &envelope).expect("sealed");
     let bundle = Bundle {
         v: 1,
         conversation_id: conversation,

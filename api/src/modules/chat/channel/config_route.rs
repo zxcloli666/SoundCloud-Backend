@@ -36,11 +36,11 @@ pub struct ChatLimitsView {
 impl ChatLimitsView {
     pub fn current() -> Self {
         Self {
-            text_max: chat_wire::msg::TEXT_MAX,
-            embeds_max: chat_wire::msg::EMBEDS_MAX,
+            text_max: sc_chat_wire::msg::TEXT_MAX,
+            embeds_max: sc_chat_wire::msg::EMBEDS_MAX,
             group_members_max: GROUP_MEMBERS_MAX,
             devices_max: DEVICES_MAX,
-            envelope_max: chat_wire::seal::MAX_ENVELOPE,
+            envelope_max: sc_chat_wire::seal::MAX_ENVELOPE,
             disappearing_ttls: DISAPPEARING_TTLS,
         }
     }

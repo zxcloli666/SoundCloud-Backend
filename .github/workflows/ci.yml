@@ -320,30 +320,6 @@ jobs:
       - name: Streaming
         run: cargo check --manifest-path streaming/Cargo.toml
 
-  chat-wire:
-    name: Chat wire
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: utils/chat-wire -> target
-          key: chat-wire
-
-      - name: Format
-        run: cargo fmt --manifest-path utils/chat-wire/Cargo.toml --check
-
-      - name: Vectors
-        run: cargo test --manifest-path utils/chat-wire/Cargo.toml --all-targets --locked
-
-      - name: Clippy
-        run: cargo clippy --manifest-path utils/chat-wire/Cargo.toml --all-targets --locked -- -D warnings
-
   chat-load:
     name: Chat load harness
     runs-on: ubuntu-latest

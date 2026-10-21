@@ -1,8 +1,8 @@
 use anyhow::Context;
-use chat_wire::msg::{self, Class, ENVELOPE_VERSION, MessageAad};
-use chat_wire::proto::envelope::Body;
-use chat_wire::proto::{Envelope, Text};
 use rand::Rng;
+use sc_chat_wire::msg::{self, Class, ENVELOPE_VERSION, MessageAad};
+use sc_chat_wire::proto::envelope::Body;
+use sc_chat_wire::proto::{Envelope, Text};
 use uuid::Uuid;
 
 const MARK: &str = "lt";
@@ -67,7 +67,7 @@ pub fn seal(sealing: &Sealing<'_>, text: String) -> anyhow::Result<Vec<u8>> {
         })),
         ..Envelope::default()
     };
-    let nonce = chat_wire::random_bytes().context("no randomness")?;
+    let nonce = sc_chat_wire::random_bytes().context("no randomness")?;
     msg::seal(sealing.ck, &sealing.aad(), nonce, &envelope).context("the message does not seal")
 }
 

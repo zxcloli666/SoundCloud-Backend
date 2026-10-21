@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, anyhow, ensure};
-use chat_wire::seal::ResponseKey;
+use sc_chat_wire::seal::ResponseKey;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -76,7 +76,7 @@ impl KekRing {
 
     pub fn wrap(&self, conversation: Uuid, epoch: i32, ck: &[u8; 32]) -> ChatResult<Vec<u8>> {
         let kek = self.keks.get(&self.current).ok_or(ChatError::Internal)?;
-        chat_wire::ck::wrap(
+        sc_chat_wire::ck::wrap(
             kek,
             self.current,
             conversation.as_bytes(),
@@ -101,7 +101,7 @@ impl KekRing {
             );
             return Err(ChatError::Internal);
         };
-        chat_wire::ck::unwrap(
+        sc_chat_wire::ck::unwrap(
             kek,
             kek_version,
             conversation.as_bytes(),
@@ -146,7 +146,7 @@ pub fn wire_epoch(epoch: i32) -> ChatResult<u32> {
 }
 
 fn fresh<const N: usize>() -> ChatResult<[u8; N]> {
-    chat_wire::random_bytes().map_err(|_| ChatError::Internal)
+    sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)
 }
 
 fn evidence_aad(version: u16) -> [u8; 32] {

@@ -12,7 +12,7 @@ const HOUR: Duration = Duration::from_secs(3_600);
 const DAY: Duration = Duration::from_secs(86_400);
 
 pub const ROOM_NEWCOMER_SECS: i64 = 600;
-pub const ROOM_NEWCOMER_BODY_MAX: usize = chat_wire::seal::NONCE_LEN + 16 + 2 * 256;
+pub const ROOM_NEWCOMER_BODY_MAX: usize = sc_chat_wire::seal::NONCE_LEN + 16 + 2 * 256;
 pub const ROOM_BYTES_PER_MINUTE: u64 = 24 * 1024;
 
 const SCRIPT: &str = r#"

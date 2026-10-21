@@ -387,7 +387,7 @@ impl Device {
             let Some(bytes) = sealed["sealed"].as_str().and_then(b64::decode) else {
                 continue;
             };
-            if let Ok(ck) = chat_wire::ck::open_for_device(
+            if let Ok(ck) = sc_chat_wire::ck::open_for_device(
                 &self.identity.box_secret,
                 conversation.as_bytes(),
                 at as u32,

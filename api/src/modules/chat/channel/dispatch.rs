@@ -2,7 +2,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{Extensions, HeaderMap, HeaderName, Method, Request, StatusCode, Uri};
 use axum::response::Response;
-use chat_wire::proto::{Header, Inner, InnerResponse};
+use sc_chat_wire::proto::{Header, Inner, InnerResponse};
 use tower::ServiceExt;
 
 use crate::modules::chat::channel::Channel;

@@ -1,8 +1,8 @@
-use chat_wire::ock::OckSecret;
-use chat_wire::prost::Message;
-use chat_wire::proto::{Inner, InnerResponse, Tier};
-use chat_wire::seal::open_request;
-use chat_wire::sign::{public_key, verify_request};
+use sc_chat_wire::ock::OckSecret;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::{Inner, InnerResponse, Tier};
+use sc_chat_wire::seal::open_request;
+use sc_chat_wire::sign::{public_key, verify_request};
 use uuid::Uuid;
 
 use super::{Call, Ock, seal};
@@ -67,7 +67,7 @@ fn a_sealed_call_opens_with_the_ock_and_carries_a_valid_signature() {
 fn the_pinned_ock_is_the_default_and_a_wrong_key_is_refused() {
     assert_eq!(
         Ock::pinned(1).expect("pinned").public,
-        *chat_wire::ock::pinned(1).expect("a pin")
+        *sc_chat_wire::ock::pinned(1).expect("a pin")
     );
     assert!(Ock::pinned(9).is_err());
     assert!(Ock::from_hex(1, "abcd").is_err());

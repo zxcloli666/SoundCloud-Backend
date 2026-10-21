@@ -4,7 +4,7 @@ use axum::body::to_bytes;
 use axum::extract::{Request, State};
 use axum::http::header::CONTENT_LENGTH;
 use axum::response::Response;
-use chat_wire::seal::{MAX_ENVELOPE, ock_version, open_request};
+use sc_chat_wire::seal::{MAX_ENVELOPE, ock_version, open_request};
 
 use crate::modules::chat::channel::Channel;
 use crate::modules::chat::channel::answer::{bad_envelope, busy, sealed, too_large};

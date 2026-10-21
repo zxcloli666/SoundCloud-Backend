@@ -18,12 +18,11 @@ REDIS_IMAGE="${CHAT_IT_REDIS_IMAGE:-mirror.gcr.io/library/redis:7-alpine}"
 PYTHON_IMAGE="${CHAT_IT_PYTHON_IMAGE:-docker.io/library/python:3.12-alpine}"
 NGINX_IMAGE="${CHAT_IT_NGINX_IMAGE:-mirror.gcr.io/library/nginx:alpine}"
 CONTAINERS=(chat-it-redis-rt chat-it-redis chat-it-ai chat-it-relay)
-VECTORS="$ROOT/utils/chat-wire/vectors/request.json"
+TEST_OCK_SECRET=66842626e4763cce2b75991a3e967c29bcc9f02395a3f0115981eb59ab3e4d8e
+TEST_OCK_PUB=dde332903df0f9e9fbc91a814131b5bcea28b46f5728e2a7e28700ed4a6c2d4d
 DATABASE_URL_IT="postgres://$PG_USER:$PG_PASSWORD@127.0.0.1:$PG_PORT/$DB"
 
 psql_in() { podman exec -i -e PGOPTIONS=--client-min-messages=warning "$PG_CONTAINER" psql -U "$PG_USER" -v ON_ERROR_STOP=1 -qAt "$@"; }
-
-vector() { grep -m1 -o "\"$1\": *\"[0-9a-f]*\"" "$VECTORS" | grep -o '[0-9a-f]\{64\}'; }
 
 sha384() {
   if command -v sha384sum > /dev/null; then sha384sum "$1"; else shasum -a 384 "$1"; fi | cut -d' ' -f1
@@ -35,7 +34,7 @@ make_keys() {
   local keys="$STATE/keys"
   mkdir -p "$keys"
   chmod 700 "$keys"
-  vector ock_secret | xxd -r -p > "$keys/ock-1"
+  echo "$TEST_OCK_SECRET" | xxd -r -p > "$keys/ock-1"
   head -c 32 /dev/urandom > "$keys/kek-1"
   head -c 32 /dev/urandom > "$keys/reports-kek-1"
   random_hex 24 > "$keys/chat-admin-token"
@@ -111,7 +110,7 @@ export CHAT_IT_PSQL="podman exec -i $PG_CONTAINER psql -U $PG_USER -d $DB"
 export CHAT_IT_REDIS_RT="podman exec -i chat-it-redis-rt redis-cli"
 export CHAT_IT_ADMIN_TOKEN_FILE=$STATE/keys/chat-admin-token
 export CHAT_IT_LOG=$STATE/chat-api.log
-export SC_CHAT_DEV_OCK=1:$(vector ock_pub)
+export SC_CHAT_DEV_OCK=1:$TEST_OCK_PUB
 EOF
 }
 

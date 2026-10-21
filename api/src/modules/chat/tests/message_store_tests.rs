@@ -1,6 +1,6 @@
-use chat_wire::msg::Class;
 use chrono::Duration;
 use futures::future::join_all;
+use sc_chat_wire::msg::Class;
 use sqlx::PgPool;
 
 use super::*;

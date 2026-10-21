@@ -1,9 +1,9 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use chat_wire::bind::verify_bind;
-use chat_wire::prost::Message;
-use chat_wire::proto::Inner;
-use chat_wire::sign::verify_request;
+use sc_chat_wire::bind::verify_bind;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::Inner;
+use sc_chat_wire::sign::verify_request;
 use uuid::Uuid;
 
 use crate::modules::chat::ChatError;

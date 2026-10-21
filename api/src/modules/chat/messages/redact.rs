@@ -1,5 +1,5 @@
-use chat_wire::msg::Class;
 use chrono::Utc;
+use sc_chat_wire::msg::Class;
 use sqlx::PgPool;
 
 use crate::modules::chat::members::access::Access;

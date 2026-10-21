@@ -1,5 +1,5 @@
-use chat_wire::msg::Class;
 use chrono::{DateTime, Duration, Utc};
+use sc_chat_wire::msg::Class;
 use uuid::Uuid;
 
 use crate::modules::chat::conversations::create::META_MAX;

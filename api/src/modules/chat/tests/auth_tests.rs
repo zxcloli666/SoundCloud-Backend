@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use chat_wire::bind::make_bind;
-use chat_wire::prost::Message;
-use chat_wire::random_bytes;
 use chrono::Utc;
+use sc_chat_wire::bind::make_bind;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::random_bytes;
 use sqlx::PgPool;
 use uuid::Uuid;
 

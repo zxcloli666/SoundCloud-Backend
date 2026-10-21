@@ -3,9 +3,9 @@ mod resolve;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use chat_wire::prost::Message;
-use chat_wire::proto::Bind;
 use chrono::{DateTime, Utc};
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::Bind;
 use uuid::Uuid;
 
 use crate::modules::chat::ChatError;

@@ -36,7 +36,7 @@ pub fn build(case: &Case, fence: &str) -> Prompt {
 }
 
 pub fn fence() -> String {
-    let bytes: [u8; 12] = chat_wire::random_bytes().unwrap_or([7; 12]);
+    let bytes: [u8; 12] = sc_chat_wire::random_bytes().unwrap_or([7; 12]);
     hex::encode(bytes)
 }
 

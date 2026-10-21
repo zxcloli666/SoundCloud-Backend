@@ -28,11 +28,7 @@ impl Drop for KeysDir {
 }
 
 fn ck_vector() -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../utils/chat-wire/vectors/ck.json"
-    );
-    serde_json::from_str(&fs::read_to_string(path).expect("the ck vector")).expect("vector json")
+    serde_json::from_str(sc_chat_wire::vectors::CK).expect("vector json")
 }
 
 fn hex32(vector: &Value, field: &str) -> [u8; 32] {

@@ -1,7 +1,7 @@
 # chat-load
 
 Load harness for chat-api. Every synthetic device holds its own connection, seals and signs every
-request like the desktop (`utils/chat-wire`), parks or short-syncs, sends 1 message per 5 min, types
+request like the desktop (`sc-chat-wire` from Core), parks or short-syncs, sends 1 message per 5 min, types
 1 per 2 min and posts read marks on receive. Messages are real ciphertext under the chat key the
 device fetched; receivers decrypt them and measure delivery time.
 
@@ -55,7 +55,7 @@ chat-load fake-pro
 | `--hold-ms`, `--short-every-secs` | `20000`, `60` | parked hold (15 s on pro), short sync period |
 | `--send-every-secs`, `--type-every-secs` | `300`, `120` | 0 turns it off |
 | `--direct`, `--relay n=url`, `--pro n=url`, `--origin` | prod names | route URLs |
-| `--ock-version`, `--ock-pub` | `1`, the chat-wire pin | OCK the requests are sealed to |
+| `--ock-version`, `--ock-pub` | `1`, the sc-chat-wire pin | OCK the requests are sealed to |
 | `--watch name=cmd` | none | abort check, see below |
 | `--chat-metrics-cmd`, `--abort-pool-wait-ms` | none, `200` | PG pool wait p99 from chat-api metrics |
 | `--music-metrics-cmd`, `--abort-music-rise`, `--baseline-secs` | none, `0.2`, `60` | backend p99 against a baseline taken before the ramp |
@@ -105,7 +105,7 @@ podman exec lt-pg psql -U scd -d scd -c "CREATE TABLE _sqlx_migrations (version 
 podman run -d --name lt-rt --network lt-net mirror.gcr.io/library/redis:7-alpine
 ```
 
-Keys dir: `ock-1` (the `ock_secret` of `utils/chat-wire/vectors/request.json`), random 32 bytes in
+Keys dir: `ock-1` (the `ock_secret` of `sc-chat-wire/vectors/request.json` in Core), random 32 bytes in
 `kek-1` and `reports-kek-1`, any token in `chat-admin-token`. Run the release `api` binary in a
 `rust:1-bookworm` container on `lt-net` as `lt-chat-api` with `API_ROLE=rt CHAT_LOADTEST=on
 CHAT_KEYS_DIR=/keys DATABASE_URL=postgres://scd:dev@lt-pg:5432/scd REDIS_URL=redis://lt-rt:6379

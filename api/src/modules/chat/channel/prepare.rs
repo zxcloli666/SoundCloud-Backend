@@ -1,8 +1,8 @@
 use axum::body::Body;
 use axum::http::{Extensions, Request};
-use chat_wire::prost::Message;
-use chat_wire::proto::{Inner, InnerResponse};
-use chat_wire::seal::OpenedRequest;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::{Inner, InnerResponse};
+use sc_chat_wire::seal::OpenedRequest;
 
 use crate::modules::chat::caller::{Resolved, resolve};
 use crate::modules::chat::channel::answer::error_answer;

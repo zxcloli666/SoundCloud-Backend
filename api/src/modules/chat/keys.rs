@@ -96,8 +96,8 @@ fn seal_for(
     stored: &StoredKey,
 ) -> ChatResult<SealedKey> {
     let ck = unwrap(chat, conversation, stored)?;
-    let ikm_e: [u8; 32] = chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
-    let sealed = chat_wire::ck::seal_for_device(
+    let ikm_e: [u8; 32] = sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
+    let sealed = sc_chat_wire::ck::seal_for_device(
         &device.box_pub,
         conversation.as_bytes(),
         wire_epoch(stored.epoch)?,

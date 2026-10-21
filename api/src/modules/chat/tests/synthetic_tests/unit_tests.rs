@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chat_wire::bind::make_bind;
-use chat_wire::prost::Message;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use sc_chat_wire::bind::make_bind;
+use sc_chat_wire::prost::Message;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -122,7 +122,7 @@ fn chat_opens_to_synthetic_users_only_while_the_load_test_flag_is_on() {
 #[test]
 fn a_stored_session_opens_only_for_a_synthetic_user_with_a_bind() {
     let auth_seed = [3u8; 32];
-    let box_pub = chat_wire::ck::box_public(&[4u8; 32]).expect("a box key");
+    let box_pub = sc_chat_wire::ck::box_public(&[4u8; 32]).expect("a box key");
     let device = Uuid::now_v7();
     let bind = make_bind(&device.to_string(), &auth_seed, &box_pub, 1).encode_to_vec();
 

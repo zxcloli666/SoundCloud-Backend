@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use chat_wire::prost::Message;
-use chat_wire::proto::InnerResponse;
-use chat_wire::seal::ResponseKey;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::InnerResponse;
+use sc_chat_wire::seal::ResponseKey;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;

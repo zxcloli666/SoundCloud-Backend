@@ -113,7 +113,7 @@ pub async fn store(
             .await?
             .ok_or(ChatError::Internal);
     }
-    if !access.accepted && out.class == chat_wire::msg::Class::Post {
+    if !access.accepted && out.class == sc_chat_wire::msg::Class::Post {
         sqlx::query_file!(
             "queries/chat/members/mark_accepted.sql",
             conversation,

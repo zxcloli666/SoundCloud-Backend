@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, anyhow, ensure};
-use chat_wire::ock::{OckSecret, pinned};
+use sc_chat_wire::ock::{OckSecret, pinned};
 
 pub struct OckRing {
     current: u8,
@@ -36,7 +36,7 @@ impl OckRing {
         );
         for (version, secret) in &keys {
             if pinned(*version) != Some(&secret.public()) {
-                tracing::warn!(version, "ock key does not match the chat-wire pin");
+                tracing::warn!(version, "ock key does not match the sc-chat-wire pin");
             }
         }
         Ok(Self { current, keys })

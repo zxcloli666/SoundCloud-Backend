@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chat_wire::ock::OckSecret;
+use sc_chat_wire::ock::OckSecret;
 use serde_json::Value;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
@@ -26,13 +26,7 @@ use crate::modules::rooms::{RoomHub, RoomsService};
 use crate::sc::ScClient;
 
 pub fn request_vector(name: &str) -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../utils/chat-wire/vectors/request.json"
-    );
-    let vectors: Value =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("chat-wire vectors"))
-            .expect("vector json");
+    let vectors: Value = serde_json::from_str(sc_chat_wire::vectors::REQUEST).expect("vector json");
     vectors["cases"]
         .as_array()
         .expect("cases")

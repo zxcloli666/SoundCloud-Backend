@@ -3,11 +3,11 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use chat_wire::prost::Message;
-use chat_wire::proto::{Inner, InnerResponse, Tier};
-use chat_wire::seal::{RequestSealer, SealedRequest};
-use chat_wire::sign::sign_request;
 use chrono::Utc;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::{Inner, InnerResponse, Tier};
+use sc_chat_wire::seal::{RequestSealer, SealedRequest};
+use sc_chat_wire::sign::sign_request;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -115,7 +115,7 @@ pub fn sealed(device: &Device, method: &str, path: &str, body: Option<Value>) ->
         max_bytes: 262_144,
         ..Inner::default()
     };
-    let ikm: [u8; 32] = chat_wire::random_bytes().expect("randomness");
+    let ikm: [u8; 32] = sc_chat_wire::random_bytes().expect("randomness");
     let sealer = RequestSealer::new(1, &vector_ock().public(), ikm).expect("a sealer");
     sign_request(&device.auth_seed, &mut inner, sealer.enc());
     sealer

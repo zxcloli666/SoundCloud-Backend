@@ -1,4 +1,4 @@
-use chat_wire::msg::Class;
+use sc_chat_wire::msg::Class;
 use sqlx::PgPool;
 use uuid::Uuid;
 

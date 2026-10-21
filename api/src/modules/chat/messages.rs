@@ -11,8 +11,8 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use chat_wire::msg::Class;
 use chrono::Utc;
+use sc_chat_wire::msg::Class;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

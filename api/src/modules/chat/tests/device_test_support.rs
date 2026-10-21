@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use chat_wire::bind::make_bind;
-use chat_wire::prost::Message;
+use sc_chat_wire::bind::make_bind;
+use sc_chat_wire::prost::Message;
 use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -23,11 +23,11 @@ pub struct DeviceKeys {
 
 impl DeviceKeys {
     pub fn new() -> Self {
-        let box_secret: [u8; 32] = chat_wire::random_bytes().expect("randomness");
+        let box_secret: [u8; 32] = sc_chat_wire::random_bytes().expect("randomness");
         Self {
             id: Uuid::new_v4(),
-            auth_seed: chat_wire::random_bytes().expect("randomness"),
-            box_pub: chat_wire::ck::box_public(&box_secret).expect("a box key"),
+            auth_seed: sc_chat_wire::random_bytes().expect("randomness"),
+            box_pub: sc_chat_wire::ck::box_public(&box_secret).expect("a box key"),
             box_secret,
         }
     }

@@ -134,7 +134,6 @@ dependencies = [
  "catalog-match",
  "catalog-normalize",
  "catalog-sources",
- "chat-wire",
  "chrono",
  "deadpool-redis",
  "entity-ref",
@@ -149,6 +148,7 @@ dependencies = [
  "rand_distr",
  "redact",
  "redis",
+ "sc-chat-wire",
  "sc-fingerprint",
  "sc-transport",
  "serde",
@@ -921,22 +921,6 @@ dependencies = [
  "cipher",
  "poly1305",
  "zeroize",
-]
-
-[[package]]
-name = "chat-wire"
-version = "0.1.1"
-dependencies = [
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "hex",
- "hpke",
- "prost",
- "prost-build",
- "protox",
- "sha2",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3863,6 +3847,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sc-chat-wire"
+version = "0.1.1"
+source = "git+https://github.com/zxcloli666/SoundCloud-Core?tag=sc-chat-wire-v0.1.1#cac73b4fcbafb03b8549338395d3f532f24980f6"
+dependencies = [
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "hex",
+ "hpke",
+ "prost",
+ "prost-build",
+ "protox",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

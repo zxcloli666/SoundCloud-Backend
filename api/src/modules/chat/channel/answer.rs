@@ -2,9 +2,9 @@ use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chat_wire::prost::Message;
-use chat_wire::proto::{Header, InnerResponse};
-use chat_wire::seal::OpenedRequest;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::{Header, InnerResponse};
+use sc_chat_wire::seal::OpenedRequest;
 
 use crate::modules::chat::ChatError;
 use crate::modules::chat::errors::BUSY_TOTAL;
@@ -24,7 +24,7 @@ pub fn error_answer(error: ChatError) -> InnerResponse {
 }
 
 pub fn sealed(opened: &OpenedRequest, answer: InnerResponse) -> Response {
-    let Ok(nonce) = chat_wire::random_bytes() else {
+    let Ok(nonce) = sc_chat_wire::random_bytes() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let Ok(body) = opened

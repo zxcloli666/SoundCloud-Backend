@@ -24,7 +24,7 @@ async fn advance(chat: &ChatState, conversation: Uuid, force: bool) -> ChatResul
     } else {
         state.key_epoch
     };
-    let ck: [u8; 32] = chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
+    let ck: [u8; 32] = sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
     let wrapped = chat.keks.wrap(conversation, epoch, &ck)?;
     let kek_version = i16::try_from(chat.keks.current()).map_err(|_| ChatError::Internal)?;
     sqlx::query_file!(

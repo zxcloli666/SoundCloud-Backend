@@ -54,7 +54,7 @@ pub fn router<S>(channel: Arc<Channel>) -> Router<S> {
     Router::new()
         .route(
             "/chat/x",
-            post(exchange::exchange).layer(DefaultBodyLimit::max(chat_wire::seal::MAX_ENVELOPE)),
+            post(exchange::exchange).layer(DefaultBodyLimit::max(sc_chat_wire::seal::MAX_ENVELOPE)),
         )
         .with_state(channel)
 }

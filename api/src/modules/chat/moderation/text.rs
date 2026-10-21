@@ -1,5 +1,5 @@
-use chat_wire::proto::envelope::Body;
-use chat_wire::proto::{Embed, Envelope};
+use sc_chat_wire::proto::envelope::Body;
+use sc_chat_wire::proto::{Embed, Envelope};
 
 pub const LINE_CHARS_MAX: usize = 4_096;
 

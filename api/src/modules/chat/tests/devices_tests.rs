@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
-use chat_wire::bind::make_bind;
-use chat_wire::prost::Message;
+use sc_chat_wire::bind::make_bind;
+use sc_chat_wire::prost::Message;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;

@@ -1,6 +1,6 @@
-use chat_wire::bind::verify_bind;
-use chat_wire::prost::Message;
-use chat_wire::proto::Bind;
+use sc_chat_wire::bind::verify_bind;
+use sc_chat_wire::prost::Message;
+use sc_chat_wire::proto::Bind;
 use uuid::Uuid;
 
 use crate::modules::chat::{ChatError, ChatResult};

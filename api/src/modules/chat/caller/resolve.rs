@@ -1,5 +1,5 @@
-use chat_wire::proto::Inner;
-use chat_wire::sign::verify_request;
+use sc_chat_wire::proto::Inner;
+use sc_chat_wire::sign::verify_request;
 use uuid::Uuid;
 
 use crate::modules::chat::caller::{CallerBind, CallerDevice, ChatCaller, SessionEntry};

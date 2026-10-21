@@ -193,7 +193,7 @@ mod wired {
     use sqlx::PgPool;
 
     use super::*;
-    use chat_wire::msg::Class;
+    use sc_chat_wire::msg::Class;
 
     use crate::modules::chat::ChatError;
     use crate::modules::chat::conversations::fixtures::{DEVICE, dm, group, outgoing, post};

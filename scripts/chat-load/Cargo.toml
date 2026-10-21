@@ -11,7 +11,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
-chat-wire = { path = "../../utils/chat-wire" }
+sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1" }
 clap = { version = "4", features = ["derive"] }
 hdrhistogram = { version = "7", default-features = false }
 hex = "0.4"

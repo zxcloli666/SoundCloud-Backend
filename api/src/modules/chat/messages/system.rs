@@ -1,5 +1,5 @@
-use chat_wire::msg::Class;
 use chrono::{DateTime, Utc};
+use sc_chat_wire::msg::Class;
 use serde::Serialize;
 use sqlx::PgConnection;
 use uuid::Uuid;

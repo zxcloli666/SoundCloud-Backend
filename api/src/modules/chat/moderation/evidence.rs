@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
-use chat_wire::msg::{Class, MessageAad};
 use chrono::{DateTime, Utc};
+use sc_chat_wire::msg::{Class, MessageAad};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -179,7 +179,7 @@ fn readable(conversation: Uuid, message: &SealedMessage, keys: &HashMap<i32, [u8
         client_id: client_id.into_bytes(),
         class,
     };
-    chat_wire::msg::open(ck, &aad, &message.body)
+    sc_chat_wire::msg::open(ck, &aad, &message.body)
         .map(|envelope| text::render(&envelope))
         .unwrap_or_else(|_| UNREADABLE.to_owned())
 }

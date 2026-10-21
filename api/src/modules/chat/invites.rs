@@ -99,7 +99,7 @@ pub async fn create_with(
     require_group_admin(chat, conversation, user_id).await?;
     users::check(chat, user_id, Scope::All).await?;
 
-    let secret: [u8; 32] = chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
+    let secret: [u8; 32] = sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?;
     let expires_at = Utc::now() + Duration::seconds(ttl);
     let hash = token_hash(&secret);
     sqlx::query_file!(

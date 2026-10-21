@@ -49,7 +49,7 @@ fn opened(device: &Enrolled, conversation: Uuid, answer: &Value) -> Vec<Opened> 
         .map(|key| {
             let epoch = i32::try_from(key["epoch"].as_i64().expect("an epoch")).expect("an epoch");
             let sealed = b64::decode(key["sealed"].as_str().expect("sealed")).expect("base64");
-            let ck = chat_wire::ck::open_for_device(
+            let ck = sc_chat_wire::ck::open_for_device(
                 &device.keys.box_secret,
                 conversation.as_bytes(),
                 u32::try_from(epoch).expect("an epoch"),

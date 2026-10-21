@@ -74,10 +74,13 @@ sc-transport = { version = "0.1.0", path = "../utils/sc-transport", features = [
 catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 redact = { version = "0.1.0", path = "../utils/redact" }
-chat-wire = { version = "0.1.1", path = "../utils/chat-wire" }
+sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }
+
+[dev-dependencies]
+sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1", features = ["vectors"] }
 
 [features]
 profiling = ["dep:pprof"]

@@ -7,10 +7,10 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::{Json, Router};
-use chat_wire::msg::{Class, MessageAad};
-use chat_wire::proto::envelope::Body;
-use chat_wire::proto::{Envelope, Text};
-use chat_wire::seal::ResponseKey;
+use sc_chat_wire::msg::{Class, MessageAad};
+use sc_chat_wire::proto::envelope::Body;
+use sc_chat_wire::proto::{Envelope, Text};
+use sc_chat_wire::seal::ResponseKey;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -63,13 +63,13 @@ impl ChatKeys for TestKeys {
     }
 
     fn wrap_ck(&self, conversation: Uuid, epoch: i32, ck: &[u8; 32]) -> ChatResult<Vec<u8>> {
-        chat_wire::ck::wrap(
+        sc_chat_wire::ck::wrap(
             &kek(self.kek_current),
             self.kek_current,
             conversation.as_bytes(),
             epoch as u32,
             ck,
-            chat_wire::random_bytes().map_err(|_| ChatError::Internal)?,
+            sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?,
         )
         .map_err(|_| ChatError::Internal)
     }
@@ -81,7 +81,7 @@ impl ChatKeys for TestKeys {
         epoch: i32,
         wrapped: &[u8],
     ) -> ChatResult<[u8; 32]> {
-        chat_wire::ck::unwrap(
+        sc_chat_wire::ck::unwrap(
             &kek(kek_version),
             kek_version,
             conversation.as_bytes(),
@@ -95,7 +95,7 @@ impl ChatKeys for TestKeys {
         reports_kek(self.reports_current)
             .seal(
                 &evidence_aad(self.reports_current),
-                chat_wire::random_bytes().map_err(|_| ChatError::Internal)?,
+                sc_chat_wire::random_bytes().map_err(|_| ChatError::Internal)?,
                 evidence,
             )
             .map_err(|_| ChatError::Internal)
@@ -214,7 +214,7 @@ pub async fn conversation(pg: &PgPool, kind: &str, members: &[(&str, bool)]) -> 
 }
 
 pub async fn conversation_key(pg: &PgPool, keys: &TestKeys, conversation: Uuid) -> [u8; 32] {
-    let ck: [u8; 32] = chat_wire::random_bytes().expect("a ck");
+    let ck: [u8; 32] = sc_chat_wire::random_bytes().expect("a ck");
     let wrapped = keys.wrap_ck(conversation, 0, &ck).expect("a wrapped ck");
     sqlx::query(
         "INSERT INTO chat.conversation_keys (conversation_id, epoch, wrapped, kek_version)
@@ -240,7 +240,7 @@ pub async fn post(pg: &PgPool, conversation: Uuid, ck: &[u8; 32], sender: &str, 
     let client_id = Uuid::new_v4();
     let device = Uuid::new_v4();
     let envelope = Envelope {
-        v: chat_wire::msg::ENVELOPE_VERSION,
+        v: sc_chat_wire::msg::ENVELOPE_VERSION,
         body: Some(Body::Text(Text {
             text: text.to_owned(),
             spans: Vec::new(),
@@ -254,10 +254,10 @@ pub async fn post(pg: &PgPool, conversation: Uuid, ck: &[u8; 32], sender: &str, 
         client_id: client_id.into_bytes(),
         class: Class::Post,
     };
-    let body = chat_wire::msg::seal(
+    let body = sc_chat_wire::msg::seal(
         ck,
         &aad,
-        chat_wire::random_bytes().expect("a nonce"),
+        sc_chat_wire::random_bytes().expect("a nonce"),
         &envelope,
     )
     .expect("a sealed body");
