@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::modules::auth::{AuthService, LinkService};
 use crate::modules::chat::ChatConfig;
 use crate::modules::chat::channel::ock::OckRing;
+use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::HotCache;
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
@@ -19,6 +20,7 @@ pub struct ChatState {
     pub redis: Pool,
     pub ocks: OckRing,
     pub keks: KekRing,
+    pub devices: DeviceCache,
     pub hub: ChatHub,
     pub hot: HotCache,
     pub moderator: Moderator,
