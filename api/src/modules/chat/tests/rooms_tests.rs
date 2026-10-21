@@ -9,7 +9,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::diff::{departed, rows};
-use super::lookup::gate_send;
+use super::lookup::{chat_of_room, gate_send};
+use super::member_from_seq;
 use super::refusal;
 use super::system::SuggestedTrack;
 use crate::error::AppError;
@@ -313,6 +314,15 @@ async fn a_room_is_moderated_through_the_sealed_routes(pg: PgPool) -> anyhow::Re
     assert_eq!(status, StatusCode::OK, "{opened}");
     assert_eq!(opened["from_seq"], 0);
     let conversation: Uuid = serde_json::from_value(opened["conversation_id"].clone())?;
+    assert_eq!(chat_of_room(&chat, &code).await, Ok(Some(conversation)));
+    assert_eq!(
+        member_from_seq(&chat, conversation, &guest).await,
+        Ok(Some(0))
+    );
+    assert_eq!(
+        member_from_seq(&chat, conversation, &stranger).await,
+        Ok(None)
+    );
     let (_, again) = ask(&router, &host, "GET", &format!("{base}/chat"), None).await?;
     assert_eq!(again["conversation_id"], opened["conversation_id"]);
     let (kind, room_ref, created_by): (String, String, String) =
@@ -371,6 +381,7 @@ async fn a_room_is_moderated_through_the_sealed_routes(pg: PgPool) -> anyhow::Re
         gate_send(&chat, conversation, &troll, "post").await,
         Err(ChatError::NotMember)
     );
+    assert_eq!(member_from_seq(&chat, conversation, &troll).await, Ok(None));
     let mut conn = chat.redis.get().await?;
     let told: Option<f64> = conn
         .zscore(rt_keys::deltas(&troll), conversation.to_string())
