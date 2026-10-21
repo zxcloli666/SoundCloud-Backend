@@ -109,13 +109,17 @@ async fn answer(
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
+fn still_stubbed(uri: &str) -> bool {
+    !uri.starts_with("/chat/devices") && !uri.contains("/keys") && !uri.starts_with("/chat/rooms/")
+}
+
 #[tokio::test]
 async fn every_inner_route_answers_unimplemented_until_its_lane_fills_it() {
     let router = inner().with_state(offline_chat_state(true));
-    let unfilled = inner_routes()
+    for (method, uri) in inner_routes()
         .into_iter()
-        .filter(|(_, uri)| !uri.starts_with("/chat/rooms/"));
-    for (method, uri) in unfilled {
+        .filter(|(_, uri)| still_stubbed(uri))
+    {
         assert_eq!(
             answer(&router, method, &uri, true).await,
             (
