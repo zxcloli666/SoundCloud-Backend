@@ -116,8 +116,11 @@ fn filled_by_conversations_lane(uri: &str) -> bool {
 }
 
 fn still_stubbed(uri: &str) -> bool {
-    !uri.starts_with("/chat/devices")
+    uri != "/chat/config"
+        && !uri.starts_with("/auth/")
+        && !uri.starts_with("/chat/devices")
         && !uri.contains("/keys")
+        && !uri.starts_with("/chat/rooms/")
         && !filled_by_conversations_lane(uri)
 }
 

@@ -1,18 +1,25 @@
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::extract::State;
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::header::CONTENT_LENGTH;
 use axum::response::Response;
-use chat_wire::prost::Message;
-use chat_wire::proto::Inner;
-use chat_wire::seal::{ock_version, open_request};
+use chat_wire::seal::{MAX_ENVELOPE, ock_version, open_request};
 
-use crate::modules::chat::ChatError;
-use crate::modules::chat::channel::answer::{bad_envelope, error_answer, sealed};
-use crate::modules::chat::channel::dispatch::dispatch;
-use crate::modules::chat::channel::{Channel, is_sealed_auth};
+use crate::modules::chat::channel::Channel;
+use crate::modules::chat::channel::answer::{bad_envelope, busy, sealed, too_large};
+use crate::modules::chat::channel::prepare::answer;
 
-pub async fn exchange(State(channel): State<Arc<Channel>>, body: Bytes) -> Response {
+pub async fn exchange(State(channel): State<Arc<Channel>>, request: Request) -> Response {
+    if declared_length(&request).is_some_and(|length| length > MAX_ENVELOPE) {
+        return too_large();
+    }
+    let Ok(_permit) = channel.busy.try_acquire() else {
+        return busy();
+    };
+    let Ok(body) = to_bytes(request.into_body(), MAX_ENVELOPE).await else {
+        return too_large();
+    };
     let Ok(version) = ock_version(&body) else {
         return bad_envelope();
     };
@@ -22,12 +29,17 @@ pub async fn exchange(State(channel): State<Arc<Channel>>, body: Bytes) -> Respo
     let Ok(opened) = open_request(&body, secret) else {
         return bad_envelope();
     };
-    let answer = match Inner::decode(opened.inner.as_slice()) {
-        Err(_) => error_answer(ChatError::Invalid),
-        Ok(inner) if !channel.chat.config.enabled && !is_sealed_auth(&inner.path) => {
-            error_answer(ChatError::Disabled)
-        }
-        Ok(inner) => dispatch(&channel, &opened, inner).await,
-    };
-    sealed(&opened, answer)
+    drop(body);
+    let inner_answer = answer(&channel, &opened).await;
+    sealed(&opened, inner_answer)
+}
+
+fn declared_length(request: &Request) -> Option<usize> {
+    request
+        .headers()
+        .get(CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
 }

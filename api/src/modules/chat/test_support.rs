@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
-use crate::modules::chat::caller::ChatCaller;
+use crate::modules::chat::caller::{Callers, ChatCaller};
 use crate::modules::chat::channel::ock::OckRing;
 use crate::modules::chat::config::{Access, ModerationConfig};
 use crate::modules::chat::devices::DeviceCache;
@@ -101,6 +101,7 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
         ocks: OckRing::new(1, BTreeMap::from([(1, vector_ock())])).expect("a ring"),
         keks: test_keks(),
         devices: DeviceCache::new(),
+        callers: Callers::new(),
         hub: ChatHub::new(),
         hot: HotCache::new(HOT_CACHE_BYTES),
         moderator: Moderator::new(
