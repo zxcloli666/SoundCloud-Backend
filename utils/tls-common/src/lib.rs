@@ -15,3 +15,4 @@ pub use shutdown::shutdown_signal;
 pub fn init_crypto() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
+
