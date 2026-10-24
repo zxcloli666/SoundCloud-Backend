@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, warn};
 use wreq::Client;
 
 const MAX_RETRIES: usize = 3;
@@ -93,6 +93,10 @@ pub async fn get_track_via_relay(
     let audio = base64::engine::general_purpose::STANDARD
         .decode(v.get("audio_b64")?.as_str()?)
         .ok()?;
+    if super::validate::is_encrypted_mp4(&audio) {
+        warn!(id, "relay sc.get_track answered with still encrypted audio");
+        return None;
+    }
     let ct = v
         .get("content_type")
         .and_then(|x| x.as_str())
@@ -134,7 +138,12 @@ async fn audio_via_relay(method_id: &str, script: &str, url: &str) -> Option<Vec
         return None;
     }
     let b64 = v.get("audio_b64")?.as_str()?;
-    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+    let audio = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    if super::validate::is_encrypted_mp4(&audio) {
+        warn!("relay sc.hls_decrypt answered with still encrypted audio");
+        return None;
+    }
+    Some(audio)
 }
 
 pub async fn hls_decrypt_via_relay(

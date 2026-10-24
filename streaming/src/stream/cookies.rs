@@ -113,32 +113,10 @@ impl CookiesClient {
             return Err(PREVIEWS_ONLY.into());
         }
 
-        let is_encrypted = |t: &&Transcoding| {
-            t.format
-                .as_ref()
-                .and_then(|f| f.protocol.as_deref())
-                .unwrap_or("")
-                .contains("encrypted")
-        };
-        let is_progressive = |t: &&Transcoding| {
-            t.format.as_ref().and_then(|f| f.protocol.as_deref()) == Some("progressive")
-        };
-        let is_hq = |t: &&Transcoding| t.quality.as_deref() == Some("hq");
-
-        let mut ordered: Vec<&Transcoding> = Vec::with_capacity(full.len());
-        ordered.extend(full.iter().filter(|t| is_hq(t) && is_progressive(t)));
-        ordered.extend(
-            full.iter()
-                .filter(|t| is_hq(t) && !is_progressive(t) && !is_encrypted(t)),
-        );
-        ordered.extend(full.iter().filter(|t| is_hq(t) && is_encrypted(t)));
-        if !hq_only {
-            ordered.extend(full.iter().filter(|t| !is_hq(t) && is_progressive(t)));
-            ordered.extend(
-                full.iter()
-                    .filter(|t| !is_hq(t) && !is_progressive(t) && !is_encrypted(t)),
-            );
-            ordered.extend(full.iter().filter(|t| !is_hq(t) && is_encrypted(t)));
+        let ordered = plain_in_order(&full, hq_only);
+        if ordered.is_empty() {
+            debug!("[cookies] nothing plain to download for {track_id}");
+            return Ok(None);
         }
 
         for transcoding in ordered {
@@ -375,6 +353,30 @@ impl CookiesClient {
     }
 }
 
+fn plain_in_order<'a>(full: &[&'a Transcoding], hq_only: bool) -> Vec<&'a Transcoding> {
+    let plain: Vec<&Transcoding> = full.iter().copied().filter(|t| !is_encrypted(t)).collect();
+    let is_progressive = |t: &&Transcoding| {
+        t.format.as_ref().and_then(|f| f.protocol.as_deref()) == Some("progressive")
+    };
+    let is_hq = |t: &&Transcoding| t.quality.as_deref() == Some("hq");
+
+    let mut ordered: Vec<&Transcoding> = Vec::with_capacity(plain.len());
+    ordered.extend(plain.iter().filter(|t| is_hq(t) && is_progressive(t)));
+    ordered.extend(plain.iter().filter(|t| is_hq(t) && !is_progressive(t)));
+    if !hq_only {
+        ordered.extend(plain.iter().filter(|t| !is_hq(t) && is_progressive(t)));
+        ordered.extend(plain.iter().filter(|t| !is_hq(t) && !is_progressive(t)));
+    }
+    ordered
+}
+
+fn is_encrypted(t: &Transcoding) -> bool {
+    t.format
+        .as_ref()
+        .and_then(|f| f.protocol.as_deref())
+        .is_some_and(|p| p.contains("encrypted"))
+}
+
 fn is_full(t: &Transcoding) -> bool {
     !t.snipped.unwrap_or(false) && !t.url.contains("/preview")
 }
@@ -432,4 +434,54 @@ fn extract_cookie_hydration_data(html: &str) -> Option<(CookieHydrationSound, St
     };
 
     Some((sound, client_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Transcoding, plain_in_order};
+
+    fn transcoding(preset: &str, quality: &str, protocol: &str) -> Transcoding {
+        serde_json::from_value(serde_json::json!({
+            "url": format!("https://api-v2.soundcloud.com/media/soundcloud:tracks:1/{preset}/stream/{protocol}"),
+            "preset": preset,
+            "quality": quality,
+            "format": { "protocol": protocol, "mime_type": "audio/mp4" }
+        }))
+        .unwrap()
+    }
+
+    fn protocols(ordered: &[&Transcoding]) -> Vec<String> {
+        ordered
+            .iter()
+            .map(|t| t.format.as_ref().unwrap().protocol.clone().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn encrypted_transcodings_are_never_downloaded_as_plain_audio() {
+        let tcs = [
+            transcoding("aac_256k", "hq", "ctr-encrypted-hls"),
+            transcoding("aac_160k", "sq", "cbc-encrypted-hls"),
+            transcoding("aac_160k", "sq", "ctr-encrypted-hls"),
+        ];
+        let full: Vec<&Transcoding> = tcs.iter().collect();
+        assert!(plain_in_order(&full, true).is_empty());
+        assert!(plain_in_order(&full, false).is_empty());
+    }
+
+    #[test]
+    fn hq_comes_first_and_sq_only_when_asked() {
+        let tcs = [
+            transcoding("mp3_1_0", "sq", "progressive"),
+            transcoding("aac_256k", "hq", "ctr-encrypted-hls"),
+            transcoding("aac_256k", "hq", "hls"),
+            transcoding("aac_160k", "sq", "hls"),
+        ];
+        let full: Vec<&Transcoding> = tcs.iter().collect();
+        assert_eq!(protocols(&plain_in_order(&full, true)), ["hls"]);
+        assert_eq!(
+            protocols(&plain_in_order(&full, false)),
+            ["hls", "progressive", "hls"]
+        );
+    }
 }
