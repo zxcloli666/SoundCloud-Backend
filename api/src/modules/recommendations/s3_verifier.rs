@@ -81,11 +81,13 @@ impl S3VerifierService {
         let mut ok_ids: Vec<String> = Vec::new();
         let mut miss_ids: Vec<String> = Vec::new();
         for (id, found) in checks {
-            if found {
-                ok_ids.push(id);
-            } else {
-                missing.insert(id.clone());
-                miss_ids.push(id);
+            match found {
+                Some(true) => ok_ids.push(id),
+                Some(false) => {
+                    missing.insert(id.clone());
+                    miss_ids.push(id);
+                }
+                None => {}
             }
         }
 
@@ -110,26 +112,45 @@ impl S3VerifierService {
         Ok(missing)
     }
 
-    async fn probe(&self, sc_track_id: &str) -> bool {
-        let Some(key) = catalog_ingest::track_object_key(sc_track_id) else {
-            return false;
-        };
+    async fn probe(&self, sc_track_id: &str) -> Option<bool> {
+        let key = catalog_ingest::track_object_key(sc_track_id)?;
         let url = format!("{}/{key}", self.storage_url);
         match self.http.head(&url).timeout(HEAD_TIMEOUT).send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                if (200..300).contains(&status) {
-                    return true;
+                let verdict = head_verdict(status);
+                if verdict.is_none() {
+                    debug!(url, status, "HEAD neither found nor gone");
                 }
-                if status != 404 && status != 410 {
-                    debug!(url, status, "HEAD non-404");
-                }
-                false
+                verdict
             }
             Err(e) => {
                 debug!(url, error = %e, "HEAD failed");
-                false
+                None
             }
+        }
+    }
+}
+
+fn head_verdict(status: u16) -> Option<bool> {
+    match status {
+        200..=299 => Some(true),
+        404 | 410 => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::head_verdict;
+
+    #[test]
+    fn only_a_real_404_marks_a_track_missing() {
+        assert_eq!(head_verdict(200), Some(true));
+        assert_eq!(head_verdict(404), Some(false));
+        assert_eq!(head_verdict(410), Some(false));
+        for busy in [429, 500, 502, 503, 504] {
+            assert_eq!(head_verdict(busy), None, "{busy}");
         }
     }
 }
