@@ -36,6 +36,7 @@ impl S3VerifierService {
         }
 
         let ttl_cutoff = Utc::now() - chrono::Duration::hours(24);
+        let recheck_cutoff = Utc::now() - chrono::Duration::days(7);
 
         type VerifyMap =
             std::collections::HashMap<String, (Option<DateTime<Utc>>, Option<DateTime<Utc>>)>;
@@ -53,7 +54,9 @@ impl S3VerifierService {
         let mut to_check: Vec<String> = Vec::new();
         for id in sc_track_ids {
             match by_id.get(id) {
-                Some((Some(verified), m)) if m.map(|x| x <= *verified).unwrap_or(true) => {
+                Some((Some(verified), m))
+                    if *verified > recheck_cutoff && m.map(|x| x <= *verified).unwrap_or(true) =>
+                {
                     continue;
                 }
                 Some((_, Some(miss))) if *miss > ttl_cutoff => {
