@@ -22,6 +22,7 @@ struct World {
     open_in: Arc<Mutex<Vec<Option<String>>>>,
     resolves_in: Arc<Mutex<Option<Vec<Option<String>>>>>,
     plain: Arc<AtomicBool>,
+    sq_only: Arc<AtomicBool>,
     absent: Arc<Mutex<Vec<Option<String>>>>,
     asked: Arc<Mutex<Asked>>,
 }
@@ -84,7 +85,9 @@ async fn intermediate_proxy(State(world): State<World>, headers: HeaderMap) -> R
                 .into_response()
         }
         ("api-v2.soundcloud.com", path) if path.starts_with("/tracks/") => {
-            if world.sees(&tag) {
+            if world.sq_only.load(Ordering::SeqCst) && world.sees(&tag) {
+                sq_only_track().into_response()
+            } else if world.sees(&tag) {
                 open_track(world.plain.load(Ordering::SeqCst)).into_response()
             } else {
                 r#"{"policy":"BLOCK","track_authorization":"auth","media":{"transcodings":[]}}"#
@@ -92,7 +95,7 @@ async fn intermediate_proxy(State(world): State<World>, headers: HeaderMap) -> R
             }
         }
         ("api-v2.soundcloud.com", path) if path.starts_with("/media/") => {
-            if !world.resolves(&tag) {
+            if !world.resolves(&tag) || path.contains("/abr_sq/") {
                 (StatusCode::NOT_FOUND, "{}").into_response()
             } else if path.ends_with("/progressive") {
                 format!(r#"{{"url":"{MP3}"}}"#).into_response()
@@ -128,6 +131,24 @@ fn open_track(plain: bool) -> String {
         "policy": "MONETIZE",
         "track_authorization": "auth",
         "media": { "transcodings": [transcoding] }
+    })
+    .to_string()
+}
+
+fn sq_only_track() -> String {
+    let encrypted = |preset: &str, quality: &str| {
+        serde_json::json!({
+            "url": format!("https://api-v2.soundcloud.com/media/{TRACK_URN}/{preset}/stream/ctr-encrypted-hls"),
+            "preset": preset,
+            "snipped": false,
+            "quality": quality,
+            "format": { "protocol": "ctr-encrypted-hls", "mime_type": "audio/mp4; codecs=\"mp4a.40.2\"" }
+        })
+    };
+    serde_json::json!({
+        "policy": "MONETIZE",
+        "track_authorization": "auth",
+        "media": { "transcodings": [encrypted("aac_96k", "lq"), encrypted("abr_sq", "sq")] }
     })
     .to_string()
 }
@@ -388,5 +409,35 @@ async fn a_region_with_no_live_proxy_is_skipped_at_once_and_does_not_spoil_the_v
         tags(&[None]),
         "star sees the cloudflare workers as us and ca, so geo-fr is missing there for good; \
          a missing region must not keep a track blocked everywhere from being remembered"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_abr_sq_falls_back_to_aac_96k_without_a_region_hunt() {
+    let world = World::default();
+    world.sq_only.store(true, Ordering::SeqCst);
+    world.open_in(&[None, Some("geo-us"), Some("geo-fr")]);
+    let anon = anon_behind(&world).await;
+
+    let src = anon
+        .resolve_restricted(TRACK_URN, false, quality::SQ)
+        .await
+        .expect("aac_96k resolves")
+        .expect("the track has a full encrypted transcoding");
+
+    assert_eq!(src.token, "license");
+    let resolved: Vec<String> = world
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(target, _)| target.contains("/media/"))
+        .map(|(target, _)| target.split('/').nth(5).unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(resolved, ["abr_sq", "aac_96k"]);
+    assert_eq!(
+        world.take_asked("api-v2.soundcloud.com/tracks/"),
+        tags(&[None]),
+        "a 404 that one transcoding earns is not a region block"
     );
 }

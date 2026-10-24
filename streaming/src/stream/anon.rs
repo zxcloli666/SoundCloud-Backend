@@ -571,19 +571,25 @@ impl AnonClient {
         let Some(tcs) = read.track.transcodings() else {
             return Ok(None);
         };
-        let Some(tc) = super::restricted::pick_encrypted(tcs, uq_first, at_least) else {
-            return Ok(None);
-        };
         let cid = self.get_client_id().await?;
-        super::restricted::resolve(
-            &self.client,
-            &self.proxy_url,
-            tc,
-            &cid,
-            read.track.track_authorization.as_deref(),
-            steered(read.region.as_deref()),
-        )
-        .await
+        let mut refused = None;
+        for tc in super::restricted::encrypted_in_order(tcs, uq_first, at_least) {
+            match super::restricted::resolve(
+                &self.client,
+                &self.proxy_url,
+                tc,
+                &cid,
+                read.track.track_authorization.as_deref(),
+                steered(read.region.as_deref()),
+            )
+            .await
+            {
+                Err(e) if looks_like_resource_gone(&e.to_string()) => refused = Some(e),
+                Ok(None) => {}
+                found => return found,
+            }
+        }
+        refused.map_or(Ok(None), Err)
     }
 
     pub(crate) async fn fetch_track_meta(

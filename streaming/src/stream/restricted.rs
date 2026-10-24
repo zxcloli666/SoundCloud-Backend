@@ -90,6 +90,29 @@ pub(crate) fn pick_encrypted<'a>(
         .filter(|t| quality::rank(quality::of_transcoding(t)) >= quality::rank(at_least))
 }
 
+pub(crate) fn encrypted_in_order<'a>(
+    transcodings: &'a [Transcoding],
+    uq_first: bool,
+    at_least: &str,
+) -> Vec<&'a Transcoding> {
+    let Some(first) = pick_encrypted(transcodings, uq_first, at_least) else {
+        return Vec::new();
+    };
+    let mut rest: Vec<&Transcoding> = transcodings
+        .iter()
+        .filter(|t| is_full_encrypted(t) && !std::ptr::eq(*t, first))
+        .filter(|t| quality::rank(quality::of_transcoding(t)) >= quality::rank(at_least))
+        .collect();
+    rest.sort_by_key(|t| {
+        let tier = quality::of_transcoding(t);
+        (
+            !uq_first && tier == quality::UQ,
+            std::cmp::Reverse(quality::rank(tier)),
+        )
+    });
+    std::iter::once(first).chain(rest).collect()
+}
+
 pub(crate) async fn resolve(
     client: &Client,
     proxy_url: &str,
@@ -218,6 +241,41 @@ mod tests {
                 .preset
                 .as_deref(),
             Some("aac_96k")
+        );
+    }
+
+    #[test]
+    fn when_the_picked_transcoding_is_refused_the_others_follow_best_first() {
+        let tcs = [
+            encrypted_preset("aac_96k", "lq", false),
+            encrypted_preset("abr_sq", "sq", false),
+        ];
+        let order: Vec<_> = super::encrypted_in_order(&tcs, false, quality::SQ)
+            .iter()
+            .map(|t| t.preset.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(
+            order,
+            ["abr_sq", "aac_96k"],
+            "soundcloud answers an encrypted abr_sq with 404; without aac_96k after it a track \
+             that has nothing else never plays and never reaches storage"
+        );
+
+        let tcs = [
+            encrypted_preset("aac_256k", "hq", false),
+            encrypted_preset("abr_sq", "sq", false),
+            encrypted_preset("aac_160k", "sq", true),
+            encrypted_preset("aac_96k", "lq", false),
+        ];
+        let economy: Vec<_> = super::encrypted_in_order(&tcs, false, quality::SQ)
+            .iter()
+            .map(|t| t.preset.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(economy, ["abr_sq", "aac_96k", "aac_256k"]);
+        assert!(
+            super::encrypted_in_order(&tcs, false, quality::HQ)
+                .iter()
+                .all(|t| t.preset.as_deref() == Some("aac_256k"))
         );
     }
 
