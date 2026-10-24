@@ -40,6 +40,7 @@ client :80/:443
 | `POOL_IDLE_TIMEOUT_SECS` | `90` | idle pool eviction |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `5000` | upstream connect timeout |
 | `SHUTDOWN_GRACE_SECS` | `10` | drain window on SIGTERM |
+| `GATEWAY_ALPN` | `h2,http/1.1` | TLS ALPN offer; `http/1.1` alone keeps every client request on its own TCP connection |
 | `RUST_LOG` | `info` | log filter |
 
 Only `http` upstreams — the gateway is the TLS edge; backends stay cleartext on the docker net.
