@@ -244,6 +244,20 @@ impl PgPool {
         Ok(row.get::<_, Uuid>(0).to_string())
     }
 
+    pub async fn mark_storage_lost(&self, track_urn: &str) -> Result<(), PgError> {
+        let client = self.connection().await?;
+        client
+            .execute(
+                r#"UPDATE tracks
+                   SET storage_state = 'pending', storage_quality = NULL, s3_verified_at = NULL,
+                       s3_missing_at = NOW(), updated_at = NOW()
+                   WHERE urn = $1 AND storage_state = 'ok'"#,
+                &[&track_urn],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_cdn_track_status(&self, id: &str, status: &str) -> Result<(), PgError> {
         let client = self.connection().await?;
         client
