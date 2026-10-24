@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,11 +6,12 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
+use futures::StreamExt;
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
 use crate::AppState;
-use crate::backend::{Backend, BackendError};
+use crate::backend::{Backend, BackendError, ByteStream, ObjectInfo};
 
 const REDIRECT_PRESIGN_EXPIRES: Duration = Duration::from_secs(15 * 60);
 
@@ -33,7 +35,7 @@ pub async fn serve(
 ) -> Result<Response, StatusCode> {
     let path = validate_path(&path)?;
 
-    let (info, stream) = match state.backend.stream(&path).await {
+    let (info, stream) = match with_first_bytes(|| state.backend.stream(&path)).await {
         Ok(v) => v,
         Err(BackendError::NotFound) => return Err(StatusCode::NOT_FOUND),
         Err(e) => {
@@ -57,6 +59,30 @@ pub async fn serve(
     }
 
     Ok(builder.body(Body::from_stream(stream)).unwrap())
+}
+
+const OPEN_ATTEMPTS: usize = 2;
+
+async fn with_first_bytes<F, Fut>(open: F) -> Result<(ObjectInfo, ByteStream), BackendError>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<(ObjectInfo, ByteStream), BackendError>>,
+{
+    let mut last = None;
+    for _ in 0..OPEN_ATTEMPTS {
+        let (info, mut stream) = open().await?;
+        match stream.next().await {
+            Some(Ok(first)) => {
+                let rest = futures::stream::once(async move { Ok(first) }).chain(stream);
+                return Ok((info, Box::pin(rest)));
+            }
+            Some(Err(e)) => last = Some(e),
+            None => return Ok((info, stream)),
+        }
+    }
+    Err(BackendError::Io(last.unwrap_or_else(|| {
+        std::io::Error::other("no bytes before the first chunk")
+    })))
 }
 
 /// GET /redirect/{path} — stable URL for AI pipeline workers.
@@ -169,7 +195,57 @@ pub async fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    use super::{ByteStream, ObjectInfo, validate_path, with_first_bytes};
+
+    fn object(chunks: Vec<Result<&'static [u8], &'static str>>) -> (ObjectInfo, ByteStream) {
+        let items = chunks
+            .into_iter()
+            .map(|c| c.map(Bytes::from_static).map_err(std::io::Error::other));
+        let info = ObjectInfo {
+            size: 6,
+            content_type: None,
+        };
+        (info, Box::pin(futures::stream::iter(items)))
+    }
+
+    async fn body(stream: ByteStream) -> Vec<u8> {
+        stream.map(|c| c.unwrap().to_vec()).concat().await
+    }
+
+    #[tokio::test]
+    async fn a_read_that_dies_before_its_first_byte_is_opened_again() {
+        let opened = AtomicUsize::new(0);
+        let (_, stream) = with_first_bytes(|| {
+            let n = opened.fetch_add(1, Ordering::SeqCst);
+            async move {
+                Ok(match n {
+                    0 => object(vec![Err("stalled stream")]),
+                    _ => object(vec![Ok(b"abc"), Ok(b"def")]),
+                })
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(body(stream).await, b"abcdef");
+        assert_eq!(opened.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_read_that_never_gives_a_byte_is_an_error_not_an_empty_answer() {
+        let opened = AtomicUsize::new(0);
+        let result = with_first_bytes(|| {
+            opened.fetch_add(1, Ordering::SeqCst);
+            async { Ok(object(vec![Err("stalled stream")])) }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(opened.load(Ordering::SeqCst), super::OPEN_ATTEMPTS);
+    }
 
     #[test]
     fn a_track_object_is_always_read_under_its_canonical_key() {
