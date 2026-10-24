@@ -147,7 +147,7 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
     let mut cookies_count = 0usize;
 
     match state.anon.fetch_track_meta(track_urn).await {
-        Ok((tcs, track_auth, cid)) => {
+        Ok((tcs, track_auth, cid, h)) => {
             for t in tcs {
                 if seen.insert(t.url.clone()) {
                     anon_count += 1;
@@ -155,7 +155,7 @@ async fn collect_entries(state: &AppState, track_urn: &str, is_premium: bool) ->
                         t,
                         client_id: cid.clone(),
                         track_auth: track_auth.clone(),
-                        headers: HashMap::new(),
+                        headers: h.clone(),
                     });
                 }
             }

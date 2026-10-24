@@ -2,6 +2,8 @@ use std::env;
 
 use stream_ticket::{StreamTicketKey, StreamTicketKeys};
 
+const DEFAULT_REGIONS: &str = "geo-us,geo-de,geo-ru,geo-fr,geo-nl";
+
 pub struct Config {
     pub port: u16,
     pub database_host: String,
@@ -16,6 +18,7 @@ pub struct Config {
     pub database_acquire_timeout_secs: u64,
     pub sc_proxy_url: String,
     pub sc_proxy_fallback: bool,
+    pub egress_regions: Vec<String>,
     pub sc_oauth_fallback_sessions: usize,
     pub free_hq_fetches: usize,
     pub sc_cookies: Vec<String>,
@@ -74,6 +77,9 @@ impl Config {
             sc_proxy_fallback: env::var("SC_PROXY_FALLBACK")
                 .map(|v| v == "true")
                 .unwrap_or(false),
+            egress_regions: crate::stream::egress::parse_regions(
+                &env::var("SC_EGRESS_REGIONS").unwrap_or_else(|_| DEFAULT_REGIONS.to_owned()),
+            ),
             sc_oauth_fallback_sessions: env::var("SC_OAUTH_FALLBACK_SESSIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())

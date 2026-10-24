@@ -52,7 +52,7 @@ async fn canary_resolves(state: &AppState) -> Readiness {
         return Ok(());
     };
     match tokio::time::timeout(CANARY_TIMEOUT, state.anon.fetch_track_meta(track_urn)).await {
-        Ok(Ok((transcodings, _, _))) if !transcodings.is_empty() => Ok(()),
+        Ok(Ok((transcodings, ..))) if !transcodings.is_empty() => Ok(()),
         Ok(Ok(_)) => {
             warn!("[ready] canary {track_urn} has no transcodings");
             Err("canary has no transcodings")

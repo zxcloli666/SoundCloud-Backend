@@ -76,6 +76,7 @@ async fn pick_wvd(dir: &str) -> Result<Bytes, String> {
 
 static FETCH_SEM: once_cell::sync::Lazy<Arc<Semaphore>> =
     once_cell::sync::Lazy::new(|| Arc::new(Semaphore::new(8)));
+static DECRYPT_SEM: Semaphore = Semaphore::const_new(2);
 
 #[derive(Serialize)]
 pub struct TranscodeUploadResponse {
@@ -223,8 +224,61 @@ async fn fetch_track(state: &AppState, track_urn: &str) -> Option<(Bytes, &'stat
         }
     }
 
+    if let Some((data, quality)) = fetch_restricted(state, track_urn, tag).await {
+        info!("{tag} {track_urn} → restricted ({quality})");
+        return Some((data, quality));
+    }
+
     warn!("{tag} {track_urn} → no stream available");
     None
+}
+
+async fn fetch_restricted(
+    state: &AppState,
+    track_urn: &str,
+    tag: &str,
+) -> Option<(Bytes, &'static str)> {
+    let Ok(_turn) = DECRYPT_SEM.try_acquire() else {
+        info!("{tag} {track_urn} decrypts are busy, the pipeline comes back for it");
+        return None;
+    };
+    let src = match state
+        .anon
+        .resolve_restricted(track_urn, false, quality::SQ)
+        .await
+    {
+        Ok(src) => src?,
+        Err(e) => {
+            warn!("{tag} {track_urn} restricted(anon) failed: {e}");
+            return None;
+        }
+    };
+
+    if let (Some(wvd_url), Some(wvd_token)) = (
+        state.config.edge_wvd_url.as_deref(),
+        state.config.edge_wvd_token.as_deref(),
+    ) && let Some(audio) =
+        crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
+            .await
+    {
+        return Some((Bytes::from(audio), src.quality));
+    }
+
+    let engine = state.decryptor.as_ref()?;
+    match crate::stream::decrypt_fetch::decrypt_whole(
+        engine,
+        &state.http_client,
+        &state.config.sc_proxy_url,
+        &src,
+    )
+    .await
+    {
+        Ok(whole) => Some((whole, src.quality)),
+        Err(e) => {
+            warn!("{tag} {track_urn} restricted decode failed: {e}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +327,43 @@ mod tests {
             Err(StatusCode::FORBIDDEN)
         );
         assert!(check_auth(&bearing("secret"), "secret").is_ok());
+    }
+
+    #[test]
+    fn the_background_fetch_decrypts_a_track_that_has_no_plain_copy() {
+        let source = crate::source_tree::read("src/stream/internal.rs");
+        let fetch = source
+            .split_once("async fn fetch_track(")
+            .expect("the background fetch is still here")
+            .1;
+        let fetch = fetch.split_once("\n}\n").expect("the function ends").0;
+        let anon = fetch
+            .find("state.anon.get_stream(")
+            .expect("plain anon copies are still fetched");
+        let restricted = fetch
+            .find("fetch_restricted(")
+            .expect("drm-only tracks never reach storage without the decrypt");
+        assert!(
+            anon < restricted,
+            "a plain copy costs no license; the decrypt is only for tracks without one"
+        );
+
+        let decrypt = source
+            .split_once("async fn fetch_restricted(")
+            .expect("the decrypt step is still here")
+            .1;
+        let turn = decrypt
+            .find("DECRYPT_SEM.try_acquire()")
+            .expect("background decrypts are bounded on their own");
+        let license = decrypt
+            .find("resolve_restricted(")
+            .expect("the decrypt resolves a license token");
+        assert!(
+            turn < license,
+            "the pending backlog holds thousands of tracks; without a turn each one would ask \
+             for a license at once, and waiting for a turn would hold a fetch slot that a plain \
+             copy could use"
+        );
     }
 
     #[test]

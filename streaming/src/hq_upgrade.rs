@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::db::postgres::PgPool;
@@ -167,7 +166,13 @@ impl Upgrader {
         }
 
         if let Some(src) = self.restricted_source(track_urn).await {
-            let data = self.decrypt_all(&src).await?;
+            let data = crate::stream::decrypt_fetch::decrypt_whole(
+                &self.engine,
+                &self.http_client,
+                &self.sc_proxy_url,
+                &src,
+            )
+            .await?;
             return Ok(self.upload(track_urn, data, src.quality));
         }
 
@@ -206,28 +211,6 @@ impl Upgrader {
                 None
             }
         }
-    }
-
-    async fn decrypt_all(
-        &self,
-        src: &RestrictedSource,
-    ) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
-        let fetcher: Arc<dyn decrypt::Fetcher> =
-            Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-                client: self.http_client.clone(),
-                proxy_url: self.sc_proxy_url.clone(),
-            });
-        let mut stream = self
-            .engine
-            .process_stream(&src.manifest, &src.token, fetcher)
-            .await?;
-
-        let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024 * 1024);
-        while let Some(chunk) = stream.next().await {
-            buf.extend_from_slice(&chunk?);
-        }
-        buf.shrink_to_fit();
-        Ok(Bytes::from(buf))
     }
 
     fn upload(&self, track_urn: &str, data: Bytes, quality: &'static str) -> bool {

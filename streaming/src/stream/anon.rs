@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wreq::Client;
 
+use super::egress::{Egress, Known, steered};
 use super::hls::{M3u8Refresher, download_hls, download_progressive, fetch_m3u8_source};
 use super::proxy::{fetch_get_json, fetch_get_text};
 use super::quality;
@@ -25,6 +26,32 @@ pub struct ResolvedTrack {
     pub permalink_url: Option<String>,
     pub track_authorization: Option<String>,
     pub media: Option<TrackMedia>,
+    pub policy: Option<String>,
+}
+
+impl ResolvedTrack {
+    fn blocked_here(&self) -> bool {
+        self.policy.as_deref() == Some("BLOCK")
+    }
+
+    fn transcodings(&self) -> Option<&Vec<Transcoding>> {
+        self.media
+            .as_ref()
+            .and_then(|m| m.transcodings.as_ref())
+            .filter(|t| !t.is_empty())
+    }
+}
+
+pub(crate) type TrackMeta = (
+    Vec<Transcoding>,
+    Option<String>,
+    String,
+    HashMap<String, String>,
+);
+
+pub(crate) struct TrackRead {
+    pub track: ResolvedTrack,
+    pub region: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -43,6 +70,7 @@ pub struct AnonClient {
     proxy_url: String,
     client_id: Arc<RwLock<Option<String>>>,
     refresh_gate: Mutex<Option<Instant>>,
+    egress: Egress,
 }
 
 impl AnonClient {
@@ -52,7 +80,13 @@ impl AnonClient {
             proxy_url,
             client_id: Arc::new(RwLock::new(None)),
             refresh_gate: Mutex::new(None),
+            egress: Egress::new(Vec::new()),
         }
+    }
+
+    pub fn with_regions(mut self, regions: Vec<String>) -> Self {
+        self.egress = Egress::new(regions);
+        self
     }
 
     pub async fn get_client_id(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -97,6 +131,104 @@ impl AnonClient {
         }
     }
 
+    pub(crate) async fn read_track(
+        &self,
+        track_id: &str,
+    ) -> Result<TrackRead, Box<dyn std::error::Error + Send + Sync>> {
+        let known = self.egress.known(track_id);
+        if let Known::Region(region) = &known {
+            match self.get_track_from(track_id, region).await {
+                Ok(track) if !track.blocked_here() => {
+                    return Ok(TrackRead {
+                        track,
+                        region: Some(region.clone()),
+                    });
+                }
+                _ => self.egress.forget(track_id),
+            }
+        }
+
+        let track = self.get_track_by_id(track_id).await?;
+        if !track.blocked_here() || known == Known::Nowhere {
+            return Ok(TrackRead {
+                track,
+                region: None,
+            });
+        }
+
+        let (open, every_region_answered) = self.first_open_region(track_id).await;
+        if let Some(open) = open {
+            info!(
+                "[anon] {track_id} is blocked where we asked first, {} sees it",
+                open.region.as_deref().unwrap_or("?")
+            );
+            return Ok(open);
+        }
+        if every_region_answered {
+            self.egress.remember_nowhere(track_id);
+        }
+        Ok(TrackRead {
+            track,
+            region: None,
+        })
+    }
+
+    async fn first_open_region(&self, track_id: &str) -> (Option<TrackRead>, bool) {
+        let mut every_region_answered = true;
+        for region in self.egress.regions() {
+            match self.get_track_from(track_id, region).await {
+                Ok(open) if !open.blocked_here() => {
+                    self.egress.remember(track_id, region);
+                    let open = TrackRead {
+                        track: open,
+                        region: Some(region.clone()),
+                    };
+                    return (Some(open), every_region_answered);
+                }
+                Ok(_) => {}
+                Err(e) if region_absent(&e.to_string()) => {
+                    debug!("[anon] {track_id}: no live proxy in {region}");
+                }
+                Err(e) => {
+                    debug!("[anon] {track_id} through {region} failed: {e}");
+                    every_region_answered = false;
+                }
+            }
+        }
+        (None, every_region_answered)
+    }
+
+    async fn reread_after_a_regional_404(&self, track_id: &str) -> Option<TrackRead> {
+        if self.egress.regions().is_empty() {
+            return None;
+        }
+        let (open, _) = self.first_open_region(track_id).await;
+        if let Some(open) = &open {
+            info!(
+                "[anon] {track_id} answered 404 where we resolved it, trying {}",
+                open.region.as_deref().unwrap_or("?")
+            );
+        }
+        open
+    }
+
+    async fn get_track_from(
+        &self,
+        track_id: &str,
+        region: &str,
+    ) -> Result<ResolvedTrack, Box<dyn std::error::Error + Send + Sync>> {
+        let client_id = self.get_client_id().await?;
+        let target = format!("{SC_API_V2}/tracks/{track_id}?client_id={client_id}");
+        fetch_get_json(
+            &self.client,
+            &self.proxy_url,
+            &target,
+            steered(Some(region)),
+            false,
+        )
+        .await
+    }
+
     pub async fn resolve_url(
         &self,
         url: &str,
@@ -134,8 +266,9 @@ impl AnonClient {
         transcoding_url: &str,
         explicit_client_id: Option<&str>,
         track_authorization: Option<&str>,
+        region: Option<&str>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        if explicit_client_id.is_none() {
+        if explicit_client_id.is_none() && region.is_none() {
             let cid = self.get_client_id().await.unwrap_or_default();
             if let Some(url) = crate::stream::proxy::transcoding_via_relay(
                 transcoding_url,
@@ -162,7 +295,7 @@ impl AnonClient {
             &self.client,
             &self.proxy_url,
             &target,
-            HashMap::new(),
+            steered(region),
             false,
         )
         .await
@@ -179,7 +312,7 @@ impl AnonClient {
                     &self.client,
                     &self.proxy_url,
                     &retry_target,
-                    HashMap::new(),
+                    steered(region),
                     false,
                 )
                 .await?;
@@ -196,79 +329,88 @@ impl AnonClient {
     ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
 
-        let track = self
-            .get_track_by_id(track_id)
+        let read = self
+            .read_track(track_id)
             .await
             .map_err(|e| format!("get track failed: {e}"))?;
 
-        let transcodings = track.media.as_ref().and_then(|m| m.transcodings.as_ref());
-
-        let transcodings = match transcodings {
-            Some(t) if !t.is_empty() => t,
-            _ => {
+        let read = match read.track.transcodings() {
+            Some(_) => read,
+            None if read.track.blocked_here() => {
+                return Err(format!("{track_id} is blocked in every region we read from").into());
+            }
+            None => {
                 warn!("[anon] no transcodings for {track_id}, refreshing client_id");
                 self.invalidate_and_refresh().await?;
-                let retry_track = self
-                    .get_track_by_id(track_id)
+                let retry = self
+                    .read_track(track_id)
                     .await
                     .map_err(|e| format!("retry get track failed: {e}"))?;
-                match retry_track
-                    .media
-                    .as_ref()
-                    .and_then(|m| m.transcodings.as_ref())
-                {
-                    Some(t) if !t.is_empty() => {
-                        return self
-                            .stream_from_transcodings(
-                                t,
-                                retry_track.track_authorization.as_deref(),
-                                at_least,
-                            )
-                            .await;
-                    }
-                    _ => {
-                        return Err(format!(
-                            "still no transcodings for {track_id} after a client_id refresh"
-                        )
-                        .into());
-                    }
+                if retry.track.transcodings().is_none() {
+                    return Err(format!(
+                        "still no transcodings for {track_id} after a client_id refresh"
+                    )
+                    .into());
                 }
+                return self.stream_read(track_id, &retry, at_least).await;
             }
         };
 
-        let track_auth = track.track_authorization.as_deref();
-        match self
-            .stream_from_transcodings(transcodings, track_auth, at_least)
-            .await
-        {
-            Ok(Some(r)) => Ok(Some(r)),
-            Ok(None) => Ok(None),
+        match self.stream_read(track_id, &read, at_least).await {
+            Ok(found) => Ok(found),
             Err(e) => {
                 warn!("[anon] stream failed for {track_id}, refreshing client_id: {e}");
                 self.invalidate_and_refresh().await?;
-                let retry_track = self
-                    .get_track_by_id(track_id)
+                let retry = self
+                    .read_track(track_id)
                     .await
                     .map_err(|e2| format!("retry get track failed: {e2}"))?;
-                match retry_track
-                    .media
-                    .as_ref()
-                    .and_then(|m| m.transcodings.as_ref())
-                {
-                    Some(t) if !t.is_empty() => {
-                        self.stream_from_transcodings(
-                            t,
-                            retry_track.track_authorization.as_deref(),
-                            at_least,
-                        )
-                        .await
-                    }
-                    _ => Err(
-                        format!("no transcodings for {track_id} after a client_id refresh").into(),
-                    ),
+                if retry.track.transcodings().is_none() {
+                    return Err(format!(
+                        "no transcodings for {track_id} after a client_id refresh"
+                    )
+                    .into());
                 }
+                self.stream_read(track_id, &retry, at_least).await
             }
         }
+    }
+
+    async fn stream_read(
+        self: &Arc<Self>,
+        track_id: &str,
+        read: &TrackRead,
+        at_least: &'static str,
+    ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
+        let found = self.stream_plain(read, at_least).await?;
+        let plain_listed = read
+            .track
+            .transcodings()
+            .is_some_and(|t| !ranked_transcodings(t, at_least).is_empty());
+        if found.is_some() || read.region.is_some() || !plain_listed {
+            return Ok(found);
+        }
+        match self.reread_after_a_regional_404(track_id).await {
+            Some(open) => self.stream_plain(&open, at_least).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn stream_plain(
+        self: &Arc<Self>,
+        read: &TrackRead,
+        at_least: &'static str,
+    ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(transcodings) = read.track.transcodings() else {
+            return Ok(None);
+        };
+        self.stream_from_transcodings(
+            transcodings,
+            read.track.track_authorization.as_deref(),
+            at_least,
+            read.region.as_deref(),
+        )
+        .await
     }
 
     async fn stream_from_transcodings(
@@ -276,6 +418,7 @@ impl AnonClient {
         transcodings: &[Transcoding],
         track_auth: Option<&str>,
         at_least: &'static str,
+        region: Option<&str>,
     ) -> Result<Option<AnonStreamResult>, Box<dyn std::error::Error + Send + Sync>> {
         let ranked = ranked_transcodings(transcodings, at_least);
         if ranked.is_empty() {
@@ -293,7 +436,10 @@ impl AnonClient {
             let is_progressive =
                 t.format.as_ref().and_then(|f| f.protocol.as_deref()) == Some("progressive");
 
-            let media_url = match self.resolve_transcoding_url(&t.url, None, track_auth).await {
+            let media_url = match self
+                .resolve_transcoding_url(&t.url, None, track_auth, region)
+                .await
+            {
                 Ok(u) => u,
                 Err(e) => {
                     warn!(
@@ -323,16 +469,19 @@ impl AnonClient {
                     let me = Arc::clone(self);
                     let transcoding_url = t.url.clone();
                     let track_auth = track_auth.map(str::to_string);
+                    let region = region.map(str::to_string);
                     Arc::new(move || {
                         let me = Arc::clone(&me);
                         let transcoding_url = transcoding_url.clone();
                         let track_auth = track_auth.clone();
+                        let region = region.clone();
                         Box::pin(async move {
                             let media = me
                                 .resolve_transcoding_url(
                                     &transcoding_url,
                                     None,
                                     track_auth.as_deref(),
+                                    region.as_deref(),
                                 )
                                 .await?;
                             fetch_m3u8_source(
@@ -396,10 +545,31 @@ impl AnonClient {
     ) -> Result<Option<super::restricted::RestrictedSource>, Box<dyn std::error::Error + Send + Sync>>
     {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
-        let track = self.get_track_by_id(track_id).await?;
-        let tcs = match track.media.as_ref().and_then(|m| m.transcodings.as_ref()) {
-            Some(t) => t,
-            None => return Ok(None),
+        let read = self.read_track(track_id).await?;
+        match self.resolve_encrypted(&read, uq_first, at_least).await {
+            Err(e) if read.region.is_none() && looks_like_resource_gone(&e.to_string()) => {
+                let Some(open) = self.reread_after_a_regional_404(track_id).await else {
+                    return Err(e);
+                };
+                let resolved = self.resolve_encrypted(&open, uq_first, at_least).await;
+                if !matches!(resolved, Ok(Some(_))) {
+                    self.egress.forget(track_id);
+                }
+                resolved
+            }
+            resolved => resolved,
+        }
+    }
+
+    async fn resolve_encrypted(
+        &self,
+        read: &TrackRead,
+        uq_first: bool,
+        at_least: &str,
+    ) -> Result<Option<super::restricted::RestrictedSource>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        let Some(tcs) = read.track.transcodings() else {
+            return Ok(None);
         };
         let Some(tc) = super::restricted::pick_encrypted(tcs, uq_first, at_least) else {
             return Ok(None);
@@ -410,8 +580,8 @@ impl AnonClient {
             &self.proxy_url,
             tc,
             &cid,
-            track.track_authorization.as_deref(),
-            HashMap::new(),
+            read.track.track_authorization.as_deref(),
+            steered(read.region.as_deref()),
         )
         .await
     }
@@ -419,16 +589,17 @@ impl AnonClient {
     pub(crate) async fn fetch_track_meta(
         &self,
         track_urn: &str,
-    ) -> Result<(Vec<Transcoding>, Option<String>, String), Box<dyn std::error::Error + Send + Sync>>
-    {
+    ) -> Result<TrackMeta, Box<dyn std::error::Error + Send + Sync>> {
         let track_id = track_urn.rsplit(':').next().unwrap_or(track_urn);
-        let track = self.get_track_by_id(track_id).await?;
+        let read = self.read_track(track_id).await?;
         let cid = self.get_client_id().await?;
-        let tcs = track
+        let headers = steered(read.region.as_deref());
+        let tcs = read
+            .track
             .media
             .and_then(|m| m.transcodings)
             .ok_or("anon: no transcodings")?;
-        Ok((tcs, track.track_authorization, cid))
+        Ok((tcs, read.track.track_authorization, cid, headers))
     }
 
     async fn refresh_client_id(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -554,6 +725,10 @@ fn build_resolve_target(url: &str, client_id: &str) -> String {
 
 fn looks_like_resource_gone(err: &str) -> bool {
     err.contains("404")
+}
+
+fn region_absent(err: &str) -> bool {
+    err == "status 502"
 }
 
 #[cfg(test)]

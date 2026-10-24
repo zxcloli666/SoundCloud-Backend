@@ -97,10 +97,10 @@ async fn main() {
         .build()
         .expect("Failed to build storage passthrough HTTP client");
 
-    let anon = Arc::new(AnonClient::new(
-        http_client.clone(),
-        config.sc_proxy_url.clone(),
-    ));
+    let anon = Arc::new(
+        AnonClient::new(http_client.clone(), config.sc_proxy_url.clone())
+            .with_regions(config.egress_regions.clone()),
+    );
 
     let cookies = if config.cookies_enabled() {
         let pool = Arc::new(CookiesPool::new(
