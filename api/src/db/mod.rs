@@ -3,13 +3,14 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
-use sqlx::{ConnectOptions, PgPool};
+use sqlx::{ConnectOptions, Connection, PgConnection, PgPool};
 use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
 const REQUIRED_CORE_SCHEMA_VERSION: i64 = 155;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
+const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     let mut opts = PgConnectOptions::from_str(&cfg.url)?;
@@ -57,19 +58,33 @@ fn core_share(pool_max: u32) -> u32 {
         .max(1)
 }
 
-async fn pool(
-    cfg: &DatabaseCfg,
-    max_connections: u32,
-    opts: PgConnectOptions,
-) -> Result<PgPool, sqlx::Error> {
+fn pool_options(cfg: &DatabaseCfg, max_connections: u32) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(cfg.acquire_timeout)
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
         .test_before_acquire(true)
-        .connect_with(opts)
-        .await
+        .after_release(|connection, _| Box::pin(settle_released(connection)))
+}
+
+async fn settle_released(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    match tokio::time::timeout(RELEASE_PING_TIMEOUT, connection.ping()).await {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "released connection did not settle",
+        ))),
+    }
+}
+
+async fn pool(
+    cfg: &DatabaseCfg,
+    max_connections: u32,
+    opts: PgConnectOptions,
+) -> Result<PgPool, sqlx::Error> {
+    pool_options(cfg, max_connections).connect_with(opts).await
 }
 
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
@@ -232,5 +247,38 @@ mod tests {
         .await?;
 
         verify_schema(&pool).await
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_connection_dropped_mid_query_frees_its_pool_slot(
+        _: PgPoolOptions,
+        opts: PgConnectOptions,
+    ) -> anyhow::Result<()> {
+        let mut single = cfg("postgres://u:p@h:5432/db", DbSslCfg::default());
+        single.acquire_timeout = Duration::from_secs(60);
+        let pool = pool_options(&single, 1).connect_with(opts).await?;
+
+        let mut tx = pool.begin().await?;
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(300),
+            sqlx::query("SELECT pg_sleep(60)").execute(&mut *tx),
+        )
+        .await;
+        assert!(abandoned.is_err());
+        drop(tx);
+
+        let reacquired = tokio::time::timeout(
+            RELEASE_PING_TIMEOUT + Duration::from_secs(5),
+            pool.acquire(),
+        )
+        .await;
+        let mut connection = reacquired.expect("the pool slot stayed taken")?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE query = 'SELECT pg_sleep(60)' AND pid <> pg_backend_pid()",
+        )
+        .execute(&mut *connection)
+        .await?;
+        Ok(())
     }
 }

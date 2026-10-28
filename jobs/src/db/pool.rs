@@ -3,10 +3,12 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
-use sqlx::{ConnectOptions, PgPool};
+use sqlx::{ConnectOptions, Connection, PgConnection, PgPool};
 use tracing::log::LevelFilter;
 
 use crate::config::{DatabaseConfig, PoolConfig, SessionLimits};
+
+const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub struct DatabaseError {
@@ -46,6 +48,7 @@ pub async fn connect(
             let limits = limits.clone();
             Box::pin(async move { apply_session_limits(connection, &limits).await })
         })
+        .after_release(|connection, _metadata| Box::pin(settle_released(connection)))
         .connect_with(options)
         .await
         .map_err(|source| DatabaseError {
@@ -128,6 +131,17 @@ async fn apply_session_limits(
     .execute(connection)
     .await?;
     Ok(())
+}
+
+async fn settle_released(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    match tokio::time::timeout(RELEASE_PING_TIMEOUT, connection.ping()).await {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "released connection did not settle",
+        ))),
+    }
 }
 
 fn duration_setting(duration: Duration) -> String {
@@ -283,6 +297,37 @@ mod tests {
             waited < Duration::from_secs(2),
             "PostgreSQL took {waited:?} to cancel a query budgeted at two hundred milliseconds"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a live PostgreSQL"]
+    async fn a_connection_dropped_mid_query_frees_its_pool_slot() -> anyhow::Result<()> {
+        let (database, mut pool) = bounded(Duration::from_secs(60));
+        pool.acquire_timeout = Duration::from_secs(60);
+        let pool = connect(&database, &pool, "jobs-release-test").await?;
+
+        let mut transaction = pool.begin().await?;
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(300),
+            sqlx::query("SELECT pg_sleep(30)").execute(&mut *transaction),
+        )
+        .await;
+        assert!(abandoned.is_err());
+        drop(transaction);
+
+        let reacquired = tokio::time::timeout(
+            RELEASE_PING_TIMEOUT + Duration::from_secs(5),
+            pool.acquire(),
+        )
+        .await;
+        let mut connection = reacquired.expect("the pool slot stayed taken")?;
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+             WHERE query = 'SELECT pg_sleep(30)' AND pid <> pg_backend_pid()",
+        )
+        .execute(&mut *connection)
+        .await?;
         Ok(())
     }
 
