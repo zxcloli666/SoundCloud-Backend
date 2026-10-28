@@ -16,6 +16,8 @@ const OPEN_ROUTES: &[&str] = &[
     "/resolve",
 ];
 
+const METRICS_ROUTE: &str = "/admin/metrics";
+
 fn modules_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
@@ -144,6 +146,7 @@ fn signature_of<'a>(source: &'a str, handler: &str) -> Option<&'a str> {
 
 fn guards(signature: &str) -> bool {
     signature.contains("AdminAuth")
+        || signature.contains("MetricsAuth")
         || signature.contains("SessionCtx")
         || signature.contains("OptionalSession")
         || signature.contains("RawSessionIdHeader")
@@ -285,15 +288,20 @@ fn an_admin_route_is_gated_by_admin_auth_and_by_nothing_weaker() {
                     continue;
                 };
                 checked += 1;
-                if !signature.contains("AdminAuth") {
+                let gate = if path == METRICS_ROUTE {
+                    "MetricsAuth"
+                } else {
+                    "AdminAuth"
+                };
+                if !signature.contains(gate) {
                     wrong.push(format!(
                         "{path} -> {handler} ({file}): a session is not an admin token"
                     ));
                     continue;
                 }
-                if !first_parameter(signature).contains("AdminAuth") {
+                if !first_parameter(signature).contains(gate) {
                     wrong.push(format!(
-                        "{path} -> {handler} ({file}): AdminAuth is not the first argument, so \
+                        "{path} -> {handler} ({file}): {gate} is not the first argument, so \
                          an earlier extractor can answer the request before the token is checked"
                     ));
                 }
@@ -309,6 +317,47 @@ fn an_admin_route_is_gated_by_admin_auth_and_by_nothing_weaker() {
     assert!(
         wrong.is_empty(),
         "every /admin route must be closed by AdminAuth before anything else runs:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn the_metrics_token_opens_the_metrics_page_and_nothing_else() {
+    let sources: Vec<(String, String)> = router_sources()
+        .into_iter()
+        .map(|(file, raw)| (file, strip_comments(&raw)))
+        .collect();
+
+    let mut metrics_pages = 0;
+    let mut wrong: Vec<String> = Vec::new();
+    for (file, source) in &sources {
+        if !source.contains(".route(") {
+            continue;
+        }
+        for (path, handlers) in route_handlers(source) {
+            for handler in handlers {
+                let Some(signature) = resolve(&sources, file, &handler) else {
+                    continue;
+                };
+                if !signature.contains("MetricsAuth") {
+                    continue;
+                }
+                if path == METRICS_ROUTE {
+                    metrics_pages += 1;
+                } else {
+                    wrong.push(format!("{path} -> {handler} ({file})"));
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        metrics_pages, 1,
+        "{METRICS_ROUTE} is no longer behind MetricsAuth"
+    );
+    assert!(
+        wrong.is_empty(),
+        "the metrics token must open {METRICS_ROUTE} and nothing else:\n{}",
         wrong.join("\n")
     );
 }
