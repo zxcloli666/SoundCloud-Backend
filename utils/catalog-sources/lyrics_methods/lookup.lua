@@ -191,12 +191,13 @@ local lrclib_exact_tried = false
 
 local function add_lrclib_exact()
   lrclib_exact_tried = true
-  if not nonempty(inputs.title) or not nonempty(inputs.artist) or type(inputs.duration_sec) ~= "number" then
+  local duration = inputs.duration_sec
+  if not nonempty(inputs.title) or not nonempty(inputs.artist) or type(duration) ~= "number" or duration < 1 or duration > 3600 then
     return
   end
   local item = request_json("https://lrclib.net/api/get?track_name=" .. urlencode(inputs.title)
     .. "&artist_name=" .. urlencode(inputs.artist)
-    .. "&duration=" .. tostring(math.floor(inputs.duration_sec)))
+    .. "&duration=" .. tostring(math.floor(duration)))
   add_lrclib_item(item, 1)
 end
 
