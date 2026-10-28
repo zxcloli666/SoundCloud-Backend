@@ -25,6 +25,7 @@ const CHUNKS_IN_FLIGHT: usize = 2;
 const BYTES_IN_FLIGHT: usize = 16 << 20;
 const KEPT_AT_MOST: usize = 32 << 20;
 const SLOT_HELD_AT_MOST: Duration = Duration::from_secs(120);
+const RELAY_TRACK_AT_MOST: Duration = Duration::from_secs(40);
 
 #[derive(Clone, Copy)]
 pub(super) struct UploadRule {
@@ -154,14 +155,19 @@ pub(super) async fn try_relay_track(
         return None;
     }
     let client_id = state.anon.get_client_id().await.unwrap_or_default();
-    let (audio, ct) = crate::stream::proxy::get_track_via_relay(
+    let fetched = crate::stream::proxy::get_track_via_relay(
         id,
         quality,
         &client_id,
         state.config.edge_wvd_url.as_deref(),
         state.config.edge_wvd_token.as_deref(),
-    )
-    .await?;
+    );
+    let Ok(fetched) = tokio::time::timeout(RELAY_TRACK_AT_MOST, fetched).await else {
+        warn!("[relay] {track_urn} sc.get_track gave nothing in {RELAY_TRACK_AT_MOST:?}");
+        crate::metrics::record_source("relay_track", "timeout");
+        return None;
+    };
+    let (audio, ct) = fetched?;
     Some((
         Bytes::from(audio),
         crate::stream::hls::mime_to_content_type(&ct),
@@ -451,6 +457,16 @@ mod tests {
         L: Sink<Result<Bytes, decrypt::Error>> + Unpin,
     {
         Pump::new(stream, listener, keeping).run().await
+    }
+
+    #[test]
+    fn a_stuck_relay_leaves_the_other_sources_most_of_the_stream_deadline() {
+        assert!(
+            RELAY_TRACK_AT_MOST * 3 <= crate::stream::handler::STREAM_DEADLINE,
+            "the call relay waits up to 180 s and relay_track is asked first; at the 2026-10-28 \
+             peak 39 of 63 plays without a quality hit the 120 s deadline before oauth, anon or \
+             restricted were asked"
+        );
     }
 
     #[tokio::test]
