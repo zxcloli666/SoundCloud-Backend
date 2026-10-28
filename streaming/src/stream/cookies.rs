@@ -156,10 +156,6 @@ impl CookiesClient {
         );
         h.insert("Origin".into(), "https://soundcloud.com".into());
         h.insert("Referer".into(), "https://soundcloud.com/".into());
-        h.insert(
-            "User-Agent".into(),
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36".into(),
-        );
         h
     }
 
@@ -321,10 +317,6 @@ impl CookiesClient {
         let page = super::target::soundcloud_page(permalink_url)?;
 
         let mut headers = HashMap::new();
-        headers.insert(
-            "User-Agent".into(),
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36".into(),
-        );
         headers.insert("Cookie".into(), self.cookies.clone());
 
         let (html, _) =

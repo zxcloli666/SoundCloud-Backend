@@ -8,7 +8,7 @@ use catalog_normalize::{name_similarity, normalize_title, title_forms, works_mat
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use wreq::header::{ACCEPT, COOKIE, HeaderMap, HeaderValue, USER_AGENT};
+use wreq::header::{ACCEPT, COOKIE, HeaderMap, HeaderValue};
 
 use crate::{ExternalFetcher, GeniusService, SourceError, SourceResult};
 
@@ -19,7 +19,6 @@ const MAX_QUERIES: usize = 4;
 const MAX_LYRICS_BYTES: usize = 800 * 1024;
 const SYNCED_DURATION_TOLERANCE_SEC: i64 = 5;
 const LRCLIB_API: &str = "https://lrclib.net/api";
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 const MUSIXMATCH_APP_ID: &str = "web-desktop-app-v1.0";
 const MUSIXMATCH_TOKEN_TTL: Duration = Duration::from_secs(9 * 60 * 60);
 
@@ -755,7 +754,6 @@ fn validate_genius_url(value: &str) -> SourceResult<&str> {
 
 fn json_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
     headers
 }

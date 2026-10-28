@@ -636,11 +636,7 @@ impl AnonClient {
     }
 
     async fn fetch_client_id(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut headers = HashMap::new();
-        headers.insert(
-            "User-Agent".into(),
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36".into(),
-        );
+        let headers = HashMap::new();
 
         let (html, _) =
             fetch_get_text(&self.client, &self.proxy_url, SC_BASE_URL, headers, false).await?;

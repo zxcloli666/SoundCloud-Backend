@@ -13,7 +13,6 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use wreq::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
-    USER_AGENT,
 };
 use wreq::{Client, Method};
 
@@ -61,8 +60,6 @@ impl RelayTransport for RelayClient {
 const API_BASE: &str = "https://api.soundcloud.com";
 const AUTH_BASE: &str = "https://secure.soundcloud.com";
 const SC_HOME: &str = "https://soundcloud.com";
-const SC_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                         (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const ANON_CID_TTL: Duration = Duration::from_secs(1800);
 const ANON_CID_RETRY_BASE: Duration = Duration::from_secs(5);
 const ANON_CID_RETRY_MAX: Duration = Duration::from_secs(300);
@@ -355,7 +352,6 @@ impl ScClient {
 
     async fn location_direct(&self, target_url: &str, via_proxy: bool) -> ScResult<String> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
         let url = if via_proxy {
             let encoded = base64::engine::general_purpose::STANDARD.encode(target_url);
             headers.insert(
@@ -393,7 +389,7 @@ impl ScClient {
         let request = RelayRequest {
             url: target_url.to_owned(),
             method: Method::GET.as_str().to_owned(),
-            headers: HashMap::from([(USER_AGENT.as_str().to_owned(), SC_WEB_UA.to_owned())]),
+            headers: HashMap::new(),
             body: Bytes::new(),
         };
         let response = relay
@@ -613,10 +609,8 @@ impl ScClient {
                 return None;
             }
         }
-        let mut h = HeaderMap::new();
-        h.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
         let fetched = self
-            .anon_get_via_relay_proxy(&self.inner.home_base, h)
+            .anon_get_via_relay_proxy(&self.inner.home_base, HeaderMap::new())
             .await
             .ok()
             .and_then(|bytes| extract_anon_client_id(&String::from_utf8_lossy(&bytes)));

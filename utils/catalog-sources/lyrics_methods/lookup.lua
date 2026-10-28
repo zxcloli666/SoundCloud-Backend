@@ -1,11 +1,8 @@
-local browser_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-
 local function request(url)
   local headers = {
     ["Accept-Encoding"] = "identity",
     ["Accept"] = "application/json,text/html;q=0.9,*/*;q=0.8",
-    ["Accept-Language"] = "en-US,en;q=0.9",
-    ["User-Agent"] = browser_ua
+    ["Accept-Language"] = "en-US,en;q=0.9"
   }
   if string.find(url, "musixmatch.com", 1, true) ~= nil then
     headers["Cookie"] = "x-mxm-token-guid=" .. client_id()
@@ -153,8 +150,8 @@ local function get_mxm_token()
     error("invalid musixmatch token payload")
   end
   local token = payload.message.body.user_token
-  if not nonempty(token) or token == "UpgradeOnlyUpgradeOnlyUpgradeOnlyUpgradeOnly" then
-    error("musixmatch token is unavailable")
+  if not nonempty(token) or token == "UpgradeOnlyUpgradeOnlyUpgradeOnlyUpgradeOnly" or string.find(token, "^0+$") ~= nil then
+    return nil
   end
   mxm_token = token
   return mxm_token
@@ -185,12 +182,13 @@ local function add_lrclib(query, query_index)
   end
 end
 
+local genius_pages = 0
+
 local function add_genius(query, query_index)
   local payload = request_json("https://genius.com/api/search/multi?q=" .. urlencode(query))
   if type(payload) ~= "table" or type(payload.response) ~= "table" then
     error("invalid genius search payload")
   end
-  local added = 0
   local sections = payload.response.sections
   if type(sections) ~= "table" then
     return
@@ -198,11 +196,9 @@ local function add_genius(query, query_index)
   for _, section in ipairs(sections) do
     if section.type == "song" and type(section.hits) == "table" then
       for _, hit in ipairs(section.hits) do
-        if added >= 2 then
-          return
-        end
         local result = hit.result
         if type(result) == "table" and nonempty(result.url) then
+          genius_pages = genius_pages + 1
           local text = genius_lyrics(result.url)
           if text ~= nil then
             local artist = nil
@@ -216,8 +212,8 @@ local function add_genius(query, query_index)
               title = result.title,
               query_index = query_index
             })
-            added = added + 1
           end
+          return
         end
       end
     end
@@ -306,6 +302,9 @@ end
 
 local function add_musixmatch(query_index)
   local token = get_mxm_token()
+  if token == nil then
+    return
+  end
   local duration = tonumber(inputs.duration_sec) or 0
   local url = mxm_base .. "/macro.subtitles.get?app_id=web-desktop-app-v1.0&usertoken=" .. urlencode(token) .. "&namespace=lyrics_richsynched&subtitle_format=lrc&q_track=" .. urlencode(inputs.title or "") .. "&q_artist=" .. urlencode(inputs.artist or "") .. "&q_album=&q_duration=" .. tostring(duration) .. "&optional_calls=track.richsync&format=json"
   local payload = request_json(url)
@@ -335,16 +334,51 @@ local function add_musixmatch(query_index)
   end
 end
 
-attempt("musixmatch", add_musixmatch, 0)
+local function normalized(value)
+  if not nonempty(value) then
+    return ""
+  end
+  return (string.gsub(string.lower(value), "[%s%p]", ""))
+end
+
+local function settled()
+  local title = normalized(inputs.title)
+  local artist = normalized(inputs.artist)
+  if title == "" then
+    return false
+  end
+  for _, candidate in ipairs(candidates) do
+    local candidate_artist = normalized(candidate.artist)
+    local same_artist = artist == "" or candidate_artist == ""
+      or string.find(candidate_artist, artist, 1, true) ~= nil
+      or string.find(artist, candidate_artist, 1, true) ~= nil
+    if same_artist and normalized(candidate.title) == title then
+      return true
+    end
+  end
+  return false
+end
+
+local musixmatch_tried = false
 
 for index, query in ipairs(inputs.queries or {}) do
-  if index > 4 then
+  if index > 4 or settled() then
     break
   end
   if nonempty(query) then
     attempt("lrclib", add_lrclib, query, index)
-    attempt("genius", add_genius, query, index)
+    if genius_pages < 2 and not settled() then
+      attempt("genius", add_genius, query, index)
+    end
   end
+  if not musixmatch_tried and not settled() then
+    musixmatch_tried = true
+    attempt("musixmatch", add_musixmatch, 0)
+  end
+end
+
+if not musixmatch_tried and not settled() then
+  attempt("musixmatch", add_musixmatch, 0)
 end
 
 if #candidates == 0 then

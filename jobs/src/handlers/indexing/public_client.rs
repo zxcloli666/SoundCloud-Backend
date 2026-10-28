@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
 use url::Url;
-use wreq::header::{ACCEPT, ACCEPT_ENCODING, RETRY_AFTER, USER_AGENT};
+use wreq::header::{ACCEPT, ACCEPT_ENCODING, RETRY_AFTER};
 use wreq::{Client, Response, StatusCode};
 
 use crate::config::DurationConfig;
@@ -17,8 +17,6 @@ const TRACK_RESPONSE_LIMIT: usize = 256 * 1024;
 const DEFAULT_RATE_LIMIT_DELAY: Duration = Duration::from_secs(5 * 60);
 const MAX_RATE_LIMIT_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
 const REJECTION_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
-const WEB_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
 
 pub struct PublicSoundCloudClient {
     http: Client,
@@ -281,7 +279,6 @@ impl PublicSoundCloudClient {
         request
             .header(ACCEPT, "application/json, text/html;q=0.9")
             .header(ACCEPT_ENCODING, "identity")
-            .header(USER_AGENT, WEB_USER_AGENT)
     }
 }
 
