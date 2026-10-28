@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 
-use crate::common::admin::AdminAuth;
+use crate::common::admin::{AdminAuth, MetricsAuth};
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -164,7 +164,7 @@ pub async fn index_usage(
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn metrics(_: AdminAuth, State(state): State<AppState>) -> axum::response::Response {
+pub async fn metrics(_: MetricsAuth, State(state): State<AppState>) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 

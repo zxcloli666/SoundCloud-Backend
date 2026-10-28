@@ -86,6 +86,7 @@ pub struct StreamingCfg {
 #[derive(Clone, Debug)]
 pub struct AdminCfg {
     pub token: redact::Secret<String>,
+    pub metrics_token: redact::Secret<String>,
 }
 
 #[derive(Clone)]
@@ -285,6 +286,7 @@ impl AppConfig {
 
             admin: AdminCfg {
                 token: env_str("ADMIN_TOKEN", "").into(),
+                metrics_token: env_str("METRICS_TOKEN", "").into(),
             },
 
             redis: RedisCfg {
@@ -432,6 +434,7 @@ mod tests {
     fn no_configured_secret_can_reach_a_log_through_a_derived_debug() {
         let admin = AdminCfg {
             token: "s3cr3t-admin-token".to_owned().into(),
+            metrics_token: "s3cr3t-metrics-token".to_owned().into(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),

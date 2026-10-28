@@ -222,9 +222,9 @@ async fn serve_metrics(
     state: axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    if let Err((status, message)) =
-        stream::internal::check_auth(&headers, &state.config.internal_token)
-    {
+    let allowed = stream::internal::check_auth(&headers, &state.config.metrics_token)
+        .or_else(|_| stream::internal::check_auth(&headers, &state.config.internal_token));
+    if let Err((status, message)) = allowed {
         return (status, message).into_response();
     }
     let status = state.pg.status();

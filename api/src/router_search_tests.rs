@@ -59,6 +59,7 @@ fn config(redis: &str) -> AppConfig {
         },
         admin: AdminCfg {
             token: String::new().into(),
+            metrics_token: String::new().into(),
         },
         redis: RedisCfg {
             url: redis.to_owned(),
