@@ -107,7 +107,7 @@ end
 local failures = {}
 local failed_sources = {}
 local genius_blocked = false
-local lrclib_busy = false
+local unreachable = false
 
 local function attempt(source, step, ...)
   if failed_sources[source] then
@@ -123,8 +123,8 @@ local function attempt(source, step, ...)
   if source == "genius" and (string.find(message, "status 403", 1, true) ~= nil or string.find(message, "challenge page", 1, true) ~= nil) then
     genius_blocked = true
   end
-  if source == "lrclib" and string.find(message, "status 5", 1, true) ~= nil then
-    lrclib_busy = true
+  if string.find(message, "status 0", 1, true) ~= nil then
+    unreachable = true
   end
   return nil
 end
@@ -277,11 +277,11 @@ if #candidates == 0 then
   if genius_blocked then
     return { kind = "empty", failed = failures, genius_blocked = true, __verdict = "soft_negative" }
   end
-  if lrclib_busy and #failures == 1 then
-    return { kind = "empty", failed = failures }
+  if unreachable then
+    error(table.concat(failures, "; "), 0)
   end
   if #failures > 0 then
-    error(table.concat(failures, "; "), 0)
+    return { kind = "empty", failed = failures }
   end
   return { kind = "empty", __verdict = "terminal" }
 end
