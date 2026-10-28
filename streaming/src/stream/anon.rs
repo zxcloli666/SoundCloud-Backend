@@ -30,8 +30,8 @@ pub struct ResolvedTrack {
 }
 
 impl ResolvedTrack {
-    fn blocked_here(&self) -> bool {
-        self.policy.as_deref() == Some("BLOCK")
+    fn closed_here(&self) -> bool {
+        matches!(self.policy.as_deref(), Some("BLOCK" | "SNIP"))
     }
 
     fn transcodings(&self) -> Option<&Vec<Transcoding>> {
@@ -138,7 +138,7 @@ impl AnonClient {
         let known = self.egress.known(track_id);
         if let Known::Region(region) = &known {
             match self.get_track_from(track_id, region).await {
-                Ok(track) if !track.blocked_here() => {
+                Ok(track) if !track.closed_here() => {
                     return Ok(TrackRead {
                         track,
                         region: Some(region.clone()),
@@ -149,7 +149,7 @@ impl AnonClient {
         }
 
         let track = self.get_track_by_id(track_id).await?;
-        if !track.blocked_here() || known == Known::Nowhere {
+        if !track.closed_here() || known == Known::Nowhere {
             return Ok(TrackRead {
                 track,
                 region: None,
@@ -177,7 +177,7 @@ impl AnonClient {
         let mut every_region_answered = true;
         for region in self.egress.regions() {
             match self.get_track_from(track_id, region).await {
-                Ok(open) if !open.blocked_here() => {
+                Ok(open) if !open.closed_here() => {
                     self.egress.remember(track_id, region);
                     let open = TrackRead {
                         track: open,
@@ -336,7 +336,7 @@ impl AnonClient {
 
         let read = match read.track.transcodings() {
             Some(_) => read,
-            None if read.track.blocked_here() => {
+            None if read.track.closed_here() => {
                 return Err(format!("{track_id} is blocked in every region we read from").into());
             }
             None => {

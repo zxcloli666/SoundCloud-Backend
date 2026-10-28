@@ -23,6 +23,7 @@ struct World {
     resolves_in: Arc<Mutex<Option<Vec<Option<String>>>>>,
     plain: Arc<AtomicBool>,
     sq_only: Arc<AtomicBool>,
+    preview_where_closed: Arc<AtomicBool>,
     absent: Arc<Mutex<Vec<Option<String>>>>,
     asked: Arc<Mutex<Asked>>,
 }
@@ -89,6 +90,8 @@ async fn intermediate_proxy(State(world): State<World>, headers: HeaderMap) -> R
                 sq_only_track().into_response()
             } else if world.sees(&tag) {
                 open_track(world.plain.load(Ordering::SeqCst)).into_response()
+            } else if world.preview_where_closed.load(Ordering::SeqCst) {
+                preview_track().into_response()
             } else {
                 r#"{"policy":"BLOCK","track_authorization":"auth","media":{"transcodings":[]}}"#
                     .into_response()
@@ -131,6 +134,21 @@ fn open_track(plain: bool) -> String {
         "policy": "MONETIZE",
         "track_authorization": "auth",
         "media": { "transcodings": [transcoding] }
+    })
+    .to_string()
+}
+
+fn preview_track() -> String {
+    serde_json::json!({
+        "policy": "SNIP",
+        "track_authorization": "auth",
+        "media": { "transcodings": [{
+            "url": format!("https://api-v2.soundcloud.com/media/{TRACK_URN}/preview/stream/progressive"),
+            "preset": "mp3_1_0",
+            "snipped": true,
+            "quality": "sq",
+            "format": { "protocol": "progressive", "mime_type": "audio/mpeg" }
+        }] }
     })
     .to_string()
 }
@@ -204,6 +222,54 @@ async fn a_track_blocked_where_we_ask_first_is_read_and_resolved_through_a_regio
         world.take_asked("playback.media-streaming.soundcloud.cloud"),
         tags(&[None]),
         "the manifest host is not region checked and must never see our routing header"
+    );
+}
+
+#[tokio::test]
+async fn a_track_that_is_only_a_preview_where_we_ask_first_is_played_in_full_through_a_region_that_sees_it()
+ {
+    let world = World::default();
+    world.preview_where_closed.store(true, Ordering::SeqCst);
+    world.open_in(&[Some("geo-fr")]);
+    let anon = anon_behind(&world).await;
+
+    let src = anon
+        .resolve_restricted(TRACK_URN, false, quality::SQ)
+        .await
+        .expect("the region that sees the track answers")
+        .expect("the track has a full encrypted transcoding");
+
+    assert_eq!(src.token, "license");
+    assert_eq!(
+        world.take_asked("api-v2.soundcloud.com/tracks/"),
+        tags(&[None, Some("geo-us"), Some("geo-fr")]),
+        "label tracks answer SNIP with a 30 s preview from RU, UA and HN proxies and play in \
+         full from US, DE, FR and NL; read as open, a quarter of their plays found nothing"
+    );
+    assert_eq!(
+        world.take_asked("api-v2.soundcloud.com/media/"),
+        tags(&[Some("geo-fr")])
+    );
+}
+
+#[tokio::test]
+async fn a_preview_everywhere_costs_one_read_for_the_next_hour() {
+    let world = World::default();
+    world.preview_where_closed.store(true, Ordering::SeqCst);
+    let anon = anon_behind(&world).await;
+
+    let found = anon
+        .get_stream(TRACK_URN, quality::SQ)
+        .await
+        .expect("soundcloud answers");
+    assert!(found.is_none(), "a go+ track has only its preview");
+    assert_eq!(world.take_asked("api-v2.soundcloud.com/tracks/").len(), 3);
+
+    anon.read_track(TRACK_ID).await.expect("soundcloud answers");
+    assert_eq!(
+        world.take_asked("api-v2.soundcloud.com/tracks/"),
+        tags(&[None]),
+        "a go+ track must not cost a read per region on every play"
     );
 }
 
