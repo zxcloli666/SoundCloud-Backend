@@ -76,7 +76,6 @@ struct LuaInputs<'a> {
     genius_song_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     genius_url: Option<&'a str>,
-    musixmatch_base: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -161,7 +160,6 @@ impl LyricsSources {
             queries,
             genius_song_id: hints.genius_song_id,
             genius_url: hints.genius_url.as_deref(),
-            musixmatch_base: self.musixmatch.base.as_str(),
         })
         .map_err(|error| SourceError::Invalid(format!("lyrics lua input: {error}")))?;
         let output = self
@@ -1361,7 +1359,6 @@ mod tests {
             queries: &[],
             genius_song_id: None,
             genius_url: None,
-            musixmatch_base: "https://example.test",
         })
         .unwrap();
         let object = payload.as_object().unwrap();
