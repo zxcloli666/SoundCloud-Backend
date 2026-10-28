@@ -7,6 +7,9 @@ local function request(url)
   if string.find(url, "musixmatch.com", 1, true) ~= nil then
     headers["Cookie"] = "x-mxm-token-guid=" .. client_id()
   end
+  if string.find(url, "lrclib.net", 1, true) ~= nil then
+    headers["Lrclib-Client"] = "SoundCloud Desktop (https://github.com/zxcloli666/SoundCloud-Desktop)"
+  end
   local response = http({ url = url, method = "GET", headers = headers })
   if response.status == 200 then
     return response.body
@@ -99,6 +102,7 @@ end
 local failures = {}
 local failed_sources = {}
 local genius_blocked = false
+local lrclib_busy = false
 
 local function attempt(source, step, ...)
   if failed_sources[source] then
@@ -113,6 +117,9 @@ local function attempt(source, step, ...)
   failures[#failures + 1] = source .. ": " .. message
   if source == "genius" and (string.find(message, "status 403", 1, true) ~= nil or string.find(message, "challenge page", 1, true) ~= nil) then
     genius_blocked = true
+  end
+  if source == "lrclib" and string.find(message, "status 5", 1, true) ~= nil then
+    lrclib_busy = true
   end
   return nil
 end
@@ -137,6 +144,31 @@ local mxm_token = nil
 local mxm_token_loaded = false
 local mxm_base = inputs.musixmatch_base
 
+local function normalized(value)
+  if not nonempty(value) then
+    return ""
+  end
+  return (string.gsub(string.lower(value), "[%s%p]", ""))
+end
+
+local function settled()
+  local title = normalized(inputs.title)
+  local artist = normalized(inputs.artist)
+  if title == "" then
+    return false
+  end
+  for _, candidate in ipairs(candidates) do
+    local candidate_artist = normalized(candidate.artist)
+    local same_artist = artist == "" or candidate_artist == ""
+      or string.find(candidate_artist, artist, 1, true) ~= nil
+      or string.find(artist, candidate_artist, 1, true) ~= nil
+    if same_artist and normalized(candidate.title) == title then
+      return true
+    end
+  end
+  return false
+end
+
 local function get_mxm_token()
   if mxm_token_loaded then
     return mxm_token
@@ -157,7 +189,42 @@ local function get_mxm_token()
   return mxm_token
 end
 
+local function add_lrclib_item(item, query_index)
+  if type(item) ~= "table" or not (nonempty(item.plainLyrics) or nonempty(item.syncedLyrics)) then
+    return false
+  end
+  add_candidate(candidates, {
+    source = "lrclib",
+    plain_text = item.plainLyrics,
+    synced_lrc = item.syncedLyrics,
+    artist = item.artistName,
+    title = item.trackName,
+    duration_sec = item.duration,
+    query_index = query_index
+  })
+  return true
+end
+
+local lrclib_exact_tried = false
+
+local function add_lrclib_exact()
+  lrclib_exact_tried = true
+  if not nonempty(inputs.title) or not nonempty(inputs.artist) or type(inputs.duration_sec) ~= "number" then
+    return
+  end
+  local item = request_json("https://lrclib.net/api/get?track_name=" .. urlencode(inputs.title)
+    .. "&artist_name=" .. urlencode(inputs.artist)
+    .. "&duration=" .. tostring(math.floor(inputs.duration_sec)))
+  add_lrclib_item(item, 1)
+end
+
 local function add_lrclib(query, query_index)
+  if not lrclib_exact_tried then
+    add_lrclib_exact()
+    if settled() then
+      return
+    end
+  end
   local payload = request_json("https://lrclib.net/api/search?q=" .. urlencode(query))
   if type(payload) ~= "table" then
     error("invalid lrclib payload")
@@ -167,16 +234,7 @@ local function add_lrclib(query, query_index)
     if added >= 3 then
       break
     end
-    if type(item) == "table" and (nonempty(item.plainLyrics) or nonempty(item.syncedLyrics)) then
-      add_candidate(candidates, {
-        source = "lrclib",
-        plain_text = item.plainLyrics,
-        synced_lrc = item.syncedLyrics,
-        artist = item.artistName,
-        title = item.trackName,
-        duration_sec = item.duration,
-        query_index = query_index
-      })
+    if add_lrclib_item(item, query_index) then
       added = added + 1
     end
   end
@@ -334,31 +392,6 @@ local function add_musixmatch(query_index)
   end
 end
 
-local function normalized(value)
-  if not nonempty(value) then
-    return ""
-  end
-  return (string.gsub(string.lower(value), "[%s%p]", ""))
-end
-
-local function settled()
-  local title = normalized(inputs.title)
-  local artist = normalized(inputs.artist)
-  if title == "" then
-    return false
-  end
-  for _, candidate in ipairs(candidates) do
-    local candidate_artist = normalized(candidate.artist)
-    local same_artist = artist == "" or candidate_artist == ""
-      or string.find(candidate_artist, artist, 1, true) ~= nil
-      or string.find(artist, candidate_artist, 1, true) ~= nil
-    if same_artist and normalized(candidate.title) == title then
-      return true
-    end
-  end
-  return false
-end
-
 local musixmatch_tried = false
 
 for index, query in ipairs(inputs.queries or {}) do
@@ -384,6 +417,9 @@ end
 if #candidates == 0 then
   if genius_blocked then
     return { kind = "empty", failed = failures, genius_blocked = true, __verdict = "soft_negative" }
+  end
+  if lrclib_busy and #failures == 1 then
+    return { kind = "empty", failed = failures }
   end
   if #failures > 0 then
     error(table.concat(failures, "; "), 0)

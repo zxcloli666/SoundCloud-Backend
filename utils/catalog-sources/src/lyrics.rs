@@ -19,6 +19,7 @@ const MAX_QUERIES: usize = 4;
 const MAX_LYRICS_BYTES: usize = 800 * 1024;
 const SYNCED_DURATION_TOLERANCE_SEC: i64 = 5;
 const LRCLIB_API: &str = "https://lrclib.net/api";
+const LRCLIB_CLIENT: &str = "SoundCloud Desktop (https://github.com/zxcloli666/SoundCloud-Desktop)";
 const MUSIXMATCH_APP_ID: &str = "web-desktop-app-v1.0";
 const MUSIXMATCH_TOKEN_TTL: Duration = Duration::from_secs(9 * 60 * 60);
 
@@ -185,7 +186,7 @@ impl LyricsSources {
                 Ok(LyricsLookupOutcome::CleanMiss)
             }
             "empty" if envelope.candidates.is_empty() => {
-                Err(SourceError::Unreachable(envelope.failed.join("; ")))
+                Ok(LyricsLookupOutcome::Retry(relay_failure(&envelope.failed)))
             }
             "found" => {
                 let candidates = envelope
@@ -197,7 +198,7 @@ impl LyricsSources {
                 match select_candidate(hints, candidates) {
                     Some(candidate) => Ok(LyricsLookupOutcome::Found(candidate)),
                     None if clean => Ok(LyricsLookupOutcome::CleanMiss),
-                    None => Err(SourceError::Unreachable(envelope.failed.join("; "))),
+                    None => Ok(LyricsLookupOutcome::Retry(relay_failure(&envelope.failed))),
                 }
             }
             _ => Err(SourceError::Invalid(
@@ -292,7 +293,9 @@ impl LyricsSources {
         query_index: usize,
     ) -> SourceResult<Vec<LyricsCandidate>> {
         let url = format!("{LRCLIB_API}/search?q={}", urlencoding::encode(query));
-        let bytes = self.fetcher.get_bytes(&url, json_headers()).await?;
+        let mut headers = json_headers();
+        headers.insert("lrclib-client", HeaderValue::from_static(LRCLIB_CLIENT));
+        let bytes = self.fetcher.get_bytes(&url, headers).await?;
         let entries: Vec<LrclibRaw> = serde_json::from_slice(&bytes)
             .map_err(|error| SourceError::Invalid(format!("lrclib search: {error}")))?;
         Ok(entries
@@ -721,6 +724,23 @@ fn failure(error: &SourceError) -> LyricsFailure {
     }
 }
 
+fn relay_failure(failed: &[String]) -> LyricsFailure {
+    let any = |needle: &str| failed.iter().any(|failure| failure.contains(needle));
+    let class = if any("status 5") {
+        "upstream"
+    } else if any("status 429") {
+        "rate_limited"
+    } else if any("status 403") || any("challenge page") {
+        "blocked"
+    } else {
+        "transport"
+    };
+    LyricsFailure {
+        class: class.to_owned(),
+        retry_after_seconds: None,
+    }
+}
+
 fn merge_failures(failures: Vec<LyricsFailure>) -> LyricsFailure {
     let retry_after_seconds = failures
         .iter()
@@ -1055,6 +1075,7 @@ mod tests {
         Empty,
         Unusable,
         GeniusBlocked,
+        LrclibBusy,
         Fail,
     }
 
@@ -1153,6 +1174,9 @@ mod tests {
                     )),
                     MethodMode::GeniusBlocked => Ok(Bytes::from_static(
                         br#"{"kind":"empty","failed":["genius: lyrics upstream status 403"],"genius_blocked":true}"#,
+                    )),
+                    MethodMode::LrclibBusy => Ok(Bytes::from_static(
+                        br#"{"kind":"empty","failed":["lrclib: lyrics upstream status 503"]}"#,
                     )),
                     MethodMode::Fail => Err(SourceError::Unreachable(
                         "mock Lua channel failure".to_owned(),
@@ -1294,15 +1318,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unusable_lua_hit_with_a_failed_source_moves_on_to_raw_relay() {
+    async fn an_unusable_lua_hit_with_a_failed_source_is_retried_later() {
         let relay = MockRelay::new(MethodMode::Unusable, RawMode::Hit);
         let service = sources(relay.clone(), String::new());
 
         let outcome = service.lookup(&hints()).await;
 
-        assert!(matches!(outcome, LyricsLookupOutcome::Found(_)));
+        assert_eq!(
+            outcome,
+            LyricsLookupOutcome::Retry(LyricsFailure {
+                class: "blocked".to_owned(),
+                retry_after_seconds: None,
+            })
+        );
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn busy_lrclib_is_retried_later_without_the_raw_path() {
+        let relay = MockRelay::new(MethodMode::LrclibBusy, RawMode::Hit);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        assert_eq!(
+            outcome,
+            LyricsLookupOutcome::Retry(LyricsFailure {
+                class: "upstream".to_owned(),
+                retry_after_seconds: None,
+            })
+        );
         assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
-        assert!(relay.raw_calls.load(Ordering::Relaxed) >= 1);
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
