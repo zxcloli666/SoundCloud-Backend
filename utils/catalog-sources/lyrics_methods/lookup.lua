@@ -58,10 +58,6 @@ local function genius_lyrics(url)
   if html == nil then
     return nil
   end
-  local lower = string.lower(html)
-  if string.find(lower, "cf%-challenge") ~= nil or string.find(lower, "captcha") ~= nil or string.find(lower, "just a moment", 1, true) ~= nil then
-    error("genius challenge page")
-  end
   local parts = {}
   for container in string.gmatch(html, '<div[^>]-data%-lyrics%-container="true"[^>]*>(.-)</div>') do
     local text = decode_html(container)
@@ -69,10 +65,14 @@ local function genius_lyrics(url)
       parts[#parts + 1] = text
     end
   end
-  if #parts == 0 then
-    return nil
+  if #parts > 0 then
+    return table.concat(parts, "\n")
   end
-  return table.concat(parts, "\n")
+  local lower = string.lower(html)
+  if string.find(lower, "cf%-challenge") ~= nil or string.find(lower, "just a moment", 1, true) ~= nil then
+    error("genius challenge page")
+  end
+  return nil
 end
 
 local function add_candidate(candidates, candidate)
@@ -101,6 +101,7 @@ end
 
 local failures = {}
 local failed_sources = {}
+local genius_blocked = false
 
 local function attempt(source, step, ...)
   if failed_sources[source] then
@@ -110,8 +111,12 @@ local function attempt(source, step, ...)
   if ok then
     return result
   end
+  local message = tostring(result)
   failed_sources[source] = true
-  failures[#failures + 1] = source .. ": " .. tostring(result)
+  failures[#failures + 1] = source .. ": " .. message
+  if source == "genius" and (string.find(message, "status 403", 1, true) ~= nil or string.find(message, "challenge page", 1, true) ~= nil) then
+    genius_blocked = true
+  end
   return nil
 end
 
@@ -186,7 +191,10 @@ local function add_genius(query, query_index)
     error("invalid genius search payload")
   end
   local added = 0
-  local sections = payload.response.sections or {}
+  local sections = payload.response.sections
+  if type(sections) ~= "table" then
+    return
+  end
   for _, section in ipairs(sections) do
     if section.type == "song" and type(section.hits) == "table" then
       for _, hit in ipairs(section.hits) do
@@ -340,10 +348,17 @@ for index, query in ipairs(inputs.queries or {}) do
 end
 
 if #candidates == 0 then
+  if genius_blocked then
+    return { kind = "empty", failed = failures, genius_blocked = true, __verdict = "soft_negative" }
+  end
   if #failures > 0 then
     error(table.concat(failures, "; "), 0)
   end
   return { kind = "empty", __verdict = "terminal" }
+end
+
+if genius_blocked then
+  return { kind = "found", candidates = candidates, failed = failures, genius_blocked = true, __verdict = "soft_negative" }
 end
 
 if #failures > 0 then

@@ -54,6 +54,9 @@ for _ = 1, max_pages do
     complete = true
     break
   end
+  if response.status == 403 then
+    return { kind = "blocked", complete = false, next_page = page, __verdict = "soft_negative" }
+  end
   if response.status ~= 200 then
     error("genius pagination status " .. tostring(response.status))
   end
@@ -75,7 +78,7 @@ for _ = 1, max_pages do
       break
     end
     page = page + 1
-  elseif remote_next == nil then
+  elseif type(remote_next) ~= "number" and type(remote_next) ~= "string" then
     complete = true
     break
   else

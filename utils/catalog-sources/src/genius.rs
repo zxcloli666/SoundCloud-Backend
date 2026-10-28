@@ -412,9 +412,8 @@ impl GeniusService {
         let html = String::from_utf8(bytes.to_vec())
             .map_err(|error| SourceError::Invalid(format!("genius html utf8: {error}")))?;
         let lowercase = html.to_lowercase();
-        if lowercase.contains("cf-challenge")
-            || lowercase.contains("captcha")
-            || lowercase.contains("just a moment")
+        if !lowercase.contains("data-lyrics-container")
+            && (lowercase.contains("cf-challenge") || lowercase.contains("just a moment"))
         {
             return Err(SourceError::Invalid(
                 "genius returned a challenge page".to_owned(),
@@ -453,6 +452,11 @@ impl GeniusService {
             .await?;
         let envelope: PaginationEnvelope<T> = serde_json::from_slice(&output)
             .map_err(|error| SourceError::Invalid(format!("genius pagination output: {error}")))?;
+        if envelope.kind == "blocked" {
+            return Err(SourceError::Unreachable(
+                "genius pagination is blocked in every relay region".to_owned(),
+            ));
+        }
         if !matches!(envelope.kind.as_str(), "found" | "empty") {
             return Err(SourceError::Invalid(
                 "genius pagination returned an unknown outcome".to_owned(),

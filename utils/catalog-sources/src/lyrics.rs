@@ -86,6 +86,8 @@ struct LuaEnvelope {
     candidates: Vec<LuaCandidate>,
     #[serde(default)]
     failed: Vec<String>,
+    #[serde(default)]
+    genius_blocked: bool,
 }
 
 #[derive(Deserialize)]
@@ -173,8 +175,19 @@ impl LyricsSources {
             .await?;
         let envelope: LuaEnvelope = serde_json::from_slice(&output)
             .map_err(|error| SourceError::Invalid(format!("lyrics lua output: {error}")))?;
+        let only_blocked_genius = envelope.genius_blocked
+            && envelope
+                .failed
+                .iter()
+                .all(|failure| failure.starts_with("genius: "));
+        let clean = envelope.failed.is_empty() || only_blocked_genius;
         match envelope.kind.as_str() {
-            "empty" if envelope.candidates.is_empty() => Ok(LyricsLookupOutcome::CleanMiss),
+            "empty" if envelope.candidates.is_empty() && clean => {
+                Ok(LyricsLookupOutcome::CleanMiss)
+            }
+            "empty" if envelope.candidates.is_empty() => {
+                Err(SourceError::Unreachable(envelope.failed.join("; ")))
+            }
             "found" => {
                 let candidates = envelope
                     .candidates
@@ -184,7 +197,7 @@ impl LyricsSources {
                     .collect();
                 match select_candidate(hints, candidates) {
                     Some(candidate) => Ok(LyricsLookupOutcome::Found(candidate)),
-                    None if envelope.failed.is_empty() => Ok(LyricsLookupOutcome::CleanMiss),
+                    None if clean => Ok(LyricsLookupOutcome::CleanMiss),
                     None => Err(SourceError::Unreachable(envelope.failed.join("; "))),
                 }
             }
@@ -1043,6 +1056,7 @@ mod tests {
         Found,
         Empty,
         Unusable,
+        GeniusBlocked,
         Fail,
     }
 
@@ -1138,6 +1152,9 @@ mod tests {
                     MethodMode::Empty => Ok(Bytes::from_static(br#"{"kind":"empty"}"#)),
                     MethodMode::Unusable => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"short","exact":false,"query_index":1}],"failed":["genius: lyrics upstream status 403"]}"#,
+                    )),
+                    MethodMode::GeniusBlocked => Ok(Bytes::from_static(
+                        br#"{"kind":"empty","failed":["genius: lyrics upstream status 403"],"genius_blocked":true}"#,
                     )),
                     MethodMode::Fail => Err(SourceError::Unreachable(
                         "mock Lua channel failure".to_owned(),
@@ -1264,6 +1281,17 @@ mod tests {
 
         assert_eq!(outcome, LyricsLookupOutcome::CleanMiss);
         assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn genius_blocked_in_every_region_is_a_clean_miss() {
+        let relay = MockRelay::new(MethodMode::GeniusBlocked, RawMode::Hit);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        assert_eq!(outcome, LyricsLookupOutcome::CleanMiss);
         assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
     }
 
