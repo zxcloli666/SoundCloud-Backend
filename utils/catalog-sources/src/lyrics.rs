@@ -19,7 +19,6 @@ const MAX_QUERIES: usize = 4;
 const MAX_LYRICS_BYTES: usize = 800 * 1024;
 const SYNCED_DURATION_TOLERANCE_SEC: i64 = 5;
 const LRCLIB_API: &str = "https://lrclib.net/api";
-const LRCLIB_CLIENT: &str = "SoundCloud Desktop (https://github.com/zxcloli666/SoundCloud-Desktop)";
 const MUSIXMATCH_APP_ID: &str = "web-desktop-app-v1.0";
 const MUSIXMATCH_TOKEN_TTL: Duration = Duration::from_secs(9 * 60 * 60);
 
@@ -291,9 +290,7 @@ impl LyricsSources {
         query_index: usize,
     ) -> SourceResult<Vec<LyricsCandidate>> {
         let url = format!("{LRCLIB_API}/search?q={}", urlencoding::encode(query));
-        let mut headers = json_headers();
-        headers.insert("lrclib-client", HeaderValue::from_static(LRCLIB_CLIENT));
-        let bytes = self.fetcher.get_bytes(&url, headers).await?;
+        let bytes = self.fetcher.get_bytes(&url, json_headers()).await?;
         let entries: Vec<LrclibRaw> = serde_json::from_slice(&bytes)
             .map_err(|error| SourceError::Invalid(format!("lrclib search: {error}")))?;
         Ok(entries

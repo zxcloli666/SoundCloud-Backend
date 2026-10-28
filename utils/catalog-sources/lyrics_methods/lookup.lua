@@ -7,15 +7,15 @@ end
 
 local function request(url)
   requests = requests + 1
-  local headers = {
-    ["Accept-Encoding"] = "identity",
-    ["Accept"] = "application/json,text/html;q=0.9,*/*;q=0.8",
-    ["Accept-Language"] = "en-US,en;q=0.9"
-  }
-  if string.find(url, "lrclib.net", 1, true) ~= nil then
-    headers["Lrclib-Client"] = "SoundCloud Desktop (https://github.com/zxcloli666/SoundCloud-Desktop)"
-  end
-  local response = http({ url = url, method = "GET", headers = headers })
+  local response = http({
+    url = url,
+    method = "GET",
+    headers = {
+      ["Accept-Encoding"] = "identity",
+      ["Accept"] = "application/json,text/html;q=0.9,*/*;q=0.8",
+      ["Accept-Language"] = "en-US,en;q=0.9"
+    }
+  })
   if response.status == 200 then
     return response.body
   end
