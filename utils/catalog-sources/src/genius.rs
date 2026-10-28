@@ -305,6 +305,7 @@ struct PaginationInput<'a> {
 #[derive(Deserialize)]
 struct PaginationEnvelope<T> {
     kind: String,
+    #[serde(default = "Vec::new")]
     items: Vec<T>,
     complete: bool,
     next_page: u32,

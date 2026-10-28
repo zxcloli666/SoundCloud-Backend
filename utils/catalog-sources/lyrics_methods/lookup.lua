@@ -99,7 +99,23 @@ local function linked_genius()
   return genius_lyrics(song.response.song.url)
 end
 
-local linked = linked_genius()
+local failures = {}
+local failed_sources = {}
+
+local function attempt(source, step, ...)
+  if failed_sources[source] then
+    return nil
+  end
+  local ok, result = pcall(step, ...)
+  if ok then
+    return result
+  end
+  failed_sources[source] = true
+  failures[#failures + 1] = source .. ": " .. tostring(result)
+  return nil
+end
+
+local linked = attempt("genius", linked_genius)
 if linked ~= nil then
   return {
     kind = "found",
@@ -311,20 +327,27 @@ local function add_musixmatch(query_index)
   end
 end
 
-add_musixmatch(0)
+attempt("musixmatch", add_musixmatch, 0)
 
 for index, query in ipairs(inputs.queries or {}) do
   if index > 4 then
     break
   end
   if nonempty(query) then
-    add_lrclib(query, index)
-    add_genius(query, index)
+    attempt("lrclib", add_lrclib, query, index)
+    attempt("genius", add_genius, query, index)
   end
 end
 
 if #candidates == 0 then
-  return { kind = "empty", candidates = {}, __verdict = "terminal" }
+  if #failures > 0 then
+    error(table.concat(failures, "; "), 0)
+  end
+  return { kind = "empty", __verdict = "terminal" }
+end
+
+if #failures > 0 then
+  return { kind = "found", candidates = candidates, failed = failures }
 end
 
 return { kind = "found", candidates = candidates }

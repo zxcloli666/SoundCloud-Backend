@@ -69,9 +69,12 @@ pub struct LyricsSources {
 struct LuaInputs<'a> {
     artist: &'a str,
     title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     duration_sec: Option<i64>,
     queries: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
     genius_song_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     genius_url: Option<&'a str>,
     musixmatch_base: &'a str,
 }
@@ -81,6 +84,8 @@ struct LuaEnvelope {
     kind: String,
     #[serde(default)]
     candidates: Vec<LuaCandidate>,
+    #[serde(default)]
+    failed: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -177,9 +182,11 @@ impl LyricsSources {
                     .take(MAX_CANDIDATES)
                     .filter_map(lua_candidate)
                     .collect();
-                Ok(select_candidate(hints, candidates)
-                    .map(LyricsLookupOutcome::Found)
-                    .unwrap_or(LyricsLookupOutcome::CleanMiss))
+                match select_candidate(hints, candidates) {
+                    Some(candidate) => Ok(LyricsLookupOutcome::Found(candidate)),
+                    None if envelope.failed.is_empty() => Ok(LyricsLookupOutcome::CleanMiss),
+                    None => Err(SourceError::Unreachable(envelope.failed.join("; "))),
+                }
             }
             _ => Err(SourceError::Invalid(
                 "lyrics lua returned an unknown envelope".to_owned(),
@@ -1035,6 +1042,7 @@ mod tests {
     enum MethodMode {
         Found,
         Empty,
+        Unusable,
         Fail,
     }
 
@@ -1127,8 +1135,9 @@ mod tests {
                     MethodMode::Found => Ok(Bytes::from_static(
                         br#"{"kind":"found","candidates":[{"source":"genius","plain_text":"A sufficiently long exact lyrics body returned by relay Lua","exact":true,"query_index":0}]}"#,
                     )),
-                    MethodMode::Empty => Ok(Bytes::from_static(
-                        br#"{"kind":"empty","candidates":[]}"#,
+                    MethodMode::Empty => Ok(Bytes::from_static(br#"{"kind":"empty"}"#)),
+                    MethodMode::Unusable => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","plain_text":"short","exact":false,"query_index":1}],"failed":["genius: lyrics upstream status 403"]}"#,
                     )),
                     MethodMode::Fail => Err(SourceError::Unreachable(
                         "mock Lua channel failure".to_owned(),
@@ -1256,6 +1265,36 @@ mod tests {
         assert_eq!(outcome, LyricsLookupOutcome::CleanMiss);
         assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
         assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unusable_lua_hit_with_a_failed_source_moves_on_to_raw_relay() {
+        let relay = MockRelay::new(MethodMode::Unusable, RawMode::Hit);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        assert!(matches!(outcome, LyricsLookupOutcome::Found(_)));
+        assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
+        assert!(relay.raw_calls.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[test]
+    fn absent_optional_inputs_are_left_out_of_the_lua_payload() {
+        let payload = serde_json::to_value(LuaInputs {
+            artist: "Eminem",
+            title: "Lose Yourself",
+            duration_sec: None,
+            queries: &[],
+            genius_song_id: None,
+            genius_url: None,
+            musixmatch_base: "https://example.test",
+        })
+        .unwrap();
+        let object = payload.as_object().unwrap();
+        assert!(!object.contains_key("genius_song_id"));
+        assert!(!object.contains_key("genius_url"));
+        assert!(!object.contains_key("duration_sec"));
     }
 
     #[tokio::test]

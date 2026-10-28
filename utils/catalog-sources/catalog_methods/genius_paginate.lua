@@ -90,7 +90,6 @@ end
 if #items == 0 and complete then
   return {
     kind = "empty",
-    items = {},
     complete = true,
     next_page = next_page,
     __verdict = "terminal"
@@ -99,7 +98,7 @@ end
 
 return {
   kind = "found",
-  items = items,
+  items = #items > 0 and items or nil,
   complete = complete,
   next_page = next_page
 }
