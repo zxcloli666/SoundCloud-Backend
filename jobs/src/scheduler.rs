@@ -17,7 +17,7 @@ const REALIGN_MAX_BATCHES: usize = 100;
 const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::ArtistAttributionRevalidate, 5 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::CatalogWorkReconcile, 5 * 60, -10, 4).delayed(),
-    Schedule::new(JobKind::CatalogCreditReview, 6 * 60 * 60, -10, 4).delayed(),
+    Schedule::new(JobKind::CatalogCreditReview, 72 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::AuthCleanupLinkRequests, 60, 0, 8),
     Schedule::new(JobKind::AuthCleanupLoginRequests, 60, 0, 8),
     Schedule::new(JobKind::DiagCleanup, 10 * 60, -10, 4),
@@ -27,6 +27,9 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::OAuthAppsRefresh, 60, 5, 8),
     Schedule::new(JobKind::DiscoverAccounts, 5 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::DiscoverAggregates, 3 * 60 * 60, -5, 4),
+    Schedule::new(JobKind::DiscoverAlbumAggregates, 3 * 60 * 60, -5, 4),
+    Schedule::new(JobKind::DiscoverArtistPopularity, 3 * 60 * 60, -5, 4),
+    Schedule::new(JobKind::DiscoverArtistTags, 3 * 60 * 60, -5, 4),
     Schedule::new(JobKind::DiscoverCatalogGenius, 60, -10, 4).delayed(),
     Schedule::new(JobKind::DiscoverCatalogMusicBrainz, 60, -10, 4).delayed(),
     Schedule::new(JobKind::DiscoverInterest, 60 * 60, -10, 4),

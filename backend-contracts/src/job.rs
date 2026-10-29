@@ -104,6 +104,9 @@ pub enum JobKind {
     CrawlArtist,
     DiscoverAccounts,
     DiscoverAggregates,
+    DiscoverAlbumAggregates,
+    DiscoverArtistPopularity,
+    DiscoverArtistTags,
     DiscoverCatalogGenius,
     DiscoverCatalogMusicBrainz,
     DiscoverInterest,
@@ -155,6 +158,9 @@ impl JobKind {
         Self::CrawlArtist,
         Self::DiscoverAccounts,
         Self::DiscoverAggregates,
+        Self::DiscoverAlbumAggregates,
+        Self::DiscoverArtistPopularity,
+        Self::DiscoverArtistTags,
         Self::DiscoverCatalogGenius,
         Self::DiscoverCatalogMusicBrainz,
         Self::DiscoverInterest,
@@ -206,6 +212,9 @@ impl JobKind {
             Self::CrawlArtist => "crawl.artist",
             Self::DiscoverAccounts => "discover.accounts",
             Self::DiscoverAggregates => "discover.aggregates",
+            Self::DiscoverAlbumAggregates => "discover.album_aggregates",
+            Self::DiscoverArtistPopularity => "discover.artist_popularity",
+            Self::DiscoverArtistTags => "discover.artist_tags",
             Self::DiscoverCatalogGenius => "discover.catalog_genius",
             Self::DiscoverCatalogMusicBrainz => "discover.catalog_musicbrainz",
             Self::DiscoverInterest => "discover.interest",
@@ -262,6 +271,9 @@ impl JobKind {
             | Self::CollabTrain
             | Self::DiscoverAccounts
             | Self::DiscoverAggregates
+            | Self::DiscoverAlbumAggregates
+            | Self::DiscoverArtistPopularity
+            | Self::DiscoverArtistTags
             | Self::DiscoverCatalogGenius
             | Self::DiscoverCatalogMusicBrainz
             | Self::DiscoverInterest
@@ -320,6 +332,9 @@ impl FromStr for JobKind {
             "crawl.artist" => Self::CrawlArtist,
             "discover.accounts" => Self::DiscoverAccounts,
             "discover.aggregates" => Self::DiscoverAggregates,
+            "discover.album_aggregates" => Self::DiscoverAlbumAggregates,
+            "discover.artist_popularity" => Self::DiscoverArtistPopularity,
+            "discover.artist_tags" => Self::DiscoverArtistTags,
             "discover.catalog_genius" => Self::DiscoverCatalogGenius,
             "discover.catalog_musicbrainz" => Self::DiscoverCatalogMusicBrainz,
             "discover.interest" => Self::DiscoverInterest,
@@ -440,7 +455,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 47);
+        assert_eq!(kinds.len(), 50);
     }
 
     #[test]

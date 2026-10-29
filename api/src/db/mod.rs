@@ -46,6 +46,7 @@ fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     }
 
     Ok(opts
+        .options([("jit", "off")])
         .log_statements(LevelFilter::Debug)
         .log_slow_statements(LevelFilter::Warn, Duration::from_millis(500)))
 }

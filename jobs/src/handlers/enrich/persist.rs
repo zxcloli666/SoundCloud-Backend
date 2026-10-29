@@ -121,22 +121,7 @@ pub async fn apply(
         link_album_track(&mut tx, album_id, track_id).await?;
     }
 
-    let canonical_id = match res.isrc.as_deref() {
-        Some(isrc) if !isrc.is_empty() => {
-            Some(resolve_canonical_for_isrc(&mut tx, track_id, isrc).await?)
-        }
-        _ => None,
-    };
-
     if let (Some(artist_id), Some(sc_id)) = (primary_artist_id, uploader_sc_user_id) {
-        sqlx::query_file!(
-            "queries/enrich/persist/set_uploader_sc_user_id.sql",
-            track_id,
-            sc_id
-        )
-        .execute(&mut *tx)
-        .await?;
-
         let primary_name = primaries.first().map(|c| c.name.as_str()).unwrap_or("");
         maybe_auto_attach_sc_account(
             &mut tx,
@@ -147,7 +132,7 @@ pub async fn apply(
         )
         .await?;
 
-        maybe_attach_reupload_account(&mut tx, artist_id, sc_id).await?;
+        maybe_attach_reupload_account(&mut tx, track_id, artist_id, sc_id).await?;
     }
 
     let upload_kind = if res.is_cover {
@@ -159,6 +144,24 @@ pub async fn apply(
 
     let source = res.source.as_str();
     let confidence = calibrate_confidence(&mut tx, source, res.confidence).await?;
+
+    let canonical_id = match res.isrc.as_deref() {
+        Some(isrc) if !isrc.is_empty() => {
+            Some(resolve_canonical_for_isrc(&mut tx, track_id, isrc).await?)
+        }
+        _ => None,
+    };
+
+    if let (Some(_), Some(sc_id)) = (primary_artist_id, uploader_sc_user_id) {
+        sqlx::query_file!(
+            "queries/enrich/persist/set_uploader_sc_user_id.sql",
+            track_id,
+            sc_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
     sqlx::query_file!(
         "queries/enrich/persist/finalize_track.sql",
         track_id,

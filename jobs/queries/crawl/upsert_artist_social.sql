@@ -4,3 +4,4 @@ UPDATE
     SET kind = EXCLUDED.kind,
     source = EXCLUDED.source,
     updated_at = now()
+WHERE (artist_socials.kind, artist_socials.source) IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.source)

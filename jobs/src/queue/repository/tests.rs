@@ -571,6 +571,9 @@ async fn expired_lease_is_released_before_reclaim(pool: PgPool) -> anyhow::Resul
     sqlx::query_file!("queries/queue/test_expire_job.sql", job.id)
         .execute(&pool)
         .await?;
+    repository
+        .release_expired(&[JobKind::DiscoverAggregates], 10)
+        .await?;
 
     let mut current = repository
         .claim(
@@ -612,6 +615,10 @@ async fn an_expired_lease_left_in_a_stale_lane_is_released_into_its_kind_lane(
     )
     .execute(&pool)
     .await?;
+
+    repository
+        .release_expired(&[JobKind::LyricsEmbed], 10)
+        .await?;
 
     let claimed = repository
         .claim(

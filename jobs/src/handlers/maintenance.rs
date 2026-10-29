@@ -1,16 +1,26 @@
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use sqlx::PgPool;
 
 use crate::queue::{JobError, JobResult};
 
 const CLEANUP_BATCH: i64 = 1_000;
+const RECEIPT_BATCH: u64 = 10_000;
+const RECEIPT_SWEEP_BATCHES: usize = 100;
+const RECEIPTS_FULL_SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct MaintenanceHandler {
     pool: PgPool,
+    receipts_swept_at: Mutex<Option<Instant>>,
 }
 
 impl MaintenanceHandler {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            receipts_swept_at: Mutex::new(None),
+        }
     }
 
     pub async fn cleanup_login_requests(&self) -> JobResult {
@@ -74,15 +84,25 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_job_receipts(&self) -> JobResult {
+        let full_sweep = self.receipts_swept_at.lock().map_or(true, |swept_at| {
+            swept_at.is_none_or(|at| at.elapsed() >= RECEIPTS_FULL_SWEEP_EVERY)
+        });
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         sqlx::query_file!("queries/maintenance/cleanup_job_failures.sql")
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
-        sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql")
-            .execute(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
+        for _ in 0..RECEIPT_SWEEP_BATCHES {
+            let removed =
+                sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql", full_sweep)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(JobError::retryable)?
+                    .rows_affected();
+            if !full_sweep || removed < RECEIPT_BATCH {
+                break;
+            }
+        }
         sqlx::query_file!("queries/maintenance/cleanup_pipeline_event_receipts.sql")
             .execute(&mut *transaction)
             .await
@@ -92,6 +112,9 @@ impl MaintenanceHandler {
             .await
             .map_err(JobError::retryable)?;
         transaction.commit().await.map_err(JobError::retryable)?;
+        if full_sweep && let Ok(mut swept_at) = self.receipts_swept_at.lock() {
+            *swept_at = Some(Instant::now());
+        }
         Ok(())
     }
 

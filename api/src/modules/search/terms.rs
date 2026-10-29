@@ -1,10 +1,17 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use mini_moka::sync::Cache;
 use sqlx::{Postgres, Transaction};
 
+use crate::cache::KeyedCoalesce;
 use crate::error::AppResult;
 
 const CATALOG_GROUPS: usize = 6;
 const LYRICS_TOKENS: i64 = 8;
 const LYRICS_GROUPS: usize = 4;
+const ROWS_KEPT: Duration = Duration::from_secs(300);
+const ROWS_CAPACITY: u64 = 20_000;
 
 const NOISE: &[&str] = &[
     "official",
@@ -85,19 +92,64 @@ struct Group {
     rarity: i64,
 }
 
+type Rows = Arc<Vec<TermRow>>;
+
+pub struct TermsCache {
+    rows: Cache<(String, i64), Rows>,
+    flights: KeyedCoalesce<Rows>,
+}
+
+impl TermsCache {
+    pub fn new() -> Self {
+        Self {
+            rows: Cache::builder()
+                .max_capacity(ROWS_CAPACITY)
+                .time_to_live(ROWS_KEPT)
+                .build(),
+            flights: KeyedCoalesce::new(),
+        }
+    }
+}
+
+impl Default for TermsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub async fn resolve(
+    cache: &TermsCache,
     tx: &mut Transaction<'_, Postgres>,
     q_norm: &str,
     shape: Shape,
 ) -> AppResult<Option<Terms>> {
-    let rows = sqlx::query_file_as!(
-        TermRow,
-        "queries/search/terms.sql",
-        q_norm,
-        shape.token_cap()
-    )
-    .fetch_all(&mut **tx)
-    .await?;
+    let key = (q_norm.to_owned(), shape.token_cap());
+    let rows = match cache.rows.get(&key) {
+        Some(rows) => rows,
+        None => {
+            let flight = format!("{}:{q_norm}", key.1);
+            cache
+                .flights
+                .run(&flight, || async {
+                    if let Some(rows) = cache.rows.get(&key) {
+                        return Ok(rows);
+                    }
+                    let rows = Arc::new(
+                        sqlx::query_file_as!(
+                            TermRow,
+                            "queries/search/terms.sql",
+                            q_norm,
+                            shape.token_cap()
+                        )
+                        .fetch_all(&mut **tx)
+                        .await?,
+                    );
+                    cache.rows.insert(key.clone(), rows.clone());
+                    Ok::<_, crate::error::AppError>(rows)
+                })
+                .await?
+        }
+    };
     Ok(build(&rows, shape))
 }
 
