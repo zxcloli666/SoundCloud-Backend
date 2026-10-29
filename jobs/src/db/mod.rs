@@ -67,9 +67,7 @@ async fn connect_analytics(config: &JobsConfig) -> Result<Option<PgPool>, Databa
         return Ok(None);
     };
     let name = format!("scd-jobs:{}:read", config.instance_id);
-    pool::connect(read, &read.bulk_pool, &name)
-        .await
-        .map(Some)
+    pool::connect(read, &read.bulk_pool, &name).await.map(Some)
 }
 
 pub(crate) async fn connect_migration(
