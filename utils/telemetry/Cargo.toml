@@ -16,5 +16,11 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 
 [dev-dependencies]
 opentelemetry_sdk = { version = "0.33", features = ["testing"] }
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
 tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "timeout"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+log = "0.4"
+tracing-log = "0.2"

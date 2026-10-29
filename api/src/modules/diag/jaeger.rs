@@ -136,6 +136,10 @@ fn view(span: &Value, service: &str, host: &str) -> SpanView {
         let Some(key) = item.get("key").and_then(Value::as_str) else {
             continue;
         };
+        let key = match key {
+            "http.status_code" => "http.response.status_code",
+            other => other,
+        };
         if KEPT_ATTRIBUTES.contains(&key)
             && let Some(value) = item.get("value").and_then(plain)
         {
@@ -221,6 +225,18 @@ mod tests {
         assert_eq!(span.attrs["http.response.status_code"], 502);
         assert_eq!(span.attrs["scd.debug"], true);
         assert!(!span.attrs.contains_key("request_id"));
+    }
+
+    const STORED: &str = r#"{"result":{"resourceSpans":[{"resource":{"attributes":[{"key":"scd.host","value":{"stringValue":"main"}},{"key":"service.name","value":{"stringValue":"api-main"}},{"key":"telemetry.sdk.language","value":{"stringValue":"rust"}},{"key":"telemetry.sdk.name","value":{"stringValue":"opentelemetry"}},{"key":"telemetry.sdk.version","value":{"stringValue":"0.33.1"}}]},"scopeSpans":[{"scope":{"name":"api"},"spans":[{"traceId":"e5de4e36a0aeef2184790ed7327e2ac7","spanId":"d536487b0a014319","flags":1,"name":"GET /health","kind":2,"startTimeUnixNano":"1793300100351847885","endTimeUnixNano":"1793300100352286235","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"http.route","value":{"stringValue":"/health"}},{"key":"http.status_code","value":{"intValue":"503"}},{"key":"request_id","value":{"stringValue":"e5de4e36a0aeef2184790ed7327e2ac7"}},{"key":"scd.host","value":{"stringValue":"main"}}],"status":{"code":2}}]}]}]}}"#;
+
+    #[test]
+    fn the_status_code_jaeger_stores_under_its_old_name_is_read() {
+        let view = compact("e5de4e36a0aeef2184790ed7327e2ac7", STORED.as_bytes()).expect("spans");
+        let span = &view.spans[0];
+
+        assert_eq!(span.attrs["http.response.status_code"], 503);
+        assert!(!span.attrs.contains_key("http.status_code"));
+        assert_eq!(span.status, "error");
     }
 
     #[test]
