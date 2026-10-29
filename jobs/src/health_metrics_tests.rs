@@ -12,6 +12,11 @@ fn metered(name: &'static str, pool: &PgPool) -> crate::metrics::MeteredPool {
     }
 }
 
+async fn render_fresh(pool: &PgPool, metered: &[crate::metrics::MeteredPool]) -> Option<String> {
+    crate::metrics::forget_snapshots().await;
+    crate::metrics::render(pool, metered).await
+}
+
 async fn enqueue(pool: &PgPool, lane: &str, leased: bool, attempts: i32) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO background_jobs (
@@ -55,7 +60,7 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
     .execute(&pool)
     .await?;
 
-    let Some(body) = crate::metrics::render(&pool, &[]).await else {
+    let Some(body) = render_fresh(&pool, &[]).await else {
         return Ok(());
     };
 
@@ -73,7 +78,7 @@ async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> any
     crate::metrics::init();
     let metered = [metered("queue", &pool), metered("maintenance", &pool)];
 
-    let Some(body) = crate::metrics::render(&pool, &metered).await else {
+    let Some(body) = render_fresh(&pool, &metered).await else {
         return Ok(());
     };
 
@@ -101,7 +106,7 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     pool.close().await;
 
     crate::metrics::sample_pool_wait(&metered("closed", &pool)).await;
-    let Some(body) = crate::metrics::render(&pool, &[]).await else {
+    let Some(body) = render_fresh(&pool, &[]).await else {
         return Ok(());
     };
 
@@ -124,7 +129,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
         std::time::Duration::from_millis(1),
     );
 
-    let Some(body) = crate::metrics::render(&pool, &[metered("main_fast", &pool)]).await else {
+    let Some(body) = render_fresh(&pool, &[metered("main_fast", &pool)]).await else {
         return Ok(());
     };
 
@@ -182,7 +187,7 @@ async fn an_empty_queue_still_reports_every_lane(pool: PgPool) -> anyhow::Result
     let _alone = RENDERING.lock().await;
     crate::metrics::init();
 
-    let Some(body) = crate::metrics::render(&pool, &[]).await else {
+    let Some(body) = render_fresh(&pool, &[]).await else {
         return Ok(());
     };
 

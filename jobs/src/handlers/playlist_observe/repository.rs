@@ -1143,6 +1143,38 @@ async fn lock_run(
     .ok_or(RepositoryError::MissingState)
 }
 
+async fn insert_or_find_snapshot(
+    transaction: &mut Transaction<'_, Postgres>,
+    playlist_urn: &str,
+    fingerprint: &[u8],
+    track_count: i32,
+) -> Result<Uuid, RepositoryError> {
+    for _ in 0..3 {
+        let inserted = sqlx::query_file_scalar!(
+            "queries/playlist_observe/upsert_snapshot.sql",
+            playlist_urn,
+            fingerprint,
+            track_count
+        )
+        .fetch_optional(&mut **transaction)
+        .await?;
+        if let Some(snapshot_id) = inserted {
+            return Ok(snapshot_id);
+        }
+        let found = sqlx::query_file_scalar!(
+            "queries/playlist_observe/find_snapshot.sql",
+            playlist_urn,
+            fingerprint
+        )
+        .fetch_optional(&mut **transaction)
+        .await?;
+        if let Some(snapshot_id) = found {
+            return Ok(snapshot_id);
+        }
+    }
+    Err(sqlx::Error::RowNotFound.into())
+}
+
 async fn store_snapshot(
     transaction: &mut Transaction<'_, Postgres>,
     playlist_urn: &str,
@@ -1151,26 +1183,8 @@ async fn store_snapshot(
 ) -> Result<Uuid, RepositoryError> {
     let track_count =
         i32::try_from(track_ids.len()).map_err(|_| RepositoryError::InconsistentSnapshot)?;
-    let inserted = sqlx::query_file_scalar!(
-        "queries/playlist_observe/upsert_snapshot.sql",
-        playlist_urn,
-        fingerprint,
-        track_count
-    )
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let snapshot_id = match inserted {
-        Some(snapshot_id) => snapshot_id,
-        None => {
-            sqlx::query_file_scalar!(
-                "queries/playlist_observe/find_snapshot.sql",
-                playlist_urn,
-                fingerprint
-            )
-            .fetch_one(&mut **transaction)
-            .await?
-        }
-    };
+    let snapshot_id =
+        insert_or_find_snapshot(transaction, playlist_urn, fingerprint, track_count).await?;
     sqlx::query_file!(
         "queries/playlist_observe/insert_snapshot_tracks.sql",
         snapshot_id,

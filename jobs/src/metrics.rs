@@ -409,6 +409,12 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     Some(handle.render())
 }
 
+#[cfg(test)]
+pub(crate) async fn forget_snapshots() {
+    *LANE_SNAPSHOT_AT.lock().await = None;
+    *KIND_SNAPSHOT_AT.lock().await = None;
+}
+
 async fn record_lane_depths(pool: &PgPool) {
     let mut snapshot_at = LANE_SNAPSHOT_AT.lock().await;
     if snapshot_at.is_some_and(|taken| taken.elapsed() < SNAPSHOT_TTL) {
