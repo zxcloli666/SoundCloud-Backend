@@ -490,5 +490,564 @@
     "type": "object"
   },
   "max_bundle_bytes": 262144,
+  "report": {
+    "$defs": {
+      "Counts": {
+        "properties": {
+          "attempts": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "errors": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_attempts": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "server_spans": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "traces_found": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "traces_wanted": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempts",
+          "failed_attempts",
+          "errors",
+          "traces_wanted",
+          "traces_found",
+          "server_spans"
+        ],
+        "type": "object"
+      },
+      "ErrorKind": {
+        "enum": [
+          "render",
+          "unhandled",
+          "rejection",
+          "panic",
+          "playback",
+          "request"
+        ],
+        "type": "string"
+      },
+      "Evidence": {
+        "properties": {
+          "errors": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "timeline": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "timeline",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "Frame": {
+        "properties": {
+          "column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "type": "string"
+          },
+          "function": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "file",
+          "line",
+          "column"
+        ],
+        "type": "object"
+      },
+      "Header": {
+        "properties": {
+          "app": {
+            "$ref": "#/$defs/ReportApp"
+          },
+          "code": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/$defs/Session"
+          },
+          "view": {
+            "$ref": "#/$defs/View"
+          }
+        },
+        "required": [
+          "view",
+          "code",
+          "created",
+          "app",
+          "session"
+        ],
+        "type": "object"
+      },
+      "Hint": {
+        "properties": {
+          "evidence": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "rule": {
+            "$ref": "#/$defs/Rule"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "text",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "IssueStats": {
+        "properties": {
+          "events": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "first_at": {
+            "type": "string"
+          },
+          "first_version": {
+            "type": "string"
+          },
+          "installs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "installs_24h": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_at": {
+            "type": "string"
+          },
+          "versions": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "events",
+          "installs",
+          "installs_24h",
+          "first_at",
+          "last_at",
+          "first_version",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "Missing": {
+        "properties": {
+          "sourcemaps": {
+            "$ref": "#/$defs/SourcemapState"
+          },
+          "trace_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "traces": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "traces",
+          "trace_ids",
+          "sourcemaps"
+        ],
+        "type": "object"
+      },
+      "Outcome": {
+        "enum": [
+          "ok",
+          "error"
+        ],
+        "type": "string"
+      },
+      "ReportApp": {
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "install": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "os_version": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "os",
+          "os_version",
+          "arch",
+          "install",
+          "locale"
+        ],
+        "type": "object"
+      },
+      "ReportError": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "component_stack": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "frames": {
+            "items": {
+              "$ref": "#/$defs/Frame"
+            },
+            "type": "array"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IssueStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ErrorKind"
+          },
+          "message": {
+            "type": "string"
+          },
+          "trace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "message",
+          "count",
+          "fingerprint",
+          "context",
+          "frames"
+        ],
+        "type": "object"
+      },
+      "Rule": {
+        "enum": [
+          "relay_blocked",
+          "origin_blocked",
+          "all_routes_down",
+          "never_reached",
+          "our_server_error",
+          "our_slowness",
+          "tier_missing",
+          "region_blocked",
+          "session_expired",
+          "busy",
+          "widespread",
+          "local_only",
+          "new_in_version"
+        ],
+        "type": "string"
+      },
+      "Session": {
+        "additionalProperties": false,
+        "properties": {
+          "logged_in": {
+            "type": "boolean"
+          },
+          "premium": {
+            "type": "boolean"
+          },
+          "quality": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "route": {
+            "additionalProperties": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxProperties": 4,
+            "propertyNames": {
+              "maxLength": 64
+            },
+            "type": "object"
+          },
+          "uptime_s": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uptime_s",
+          "logged_in",
+          "premium",
+          "quality",
+          "route"
+        ],
+        "type": "object"
+      },
+      "SourcemapState": {
+        "enum": [
+          "not_needed",
+          "applied",
+          "missing",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "TimelineEntry": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "attrs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "host": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/Outcome"
+          },
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "who": {
+            "$ref": "#/$defs/Who"
+          }
+        },
+        "required": [
+          "at",
+          "who",
+          "host",
+          "service",
+          "name",
+          "outcome",
+          "ms",
+          "count",
+          "attrs"
+        ],
+        "type": "object"
+      },
+      "View": {
+        "enum": [
+          "internal",
+          "public"
+        ],
+        "type": "string"
+      },
+      "Who": {
+        "enum": [
+          "client",
+          "server"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "counts": {
+        "$ref": "#/$defs/Counts"
+      },
+      "errors": {
+        "items": {
+          "$ref": "#/$defs/ReportError"
+        },
+        "type": "array"
+      },
+      "header": {
+        "$ref": "#/$defs/Header"
+      },
+      "hints": {
+        "items": {
+          "$ref": "#/$defs/Hint"
+        },
+        "type": "array"
+      },
+      "missing": {
+        "$ref": "#/$defs/Missing"
+      },
+      "offset_ms": {
+        "format": "int64",
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "timeline": {
+        "items": {
+          "$ref": "#/$defs/TimelineEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "header",
+      "counts",
+      "timeline",
+      "errors",
+      "hints",
+      "missing"
+    ],
+    "title": "scd-diagnostics report",
+    "type": "object"
+  },
   "version": 1
 }

@@ -353,6 +353,7 @@ pub fn diag_contract() -> Value {
         "max_bundle_bytes": MAX_BUNDLE_BYTES,
         "bundle": root_schema::<Bundle>("scd-diagnostics bundle"),
         "events": root_schema::<EventsBody>("scd-diagnostics events"),
+        "report": root_schema::<crate::diag_report::Report>("scd-diagnostics report"),
     })
 }
 

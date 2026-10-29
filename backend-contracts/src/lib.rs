@@ -1,6 +1,7 @@
 mod catalog_collection;
 mod catalog_refresh;
 pub mod diag;
+pub mod diag_report;
 mod job;
 pub mod pipeline;
 pub mod reasons;
