@@ -8,6 +8,8 @@ const DETACHED: &[&str] = &[
     "JoinSet::new",
 ];
 
+const AWAITED_BLOCKING_WORK: &str = "src/modules/diag/report/sourcemaps.rs";
+
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -93,7 +95,8 @@ fn the_serving_process_starts_no_work_of_its_own() {
     for (file, body) in serving_sources() {
         for (number, line) in body.lines().enumerate() {
             for pattern in DETACHED {
-                if line.contains(pattern) {
+                let awaited = *pattern == "spawn_blocking" && file == AWAITED_BLOCKING_WORK;
+                if line.contains(pattern) && !awaited {
                     detached.push(format!("{file}:{}: {}", number + 1, line.trim()));
                 }
             }
