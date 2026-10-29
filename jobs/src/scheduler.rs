@@ -17,7 +17,7 @@ const REALIGN_MAX_BATCHES: usize = 100;
 const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::ArtistAttributionRevalidate, 5 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::CatalogWorkReconcile, 5 * 60, -10, 4).delayed(),
-    Schedule::new(JobKind::CatalogCreditReview, 6 * 60 * 60, -10, 4).delayed(),
+    Schedule::new(JobKind::CatalogCreditReview, 72 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::AuthCleanupLinkRequests, 60, 0, 8),
     Schedule::new(JobKind::AuthCleanupLoginRequests, 60, 0, 8),
     Schedule::new(JobKind::DiagCleanup, 10 * 60, -10, 4),

@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::failure::{self, Shed, search_busy, search_timeout};
-use super::terms::{self, Shape};
+use super::terms::{self, Shape, TermsCache};
 use crate::cache::cache_service::CacheScope;
 use crate::cache::{CacheService, KeyedCoalesce, ListPageResult, build_list_cache_key};
 use crate::error::{AppError, AppResult};
@@ -37,6 +37,7 @@ pub struct SearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
     flights: KeyedCoalesce<Result<String, Shed>>,
+    pub(super) terms: TermsCache,
     pub(super) permits: Semaphore,
 }
 
@@ -113,6 +114,7 @@ impl SearchService {
             pg,
             cache,
             flights: KeyedCoalesce::new(),
+            terms: TermsCache::new(),
             permits: Semaphore::new(PERMITS),
         })
     }
@@ -190,7 +192,7 @@ impl SearchService {
         let key = request.key("search-db-v2-tracks", &q, owner.as_deref());
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Tracks).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Tracks).await? else {
                 return Ok(request.empty());
             };
             let ids = sqlx::query_file_scalar!(
@@ -232,7 +234,8 @@ impl SearchService {
         let key = request.key("search-db-v2-playlists", &q, owner.as_deref());
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -263,7 +266,8 @@ impl SearchService {
         let key = request.key("search-db-v2-users", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -297,7 +301,8 @@ impl SearchService {
         let key = request.key("search-db-v2-artists", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -326,7 +331,8 @@ impl SearchService {
         let key = request.key("search-db-v2-albums", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(

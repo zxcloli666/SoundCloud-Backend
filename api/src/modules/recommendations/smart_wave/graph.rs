@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use mini_moka::sync::Cache;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -41,6 +42,26 @@ type Adjacency = HashMap<Uuid, Arc<Neighbors>>;
 
 pub struct GraphEdges {
     by_artist: Cache<Uuid, Arc<Neighbors>>,
+    loading: Mutex<HashMap<Uuid, Arc<Semaphore>>>,
+}
+
+struct Loading<'a> {
+    edges: &'a GraphEdges,
+    artists: Vec<(Uuid, Arc<Semaphore>)>,
+}
+
+impl Drop for Loading<'_> {
+    fn drop(&mut self) {
+        let mut loading = self
+            .edges
+            .loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (artist, done) in &self.artists {
+            loading.remove(artist);
+            done.close();
+        }
+    }
 }
 
 impl GraphEdges {
@@ -51,6 +72,7 @@ impl GraphEdges {
                 .weigher(|_, neighbors: &Arc<Neighbors>| edge_count(neighbors))
                 .time_to_live(EDGES_TTL)
                 .build(),
+            loading: Mutex::new(HashMap::new()),
         }
     }
 
@@ -65,27 +87,85 @@ impl GraphEdges {
                 None => missing.push(*artist),
             }
         }
-        if !missing.is_empty() {
-            let Ok(edges) = sqlx::query_file!(
-                "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
-                &missing
-            )
-            .fetch_all(pg)
-            .await
-            else {
-                return Adjacency::new();
-            };
-            let edges = edges
-                .into_iter()
-                .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
-            for (artist, neighbors) in neighbors_by_artist(&missing, edges) {
-                let neighbors = Arc::new(neighbors);
-                self.by_artist.insert(artist, neighbors.clone());
-                adjacency.insert(artist, neighbors);
+        let (loading, awaited) = self.claim(&missing);
+        let loaded = self
+            .load(pg, loading.artists.iter().map(|(artist, _)| *artist))
+            .await;
+        drop(loading);
+        let Some(loaded) = loaded else {
+            return Adjacency::new();
+        };
+        adjacency.extend(loaded);
+        let mut stragglers = Vec::new();
+        for (artist, done) in awaited {
+            let _ = done.acquire().await;
+            match self.by_artist.get(&artist) {
+                Some(neighbors) => {
+                    adjacency.insert(artist, neighbors);
+                }
+                None => stragglers.push(artist),
             }
         }
+        let Some(loaded) = self.load(pg, stragglers).await else {
+            return Adjacency::new();
+        };
+        adjacency.extend(loaded);
         adjacency.retain(|_, neighbors| !neighbors.is_empty());
         adjacency
+    }
+
+    fn claim(&self, missing: &[Uuid]) -> (Loading<'_>, Vec<(Uuid, Arc<Semaphore>)>) {
+        let mut loading = self
+            .loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mine = Vec::new();
+        let mut awaited = Vec::new();
+        for artist in missing {
+            match loading.get(artist) {
+                Some(done) => awaited.push((*artist, done.clone())),
+                None => {
+                    let done = Arc::new(Semaphore::new(0));
+                    loading.insert(*artist, done.clone());
+                    mine.push((*artist, done));
+                }
+            }
+        }
+        (
+            Loading {
+                edges: self,
+                artists: mine,
+            },
+            awaited,
+        )
+    }
+
+    async fn load(
+        &self,
+        pg: &PgPool,
+        artists: impl IntoIterator<Item = Uuid>,
+    ) -> Option<Adjacency> {
+        let artists: Vec<Uuid> = artists.into_iter().collect();
+        if artists.is_empty() {
+            return Some(Adjacency::new());
+        }
+        let edges = sqlx::query_file!(
+            "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+            &artists
+        )
+        .fetch_all(pg)
+        .await
+        .ok()?;
+        let edges = edges
+            .into_iter()
+            .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
+        let mut adjacency = Adjacency::new();
+        for (artist, neighbors) in neighbors_by_artist(&artists, edges) {
+            let neighbors = Arc::new(neighbors);
+            self.by_artist.insert(artist, neighbors.clone());
+            adjacency.insert(artist, neighbors);
+        }
+        Some(adjacency)
     }
 }
 
@@ -422,6 +502,197 @@ async fn write_cache(redis: &RedisPool, sc_user_id: &str, affinity: &Affinity) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    const CALLERS: usize = 12;
+
+    async fn wide(small: &PgPool) -> anyhow::Result<PgPool> {
+        Ok(PgPoolOptions::new()
+            .max_connections(40)
+            .connect_with((*small.connect_options()).clone())
+            .await?)
+    }
+
+    async fn seed(pool: &PgPool) -> anyhow::Result<[Uuid; 3]> {
+        let artists = [1_u128, 2, 3].map(Uuid::from_u128);
+        for (index, artist) in artists.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO artists (id, name, normalized_name, source)
+                 VALUES ($1, $2, $2, 'test')",
+            )
+            .bind(artist)
+            .bind(format!("graph artist {index}"))
+            .execute(pool)
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO artist_coplay (a_id, b_id, weight) VALUES ($1, $2, 0.5), ($1, $3, 0.25), ($2, $3, 0.75)",
+        )
+        .bind(artists[0])
+        .bind(artists[1])
+        .bind(artists[2])
+        .execute(pool)
+        .await?;
+        sqlx::query("INSERT INTO artist_colike (a_id, b_id, co, w) VALUES ($1, $2, 5, 0.4)")
+            .bind(artists[0])
+            .bind(artists[1])
+            .execute(pool)
+            .await?;
+        Ok(artists)
+    }
+
+    async fn waiting_on_edges(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND wait_event_type = 'Lock'
+               AND query LIKE '%FROM artist_coplay%'",
+        )
+        .fetch_one(pool)
+        .await?)
+    }
+
+    async fn expected(pool: &PgPool, artists: &[Uuid]) -> anyhow::Result<Adjacency> {
+        let edges = sqlx::query_file!(
+            "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+            artists
+        )
+        .fetch_all(pool)
+        .await?;
+        let edges = edges
+            .into_iter()
+            .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
+        let mut adjacency: Adjacency = neighbors_by_artist(artists, edges)
+            .into_iter()
+            .map(|(artist, neighbors)| (artist, Arc::new(neighbors)))
+            .collect();
+        adjacency.retain(|_, neighbors| !neighbors.is_empty());
+        Ok(adjacency)
+    }
+
+    type Flat = Vec<(Uuid, i16, Vec<(Uuid, u32)>)>;
+
+    fn sorted(adjacency: &Adjacency) -> Flat {
+        let mut flat = Vec::new();
+        for (artist, neighbors) in adjacency {
+            for (kind, list) in neighbors.iter() {
+                let mut list: Vec<_> = list
+                    .iter()
+                    .map(|(dst, weight)| (*dst, weight.to_bits()))
+                    .collect();
+                list.sort();
+                flat.push((*artist, *kind, list));
+            }
+        }
+        flat.sort();
+        flat
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn concurrent_misses_for_one_artist_make_one_db_call(
+        small: PgPool,
+    ) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let want = expected(&pool, &artists[..2]).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let calls: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let pool = pool.clone();
+                let edges = edges.clone();
+                tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let waiting = waiting_on_edges(&pool).await?;
+        blocker.rollback().await?;
+
+        assert_eq!(waiting, 1);
+        for call in calls {
+            assert_eq!(sorted(&call.await?), sorted(&want));
+        }
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let cached = tokio::time::timeout(Duration::from_secs(2), edges.of(&pool, &artists[..2]))
+            .await
+            .expect("a cached artist must not touch the database");
+        assert_eq!(sorted(&cached), sorted(&want));
+        blocker.rollback().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn overlapping_callers_load_each_artist_once(small: PgPool) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let first = vec![artists[0], artists[1]];
+        let second = vec![artists[1], artists[2]];
+        let want_first = expected(&pool, &first).await?;
+        let want_second = expected(&pool, &second).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let one = {
+            let (pool, edges, first) = (pool.clone(), edges.clone(), first.clone());
+            tokio::spawn(async move { edges.of(&pool, &first).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let two = {
+            let (pool, edges, second) = (pool.clone(), edges.clone(), second.clone());
+            tokio::spawn(async move { edges.of(&pool, &second).await })
+        };
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waiting = waiting_on_edges(&pool).await?;
+        blocker.rollback().await?;
+
+        assert_eq!(waiting, 2, "the shared artist is not loaded twice");
+        assert_eq!(sorted(&one.await?), sorted(&want_first));
+        assert_eq!(sorted(&two.await?), sorted(&want_second));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_failed_owner_does_not_strand_the_waiters(small: PgPool) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let want = expected(&pool, &artists[..2]).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let owner = {
+            let (pool, edges) = (pool.clone(), edges.clone());
+            tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let waiter = {
+            let (pool, edges) = (pool.clone(), edges.clone());
+            tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        owner.abort();
+        let _ = owner.await;
+        blocker.rollback().await?;
+
+        let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("the waiter must not hang")?;
+        assert_eq!(sorted(&got), sorted(&want));
+        Ok(())
+    }
 
     #[test]
     fn decay_fold_tz_case() {

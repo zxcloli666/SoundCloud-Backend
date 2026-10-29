@@ -24,6 +24,7 @@ pub struct TracksService {
     miss: Arc<CatalogMiss>,
     mutations: super::mutations::TrackMutations,
     uploads: super::upload::UploadGate,
+    read_stamps: super::read_stamp::ReadStamps,
 }
 
 pub(crate) struct TracksServiceDependencies {
@@ -55,6 +56,7 @@ impl TracksService {
             miss,
             mutations,
             uploads: super::upload::UploadGate::new(),
+            read_stamps: super::read_stamp::ReadStamps::new(),
         })
     }
 
@@ -115,9 +117,7 @@ impl TracksService {
                     .is_some_and(|owner| extract_sc_id(owner) == extract_sc_id(sc_user_id))
         });
         let verified_secret = if let Some(row) = local {
-            let _ = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
-                .execute(&self.pg)
-                .await;
+            self.read_stamps.touch(&self.pg, sc_track_id).await;
             self.opened(sc_track_id).await;
             if self.cold_refresh.is_track_stale(Some(row.sc_synced_at))
                 && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(

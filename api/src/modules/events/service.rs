@@ -150,7 +150,6 @@ impl EventsService {
         let user_guard = lock.lock().await;
 
         let event_id = Uuid::now_v7();
-        let mut transaction = self.pg.begin().await?;
         match position_pct {
             Some(position) => {
                 sqlx::query_file!(
@@ -162,7 +161,7 @@ impl EventsService {
                     weight,
                     position,
                 )
-                .execute(&mut *transaction)
+                .execute(&self.pg)
                 .await?;
             }
             None => {
@@ -174,11 +173,10 @@ impl EventsService {
                     event_type,
                     weight,
                 )
-                .execute(&mut *transaction)
+                .execute(&self.pg)
                 .await?;
             }
         }
-        transaction.commit().await?;
         drop(user_guard);
 
         self.enqueue_indexing(&normalized).await;
