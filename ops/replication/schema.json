@@ -1,0 +1,2225 @@
+{
+ "core": {
+  "admin_maintenance_runs": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "changed", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "cursor_text", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "cursor_uuid", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "character varying(64)"},
+    {"default": "0", "generated": false, "name": "merged", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "phase", "notnull": true, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "run_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "scanned", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "skipped", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "started_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["kind"], "expr": false, "keys": ["kind"], "name": "admin_maintenance_runs_pkey", "primary": true, "where": null}
+   ]
+  },
+  "ai_resolver_budget": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "spent", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "spent_on", "notnull": true, "type": "date"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["spent_on"], "expr": false, "keys": ["spent_on"], "name": "ai_resolver_budget_pkey", "primary": true, "where": null}
+   ]
+  },
+  "ai_resolver_cache": {
+   "columns": [
+    {"default": null, "generated": false, "name": "cache_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "reply", "notnull": true, "type": "jsonb"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["cache_key"], "expr": false, "keys": ["cache_key"], "name": "ai_resolver_cache_pkey", "primary": true, "where": null}
+   ]
+  },
+  "album_artists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "album_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "role", "notnull": true, "type": "character varying(16)"}
+   ],
+   "fks": [
+    {"cols": ["album_id"], "name": "album_artists_album_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "albums"},
+    {"cols": ["artist_id"], "name": "album_artists_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["album_id", "artist_id", "role"], "expr": false, "keys": ["album_id", "artist_id", "role"], "name": "album_artists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "album_tracks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "album_id", "notnull": true, "type": "uuid"},
+    {"default": "1", "generated": false, "name": "disc_number", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "position", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["album_id"], "name": "album_tracks_album_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "albums"},
+    {"cols": ["track_id"], "name": "album_tracks_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["album_id", "track_id"], "expr": false, "keys": ["album_id", "track_id"], "name": "album_tracks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "albums": {
+   "columns": [
+    {"default": null, "generated": false, "name": "aggregates_updated_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "confidence", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "cover_url", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "genius_album_id", "notnull": false, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "false", "generated": false, "name": "is_star_artist", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "mb_release_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "normalized_title", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "popularity_score", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "primary_artist_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "release_date", "notnull": false, "type": "date"},
+    {"default": null, "generated": false, "name": "release_year", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "spotify_album_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "total_duration_ms", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "track_count", "notnull": true, "type": "integer"},
+    {"default": "'album'::character varying", "generated": false, "name": "type", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["primary_artist_id"], "name": "albums_primary_artist_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["mb_release_id"], "expr": false, "keys": ["mb_release_id"], "name": "albums_mb_uq", "primary": false, "where": "(mb_release_id IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "albums_pkey", "primary": true, "where": null},
+    {"cols": ["spotify_album_id"], "expr": false, "keys": ["spotify_album_id"], "name": "albums_spotify_uq", "primary": false, "where": "(spotify_album_id IS NOT NULL)"}
+   ]
+  },
+  "artist_attribution_revalidation": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "credits_removed", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "identity_completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "identity_cursor_account", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "identity_cursor_artist", "notnull": false, "type": "uuid"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "tracks_reset", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "updated_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "walker_completed_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "artist_attribution_revalidation_pkey", "primary": true, "where": null}
+   ]
+  },
+  "artist_colike": {
+   "columns": [
+    {"default": null, "generated": false, "name": "a_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "b_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "co", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "w", "notnull": true, "type": "real"}
+   ],
+   "fks": [
+    {"cols": ["a_id"], "name": "artist_colike_a_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["b_id"], "name": "artist_colike_b_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["a_id", "b_id"], "expr": false, "keys": ["a_id", "b_id"], "name": "artist_colike_pkey", "primary": true, "where": null}
+   ]
+  },
+  "artist_coplay": {
+   "columns": [
+    {"default": null, "generated": false, "name": "a_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "b_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "last_seen", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "weight", "notnull": true, "type": "real"}
+   ],
+   "fks": [
+    {"cols": ["a_id"], "name": "artist_coplay_a_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["b_id"], "name": "artist_coplay_b_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["a_id", "b_id"], "expr": false, "keys": ["a_id", "b_id"], "name": "artist_coplay_pkey", "primary": true, "where": null}
+   ]
+  },
+  "artist_sc_accounts": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "notes", "notnull": false, "type": "text"},
+    {"default": "'main'::character varying", "generated": false, "name": "role", "notnull": true, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "verified", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "artist_sc_accounts_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "artist_sc_account_flag", "name": "artist_sc_account_flag_trg"}
+   ],
+   "unique": [
+    {"cols": ["artist_id", "sc_user_id"], "expr": false, "keys": ["artist_id", "sc_user_id"], "name": "artist_sc_accounts_pkey", "primary": true, "where": null},
+    {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "artist_sc_accounts_verified_identity_uq", "primary": false, "where": "verified"}
+   ]
+  },
+  "artist_socials": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "url", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "verified", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "artist_socials_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["artist_id", "url"], "expr": false, "keys": ["artist_id", "url"], "name": "artist_socials_pkey", "primary": true, "where": null}
+   ]
+  },
+  "artists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "account_walk_locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "aggregates_updated_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "album_count_denorm", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "avatar_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "bio", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "confidence", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "country", "notnull": false, "type": "character varying(8)"},
+    {"default": "0", "generated": false, "name": "crawl_attempts", "notnull": true, "type": "smallint"},
+    {"default": "false", "generated": false, "name": "crawl_dead", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "crawl_fail_count", "notnull": true, "type": "smallint"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "genius_artist_id", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "genius_crawl_offset", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "genius_crawled_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "genius_locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "genius_next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "has_sc_account", "notnull": true, "type": "boolean"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "interest_score", "notnull": true, "type": "real"},
+    {"default": "false", "generated": false, "name": "is_star", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "isni", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_account_walk_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_crawled_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "mb_artist_id", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "mb_crawl_offset", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "mb_crawled_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "mb_locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "mb_next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "merged_into", "notnull": false, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "monthly_listeners", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "normalized_name", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "popularity_score", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "spotify_artist_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "star_aura_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "star_custom_hex", "notnull": false, "type": "character varying(7)"},
+    {"default": "'{}'::text[]", "generated": false, "name": "tags", "notnull": true, "type": "text[]"},
+    {"default": "0", "generated": false, "name": "track_count_featured", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "track_count_primary", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "trending_score", "notnull": true, "type": "real"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["merged_into"], "name": "artists_merged_into_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["genius_artist_id"], "expr": false, "keys": ["genius_artist_id"], "name": "artists_genius_uq", "primary": false, "where": "(genius_artist_id IS NOT NULL)"},
+    {"cols": ["mb_artist_id"], "expr": false, "keys": ["mb_artist_id"], "name": "artists_mb_uq", "primary": false, "where": "(mb_artist_id IS NOT NULL)"},
+    {"cols": ["normalized_name"], "expr": false, "keys": ["normalized_name"], "name": "artists_normalized_name_uq", "primary": false, "where": "(merged_into IS NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "artists_pkey", "primary": true, "where": null},
+    {"cols": ["spotify_artist_id"], "expr": false, "keys": ["spotify_artist_id"], "name": "artists_spotify_uq", "primary": false, "where": "(spotify_artist_id IS NOT NULL)"}
+   ]
+  },
+  "audio_index_wire_state": {
+   "columns": [
+    {"default": "1", "generated": false, "name": "attempt", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "dispatched_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "outcome_rank", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "outcome_reason", "notnull": false, "type": "character varying(48)"},
+    {"default": null, "generated": false, "name": "outcome_status", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "quarantine_reason", "notnull": false, "type": "character varying(64)"},
+    {"default": null, "generated": false, "name": "result_consumer", "notnull": false, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "result_lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "result_lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "result_published_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "result_stream", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "result_stream_sequence", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "upload_generation", "notnull": false, "type": "bigint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "audio_index_wire_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "background_job_enqueues": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "accepted_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "background_job_enqueues_pkey", "primary": true, "where": null}
+   ]
+  },
+  "background_job_failures": {
+   "columns": [
+    {"default": null, "generated": false, "name": "attempts", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "dedup_key", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "failed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "lane", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "max_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "payload", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "priority", "notnull": true, "type": "smallint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id", "generation"], "expr": false, "keys": ["id", "generation"], "name": "background_job_failures_pkey", "primary": true, "where": null}
+   ]
+  },
+  "background_jobs": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "available_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "dedup_key", "notnull": false, "type": "text"},
+    {"default": "1", "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "lane", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "lease_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "leased_by", "notnull": false, "type": "text"},
+    {"default": "8", "generated": false, "name": "max_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "payload", "notnull": true, "type": "jsonb"},
+    {"default": "0", "generated": false, "name": "priority", "notnull": true, "type": "smallint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["kind", "dedup_key"], "expr": false, "keys": ["kind", "dedup_key"], "name": "background_jobs_dedup_idx", "primary": false, "where": "(dedup_key IS NOT NULL)"},
+    {"cols": ["lease_id"], "expr": false, "keys": ["lease_id"], "name": "background_jobs_lease_idx", "primary": false, "where": "(lease_id IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "background_jobs_pkey", "primary": true, "where": null}
+   ]
+  },
+  "background_schedules": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "enabled", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "interval_seconds", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "lane", "notnull": true, "type": "character varying(16)"},
+    {"default": "8", "generated": false, "name": "max_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "priority", "notnull": true, "type": "smallint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["kind"], "expr": false, "keys": ["kind"], "name": "background_schedules_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_audience": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "relation", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "subject_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["subject_urn", "relation", "user_urn"], "expr": false, "keys": ["subject_urn", "relation", "user_urn"], "name": "catalog_audience_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_collection_cursors": {
+   "columns": [
+    {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "cursor", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "subject_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["subject_id", "collection", "scope"], "name": "catalog_collection_cursors_subject_id_collection_scope_fkey", "on_delete": "c", "ref_cols": ["subject_id", "collection", "scope"], "ref_table": "catalog_collection_sync"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["subject_id", "collection", "scope", "cursor"], "expr": false, "keys": ["subject_id", "collection", "scope", "cursor"], "name": "catalog_collection_cursors_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_collection_seen": {
+   "columns": [
+    {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "entity_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "snapshot_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "subject_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["subject_id", "collection", "scope"], "name": "catalog_collection_seen_subject_id_collection_scope_fkey", "on_delete": "c", "ref_cols": ["subject_id", "collection", "scope"], "ref_table": "catalog_collection_sync"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["subject_id", "collection", "scope", "entity_key"], "expr": false, "keys": ["subject_id", "collection", "scope", "entity_key"], "name": "catalog_collection_seen_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_collection_sync": {
+   "columns": [
+    {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "complete", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "item_count", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "job_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "next_cursor", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "page_count", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "snapshot_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "started_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "subject_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "verified_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["subject_id", "collection", "scope"], "expr": false, "keys": ["subject_id", "collection", "scope"], "name": "catalog_collection_sync_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_merge_state": {
+   "columns": [
+    {"default": null, "generated": false, "name": "cursor_artist", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "cursor_recording_key", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "groups_merged", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "passes_completed", "notnull": true, "type": "bigint"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "tracks_superseded", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "updated_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "catalog_merge_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "catalog_work_links": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "linked_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "match_reason", "notnull": true, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "matched_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "normalizer_version", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "wanted_track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "catalog_work_links_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"},
+    {"cols": ["wanted_track_id"], "name": "catalog_work_links_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["wanted_track_id", "track_id"], "expr": false, "keys": ["wanted_track_id", "track_id"], "name": "catalog_work_links_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cdn_tracks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "cdn_path", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "last_accessed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "quality", "notnull": true, "type": "character varying(16)"},
+    {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "track_urn", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "cdn_tracks_pkey", "primary": true, "where": null},
+    {"cols": ["track_urn", "quality"], "expr": false, "keys": ["track_urn", "quality"], "name": "cdn_tracks_urn_quality_uq", "primary": false, "where": null}
+   ]
+  },
+  "cluster_bandit_stats": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "clicks", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "cluster_id", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "completes", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "shows", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_user_id", "cluster_id"], "expr": false, "keys": ["sc_user_id", "cluster_id"], "name": "cluster_bandit_stats_pkey", "primary": true, "where": null}
+   ]
+  },
+  "diag_bundles": {
+   "columns": [
+    {"default": null, "generated": false, "name": "app_version", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "body", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "code", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "os", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["code"], "expr": false, "keys": ["code"], "name": "diag_bundles_pkey", "primary": true, "where": null}
+   ]
+  },
+  "diag_events": {
+   "columns": [
+    {"default": null, "generated": false, "name": "app_version", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "body", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "fingerprint", "notnull": true, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "install", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "os", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "trace", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "diag_events_pkey", "primary": true, "where": null}
+   ]
+  },
+  "diag_issue_days": {
+   "columns": [
+    {"default": null, "generated": false, "name": "app_version", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "day", "notnull": true, "type": "date"},
+    {"default": null, "generated": false, "name": "events", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "fingerprint", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "first_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "host", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "last_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["fingerprint", "day", "host", "app_version"], "expr": false, "keys": ["fingerprint", "day", "host", "app_version"], "name": "diag_issue_days_pkey", "primary": true, "where": null}
+   ]
+  },
+  "diag_issue_origins": {
+   "columns": [
+    {"default": null, "generated": false, "name": "day", "notnull": true, "type": "date"},
+    {"default": null, "generated": false, "name": "fingerprint", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "host", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "origin", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["fingerprint", "day", "host", "origin"], "expr": false, "keys": ["fingerprint", "day", "host", "origin"], "name": "diag_issue_origins_pkey", "primary": true, "where": null}
+   ]
+  },
+  "discover_promoted": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "entity_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "entity_type", "notnull": true, "type": "character varying(8)"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "note", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "position", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["entity_type", "entity_id"], "expr": false, "keys": ["entity_type", "entity_id"], "name": "discover_promoted_entity_uq", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "discover_promoted_pkey", "primary": true, "where": null}
+   ]
+  },
+  "discover_settings": {
+   "columns": [
+    {"default": "1", "generated": false, "name": "id", "notnull": true, "type": "smallint"},
+    {"default": "true", "generated": false, "name": "show_star", "notnull": true, "type": "boolean"},
+    {"default": "8", "generated": false, "name": "star_limit", "notnull": true, "type": "integer"},
+    {"default": "'popular'::character varying", "generated": false, "name": "star_strategy", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "discover_settings_pkey", "primary": true, "where": null}
+   ]
+  },
+  "discover_tag_counts": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_count", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "refreshed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "tag", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["tag"], "expr": false, "keys": ["tag"], "name": "discover_tag_counts_pkey", "primary": true, "where": null}
+   ]
+  },
+  "disliked_tracks": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_data", "notnull": false, "type": "jsonb"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "disliked_tracks_pkey", "primary": true, "where": null},
+    {"cols": ["sc_user_id", "sc_track_id"], "expr": false, "keys": ["sc_user_id", "sc_track_id"], "name": "disliked_tracks_user_track_uq", "primary": false, "where": null}
+   ]
+  },
+  "enrich_calibration": {
+   "columns": [
+    {"default": null, "generated": false, "name": "calibrated", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "raw_bin_high", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "raw_bin_low", "notnull": true, "type": "real"},
+    {"default": "0", "generated": false, "name": "sample_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["source", "raw_bin_low", "raw_bin_high"], "expr": false, "keys": ["source", "raw_bin_low", "raw_bin_high"], "name": "enrich_calibration_pkey", "primary": true, "where": null}
+   ]
+  },
+  "featured_items": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "sc_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "type", "notnull": true, "type": "character varying(20)"},
+    {"default": "1", "generated": false, "name": "weight", "notnull": true, "type": "integer"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "featured_items_pkey", "primary": true, "where": null}
+   ]
+  },
+  "link_requests": {
+   "columns": [
+    {"default": null, "generated": false, "name": "claim_token", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "mode", "notnull": true, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "source_session_id", "notnull": false, "type": "uuid"},
+    {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "target_session_id", "notnull": false, "type": "uuid"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["claim_token"], "expr": false, "keys": ["claim_token"], "name": "link_requests_claim_token_uq", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "link_requests_pkey", "primary": true, "where": null}
+   ]
+  },
+  "listening_history": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "artist_urn", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "artwork_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "duration", "notnull": true, "type": "integer"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "played_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "listening_history_pkey", "primary": true, "where": null}
+   ]
+  },
+  "login_requests": {
+   "columns": [
+    {"default": null, "generated": false, "name": "code_verifier", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "profile_ok", "notnull": false, "type": "boolean"},
+    {"default": null, "generated": false, "name": "redirect_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "result_session_id", "notnull": false, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "retry_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "state", "notnull": true, "type": "text"},
+    {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "step", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "target_session_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "username", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "login_requests_pkey", "primary": true, "where": null},
+    {"cols": ["state"], "expr": false, "keys": ["state"], "name": "login_requests_state_uq", "primary": false, "where": null}
+   ]
+  },
+  "lyrics_cache": {
+   "columns": [
+    {"default": "1", "generated": false, "name": "content_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "content_hash", "notnull": false, "type": "bytea"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "embedded_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "embedding_state", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "fts", "notnull": false, "type": "tsvector"},
+    {"default": null, "generated": false, "name": "language", "notnull": false, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "language_confidence", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "plain_source", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "plain_text", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "synced_lrc", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_source", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "synced_version", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": false, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "lyrics_cache_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "lyrics_cache_fts_refresh", "name": "lyrics_cache_fts_trg"}
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_cache_pkey", "primary": true, "where": null}
+   ]
+  },
+  "lyrics_embedding_wire_state": {
+   "columns": [
+    {"default": null, "generated": false, "name": "completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "first_publish_attempt_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "lyrics_content_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "lyrics_created_at", "notnull": false, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "publish_acknowledged_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "publish_retry_until", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "quarantine_reason", "notnull": false, "type": "character varying(64)"},
+    {"default": "0", "generated": false, "name": "reopen_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "request_language", "notnull": false, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "request_message_id", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "request_sha256", "notnull": false, "type": "bytea"},
+    {"default": null, "generated": false, "name": "request_text", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "request_version", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "result_consumer", "notnull": false, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "result_kind", "notnull": false, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "result_lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "result_lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "result_published_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "result_rank", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "result_reason", "notnull": false, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "result_stream", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "result_stream_sequence", "notnull": false, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "result_timeouts", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_embedding_wire_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "lyrics_lookup_backfill_state": {
+   "columns": [
+    {"default": "false", "generated": false, "name": "completed", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "cursor_id", "notnull": false, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "rows_created", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "rows_seen", "notnull": true, "type": "bigint"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "lyrics_lookup_backfill_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "lyrics_lookup_state": {
+   "columns": [
+    {"default": "1", "generated": false, "name": "algorithm_version", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "claim_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "claim_job_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "claim_job_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "claim_job_lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "claim_state_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "failure_streak", "notnull": true, "type": "integer"},
+    {"default": "1", "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "input_artist", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "input_duration_ms", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "input_genius_song_id", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "input_genius_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "input_release_date", "notnull": false, "type": "date"},
+    {"default": null, "generated": false, "name": "input_sc_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "input_title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "last_attempt_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "character varying(512)"},
+    {"default": null, "generated": false, "name": "last_outcome", "notnull": false, "type": "character varying(32)"},
+    {"default": "0", "generated": false, "name": "miss_streak", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "priority", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "retry_after_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": "1", "generated": false, "name": "source_set_version", "notnull": true, "type": "integer"},
+    {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "wake_durable_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "wake_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "wake_message_id", "notnull": false, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "lyrics_lookup_state_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "lyrics_lookup_state_pkey", "primary": true, "where": null},
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_lookup_state_sc_track_id_key", "primary": false, "where": null}
+   ]
+  },
+  "oauth_app_request_cooldowns": {
+   "columns": [
+    {"default": "1", "generated": false, "name": "failure_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "retry_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "oauth_app_request_cooldowns_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_request_cooldowns_pkey", "primary": true, "where": null}
+   ]
+  },
+  "oauth_app_token_issuance_reservations": {
+   "columns": [
+    {"default": null, "generated": false, "name": "client_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "released_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "reserved_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "oauth_app_token_issuance_reservations_oauth_app_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "oauth_app_token_issuance_reservations_pkey", "primary": true, "where": null}
+   ]
+  },
+  "oauth_app_token_refresh_state": {
+   "columns": [
+    {"default": null, "generated": false, "name": "lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "retry_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "oauth_app_token_refresh_state_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_token_refresh_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "oauth_app_tokens": {
+   "columns": [
+    {"default": null, "generated": false, "name": "access_token", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "generation", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_refresh_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_used_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "refresh_attempts", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "refresh_token", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "refreshed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "scope", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "oauth_app_tokens_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_tokens_pkey", "primary": true, "where": null}
+   ]
+  },
+  "oauth_apps": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "client_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "client_secret", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_used_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "redirect_uri", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": null, "expr": true, "keys": ["btrim(client_id, '\t\n\u000b\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'::text)"], "name": "oauth_apps_client_identity_uq", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "oauth_apps_pkey", "primary": true, "where": null}
+   ]
+  },
+  "pipeline_event_receipts": {
+   "columns": [
+    {"default": null, "generated": false, "name": "consumer", "notnull": true, "type": "character varying(96)"},
+    {"default": null, "generated": false, "name": "event_published_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "processed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "stream", "notnull": true, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "stream_sequence", "notnull": true, "type": "bigint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["consumer", "stream", "stream_sequence", "event_published_at"], "expr": false, "keys": ["consumer", "stream", "stream_sequence", "event_published_at"], "name": "pipeline_event_receipts_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlist_legacy_membership_intents": {
+   "columns": [
+    {"default": null, "generated": false, "name": "archive_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "archived_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "'unclassified'::text", "generated": false, "name": "classification", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "legacy_desired_revision", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "legacy_synced_revision", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "legacy_user_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "local_snapshot_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "prior_classification", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "queue_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "queue_failed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "queue_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "queue_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "queue_last_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "queue_next_run_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "queue_payload", "notnull": false, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "queue_retry_count", "notnull": false, "type": "integer"},
+    {"default": null, "generated": false, "name": "remote_attempted_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "remote_completed_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "remote_result", "notnull": false, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "resolved_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["local_snapshot_id"], "name": "playlist_legacy_membership_intents_local_snapshot_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "playlist_remote_snapshots"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["archive_id"], "expr": false, "keys": ["archive_id"], "name": "playlist_legacy_membership_intents_pkey", "primary": true, "where": null},
+    {"cols": ["queue_id"], "expr": false, "keys": ["queue_id"], "name": "playlist_legacy_membership_intents_queue_id_key", "primary": false, "where": null}
+   ]
+  },
+  "playlist_membership_operations": {
+   "columns": [
+    {"default": null, "generated": false, "name": "accepted_projection_revision", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "actor_sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "base_baseline_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "base_observation_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "boundary", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "conflict_code", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "expected_projection_revision", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "idempotency_key", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "left_anchor_track_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "operation_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "ordered_track_ids", "notnull": false, "type": "text[]"},
+    {"default": "'pending'::text", "generated": false, "name": "outcome", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "request_fingerprint", "notnull": true, "type": "bytea"},
+    {"default": null, "generated": false, "name": "resolved_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "right_anchor_track_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "sequence", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn", "base_observation_id"], "name": "playlist_membership_operations_base_observation_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_observations"},
+    {"cols": ["playlist_urn"], "name": "playlist_membership_operations_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["playlist_urn"], "ref_table": "playlist_membership_state"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["playlist_urn", "idempotency_key"], "expr": false, "keys": ["playlist_urn", "idempotency_key"], "name": "playlist_membership_operations_idempotency_uq", "primary": false, "where": null},
+    {"cols": ["operation_id"], "expr": false, "keys": ["operation_id"], "name": "playlist_membership_operations_pkey", "primary": true, "where": null},
+    {"cols": ["playlist_urn", "sequence"], "expr": false, "keys": ["playlist_urn", "sequence"], "name": "playlist_membership_operations_sequence_uq", "primary": false, "where": null}
+   ]
+  },
+  "playlist_membership_state": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "baseline_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "baseline_observation_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "candidate_fingerprint", "notnull": false, "type": "bytea"},
+    {"default": "0", "generated": false, "name": "committed_operation_sequence", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "conflict_code", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "last_operation_sequence", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "latest_observation_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "next_reconcile_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "''::text", "generated": false, "name": "owner_sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "projection_revision", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "projection_track_count", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "reconcile_failure_streak", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "reconcile_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "remote_applied_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "remote_apply_fingerprint", "notnull": false, "type": "bytea"},
+    {"default": null, "generated": false, "name": "remote_apply_generation", "notnull": false, "type": "bigint"},
+    {"default": "'unhydrated'::text", "generated": false, "name": "sync_status", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn", "baseline_observation_id"], "name": "playlist_membership_state_baseline_observation_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_observations"},
+    {"cols": ["playlist_urn", "latest_observation_id"], "name": "playlist_membership_state_latest_observation_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_observations"},
+    {"cols": ["playlist_urn"], "name": "playlist_membership_state_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["playlist_urn"], "expr": false, "keys": ["playlist_urn"], "name": "playlist_membership_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlist_reconcile_runs": {
+   "columns": [
+    {"default": null, "generated": false, "name": "candidate_fingerprint", "notnull": false, "type": "bytea"},
+    {"default": null, "generated": false, "name": "captured_baseline_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "captured_through_operation_sequence", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "'started'::text", "generated": false, "name": "decision", "notnull": true, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "job_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "job_id", "notnull": true, "type": "uuid"},
+    {"default": "'shadow'::text", "generated": false, "name": "mode", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "observation_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "reason", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "reconcile_generation", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "started_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn", "observation_id"], "name": "playlist_reconcile_runs_observation_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_observations"},
+    {"cols": ["playlist_urn"], "name": "playlist_reconcile_runs_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["playlist_urn"], "ref_table": "playlist_membership_state"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["playlist_urn", "reconcile_generation"], "expr": false, "keys": ["playlist_urn", "reconcile_generation"], "name": "playlist_reconcile_runs_generation_uq", "primary": false, "where": null},
+    {"cols": ["job_id", "job_generation"], "expr": false, "keys": ["job_id", "job_generation"], "name": "playlist_reconcile_runs_job_uq", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_reconcile_runs_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlist_remote_observations": {
+   "columns": [
+    {"default": "false", "generated": false, "name": "all_items_identified", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "authority", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "declared_track_count", "notnull": false, "type": "integer"},
+    {"default": null, "generated": false, "name": "error_kind", "notnull": false, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "observed_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "observed_track_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "outcome", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "pagination_complete", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "retry_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_last_modified", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "snapshot_id", "notnull": false, "type": "uuid"},
+    {"default": "((authority = 'owner'::text) AND (outcome = 'complete'::text) AND (snapshot_id IS NOT NULL) AND pagination_complete AND all_items_identified AND COALESCE((declared_track_count = observed_track_count), false))", "generated": true, "name": "write_eligible", "notnull": false, "type": "boolean"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn"], "name": "playlist_remote_observations_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"},
+    {"cols": ["playlist_urn", "snapshot_id"], "name": "playlist_remote_observations_snapshot_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_snapshots"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_remote_observations_pkey", "primary": true, "where": null},
+    {"cols": ["playlist_urn", "id"], "expr": false, "keys": ["playlist_urn", "id"], "name": "playlist_remote_observations_playlist_identity_uq", "primary": false, "where": null}
+   ]
+  },
+  "playlist_remote_snapshot_tracks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "position", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "snapshot_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["snapshot_id"], "name": "playlist_remote_snapshot_tracks_snapshot_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "playlist_remote_snapshots"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["snapshot_id", "sc_track_id"], "expr": false, "keys": ["snapshot_id", "sc_track_id"], "name": "playlist_remote_snapshot_tracks_member_uq", "primary": false, "where": null},
+    {"cols": ["snapshot_id", "position"], "expr": false, "keys": ["snapshot_id", "\"position\""], "name": "playlist_remote_snapshot_tracks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlist_remote_snapshots": {
+   "columns": [
+    {"default": null, "generated": false, "name": "content_fingerprint", "notnull": true, "type": "bytea"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_count", "notnull": true, "type": "integer"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn"], "name": "playlist_remote_snapshots_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["playlist_urn", "content_fingerprint"], "expr": false, "keys": ["playlist_urn", "content_fingerprint"], "name": "playlist_remote_snapshots_content_uq", "primary": false, "where": null},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_remote_snapshots_pkey", "primary": true, "where": null},
+    {"cols": ["playlist_urn", "id"], "expr": false, "keys": ["playlist_urn", "id"], "name": "playlist_remote_snapshots_playlist_identity_uq", "primary": false, "where": null}
+   ]
+  },
+  "playlist_sweep_cursor": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "id", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "last_owner_sc_user_id", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_sweep_cursor_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlist_track_projection": {
+   "columns": [
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "position", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["playlist_urn"], "name": "playlist_track_projection_playlist_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["playlist_urn", "sc_track_id"], "expr": false, "keys": ["playlist_urn", "sc_track_id"], "name": "playlist_track_projection_member_uq", "primary": false, "where": null},
+    {"cols": ["playlist_urn", "position"], "expr": false, "keys": ["playlist_urn", "\"position\""], "name": "playlist_track_projection_pkey", "primary": true, "where": null}
+   ]
+  },
+  "playlists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artwork_url", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "deleted_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "description", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "duration_ms", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "genre", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "kind", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "label_name", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "likes_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "owner_sc_user_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "owner_urn", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "owner_username", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "permalink_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "playlist_type", "notnull": false, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "release_date", "notnull": false, "type": "date"},
+    {"default": null, "generated": false, "name": "release_year", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "reposts_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "'{}'::jsonb", "generated": false, "name": "sc_desired", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "sc_last_modified", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "'{}'::jsonb", "generated": false, "name": "sc_metadata", "notnull": true, "type": "jsonb"},
+    {"default": "0", "generated": false, "name": "sc_mutation_observation", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "sc_observation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_playlist_id", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "sc_synced_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "sc_write_confirmed", "notnull": true, "type": "boolean"},
+    {"default": "'public'::character varying", "generated": false, "name": "sharing", "notnull": true, "type": "character varying(8)"},
+    {"default": "'{}'::text[]", "generated": false, "name": "tags", "notnull": true, "type": "text[]"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title_normalized", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "track_count", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "urn", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["urn"], "expr": false, "keys": ["urn"], "name": "playlists_pkey", "primary": true, "where": null},
+    {"cols": ["sc_playlist_id"], "expr": false, "keys": ["sc_playlist_id"], "name": "playlists_sc_playlist_id_key", "primary": false, "where": null}
+   ]
+  },
+  "recommendation_quality_models": {
+   "columns": [
+    {"default": null, "generated": false, "name": "examples", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "feature_means", "notnull": true, "type": "real[]"},
+    {"default": null, "generated": false, "name": "feature_scales", "notnull": true, "type": "real[]"},
+    {"default": null, "generated": false, "name": "intercept", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "positives", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "train_accuracy", "notnull": true, "type": "real"},
+    {"default": "now()", "generated": false, "name": "trained_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "version", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "weights", "notnull": true, "type": "real[]"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["version"], "expr": false, "keys": ["version"], "name": "recommendation_quality_models_pkey", "primary": true, "where": null}
+   ]
+  },
+  "sc_egress_health": {
+   "columns": [
+    {"default": null, "generated": false, "name": "channel", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "open_until", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "opened_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "opened_by", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["channel"], "expr": false, "keys": ["channel"], "name": "sc_egress_health_pkey", "primary": true, "where": null}
+   ]
+  },
+  "sc_track_counters": {
+   "columns": [
+    {"default": null, "generated": false, "name": "comment_count", "notnull": false, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "fetched_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "likes_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "play_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "reposts_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "sc_track_counters_pkey", "primary": true, "where": null}
+   ]
+  },
+  "search_terms": {
+   "columns": [
+    {"default": null, "generated": false, "name": "latin", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "ndoc", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "word", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["word"], "expr": false, "keys": ["word"], "name": "search_terms_pkey", "primary": true, "where": null}
+   ]
+  },
+  "sessions": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "soundcloud_connection_id", "notnull": false, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
+   ],
+   "fks": [
+    {"cols": ["soundcloud_connection_id"], "name": "sessions_soundcloud_connection_fk", "on_delete": "n", "ref_cols": ["id"], "ref_table": "soundcloud_connections"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "sessions_pkey", "primary": true, "where": null}
+   ]
+  },
+  "soundcloud_connections": {
+   "columns": [
+    {"default": null, "generated": false, "name": "access_token", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "first_refresh_rejection_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_refresh_attempt_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_refresh_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_refresh_error_kind", "notnull": false, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "last_refresh_success_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": false, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "refresh_failure_count", "notnull": true, "type": "integer"},
+    {"default": "1", "generated": false, "name": "refresh_generation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "refresh_lease_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "refresh_lease_id", "notnull": false, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "refresh_rejection_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "refresh_token", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "retry_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "username", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "soundcloud_connections_oauth_app_id_fkey", "on_delete": "r", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "soundcloud_connections_pkey", "primary": true, "where": null}
+   ]
+  },
+  "star_track_tiers": {
+   "columns": [
+    {"default": "true", "generated": false, "name": "align_due", "notnull": true, "type": "boolean"},
+    {"default": "true", "generated": false, "name": "audio_due", "notnull": true, "type": "boolean"},
+    {"default": "true", "generated": false, "name": "embed_due", "notnull": true, "type": "boolean"},
+    {"default": "true", "generated": false, "name": "enrich_due", "notnull": true, "type": "boolean"},
+    {"default": "true", "generated": false, "name": "lookup_due", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "tier", "notnull": true, "type": "smallint"},
+    {"default": "now()", "generated": false, "name": "tiered_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "upgrade_from", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "upgrade_tried_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "star_track_tiers_pkey", "primary": true, "where": null}
+   ]
+  },
+  "storage_event_state": {
+   "columns": [
+    {"default": null, "generated": false, "name": "event_published_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "stream", "notnull": true, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "stream_sequence", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "transcription_generation", "notnull": false, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "uploaded_generation", "notnull": true, "type": "bigint"}
+   ],
+   "fks": [
+    {"cols": ["sc_track_id"], "name": "storage_event_state_sc_track_id_fkey", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "storage_event_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "subscription_snapshot_state": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "initialized_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "subscription_snapshot_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "subscriptions": {
+   "columns": [
+    {"default": null, "generated": false, "name": "exp_date", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_urn"], "expr": false, "keys": ["user_urn"], "name": "subscriptions_pkey", "primary": true, "where": null}
+   ]
+  },
+  "sync_queue": {
+   "columns": [
+    {"default": null, "generated": false, "name": "action_type", "notnull": true, "type": "character varying(32)"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "dead", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "failed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "1", "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "lease_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "payload", "notnull": false, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "remote_attempted_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "remote_completed_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "remote_result", "notnull": false, "type": "jsonb"},
+    {"default": "0", "generated": false, "name": "retry_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "target_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "sync_queue_pkey", "primary": true, "where": null},
+    {"cols": ["user_id", "action_type", "target_urn"], "expr": false, "keys": ["user_id", "action_type", "target_urn"], "name": "sync_queue_target_uq", "primary": false, "where": "((action_type)::text <> 'comment'::text)"}
+   ]
+  },
+  "sync_queue_action_pauses": {
+   "columns": [
+    {"default": null, "generated": false, "name": "action_type", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "paused_until", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "'rate_limited'::text", "generated": false, "name": "reason", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "strikes", "notnull": true, "type": "integer"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["oauth_app_id"], "name": "sync_queue_action_pauses_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["oauth_app_id", "action_type"], "expr": false, "keys": ["oauth_app_id", "action_type"], "name": "sync_queue_action_pauses_pkey", "primary": true, "where": null}
+   ]
+  },
+  "taste_model_versions": {
+   "columns": [
+    {"default": "false", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "applied_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "dim", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "input_object", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "items_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "metrics", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "pooling", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "refreshed_through", "notnull": false, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "trained_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "users_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "version", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["collection"], "expr": false, "keys": ["collection"], "name": "taste_model_versions_collection_key", "primary": false, "where": null},
+    {"cols": ["input_object"], "expr": false, "keys": ["input_object"], "name": "taste_model_versions_input_object_key", "primary": false, "where": null},
+    {"cols": ["version"], "expr": false, "keys": ["version"], "name": "taste_model_versions_pkey", "primary": true, "where": null},
+    {"cols": null, "expr": true, "keys": ["(true)"], "name": "taste_model_versions_single_active_idx", "primary": false, "where": "active"}
+   ]
+  },
+  "taste_schedule": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "next_export_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "next_refresh_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "taste_schedule_pkey", "primary": true, "where": null}
+   ]
+  },
+  "track_artist_blocks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "note", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "track_artist_blocks_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["track_id"], "name": "track_artist_blocks_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["track_id", "artist_id"], "expr": false, "keys": ["track_id", "artist_id"], "name": "track_artist_blocks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "track_artists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "confidence", "notnull": true, "type": "real"},
+    {"default": "'unattributed'::character varying", "generated": false, "name": "evidence", "notnull": true, "type": "character varying(24)"},
+    {"default": "0", "generated": false, "name": "position", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "role", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "track_artists_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["track_id"], "name": "track_artists_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "track_artists_block_guard", "name": "track_artists_block_guard_trg"}
+   ],
+   "unique": [
+    {"cols": ["track_id", "artist_id", "role"], "expr": false, "keys": ["track_id", "artist_id", "role"], "name": "track_artists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "track_comments": {
+   "columns": [
+    {"default": null, "generated": false, "name": "body", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "sc_comment_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "track_position_ms", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "track_comments_pkey", "primary": true, "where": null},
+    {"cols": ["sc_comment_id"], "expr": false, "keys": ["sc_comment_id"], "name": "track_comments_sc_comment_id_key", "primary": false, "where": null}
+   ]
+  },
+  "track_work_aliases": {
+   "columns": [
+    {"default": null, "generated": false, "name": "alias_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "track_work_aliases_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["track_id", "alias_key"], "expr": false, "keys": ["track_id", "alias_key"], "name": "track_work_aliases_pkey", "primary": true, "where": null}
+   ]
+  },
+  "tracks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "album_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "album_position", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "artwork_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "audio_fingerprint", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "canonical_track_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "comments_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "cover_of_artist_id", "notnull": false, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "deleted_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "description", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "duration_ms", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "duration_resolve_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "duration_resolve_retry_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "enrich_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "enrich_confidence", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "enrich_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "enrich_locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "enrich_next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "enrich_source", "notnull": false, "type": "character varying(16)"},
+    {"default": "'pending'::character varying", "generated": false, "name": "enrich_state", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "enriched_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "genius_song_id", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "genius_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "genre", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "hq_upgrade_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "hq_upgrade_last_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "hq_upgrade_pending", "notnull": true, "type": "boolean"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "index_attempts", "notnull": true, "type": "smallint"},
+    {"default": "5", "generated": false, "name": "index_priority", "notnull": true, "type": "smallint"},
+    {"default": "'pending'::character varying", "generated": false, "name": "index_state", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "indexed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "is_cover", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "isrc", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "language", "notnull": false, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "language_confidence", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "likes_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "metadata_artist", "notnull": false, "type": "text"},
+    {"default": "false", "generated": false, "name": "needs_duration_resolve", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "permalink_url", "notnull": false, "type": "text"},
+    {"default": "false", "generated": false, "name": "pipeline_held", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "play_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "primary_artist_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "quality_model_version", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "quality_score", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "recording_key", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "release_date", "notnull": false, "type": "date"},
+    {"default": null, "generated": false, "name": "release_year", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "reposts_count_sc", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "s3_missing_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "s3_verified_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "'{}'::jsonb", "generated": false, "name": "sc_desired", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "sc_last_modified", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "'{}'::jsonb", "generated": false, "name": "sc_metadata", "notnull": true, "type": "jsonb"},
+    {"default": "0", "generated": false, "name": "sc_mutation_observation", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "sc_observation", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "sc_synced_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "sc_write_confirmed", "notnull": true, "type": "boolean"},
+    {"default": "'public'::character varying", "generated": false, "name": "sharing", "notnull": true, "type": "character varying(8)"},
+    {"default": "0", "generated": false, "name": "storage_attempts", "notnull": true, "type": "smallint"},
+    {"default": "5", "generated": false, "name": "storage_priority", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "storage_quality", "notnull": false, "type": "character varying(4)"},
+    {"default": "'pending'::character varying", "generated": false, "name": "storage_state", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "superseded_by", "notnull": false, "type": "uuid"},
+    {"default": "'{}'::text[]", "generated": false, "name": "tags", "notnull": true, "type": "text[]"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "title_normalized", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "transcribe_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "transcribe_state", "notnull": false, "type": "character varying(16)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "'unknown'::character varying", "generated": false, "name": "upload_kind", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "uploader_avatar_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "uploader_sc_user_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "uploader_urn", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "uploader_username", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "waveform_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "work_key", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "work_normalizer_version", "notnull": false, "type": "smallint"}
+   ],
+   "fks": [
+    {"cols": ["album_id"], "name": "tracks_album_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "albums"},
+    {"cols": ["cover_of_artist_id"], "name": "tracks_cover_of_artist_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["primary_artist_id"], "name": "tracks_primary_artist_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["superseded_by"], "name": "tracks_superseded_by_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "lyrics_lookup_track_state_refresh", "name": "tracks_lyrics_lookup_state_refresh"},
+    {"enabled": "O", "function": "tracks_primary_block_guard", "name": "tracks_primary_block_guard_trg"}
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "tracks_pkey", "primary": true, "where": null},
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "tracks_sc_track_id_uq", "primary": false, "where": null},
+    {"cols": ["urn"], "expr": false, "keys": ["urn"], "name": "tracks_urn_uq", "primary": false, "where": null}
+   ]
+  },
+  "transcription_sync_versions": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "first_seen_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "last_seen_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sync_version", "notnull": true, "type": "character varying(128)"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sync_version"], "expr": false, "keys": ["sync_version"], "name": "transcription_sync_versions_pkey", "primary": true, "where": null}
+   ]
+  },
+  "transcription_wire_state": {
+   "columns": [
+    {"default": null, "generated": false, "name": "aligned_share", "notnull": false, "type": "double precision"},
+    {"default": "1", "generated": false, "name": "attempt", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "completed_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "confidence", "notnull": false, "type": "double precision"},
+    {"default": null, "generated": false, "name": "dispatched_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "lines_total", "notnull": false, "type": "integer"},
+    {"default": null, "generated": false, "name": "lines_unplaced", "notnull": false, "type": "integer"},
+    {"default": null, "generated": false, "name": "placed_share", "notnull": false, "type": "double precision"},
+    {"default": null, "generated": false, "name": "quarantine_reason", "notnull": false, "type": "character varying(64)"},
+    {"default": null, "generated": false, "name": "reason", "notnull": false, "type": "character varying(32)"},
+    {"default": "0", "generated": false, "name": "reopen_count", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "reopened_for_sync_version", "notnull": false, "type": "character varying(128)"},
+    {"default": null, "generated": false, "name": "result_language", "notnull": false, "type": "character varying(8)"},
+    {"default": null, "generated": false, "name": "result_published_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "result_rank", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "result_stream_sequence", "notnull": false, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "result_timeouts", "notnull": true, "type": "integer"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "sync_version", "notnull": false, "type": "character varying(128)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "upload_generation", "notnull": false, "type": "bigint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "transcription_wire_state_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_auras": {
+   "columns": [
+    {"default": null, "generated": false, "name": "aura_id", "notnull": true, "type": "character varying(32)"},
+    {"default": null, "generated": false, "name": "custom_hex", "notnull": false, "type": "character varying(7)"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_urn"], "expr": false, "keys": ["user_urn"], "name": "user_auras_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_blocked_artists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "avatar_url", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": "'{}'::text[]", "generated": false, "name": "sc_user_ids", "notnull": true, "type": "text[]"},
+    {"default": null, "generated": false, "name": "target_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_user_id", "kind", "target_id"], "expr": false, "keys": ["sc_user_id", "kind", "target_id"], "name": "user_blocked_artists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_collection_sync": {
+   "columns": [
+    {"default": null, "generated": false, "name": "collection", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "collection"], "expr": false, "keys": ["user_id", "collection"], "name": "user_collection_sync_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_events": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "event_type", "notnull": true, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "position_pct", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "weight", "notnull": true, "type": "double precision"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "user_events_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_followers": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "target_user_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "target_user_urn"], "expr": false, "keys": ["user_id", "target_user_urn"], "name": "user_followers_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_followings": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "target_user_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "target_user_urn"], "expr": false, "keys": ["user_id", "target_user_urn"], "name": "user_followings_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_like_ranks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "like_created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "rank", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_like_ranks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_likes_playlists": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "playlist_urn"], "expr": false, "keys": ["user_id", "playlist_urn"], "name": "user_likes_playlists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_likes_tracks": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "liked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_likes_tracks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_owned_playlists": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "playlist_urn"], "expr": false, "keys": ["user_id", "playlist_urn"], "name": "user_owned_playlists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_owned_tracks": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_owned_tracks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_profiles": {
+   "columns": [
+    {"default": null, "generated": false, "name": "profile_json", "notnull": true, "type": "jsonb"},
+    {"default": "0", "generated": false, "name": "sc_observation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "synced_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["soundcloud_user_id"], "expr": false, "keys": ["soundcloud_user_id"], "name": "user_profiles_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_superlike_ranks": {
+   "columns": [
+    {"default": null, "generated": false, "name": "rank", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "superlike_created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_superlike_ranks_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_superlikes": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "like_created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_superlikes_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_taste_vectors": {
+   "columns": [
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "vec", "notnull": true, "type": "real[]"},
+    {"default": null, "generated": false, "name": "version", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+    {"cols": ["version"], "name": "user_taste_vectors_version_fkey", "on_delete": "c", "ref_cols": ["version"], "ref_table": "taste_model_versions"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_user_id", "version"], "expr": false, "keys": ["sc_user_id", "version"], "name": "user_taste_vectors_pkey", "primary": true, "where": null}
+   ]
+  },
+  "user_web_profiles": {
+   "columns": [
+    {"default": null, "generated": false, "name": "profiles", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "sc_observation", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "synced_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "user_web_profiles_pkey", "primary": true, "where": null}
+   ]
+  },
+  "users": {
+   "columns": [
+    {"default": null, "generated": false, "name": "avatar_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "city", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "comments_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "country", "notnull": false, "type": "character varying(64)"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "description", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "first_name", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "followers_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "followings_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "full_name", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "kind", "notnull": false, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "last_name", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "permalink", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "permalink_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "playlists_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "reposts_count", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_created_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_last_modified", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "sc_observation", "notnull": true, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "sc_synced_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "tracks_count", "notnull": false, "type": "bigint"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "username", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "username_normalized", "notnull": true, "type": "text"},
+    {"default": "false", "generated": false, "name": "verified", "notnull": true, "type": "boolean"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "users_pkey", "primary": true, "where": null},
+    {"cols": ["urn"], "expr": false, "keys": ["urn"], "name": "users_urn_key", "primary": false, "where": null}
+   ]
+  },
+  "wanted_track_albums": {
+   "columns": [
+    {"default": null, "generated": false, "name": "album_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "position", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "wanted_track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["album_id"], "name": "wanted_track_albums_album_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "albums"},
+    {"cols": ["wanted_track_id"], "name": "wanted_track_albums_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["wanted_track_id", "album_id"], "expr": false, "keys": ["wanted_track_id", "album_id"], "name": "wanted_track_albums_pkey", "primary": true, "where": null}
+   ]
+  },
+  "wanted_track_artists": {
+   "columns": [
+    {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "position", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "role", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "wanted_track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["artist_id"], "name": "wanted_track_artists_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["wanted_track_id"], "name": "wanted_track_artists_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["wanted_track_id", "artist_id", "role"], "expr": false, "keys": ["wanted_track_id", "artist_id", "role"], "name": "wanted_track_artists_pkey", "primary": true, "where": null}
+   ]
+  },
+  "wanted_track_work_aliases": {
+   "columns": [
+    {"default": null, "generated": false, "name": "alias_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "wanted_track_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+    {"cols": ["wanted_track_id"], "name": "wanted_track_work_aliases_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["wanted_track_id", "alias_key"], "expr": false, "keys": ["wanted_track_id", "alias_key"], "name": "wanted_track_work_aliases_pkey", "primary": true, "where": null}
+   ]
+  },
+  "wanted_tracks": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "discovered_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "duration_ms", "notnull": false, "type": "integer"},
+    {"default": null, "generated": false, "name": "external_id", "notnull": false, "type": "text"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "isrc", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "normalized_title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "primary_artist_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "recording_key", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "release_year", "notnull": false, "type": "smallint"},
+    {"default": "0", "generated": false, "name": "resolve_attempts", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "resolve_error", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "resolve_locked_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "now()", "generated": false, "name": "resolve_next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"},
+    {"default": "'wanted'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": false, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "work_key", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "work_normalizer_version", "notnull": false, "type": "smallint"},
+    {"default": null, "generated": false, "name": "work_reconciled_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["primary_artist_id"], "name": "wanted_tracks_primary_artist_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "artists"},
+    {"cols": ["track_id"], "name": "wanted_tracks_track_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["source", "external_id"], "expr": false, "keys": ["source", "external_id"], "name": "wanted_tracks_external_uq", "primary": false, "where": "(external_id IS NOT NULL)"},
+    {"cols": ["isrc"], "expr": false, "keys": ["isrc"], "name": "wanted_tracks_isrc_uq", "primary": false, "where": "(isrc IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "wanted_tracks_pkey", "primary": true, "where": null}
+   ]
+  }
+ },
+ "ops": {
+  "rec_hard_negative_sweep": {
+   "columns": [
+    {"default": null, "generated": false, "name": "scanned_event_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "scanned_through", "notnull": true, "type": "timestamp without time zone"},
+    {"default": "true", "generated": false, "name": "singleton", "notnull": true, "type": "boolean"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "rec_hard_negative_sweep_pkey", "primary": true, "where": null}
+   ]
+  },
+  "rec_hard_negatives": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "detected_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "event_id", "notnull": false, "type": "uuid"},
+    {"default": "nextval('rec_hard_negatives_id_seq'::regclass)", "generated": false, "name": "id", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "position_pct", "notnull": true, "type": "real"},
+    {"default": null, "generated": false, "name": "predicted_score", "notnull": false, "type": "real"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["event_id"], "expr": false, "keys": ["event_id"], "name": "rec_hard_negatives_event_id_idx", "primary": false, "where": "(event_id IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "rec_hard_negatives_pkey", "primary": true, "where": null}
+   ]
+  },
+  "rec_impressions": {
+   "columns": [
+    {"default": null, "generated": false, "name": "cluster_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "event_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "features", "notnull": false, "type": "jsonb"},
+    {"default": "nextval('rec_impressions_id_seq'::regclass)", "generated": false, "name": "id", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "position", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "request_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "score", "notnull": false, "type": "real"},
+    {"default": "now()", "generated": false, "name": "shown_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "source", "notnull": true, "type": "character varying(16)"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["event_id"], "expr": false, "keys": ["event_id"], "name": "rec_impressions_event_id_idx", "primary": false, "where": "(event_id IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "rec_impressions_pkey", "primary": true, "where": null}
+   ]
+  }
+ }
+}
