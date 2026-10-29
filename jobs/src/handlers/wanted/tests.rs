@@ -118,6 +118,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              resolve_attempts smallint NOT NULL DEFAULT 0,
              resolve_next_run_at timestamptz NOT NULL DEFAULT now(),
              resolve_locked_at timestamptz,
+             fetched_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );",
     )
@@ -283,5 +284,81 @@ async fn a_linked_track_is_left_alone_by_the_backoff(pool: PgPool) -> anyhow::Re
         .await?;
 
     assert_eq!(state(&pool, id).await?.0, "linked");
+    Ok(())
+}
+
+async fn fetch_titles(pool: &PgPool, artist_id: Uuid, limit: i64) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_file_as!(
+        WantedTrack,
+        "queries/wanted/fetch_for_artist.sql",
+        artist_id,
+        limit
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|track| track.title)
+    .collect())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_artist_fetch_takes_the_least_recently_fetched_rows_first(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let artist_id = Uuid::now_v7();
+    sqlx::query("INSERT INTO artists (id, name) VALUES ($1, 'Мокери')")
+        .bind(artist_id)
+        .execute(&pool)
+        .await?;
+    for (title, age_days) in [("first", 3), ("second", 2), ("third", 1), ("fourth", 0)] {
+        sqlx::query(
+            "INSERT INTO wanted_tracks (id, title, primary_artist_id, updated_at)
+             VALUES ($1, $2, $3, now() - $4 * interval '1 day')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(title)
+        .bind(artist_id)
+        .bind(age_days)
+        .execute(&pool)
+        .await?;
+    }
+
+    let round_one = fetch_titles(&pool, artist_id, 2).await?;
+    let round_two = fetch_titles(&pool, artist_id, 2).await?;
+    let round_three = fetch_titles(&pool, artist_id, 2).await?;
+
+    assert_eq!(round_one, ["first", "second"]);
+    assert_eq!(round_two, ["third", "fourth"]);
+    assert_eq!(round_three, ["first", "second"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_recrawled_row_keeps_its_place_in_the_artist_fetch_order(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let artist_id = Uuid::now_v7();
+    sqlx::query("INSERT INTO artists (id, name) VALUES ($1, 'Мокери')")
+        .bind(artist_id)
+        .execute(&pool)
+        .await?;
+    for title in ["first", "second"] {
+        sqlx::query("INSERT INTO wanted_tracks (id, title, primary_artist_id) VALUES ($1, $2, $3)")
+            .bind(Uuid::now_v7())
+            .bind(title)
+            .bind(artist_id)
+            .execute(&pool)
+            .await?;
+    }
+    fetch_titles(&pool, artist_id, 1).await?;
+
+    sqlx::query("UPDATE wanted_tracks SET updated_at = now() WHERE title = 'second'")
+        .execute(&pool)
+        .await?;
+    let next = fetch_titles(&pool, artist_id, 1).await?;
+
+    assert_eq!(next, ["second"]);
     Ok(())
 }
