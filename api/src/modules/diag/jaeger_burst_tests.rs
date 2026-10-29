@@ -22,6 +22,10 @@ fn hex(len: usize) -> String {
         .collect()
 }
 
+fn setting(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
 async fn send(app: &Router, trace: &str, flags: &str) {
     let request = Request::get("/health")
         .header("traceparent", format!("00-{trace}-{}-{flags}", hex(16)))
@@ -43,10 +47,9 @@ async fn kept(http: &wreq::Client, base: &str, ids: &[String]) -> BTreeSet<Strin
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs the two Jaeger containers of ops/jaeger/probe/run.sh"]
 async fn a_client_debug_flag_keeps_traces_only_up_to_the_cap_and_both_hosts_agree() {
-    let a = std::env::var("PROBE_JAEGER_A").expect("PROBE_JAEGER_A");
-    let b = std::env::var("PROBE_JAEGER_B").expect("PROBE_JAEGER_B");
-    let cap: f64 = std::env::var("TELEMETRY_SPANS_PER_SECOND")
-        .ok()
+    let a = setting("PROBE_JAEGER_A").expect("PROBE_JAEGER_A");
+    let b = setting("PROBE_JAEGER_B").expect("PROBE_JAEGER_B");
+    let cap: f64 = setting("TELEMETRY_SPANS_PER_SECOND")
         .and_then(|value| value.parse().ok())
         .unwrap_or(10.0);
     let guard = telemetry::init("api", "warn", &["telemetry"]);
