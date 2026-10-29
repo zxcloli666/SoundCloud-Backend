@@ -282,4 +282,35 @@ mod tests {
         .await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn pools_run_with_jit_off_and_recommendations_keep_their_timeout() -> anyhow::Result<()> {
+        let url = std::env::var("DATABASE_URL")?;
+        let mut cfg = cfg(&url, DbSslCfg::default());
+        cfg.acquire_timeout = Duration::from_secs(20);
+        let core = pool(&cfg, 1, connect_opts(&cfg)?).await?;
+        let recommendations = pool(
+            &cfg,
+            1,
+            connect_opts(&cfg)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]),
+        )
+        .await?;
+
+        let core_jit: String = sqlx::query_scalar("SHOW jit").fetch_one(&core).await?;
+        let core_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&core)
+            .await?;
+        let recommendations_jit: String = sqlx::query_scalar("SHOW jit")
+            .fetch_one(&recommendations)
+            .await?;
+        let recommendations_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&recommendations)
+            .await?;
+
+        assert_eq!(core_jit, "off");
+        assert_ne!(core_timeout, "15s");
+        assert_eq!(recommendations_jit, "off");
+        assert_eq!(recommendations_timeout, "15s");
+        Ok(())
+    }
 }
