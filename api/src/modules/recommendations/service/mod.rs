@@ -22,6 +22,7 @@ use crate::config::SoundwaveCfg;
 use crate::modules::collab::CollabVectorService;
 use crate::modules::lyrics::WorkerClient;
 use crate::modules::recommendations::s3_verifier::S3VerifierService;
+use crate::modules::recommendations::smart_wave::artist_tracks::ArtistTopTracks;
 use crate::modules::recommendations::smart_wave::graph::GraphEdges;
 use crate::qdrant::QdrantService;
 
@@ -36,6 +37,7 @@ pub struct RecommendationsService {
     pub(crate) cfg: SoundwaveCfg,
     pub(crate) cluster_flights: KeyedCoalesce<String>,
     pub(crate) graph_edges: GraphEdges,
+    pub(crate) artist_tracks: ArtistTopTracks,
 }
 
 impl RecommendationsService {
@@ -61,6 +63,7 @@ impl RecommendationsService {
             cfg,
             cluster_flights: KeyedCoalesce::new(),
             graph_edges: GraphEdges::new(),
+            artist_tracks: ArtistTopTracks::new(),
         })
     }
 }
