@@ -1,7 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
 
-use mini_moka::sync::Cache;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
@@ -17,9 +15,6 @@ use crate::modules::resolve::{Adopted, CatalogMiss};
 use crate::modules::sync_queue::SyncQueueService;
 use crate::sc::ScClient;
 
-const READ_STAMP_KEPT: Duration = Duration::from_secs(12 * 3600);
-const READ_STAMP_CAPACITY: u64 = 500_000;
-
 pub struct TracksService {
     sc: ScClient,
     pg: PgPool,
@@ -29,7 +24,7 @@ pub struct TracksService {
     miss: Arc<CatalogMiss>,
     mutations: super::mutations::TrackMutations,
     uploads: super::upload::UploadGate,
-    read_stamped: Cache<String, ()>,
+    read_stamps: super::read_stamp::ReadStamps,
 }
 
 pub(crate) struct TracksServiceDependencies {
@@ -61,10 +56,7 @@ impl TracksService {
             miss,
             mutations,
             uploads: super::upload::UploadGate::new(),
-            read_stamped: Cache::builder()
-                .max_capacity(READ_STAMP_CAPACITY)
-                .time_to_live(READ_STAMP_KEPT)
-                .build(),
+            read_stamps: super::read_stamp::ReadStamps::new(),
         })
     }
 
@@ -125,7 +117,7 @@ impl TracksService {
                     .is_some_and(|owner| extract_sc_id(owner) == extract_sc_id(sc_user_id))
         });
         let verified_secret = if let Some(row) = local {
-            self.touch_last_read(sc_track_id).await;
+            self.read_stamps.touch(&self.pg, sc_track_id).await;
             self.opened(sc_track_id).await;
             if self.cold_refresh.is_track_stale(Some(row.sc_synced_at))
                 && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
@@ -204,18 +196,6 @@ impl TracksService {
             .into_iter()
             .next()
             .ok_or_else(|| crate::error::AppError::not_found("Track not found"))
-    }
-
-    async fn touch_last_read(&self, sc_track_id: &str) {
-        if self.read_stamped.contains_key(&sc_track_id.to_owned()) {
-            return;
-        }
-        let stamped = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
-            .execute(&self.pg)
-            .await;
-        if stamped.is_ok_and(|done| done.rows_affected() == 1) {
-            self.read_stamped.insert(sc_track_id.to_owned(), ());
-        }
     }
 
     pub async fn opened(&self, sc_track_id: &str) {
