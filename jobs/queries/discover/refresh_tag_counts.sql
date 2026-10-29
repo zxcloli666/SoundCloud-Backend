@@ -15,6 +15,7 @@ WITH counted AS (
     ON CONFLICT (tag) DO UPDATE
         SET artist_count = EXCLUDED.artist_count,
             refreshed_at = EXCLUDED.refreshed_at
+        WHERE discover_tag_counts.artist_count IS DISTINCT FROM EXCLUDED.artist_count
     RETURNING tag
 )
 DELETE FROM discover_tag_counts

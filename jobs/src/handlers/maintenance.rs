@@ -6,6 +6,8 @@ use sqlx::PgPool;
 use crate::queue::{JobError, JobResult};
 
 const CLEANUP_BATCH: i64 = 1_000;
+const RECEIPT_BATCH: u64 = 10_000;
+const RECEIPT_SWEEP_BATCHES: usize = 100;
 const RECEIPTS_FULL_SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct MaintenanceHandler {
@@ -90,10 +92,17 @@ impl MaintenanceHandler {
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
-        sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql", full_sweep)
-            .execute(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
+        for _ in 0..RECEIPT_SWEEP_BATCHES {
+            let removed =
+                sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql", full_sweep)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(JobError::retryable)?
+                    .rows_affected();
+            if !full_sweep || removed < RECEIPT_BATCH {
+                break;
+            }
+        }
         sqlx::query_file!("queries/maintenance/cleanup_pipeline_event_receipts.sql")
             .execute(&mut *transaction)
             .await

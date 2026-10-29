@@ -1,4 +1,4 @@
-use catalog_normalize::{NORMALIZER_VERSION, normalize_title, title_forms};
+use catalog_normalize::{normalize_title, title_forms};
 use catalog_sources::{GeniusAlbumTrack, GeniusService, GeniusSongMeta};
 use sqlx::PgPool;
 use tracing::debug;
@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::entities;
 use super::error::CrawlResult;
+use super::page::{Page, WantedDraft};
 
 const SONG_PAGE_SIZE: u32 = 50;
 const MAX_SONG_PAGES: usize = 10;
@@ -29,10 +30,16 @@ pub async fn discover_songs(
             MAX_SONG_PAGES,
         )
         .await?;
+    let mut page = Page::default();
     for song in songs {
-        if let Err(error) = persist_song(pool, genius, artist_id, genius_artist_id, song).await {
+        if let Err(error) =
+            persist_song(pool, genius, &mut page, artist_id, genius_artist_id, song).await
+        {
             debug!(artist = %artist_id, %error, "genius song persist failed");
         }
+    }
+    if let Err(error) = page.flush(pool).await {
+        debug!(artist = %artist_id, %error, "genius song batch persist failed");
     }
     Ok(next_offset)
 }
@@ -46,6 +53,7 @@ pub async fn discover_albums(
     let albums = genius
         .list_artist_albums_window(genius_artist_id, ALBUM_PAGE_SIZE, MAX_ALBUM_PAGES)
         .await?;
+    let mut page = Page::default();
     for album in albums {
         let year_hint = album.year;
         let genius_album_id = album.genius_album_id;
@@ -58,18 +66,29 @@ pub async fn discover_albums(
                     continue;
                 }
             };
-        if let Err(error) =
-            ingest_album_tracks(pool, genius, artist_id, album_id, genius_album_id).await
+        if let Err(error) = ingest_album_tracks(
+            pool,
+            genius,
+            &mut page,
+            artist_id,
+            album_id,
+            genius_album_id,
+        )
+        .await
         {
             debug!(%album_id, %error, "genius album tracks ingest failed");
         }
     }
+    if let Err(error) = page.flush(pool).await {
+        debug!(artist = %artist_id, %error, "genius album batch persist failed");
+    }
     Ok(())
 }
 
-pub async fn ingest_album_tracks(
+async fn ingest_album_tracks(
     pool: &PgPool,
     genius: &GeniusService,
+    page: &mut Page,
     primary_artist_id: Uuid,
     album_id: Uuid,
     genius_album_id: i64,
@@ -82,7 +101,9 @@ pub async fn ingest_album_tracks(
         )
         .await?;
     for track in tracks {
-        if let Err(error) = persist_album_track(pool, primary_artist_id, album_id, track).await {
+        if let Err(error) =
+            persist_album_track(pool, page, primary_artist_id, album_id, track).await
+        {
             debug!(%album_id, %error, "genius album track persist failed");
         }
     }
@@ -92,6 +113,7 @@ pub async fn ingest_album_tracks(
 async fn persist_song(
     pool: &PgPool,
     genius: &GeniusService,
+    page: &mut Page,
     crawled_artist_id: Uuid,
     crawled_genius_artist_id: i64,
     song: GeniusSongMeta,
@@ -105,9 +127,8 @@ async fn persist_song(
     let primary_artist_id = match primary.genius_artist_id {
         Some(id) if id == crawled_genius_artist_id => Some(crawled_artist_id),
         _ => {
-            entities::artist_id(
+            page.artist_id(
                 pool,
-                None,
                 primary.genius_artist_id.map(|id| id.to_string()).as_deref(),
                 &primary.name,
             )
@@ -141,45 +162,40 @@ async fn persist_song(
         return Ok(());
     }
 
-    let forms = title_forms(&song.title);
-    let external_id = genius_song_id.to_string();
-    let wanted_id = sqlx::query_file_scalar!(
-        "queries/crawl/upsert_wanted_from_genius.sql",
-        song.title.trim(),
-        &normalized,
+    let featured = featured_ids(pool, page, &song.featured).await;
+    let album = song_album(pool, genius, genius_song_id, primary_artist_id).await;
+    let draft = WantedDraft {
+        title: song.title.trim().to_owned(),
+        forms: title_forms(&song.title),
+        normalized,
         primary_artist_id,
-        &external_id,
-        &forms.work_key,
-        &forms.recording_key,
-        NORMALIZER_VERSION
-    )
-    .fetch_optional(pool)
-    .await?;
-    let Some(wanted_id) = wanted_id else {
-        return Ok(());
+        external_id: genius_song_id.to_string(),
+        featured,
+        album,
     };
+    page.add(pool, draft).await
+}
 
-    entities::store_wanted_aliases(pool, wanted_id, &forms.aliases).await?;
-    if let Some(primary_artist_id) = primary_artist_id {
-        entities::credit_wanted_artist(pool, wanted_id, primary_artist_id, "primary", 0).await?;
-    }
-    credit_featured(pool, wanted_id, &song.featured).await?;
-
-    if let Some(details) = genius.lookup_song(genius_song_id).await
-        && let Some(album) = details.album
-    {
-        let year_hint = details.year;
-        if let Some(album_id) =
-            entities::genius_album_id(pool, album, primary_artist_id, year_hint).await?
-        {
-            entities::place_wanted_in_album(pool, wanted_id, album_id, 0).await?;
+async fn song_album(
+    pool: &PgPool,
+    genius: &GeniusService,
+    genius_song_id: i64,
+    primary_artist_id: Option<Uuid>,
+) -> Option<(Uuid, i16)> {
+    let details = genius.lookup_song(genius_song_id).await?;
+    let album = details.album?;
+    match entities::genius_album_id(pool, album, primary_artist_id, details.year).await {
+        Ok(album_id) => album_id.map(|album_id| (album_id, 0)),
+        Err(error) => {
+            debug!(genius_song_id, %error, "genius song album lookup failed");
+            None
         }
     }
-    Ok(())
 }
 
 async fn persist_album_track(
     pool: &PgPool,
+    page: &mut Page,
     album_primary_artist_id: Uuid,
     album_id: Uuid,
     track: GeniusAlbumTrack,
@@ -189,14 +205,14 @@ async fn persist_album_track(
         return Ok(());
     }
     let primary_artist_id = match track.primary_artist.as_ref() {
-        Some(primary) => entities::artist_id(
-            pool,
-            None,
-            primary.genius_artist_id.map(|id| id.to_string()).as_deref(),
-            &primary.name,
-        )
-        .await?
-        .or(Some(album_primary_artist_id)),
+        Some(primary) => page
+            .artist_id(
+                pool,
+                primary.genius_artist_id.map(|id| id.to_string()).as_deref(),
+                &primary.name,
+            )
+            .await?
+            .or(Some(album_primary_artist_id)),
         None => Some(album_primary_artist_id),
     };
     let position = track
@@ -214,51 +230,41 @@ async fn persist_album_track(
         return Ok(());
     }
 
-    let forms = title_forms(&track.title);
-    let external_id = track.genius_song_id.to_string();
-    let wanted_id = sqlx::query_file_scalar!(
-        "queries/crawl/upsert_wanted_from_genius.sql",
-        track.title.trim(),
-        &normalized,
+    let featured = featured_ids(pool, page, &track.featured).await;
+    let draft = WantedDraft {
+        title: track.title.trim().to_owned(),
+        forms: title_forms(&track.title),
+        normalized,
         primary_artist_id,
-        &external_id,
-        &forms.work_key,
-        &forms.recording_key,
-        NORMALIZER_VERSION
-    )
-    .fetch_optional(pool)
-    .await?;
-    let Some(wanted_id) = wanted_id else {
-        return Ok(());
+        external_id: track.genius_song_id.to_string(),
+        featured,
+        album: Some((album_id, position)),
     };
-
-    entities::store_wanted_aliases(pool, wanted_id, &forms.aliases).await?;
-    if let Some(primary_artist_id) = primary_artist_id {
-        entities::credit_wanted_artist(pool, wanted_id, primary_artist_id, "primary", 0).await?;
-    }
-    credit_featured(pool, wanted_id, &track.featured).await?;
-    entities::place_wanted_in_album(pool, wanted_id, album_id, position).await?;
-    Ok(())
+    page.add(pool, draft).await
 }
 
-async fn credit_featured(
+async fn featured_ids(
     pool: &PgPool,
-    wanted_id: Uuid,
+    page: &mut Page,
     featured: &[catalog_sources::GeniusArtistRef],
-) -> CrawlResult {
+) -> Vec<(Uuid, i16)> {
+    let mut ids = Vec::new();
     for (position, artist) in featured.iter().enumerate() {
-        let Some(artist_id) = entities::artist_id(
-            pool,
-            None,
-            artist.genius_artist_id.map(|id| id.to_string()).as_deref(),
-            &artist.name,
-        )
-        .await?
-        else {
-            continue;
-        };
-        entities::credit_wanted_artist(pool, wanted_id, artist_id, "featured", position as i16)
-            .await?;
+        let found = page
+            .artist_id(
+                pool,
+                artist.genius_artist_id.map(|id| id.to_string()).as_deref(),
+                &artist.name,
+            )
+            .await;
+        match found {
+            Ok(Some(artist_id)) => ids.push((artist_id, position as i16)),
+            Ok(None) => {}
+            Err(error) => {
+                debug!(%error, "genius featured artist lookup failed");
+                break;
+            }
+        }
     }
-    Ok(())
+    ids
 }

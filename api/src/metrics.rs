@@ -15,6 +15,7 @@ const SC_RELAY_BREAKER_OPEN: &str = "api_sc_relay_breaker_open";
 const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
+const ARTIST_TRACKS_CACHE: &str = "api_artist_top_tracks_cache_total";
 const PG_BACKENDS: &str = "api_pg_backends";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
 const PG_DEADLOCKS: &str = "api_pg_deadlocks_total";
@@ -167,6 +168,14 @@ pub fn record_sc_failure(error: &crate::error::AppError) {
     if let Some(seconds) = crate::sc::retry_after_seconds(error) {
         metrics::histogram!(SC_RETRY_AFTER).record(seconds as f64);
     }
+}
+
+pub fn record_artist_tracks_cache(hit: bool) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    let result = if hit { "hit" } else { "miss" };
+    metrics::counter!(ARTIST_TRACKS_CACHE, "result" => result).increment(1);
 }
 
 pub fn record_taste_vector_read_error() {

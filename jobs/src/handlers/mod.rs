@@ -66,7 +66,7 @@ use self::catalog_credits::CatalogCreditHandler;
 use self::catalog_read::PublicCatalogReader;
 use self::collab::{CollabHandler, CollabResult};
 use self::crawl::CrawlHandler;
-use self::discover::DiscoverHandler;
+use self::discover::{DiscoverHandler, Group as DiscoverGroup};
 use self::encode::EncodeResultHandler;
 use self::enrich::EnrichHandler;
 use self::external::ExternalSources;
@@ -101,6 +101,7 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
 pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
     JobKind::AdminMusicBrainzNames,
+    JobKind::AdminWantedAliases,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
     JobKind::CrawlArtist,
@@ -117,6 +118,9 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::CollabTrain,
     JobKind::DiscoverAccounts,
     JobKind::DiscoverAggregates,
+    JobKind::DiscoverAlbumAggregates,
+    JobKind::DiscoverArtistPopularity,
+    JobKind::DiscoverArtistTags,
     JobKind::DiscoverCatalogGenius,
     JobKind::DiscoverCatalogMusicBrainz,
     JobKind::DiscoverInterest,
@@ -149,11 +153,15 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
         kind,
         JobKind::AdminCatalogRenormalize
             | JobKind::AdminMusicBrainzNames
+            | JobKind::AdminWantedAliases
             | JobKind::CollabTrain
             | JobKind::CatalogRefresh
             | JobKind::CatalogCollection
             | JobKind::CrawlArtist
             | JobKind::DiscoverAggregates
+            | JobKind::DiscoverAlbumAggregates
+            | JobKind::DiscoverArtistPopularity
+            | JobKind::DiscoverArtistTags
             | JobKind::DispatchTranscription
             | JobKind::IndexTrack
             | JobKind::LyricsEmbed
@@ -457,6 +465,12 @@ impl JobHandlers {
                     .reconcile_musicbrainz_names(job, payload)
                     .await
             }
+            JobKind::AdminWantedAliases => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .rebuild_wanted_aliases(job, payload)
+                    .await
+            }
             JobKind::ArtistAttributionRevalidate => {
                 empty_payload(job)?;
                 self.attribution.revalidate().await
@@ -505,7 +519,27 @@ impl JobHandlers {
             }
             JobKind::DiscoverAggregates => {
                 empty_payload(job)?;
-                self.discover.refresh_aggregates().await
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Summary)
+                    .await
+            }
+            JobKind::DiscoverArtistPopularity => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistPopularity)
+                    .await
+            }
+            JobKind::DiscoverArtistTags => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistTags)
+                    .await
+            }
+            JobKind::DiscoverAlbumAggregates => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Albums)
+                    .await
             }
             JobKind::CrawlArtist => {
                 let payload = payload::<CrawlArtistPayload>(job)?;

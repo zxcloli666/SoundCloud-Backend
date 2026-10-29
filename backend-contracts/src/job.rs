@@ -90,6 +90,7 @@ pub const INDEX_TRACK_PRIORITY: i16 = 5;
 pub enum JobKind {
     AdminCatalogRenormalize,
     AdminMusicBrainzNames,
+    AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
     AuthCleanupLoginRequests,
@@ -104,6 +105,9 @@ pub enum JobKind {
     CrawlArtist,
     DiscoverAccounts,
     DiscoverAggregates,
+    DiscoverAlbumAggregates,
+    DiscoverArtistPopularity,
+    DiscoverArtistTags,
     DiscoverCatalogGenius,
     DiscoverCatalogMusicBrainz,
     DiscoverInterest,
@@ -141,6 +145,7 @@ impl JobKind {
     pub const ALL: &'static [Self] = &[
         Self::AdminCatalogRenormalize,
         Self::AdminMusicBrainzNames,
+        Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
         Self::AuthCleanupLoginRequests,
@@ -155,6 +160,9 @@ impl JobKind {
         Self::CrawlArtist,
         Self::DiscoverAccounts,
         Self::DiscoverAggregates,
+        Self::DiscoverAlbumAggregates,
+        Self::DiscoverArtistPopularity,
+        Self::DiscoverArtistTags,
         Self::DiscoverCatalogGenius,
         Self::DiscoverCatalogMusicBrainz,
         Self::DiscoverInterest,
@@ -192,6 +200,7 @@ impl JobKind {
         match self {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
+            Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
             Self::AuthCleanupLoginRequests => "auth.cleanup_login_requests",
@@ -206,6 +215,9 @@ impl JobKind {
             Self::CrawlArtist => "crawl.artist",
             Self::DiscoverAccounts => "discover.accounts",
             Self::DiscoverAggregates => "discover.aggregates",
+            Self::DiscoverAlbumAggregates => "discover.album_aggregates",
+            Self::DiscoverArtistPopularity => "discover.artist_popularity",
+            Self::DiscoverArtistTags => "discover.artist_tags",
             Self::DiscoverCatalogGenius => "discover.catalog_genius",
             Self::DiscoverCatalogMusicBrainz => "discover.catalog_musicbrainz",
             Self::DiscoverInterest => "discover.interest",
@@ -262,6 +274,9 @@ impl JobKind {
             | Self::CollabTrain
             | Self::DiscoverAccounts
             | Self::DiscoverAggregates
+            | Self::DiscoverAlbumAggregates
+            | Self::DiscoverArtistPopularity
+            | Self::DiscoverArtistTags
             | Self::DiscoverCatalogGenius
             | Self::DiscoverCatalogMusicBrainz
             | Self::DiscoverInterest
@@ -283,6 +298,7 @@ impl JobKind {
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
             | Self::AdminMusicBrainzNames
+            | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
             | Self::CrawlArtist
@@ -306,6 +322,7 @@ impl FromStr for JobKind {
         let kind = match value {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
+            "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
             "auth.cleanup_login_requests" => Self::AuthCleanupLoginRequests,
@@ -320,6 +337,9 @@ impl FromStr for JobKind {
             "crawl.artist" => Self::CrawlArtist,
             "discover.accounts" => Self::DiscoverAccounts,
             "discover.aggregates" => Self::DiscoverAggregates,
+            "discover.album_aggregates" => Self::DiscoverAlbumAggregates,
+            "discover.artist_popularity" => Self::DiscoverArtistPopularity,
+            "discover.artist_tags" => Self::DiscoverArtistTags,
             "discover.catalog_genius" => Self::DiscoverCatalogGenius,
             "discover.catalog_musicbrainz" => Self::DiscoverCatalogMusicBrainz,
             "discover.interest" => Self::DiscoverInterest,
@@ -393,6 +413,7 @@ mod tests {
         let legacy = [
             JobKind::AdminCatalogRenormalize,
             JobKind::AdminMusicBrainzNames,
+            JobKind::AdminWantedAliases,
             JobKind::ArtistAttributionRevalidate,
             JobKind::AuthCleanupLinkRequests,
             JobKind::AuthCleanupLoginRequests,
@@ -440,7 +461,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 47);
+        assert_eq!(kinds.len(), 51);
     }
 
     #[test]

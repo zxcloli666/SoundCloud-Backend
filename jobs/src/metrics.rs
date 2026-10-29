@@ -61,8 +61,9 @@ const POOL_WAIT_BUCKETS: &[f64] = &[
 const DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 600.0];
 
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+static LANE_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
-const KIND_SNAPSHOT_TTL: Duration = Duration::from_secs(45);
+const SNAPSHOT_TTL: Duration = Duration::from_secs(60);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
 
 pub fn init() {
@@ -403,6 +404,22 @@ pub async fn sample_pool_wait(metered: &MeteredPool) {
 pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     let handle = HANDLE.get()?;
     futures::future::join_all(metered.iter().map(sample_pool_wait)).await;
+    record_lane_depths(pool).await;
+    record_kind_depths(pool).await;
+    Some(handle.render())
+}
+
+#[cfg(test)]
+pub(crate) async fn forget_snapshots() {
+    *LANE_SNAPSHOT_AT.lock().await = None;
+    *KIND_SNAPSHOT_AT.lock().await = None;
+}
+
+async fn record_lane_depths(pool: &PgPool) {
+    let mut snapshot_at = LANE_SNAPSHOT_AT.lock().await;
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < SNAPSHOT_TTL) {
+        return;
+    }
     let lanes: Vec<String> = JobLane::ALL
         .iter()
         .map(|lane| lane.as_str().to_owned())
@@ -412,6 +429,7 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
         .await
     {
         Ok(rows) => {
+            *snapshot_at = Some(Instant::now());
             for row in rows {
                 let lane = row.lane;
                 metrics::gauge!(QUEUE_DEPTH, "lane" => lane.clone(), "state" => "pending")
@@ -431,13 +449,11 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
         }
         Err(error) => tracing::warn!(%error, "queue metrics snapshot failed"),
     }
-    record_kind_depths(pool).await;
-    Some(handle.render())
 }
 
 async fn record_kind_depths(pool: &PgPool) {
     let mut snapshot_at = KIND_SNAPSHOT_AT.lock().await;
-    if snapshot_at.is_some_and(|taken| taken.elapsed() < KIND_SNAPSHOT_TTL) {
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < SNAPSHOT_TTL) {
         return;
     }
     let rows = match sqlx::query_file!("queries/queue/metrics_kinds.sql")

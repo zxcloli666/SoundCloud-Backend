@@ -293,3 +293,184 @@ async fn a_crawled_artist_with_an_unknown_id_is_not_a_short_named_local_one(
     );
     Ok(())
 }
+
+async fn seed_artist(pool: &PgPool, name: &str) -> anyhow::Result<Uuid> {
+    Ok(sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, source) VALUES ($1, lower($1), 'genius') RETURNING id",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await?)
+}
+
+fn draft(external_id: &str, primary: Uuid, aliases: &[&str]) -> page::WantedDraft {
+    let mut forms = catalog_normalize::title_forms(external_id);
+    forms.aliases = aliases.iter().map(|alias| (*alias).to_owned()).collect();
+    page::WantedDraft {
+        title: format!("Song {external_id}"),
+        normalized: format!("song {external_id}"),
+        primary_artist_id: Some(primary),
+        external_id: external_id.to_owned(),
+        forms,
+        featured: Vec::new(),
+        album: None,
+    }
+}
+
+async fn aliases_of(pool: &PgPool, external_id: &str) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT alias.alias_key
+         FROM wanted_track_work_aliases AS alias
+         JOIN wanted_tracks AS wanted ON wanted.id = alias.wanted_track_id
+         WHERE wanted.external_id = $1
+         ORDER BY alias.alias_key",
+    )
+    .bind(external_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_flushed_page_writes_the_wanted_rows_with_credits_aliases_and_albums(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let featured = seed_artist(&pool, "Gost").await?;
+    let album: Uuid = sqlx::query_scalar(
+        "INSERT INTO albums (title, normalized_title, source) VALUES ('Al', 'al', 'genius') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let mut page = page::Page::default();
+    let mut first = draft("1", primary, &["a", "b"]);
+    first.featured = vec![(featured, 0)];
+    first.album = Some((album, 3));
+    page.add(&pool, first).await?;
+    page.add(&pool, draft("2", primary, &[])).await?;
+    page.flush(&pool).await?;
+
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM wanted_tracks WHERE source = 'genius_crawl'")
+            .fetch_one(&pool)
+            .await?;
+    let credits: Vec<(String, String, i16)> = sqlx::query_as(
+        "SELECT credit.role, wanted.external_id, credit.position
+         FROM wanted_track_artists AS credit
+         JOIN wanted_tracks AS wanted ON wanted.id = credit.wanted_track_id
+         ORDER BY wanted.external_id, credit.role",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let placed: Vec<i16> = sqlx::query_scalar("SELECT position FROM wanted_track_albums")
+        .fetch_all(&pool)
+        .await?;
+
+    assert_eq!(rows, 2);
+    assert_eq!(
+        credits,
+        [
+            ("featured".to_owned(), "1".to_owned(), 0),
+            ("primary".to_owned(), "1".to_owned(), 0),
+            ("primary".to_owned(), "2".to_owned(), 0),
+        ]
+    );
+    assert_eq!(placed, [3]);
+    assert_eq!(aliases_of(&pool, "1").await?, ["a", "b"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_recrawl_keeps_the_aliases_and_replaces_only_the_changed_ones(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let mut page = page::Page::default();
+    page.add(&pool, draft("1", primary, &["a", "b"])).await?;
+    page.flush(&pool).await?;
+    page.add(&pool, draft("1", primary, &["a", "b"])).await?;
+    page.flush(&pool).await?;
+    let unchanged = aliases_of(&pool, "1").await?;
+
+    page.add(&pool, draft("1", primary, &["b", "c"])).await?;
+    page.flush(&pool).await?;
+
+    assert_eq!(unchanged, ["a", "b"]);
+    assert_eq!(aliases_of(&pool, "1").await?, ["b", "c"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_single_row_alias_store_keeps_aliases_on_a_repeat(pool: PgPool) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let mut page = page::Page::default();
+    page.add(&pool, draft("1", primary, &[])).await?;
+    page.flush(&pool).await?;
+    let wanted_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM wanted_tracks WHERE external_id = '1'")
+            .fetch_one(&pool)
+            .await?;
+    let set = |aliases: &[&str]| aliases.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["a", "b"])).await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["a", "b"])).await?;
+    let repeated = aliases_of(&pool, "1").await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["b", "c"])).await?;
+    let changed = aliases_of(&pool, "1").await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &[]).await?;
+
+    assert_eq!(repeated, ["a", "b"]);
+    assert_eq!(changed, ["b", "c"]);
+    assert!(aliases_of(&pool, "1").await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_unchanged_recrawl_does_not_touch_the_wanted_row(pool: PgPool) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let mut page = page::Page::default();
+    page.add(&pool, draft("1", primary, &[])).await?;
+    page.flush(&pool).await?;
+    let before: i64 =
+        sqlx::query_scalar("SELECT xmin::text::bigint FROM wanted_tracks WHERE external_id = '1'")
+            .fetch_one(&pool)
+            .await?;
+
+    page.add(&pool, draft("1", primary, &[])).await?;
+    page.flush(&pool).await?;
+    let after: i64 =
+        sqlx::query_scalar("SELECT xmin::text::bigint FROM wanted_tracks WHERE external_id = '1'")
+            .fetch_one(&pool)
+            .await?;
+
+    assert_eq!(before, after);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_same_song_twice_in_one_page_is_written_in_order(pool: PgPool) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let mut page = page::Page::default();
+    page.add(&pool, draft("1", primary, &["a"])).await?;
+    page.add(&pool, draft("1", primary, &["b"])).await?;
+    page.flush(&pool).await?;
+
+    assert_eq!(aliases_of(&pool, "1").await?, ["b"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_page_resolves_the_same_artist_once(pool: PgPool) -> anyhow::Result<()> {
+    let artist = seed_artist(&pool, "Gost").await?;
+    let mut page = page::Page::default();
+
+    let first = page.artist_id(&pool, Some("77"), "Gost").await?;
+    sqlx::query("DELETE FROM artists WHERE id = $1")
+        .bind(artist)
+        .execute(&pool)
+        .await?;
+    let second = page.artist_id(&pool, Some("77"), "Gost").await?;
+
+    assert_eq!(first, Some(artist));
+    assert_eq!(second, first);
+    Ok(())
+}

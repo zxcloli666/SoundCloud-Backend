@@ -5,7 +5,7 @@ use catalog_sources::{ExternalFetcher, MbClient};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{AdminMaintenanceHandler, CATALOG_RENORMALIZE};
+use super::{AdminMaintenanceHandler, CATALOG_RENORMALIZE, WANTED_ALIASES};
 use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -66,6 +66,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0083_admin_maintenance_runs.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0173_admin_maintenance_wanted_aliases_kind.sql"
     ))
     .execute(pool)
     .await?;
@@ -335,5 +340,177 @@ async fn a_slice_leaves_a_live_continuation_behind_the_job_it_is_still_running(
 
     assert_eq!(continuation.0, 1);
     assert!(continuation.1 > job.generation);
+    Ok(())
+}
+
+async fn claim_aliases(pool: &PgPool, run_id: Uuid) -> anyhow::Result<LeasedJob> {
+    let queue = JobRepository::new(pool.clone(), "admin-aliases-test".to_owned());
+    queue
+        .enqueue_if_absent(&NewJob {
+            id: Uuid::now_v7(),
+            kind: JobKind::AdminWantedAliases,
+            dedup_key: Some(WANTED_ALIASES.to_owned()),
+            payload: serde_json::json!({
+                "version": "1",
+                "payload": { "run_id": run_id }
+            }),
+            priority: 20,
+            max_attempts: 8,
+            available_at: chrono::Utc::now(),
+        })
+        .await?;
+    let mut jobs = queue
+        .claim(
+            &[JobKind::AdminWantedAliases],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(600),
+        )
+        .await?;
+    jobs.pop()
+        .ok_or_else(|| anyhow::anyhow!("aliases job was not claimed"))
+}
+
+async fn run_aliases(pool: &PgPool, job: &LeasedJob) -> anyhow::Result<(i64, i64)> {
+    let run_id = Uuid::now_v7();
+    let handler = handler(pool);
+    for _ in 0..10 {
+        handler
+            .rebuild_wanted_aliases(job, AdminMaintenancePayload { run_id })
+            .await?;
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM admin_maintenance_runs WHERE kind = $1")
+                .bind(WANTED_ALIASES)
+                .fetch_one(pool)
+                .await?;
+        if status == "completed" {
+            break;
+        }
+    }
+    Ok(
+        sqlx::query_as("SELECT scanned, changed FROM admin_maintenance_runs WHERE kind = $1")
+            .bind(WANTED_ALIASES)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn stored_aliases(pool: &PgPool) -> anyhow::Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT wanted.external_id, alias.alias_key
+         FROM wanted_track_work_aliases AS alias
+         JOIN wanted_tracks AS wanted ON wanted.id = alias.wanted_track_id
+         ORDER BY 1, 2",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_alias_backfill_repairs_damaged_rows_and_leaves_correct_ones_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let total = 2_500;
+    let mut expected = Vec::new();
+    for index in 0..total {
+        let title = if index % 3 == 0 {
+            format!("Plain {index}")
+        } else {
+            format!("холод{index} (cold{index})")
+        };
+        let forms = catalog_normalize::title_forms(&title);
+        let wanted_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO wanted_tracks
+                 (title, normalized_title, source, external_id, work_key, recording_key,
+                  work_normalizer_version)
+             VALUES ($1, $1, 'genius_crawl', $2, $3, $4, 1)
+             RETURNING id",
+        )
+        .bind(&title)
+        .bind(format!("g{index:05}"))
+        .bind(&forms.work_key)
+        .bind(&forms.recording_key)
+        .fetch_one(&pool)
+        .await?;
+        for alias in &forms.aliases {
+            expected.push((format!("g{index:05}"), alias.clone()));
+        }
+        let stored: Vec<String> = match index % 4 {
+            0 => forms.aliases.clone(),
+            1 => Vec::new(),
+            2 => forms
+                .aliases
+                .iter()
+                .cloned()
+                .chain(["stale".to_owned()])
+                .collect(),
+            _ => forms.aliases.iter().take(1).cloned().collect(),
+        };
+        for alias in stored {
+            sqlx::query(
+                "INSERT INTO wanted_track_work_aliases (wanted_track_id, alias_key) VALUES ($1, $2)",
+            )
+            .bind(wanted_id)
+            .bind(alias)
+            .execute(&pool)
+            .await?;
+        }
+    }
+    expected.sort();
+    assert!(expected.len() > 1_000);
+    assert_ne!(stored_aliases(&pool).await?, expected);
+    let untouched_before: Vec<(String, String)> = sqlx::query_as(
+        "SELECT wanted.external_id, alias.xmin::text
+         FROM wanted_track_work_aliases AS alias
+         JOIN wanted_tracks AS wanted ON wanted.id = alias.wanted_track_id
+         WHERE wanted.external_id ~ '^g[0-9]*[048]$'
+           AND alias.alias_key <> 'stale'
+         ORDER BY 1, alias.alias_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let wanted_xmin_before: Vec<(String,)> =
+        sqlx::query_as("SELECT xmin::text FROM wanted_tracks ORDER BY external_id")
+            .fetch_all(&pool)
+            .await?;
+
+    let job = claim_aliases(&pool, Uuid::now_v7()).await?;
+    let (scanned, changed) = run_aliases(&pool, &job).await?;
+
+    assert_eq!(scanned, total);
+    assert!(changed > 0);
+    assert_eq!(stored_aliases(&pool).await?, expected);
+    let untouched_after: Vec<(String, String)> = sqlx::query_as(
+        "SELECT wanted.external_id, alias.xmin::text
+         FROM wanted_track_work_aliases AS alias
+         JOIN wanted_tracks AS wanted ON wanted.id = alias.wanted_track_id
+         WHERE wanted.external_id ~ '^g[0-9]*[048]$'
+           AND alias.alias_key <> 'stale'
+         ORDER BY 1, alias.alias_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert!(untouched_after.len() >= untouched_before.len());
+    for row in &untouched_before {
+        assert!(untouched_after.contains(row));
+    }
+    let wanted_xmin_after: Vec<(String,)> =
+        sqlx::query_as("SELECT xmin::text FROM wanted_tracks ORDER BY external_id")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(wanted_xmin_before, wanted_xmin_after);
+
+    let alias_xmin = || async {
+        sqlx::query_as::<_, (String, String, String)>(
+            "SELECT wanted_track_id::text, alias_key, xmin::text FROM wanted_track_work_aliases
+             ORDER BY 1, 2",
+        )
+        .fetch_all(&pool)
+        .await
+    };
+    let before_second = alias_xmin().await?;
+    let (_, changed_again) = run_aliases(&pool, &job).await?;
+    assert_eq!(changed_again, 0);
+    assert_eq!(alias_xmin().await?, before_second);
     Ok(())
 }
