@@ -126,7 +126,6 @@ async fn an_invalid_audio_backfill_index_fails_the_indexing_schema_check(
 ) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "CREATE TABLE tracks (sc_track_id text NOT NULL);
-         CREATE INDEX tracks_indexing_stuck_idx ON tracks (sc_track_id);
          CREATE INDEX tracks_storage_failed_retry_idx ON tracks (sc_track_id);
          INSERT INTO tracks (sc_track_id) VALUES ('42'), ('42');",
     )
