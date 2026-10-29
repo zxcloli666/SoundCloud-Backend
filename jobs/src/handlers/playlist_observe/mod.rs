@@ -402,12 +402,13 @@ impl PlaylistObserveHandler {
             .map_err(repository_job_error)?;
         match result {
             PersistResult::Applied => {
-                for track in &snapshot.hydrated_tracks {
-                    if let Err(error) =
-                        wake::enqueue(&self.pool, &self.queue, &track.sc_track_id).await
-                    {
-                        tracing::debug!(track = %track.sc_track_id, %error, "lyrics wake deferred to sweep");
-                    }
+                let tracks = snapshot
+                    .hydrated_tracks
+                    .iter()
+                    .map(|track| track.sc_track_id.clone())
+                    .collect::<Vec<_>>();
+                if let Err(error) = wake::enqueue_many(&self.pool, &self.queue, &tracks).await {
+                    tracing::debug!(%error, "lyrics wake deferred to sweep");
                 }
                 Ok(())
             }

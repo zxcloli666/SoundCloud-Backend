@@ -66,8 +66,9 @@ pub async fn upsert_track_in(
     new_storage_priority: TrackPriority,
     observation: Observation,
 ) -> Result<IngestResult, sqlx::Error> {
-    let row: Option<(Uuid, bool)> = sqlx::query_as(
-        "INSERT INTO tracks (
+    let row: Option<(Uuid, bool, bool)> = sqlx::query_as(
+        "WITH upserted AS (
+         INSERT INTO tracks (
             sc_track_id, urn, title, title_normalized, description, genre, tags,
             duration_ms, artwork_url, permalink_url, waveform_url, language, isrc,
             metadata_artist, sharing, sc_created_at, sc_last_modified, release_year, release_date,
@@ -164,7 +165,20 @@ pub async fn upsert_track_in(
             tracks.sc_last_modified, COALESCE(EXCLUDED.sc_last_modified, tracks.sc_last_modified),
             tracks.sc_desired, tracks.sc_write_confirmed, to_jsonb(EXCLUDED)
          )
-         RETURNING id, (xmax = 0) AS was_new",
+         RETURNING id, (xmax = 0) AS was_new
+         ), bumped AS (
+            UPDATE tracks
+            SET index_priority = LEAST(index_priority, $29),
+                storage_priority = LEAST(storage_priority, $30),
+                pipeline_held = false
+            WHERE sc_track_id = $1
+              AND NOT EXISTS (SELECT 1 FROM upserted)
+              AND (index_priority > $29 OR storage_priority > $30 OR pipeline_held)
+         )
+         SELECT id, was_new, true AS metadata_applied FROM upserted
+         UNION ALL
+         SELECT id, false, false FROM tracks
+         WHERE sc_track_id = $1 AND NOT EXISTS (SELECT 1 FROM upserted)",
     )
     .bind(&fields.sc_track_id)
     .bind(&fields.urn)
@@ -203,10 +217,10 @@ pub async fn upsert_track_in(
     .await?;
 
     match row {
-        Some(r) => Ok(IngestResult {
-            id: r.0,
-            was_new: r.1,
-            metadata_applied: true,
+        Some((id, was_new, metadata_applied)) => Ok(IngestResult {
+            id,
+            was_new,
+            metadata_applied,
         }),
         None => {
             sqlx::query_file!(
