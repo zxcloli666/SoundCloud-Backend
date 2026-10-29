@@ -5,7 +5,6 @@ SET scd.node = 'main';
 
 DO $d$
 DECLARE
-    f regprocedure;
     chk record;
 BEGIN
     FOR chk IN
@@ -18,15 +17,6 @@ BEGIN
     END LOOP;
     EXECUTE (SELECT 'TRUNCATE ' || string_agg(format('public.%I', relname), ', ' ORDER BY relname)
              FROM pg_catalog.pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r');
-    FOR f IN
-        SELECT DISTINCT t.tgfoid::regprocedure
-        FROM pg_catalog.pg_trigger t
-        JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname NOT LIKE 'zz%'
-    LOOP
-        EXECUTE format('ALTER FUNCTION %s SET search_path = public', f);
-    END LOOP;
 END
 $d$;
 
@@ -88,6 +78,8 @@ DECLARE
     j jsonb;
     bumped jsonb;
     pk jsonb;
+    purged jsonb;
+    receipted jsonb;
     rel text;
     from_j text;
     where_pk text;
@@ -153,6 +145,17 @@ BEGIN
                     SELECT jsonb_object_agg(key, value) INTO pk FROM jsonb_each(j) WHERE quote_ident(key) = ANY (string_to_array(pk_cols, ', '));
                     PERFORM pg_temp.step(t.name, node_role, 'purge', format('SELECT NULL::jsonb FROM (SELECT public.scd_purge(%L, $1)) s', t.name), pk);
                     PERFORM pg_temp.step(t.name, node_role, 'replica insert after purge', format('INSERT INTO %s (%s) %s RETURNING NULL::jsonb', rel, all_cols, from_j), j);
+                END IF;
+                IF node_role = 'core' AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc WHERE proname = 'scd_purge_intent_' || t.name) THEN
+                    SELECT jsonb_object_agg(key, value) INTO purged FROM jsonb_each(j) WHERE quote_ident(key) = ANY (string_to_array(pk_cols, ', '));
+                    PERFORM set_config('session_replication_role', 'origin', true);
+                    receipted := pg_temp.step(t.name, node_role, 'purge with receipt', format('SELECT to_jsonb(public.scd_purge_intent(%L, $1))', t.name), purged);
+                    IF receipted IS DISTINCT FROM 'true' OR NOT EXISTS (SELECT 1 FROM public.repl_purges x WHERE x.tbl = t.name AND x.pk = purged) THEN
+                        RAISE EXCEPTION 'scd_purge_intent on % did not purge with a receipt: %', t.name,
+                            (SELECT string_agg(e.step || ' ' || e.outcome, ', ') FROM pg_temp.exercised e WHERE e.tbl = t.name AND e.role = node_role);
+                    END IF;
+                    PERFORM set_config('session_replication_role', 'replica', true);
+                    PERFORM pg_temp.step(t.name, node_role, 'replica insert after receipt purge', format('INSERT INTO %s (%s) %s RETURNING NULL::jsonb', rel, all_cols, from_j), j);
                 END IF;
                 PERFORM pg_temp.step(t.name, node_role, 'replica delete', format('DELETE FROM %s WHERE %s RETURNING NULL::jsonb', rel, where_pk), j);
                 PERFORM pg_temp.step(t.name, node_role, 'replica insert again', format('INSERT INTO %s (%s) %s RETURNING NULL::jsonb', rel, all_cols, from_j), j);

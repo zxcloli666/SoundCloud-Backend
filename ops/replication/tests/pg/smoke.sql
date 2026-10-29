@@ -20,33 +20,59 @@ $f$;
 CREATE TEMP TABLE seen (k text PRIMARY KEY, v bigint);
 
 INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('u1', 't1');
-SELECT pg_temp.ok(wanted_v > 0 AND wanted_v % 16 = 2 AND result_v = 0, 'zz_ver: api insert bumps the intent version only')
+SELECT pg_temp.ok(wanted_v > 0 AND wanted_v % 16 = 2, 'zz_ver: api insert bumps the intent version')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 INSERT INTO seen SELECT 'w1', wanted_v FROM public.user_likes_tracks WHERE user_id = 'u1';
 
 UPDATE public.user_likes_tracks SET last_read_at = now() WHERE user_id = 'u1';
-SELECT pg_temp.ok(wanted_v = (SELECT v FROM seen WHERE k = 'w1') AND result_v = 0, 'zz_ver: a local column change keeps versions')
+SELECT pg_temp.ok(wanted_v = (SELECT v FROM seen WHERE k = 'w1'), 'zz_ver: a local column change keeps versions')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 
 UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'u1';
-SELECT pg_temp.ok(wanted_v > (SELECT v FROM seen WHERE k = 'w1') AND wanted_v % 16 = 2 AND result_v = 0, 'zz_ver: an intent change bumps the intent version')
+SELECT pg_temp.ok(wanted_v > (SELECT v FROM seen WHERE k = 'w1') AND wanted_v % 16 = 2, 'zz_ver: an intent change bumps the intent version')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 INSERT INTO seen SELECT 'w2', wanted_v FROM public.user_likes_tracks WHERE user_id = 'u1';
 
 SET session_replication_role = replica;
-UPDATE public.user_likes_tracks SET wanted_state = true, wanted_v = 17, progress = true, result_v = 33 WHERE user_id = 'u1';
-SELECT pg_temp.ok(NOT wanted_state AND wanted_v = (SELECT v FROM seen WHERE k = 'w2') AND progress AND result_v = 33,
-    'zz_merge: per group, an older intent is dropped and a newer result is taken')
+UPDATE public.user_likes_tracks SET wanted_state = true, wanted_v = 17, progress = true WHERE user_id = 'u1';
+SELECT pg_temp.ok(NOT wanted_state AND wanted_v = (SELECT v FROM seen WHERE k = 'w2') AND progress,
+    'zz_merge on api: an older intent is dropped, core''s result is taken unconditionally')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 
-INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v, progress, result_v, synced_at)
-VALUES ('u1', 't1', true, 1, false, 49, '2026-01-01');
-SELECT pg_temp.ok(count(*) = 1 AND bool_and(NOT wanted_state AND NOT progress AND result_v = 49 AND synced_at = '2026-01-01'),
-    'zz_merge: an insert on an existing key becomes a per-group merge')
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v, progress, synced_at)
+VALUES ('u1', 't1', true, 1, false, '2026-01-01');
+SELECT pg_temp.ok(count(*) = 1 AND bool_and(NOT wanted_state AND NOT progress AND synced_at = '2026-01-01'),
+    'zz_merge on api: an insert on an existing key keeps the newer intent and takes core''s result')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 
-UPDATE public.user_likes_tracks SET wanted_state = true, wanted_v = (SELECT v FROM seen WHERE k = 'w2') + 16 WHERE user_id = 'u1';
-SELECT pg_temp.ok(wanted_state AND wanted_v = (SELECT v FROM seen WHERE k = 'w2') + 16, 'zz_merge: a newer intent version wins')
+UPDATE public.user_likes_tracks SET wanted_state = true WHERE user_id = 'u1';
+SELECT pg_temp.ok(wanted_state, 'zz_merge on api: a tie takes the incoming row')
+FROM public.user_likes_tracks WHERE user_id = 'u1';
+
+SET scd.role = 'core';
+UPDATE public.user_likes_tracks SET wanted_state = false, progress = true, synced_at = '2026-02-02' WHERE user_id = 'u1';
+SELECT pg_temp.ok(wanted_state AND NOT progress AND synced_at = '2026-01-01',
+    'zz_merge on core: a tie keeps the local intent, api values never reach core''s result')
+FROM public.user_likes_tracks WHERE user_id = 'u1';
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v, progress, synced_at)
+VALUES ('u1', 't1', false, (SELECT v FROM seen WHERE k = 'w2') + 16, true, '2026-03-03');
+SELECT pg_temp.ok(NOT wanted_state AND wanted_v = (SELECT v FROM seen WHERE k = 'w2') + 16 AND NOT progress AND synced_at = '2026-01-01',
+    'zz_merge on core: a newer api insert on an existing key takes the intent and keeps core''s result')
+FROM public.user_likes_tracks WHERE user_id = 'u1';
+SET scd.role = 'api';
+
+INSERT INTO seen SELECT 'c1', extract(epoch FROM created_at)::bigint FROM public.user_likes_tracks WHERE user_id = 'u1';
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v, created_at)
+VALUES ('u1', 't1', true, ((SELECT v FROM seen WHERE k = 'w2') & ~15) + 2, '2020-01-01');
+SELECT pg_temp.ok(created_at > '2021-01-01', 'zz_merge D2: an older echo of this node''s own insert does not move created_at')
+FROM public.user_likes_tracks WHERE user_id = 'u1';
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v, created_at)
+VALUES ('u1', 't1', true, ((SELECT v FROM seen WHERE k = 'w2') & ~15) + 3, '2020-01-01');
+SELECT pg_temp.ok(created_at = '2020-01-01' AND NOT wanted_state,
+    'zz_merge D2: a row born on the other api node merges created_at with least, the older intent stays')
+FROM public.user_likes_tracks WHERE user_id = 'u1';
+UPDATE public.user_likes_tracks SET created_at = '2026-05-05', wanted_v = wanted_v + 16 WHERE user_id = 'u1';
+SELECT pg_temp.ok(created_at = '2026-05-05', 'zz_merge D2: a replicated update of created_at (re-like) is taken as is')
 FROM public.user_likes_tracks WHERE user_id = 'u1';
 
 SET scd.mode = 'legacy';
@@ -146,7 +172,6 @@ SELECT pg_temp.ok(pg_temp.n('guard', 'artists') = 2, 'zz_guard: C writes on core
 SET scd.role = 'api';
 
 SET scd.cmd = '00000000-0000-0000-0000-000000000002';
-SET search_path = public;
 INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000b2', 'B', 'b', 'sc');
 INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms, primary_artist_id, last_read_at)
 VALUES ('00000000-0000-0000-0000-0000000000d1', 'urn:t:1', 'sc1', 'T', 't', 1000, '00000000-0000-0000-0000-0000000000b2', '2026-01-02');
@@ -154,7 +179,6 @@ INSERT INTO public.track_artists (track_id, artist_id, role, source)
 VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000b2', 'primary', 'sc');
 INSERT INTO public.cmd_pending (tbl, pk, node, id)
 VALUES ('artists', '{"id": "00000000-0000-0000-0000-0000000000b3"}', 'main', '00000000-0000-0000-0000-000000000002');
-SET search_path = '';
 RESET scd.cmd;
 
 SET session_replication_role = replica;
@@ -181,11 +205,9 @@ SELECT pg_temp.ok(
 
 SET session_replication_role = origin;
 SET scd.cmd = '00000000-0000-0000-0000-000000000003';
-SET search_path = public;
 INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000b5', 'R', 'r', 'sc');
 UPDATE public.tracks SET primary_artist_id = '00000000-0000-0000-0000-0000000000b5' WHERE id = '00000000-0000-0000-0000-0000000000d1';
 SELECT public.scd_purge('artists', '{"id": "00000000-0000-0000-0000-0000000000b5"}');
-SET search_path = '';
 RESET scd.cmd;
 SELECT pg_temp.ok(primary_artist_id IS NULL, 'scd_purge: a NO ACTION nullable child reference is cleared before the parent goes')
 FROM public.tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
@@ -244,12 +266,10 @@ RESET extra_float_digits;
 SELECT pg_temp.ok(h IS NOT NULL AND h = public.scd_row_hash('tracks', '{"id": "00000000-0000-0000-0000-0000000000d1"}'),
     'scd_row_hash: the hash does not depend on session settings') FROM hashes;
 SET scd.cmd = '00000000-0000-0000-0000-000000000004';
-SET search_path = public;
 UPDATE public.tracks SET last_read_at = now() WHERE id = '00000000-0000-0000-0000-0000000000d1';
 SELECT pg_temp.ok(h = public.scd_row_hash('tracks', '{"id": "00000000-0000-0000-0000-0000000000d1"}'), 'scd_row_hash: local columns are not hashed') FROM hashes;
 UPDATE public.tracks SET title = 'changed' WHERE id = '00000000-0000-0000-0000-0000000000d1';
 SELECT pg_temp.ok(h <> public.scd_row_hash('tracks', '{"id": "00000000-0000-0000-0000-0000000000d1"}'), 'scd_row_hash: a published column change changes the hash') FROM hashes;
-SET search_path = '';
 RESET scd.cmd;
 
 SELECT pg_temp.ok(count(*) = 0, 'scd_publication_lists: every list has the primary key')

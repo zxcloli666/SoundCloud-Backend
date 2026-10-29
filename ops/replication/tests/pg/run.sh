@@ -4,66 +4,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repl="$(cd "$here/../.." && pwd)"
 root="$(cd "$repl/../.." && pwd)"
-psql_cmd="${PSQL:-psql}"
-socket="${PG_SOCKET:-/var/run/postgresql}"
-nodes="core main star"
 tmp="$(mktemp -d)"
-
-sql() { $psql_cmd -X -q -v ON_ERROR_STOP=1 "$@"; }
-val() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -At -d "$1" -c "$2"; }
-say() { printf '== %s\n' "$*"; }
-
-teardown() {
-  for n in $nodes; do
-    for s in $(val postgres "SELECT s.subname FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_database d ON d.oid = s.subdbid WHERE d.datname = 'scd_b1_$n'"); do
-      sql -d "scd_b1_$n" -c "ALTER SUBSCRIPTION $s DISABLE" -c "ALTER SUBSCRIPTION $s SET (slot_name = NONE)" -c "DROP SUBSCRIPTION $s"
-    done
-  done
-  for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
-    val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
-  done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_tpl scd_b1_ops; do
-    sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
-  done
-}
-
-fresh() {
-  sql -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS $1 WITH (FORCE)" -c "CREATE DATABASE $1 ${2:+TEMPLATE $2}"
-}
-
-install() {
-  for f in "$repl/generated/tables.sql" "$here/b2_stub.sql" "$repl/generated/triggers.sql" \
-           "$repl/generated/row_hash.sql" "$repl/generated/purge_children.sql" "$repl/generated/publications.sql"; do
-    sql -d "$1" -c "SET search_path = ''" -c "SET client_min_messages = warning" -f - < "$f"
-  done
-}
-
-wait_for() {
-  local i
-  for i in $(seq 1 120); do
-    if [ "$(val "$1" "$2")" = t ]; then
-      echo "ok $3"
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "FAIL $3 (on $1: $2)"
-  exit 1
-}
-
-mark() {
-  sql -d "scd_b1_$1" -c "INSERT INTO public.user_events (id, sc_user_id, sc_track_id, event_type, weight) VALUES ('00000000-0000-0000-0000-00000000$2', 'mark', 'mark', 'mark', 0)"
-}
-
-same_on_all() {
-  local a b c
-  a="$(val scd_b1_core "$1")"; b="$(val scd_b1_main "$1")"; c="$(val scd_b1_star "$1")"
-  if [ -z "$a" ] || [ "$a" != "$b" ] || [ "$a" != "$c" ]; then
-    echo "FAIL $2: core=$a main=$b star=$c"
-    exit 1
-  fi
-  echo "ok $2"
-}
+. "$here/lib.sh"
 
 trap 'teardown > /dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
 teardown
@@ -101,26 +43,29 @@ sql -At -d scd_b1_exercise -f - < "$here/exercise.sql" > "$tmp/exercise.log" 2>&
 sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 
 say "three nodes on real logical replication"
+val postgres "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = 'scd_repl'" | grep -q 1 || sql -d postgres -c "CREATE ROLE scd_repl NOLOGIN"
 for n in $nodes; do
   fresh "scd_b1_$n" scd_b1_tpl
   role=api; [ "$n" = core ] && role=core
-  sql -d postgres -c "ALTER DATABASE scd_b1_$n SET scd.role = '$role'" -c "ALTER DATABASE scd_b1_$n SET scd.node = '$n'" \
-    -c "ALTER DATABASE scd_b1_$n SET scd.mode = 'split'"
-  sql -d "scd_b1_$n" -f - <<SQL
-DO \$d\$
-DECLARE r record;
-BEGIN
-    FOR r IN SELECT DISTINCT pubname, publish FROM public.scd_publication_lists() WHERE node = '$role' ORDER BY 1 LOOP
-        EXECUTE format('CREATE PUBLICATION %I WITH (publish = %L)', r.pubname, r.publish);
-    END LOOP;
-    FOR r IN SELECT * FROM public.scd_publication_lists() WHERE node = '$role' ORDER BY 1, 4 LOOP
-        EXECUTE format('ALTER PUBLICATION %I ADD TABLE public.%I (%s)', r.pubname, r.tbl,
-            (SELECT string_agg(quote_ident(c), ', ' ORDER BY c) FROM unnest(r.cols) c));
-    END LOOP;
-END
-\$d\$;
-SQL
+  val "scd_b1_$n" "SELECT string_agg(x, '; ') FROM public.scd_configure('$n', '$role', 'split') x" > /dev/null
+  [ "$(val "scd_b1_$n" "SELECT count(*) FROM public.scd_configure('$n', '$role', 'split')")" = 0 ]
+  [ "$(val "scd_b1_$n" "SELECT count(*) FROM public.scd_repl_problems()")" -gt 0 ]
+  [ "$n" = core ] && weak_grant "scd_b1_$n"
+  val "scd_b1_$n" "SELECT count(*) FROM public.scd_grant_repl()" > /dev/null
+  problems="$(val "scd_b1_$n" "SELECT string_agg(x, '; ') FROM public.scd_repl_problems() x")"
+  [ -z "$problems" ] || { echo "FAIL scd_repl problems on $n: $problems"; exit 1; }
+  [ "$(val "scd_b1_$n" "SELECT count(*) FROM public.scd_sync_publications()")" -gt 0 ]
+  [ "$(val "scd_b1_$n" "SELECT count(*) FROM public.scd_sync_publications()")" = 0 ]
 done
+echo "ok scd_configure, scd_grant_repl and scd_sync_publications are idempotent; scd_repl_problems is empty after the grant"
+for n in $nodes; do
+  bad="$(val "scd_b1_$n" "SELECT count(*) FROM public.scd_publication_lists() l
+    JOIN pg_catalog.pg_publication_tables p ON p.pubname = l.pubname AND p.schemaname = 'public' AND p.tablename = l.tbl
+    WHERE l.node = CASE public.scd_role() WHEN 'core' THEN 'core' ELSE 'api' END
+      AND ARRAY(SELECT c::text FROM unnest(p.attnames) c ORDER BY 1) <> public.scd_publication_columns(l.tbl, l.cols)")"
+  [ "$bad" = 0 ] || { echo "FAIL publication column lists differ on $n: $bad"; exit 1; }
+done
+echo "ok publication column lists = planned columns that exist"
 
 subscribe() {
   val "scd_b1_$2" "SELECT pg_catalog.pg_create_logical_replication_slot('scd_b1_$1_from_$2', 'pgoutput')" > /dev/null
@@ -138,11 +83,11 @@ say "M: intent from an api node, result from core, per-group merge"
 sql -d scd_b1_main -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('r1', 't1')"
 wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.user_likes_tracks WHERE user_id = 'r1')" "an api insert reaches the other api node through core"
 sql -d scd_b1_core -c "UPDATE public.user_likes_tracks SET progress = true, synced_at = '2026-01-01' WHERE user_id = 'r1'"
-wait_for scd_b1_main "SELECT progress AND result_v % 16 = 1 FROM public.user_likes_tracks WHERE user_id = 'r1'" "core's result reaches the api node"
+wait_for scd_b1_main "SELECT progress FROM public.user_likes_tracks WHERE user_id = 'r1'" "core's result reaches the api node"
 sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'r1'"
 wait_for scd_b1_core "SELECT NOT wanted_state AND progress FROM public.user_likes_tracks WHERE user_id = 'r1'" "a later intent keeps core's result"
 wait_for scd_b1_star "SELECT NOT wanted_state AND progress FROM public.user_likes_tracks WHERE user_id = 'r1'" "and reaches the other api node"
-same_on_all "SELECT public.scd_row_hash('user_likes_tracks', '{\"user_id\": \"r1\", \"sc_track_id\": \"t1\"}') || ' ' || wanted_v || ' ' || result_v FROM public.user_likes_tracks WHERE user_id = 'r1'" "M row, hash and versions equal on all nodes"
+pairs user_likes_tracks "user_id = 'r1'" "M row equal on all nodes"
 
 say "A: the same R6 id written on two api nodes converges to the newer version"
 sql -d scd_b1_star -c "ALTER SUBSCRIPTION star_from_core DISABLE"
@@ -190,18 +135,18 @@ wait_for scd_b1_star "SELECT count(*) = 2 FROM public.user_likes_tracks WHERE us
 sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main DISABLE"
 wait_for scd_b1_core "SELECT NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_subscription WHERE subname = 'core_from_main' AND pid IS NOT NULL)" "core stops reading main"
 sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'r3'"
-sql -d scd_b1_core -f - <<'SQL'
-BEGIN;
-INSERT INTO public.repl_purges (tbl, pk, purged_v)
-SELECT 'user_likes_tracks', jsonb_build_object('user_id', user_id, 'sc_track_id', sc_track_id), wanted_v
-FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3');
-DELETE FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3');
-COMMIT;
-SQL
+[ "$(val scd_b1_core "SELECT count(*) FILTER (WHERE public.scd_purge_intent('user_likes_tracks', jsonb_build_object('user_id', user_id, 'sc_track_id', sc_track_id))) FROM (SELECT user_id, sc_track_id FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3') ORDER BY 1) x")" = 2 ]
+[ "$(val scd_b1_core "SELECT count(*) FROM public.repl_purges WHERE tbl = 'user_likes_tracks' AND pk ->> 'user_id' IN ('r2', 'r3')")" = 2 ]
+if val scd_b1_main "SELECT public.scd_purge_intent('user_likes_tracks', '{\"user_id\": \"r3\", \"sc_track_id\": \"t1\"}')" 2>/dev/null; then
+  echo "FAIL scd_purge_intent ran on an api node"; exit 1
+fi
+echo "ok scd_purge_intent writes the receipt and deletes in one tx on core, refuses on an api node"
 wait_for scd_b1_star "SELECT count(*) = 0 FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3')" "star applies both purges"
 wait_for scd_b1_main "SELECT array_agg(user_id) = ARRAY['r3'] FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3')" "main applies the covered purge and keeps its newer intent"
 wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.repl_resend WHERE pk = '{\"user_id\": \"r3\", \"sc_track_id\": \"t1\"}')" "main queues the kept row for resend"
 sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
+
+. "$here/split.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do
