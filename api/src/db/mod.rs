@@ -1,5 +1,7 @@
 use std::str::FromStr;
-use std::time::Duration;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, ensure};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
@@ -11,6 +13,18 @@ use crate::config::{AppConfig, DatabaseCfg};
 const REQUIRED_CORE_SCHEMA_VERSION: i64 = 156;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
+
+static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
+static CORE_RELEASED_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+fn clock_ms() -> u64 {
+    CLOCK.elapsed().as_millis() as u64
+}
+
+pub fn core_pool_quiet_for() -> Duration {
+    let released = CORE_RELEASED_AT_MS.load(Ordering::Relaxed);
+    Duration::from_millis(clock_ms().saturating_sub(released))
+}
 
 fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     let mut opts = PgConnectOptions::from_str(&cfg.url)?;
@@ -58,19 +72,31 @@ fn core_share(pool_max: u32) -> u32 {
         .max(1)
 }
 
-fn pool_options(cfg: &DatabaseCfg, max_connections: u32) -> PgPoolOptions {
+fn pool_options(
+    cfg: &DatabaseCfg,
+    max_connections: u32,
+    released_at: Option<&'static AtomicU64>,
+) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(cfg.acquire_timeout)
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
         .test_before_acquire(true)
-        .after_release(|connection, _| Box::pin(settle_released(connection)))
+        .after_release(move |connection, _| Box::pin(settle_released(connection, released_at)))
 }
 
-async fn settle_released(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+async fn settle_released(
+    connection: &mut PgConnection,
+    released_at: Option<&'static AtomicU64>,
+) -> Result<bool, sqlx::Error> {
     match tokio::time::timeout(RELEASE_PING_TIMEOUT, connection.ping()).await {
-        Ok(Ok(())) => Ok(true),
+        Ok(Ok(())) => {
+            if let Some(released_at) = released_at {
+                released_at.store(clock_ms(), Ordering::Relaxed);
+            }
+            Ok(true)
+        }
         Ok(Err(error)) => Err(error),
         Err(_) => Err(sqlx::Error::Io(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
@@ -83,20 +109,29 @@ async fn pool(
     cfg: &DatabaseCfg,
     max_connections: u32,
     opts: PgConnectOptions,
+    released_at: Option<&'static AtomicU64>,
 ) -> Result<PgPool, sqlx::Error> {
-    pool_options(cfg, max_connections).connect_with(opts).await
+    pool_options(cfg, max_connections, released_at)
+        .connect_with(opts)
+        .await
 }
 
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let db = &cfg.database;
-    pool(db, core_share(db.pool_max), connect_opts(db)?).await
+    pool(
+        db,
+        core_share(db.pool_max),
+        connect_opts(db)?,
+        Some(&CORE_RELEASED_AT_MS),
+    )
+    .await
 }
 
 pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let db = &cfg.database;
     let opts =
         connect_opts(db)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]);
-    pool(db, recommendations_share(db.pool_max), opts).await
+    pool(db, recommendations_share(db.pool_max), opts, None).await
 }
 
 pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -256,7 +291,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let mut single = cfg("postgres://u:p@h:5432/db", DbSslCfg::default());
         single.acquire_timeout = Duration::from_secs(60);
-        let pool = pool_options(&single, 1).connect_with(opts).await?;
+        let pool = pool_options(&single, 1, None).connect_with(opts).await?;
 
         let mut tx = pool.begin().await?;
         let abandoned = tokio::time::timeout(

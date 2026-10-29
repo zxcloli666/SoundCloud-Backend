@@ -38,6 +38,7 @@ pub async fn premium_gate(State(state): State<AppState>, req: Request, next: Nex
 
 fn is_open_path(path: &str) -> bool {
     path == "/health"
+        || path == "/health/live"
         || path == "/probe"
         || path == "/me/subscription"
         || path == "/admin/metrics"
