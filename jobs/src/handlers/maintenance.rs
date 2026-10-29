@@ -24,6 +24,26 @@ impl MaintenanceHandler {
         Ok(())
     }
 
+    pub async fn cleanup_diag(&self) -> JobResult {
+        loop {
+            let bundles = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_bundles.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let events =
+                sqlx::query_file!("queries/maintenance/cleanup_diag_events.sql", CLEANUP_BATCH)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(JobError::retryable)?;
+            if bundles.rows_affected() + events.rows_affected() == 0 {
+                return Ok(());
+            }
+        }
+    }
+
     pub async fn cleanup_link_requests(&self) -> JobResult {
         sqlx::query_file!(
             "queries/maintenance/cleanup_link_requests.sql",
@@ -123,3 +143,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "maintenance_diag_tests.rs"]
+mod diag_tests;

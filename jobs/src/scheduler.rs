@@ -20,6 +20,7 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::CatalogCreditReview, 6 * 60 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::AuthCleanupLinkRequests, 60, 0, 8),
     Schedule::new(JobKind::AuthCleanupLoginRequests, 60, 0, 8),
+    Schedule::new(JobKind::DiagCleanup, 10 * 60, -10, 4),
     Schedule::new(JobKind::CleanupJobReceipts, 5 * 60, -10, 4),
     Schedule::new(JobKind::CollabBootstrap, 60 * 60, 0, 8),
     Schedule::new(JobKind::CollabTrain, 6 * 60 * 60, -10, 4).delayed(),

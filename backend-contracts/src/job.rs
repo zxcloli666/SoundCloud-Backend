@@ -100,6 +100,7 @@ pub enum JobKind {
     CatalogCollection,
     CatalogWorkReconcile,
     CleanupJobReceipts,
+    DiagCleanup,
     CrawlArtist,
     DiscoverAccounts,
     DiscoverAggregates,
@@ -150,6 +151,7 @@ impl JobKind {
         Self::CatalogCollection,
         Self::CatalogWorkReconcile,
         Self::CleanupJobReceipts,
+        Self::DiagCleanup,
         Self::CrawlArtist,
         Self::DiscoverAccounts,
         Self::DiscoverAggregates,
@@ -199,6 +201,7 @@ impl JobKind {
             Self::CatalogRefresh => "catalog.refresh",
             Self::CatalogCollection => "catalog.collection",
             Self::CatalogWorkReconcile => "catalog.reconcile_works",
+            Self::DiagCleanup => "diag.cleanup",
             Self::CleanupJobReceipts => "jobs.cleanup_receipts",
             Self::CrawlArtist => "crawl.artist",
             Self::DiscoverAccounts => "discover.accounts",
@@ -242,6 +245,7 @@ impl JobKind {
             Self::AuthCleanupLinkRequests
             | Self::AuthCleanupLoginRequests
             | Self::CleanupJobReceipts
+            | Self::DiagCleanup
             | Self::DispatchAudioIndex
             | Self::DispatchTranscription
             | Self::LyricsEmbed
@@ -312,6 +316,7 @@ impl FromStr for JobKind {
             "catalog.collection" => Self::CatalogCollection,
             "catalog.reconcile_works" => Self::CatalogWorkReconcile,
             "jobs.cleanup_receipts" => Self::CleanupJobReceipts,
+            "diag.cleanup" => Self::DiagCleanup,
             "crawl.artist" => Self::CrawlArtist,
             "discover.accounts" => Self::DiscoverAccounts,
             "discover.aggregates" => Self::DiscoverAggregates,
@@ -395,6 +400,7 @@ mod tests {
             JobKind::CollabTrain,
             JobKind::CatalogWorkReconcile,
             JobKind::CleanupJobReceipts,
+            JobKind::DiagCleanup,
             JobKind::CrawlArtist,
             JobKind::DiscoverAccounts,
             JobKind::DiscoverAggregates,
@@ -434,7 +440,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 46);
+        assert_eq!(kinds.len(), 47);
     }
 
     #[test]

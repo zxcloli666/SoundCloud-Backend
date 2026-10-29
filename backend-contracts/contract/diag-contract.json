@@ -1,0 +1,494 @@
+{
+  "bundle": {
+    "$defs": {
+      "App": {
+        "additionalProperties": false,
+        "properties": {
+          "arch": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "install": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "locale": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "os": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "os_version": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "os",
+          "os_version",
+          "arch",
+          "install",
+          "locale",
+          "id"
+        ],
+        "type": "object"
+      },
+      "Attempt": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "debug": {
+            "type": "boolean"
+          },
+          "error": {
+            "maxLength": 1000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hop": {
+            "pattern": "^(direct|r[0-9]+|p[0-9]+)$",
+            "type": "string"
+          },
+          "method": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "service": {
+            "$ref": "#/$defs/Service"
+          },
+          "span": {
+            "pattern": "^[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "status": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trace": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "trace",
+          "span",
+          "debug",
+          "service",
+          "method",
+          "path",
+          "hop",
+          "status",
+          "ms",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "ErrorEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "component_stack": {
+            "maxLength": 4000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "additionalProperties": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxProperties": 10,
+            "propertyNames": {
+              "maxLength": 64
+            },
+            "type": "object"
+          },
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "pattern": "^[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ErrorKind"
+          },
+          "message": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "stack": {
+            "maxLength": 8000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "message",
+          "fingerprint",
+          "count",
+          "context"
+        ],
+        "type": "object"
+      },
+      "ErrorKind": {
+        "enum": [
+          "render",
+          "unhandled",
+          "rejection",
+          "panic",
+          "playback",
+          "request"
+        ],
+        "type": "string"
+      },
+      "Service": {
+        "enum": [
+          "api",
+          "stream",
+          "storage",
+          "pay",
+          "images",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Session": {
+        "additionalProperties": false,
+        "properties": {
+          "logged_in": {
+            "type": "boolean"
+          },
+          "premium": {
+            "type": "boolean"
+          },
+          "quality": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "route": {
+            "additionalProperties": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "maxProperties": 4,
+            "propertyNames": {
+              "maxLength": 64
+            },
+            "type": "object"
+          },
+          "uptime_s": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uptime_s",
+          "logged_in",
+          "premium",
+          "quality",
+          "route"
+        ],
+        "type": "object"
+      },
+      "Trigger": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/TriggerKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "TriggerKind": {
+        "enum": [
+          "manual",
+          "render",
+          "netcheck"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "app": {
+        "$ref": "#/$defs/App"
+      },
+      "at": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "attempts": {
+        "items": {
+          "$ref": "#/$defs/Attempt"
+        },
+        "maxItems": 300,
+        "type": "array"
+      },
+      "errors": {
+        "items": {
+          "$ref": "#/$defs/ErrorEntry"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "kind": {
+        "const": "scd-diagnostics",
+        "maxLength": 32,
+        "type": "string"
+      },
+      "log_tail": {
+        "items": {
+          "maxLength": 500,
+          "type": "string"
+        },
+        "maxItems": 150,
+        "type": "array"
+      },
+      "netcheck": {
+        "maxLength": 8192,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "session": {
+        "$ref": "#/$defs/Session"
+      },
+      "trigger": {
+        "$ref": "#/$defs/Trigger"
+      },
+      "v": {
+        "const": 1,
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "kind",
+      "v",
+      "at",
+      "app",
+      "session",
+      "trigger",
+      "attempts",
+      "errors",
+      "log_tail"
+    ],
+    "title": "scd-diagnostics bundle",
+    "type": "object"
+  },
+  "events": {
+    "$defs": {
+      "App": {
+        "additionalProperties": false,
+        "properties": {
+          "arch": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "install": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "locale": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "os": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "os_version": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "os",
+          "os_version",
+          "arch",
+          "install",
+          "locale",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ErrorEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "component_stack": {
+            "maxLength": 4000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "additionalProperties": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxProperties": 10,
+            "propertyNames": {
+              "maxLength": 64
+            },
+            "type": "object"
+          },
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "pattern": "^[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ErrorKind"
+          },
+          "message": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "stack": {
+            "maxLength": 8000,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "message",
+          "fingerprint",
+          "count",
+          "context"
+        ],
+        "type": "object"
+      },
+      "ErrorKind": {
+        "enum": [
+          "render",
+          "unhandled",
+          "rejection",
+          "panic",
+          "playback",
+          "request"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "app": {
+        "$ref": "#/$defs/App"
+      },
+      "events": {
+        "items": {
+          "$ref": "#/$defs/ErrorEntry"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "app",
+      "events"
+    ],
+    "title": "scd-diagnostics events",
+    "type": "object"
+  },
+  "max_bundle_bytes": 262144,
+  "version": 1
+}

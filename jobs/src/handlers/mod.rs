@@ -89,6 +89,7 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::AuthCleanupLinkRequests,
     JobKind::AuthCleanupLoginRequests,
     JobKind::CleanupJobReceipts,
+    JobKind::DiagCleanup,
     JobKind::DispatchAudioIndex,
     JobKind::DispatchTranscription,
     JobKind::LyricsEmbed,
@@ -435,6 +436,10 @@ impl JobHandlers {
             JobKind::AuthCleanupLinkRequests => {
                 empty_payload(job)?;
                 self.maintenance.cleanup_link_requests().await
+            }
+            JobKind::DiagCleanup => {
+                empty_payload(job)?;
+                self.maintenance.cleanup_diag().await
             }
             JobKind::AuthCleanupLoginRequests => {
                 empty_payload(job)?;
