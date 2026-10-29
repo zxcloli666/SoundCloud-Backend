@@ -66,7 +66,7 @@ use self::catalog_credits::CatalogCreditHandler;
 use self::catalog_read::PublicCatalogReader;
 use self::collab::{CollabHandler, CollabResult};
 use self::crawl::CrawlHandler;
-use self::discover::DiscoverHandler;
+use self::discover::{DiscoverHandler, Group as DiscoverGroup};
 use self::encode::EncodeResultHandler;
 use self::enrich::EnrichHandler;
 use self::external::ExternalSources;
@@ -117,6 +117,9 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::CollabTrain,
     JobKind::DiscoverAccounts,
     JobKind::DiscoverAggregates,
+    JobKind::DiscoverAlbumAggregates,
+    JobKind::DiscoverArtistPopularity,
+    JobKind::DiscoverArtistTags,
     JobKind::DiscoverCatalogGenius,
     JobKind::DiscoverCatalogMusicBrainz,
     JobKind::DiscoverInterest,
@@ -154,6 +157,9 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
             | JobKind::CatalogCollection
             | JobKind::CrawlArtist
             | JobKind::DiscoverAggregates
+            | JobKind::DiscoverAlbumAggregates
+            | JobKind::DiscoverArtistPopularity
+            | JobKind::DiscoverArtistTags
             | JobKind::DispatchTranscription
             | JobKind::IndexTrack
             | JobKind::LyricsEmbed
@@ -505,7 +511,27 @@ impl JobHandlers {
             }
             JobKind::DiscoverAggregates => {
                 empty_payload(job)?;
-                self.discover.refresh_aggregates().await
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Summary)
+                    .await
+            }
+            JobKind::DiscoverArtistPopularity => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistPopularity)
+                    .await
+            }
+            JobKind::DiscoverArtistTags => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistTags)
+                    .await
+            }
+            JobKind::DiscoverAlbumAggregates => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Albums)
+                    .await
             }
             JobKind::CrawlArtist => {
                 let payload = payload::<CrawlArtistPayload>(job)?;
