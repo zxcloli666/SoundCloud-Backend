@@ -52,6 +52,8 @@ def statement_rules(t, verb, o, where, api_side):
     if api_side and verb in ("delete", "truncate"):
         if t.cls == "M" or (t.cls == "A" and t.delete != "tombstone"):
             out.add(("api-delete-shared", where, t.name))
+    if not api_side and t.cls == "M" and verb in ("delete", "truncate"):
+        out.add(("core-delete-m", where, t.name))
     if t.cls == "A" and t.insert_only and (verb in ("update", "merge") or (verb == "insert" and o["upsert_do_update"])):
         out.add(("a-insert-only-updated", where, t.name))
     return out
@@ -154,6 +156,7 @@ def explain(rule):
         "api-write-c": "api writes a core-owned table; go through scd_wt and a kind",
         "api-write-p": "api writes a core-private table; go through scd_wt and a kind",
         "api-delete-shared": "only core hard-deletes M and non-tombstone A rows (R7)",
+        "core-delete-m": "core deletes an M row only through scd_purge_intent, which writes the receipt first (R7)",
         "a-insert-only-updated": "insert_only A table is updated; version it in ownership.yaml",
         "clock": "use scd_clock() instead of nextval('catalog_metadata_clock')",
         "unknown-kind": "scd_wt kind not declared in ownership.yaml",

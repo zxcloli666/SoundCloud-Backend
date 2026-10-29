@@ -1,5 +1,6 @@
 api-delete-shared|api/queries/admin/sync_queue/purge.sql|sync_queue
 api-delete-shared|api/queries/auth/service/delete_orphan_connection.sql|soundcloud_connections
+api-delete-shared|api/queries/oauth_apps/service/delete_by_id.sql|oauth_apps
 api-delete-shared|api/queries/playlists/service/cancel_updates.sql|sync_queue
 api-delete-shared|api/queries/sync_queue/service/cancel_inverse.sql|sync_queue
 api-delete-shared|api/queries/sync_queue/service/revive_dead.sql|sync_queue
@@ -107,3 +108,11 @@ clock|jobs/queries/playlist_observe/retire_remotely_deleted.sql|catalog_metadata
 clock|jobs/queries/sync_queue/actions/confirm_playlist_update.sql|catalog_metadata_clock
 clock|jobs/queries/sync_queue/actions/confirm_track_update.sql|catalog_metadata_clock
 clock|utils/catalog-ingest/queries/begin_observation.sql|catalog_metadata_clock
+core-delete-m|jobs/queries/playlist_observe/retire_remotely_deleted.sql|sync_queue
+core-delete-m|jobs/queries/sync_queue/actions/unfollow_user.sql|user_followings
+core-delete-m|jobs/queries/sync_queue/actions/unlike_playlist.sql|user_likes_playlists
+core-delete-m|jobs/queries/sync_queue/actions/unlike_track.sql|user_likes_tracks
+core-delete-m|jobs/queries/sync_queue/delete_completed.sql|sync_queue
+core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_followings
+core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_likes_playlists
+core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_likes_tracks
