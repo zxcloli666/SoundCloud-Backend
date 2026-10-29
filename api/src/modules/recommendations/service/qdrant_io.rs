@@ -93,13 +93,13 @@ impl RecommendationsService {
             .iter()
             .filter_map(|p| value_to_u64(&point_id_to_value(p.id.clone())).map(|n| n.to_string()))
             .collect();
-        let (public, lyrics_eligibility) = if collection == crate::qdrant::collections::TRACKS_LYRICS
-        {
-            let (public, eligibility) = load_public_and_eligibility(&self.pg, &ids).await;
-            (public, Some(eligibility))
-        } else {
-            (self.public_track_ids(&ids).await, None)
-        };
+        let (public, lyrics_eligibility) =
+            if collection == crate::qdrant::collections::TRACKS_LYRICS {
+                let (public, eligibility) = load_public_and_eligibility(&self.pg, &ids).await;
+                (public, Some(eligibility))
+            } else {
+                (self.public_track_ids(&ids).await, None)
+            };
         raw.into_iter()
             .filter_map(|p| {
                 let id = point_id_to_value(p.id);
@@ -159,7 +159,6 @@ impl RecommendationsService {
     ) -> LyricsVectorEligibility {
         load_eligibility(&self.pg, ids).await
     }
-
 }
 
 async fn load_public_and_eligibility(

@@ -88,7 +88,9 @@ impl GraphEdges {
             }
         }
         let (loading, awaited) = self.claim(&missing);
-        let loaded = self.load(pg, loading.artists.iter().map(|(artist, _)| *artist)).await;
+        let loaded = self
+            .load(pg, loading.artists.iter().map(|(artist, _)| *artist))
+            .await;
         drop(loading);
         let Some(loaded) = loaded else {
             return Adjacency::new();

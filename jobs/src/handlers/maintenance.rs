@@ -82,12 +82,9 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_job_receipts(&self) -> JobResult {
-        let full_sweep = self
-            .receipts_swept_at
-            .lock()
-            .map_or(true, |swept_at| {
-                swept_at.is_none_or(|at| at.elapsed() >= RECEIPTS_FULL_SWEEP_EVERY)
-            });
+        let full_sweep = self.receipts_swept_at.lock().map_or(true, |swept_at| {
+            swept_at.is_none_or(|at| at.elapsed() >= RECEIPTS_FULL_SWEEP_EVERY)
+        });
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         sqlx::query_file!("queries/maintenance/cleanup_job_failures.sql")
             .execute(&mut *transaction)
