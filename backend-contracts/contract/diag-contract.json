@@ -68,7 +68,7 @@
             ]
           },
           "hop": {
-            "pattern": "^(direct|r[0-9]+|p[0-9]+)$",
+            "pattern": "^(direct|relay|pro|r[0-9]+|p[0-9]+)$",
             "type": "string"
           },
           "method": {

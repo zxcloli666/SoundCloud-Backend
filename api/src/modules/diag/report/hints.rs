@@ -57,12 +57,24 @@ fn relay_blocked(facts: &Facts) -> Option<Hint> {
         facts.hint(
             Rule::RelayBlocked,
             format!(
-                "Relay {} failed to connect while another route worked.",
-                hops.join(", ")
+                "{} failed to connect while another route worked.",
+                hops.iter()
+                    .map(|hop| hop_name(hop))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             evidence,
         )
     })
+}
+
+fn hop_name(hop: &str) -> String {
+    match hop {
+        "relay" => "A relay".to_owned(),
+        "pro" => "A pro relay".to_owned(),
+        _ if hop.starts_with('p') => format!("Pro relay {hop}"),
+        _ => format!("Relay {hop}"),
+    }
 }
 
 fn origin_blocked(facts: &Facts) -> Option<Hint> {

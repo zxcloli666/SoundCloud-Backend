@@ -18,15 +18,15 @@ pub const MAX_LOG_LINES: usize = 150;
 pub const MAX_EVENTS: usize = 50;
 pub const MAX_CONTEXT_KEYS: usize = 10;
 
-const SHORT: usize = 64;
-const MESSAGE: usize = 2000;
-const STACK: usize = 8000;
-const COMPONENT_STACK: usize = 4000;
-const PATH: usize = 1000;
-const ERROR: usize = 1000;
-const LOG_LINE: usize = 500;
-const NETCHECK: usize = 8192;
-const CONTEXT_VALUE: usize = 300;
+pub const MAX_SHORT_CHARS: usize = 64;
+pub const MAX_MESSAGE_CHARS: usize = 2000;
+pub const MAX_STACK_CHARS: usize = 8000;
+pub const MAX_COMPONENT_STACK_CHARS: usize = 4000;
+pub const MAX_PATH_CHARS: usize = 1000;
+pub const MAX_ERROR_CHARS: usize = 1000;
+pub const MAX_LOG_LINE_CHARS: usize = 500;
+pub const MAX_NETCHECK_CHARS: usize = 8192;
+pub const MAX_CONTEXT_VALUE_CHARS: usize = 300;
 
 const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
@@ -137,7 +137,7 @@ pub struct Attempt {
     pub method: String,
     #[schemars(length(max = 1000))]
     pub path: String,
-    #[schemars(pattern("^(direct|r[0-9]+|p[0-9]+)$"))]
+    #[schemars(pattern("^(direct|relay|pro|r[0-9]+|p[0-9]+)$"))]
     pub hop: String,
     pub status: u16,
     pub ms: u64,
@@ -222,13 +222,13 @@ impl Bundle {
         }
         timestamp("at", &self.at)?;
         self.app.check()?;
-        chars("quality", &self.session.quality, SHORT)?;
+        chars("quality", &self.session.quality, MAX_SHORT_CHARS)?;
         if self.session.route.len() > 4 {
             return Err("route has too many keys".to_owned());
         }
         for (key, value) in &self.session.route {
-            chars("route key", key, SHORT)?;
-            chars("route value", value, SHORT)?;
+            chars("route key", key, MAX_SHORT_CHARS)?;
+            chars("route value", value, MAX_SHORT_CHARS)?;
         }
         if self.attempts.len() > MAX_ATTEMPTS {
             return Err("too many attempts".to_owned());
@@ -248,13 +248,13 @@ impl Bundle {
             return Err("trigger.error points past errors".to_owned());
         }
         if let Some(netcheck) = &self.netcheck {
-            chars("netcheck", netcheck, NETCHECK)?;
+            chars("netcheck", netcheck, MAX_NETCHECK_CHARS)?;
         }
         if self.log_tail.len() > MAX_LOG_LINES {
             return Err("log_tail is too long".to_owned());
         }
         for line in &self.log_tail {
-            chars("log_tail line", line, LOG_LINE)?;
+            chars("log_tail line", line, MAX_LOG_LINE_CHARS)?;
         }
         Ok(())
     }
@@ -283,7 +283,7 @@ impl App {
             ("install", &self.install),
             ("locale", &self.locale),
         ] {
-            chars(name, value, SHORT)?;
+            chars(name, value, MAX_SHORT_CHARS)?;
         }
         hex("app.id", &self.id, INSTALL_PATTERN)
     }
@@ -297,10 +297,10 @@ impl Attempt {
         if !METHODS.contains(&self.method.as_str()) {
             return Err("attempt.method is not an HTTP method".to_owned());
         }
-        chars("attempt.path", &self.path, PATH)?;
+        chars("attempt.path", &self.path, MAX_PATH_CHARS)?;
         hop(&self.hop)?;
         if let Some(error) = &self.error {
-            chars("attempt.error", error, ERROR)?;
+            chars("attempt.error", error, MAX_ERROR_CHARS)?;
         }
         Ok(())
     }
@@ -309,12 +309,12 @@ impl Attempt {
 impl ErrorEntry {
     pub fn check(&self) -> Result<(), String> {
         timestamp("error.at", &self.at)?;
-        chars("error.message", &self.message, MESSAGE)?;
+        chars("error.message", &self.message, MAX_MESSAGE_CHARS)?;
         if let Some(stack) = &self.stack {
-            chars("error.stack", stack, STACK)?;
+            chars("error.stack", stack, MAX_STACK_CHARS)?;
         }
         if let Some(stack) = &self.component_stack {
-            chars("error.component_stack", stack, COMPONENT_STACK)?;
+            chars("error.component_stack", stack, MAX_COMPONENT_STACK_CHARS)?;
         }
         if let Some(trace) = &self.trace {
             hex("error.trace", trace, TRACE_PATTERN)?;
@@ -324,8 +324,8 @@ impl ErrorEntry {
             return Err("error.context has too many keys".to_owned());
         }
         for (key, value) in &self.context {
-            chars("error.context key", key, SHORT)?;
-            chars("error.context value", value, CONTEXT_VALUE)?;
+            chars("error.context key", key, MAX_SHORT_CHARS)?;
+            chars("error.context value", value, MAX_CONTEXT_VALUE_CHARS)?;
         }
         Ok(())
     }
@@ -350,7 +350,7 @@ fn context_schema(_: &mut SchemaGenerator) -> Schema {
 }
 
 fn timestamp(name: &str, value: &str) -> Result<(), String> {
-    chars(name, value, SHORT)?;
+    chars(name, value, MAX_SHORT_CHARS)?;
     DateTime::parse_from_rfc3339(value)
         .map(|_| ())
         .map_err(|_| format!("{name} must be an RFC 3339 timestamp"))
@@ -360,8 +360,8 @@ fn hop(value: &str) -> Result<(), String> {
     let numbered = value.strip_prefix(['r', 'p']).is_some_and(|digits| {
         !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
     });
-    if value != "direct" && !numbered {
-        return Err("attempt.hop must be direct, rN or pN".to_owned());
+    if !matches!(value, "direct" | "relay" | "pro") && !numbered {
+        return Err("attempt.hop must be direct, relay, pro, rN or pN".to_owned());
     }
     Ok(())
 }
@@ -492,13 +492,13 @@ mod tests {
 
     #[test]
     fn a_hop_outside_the_pattern_is_refused() {
-        for bad in ["sc-call1 10.1.2.3", "r", "rx", "r1 ", "relay", "", "P2"] {
+        for bad in ["sc-call1 10.1.2.3", "r", "rx", "r1 ", "relays", "", "P2"] {
             let mut bundle = sample();
             bundle.attempts[0].hop = bad.to_owned();
 
             assert!(bundle.check().is_err(), "{bad}");
         }
-        for good in ["direct", "r2", "p10"] {
+        for good in ["direct", "relay", "pro", "r2", "p10"] {
             let mut bundle = sample();
             bundle.attempts[0].hop = good.to_owned();
 
