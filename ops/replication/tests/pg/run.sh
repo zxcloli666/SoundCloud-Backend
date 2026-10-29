@@ -22,7 +22,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
@@ -71,8 +71,8 @@ teardown
 say "migrate a template database"
 fresh scd_b1_tpl
 fresh scd_b1_ops
-for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -f - < "$f"; done
-for f in "$root"/api/migrations-ops/*.sql; do sql -d scd_b1_ops -f - < "$f"; done
+for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -c "SET client_min_messages = error" -f - < "$f"; done
+for f in "$root"/api/migrations-ops/*.sql; do sql -d scd_b1_ops -c "SET client_min_messages = error" -f - < "$f"; done
 
 say "schema.json matches the migrations"
 PSQL="$psql_cmd" SCHEMA_OUT="$tmp/schema.json" "$repl/schema.sh" scd_b1_tpl scd_b1_ops
@@ -85,13 +85,20 @@ echo "ok schema.json"
 
 say "install generated SQL twice with an empty search_path"
 install scd_b1_tpl
+sql -d scd_b1_tpl -c "CREATE TRIGGER zz_ver BEFORE UPDATE ON public.albums FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger()"
 install scd_b1_tpl
-echo "ok install"
+[ "$(val scd_b1_tpl "SELECT count(*) FROM pg_catalog.pg_trigger WHERE tgrelid = 'public.albums'::regclass AND tgname = 'zz_ver'")" = 0 ]
+echo "ok install is idempotent and drops a stale generated trigger"
 
 say "smoke per trigger class"
 fresh scd_b1_smoke scd_b1_tpl
 sql -At -d scd_b1_smoke -f - < "$here/smoke.sql" > "$tmp/smoke.log" 2>&1 || { cat "$tmp/smoke.log"; exit 1; }
 sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/smoke.log"
+
+say "every generated function runs against the real schema"
+fresh scd_b1_exercise scd_b1_tpl
+sql -At -d scd_b1_exercise -f - < "$here/exercise.sql" > "$tmp/exercise.log" 2>&1 || { cat "$tmp/exercise.log"; exit 1; }
+sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 
 say "three nodes on real logical replication"
 for n in $nodes; do
@@ -138,8 +145,11 @@ wait_for scd_b1_star "SELECT NOT wanted_state AND progress FROM public.user_like
 same_on_all "SELECT public.scd_row_hash('user_likes_tracks', '{\"user_id\": \"r1\", \"sc_track_id\": \"t1\"}') || ' ' || wanted_v || ' ' || result_v FROM public.user_likes_tracks WHERE user_id = 'r1'" "M row, hash and versions equal on all nodes"
 
 say "A: the same R6 id written on two api nodes converges to the newer version"
+sql -d scd_b1_star -c "ALTER SUBSCRIPTION star_from_core DISABLE"
+wait_for scd_b1_star "SELECT NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_subscription WHERE subname = 'star_from_core' AND pid IS NOT NULL)" "star stops reading core"
 sql -d scd_b1_main -c "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id) VALUES ('00000000-0000-0000-0000-0000000000d1', 'r1', 'x1')"
 sql -d scd_b1_star -c "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id) VALUES ('00000000-0000-0000-0000-0000000000d1', 'r1', 'x1')"
+sql -d scd_b1_star -c "ALTER SUBSCRIPTION star_from_core ENABLE"
 wait_for scd_b1_main "SELECT row_v % 16 = 3 FROM public.disliked_tracks WHERE sc_user_id = 'r1'" "main takes star's newer row"
 wait_for scd_b1_core "SELECT row_v % 16 = 3 FROM public.disliked_tracks WHERE sc_user_id = 'r1'" "core keeps star's newer row"
 same_on_all "SELECT id || ' ' || row_v FROM public.disliked_tracks WHERE sc_user_id = 'r1'" "A row equal on all nodes"
