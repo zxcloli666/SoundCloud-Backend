@@ -40,7 +40,7 @@ impl SearchService {
         let key = request.key("search-lyrics-v2", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Lyrics).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Lyrics).await? else {
                 return Ok(response(&request, Vec::new(), false));
             };
             let rows = sqlx::query_file!(
