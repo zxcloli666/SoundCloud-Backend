@@ -9,6 +9,8 @@ pub struct AdminAuth;
 
 pub struct MetricsAuth;
 
+pub struct DiagAuth;
+
 impl FromRequestParts<AppState> for AdminAuth {
     type Rejection = AppError;
 
@@ -39,6 +41,24 @@ impl FromRequestParts<AppState> for MetricsAuth {
         }
         AdminAuth::from_request_parts(parts, state).await?;
         Ok(MetricsAuth)
+    }
+}
+
+impl FromRequestParts<AppState> for DiagAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        if token_matches(
+            header(parts, "x-diag-token"),
+            state.config.admin.diag_token.expose(),
+        ) {
+            return Ok(DiagAuth);
+        }
+        AdminAuth::from_request_parts(parts, state).await?;
+        Ok(DiagAuth)
     }
 }
 

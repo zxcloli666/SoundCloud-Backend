@@ -87,6 +87,8 @@ pub struct StreamingCfg {
 pub struct AdminCfg {
     pub token: redact::Secret<String>,
     pub metrics_token: redact::Secret<String>,
+    pub diag_token: redact::Secret<String>,
+    pub jaeger_url: String,
 }
 
 #[derive(Clone)]
@@ -287,6 +289,8 @@ impl AppConfig {
             admin: AdminCfg {
                 token: env_str("ADMIN_TOKEN", "").into(),
                 metrics_token: env_str("METRICS_TOKEN", "").into(),
+                diag_token: env_str("DIAG_TOKEN", "").into(),
+                jaeger_url: env_str("JAEGER_QUERY_URL", "http://jaeger:16686/jaeger"),
             },
 
             redis: RedisCfg {
@@ -435,6 +439,8 @@ mod tests {
         let admin = AdminCfg {
             token: "s3cr3t-admin-token".to_owned().into(),
             metrics_token: "s3cr3t-metrics-token".to_owned().into(),
+            diag_token: "s3cr3t-diag-token".to_owned().into(),
+            jaeger_url: String::new(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),

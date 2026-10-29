@@ -14,6 +14,8 @@ const OPEN_ROUTES: &[&str] = &[
     "/auth/link/claim",
     "/auth/link/status",
     "/resolve",
+    "/diag/bundles",
+    "/diag/events",
 ];
 
 const METRICS_ROUTE: &str = "/admin/metrics";
@@ -147,6 +149,7 @@ fn signature_of<'a>(source: &'a str, handler: &str) -> Option<&'a str> {
 fn guards(signature: &str) -> bool {
     signature.contains("AdminAuth")
         || signature.contains("MetricsAuth")
+        || signature.contains("DiagAuth")
         || signature.contains("SessionCtx")
         || signature.contains("OptionalSession")
         || signature.contains("RawSessionIdHeader")
@@ -290,6 +293,8 @@ fn an_admin_route_is_gated_by_admin_auth_and_by_nothing_weaker() {
                 checked += 1;
                 let gate = if path == METRICS_ROUTE {
                     "MetricsAuth"
+                } else if path.starts_with("/admin/diag/") {
+                    "DiagAuth"
                 } else {
                     "AdminAuth"
                 };

@@ -49,6 +49,7 @@ pub fn build(state: AppState) -> Router {
     let router = Router::new()
         .merge(modules::health::router())
         .merge(modules::admin::router())
+        .merge(modules::diag::router())
         .merge(modules::auth::router(state.admission.clone()))
         .merge(modules::me::router())
         .merge(modules::legacy_clients::router())
@@ -147,21 +148,21 @@ fn is_sensitive_path(path: &str) -> bool {
 async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = crate::common::http_metrics::method_label(req.method());
     let path = crate::common::http_metrics::route_label(req.extensions().get::<MatchedPath>());
-    let request_id = crate::common::request_id::accept_or_mint(
-        req.headers()
-            .get(crate::common::request_id::HEADER)
-            .and_then(|value| value.to_str().ok()),
-    );
+    let span = telemetry::root_span(&req);
+    let request_id = match telemetry::trace_id(&span, req.headers()) {
+        Some(trace) => trace,
+        None => crate::common::request_id::accept_or_mint(
+            req.headers()
+                .get(crate::common::request_id::HEADER)
+                .and_then(|value| value.to_str().ok()),
+        ),
+    };
+    span.record("request_id", request_id.as_str());
     let key = format!("{method} {path}");
     let start = std::time::Instant::now();
-    let span = tracing::info_span!(
-        "request",
-        request_id = %request_id,
-        method,
-        route = %path,
-    );
-    let mut resp = next.run(req).instrument(span).await;
+    let mut resp = next.run(req).instrument(span.clone()).await;
     let elapsed = start.elapsed();
+    telemetry::finish(&span, resp.status().as_u16());
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         resp.headers_mut().insert(
             HeaderName::from_static(crate::common::request_id::HEADER),

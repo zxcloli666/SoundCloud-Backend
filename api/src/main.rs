@@ -37,7 +37,9 @@ mod sc_surface_tests;
 #[path = "secret_surface_tests.rs"]
 mod secret_surface_tests;
 mod state;
-mod telemetry;
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod telemetry_tests;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -77,7 +79,17 @@ use crate::state::AppState;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     tls_common::init_crypto();
-    telemetry::init();
+    let _telemetry = telemetry::init(
+        "api",
+        "info,api=debug,tower_http=info,sqlx=warn",
+        &[
+            "api",
+            "telemetry",
+            "call_relay",
+            "sc_transport",
+            "tls_common",
+        ],
+    );
     metrics::init();
 
     let config = Arc::new(AppConfig::from_env());
@@ -252,8 +264,10 @@ async fn main() {
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
     let port = config.port;
+    let diag = crate::modules::diag::DiagService::new(pg.clone(), config.admin.jaeger_url.clone());
     let state = AppState {
         config: config.clone(),
+        diag,
         pg,
         background_jobs,
         http_metrics: std::sync::Arc::new(crate::common::http_metrics::HttpMetrics::new()),

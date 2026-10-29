@@ -237,6 +237,7 @@ impl IntoResponse for AppError {
 
         if status.is_server_error() {
             tracing::error!(error = %self, "request failed");
+            telemetry::fail(&tracing::Span::current(), &self.to_string());
         } else {
             tracing::debug!(error = %self, status = %status, "request rejected");
         }

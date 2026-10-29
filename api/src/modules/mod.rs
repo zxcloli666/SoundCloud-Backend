@@ -6,6 +6,7 @@ pub mod blocked_artists;
 pub mod centroids;
 pub mod cold_refresh;
 pub mod collab;
+pub mod diag;
 pub mod discover;
 pub mod dislikes;
 pub mod enrich;

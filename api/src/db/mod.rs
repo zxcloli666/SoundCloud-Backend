@@ -8,7 +8,7 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 155;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 156;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 

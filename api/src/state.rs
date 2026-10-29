@@ -35,6 +35,7 @@ use crate::sc::ScReadService;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
+    pub diag: Arc<crate::modules::diag::DiagService>,
     pub pg: PgPool,
     pub background_jobs: Arc<BackgroundJobs>,
     pub http_metrics: Arc<HttpMetrics>,

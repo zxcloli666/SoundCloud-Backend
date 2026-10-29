@@ -60,6 +60,8 @@ fn config(redis: &str) -> AppConfig {
         admin: AdminCfg {
             token: String::new().into(),
             metrics_token: String::new().into(),
+            diag_token: String::new().into(),
+            jaeger_url: String::new(),
         },
         redis: RedisCfg {
             url: redis.to_owned(),
@@ -225,6 +227,7 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
+        diag: crate::modules::diag::DiagService::new(pg.clone(), String::new()),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),
         soundcloud_search: crate::modules::soundcloud_search::SoundCloudSearch::new(
