@@ -1,9 +1,9 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::http::request::Parts;
+use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use backend_contracts::diag::{Bundle, EventsBody};
@@ -11,16 +11,23 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::common::admin::DiagAuth;
+use crate::common::admission::{PublicAdmission, admit_diag_bundle, admit_diag_events};
 use crate::error::AppError;
 use crate::state::AppState;
 
 const MAX_HOURS: i32 = 720;
 const MAX_ISSUES: i64 = 200;
 
-pub fn router() -> Router<AppState> {
+pub fn router(admission: Arc<PublicAdmission>) -> Router<AppState> {
     Router::new()
-        .route("/diag/bundles", post(post_bundle))
-        .route("/diag/events", post(post_events))
+        .route(
+            "/diag/bundles",
+            post(post_bundle).route_layer(from_fn_with_state(admission.clone(), admit_diag_bundle)),
+        )
+        .route(
+            "/diag/events",
+            post(post_events).route_layer(from_fn_with_state(admission, admit_diag_events)),
+        )
         .route("/admin/diag/bundles/{code}", get(get_bundle))
         .route("/admin/diag/traces/{trace}", get(get_trace))
         .route("/admin/diag/issues", get(list_issues))
@@ -38,31 +45,10 @@ struct IssueQuery {
     hours: Option<i32>,
 }
 
-fn client_ip(parts: &Parts) -> IpAddr {
-    parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|connection| connection.0.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-}
-
-fn too_many() -> AppError {
-    AppError::coded(
-        StatusCode::TOO_MANY_REQUESTS,
-        "diag_rate_limited",
-        "Too many reports from this address, try later",
-    )
-    .with_retry_after(3600)
-}
-
 async fn post_bundle(
     State(state): State<AppState>,
-    parts: Parts,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    if !state.diag.allow_bundle(client_ip(&parts)) {
-        return Err(too_many());
-    }
     let bundle: Bundle = serde_json::from_slice(&body)
         .map_err(|error| AppError::bad_request(format!("bad bundle: {error}")))?;
     bundle.check().map_err(AppError::bad_request)?;
@@ -73,20 +59,10 @@ async fn post_bundle(
     ))
 }
 
-async fn post_events(
-    State(state): State<AppState>,
-    parts: Parts,
-    body: Bytes,
-) -> Result<StatusCode, AppError> {
+async fn post_events(State(state): State<AppState>, body: Bytes) -> Result<StatusCode, AppError> {
     let events: EventsBody = serde_json::from_slice(&body)
         .map_err(|error| AppError::bad_request(format!("bad events: {error}")))?;
     events.check().map_err(AppError::bad_request)?;
-    if !state
-        .diag
-        .allow_events(client_ip(&parts), events.events.len() as u32)
-    {
-        return Err(too_many());
-    }
     state.diag.store_events(&events).await?;
     Ok(StatusCode::ACCEPTED)
 }

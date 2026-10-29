@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use axum::Extension;
 use axum::Router;
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{HeaderMap, HeaderValue, Request};
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use deadpool_redis::{Config, Runtime};
@@ -222,12 +222,21 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             room_list: limits(11, 12),
             room_create: limits(13, 14),
             room_join: limits(15, 16),
+            diag_bundle: limits(17, 18),
+            diag_events: limits(19, 20),
+            trusted_proxies: Vec::new(),
         },
         "test:public:admission:budgets",
     );
 
     assert_eq!(admission.limits(Endpoint::Login).per_client, 1);
     assert_eq!(admission.limits(Endpoint::LinkCreate).per_client, 3);
+    assert_eq!(admission.limits(Endpoint::DiagBundle).per_client, 17);
+    assert_eq!(admission.limits(Endpoint::DiagEvents).per_client, 19);
+    assert_eq!(
+        admission.window(Endpoint::DiagBundle),
+        Duration::from_secs(3600)
+    );
     assert_eq!(
         admission.limits(Endpoint::Resolve).per_client,
         5,
@@ -343,6 +352,113 @@ async fn a_busy_resolve_never_answers_like_a_session_problem() -> anyhow::Result
     Ok(())
 }
 
+fn headers(lines: &[&str]) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for line in lines {
+        headers.append("x-forwarded-for", HeaderValue::from_str(line).unwrap());
+    }
+    headers
+}
+
+fn nets(list: &[&str]) -> Vec<IpNet> {
+    list.iter().map(|net| net.parse().unwrap()).collect()
+}
+
+fn address(text: &str) -> IpAddr {
+    text.parse().unwrap()
+}
+
+#[test]
+fn trusted_peer_takes_the_first_untrusted_entry_from_the_right() {
+    let trusted = nets(&["10.0.0.0/8", "198.51.100.5/32"]);
+    let chain = headers(&["203.0.113.9, 10.1.1.1, 198.51.100.5"]);
+
+    assert_eq!(
+        client_address(address("10.0.0.2"), &chain, &trusted),
+        address("203.0.113.9")
+    );
+}
+
+#[test]
+fn spoofed_left_entries_are_ignored() {
+    let trusted = nets(&["10.0.0.0/8"]);
+    let chain = headers(&["1.2.3.4, 203.0.113.9, 10.1.1.1"]);
+
+    assert_eq!(
+        client_address(address("10.0.0.2"), &chain, &trusted),
+        address("203.0.113.9")
+    );
+}
+
+#[test]
+fn several_header_lines_read_as_one_chain() {
+    let trusted = nets(&["10.0.0.0/8"]);
+    let chain = headers(&["203.0.113.9", "10.1.1.1"]);
+
+    assert_eq!(
+        client_address(address("10.0.0.2"), &chain, &trusted),
+        address("203.0.113.9")
+    );
+}
+
+#[test]
+fn untrusted_peer_ignores_the_header() {
+    let trusted = nets(&["10.0.0.0/8"]);
+    let chain = headers(&["203.0.113.9"]);
+
+    assert_eq!(
+        client_address(address("192.0.2.7"), &chain, &trusted),
+        address("192.0.2.7")
+    );
+}
+
+#[test]
+fn empty_trusted_list_keeps_the_transport_address() {
+    let chain = headers(&["203.0.113.9"]);
+
+    assert_eq!(
+        client_address(address("10.0.0.2"), &chain, &[]),
+        address("10.0.0.2")
+    );
+}
+
+#[test]
+fn malformed_or_missing_header_keeps_the_transport_address() {
+    let trusted = nets(&["10.0.0.0/8"]);
+    let peer = address("10.0.0.2");
+
+    assert_eq!(client_address(peer, &headers(&[]), &trusted), peer);
+    assert_eq!(client_address(peer, &headers(&[""]), &trusted), peer);
+    assert_eq!(client_address(peer, &headers(&["unknown"]), &trusted), peer);
+    assert_eq!(
+        client_address(peer, &headers(&["203.0.113.9, garbage"]), &trusted),
+        peer
+    );
+    assert_eq!(
+        client_address(peer, &headers(&["10.9.9.9"]), &trusted),
+        peer
+    );
+}
+
+#[test]
+fn ipv6_clients_and_proxies_work() {
+    let trusted = nets(&["fd00::/8", "10.0.0.0/8"]);
+    let chain = headers(&["2001:db8::7, fd00::5"]);
+
+    assert_eq!(
+        client_address(address("fd00::1"), &chain, &trusted),
+        address("2001:db8::7")
+    );
+    assert_eq!(
+        client_address(
+            address("::ffff:10.0.0.2"),
+            &headers(&["203.0.113.9"]),
+            &trusted
+        ),
+        address("203.0.113.9")
+    );
+}
+
 fn limits(per_client: u32, global: u32) -> AdmissionLimitCfg {
     AdmissionLimitCfg { per_client, global }
 }
@@ -360,6 +476,9 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         room_list: limit,
         room_create: limit,
         room_join: limit,
+        diag_bundle: limit,
+        diag_events: limit,
+        trusted_proxies: Vec::new(),
     }
 }
 

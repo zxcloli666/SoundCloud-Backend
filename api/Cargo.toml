@@ -65,6 +65,7 @@ qdrant-client = "1"
 
 urlencoding = "2"
 url = "2"
+ipnet = "2"
 rand_distr = "0.4"
 backend-contracts = { version = "1.0.0", path = "../backend-contracts" }
 catalog-ingest = { version = "0.1.0", path = "../utils/catalog-ingest" }

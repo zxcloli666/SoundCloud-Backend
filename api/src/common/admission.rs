@@ -1,16 +1,18 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::header::{CACHE_CONTROL, RETRY_AFTER};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::Script;
+use ipnet::IpNet;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
@@ -57,6 +59,7 @@ return {1, 0}
 
 static SCRIPT: LazyLock<Script> = LazyLock::new(|| Script::new(ADMISSION_SCRIPT));
 const WARNING_INTERVAL_MILLISECONDS: u64 = 30_000;
+const DIAG_WINDOW: Duration = Duration::from_secs(3600);
 
 pub struct PublicAdmission {
     redis: RedisPool,
@@ -77,6 +80,8 @@ pub enum Endpoint {
     RoomList,
     RoomCreate,
     RoomJoin,
+    DiagBundle,
+    DiagEvents,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +179,8 @@ impl PublicAdmission {
             self.namespace,
             endpoint.key(),
         );
-        let window_milliseconds = i64::try_from(self.config.window.as_millis()).unwrap_or(i64::MAX);
+        let window_milliseconds =
+            i64::try_from(self.window(endpoint).as_millis()).unwrap_or(i64::MAX);
         let mut connection = self.redis.get().await?;
         let (allowed, retry_after_milliseconds): (i64, i64) = SCRIPT
             .key(global_key)
@@ -195,12 +201,23 @@ impl PublicAdmission {
 
     fn gate(&self, endpoint: Endpoint) -> &Semaphore {
         match endpoint {
-            Endpoint::Login | Endpoint::LinkCreate | Endpoint::Resolve => &self.in_flight,
+            Endpoint::Login
+            | Endpoint::LinkCreate
+            | Endpoint::Resolve
+            | Endpoint::DiagBundle
+            | Endpoint::DiagEvents => &self.in_flight,
             Endpoint::SoundCloudSearch
             | Endpoint::CatalogMiss
             | Endpoint::RoomList
             | Endpoint::RoomCreate
             | Endpoint::RoomJoin => &self.session_in_flight,
+        }
+    }
+
+    fn window(&self, endpoint: Endpoint) -> Duration {
+        match endpoint {
+            Endpoint::DiagBundle | Endpoint::DiagEvents => DIAG_WINDOW,
+            _ => self.config.window,
         }
     }
 
@@ -214,6 +231,8 @@ impl PublicAdmission {
             Endpoint::RoomList => self.config.room_list,
             Endpoint::RoomCreate => self.config.room_create,
             Endpoint::RoomJoin => self.config.room_join,
+            Endpoint::DiagBundle => self.config.diag_bundle,
+            Endpoint::DiagEvents => self.config.diag_events,
         }
     }
 
@@ -252,6 +271,8 @@ impl Endpoint {
             Self::RoomList => "rooms-list",
             Self::RoomCreate => "rooms-create",
             Self::RoomJoin => "rooms-join",
+            Self::DiagBundle => "diag-bundle",
+            Self::DiagEvents => "diag-events",
         }
     }
 
@@ -265,6 +286,8 @@ impl Endpoint {
             Self::RoomList => "/rooms/public",
             Self::RoomCreate => "/rooms",
             Self::RoomJoin => "/rooms/{code}/members",
+            Self::DiagBundle => "/diag/bundles",
+            Self::DiagEvents => "/diag/events",
         }
     }
 }
@@ -293,6 +316,22 @@ pub(crate) async fn admit_resolve(
     admit(Endpoint::Resolve, limiter, request, next).await
 }
 
+pub(crate) async fn admit_diag_bundle(
+    State(limiter): State<Arc<PublicAdmission>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    admit(Endpoint::DiagBundle, limiter, request, next).await
+}
+
+pub(crate) async fn admit_diag_events(
+    State(limiter): State<Arc<PublicAdmission>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    admit(Endpoint::DiagEvents, limiter, request, next).await
+}
+
 async fn admit(
     endpoint: Endpoint,
     limiter: Arc<PublicAdmission>,
@@ -313,7 +352,12 @@ async fn admit(
         return rejection(endpoint, AdmissionRejection::Unavailable);
     };
 
-    match limiter.check(endpoint, client_identity(address.ip())).await {
+    let client = client_address(
+        address.ip(),
+        request.headers(),
+        &limiter.config.trusted_proxies,
+    );
+    match limiter.check(endpoint, client_identity(client)).await {
         Decision::Allowed => next.run(request).await,
         Decision::Limited {
             retry_after_seconds,
@@ -350,6 +394,15 @@ fn rejection(endpoint: Endpoint, kind: AdmissionRejection) -> Response {
         return response;
     }
     let (status, code, message) = match kind {
+        AdmissionRejection::Limited { .. }
+            if matches!(endpoint, Endpoint::DiagBundle | Endpoint::DiagEvents) =>
+        {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "diag_admission_limited",
+                "Too many reports from this address, try later",
+            )
+        }
         AdmissionRejection::Limited { .. } => (
             StatusCode::TOO_MANY_REQUESTS,
             "auth_admission_limited",
@@ -386,6 +439,30 @@ pub(crate) fn resolve_busy(retry_after_seconds: u64) -> AppError {
         "Opening links is busy, try again shortly",
     )
     .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))
+}
+
+fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
+    let is_trusted = |address: IpAddr| trusted.iter().any(|net| net.contains(&address));
+    let peer = peer.to_canonical();
+    if !is_trusted(peer) {
+        return peer;
+    }
+    let entries = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .rev()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.rsplit(','));
+    for entry in entries {
+        let Ok(address) = entry.trim().parse::<IpAddr>() else {
+            return peer;
+        };
+        let address = address.to_canonical();
+        if !is_trusted(address) {
+            return address;
+        }
+    }
+    peer
 }
 
 fn client_identity(address: IpAddr) -> String {

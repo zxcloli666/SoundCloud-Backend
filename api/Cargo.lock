@@ -104,6 +104,7 @@ dependencies = [
  "entity-ref",
  "futures",
  "hex",
+ "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
  "mini-moka",

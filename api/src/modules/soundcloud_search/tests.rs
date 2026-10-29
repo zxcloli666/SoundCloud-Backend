@@ -40,6 +40,9 @@ fn admission(url: &str, per_session: u32) -> anyhow::Result<Arc<PublicAdmission>
             room_list: limit,
             room_create: limit,
             room_join: limit,
+            diag_bundle: limit,
+            diag_events: limit,
+            trusted_proxies: Vec::new(),
         },
     ))
 }

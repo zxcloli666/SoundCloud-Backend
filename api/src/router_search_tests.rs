@@ -78,6 +78,9 @@ fn config(redis: &str) -> AppConfig {
             room_list: limit,
             room_create: limit,
             room_join: limit,
+            diag_bundle: limit,
+            diag_events: limit,
+            trusted_proxies: Vec::new(),
         },
         nats: NatsCfg {
             url: "nats://127.0.0.1:1".to_owned(),

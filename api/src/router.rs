@@ -49,7 +49,7 @@ pub fn build(state: AppState) -> Router {
     let router = Router::new()
         .merge(modules::health::router())
         .merge(modules::admin::router())
-        .merge(modules::diag::router())
+        .merge(modules::diag::router(state.admission.clone()))
         .merge(modules::auth::router(state.admission.clone()))
         .merge(modules::me::router())
         .merge(modules::legacy_clients::router())

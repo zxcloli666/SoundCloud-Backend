@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +10,6 @@ use sqlx::PgPool;
 
 use super::code;
 use super::jaeger::{self, TraceView};
-use super::limits::Limits;
 use crate::error::AppError;
 
 const RETENTION_DAYS: i64 = 30;
@@ -22,7 +20,6 @@ pub struct DiagService {
     pg: PgPool,
     jaeger_url: String,
     http: wreq::Client,
-    limits: Limits,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,16 +59,7 @@ impl DiagService {
             pg,
             jaeger_url,
             http,
-            limits: Limits::new(),
         })
-    }
-
-    pub fn allow_bundle(&self, ip: IpAddr) -> bool {
-        self.limits.bundle(ip)
-    }
-
-    pub fn allow_events(&self, ip: IpAddr, count: u32) -> bool {
-        self.limits.events(ip, count)
     }
 
     pub async fn store_bundle(&self, bundle: &Bundle) -> Result<(String, DateTime<Utc>), AppError> {

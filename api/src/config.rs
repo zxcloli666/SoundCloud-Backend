@@ -123,6 +123,9 @@ pub struct AdmissionCfg {
     pub room_list: AdmissionLimitCfg,
     pub room_create: AdmissionLimitCfg,
     pub room_join: AdmissionLimitCfg,
+    pub diag_bundle: AdmissionLimitCfg,
+    pub diag_events: AdmissionLimitCfg,
+    pub trusted_proxies: Vec<ipnet::IpNet>,
 }
 
 impl AdmissionCfg {
@@ -135,6 +138,8 @@ impl AdmissionCfg {
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
+        let diag_bundle = admission_limit("DIAG_BUNDLE", 20, 20000);
+        let diag_events = admission_limit("DIAG_EVENTS", 30, 60000);
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -149,8 +154,24 @@ impl AdmissionCfg {
             room_list,
             room_create,
             room_join,
+            diag_bundle,
+            diag_events,
+            trusted_proxies: trusted_proxies(&env_str("TRUSTED_PROXIES", "")),
         }
     }
+}
+
+fn trusted_proxies(list: &str) -> Vec<ipnet::IpNet> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<ipnet::IpNet>()
+                .or_else(|_| entry.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                .unwrap_or_else(|_| panic!("TRUSTED_PROXIES has a bad entry: {entry}"))
+        })
+        .collect()
 }
 
 fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimitCfg {
