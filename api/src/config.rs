@@ -89,6 +89,7 @@ pub struct AdminCfg {
     pub metrics_token: redact::Secret<String>,
     pub diag_token: redact::Secret<String>,
     pub jaeger_url: String,
+    pub diag_sourcemaps_dir: String,
 }
 
 #[derive(Clone)]
@@ -312,6 +313,7 @@ impl AppConfig {
                 metrics_token: env_str("METRICS_TOKEN", "").into(),
                 diag_token: env_str("DIAG_TOKEN", "").into(),
                 jaeger_url: env_str("JAEGER_QUERY_URL", "http://jaeger:16686/jaeger"),
+                diag_sourcemaps_dir: env_str("DIAG_SOURCEMAPS_DIR", "/tmp/scd-sourcemaps"),
             },
 
             redis: RedisCfg {
@@ -462,6 +464,7 @@ mod tests {
             metrics_token: "s3cr3t-metrics-token".to_owned().into(),
             diag_token: "s3cr3t-diag-token".to_owned().into(),
             jaeger_url: String::new(),
+            diag_sourcemaps_dir: String::new(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),

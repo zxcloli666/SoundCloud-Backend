@@ -141,6 +141,19 @@ pub struct Attempt {
     pub bytes: u64,
 }
 
+impl Service {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Api => "api",
+            Self::Stream => "stream",
+            Self::Storage => "storage",
+            Self::Pay => "pay",
+            Self::Images => "images",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {

@@ -7,6 +7,7 @@ use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use backend_contracts::diag::{Bundle, EventsBody};
+use backend_contracts::diag_report::View;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -30,6 +31,7 @@ pub fn router(admission: Arc<PublicAdmission>) -> Router<AppState> {
         )
         .route("/admin/diag/bundles/{code}", get(get_bundle))
         .route("/admin/diag/traces/{trace}", get(get_trace))
+        .route("/admin/diag/report/{code}", get(get_report))
         .route("/admin/diag/issues", get(list_issues))
         .route("/admin/diag/issues/{fingerprint}", get(get_issue))
 }
@@ -38,6 +40,11 @@ pub fn router(admission: Arc<PublicAdmission>) -> Router<AppState> {
 struct IssuesQuery {
     hours: Option<i32>,
     limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct ReportQuery {
+    view: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +83,25 @@ async fn get_bundle(
     bundle
         .map(Json)
         .ok_or_else(|| AppError::not_found("no such bundle"))
+}
+
+async fn get_report(
+    _auth: DiagAuth,
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    Query(query): Query<ReportQuery>,
+) -> Result<Json<Value>, AppError> {
+    let view = match query.view.as_deref() {
+        None | Some("internal") => View::Internal,
+        Some("public") => View::Public,
+        Some(_) => return Err(AppError::bad_request("view must be public")),
+    };
+    let report = state
+        .diag
+        .report(&code, view)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such bundle"))?;
+    Ok(Json(json!(report)))
 }
 
 async fn get_trace(

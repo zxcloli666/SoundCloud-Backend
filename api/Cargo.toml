@@ -79,6 +79,9 @@ telemetry = { version = "0.1.0", path = "../utils/telemetry" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }
+sourcemap = "9.3.2"
+tar = "0.4.46"
+flate2 = "1.1.10"
 
 [features]
 profiling = ["dep:pprof"]

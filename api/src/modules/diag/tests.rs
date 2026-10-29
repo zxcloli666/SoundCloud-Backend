@@ -1,4 +1,5 @@
 use backend_contracts::diag::{Bundle, EventsBody};
+use backend_contracts::diag_report::{Rule, View};
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -47,7 +48,7 @@ async fn a_stored_bundle_comes_back_by_any_spelling_of_its_code(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install(&pool).await?;
-    let service = DiagService::new(pool, String::new());
+    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
 
     let (code, _) = service.store_bundle(&bundle()).await?;
     let fetched = service.bundle(&code.to_lowercase()).await?;
@@ -60,7 +61,7 @@ async fn a_stored_bundle_comes_back_by_any_spelling_of_its_code(
 #[sqlx::test(migrations = false)]
 async fn issues_count_installs_apart_from_events(pool: PgPool) -> anyhow::Result<()> {
     install(&pool).await?;
-    let service = DiagService::new(pool, String::new());
+    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
 
     service
         .store_events(&events("0123456789abcdef", "aaaaaaaaaaaa"))
@@ -85,5 +86,43 @@ async fn issues_count_installs_apart_from_events(pool: PgPool) -> anyhow::Result
         .expect("found");
     assert_eq!(detail.days.len(), 1);
     assert!(service.issue("1111111111111111", 168).await?.is_none());
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_report_counts_traces_that_could_not_be_read(pool: PgPool) -> anyhow::Result<()> {
+    install(&pool).await?;
+    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
+    let mut with_attempt = bundle();
+    with_attempt.attempts = serde_json::from_value(json!([{
+        "at": "2026-10-29T10:00:00.000Z", "trace": "4bf92f3577b3da6a3ce929d0e0e4736f",
+        "span": "00f067aa0ba902b7", "debug": true, "service": "stream", "method": "GET",
+        "path": "/stream/soundcloud:tracks:1", "hop": "r2", "status": 0, "ms": 10012,
+        "error": "connect timeout after 10s", "bytes": 0
+    }]))?;
+    let (code, _) = service.store_bundle(&with_attempt).await?;
+
+    let internal = service
+        .report(&code, View::Internal)
+        .await?
+        .expect("report");
+    let public = service.report(&code, View::Public).await?.expect("report");
+
+    assert_eq!(internal.counts.traces_wanted, 1);
+    assert_eq!(internal.missing.trace_ids.len(), 1);
+    assert!(public.missing.trace_ids.is_empty());
+    assert!(public.header.app.id.is_none());
+    assert!(
+        internal
+            .hints
+            .iter()
+            .any(|hint| hint.rule == Rule::NeverReached)
+    );
+    assert!(
+        service
+            .report("SCD-00000000", View::Internal)
+            .await?
+            .is_none()
+    );
     Ok(())
 }

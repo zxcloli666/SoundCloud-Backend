@@ -1,6 +1,7 @@
 mod code;
 mod handlers;
 mod jaeger;
+mod report;
 mod service;
 
 pub use handlers::router;

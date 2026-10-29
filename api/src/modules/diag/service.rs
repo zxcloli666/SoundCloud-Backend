@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use backend_contracts::diag::{Bundle, EventsBody};
+use backend_contracts::diag_report::{IssueStats, Report, View};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -10,16 +12,19 @@ use sqlx::PgPool;
 
 use super::code;
 use super::jaeger::{self, TraceView};
+use super::report::{self, Sourcemaps};
 use crate::error::AppError;
 
 const RETENTION_DAYS: i64 = 30;
 const CODE_ATTEMPTS: usize = 8;
 const TITLE_CHARS: usize = 300;
+const STATS_HOURS: i32 = 720;
 
 pub struct DiagService {
     pg: PgPool,
     jaeger_url: String,
     http: wreq::Client,
+    sourcemaps: Sourcemaps,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,7 +55,7 @@ pub struct IssueDetail {
 }
 
 impl DiagService {
-    pub fn new(pg: PgPool, jaeger_url: String) -> Arc<Self> {
+    pub fn new(pg: PgPool, jaeger_url: String, sourcemaps_dir: PathBuf) -> Arc<Self> {
         let http = wreq::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -59,6 +64,7 @@ impl DiagService {
             pg,
             jaeger_url,
             http,
+            sourcemaps: Sourcemaps::new(sourcemaps_dir),
         })
     }
 
@@ -123,6 +129,34 @@ impl DiagService {
 
     pub async fn trace(&self, trace: &str) -> Result<Option<TraceView>, AppError> {
         jaeger::fetch(&self.http, &self.jaeger_url, trace).await
+    }
+
+    pub fn sourcemaps(&self) -> &Sourcemaps {
+        &self.sourcemaps
+    }
+
+    pub async fn report(&self, code: &str, view: View) -> Result<Option<Report>, AppError> {
+        report::build(self, code, view).await
+    }
+
+    pub async fn issue_stats(&self, fingerprint: &str) -> Result<Option<IssueStats>, AppError> {
+        let Some(overall) = self.collect(STATS_HOURS, 1, Some(fingerprint)).await?.pop() else {
+            return Ok(None);
+        };
+        let installs_24h = self
+            .collect(24, 1, Some(fingerprint))
+            .await?
+            .pop()
+            .map_or(0, |recent| recent.installs);
+        Ok(Some(IssueStats {
+            events: overall.events,
+            installs: overall.installs,
+            installs_24h,
+            first_at: overall.first_at.to_rfc3339(),
+            last_at: overall.last_at.to_rfc3339(),
+            first_version: overall.first_version,
+            versions: overall.versions,
+        }))
     }
 
     pub async fn issues(&self, hours: i32, limit: i64) -> Result<Vec<Issue>, AppError> {

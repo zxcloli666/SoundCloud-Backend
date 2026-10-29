@@ -62,6 +62,7 @@ fn config(redis: &str) -> AppConfig {
             metrics_token: String::new().into(),
             diag_token: String::new().into(),
             jaeger_url: String::new(),
+            diag_sourcemaps_dir: String::new(),
         },
         redis: RedisCfg {
             url: redis.to_owned(),
@@ -230,7 +231,11 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
-        diag: crate::modules::diag::DiagService::new(pg.clone(), String::new()),
+        diag: crate::modules::diag::DiagService::new(
+            pg.clone(),
+            String::new(),
+            std::env::temp_dir().join("scd-test-sourcemaps"),
+        ),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),
         soundcloud_search: crate::modules::soundcloud_search::SoundCloudSearch::new(
