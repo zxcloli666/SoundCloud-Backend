@@ -96,26 +96,31 @@ mod tests {
             .layer(axum::middleware::from_fn(trace_requests))
     }
 
-    #[tokio::test]
-    async fn requests_pass_through_the_root_span_untouched() {
+    #[test]
+    fn requests_pass_through_the_root_span_untouched() {
         let _serial = SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let ok = app()
-            .oneshot(
-                HttpRequest::get("/ok/7")
-                    .body(Body::empty())
-                    .expect("request"),
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let ok = runtime
+            .block_on(
+                app().oneshot(
+                    HttpRequest::get("/ok/7")
+                        .body(Body::empty())
+                        .expect("request"),
+                ),
             )
-            .await
             .expect("response");
-        let boom = app()
-            .oneshot(
-                HttpRequest::get("/boom")
-                    .body(Body::empty())
-                    .expect("request"),
+        let boom = runtime
+            .block_on(
+                app().oneshot(
+                    HttpRequest::get("/boom")
+                        .body(Body::empty())
+                        .expect("request"),
+                ),
             )
-            .await
             .expect("response");
 
         assert_eq!(ok.status(), StatusCode::OK);

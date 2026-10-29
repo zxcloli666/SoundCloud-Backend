@@ -120,8 +120,7 @@ mod tests {
                 .expect("runtime")
                 .block_on(source("anon", "hq", attempt));
         });
-        let recorded = seen.lock().expect("lock").clone();
-        recorded
+        seen.lock().expect("lock").clone()
     }
 
     fn has(recorded: &[(String, String)], name: &str, value: &str) -> bool {

@@ -64,7 +64,7 @@ fn unhashed(frame: &str) -> String {
     while let Some(at) = rest.find(".js") {
         let before = &rest[..at];
         let name_start = before
-            .rfind(|ch: char| ch == '/' || ch == '(' || ch == ' ' || ch == '@')
+            .rfind(['/', '(', ' ', '@'])
             .map_or(0, |index| index + 1);
         let name = &before[name_start..];
         let stem = name.rsplit_once('-').map_or(name, |(stem, _)| stem);
