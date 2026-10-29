@@ -1,0 +1,305 @@
+version: 1
+
+publications:
+  scd_core_pub: {node: core, publish: "insert, update, delete"}
+  scd_api_pub: {node: api, publish: "insert, update, delete"}
+  scd_cmd_pub: {node: api, publish: "insert"}
+
+core_only_code:
+  streaming/src/db/postgres/upgrade.rs: "HQ upgrade runs only where STREAMING_HQ_UPGRADE=on, on core (B8)"
+
+kinds:
+  observe.tracks: {touches: [tracks], from: "utils/catalog-ingest tracks upsert, insert_absent, bump_priority (api search, resolve, upload ingest)"}
+  observe.users: {touches: [users], from: "utils/catalog-ingest users upsert, insert_absent"}
+  observe.playlists: {touches: [playlists, playlist_membership_state], from: "utils/catalog-ingest playlists upsert, insert_absent, ensure_membership_state"}
+  observe.profile: {touches: [user_profiles], from: "utils/catalog-ingest upsert_profile (login)"}
+  track.edit: {touches: [tracks], from: "api tracks apply_update"}
+  track.delete: {touches: [tracks], from: "api tracks apply_delete"}
+  track.too_long: {touches: [tracks], from: "api tracks mark_too_long"}
+  track.release_held: {touches: [tracks], from: "api indexing release_held"}
+  track.storage_lost: {touches: [tracks], from: "streaming mark_storage_lost"}
+  track.s3_state: {touches: [tracks], from: "api s3_verifier mark_ok, mark_missing (API_BACKGROUND node)"}
+  match.wanted_link: {touches: [wanted_tracks], from: "utils/catalog-match link_to_indexed"}
+  match.album_track: {touches: [album_tracks, tracks], from: "utils/catalog-match insert_album_track, inherit_track_album"}
+  match.sc_account: {touches: [artist_sc_accounts, artists], from: "utils/catalog-match upsert_account, delete_account, backfill_artist_sc_user_id"}
+  match.genius_song: {touches: [tracks], from: "utils/catalog-match set_track_genius_song"}
+  playlist.edit: {touches: [playlists], from: "api playlists apply_update"}
+  playlist.delete: {touches: [playlists, playlist_membership_state], from: "api playlists apply_delete, retire_membership"}
+  playlist.membership_op: {touches: [playlist_membership_operations, playlist_track_projection, playlist_membership_state], from: "api playlists journal: append_operation, projection writes, advance_membership_state, ensure_membership_tracked"}
+  lyrics.wake: {touches: [lyrics_lookup_state], from: "api lyrics ensure_lookup_state, request_lookup, mark_wake_durable"}
+  comment.post: {touches: [track_comments], from: "api tracks comments insert_pending"}
+  cold_refresh.clear: {touches: [catalog_audience, track_comments, catalog_collection_sync], from: "api cold_refresh audience_clear, comments_clear"}
+  job.enqueue: {touches: [background_jobs], from: "api cold_refresh enqueue_entity, me enqueue_followed_uploads, featured create/update, playlist observe after the Redis claim"}
+  owned.insert: {touches: [user_owned_tracks], from: "api tracks insert_owned"}
+  owned.delete: {touches: [user_owned_tracks, user_owned_playlists], from: "api tracks and playlists delete_owned"}
+  app_token.reject: {touches: [oauth_app_tokens], from: "api oauth_apps token_service reject_generation"}
+  sync_queue.revive: {touches: [sync_queue], optimistic: false, from: "api sync_queue revive_dead, core only"}
+  sync_queue.purge: {touches: [sync_queue], optimistic: false, from: "api admin sync_queue purge, core only"}
+  connection.drop_orphan: {touches: [soundcloud_connections], optimistic: false, from: "api auth delete_orphan_connection, core only (B6)"}
+
+tables:
+  admin_maintenance_runs: {class: C, note: "jobs writes, api admin reads"}
+  album_artists: {class: C}
+  album_tracks: {class: C}
+  albums: {class: C}
+  artist_attribution_revalidation: {class: C, note: "singleton written by the artist flag trigger and the walker; trigger role-gated (R8)"}
+  artist_colike: {class: C, hold: "replicated by scd_graph_pub until A6, then into scd_core_pub"}
+  artist_coplay: {class: C}
+  artist_sc_accounts: {class: C, derived: [artist_sc_account_flag_trg]}
+  artist_socials: {class: C}
+  artists: {class: C}
+  background_job_failures: {class: C, note: "jobs writes, api status reads"}
+  catalog_audience: {class: C}
+  catalog_collection_sync: {class: C}
+  job_status:
+    class: C
+    planned: B2
+    pk: [kind, dedup_key]
+    columns: {kind: text, dedup_key: text, state: text, available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
+    note: "jobs writes on state change of the 3 kinds the api reads"
+  lyrics_cache: {class: C, derived: [lyrics_cache_fts_trg]}
+  lyrics_lookup_state: {class: C, note: "rows come from the tracks derived trigger on core; api only through lyrics.wake"}
+  oauth_app_tokens: {class: C}
+  playlist_membership_operations: {class: C, note: "core assigns sequence and runs the acceptance check (was mixed)"}
+  playlist_membership_state: {class: C}
+  playlist_remote_observations: {class: C, unpublished_fks: [playlist_remote_observations_snapshot_fkey]}
+  playlist_track_projection: {class: C}
+  playlist_legacy_membership_intents: {class: C, unpublished_fks: [playlist_legacy_membership_intents_local_snapshot_id_fkey]}
+  playlists: {class: C, local: [last_read_at], note: "last_read_at moves to entity_reads (B5a)"}
+  search_terms: {class: C}
+  discover_tag_counts: {class: C}
+  sync_queue_action_pauses: {class: C}
+  taste_model_versions: {class: C}
+  track_artists: {class: C, derived: [track_artists_block_guard_trg]}
+  track_comments: {class: C, note: "sc_comment_id filled by core"}
+  tracks:
+    class: C
+    id: {ns: tracks, from: [urn]}
+    local: [last_read_at]
+    derived: [tracks_lyrics_lookup_state_refresh, tracks_primary_block_guard_trg]
+    note: "last_read_at moves to entity_reads (B5a); jobs-private columns go to narrow P tables in A7"
+  user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
+  user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
+  user_owned_tracks: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
+  user_profiles: {class: C}
+  user_taste_vectors: {class: C}
+  user_web_profiles: {class: C}
+  users: {class: C, local: [last_read_at], note: "last_read_at moves to entity_reads (B5a)"}
+  wanted_track_albums: {class: C}
+  wanted_track_artists: {class: C}
+  wanted_tracks: {class: C}
+
+  ai_resolver_budget: {class: P}
+  ai_resolver_cache: {class: P}
+  audio_index_wire_state: {class: P}
+  background_job_enqueues: {class: P}
+  background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}
+  background_schedules: {class: P}
+  catalog_collection_cursors: {class: P}
+  catalog_collection_seen: {class: P}
+  catalog_merge_state: {class: P}
+  catalog_work_links: {class: P}
+  cmd_dead:
+    class: P
+    planned: B2
+    pk: [node, id]
+    columns: {node: text, id: uuid, kind: text, args: jsonb, sqlstate: text, message: text, at: "timestamptz NOT NULL DEFAULT now()"}
+  enrich_calibration: {class: P, note: "no code writer, read by jobs only"}
+  lyrics_embedding_wire_state: {class: P}
+  lyrics_lookup_backfill_state: {class: P}
+  oauth_app_token_issuance_reservations: {class: P}
+  oauth_app_token_refresh_state: {class: P}
+  pipeline_event_receipts: {class: P}
+  playlist_reconcile_runs: {class: P}
+  playlist_remote_snapshot_tracks: {class: P}
+  playlist_remote_snapshots: {class: P, note: "referenced by C tables playlist_remote_observations and playlist_legacy_membership_intents: on api nodes clear it with DELETE under the replica role, TRUNCATE fails on the FK"}
+  playlist_sweep_cursor: {class: P}
+  playlist_tracks_v9_repair: {class: P, prod_only: true, note: "prod leftover, not in migrations, no code; drop candidate"}
+  recommendation_quality_models: {class: P}
+  star_track_tiers: {class: P, note: "read only by streaming-core once HQ upgrade runs on core (BREAK H1)"}
+  storage_event_state: {class: P}
+  subscription_snapshot_state: {class: P}
+  taste_schedule: {class: P}
+  track_work_aliases: {class: P}
+  transcription_sync_versions: {class: P}
+  transcription_wire_state: {class: P}
+  user_collection_sync: {class: P, note: "no code reader or writer; drop candidate"}
+  wanted_track_work_aliases: {class: P}
+  rec_hard_negative_sweep: {class: P, db: ops}
+  rec_hard_negatives: {class: P, db: ops}
+  rec_impressions: {class: P, db: ops}
+
+  user_likes_tracks:
+    class: M
+    delete: receipt
+    groups:
+      intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
+      result: {owner: core, version: result_v, cols: [progress, synced_at, liked_at, synced_for_v]}
+    local: [last_read_at]
+    planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
+    note: "last_read_at has no writer"
+  user_likes_playlists:
+    class: M
+    delete: receipt
+    groups:
+      intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
+      result: {owner: core, version: result_v, cols: [progress, synced_at, synced_for_v]}
+    local: [last_read_at]
+    planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
+  user_followings:
+    class: M
+    delete: receipt
+    groups:
+      intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
+      result: {owner: core, version: result_v, cols: [progress, synced_at, synced_for_v]}
+    local: [last_read_at]
+    planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
+  sync_queue:
+    class: M
+    delete: receipt
+    id: {ns: sync_queue, from: [user_id, action_type, target_urn]}
+    unique: {sync_queue_target_uq: id}
+    groups:
+      intent: {owner: api, version: intent_v, cols: [user_id, action_type, target_urn, created_at, payload, generation, cancelled]}
+      result: {owner: core, version: result_v, cols: [locked_at, lease_id, lease_generation, retry_count, last_error, next_run_at, dead, failed_at, remote_attempted_generation, remote_completed_generation, remote_result, exec_generation]}
+    planned_cols: {cancelled: "boolean NOT NULL DEFAULT false", exec_generation: bigint}
+    note: "cancel_inverse, revive and admin purge run on core (4.6)"
+  soundcloud_connections:
+    class: M
+    delete: receipt
+    groups:
+      token: {owner: both, version: token_v, cols: [soundcloud_user_id, username, created_at, oauth_app_id, access_token, refresh_token, expires_at, scope]}
+      refresh: {owner: core, version: refresh_v, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at]}
+    note: "token writers: login (api) and refresh (core only, B11); orphan delete is a core kind"
+
+  cdn_tracks:
+    class: A
+    delete: none
+    id: {ns: cdn_tracks, from: [track_urn, quality]}
+    unique: {cdn_tracks_urn_quality_uq: id}
+    groups: {row: {version: row_v, cols: rest}}
+    local: [last_accessed_at]
+  diag_bundles: {class: A, delete: core, insert_only: true, note: "core retention after 30 days"}
+  diag_events: {class: A, delete: core, insert_only: true, note: "core retention after 7 days"}
+  diag_issue_days: {class: A, delete: core, groups: {row: {version: row_v, cols: rest}}, note: "host is in the key, each node counts its own rows"}
+  diag_issue_origins: {class: A, delete: core, insert_only: true}
+  discover_promoted:
+    class: A
+    delete: tombstone
+    id: {ns: discover_promoted, from: [entity_type, entity_id]}
+    unique: {discover_promoted_entity_uq: id}
+    groups: {row: {version: row_v, cols: rest}}
+  discover_settings: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
+  disliked_tracks:
+    class: A
+    delete: tombstone
+    id: {ns: disliked_tracks, from: [sc_user_id, sc_track_id]}
+    unique: {disliked_tracks_user_track_uq: id}
+    groups: {row: {version: row_v, cols: rest}}
+    note: "versioned although insert-only: the R6 id comes back on a re-dislike and must beat the tombstone"
+  featured_items: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  link_requests:
+    class: A
+    delete: tombstone
+    unique: {link_requests_claim_token_uq: random}
+    groups: {row: {version: row_v, cols: rest}}
+  listening_history: {class: A, delete: tombstone, insert_only: true, note: "random id, so the tombstone blocks unconditionally"}
+  login_requests:
+    class: A
+    delete: tombstone
+    unique: {login_requests_state_uq: random}
+    groups: {row: {version: row_v, cols: rest}}
+  oauth_app_request_cooldowns: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
+  oauth_apps:
+    class: A
+    delete: tombstone
+    id: {ns: oauth_apps, from: [client_id]}
+    unique: {oauth_apps_client_identity_uq: id}
+    groups: {row: {version: row_v, cols: rest}}
+    local: [last_used_at]
+    note: "last_used_at is per-node LRU state; seed moves to a migration"
+  repl_tombstones:
+    class: A
+    delete: core
+    planned: B2
+    pk: [tbl, pk]
+    columns: {tbl: text, pk: jsonb, v: "bigint NOT NULL DEFAULT 0", at: "timestamptz NOT NULL DEFAULT now()"}
+    groups: {row: {version: v, cols: rest}}
+    note: "core purges after 7 days"
+  sc_egress_health: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}, note: "breaker rows, every node writes"}
+  sessions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  subscriptions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  track_artist_blocks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  user_auras: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
+  user_blocked_artists: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  user_events: {class: A, delete: none, insert_only: true}
+  user_like_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  user_superlike_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  user_superlikes: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+
+  entity_reads:
+    class: K
+    planned: B2
+    pk: [entity_urn]
+    columns: {entity_urn: text, last_read_at: "timestamptz NOT NULL"}
+    register: last_read_at
+  repl_checksums:
+    class: K
+    planned: B2
+    pk: [node, tbl, range]
+    columns: {node: text, tbl: text, range: text, hash: text, at: "timestamptz NOT NULL DEFAULT now()"}
+    register: at
+  sc_track_counters: {class: K, register: fetched_at}
+
+  _mw_installed: {class: L, prod_only: true, note: "legacy replication trigger bookkeeping, dropped at the switch"}
+  _sqlx_migrations: {class: L, prod_only: true}
+  cluster_bandit_stats: {class: L}
+  cmd_pending:
+    class: L
+    planned: B2
+    pk: [tbl, pk, id]
+    columns: {tbl: text, pk: jsonb, node: text, id: uuid}
+  oauth_app_tokens_local: {class: L, planned: B11}
+  repl_resend:
+    class: L
+    planned: B2
+    pk: [tbl, pk]
+    columns: {tbl: text, pk: jsonb}
+
+  cmd_outbox:
+    class: X
+    planned: B2
+    pk: [node, id]
+    columns: {node: text, id: uuid, kind: text, args: jsonb, touched: jsonb, created_at: "timestamptz NOT NULL DEFAULT now()", done_at: timestamptz}
+    publish: [scd_cmd_pub]
+    local: [done_at]
+  cmd_done:
+    class: X
+    planned: B2
+    pk: [node, id]
+    columns: {node: text, id: uuid, status: text, at: "timestamptz NOT NULL DEFAULT now()"}
+    publish: [scd_core_pub]
+  cmd_reassert:
+    class: X
+    planned: B2
+    pk: [node, id, tbl, pk]
+    columns: {node: text, id: uuid, tbl: text, pk: jsonb, row: jsonb}
+    publish: [scd_core_pub]
+  cmd_purge:
+    class: X
+    planned: B2
+    pk: [node, id, tbl, pk]
+    columns: {node: text, id: uuid, tbl: text, pk: jsonb}
+    publish: [scd_core_pub]
+  repl_purges:
+    class: X
+    planned: B2
+    pk: [tbl, pk, at]
+    columns: {tbl: text, pk: jsonb, purged_v: bigint, at: "timestamptz NOT NULL DEFAULT now()"}
+    publish: [scd_core_pub]
+  repl_repair:
+    class: X
+    planned: B2
+    pk: [id]
+    columns: {id: uuid, src_node: text, tbl: text, pk: jsonb, row: jsonb, at: "timestamptz NOT NULL DEFAULT now()"}
+    publish: [scd_core_pub, scd_api_pub]
