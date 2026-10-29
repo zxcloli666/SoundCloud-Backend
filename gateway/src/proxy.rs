@@ -87,7 +87,7 @@ pub async fn handle(
     match state.client.request(req).await {
         Ok(resp) => {
             let (mut parts, body) = resp.into_parts();
-            strip_hop(&mut parts.headers, false);
+            clean_response(&mut parts.headers);
             Response::from_parts(parts, box_body(body))
         }
         Err(e) => {
@@ -111,7 +111,7 @@ async fn proxy_upgrade(state: Arc<ProxyState>, mut req: Request<Incoming>) -> Re
     if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
         // Upstream refused the upgrade — relay its response as-is.
         let (mut parts, body) = resp.into_parts();
-        strip_hop(&mut parts.headers, false);
+        clean_response(&mut parts.headers);
         return Response::from_parts(parts, box_body(body));
     }
 
@@ -180,6 +180,11 @@ fn sanitize(headers: &mut HeaderMap, keep_upgrade: bool) {
             headers.remove(name);
         }
     }
+}
+
+fn clean_response(headers: &mut HeaderMap) {
+    strip_hop(headers, false);
+    headers.remove(header::SERVER);
 }
 
 fn strip_hop(headers: &mut HeaderMap, keep_upgrade: bool) {
