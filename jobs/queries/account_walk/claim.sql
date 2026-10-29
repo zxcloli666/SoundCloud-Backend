@@ -24,7 +24,7 @@ WITH never_walked AS (
       AND artist.has_sc_account
       AND NOT artist.is_star
     ORDER BY artist.last_account_walk_at NULLS FIRST
-    LIMIT $3
+    LIMIT GREATEST($3 - (SELECT count(*) FROM never_walked), 0)
     FOR UPDATE SKIP LOCKED
 ), picked AS (
     SELECT candidate.id
