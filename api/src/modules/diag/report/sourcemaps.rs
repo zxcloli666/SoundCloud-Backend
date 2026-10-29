@@ -104,8 +104,7 @@ impl Sourcemaps {
             anyhow::bail!("sourcemap archive is too large");
         }
         tokio::fs::create_dir_all(&self.dir).await?;
-        let target = directory.clone();
-        tokio::task::spawn_blocking(move || unpack(&archive, &target)).await??;
+        tokio::task::block_in_place(|| unpack(&archive, &directory))?;
         prune(&self.dir, version).await?;
         Ok(Fetched::Ready)
     }
@@ -153,7 +152,7 @@ async fn prune(dir: &Path, current: &str) -> anyhow::Result<()> {
             versions.push((metadata.modified()?, entry.path()));
         }
     }
-    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    versions.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     for (_, path) in versions.into_iter().skip(KEPT_VERSIONS) {
         if path.file_name().and_then(|name| name.to_str()) != Some(current) {
             tokio::fs::remove_dir_all(path).await?;
