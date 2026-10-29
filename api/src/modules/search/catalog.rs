@@ -37,7 +37,7 @@ pub struct SearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
     flights: KeyedCoalesce<Result<String, Shed>>,
-    terms: TermsCache,
+    pub(super) terms: TermsCache,
     pub(super) permits: Semaphore,
 }
 
