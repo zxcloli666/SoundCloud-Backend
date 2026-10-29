@@ -90,6 +90,7 @@ pub const INDEX_TRACK_PRIORITY: i16 = 5;
 pub enum JobKind {
     AdminCatalogRenormalize,
     AdminMusicBrainzNames,
+    AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
     AuthCleanupLoginRequests,
@@ -144,6 +145,7 @@ impl JobKind {
     pub const ALL: &'static [Self] = &[
         Self::AdminCatalogRenormalize,
         Self::AdminMusicBrainzNames,
+        Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
         Self::AuthCleanupLoginRequests,
@@ -198,6 +200,7 @@ impl JobKind {
         match self {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
+            Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
             Self::AuthCleanupLoginRequests => "auth.cleanup_login_requests",
@@ -295,6 +298,7 @@ impl JobKind {
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
             | Self::AdminMusicBrainzNames
+            | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
             | Self::CrawlArtist
@@ -318,6 +322,7 @@ impl FromStr for JobKind {
         let kind = match value {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
+            "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
             "auth.cleanup_login_requests" => Self::AuthCleanupLoginRequests,
@@ -408,6 +413,7 @@ mod tests {
         let legacy = [
             JobKind::AdminCatalogRenormalize,
             JobKind::AdminMusicBrainzNames,
+            JobKind::AdminWantedAliases,
             JobKind::ArtistAttributionRevalidate,
             JobKind::AuthCleanupLinkRequests,
             JobKind::AuthCleanupLoginRequests,
@@ -455,7 +461,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 50);
+        assert_eq!(kinds.len(), 51);
     }
 
     #[test]

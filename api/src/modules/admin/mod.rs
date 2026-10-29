@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
         )
+        .route(
+            "/admin/maintenance/wanted-aliases",
+            post(maintenance::wanted_aliases),
+        )
         .route("/admin/maintenance/status", get(maintenance::status))
         .route("/admin/playlists/legacy", get(playlists::list_legacy))
         .route(
