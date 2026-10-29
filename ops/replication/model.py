@@ -10,7 +10,7 @@ OWNERS = ("api", "core", "both")
 DELETES = {"M": ("receipt",), "A": ("none", "tombstone", "core")}
 TABLE_KEYS = {
     "class", "db", "note", "planned", "prod_only", "pk", "columns", "planned_cols", "groups", "local", "private",
-    "delete", "insert_only", "register", "id", "unique", "publish", "hold", "derived", "unpublished_fks",
+    "delete", "insert_only", "register", "id", "unique", "publish", "hold", "derived", "unpublished_fks", "least",
 }
 FK_ACTIONS = {"a": "no action", "r": "restrict", "c": "cascade", "n": "set null", "d": "set default"}
 
@@ -43,6 +43,7 @@ class Table:
         self.uniques = []
         self.fks = []
         self.triggers = []
+        self.trigger_info = {}
         self.pk = list(spec.get("pk") or [])
         if schema:
             for c in schema["columns"]:
@@ -58,6 +59,7 @@ class Table:
                     self.uniques.append(u)
             self.fks = schema["fks"]
             self.triggers = [t["name"] for t in schema["triggers"]]
+            self.trigger_info = {t["name"]: t for t in schema["triggers"]}
         elif spec.get("columns"):
             for col, decl in spec["columns"].items():
                 self.types[col], self.notnull[col], self.defaults[col] = parse_decl(decl)
@@ -81,6 +83,10 @@ class Table:
             if g["cols"] == "rest":
                 taken = {c for o in self.groups.values() if isinstance(o["cols"], list) for c in o["cols"]}
                 g["cols"] = [c for c in self.replicated if c not in self.pk and c not in self.versions and c not in taken]
+        if "least" in spec:
+            self.least = list(spec.get("least") or [])
+        else:
+            self.least = [c for c in ("created_at",) if any(g["version"] and c in (g["cols"] or []) for g in self.groups.values())]
 
     @property
     def replicated_class(self):
@@ -91,7 +97,13 @@ class Table:
         return bool(self.groups)
 
     def group_cols(self, owners=OWNERS):
-        return sorted({c for g in self.groups.values() if g["owner"] in owners for c in g["cols"] + [g["version"]]})
+        return sorted({c for g in self.groups.values() if g["owner"] in owners for c in g["cols"] + ([g["version"]] if g["version"] else [])})
+
+    def versioned_groups(self):
+        return [(n, g) for n, g in sorted(self.groups.items()) if g["version"]]
+
+    def group_of(self, col):
+        return next((g for g in self.groups.values() if col in (g["cols"] or [])), None)
 
     def api_groups(self):
         return [(n, g) for n, g in sorted(self.groups.items()) if g["owner"] in ("api", "both")]
@@ -152,6 +164,19 @@ class Model:
                     lists.append((pub, t.name, t.replicated))
         return sorted(lists)
 
+    def fk_parents(self):
+        return [t for t in self.installed() if t.cls in ("M", "A") and t.exists and self.children(t.name)]
+
+    def orphan_fks(self, t):
+        if t.cls not in ("M", "A"):
+            return []
+        out = []
+        for fk in t.fks:
+            parent = self.tables.get(fk["ref_table"])
+            if parent and parent.replicated_class and parent.name != t.name:
+                out.append(fk)
+        return out
+
     def children(self, parent):
         out = []
         for t in self.installed():
@@ -211,6 +236,8 @@ def table_problems(model, t):
         out += group_problems(t)
     elif t.groups:
         out.append("%s: groups only on M and A tables" % n)
+    if t.spec.get("least") is not None and t.cls not in ("M", "A"):
+        out.append("%s: least only on M and A tables" % n)
     if t.cls in DELETES and t.delete not in DELETES[t.cls]:
         out.append("%s: delete must be one of %s" % (n, "/".join(DELETES[t.cls])))
     if t.cls not in DELETES and t.spec.get("delete"):
@@ -249,7 +276,9 @@ def group_problems(t):
     for gname, g in sorted(t.groups.items()):
         if g["owner"] not in OWNERS:
             out.append("%s.%s: owner must be api, core or both" % (n, gname))
-        if not g["version"]:
+        if g["owner"] == "core" and g["version"]:
+            out.append("%s.%s: a group with one writer (core) has no version; drop %s (lab D1)" % (n, gname, g["version"]))
+        if g["owner"] != "core" and not g["version"]:
             out.append("%s.%s: group needs a version column" % (n, gname))
         if not isinstance(g["cols"], list) or not g["cols"]:
             out.append("%s.%s: group needs columns" % (n, gname))
@@ -269,6 +298,10 @@ def group_problems(t):
     for c in t.replicated:
         if c not in t.pk and c not in t.versions and c not in seen:
             out.append("%s: column %s is in no group; add it to a group or to local" % (n, c))
+    for c in t.least:
+        g = t.group_of(c)
+        if not g or not g["version"]:
+            out.append("%s: least column %s must be in a versioned group" % (n, c))
     return out
 
 
@@ -314,6 +347,16 @@ def trigger_problems(t):
             out.append("%s: derived trigger %s does not exist" % (t.name, d))
     if t.derived and t.cls != "C":
         out.append("%s: derived triggers only on C tables" % t.name)
+    for d in t.derived:
+        info = t.trigger_info.get(d)
+        if not info:
+            continue
+        if info.get("enabled") != "A":
+            out.append("%s: derived trigger %s must be ENABLE ALWAYS (R8)" % (t.name, d))
+        if not info.get("gated"):
+            out.append("%s: derived trigger %s needs WHEN (public.scd_derived()) (R8)" % (t.name, d))
+        if not info.get("pinned"):
+            out.append("%s: derived trigger function %s needs SET search_path (lab D3)" % (t.name, info.get("function")))
     return out
 
 

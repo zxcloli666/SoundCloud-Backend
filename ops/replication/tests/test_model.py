@@ -103,10 +103,53 @@ class Model(unittest.TestCase):
         lists = {(p, t): cols for p, t, cols in support.build().publication_lists()}
         self.assertEqual(lists[("scd_core_pub", "items")], ["id", "title", "urn"])
         self.assertEqual(lists[("scd_api_pub", "likes")], ["item_id", "user_id", "wanted", "wanted_v"])
-        self.assertEqual(lists[("scd_core_pub", "likes")], ["item_id", "progress", "result_v", "synced_at", "user_id", "wanted", "wanted_v"])
+        self.assertEqual(lists[("scd_core_pub", "likes")], ["item_id", "progress", "synced_at", "user_id", "wanted", "wanted_v"])
         self.assertNotIn(("scd_core_pub", "jobs_q"), lists)
         self.assertNotIn(("scd_core_pub", "reads"), lists)
         self.assertIn(("scd_api_pub", "reads"), lists)
+
+    def test_core_group_has_no_version(self):
+        s = support.spec()
+        s["tables"]["likes"]["groups"]["result"]["version"] = "result_v"
+        self.assertProblem("likes.result: a group with one writer (core) has no version; drop result_v", s)
+
+    def test_api_group_needs_a_version(self):
+        s = support.spec()
+        del s["tables"]["likes"]["groups"]["intent"]["version"]
+        self.assertProblem("likes.intent: group needs a version column", s)
+
+    def test_least_defaults_to_created_at_in_a_versioned_group(self):
+        sc = support.schema()
+        sc["core"]["marks"]["columns"].append(col("created_at", "timestamptz", True, "now()"))
+        self.assertEqual(support.build(sc=sc).tables["marks"].least, ["created_at"])
+        self.assertEqual(support.build().tables["marks"].least, [])
+
+    def test_least_must_be_in_a_versioned_group(self):
+        s = support.spec()
+        s["tables"]["likes"]["least"] = ["synced_at"]
+        self.assertProblem("likes: least column synced_at must be in a versioned group", s)
+        s["tables"]["likes"]["least"] = []
+        self.assertEqual(problems(s), [])
+
+    def test_derived_trigger_must_be_always_gated_and_pinned(self):
+        s = support.spec()
+        s["tables"]["items"]["derived"] = ["items_touch"]
+        sc = support.schema()
+        sc["core"]["items"]["triggers"].append({"name": "items_touch", "function": "touch", "enabled": "O", "gated": False, "pinned": False})
+        found = problems(s, sc)
+        self.assertIn("items: derived trigger items_touch must be ENABLE ALWAYS (R8)", found)
+        self.assertIn("items: derived trigger items_touch needs WHEN (public.scd_derived()) (R8)", found)
+        self.assertIn("items: derived trigger function touch needs SET search_path (lab D3)", found)
+        sc["core"]["items"]["triggers"][-1].update(enabled="A", gated=True, pinned=True)
+        self.assertEqual(problems(s, sc), [])
+
+    def test_fk_parents_and_orphan_fks(self):
+        sc = support.schema()
+        sc["core"]["marks"]["fks"].append(fk("marks_like_fkey", ["user_id", "item_id"], "likes", ["user_id", "item_id"], "c"))
+        m = support.build(sc=sc)
+        self.assertEqual([t.name for t in m.fk_parents()], ["likes"])
+        self.assertEqual([f["name"] for f in m.orphan_fks(m.tables["marks"])], ["marks_like_fkey"])
+        self.assertEqual(m.orphan_fks(m.tables["item_tags"]), [])
 
     def test_partial_unique_declared(self):
         sc = support.schema()

@@ -55,16 +55,17 @@ tables:
     class: C
     planned: B2
     pk: [kind, dedup_key]
-    columns: {kind: text, dedup_key: text, state: text, available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {kind: text, dedup_key: text, state: "text NOT NULL", available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
     note: "jobs writes on state change of the 3 kinds the api reads"
   lyrics_cache: {class: C, derived: [lyrics_cache_fts_trg]}
   lyrics_lookup_state: {class: C, note: "rows come from the tracks derived trigger on core; api only through lyrics.wake"}
   oauth_app_tokens: {class: C}
   playlist_membership_operations: {class: C, note: "core assigns sequence and runs the acceptance check (was mixed)"}
   playlist_membership_state: {class: C}
-  playlist_remote_observations: {class: C, unpublished_fks: [playlist_remote_observations_snapshot_fkey]}
+  playlist_remote_observations: {class: C}
+  playlist_remote_snapshots: {class: C, note: "C, not P: the C tables playlist_remote_observations and playlist_legacy_membership_intents reference it (B2)"}
   playlist_track_projection: {class: C}
-  playlist_legacy_membership_intents: {class: C, unpublished_fks: [playlist_legacy_membership_intents_local_snapshot_id_fkey]}
+  playlist_legacy_membership_intents: {class: C}
   playlists: {class: C, local: [last_read_at], note: "last_read_at moves to entity_reads (B5a)"}
   search_terms: {class: C}
   discover_tag_counts: {class: C}
@@ -103,7 +104,7 @@ tables:
     class: P
     planned: B2
     pk: [node, id]
-    columns: {node: text, id: uuid, kind: text, args: jsonb, sqlstate: text, message: text, at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {node: text, id: uuid, kind: "text NOT NULL", args: "jsonb NOT NULL", sqlstate: text, message: text, at: "timestamptz NOT NULL DEFAULT now()"}
   enrich_calibration: {class: P, note: "no code writer, read by jobs only"}
   lyrics_embedding_wire_state: {class: P}
   lyrics_lookup_backfill_state: {class: P}
@@ -111,8 +112,7 @@ tables:
   oauth_app_token_refresh_state: {class: P}
   pipeline_event_receipts: {class: P}
   playlist_reconcile_runs: {class: P}
-  playlist_remote_snapshot_tracks: {class: P}
-  playlist_remote_snapshots: {class: P, note: "referenced by C tables playlist_remote_observations and playlist_legacy_membership_intents: on api nodes clear it with DELETE under the replica role, TRUNCATE fails on the FK"}
+  playlist_remote_snapshot_tracks: {class: P, note: "child of the C table playlist_remote_snapshots; 6.6M rows stay core-private"}
   playlist_sweep_cursor: {class: P}
   playlist_tracks_v9_repair: {class: P, prod_only: true, note: "prod leftover, not in migrations, no code; drop candidate"}
   recommendation_quality_models: {class: P}
@@ -134,7 +134,7 @@ tables:
     delete: receipt
     groups:
       intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
-      result: {owner: core, version: result_v, cols: [progress, synced_at, liked_at, synced_for_v]}
+      result: {owner: core, cols: [progress, synced_at, liked_at, synced_for_v]}
     local: [last_read_at]
     planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
     note: "last_read_at has no writer"
@@ -143,7 +143,7 @@ tables:
     delete: receipt
     groups:
       intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
-      result: {owner: core, version: result_v, cols: [progress, synced_at, synced_for_v]}
+      result: {owner: core, cols: [progress, synced_at, synced_for_v]}
     local: [last_read_at]
     planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
   user_followings:
@@ -151,7 +151,7 @@ tables:
     delete: receipt
     groups:
       intent: {owner: api, version: wanted_v, cols: [wanted_state, created_at]}
-      result: {owner: core, version: result_v, cols: [progress, synced_at, synced_for_v]}
+      result: {owner: core, cols: [progress, synced_at, synced_for_v]}
     local: [last_read_at]
     planned_cols: {synced_for_v: "bigint NOT NULL DEFAULT 0"}
   sync_queue:
@@ -161,7 +161,7 @@ tables:
     unique: {sync_queue_target_uq: id}
     groups:
       intent: {owner: api, version: intent_v, cols: [user_id, action_type, target_urn, created_at, payload, generation, cancelled]}
-      result: {owner: core, version: result_v, cols: [locked_at, lease_id, lease_generation, retry_count, last_error, next_run_at, dead, failed_at, remote_attempted_generation, remote_completed_generation, remote_result, exec_generation]}
+      result: {owner: core, cols: [locked_at, lease_id, lease_generation, retry_count, last_error, next_run_at, dead, failed_at, remote_attempted_generation, remote_completed_generation, remote_result, exec_generation]}
     planned_cols: {cancelled: "boolean NOT NULL DEFAULT false", exec_generation: bigint}
     note: "cancel_inverse, revive and admin purge run on core (4.6)"
   soundcloud_connections:
@@ -169,7 +169,7 @@ tables:
     delete: receipt
     groups:
       token: {owner: both, version: token_v, cols: [soundcloud_user_id, username, created_at, oauth_app_id, access_token, refresh_token, expires_at, scope]}
-      refresh: {owner: core, version: refresh_v, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at]}
+      refresh: {owner: core, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at]}
     note: "token writers: login (api) and refresh (core only, B11); orphan delete is a core kind"
 
   cdn_tracks:
@@ -212,12 +212,12 @@ tables:
   oauth_app_request_cooldowns: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
   oauth_apps:
     class: A
-    delete: tombstone
+    delete: core
     id: {ns: oauth_apps, from: [client_id]}
     unique: {oauth_apps_client_identity_uq: id}
     groups: {row: {version: row_v, cols: rest}}
     local: [last_used_at]
-    note: "last_used_at is per-node LRU state; seed moves to a migration"
+    note: "last_used_at is per-node LRU state; seed moves to a migration; delete is core (B5c), so core can refuse a delete that would orphan connections and re-send the row"
   repl_tombstones:
     class: A
     delete: core
@@ -247,7 +247,7 @@ tables:
     class: K
     planned: B2
     pk: [node, tbl, range]
-    columns: {node: text, tbl: text, range: text, hash: text, at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {node: text, tbl: text, range: text, hash: "text NOT NULL", at: "timestamptz NOT NULL DEFAULT now()"}
     register: at
   sc_track_counters: {class: K, register: fetched_at}
 
@@ -258,32 +258,37 @@ tables:
     class: L
     planned: B2
     pk: [tbl, pk, id]
-    columns: {tbl: text, pk: jsonb, node: text, id: uuid}
+    columns: {tbl: text, pk: jsonb, node: "text NOT NULL", id: uuid}
   oauth_app_tokens_local: {class: L, planned: B11}
   repl_resend:
     class: L
     planned: B2
     pk: [tbl, pk]
     columns: {tbl: text, pk: jsonb}
+  scd_unpublished_columns:
+    class: L
+    planned: B2
+    pk: [tbl, col]
+    columns: {tbl: text, col: text, at: "timestamptz NOT NULL DEFAULT now()"}
 
   cmd_outbox:
     class: X
     planned: B2
     pk: [node, id]
-    columns: {node: text, id: uuid, kind: text, args: jsonb, touched: jsonb, created_at: "timestamptz NOT NULL DEFAULT now()", done_at: timestamptz}
+    columns: {node: text, id: uuid, kind: "text NOT NULL", args: "jsonb NOT NULL", touched: "jsonb NOT NULL DEFAULT '[]'::jsonb", created_at: "timestamptz NOT NULL DEFAULT now()", done_at: timestamptz}
     publish: [scd_cmd_pub]
     local: [done_at]
   cmd_done:
     class: X
     planned: B2
     pk: [node, id]
-    columns: {node: text, id: uuid, status: text, at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {node: text, id: uuid, status: "text NOT NULL", at: "timestamptz NOT NULL DEFAULT now()"}
     publish: [scd_core_pub]
   cmd_reassert:
     class: X
     planned: B2
     pk: [node, id, tbl, pk]
-    columns: {node: text, id: uuid, tbl: text, pk: jsonb, row: jsonb}
+    columns: {node: text, id: uuid, tbl: text, pk: jsonb, row: "jsonb NOT NULL"}
     publish: [scd_core_pub]
   cmd_purge:
     class: X
@@ -295,11 +300,11 @@ tables:
     class: X
     planned: B2
     pk: [tbl, pk, at]
-    columns: {tbl: text, pk: jsonb, purged_v: bigint, at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {tbl: text, pk: jsonb, purged_v: "bigint NOT NULL", at: "timestamptz NOT NULL DEFAULT now()"}
     publish: [scd_core_pub]
   repl_repair:
     class: X
     planned: B2
     pk: [id]
-    columns: {id: uuid, src_node: text, tbl: text, pk: jsonb, row: jsonb, at: "timestamptz NOT NULL DEFAULT now()"}
+    columns: {id: uuid, src_node: "text NOT NULL", tbl: "text NOT NULL", pk: "jsonb NOT NULL", row: "jsonb NOT NULL", at: "timestamptz NOT NULL DEFAULT now()"}
     publish: [scd_core_pub, scd_api_pub]

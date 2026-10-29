@@ -72,7 +72,7 @@ SPEC = {
             "delete": "receipt",
             "groups": {
                 "intent": {"owner": "api", "version": "wanted_v", "cols": ["wanted"]},
-                "result": {"owner": "core", "version": "result_v", "cols": ["progress", "synced_at"]},
+                "result": {"owner": "core", "cols": ["progress", "synced_at"]},
             },
         },
         "marks": {
