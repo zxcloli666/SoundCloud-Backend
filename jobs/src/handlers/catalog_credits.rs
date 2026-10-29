@@ -2,7 +2,7 @@ use sqlx::PgPool;
 
 use crate::queue::{JobError, JobResult};
 
-const CONFIRM_BATCH: i64 = 1_000;
+const CONFIRM_BATCH: i64 = 200;
 
 pub struct CatalogCreditHandler {
     pool: PgPool,

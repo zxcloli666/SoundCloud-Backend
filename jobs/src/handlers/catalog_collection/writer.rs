@@ -133,6 +133,9 @@ impl CollectionWriter {
         } else if !more {
             mirror::reconcile(&mut tx, payload, snapshot).await?;
         }
+        if !more {
+            state::sweep_seen(&mut tx, payload, snapshot).await?;
+        }
         sqlx::query_file!(
             "queries/catalog_collection/reset_attempts.sql",
             job.id,
