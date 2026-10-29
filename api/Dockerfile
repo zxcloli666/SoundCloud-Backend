@@ -24,6 +24,7 @@ COPY utils/redact /utils/redact
 COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/sc-transport /utils/sc-transport
 COPY utils/stream-ticket /utils/stream-ticket
+COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
 COPY api/Cargo.toml api/Cargo.lock /api/
 COPY api/src /api/src
