@@ -88,6 +88,7 @@ pub async fn run() -> anyhow::Result<()> {
     let taste_results = bus.taste_results(&config.nats).await?;
     let taste = Arc::new(TasteHandler::new(
         databases.maintenance.clone(),
+        databases.analytics.clone(),
         bus.clone(),
         qdrant.clone(),
         config.taste.clone(),

@@ -42,6 +42,7 @@ const REFRESH_BATCH: usize = 500;
 
 pub struct TasteHandler {
     pool: PgPool,
+    analytics: PgPool,
     bus: Bus,
     qdrant: QdrantProvisioner,
     config: TasteConfig,
@@ -55,9 +56,16 @@ struct ActiveVersion {
 }
 
 impl TasteHandler {
-    pub fn new(pool: PgPool, bus: Bus, qdrant: QdrantProvisioner, config: TasteConfig) -> Self {
+    pub fn new(
+        pool: PgPool,
+        analytics: PgPool,
+        bus: Bus,
+        qdrant: QdrantProvisioner,
+        config: TasteConfig,
+    ) -> Self {
         Self {
             pool,
+            analytics,
             bus,
             qdrant,
             config,
@@ -121,7 +129,7 @@ impl TasteHandler {
         }
         let max_bytes = self.max_object_bytes().await?;
         let dataset = match dataset::export(
-            &self.pool,
+            &self.analytics,
             &self.qdrant,
             self.config.history_days,
             self.config.min_users,
@@ -252,7 +260,7 @@ impl TasteHandler {
         let mut refreshed = 0usize;
         for batch in batches {
             let pooled = vectors::pool_users(
-                &self.pool,
+                &self.analytics,
                 &self.qdrant,
                 self.config.history_days,
                 &pooling,

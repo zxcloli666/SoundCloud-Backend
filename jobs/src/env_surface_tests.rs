@@ -17,7 +17,7 @@ const READERS: &[&str] = &[
     "worker_backlog(",
 ];
 
-const DATABASE_PREFIXES: &[&str] = &["", "OPS_"];
+const DATABASE_PREFIXES: &[&str] = &["", "OPS_", "JOBS_READ_"];
 const LANE_PREFIXES: &[&str] = &[
     "JOBS_CORE_FAST",
     "JOBS_CORE_BULK",
@@ -47,6 +47,18 @@ const READ_BY_A_LIBRARY: &[&str] = &[
     "OPS_DATABASE_SSL_CA",
     "OPS_DATABASE_SSL_CERT",
     "OPS_DATABASE_SSL_KEY",
+    "JOBS_READ_DATABASE_HOST",
+    "JOBS_READ_DATABASE_PORT",
+    "JOBS_READ_DATABASE_NAME",
+    "JOBS_READ_DATABASE_USERNAME",
+    "JOBS_READ_DATABASE_PASSWORD",
+    "JOBS_READ_DATABASE_SSL_MODE",
+    "JOBS_READ_DATABASE_SSL_CA",
+    "JOBS_READ_DATABASE_SSL_CERT",
+    "JOBS_READ_DATABASE_SSL_KEY",
+    "JOBS_READ_PG_POOL_MIN",
+    "JOBS_READ_PG_POOL_MAX",
+    "JOBS_READ_PG_ACQUIRE_TIMEOUT_MS",
 ];
 
 fn crate_root() -> PathBuf {

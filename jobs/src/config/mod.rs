@@ -11,7 +11,7 @@ use backend_contracts::worker_contract::WorkerLane;
 
 pub use database::{DatabaseConfig, PoolConfig, PoolCoverage, SessionLimits};
 
-use database::{maintenance_pool_from_env, queue_pool_from_env};
+use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_from_env};
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
 
@@ -42,6 +42,7 @@ pub struct JobsConfig {
     pub queue_pool: PoolConfig,
     pub maintenance_pool: PoolConfig,
     pub ops_database: DatabaseConfig,
+    pub read_database: Option<DatabaseConfig>,
     pub queue: QueueConfig,
     pub subscriptions: SubscriptionsConfig,
     pub subscriptions_always_premium: bool,
@@ -454,6 +455,8 @@ impl JobsConfig {
         };
         queue.validate()?;
 
+        let main_database = DatabaseConfig::from_env("", true)?;
+        let read_database = read_database_from_env(main_database.tls.require_mtls)?;
         let config = Self {
             instance_id,
             health_bind: env::parse("JOBS_HEALTH_BIND", "0.0.0.0:3001")?,
@@ -472,10 +475,11 @@ impl JobsConfig {
             worker_dispatch: WorkerDispatchConfig::from_env()?,
             admin_maintenance: AdminMaintenanceConfig::from_env()?,
             playlist_reconcile: PlaylistReconcileConfig::from_env()?,
-            main_database: DatabaseConfig::from_env("", true)?,
+            main_database,
             queue_pool: queue_pool_from_env()?,
             maintenance_pool: maintenance_pool_from_env()?,
             ops_database: DatabaseConfig::from_env("OPS_", false)?,
+            read_database,
             queue,
             subscriptions: SubscriptionsConfig::from_env()?,
             subscriptions_always_premium: env::boolean("SUBSCRIPTIONS_ALWAYS_PREMIUM", false)?,

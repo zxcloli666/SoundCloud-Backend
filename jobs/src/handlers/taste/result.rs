@@ -138,7 +138,7 @@ impl TasteHandler {
 
         let computed_at = Utc::now();
         let users = vectors::pool_everyone(
-            &self.pool,
+            &self.analytics,
             self.config.history_days,
             &artifact.pooling,
             &artifact.items,
