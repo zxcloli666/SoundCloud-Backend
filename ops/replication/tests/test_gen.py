@@ -8,10 +8,11 @@ import sys
 import tempfile
 import unittest
 
+import support
 import gen
 import model
 import sqlbits
-import support
+
 
 QUALIFIED_AFTER = re.compile(r"\b(from|join|into|update|table|on|function|exists|references|trigger)\s+([a-z_][a-z0-9_.]*)", re.I)
 

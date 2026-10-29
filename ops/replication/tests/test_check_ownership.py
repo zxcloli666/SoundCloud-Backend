@@ -4,9 +4,9 @@ import sys
 import tempfile
 import unittest
 
+import support
 import check_ownership
 import model
-import support
 from sqltext import analyze
 
 

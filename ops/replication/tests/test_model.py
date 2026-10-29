@@ -1,7 +1,7 @@
 import unittest
 
-import model
 import support
+import model
 from support import col, fk, uniq
 
 

@@ -4,9 +4,10 @@ import sys
 import tempfile
 import unittest
 
+import support
 import check_migrations
 import model
-import support
+
 
 GATED = """DO $$
 BEGIN
