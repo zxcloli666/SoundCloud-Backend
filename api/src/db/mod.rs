@@ -323,11 +323,12 @@ mod tests {
         let url = std::env::var("DATABASE_URL")?;
         let mut cfg = cfg(&url, DbSslCfg::default());
         cfg.acquire_timeout = Duration::from_secs(20);
-        let core = pool(&cfg, 1, connect_opts(&cfg)?).await?;
+        let core = pool(&cfg, 1, connect_opts(&cfg)?, None).await?;
         let recommendations = pool(
             &cfg,
             1,
             connect_opts(&cfg)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]),
+            None,
         )
         .await?;
 
