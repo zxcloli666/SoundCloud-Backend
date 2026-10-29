@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use deadpool_redis::Pool as RedisPool;
 use deadpool_redis::redis::AsyncCommands;
 use mini_moka::sync::Cache;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -41,6 +42,26 @@ type Adjacency = HashMap<Uuid, Arc<Neighbors>>;
 
 pub struct GraphEdges {
     by_artist: Cache<Uuid, Arc<Neighbors>>,
+    loading: Mutex<HashMap<Uuid, Arc<Semaphore>>>,
+}
+
+struct Loading<'a> {
+    edges: &'a GraphEdges,
+    artists: Vec<(Uuid, Arc<Semaphore>)>,
+}
+
+impl Drop for Loading<'_> {
+    fn drop(&mut self) {
+        let mut loading = self
+            .edges
+            .loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (artist, done) in &self.artists {
+            loading.remove(artist);
+            done.close();
+        }
+    }
 }
 
 impl GraphEdges {
@@ -51,6 +72,7 @@ impl GraphEdges {
                 .weigher(|_, neighbors: &Arc<Neighbors>| edge_count(neighbors))
                 .time_to_live(EDGES_TTL)
                 .build(),
+            loading: Mutex::new(HashMap::new()),
         }
     }
 
@@ -65,27 +87,83 @@ impl GraphEdges {
                 None => missing.push(*artist),
             }
         }
-        if !missing.is_empty() {
-            let Ok(edges) = sqlx::query_file!(
-                "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
-                &missing
-            )
-            .fetch_all(pg)
-            .await
-            else {
-                return Adjacency::new();
-            };
-            let edges = edges
-                .into_iter()
-                .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
-            for (artist, neighbors) in neighbors_by_artist(&missing, edges) {
-                let neighbors = Arc::new(neighbors);
-                self.by_artist.insert(artist, neighbors.clone());
-                adjacency.insert(artist, neighbors);
+        let (loading, awaited) = self.claim(&missing);
+        let loaded = self.load(pg, loading.artists.iter().map(|(artist, _)| *artist)).await;
+        drop(loading);
+        let Some(loaded) = loaded else {
+            return Adjacency::new();
+        };
+        adjacency.extend(loaded);
+        let mut stragglers = Vec::new();
+        for (artist, done) in awaited {
+            let _ = done.acquire().await;
+            match self.by_artist.get(&artist) {
+                Some(neighbors) => {
+                    adjacency.insert(artist, neighbors);
+                }
+                None => stragglers.push(artist),
             }
         }
+        let Some(loaded) = self.load(pg, stragglers).await else {
+            return Adjacency::new();
+        };
+        adjacency.extend(loaded);
         adjacency.retain(|_, neighbors| !neighbors.is_empty());
         adjacency
+    }
+
+    fn claim(&self, missing: &[Uuid]) -> (Loading<'_>, Vec<(Uuid, Arc<Semaphore>)>) {
+        let mut loading = self
+            .loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut mine = Vec::new();
+        let mut awaited = Vec::new();
+        for artist in missing {
+            match loading.get(artist) {
+                Some(done) => awaited.push((*artist, done.clone())),
+                None => {
+                    let done = Arc::new(Semaphore::new(0));
+                    loading.insert(*artist, done.clone());
+                    mine.push((*artist, done));
+                }
+            }
+        }
+        (
+            Loading {
+                edges: self,
+                artists: mine,
+            },
+            awaited,
+        )
+    }
+
+    async fn load(
+        &self,
+        pg: &PgPool,
+        artists: impl IntoIterator<Item = Uuid>,
+    ) -> Option<Adjacency> {
+        let artists: Vec<Uuid> = artists.into_iter().collect();
+        if artists.is_empty() {
+            return Some(Adjacency::new());
+        }
+        let edges = sqlx::query_file!(
+            "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+            &artists
+        )
+        .fetch_all(pg)
+        .await
+        .ok()?;
+        let edges = edges
+            .into_iter()
+            .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
+        let mut adjacency = Adjacency::new();
+        for (artist, neighbors) in neighbors_by_artist(&artists, edges) {
+            let neighbors = Arc::new(neighbors);
+            self.by_artist.insert(artist, neighbors.clone());
+            adjacency.insert(artist, neighbors);
+        }
+        Some(adjacency)
     }
 }
 
