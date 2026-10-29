@@ -87,6 +87,8 @@ mod tests {
 
     use super::*;
 
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn app() -> Router {
         Router::new()
             .route("/ok/{id}", get(|| async { "fine" }))
@@ -96,6 +98,9 @@ mod tests {
 
     #[tokio::test]
     async fn requests_pass_through_the_root_span_untouched() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let ok = app()
             .oneshot(
                 HttpRequest::get("/ok/7")
@@ -135,6 +140,9 @@ mod tests {
 
     #[test]
     fn the_root_span_joins_the_incoming_trace_and_marks_failures() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         use opentelemetry::trace::TracerProvider;
         use opentelemetry_sdk::trace::{InMemorySpanExporter, Sampler, SdkTracerProvider};
         use tracing_subscriber::prelude::*;
