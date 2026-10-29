@@ -48,6 +48,7 @@
         "additionalProperties": false,
         "properties": {
           "at": {
+            "format": "date-time",
             "maxLength": 64,
             "type": "string"
           },
@@ -71,7 +72,15 @@
             "type": "string"
           },
           "method": {
-            "maxLength": 16,
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS"
+            ],
             "type": "string"
           },
           "ms": {
@@ -120,6 +129,7 @@
         "additionalProperties": false,
         "properties": {
           "at": {
+            "format": "date-time",
             "maxLength": 64,
             "type": "string"
           },
@@ -279,6 +289,7 @@
         "$ref": "#/$defs/App"
       },
       "at": {
+        "format": "date-time",
         "maxLength": 64,
         "type": "string"
       },
@@ -393,6 +404,7 @@
         "additionalProperties": false,
         "properties": {
           "at": {
+            "format": "date-time",
             "maxLength": 64,
             "type": "string"
           },

@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 
+use chrono::DateTime;
 use schemars::{JsonSchema, Schema, SchemaGenerator, generate::SchemaSettings, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::diag_fingerprint::fingerprint;
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const CONTRACT_PATH: &str = "contract/diag-contract.json";
@@ -25,6 +28,8 @@ const LOG_LINE: usize = 500;
 const NETCHECK: usize = 8192;
 const CONTEXT_VALUE: usize = 300;
 
+const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
 const TRACE_PATTERN: &str = "^[0-9a-f]{32}$";
 const SPAN_PATTERN: &str = "^[0-9a-f]{16}$";
 const FINGERPRINT_PATTERN: &str = "^[0-9a-f]{16}$";
@@ -37,7 +42,7 @@ pub struct Bundle {
     pub kind: String,
     #[schemars(extend("const" = 1))]
     pub v: u8,
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = 64), extend("format" = "date-time"))]
     pub at: String,
     pub app: App,
     pub session: Session,
@@ -120,7 +125,7 @@ pub enum Service {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Attempt {
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = 64), extend("format" = "date-time"))]
     pub at: String,
     #[schemars(pattern("^[0-9a-f]{32}$"))]
     pub trace: String,
@@ -128,7 +133,7 @@ pub struct Attempt {
     pub span: String,
     pub debug: bool,
     pub service: Service,
-    #[schemars(length(max = 16))]
+    #[schemars(extend("enum" = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]))]
     pub method: String,
     #[schemars(length(max = 1000))]
     pub path: String,
@@ -181,7 +186,7 @@ impl ErrorKind {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorEntry {
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = 64), extend("format" = "date-time"))]
     pub at: String,
     pub kind: ErrorKind,
     #[schemars(length(max = 2000))]
@@ -199,12 +204,23 @@ pub struct ErrorEntry {
     pub context: BTreeMap<String, String>,
 }
 
+impl ErrorEntry {
+    pub fn recompute_fingerprint(&mut self) {
+        self.fingerprint = fingerprint(
+            self.kind,
+            &self.message,
+            self.stack.as_deref(),
+            &self.context,
+        );
+    }
+}
+
 impl Bundle {
     pub fn check(&self) -> Result<(), String> {
         if self.kind != BUNDLE_KIND || self.v != BUNDLE_VERSION {
             return Err("unknown bundle kind or version".to_owned());
         }
-        chars("at", &self.at, SHORT)?;
+        timestamp("at", &self.at)?;
         self.app.check()?;
         chars("quality", &self.session.quality, SHORT)?;
         if self.session.route.len() > 4 {
@@ -275,12 +291,14 @@ impl App {
 
 impl Attempt {
     fn check(&self) -> Result<(), String> {
-        chars("attempt.at", &self.at, SHORT)?;
+        timestamp("attempt.at", &self.at)?;
         hex("attempt.trace", &self.trace, TRACE_PATTERN)?;
         hex("attempt.span", &self.span, SPAN_PATTERN)?;
-        chars("attempt.method", &self.method, 16)?;
+        if !METHODS.contains(&self.method.as_str()) {
+            return Err("attempt.method is not an HTTP method".to_owned());
+        }
         chars("attempt.path", &self.path, PATH)?;
-        chars("attempt.hop", &self.hop, SHORT)?;
+        hop(&self.hop)?;
         if let Some(error) = &self.error {
             chars("attempt.error", error, ERROR)?;
         }
@@ -290,7 +308,7 @@ impl Attempt {
 
 impl ErrorEntry {
     pub fn check(&self) -> Result<(), String> {
-        chars("error.at", &self.at, SHORT)?;
+        timestamp("error.at", &self.at)?;
         chars("error.message", &self.message, MESSAGE)?;
         if let Some(stack) = &self.stack {
             chars("error.stack", stack, STACK)?;
@@ -329,6 +347,23 @@ fn context_schema(_: &mut SchemaGenerator) -> Schema {
         "propertyNames": { "maxLength": 64 },
         "additionalProperties": { "type": "string", "maxLength": 300 }
     })
+}
+
+fn timestamp(name: &str, value: &str) -> Result<(), String> {
+    chars(name, value, SHORT)?;
+    DateTime::parse_from_rfc3339(value)
+        .map(|_| ())
+        .map_err(|_| format!("{name} must be an RFC 3339 timestamp"))
+}
+
+fn hop(value: &str) -> Result<(), String> {
+    let numbered = value
+        .strip_prefix(['r', 'p'])
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+    if value != "direct" && !numbered {
+        return Err("attempt.hop must be direct, rN or pN".to_owned());
+    }
+    Ok(())
 }
 
 fn chars(name: &str, value: &str, max: usize) -> Result<(), String> {
@@ -449,6 +484,47 @@ mod tests {
                 .context
                 .insert(format!("k{index}"), "v".to_owned());
         }
+
+        assert!(bundle.check().is_err());
+    }
+
+    #[test]
+    fn a_hop_outside_the_pattern_is_refused() {
+        for bad in ["sc-call1 10.1.2.3", "r", "rx", "r1 ", "relay", "", "P2"] {
+            let mut bundle = sample();
+            bundle.attempts[0].hop = bad.to_owned();
+
+            assert!(bundle.check().is_err(), "{bad}");
+        }
+        for good in ["direct", "r2", "p10"] {
+            let mut bundle = sample();
+            bundle.attempts[0].hop = good.to_owned();
+
+            assert_eq!(bundle.check(), Ok(()), "{good}");
+        }
+    }
+
+    #[test]
+    fn a_timestamp_that_is_not_rfc3339_is_refused() {
+        for bad in ["10.9.8.7 sc-worker1 2026-10-29T10:00:30Z", "2026-10-29", "yesterday"] {
+            let mut bundle = sample();
+            bundle.at = bad.to_owned();
+            assert!(bundle.check().is_err(), "{bad}");
+
+            let mut bundle = sample();
+            bundle.attempts[0].at = bad.to_owned();
+            assert!(bundle.check().is_err(), "{bad}");
+
+            let mut bundle = sample();
+            bundle.errors[0].at = bad.to_owned();
+            assert!(bundle.check().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_method_outside_the_fixed_set_is_refused() {
+        let mut bundle = sample();
+        bundle.attempts[0].method = "FETCH".to_owned();
 
         assert!(bundle.check().is_err());
     }
