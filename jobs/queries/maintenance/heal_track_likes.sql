@@ -1,3 +1,9 @@
+WITH queued AS MATERIALIZED (
+    SELECT user_id, target_urn
+    FROM sync_queue
+    WHERE dead = false
+      AND action_type IN ('like_track', 'unlike_track')
+)
 INSERT INTO sync_queue (user_id, action_type, target_urn)
 SELECT mirror.user_id,
        CASE WHEN mirror.wanted_state THEN 'like_track' ELSE 'unlike_track' END,
@@ -7,11 +13,9 @@ WHERE mirror.progress = true
   AND COALESCE(mirror.synced_at, mirror.created_at) < now() - interval '15 minutes'
   AND NOT EXISTS (
       SELECT 1
-      FROM sync_queue AS queued
+      FROM queued
       WHERE queued.user_id = mirror.user_id
-        AND queued.dead = false
         AND queued.target_urn = 'soundcloud:tracks:' || mirror.sc_track_id
-        AND queued.action_type IN ('like_track', 'unlike_track')
   )
 LIMIT 500
 ON CONFLICT (user_id, action_type, target_urn) WHERE action_type <> 'comment' DO UPDATE

@@ -14,9 +14,12 @@ WITH star AS MATERIALIZED (
      AND likes.wanted_state
 ), other AS MATERIALIZED (
     SELECT member.sc_track_id
-    FROM star_ids
-    JOIN user_owned_playlists AS owned ON owned.user_id = star_ids.id
-    JOIN playlist_track_projection AS member ON member.playlist_urn = owned.playlist_urn
+    FROM playlist_track_projection AS member
+    WHERE member.playlist_urn = ANY (ARRAY(
+        SELECT owned.playlist_urn
+        FROM star_ids
+        JOIN user_owned_playlists AS owned ON owned.user_id = star_ids.id
+    ))
     UNION
     SELECT member.sc_track_id
     FROM star_ids
