@@ -285,6 +285,39 @@ fn our_server_error_names_the_message_of_a_failed_trace() {
 }
 
 #[test]
+fn our_server_error_names_the_request_with_its_status() {
+    let failed = bundle(
+        vec![attempt(T1, "aaaaaaaaaaaaaaa1", "direct", 503, None, AT)],
+        vec![],
+    );
+    let root = span(
+        "api-main",
+        "main",
+        "GET /resolve",
+        "1111111111111111",
+        Some("aaaaaaaaaaaaaaa1"),
+        0,
+        50,
+        true,
+        &[("http.response.status_code", "503")],
+    );
+    let traces = vec![trace(T1, vec![root])];
+    let hints = run(&Facts {
+        bundle: &failed,
+        timeline: &timeline::build(&failed, &traces),
+        traces: &traces,
+        errors: &[],
+    });
+
+    let hint = hints
+        .iter()
+        .find(|hint| hint.rule == Rule::OurServerError)
+        .expect("fires");
+
+    assert_eq!(hint.text, "GET /resolve answered 503 on our server.");
+}
+
+#[test]
 fn our_slowness_compares_the_root_span_with_the_client_timeout() {
     let timed_out = bundle(
         vec![attempt(

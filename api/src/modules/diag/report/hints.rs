@@ -132,7 +132,33 @@ fn never_reached(facts: &Facts) -> Option<Hint> {
 
 fn our_server_error(facts: &Facts) -> Option<Hint> {
     let mut evidence = Vec::new();
+    let mut request = None;
     let mut message = None;
+    for attempt in &facts.bundle.attempts {
+        let Some((trace, root)) = facts.root_span(attempt) else {
+            continue;
+        };
+        if !failed_hard(attempt) || root.status != "error" {
+            continue;
+        }
+        let status = root
+            .attrs
+            .get("http.response.status_code")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(u64::from(attempt.status));
+        if request.is_none() {
+            request = Some(format!("{} answered {status} on our server.", root.name));
+        }
+        if message.is_none() {
+            message = span_message(root);
+        }
+        evidence.extend(
+            facts
+                .timeline
+                .spans
+                .get(&(trace.trace.clone(), root.span.clone())),
+        );
+    }
     for trace in facts.traces {
         let failed = facts
             .bundle
@@ -155,10 +181,10 @@ fn our_server_error(facts: &Facts) -> Option<Hint> {
         }
     }
     (!evidence.is_empty()).then(|| {
-        let text = match message {
-            Some(message) => format!("Our server reported an error: {message}"),
-            None => "Our server reported an error.".to_owned(),
-        };
+        let mut text = request.unwrap_or_else(|| "Our server reported an error.".to_owned());
+        if let Some(message) = message {
+            text = format!("{text} Error: {message}");
+        }
         facts.hint(Rule::OurServerError, text, evidence)
     })
 }

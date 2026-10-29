@@ -1,6 +1,7 @@
 mod frames;
 mod hints;
 mod public;
+mod scrub;
 mod select;
 mod sourcemaps;
 mod timeline;
@@ -136,5 +137,7 @@ async fn report_errors(service: &DiagService, bundle: &Bundle) -> Vec<ReportErro
 
 #[cfg(test)]
 mod jaeger_view;
+#[cfg(test)]
+mod security_tests;
 #[cfg(test)]
 mod tests;
