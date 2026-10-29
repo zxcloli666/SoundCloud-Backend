@@ -1151,14 +1151,26 @@ async fn store_snapshot(
 ) -> Result<Uuid, RepositoryError> {
     let track_count =
         i32::try_from(track_ids.len()).map_err(|_| RepositoryError::InconsistentSnapshot)?;
-    let snapshot_id = sqlx::query_file_scalar!(
+    let inserted = sqlx::query_file_scalar!(
         "queries/playlist_observe/upsert_snapshot.sql",
         playlist_urn,
         fingerprint,
         track_count
     )
-    .fetch_one(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
+    let snapshot_id = match inserted {
+        Some(snapshot_id) => snapshot_id,
+        None => {
+            sqlx::query_file_scalar!(
+                "queries/playlist_observe/find_snapshot.sql",
+                playlist_urn,
+                fingerprint
+            )
+            .fetch_one(&mut **transaction)
+            .await?
+        }
+    };
     sqlx::query_file!(
         "queries/playlist_observe/insert_snapshot_tracks.sql",
         snapshot_id,
