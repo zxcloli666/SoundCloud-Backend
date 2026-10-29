@@ -79,6 +79,7 @@ pub(super) async fn maybe_auto_attach_sc_account(
 
 pub(super) async fn maybe_attach_reupload_account(
     tx: &mut Transaction<'_, Postgres>,
+    track_id: Uuid,
     artist_id: Uuid,
     sc_user_id: &str,
 ) -> EnrichResult<()> {
@@ -98,7 +99,8 @@ pub(super) async fn maybe_attach_reupload_account(
     let count: i64 = sqlx::query_file_scalar!(
         "queries/enrich/persist/count_reupload_tracks.sql",
         sc_user_id,
-        artist_id
+        artist_id,
+        track_id
     )
     .fetch_one(&mut **tx)
     .await?;

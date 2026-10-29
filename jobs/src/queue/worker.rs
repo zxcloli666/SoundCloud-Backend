@@ -15,6 +15,7 @@ use super::repository::JobRepository;
 
 const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 const RECOVERY_BATCH: usize = 100;
+const RELEASE_EXPIRED_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(crate) struct QueueWorker {
     repository: JobRepository,
@@ -79,6 +80,16 @@ impl QueueWorker {
         Ok(Vec::new())
     }
 
+    async fn release_expired(&self) {
+        if let Err(error) = self
+            .repository
+            .release_expired(self.kinds, self.lane.claim_batch)
+            .await
+        {
+            tracing::warn!(error = %error, "expired background job release failed");
+        }
+    }
+
     pub(crate) fn governed_by(mut self, governor: Arc<WriteGovernor>) -> Self {
         self.governor = Some(governor);
         self
@@ -95,6 +106,7 @@ impl QueueWorker {
         let mut tasks = JoinSet::new();
         let mut successful_claims = 0_u64;
         let mut empty_polls = 0_u32;
+        let mut next_release = tokio::time::Instant::now();
 
         'worker: loop {
             observe_ready(&mut tasks)?;
@@ -112,6 +124,11 @@ impl QueueWorker {
                     task = tasks.join_next() => observe_optional(task)?,
                 }
                 continue;
+            }
+
+            if tokio::time::Instant::now() >= next_release {
+                next_release = tokio::time::Instant::now() + RELEASE_EXPIRED_INTERVAL;
+                self.release_expired().await;
             }
 
             let claimed = self.claim(successful_claims, limit).await;
