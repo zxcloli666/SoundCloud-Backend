@@ -1273,3 +1273,130 @@ BEGIN
     RETURN;
 END
 $f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_soundcloud_connections(k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.soundcloud_connections' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT t.token_v, jsonb_build_object('id', t.id) INTO v, key FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('soundcloud_connections', key, v);
+    DELETE FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid;
+    RETURN true;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_sync_queue(k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.sync_queue' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT t.intent_v, jsonb_build_object('id', t.id) INTO v, key FROM public.sync_queue t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('sync_queue', key, v);
+    DELETE FROM public.sync_queue t WHERE t.id = (k ->> 'id')::uuid;
+    RETURN true;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_user_followings(k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.user_followings' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT t.wanted_v, jsonb_build_object('user_id', t.user_id, 'target_user_urn', t.target_user_urn) INTO v, key FROM public.user_followings t WHERE t.user_id = (k ->> 'user_id')::text AND t.target_user_urn = (k ->> 'target_user_urn')::text FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('user_followings', key, v);
+    DELETE FROM public.user_followings t WHERE t.user_id = (k ->> 'user_id')::text AND t.target_user_urn = (k ->> 'target_user_urn')::text;
+    RETURN true;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_user_likes_playlists(k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.user_likes_playlists' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT t.wanted_v, jsonb_build_object('user_id', t.user_id, 'playlist_urn', t.playlist_urn) INTO v, key FROM public.user_likes_playlists t WHERE t.user_id = (k ->> 'user_id')::text AND t.playlist_urn = (k ->> 'playlist_urn')::text FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('user_likes_playlists', key, v);
+    DELETE FROM public.user_likes_playlists t WHERE t.user_id = (k ->> 'user_id')::text AND t.playlist_urn = (k ->> 'playlist_urn')::text;
+    RETURN true;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent_user_likes_tracks(k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    v bigint;
+    key jsonb;
+BEGIN
+    IF public.scd_role() <> 'core' THEN
+        RAISE EXCEPTION 'scd_purge_intent: only core purges public.user_likes_tracks' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT t.wanted_v, jsonb_build_object('user_id', t.user_id, 'sc_track_id', t.sc_track_id) INTO v, key FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES ('user_likes_tracks', key, v);
+    DELETE FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text;
+    RETURN true;
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_intent(tbl text, k jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    CASE tbl
+        WHEN 'soundcloud_connections' THEN
+            RETURN public.scd_purge_intent_soundcloud_connections(k);
+        WHEN 'sync_queue' THEN
+            RETURN public.scd_purge_intent_sync_queue(k);
+        WHEN 'user_followings' THEN
+            RETURN public.scd_purge_intent_user_followings(k);
+        WHEN 'user_likes_playlists' THEN
+            RETURN public.scd_purge_intent_user_likes_playlists(k);
+        WHEN 'user_likes_tracks' THEN
+            RETURN public.scd_purge_intent_user_likes_tracks(k);
+        ELSE
+            RAISE EXCEPTION 'public.scd_purge_intent: unknown table %', tbl;
+    END CASE;
+END
+$f$;

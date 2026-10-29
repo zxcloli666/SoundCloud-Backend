@@ -19,6 +19,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_admin_maintenance_runs", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["kind"], "expr": false, "keys": ["kind"], "name": "admin_maintenance_runs_pkey", "primary": true, "where": null}
@@ -32,6 +35,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["spent_on"], "expr": false, "keys": ["spent_on"], "name": "ai_resolver_budget_pkey", "primary": true, "where": null}
@@ -46,6 +50,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["cache_key"], "expr": false, "keys": ["cache_key"], "name": "ai_resolver_cache_pkey", "primary": true, "where": null}
@@ -62,6 +67,9 @@
     {"cols": ["artist_id"], "name": "album_artists_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_album_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["album_id", "artist_id", "role"], "expr": false, "keys": ["album_id", "artist_id", "role"], "name": "album_artists_pkey", "primary": true, "where": null}
@@ -79,6 +87,9 @@
     {"cols": ["track_id"], "name": "album_tracks_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_album_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["album_id", "track_id"], "expr": false, "keys": ["album_id", "track_id"], "name": "album_tracks_pkey", "primary": true, "where": null}
@@ -111,6 +122,9 @@
     {"cols": ["primary_artist_id"], "name": "albums_primary_artist_id_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_albums", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["mb_release_id"], "expr": false, "keys": ["mb_release_id"], "name": "albums_mb_uq", "primary": false, "where": "(mb_release_id IS NOT NULL)"},
@@ -132,6 +146,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_attribution_revalidation", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "artist_attribution_revalidation_pkey", "primary": true, "where": null}
@@ -150,6 +167,9 @@
     {"cols": ["b_id"], "name": "artist_colike_b_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_colike", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["a_id", "b_id"], "expr": false, "keys": ["a_id", "b_id"], "name": "artist_colike_pkey", "primary": true, "where": null}
@@ -167,6 +187,9 @@
     {"cols": ["b_id"], "name": "artist_coplay_b_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_coplay", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["a_id", "b_id"], "expr": false, "keys": ["a_id", "b_id"], "name": "artist_coplay_pkey", "primary": true, "where": null}
@@ -187,7 +210,10 @@
     {"cols": ["artist_id"], "name": "artist_sc_accounts_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
-    {"enabled": "O", "function": "artist_sc_account_flag", "name": "artist_sc_account_flag_trg"}
+    {"enabled": "A", "function": "artist_sc_account_flag", "gated": true, "name": "artist_sc_account_flag_trg", "pinned": true},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_sc_accounts", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["artist_id", "sc_user_id"], "expr": false, "keys": ["artist_id", "sc_user_id"], "name": "artist_sc_accounts_pkey", "primary": true, "where": null},
@@ -208,6 +234,9 @@
     {"cols": ["artist_id"], "name": "artist_socials_artist_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artist_socials", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["artist_id", "url"], "expr": false, "keys": ["artist_id", "url"], "name": "artist_socials_pkey", "primary": true, "where": null}
@@ -263,6 +292,9 @@
     {"cols": ["merged_into"], "name": "artists_merged_into_fkey", "on_delete": "a", "ref_cols": ["id"], "ref_table": "artists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["genius_artist_id"], "expr": false, "keys": ["genius_artist_id"], "name": "artists_genius_uq", "primary": false, "where": "(genius_artist_id IS NOT NULL)"},
@@ -295,6 +327,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "audio_index_wire_state_pkey", "primary": true, "where": null}
@@ -308,6 +341,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "background_job_enqueues_pkey", "primary": true, "where": null}
@@ -331,6 +365,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_background_job_failures", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id", "generation"], "expr": false, "keys": ["id", "generation"], "name": "background_job_failures_pkey", "primary": true, "where": null}
@@ -359,6 +396,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["kind", "dedup_key"], "expr": false, "keys": ["kind", "dedup_key"], "name": "background_jobs_dedup_idx", "primary": false, "where": "(dedup_key IS NOT NULL)"},
@@ -380,6 +418,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["kind"], "expr": false, "keys": ["kind"], "name": "background_schedules_pkey", "primary": true, "where": null}
@@ -396,6 +435,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_catalog_audience", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_urn", "relation", "user_urn"], "expr": false, "keys": ["subject_urn", "relation", "user_urn"], "name": "catalog_audience_pkey", "primary": true, "where": null}
@@ -412,6 +454,7 @@
     {"cols": ["subject_id", "collection", "scope"], "name": "catalog_collection_cursors_subject_id_collection_scope_fkey", "on_delete": "c", "ref_cols": ["subject_id", "collection", "scope"], "ref_table": "catalog_collection_sync"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_id", "collection", "scope", "cursor"], "expr": false, "keys": ["subject_id", "collection", "scope", "cursor"], "name": "catalog_collection_cursors_pkey", "primary": true, "where": null}
@@ -429,6 +472,7 @@
     {"cols": ["subject_id", "collection", "scope"], "name": "catalog_collection_seen_subject_id_collection_scope_fkey", "on_delete": "c", "ref_cols": ["subject_id", "collection", "scope"], "ref_table": "catalog_collection_sync"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_id", "collection", "scope", "entity_key"], "expr": false, "keys": ["subject_id", "collection", "scope", "entity_key"], "name": "catalog_collection_seen_pkey", "primary": true, "where": null}
@@ -454,6 +498,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_catalog_collection_sync", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["subject_id", "collection", "scope"], "expr": false, "keys": ["subject_id", "collection", "scope"], "name": "catalog_collection_sync_pkey", "primary": true, "where": null}
@@ -472,6 +519,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "catalog_merge_state_pkey", "primary": true, "where": null}
@@ -491,6 +539,7 @@
     {"cols": ["wanted_track_id"], "name": "catalog_work_links_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["wanted_track_id", "track_id"], "expr": false, "keys": ["wanted_track_id", "track_id"], "name": "catalog_work_links_pkey", "primary": true, "where": null}
@@ -503,6 +552,7 @@
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": "now()", "generated": false, "name": "last_accessed_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "quality", "notnull": true, "type": "character varying(16)"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "track_urn", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
@@ -510,6 +560,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_cdn_tracks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_cdn_tracks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "cdn_tracks_pkey", "primary": true, "where": null},
@@ -533,6 +586,108 @@
     {"cols": ["sc_user_id", "cluster_id"], "expr": false, "keys": ["sc_user_id", "cluster_id"], "name": "cluster_bandit_stats_pkey", "primary": true, "where": null}
    ]
   },
+  "cmd_dead": {
+   "columns": [
+    {"default": null, "generated": false, "name": "args", "notnull": true, "type": "jsonb"},
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "message", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "sqlstate", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["node", "id"], "expr": false, "keys": ["node", "id"], "name": "cmd_dead_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cmd_done": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "status", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_on_cmd_done", "gated": false, "name": "zz_cmd_done", "pinned": true}
+   ],
+   "unique": [
+    {"cols": ["node", "id"], "expr": false, "keys": ["node", "id"], "name": "cmd_done_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cmd_outbox": {
+   "columns": [
+    {"default": null, "generated": false, "name": "args", "notnull": true, "type": "jsonb"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "done_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": "'[]'::jsonb", "generated": false, "name": "touched", "notnull": true, "type": "jsonb"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_dispatch", "gated": false, "name": "zz_cmd_dispatch", "pinned": true}
+   ],
+   "unique": [
+    {"cols": ["node", "id"], "expr": false, "keys": ["node", "id"], "name": "cmd_outbox_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cmd_pending": {
+   "columns": [
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["tbl", "pk", "id"], "expr": false, "keys": ["tbl", "pk", "id"], "name": "cmd_pending_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cmd_purge": {
+   "columns": [
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_on_cmd_purge", "gated": false, "name": "zz_cmd_purge", "pinned": true}
+   ],
+   "unique": [
+    {"cols": ["node", "id", "tbl", "pk"], "expr": false, "keys": ["node", "id", "tbl", "pk"], "name": "cmd_purge_pkey", "primary": true, "where": null}
+   ]
+  },
+  "cmd_reassert": {
+   "columns": [
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "row", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_on_cmd_reassert", "gated": false, "name": "zz_cmd_reassert", "pinned": true}
+   ],
+   "unique": [
+    {"cols": ["node", "id", "tbl", "pk"], "expr": false, "keys": ["node", "id", "tbl", "pk"], "name": "cmd_reassert_pkey", "primary": true, "where": null}
+   ]
+  },
   "diag_bundles": {
    "columns": [
     {"default": null, "generated": false, "name": "app_version", "notnull": true, "type": "text"},
@@ -544,6 +699,8 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_diag_bundles", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["code"], "expr": false, "keys": ["code"], "name": "diag_bundles_pkey", "primary": true, "where": null}
@@ -565,6 +722,8 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_diag_events", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "diag_events_pkey", "primary": true, "where": null}
@@ -580,11 +739,15 @@
     {"default": null, "generated": false, "name": "host", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "last_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "title", "notnull": true, "type": "text"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_diag_issue_days", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_diag_issue_days", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["fingerprint", "day", "host", "app_version"], "expr": false, "keys": ["fingerprint", "day", "host", "app_version"], "name": "diag_issue_days_pkey", "primary": true, "where": null}
@@ -600,6 +763,8 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_diag_issue_origins", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["fingerprint", "day", "host", "origin"], "expr": false, "keys": ["fingerprint", "day", "host", "origin"], "name": "diag_issue_origins_pkey", "primary": true, "where": null}
@@ -614,11 +779,17 @@
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "note", "notnull": false, "type": "text"},
     {"default": "0", "generated": false, "name": "position", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_discover_promoted", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_discover_promoted", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_discover_promoted", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_discover_promoted", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["entity_type", "entity_id"], "expr": false, "keys": ["entity_type", "entity_id"], "name": "discover_promoted_entity_uq", "primary": false, "where": null},
@@ -628,6 +799,7 @@
   "discover_settings": {
    "columns": [
     {"default": "1", "generated": false, "name": "id", "notnull": true, "type": "smallint"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "true", "generated": false, "name": "show_star", "notnull": true, "type": "boolean"},
     {"default": "8", "generated": false, "name": "star_limit", "notnull": true, "type": "integer"},
     {"default": "'popular'::character varying", "generated": false, "name": "star_strategy", "notnull": true, "type": "character varying(16)"},
@@ -636,6 +808,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_discover_settings", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_discover_settings", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "discover_settings_pkey", "primary": true, "where": null}
@@ -650,6 +825,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_discover_tag_counts", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["tag"], "expr": false, "keys": ["tag"], "name": "discover_tag_counts_pkey", "primary": true, "where": null}
@@ -659,6 +837,7 @@
    "columns": [
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "track_data", "notnull": false, "type": "jsonb"}
@@ -666,6 +845,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_disliked_tracks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_disliked_tracks", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_disliked_tracks", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_disliked_tracks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "disliked_tracks_pkey", "primary": true, "where": null},
@@ -684,9 +868,25 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["source", "raw_bin_low", "raw_bin_high"], "expr": false, "keys": ["source", "raw_bin_low", "raw_bin_high"], "name": "enrich_calibration_pkey", "primary": true, "where": null}
+   ]
+  },
+  "entity_reads": {
+   "columns": [
+    {"default": null, "generated": false, "name": "entity_urn", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "last_read_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_max_entity_reads", "gated": false, "name": "zz_max", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["entity_urn"], "expr": false, "keys": ["entity_urn"], "name": "entity_reads_pkey", "primary": true, "where": null}
    ]
   },
   "featured_items": {
@@ -694,6 +894,7 @@
     {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_urn", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "type", "notnull": true, "type": "character varying(20)"},
     {"default": "1", "generated": false, "name": "weight", "notnull": true, "type": "integer"}
@@ -701,9 +902,33 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_featured_items", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_featured_items", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_featured_items", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_featured_items", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "featured_items_pkey", "primary": true, "where": null}
+   ]
+  },
+  "job_status": {
+   "columns": [
+    {"default": null, "generated": false, "name": "available_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "dedup_key", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "state", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_job_status", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["kind", "dedup_key"], "expr": false, "keys": ["kind", "dedup_key"], "name": "job_status_pkey", "primary": true, "where": null}
    ]
   },
   "link_requests": {
@@ -714,6 +939,7 @@
     {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "mode", "notnull": true, "type": "character varying(8)"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "source_session_id", "notnull": false, "type": "uuid"},
     {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "target_session_id", "notnull": false, "type": "uuid"}
@@ -721,6 +947,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_link_requests", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_link_requests", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_link_requests", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_link_requests", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["claim_token"], "expr": false, "keys": ["claim_token"], "name": "link_requests_claim_token_uq", "primary": false, "where": null},
@@ -742,6 +973,10 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_listening_history", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_listening_history", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_listening_history", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "listening_history_pkey", "primary": true, "where": null}
@@ -759,6 +994,7 @@
     {"default": null, "generated": false, "name": "redirect_url", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "result_session_id", "notnull": false, "type": "uuid"},
     {"default": "0", "generated": false, "name": "retry_count", "notnull": true, "type": "integer"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "state", "notnull": true, "type": "text"},
     {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "step", "notnull": false, "type": "character varying(16)"},
@@ -768,6 +1004,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_login_requests", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_login_requests", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_login_requests", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_login_requests", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "login_requests_pkey", "primary": true, "where": null},
@@ -798,7 +1039,10 @@
     {"cols": ["track_id"], "name": "lyrics_cache_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
-    {"enabled": "O", "function": "lyrics_cache_fts_refresh", "name": "lyrics_cache_fts_trg"}
+    {"enabled": "A", "function": "lyrics_cache_fts_refresh", "gated": true, "name": "lyrics_cache_fts_trg", "pinned": true},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_lyrics_cache", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_cache_pkey", "primary": true, "where": null}
@@ -837,6 +1081,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "lyrics_embedding_wire_state_pkey", "primary": true, "where": null}
@@ -855,6 +1100,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "lyrics_lookup_backfill_state_pkey", "primary": true, "where": null}
@@ -899,6 +1145,9 @@
     {"cols": ["track_id"], "name": "lyrics_lookup_state_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_lyrics_lookup_state", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "lyrics_lookup_state_pkey", "primary": true, "where": null},
@@ -910,12 +1159,17 @@
     {"default": "1", "generated": false, "name": "failure_count", "notnull": true, "type": "integer"},
     {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "retry_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"}
    ],
    "fks": [
     {"cols": ["oauth_app_id"], "name": "oauth_app_request_cooldowns_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_oauth_app_request_cooldowns", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_orphan_oauth_app_request_cooldowns", "gated": false, "name": "zz_orphan", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_oauth_app_request_cooldowns", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_request_cooldowns_pkey", "primary": true, "where": null}
@@ -933,6 +1187,7 @@
     {"cols": ["oauth_app_id"], "name": "oauth_app_token_issuance_reservations_oauth_app_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "oauth_app_token_issuance_reservations_pkey", "primary": true, "where": null}
@@ -950,6 +1205,7 @@
     {"cols": ["oauth_app_id"], "name": "oauth_app_token_refresh_state_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_token_refresh_state_pkey", "primary": true, "where": null}
@@ -972,6 +1228,9 @@
     {"cols": ["oauth_app_id"], "name": "oauth_app_tokens_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_oauth_app_tokens", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_tokens_pkey", "primary": true, "where": null}
@@ -987,11 +1246,16 @@
     {"default": null, "generated": false, "name": "last_used_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "redirect_uri", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_fk_oauth_apps", "gated": false, "name": "zz_fk", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_oauth_apps", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_oauth_apps", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": null, "expr": true, "keys": ["btrim(client_id, '\t\n\u000b\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'::text)"], "name": "oauth_apps_client_identity_uq", "primary": false, "where": null},
@@ -1009,6 +1273,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["consumer", "stream", "stream_sequence", "event_published_at"], "expr": false, "keys": ["consumer", "stream", "stream_sequence", "event_published_at"], "name": "pipeline_event_receipts_pkey", "primary": true, "where": null}
@@ -1043,6 +1308,9 @@
     {"cols": ["local_snapshot_id"], "name": "playlist_legacy_membership_intents_local_snapshot_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "playlist_remote_snapshots"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_legacy_membership_intents", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["archive_id"], "expr": false, "keys": ["archive_id"], "name": "playlist_legacy_membership_intents_pkey", "primary": true, "where": null},
@@ -1077,6 +1345,9 @@
     {"cols": ["playlist_urn"], "name": "playlist_membership_operations_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["playlist_urn"], "ref_table": "playlist_membership_state"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_membership_operations", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["playlist_urn", "idempotency_key"], "expr": false, "keys": ["playlist_urn", "idempotency_key"], "name": "playlist_membership_operations_idempotency_uq", "primary": false, "where": null},
@@ -1113,6 +1384,9 @@
     {"cols": ["playlist_urn"], "name": "playlist_membership_state_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_membership_state", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["playlist_urn"], "expr": false, "keys": ["playlist_urn"], "name": "playlist_membership_state_pkey", "primary": true, "where": null}
@@ -1140,6 +1414,7 @@
     {"cols": ["playlist_urn"], "name": "playlist_reconcile_runs_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["playlist_urn"], "ref_table": "playlist_membership_state"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["playlist_urn", "reconcile_generation"], "expr": false, "keys": ["playlist_urn", "reconcile_generation"], "name": "playlist_reconcile_runs_generation_uq", "primary": false, "where": null},
@@ -1169,6 +1444,9 @@
     {"cols": ["playlist_urn", "snapshot_id"], "name": "playlist_remote_observations_snapshot_fkey", "on_delete": "a", "ref_cols": ["playlist_urn", "id"], "ref_table": "playlist_remote_snapshots"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_remote_observations", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_remote_observations_pkey", "primary": true, "where": null},
@@ -1185,6 +1463,7 @@
     {"cols": ["snapshot_id"], "name": "playlist_remote_snapshot_tracks_snapshot_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "playlist_remote_snapshots"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["snapshot_id", "sc_track_id"], "expr": false, "keys": ["snapshot_id", "sc_track_id"], "name": "playlist_remote_snapshot_tracks_member_uq", "primary": false, "where": null},
@@ -1203,6 +1482,9 @@
     {"cols": ["playlist_urn"], "name": "playlist_remote_snapshots_playlist_urn_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_remote_snapshots", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["playlist_urn", "content_fingerprint"], "expr": false, "keys": ["playlist_urn", "content_fingerprint"], "name": "playlist_remote_snapshots_content_uq", "primary": false, "where": null},
@@ -1219,6 +1501,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "playlist_sweep_cursor_pkey", "primary": true, "where": null}
@@ -1234,6 +1517,9 @@
     {"cols": ["playlist_urn"], "name": "playlist_track_projection_playlist_fkey", "on_delete": "c", "ref_cols": ["urn"], "ref_table": "playlists"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlist_track_projection", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["playlist_urn", "sc_track_id"], "expr": false, "keys": ["playlist_urn", "sc_track_id"], "name": "playlist_track_projection_member_uq", "primary": false, "where": null},
@@ -1280,6 +1566,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_playlists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["urn"], "expr": false, "keys": ["urn"], "name": "playlists_pkey", "primary": true, "where": null},
@@ -1301,9 +1590,92 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["version"], "expr": false, "keys": ["version"], "name": "recommendation_quality_models_pkey", "primary": true, "where": null}
+   ]
+  },
+  "repl_checksums": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "hash", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "range", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_max_repl_checksums", "gated": false, "name": "zz_max", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["node", "tbl", "range"], "expr": false, "keys": ["node", "tbl", "range"], "name": "repl_checksums_pkey", "primary": true, "where": null}
+   ]
+  },
+  "repl_purges": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "purged_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["tbl", "pk", "at"], "expr": false, "keys": ["tbl", "pk", "at"], "name": "repl_purges_pkey", "primary": true, "where": null}
+   ]
+  },
+  "repl_repair": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "row", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "src_node", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_on_repl_repair", "gated": false, "name": "zz_repl_repair", "pinned": true}
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "repl_repair_pkey", "primary": true, "where": null}
+   ]
+  },
+  "repl_resend": {
+   "columns": [
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["tbl", "pk"], "expr": false, "keys": ["tbl", "pk"], "name": "repl_resend_pkey", "primary": true, "where": null}
+   ]
+  },
+  "repl_tombstones": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "pk", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "v", "notnull": true, "type": "bigint"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_merge_repl_tombstones", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_repl_tombstones", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["tbl", "pk"], "expr": false, "keys": ["tbl", "pk"], "name": "repl_tombstones_pkey", "primary": true, "where": null}
    ]
   },
   "sc_egress_health": {
@@ -1311,11 +1683,17 @@
     {"default": null, "generated": false, "name": "channel", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "open_until", "notnull": true, "type": "timestamp with time zone"},
     {"default": "now()", "generated": false, "name": "opened_at", "notnull": true, "type": "timestamp with time zone"},
-    {"default": null, "generated": false, "name": "opened_by", "notnull": true, "type": "text"}
+    {"default": null, "generated": false, "name": "opened_by", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_sc_egress_health", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_sc_egress_health", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_sc_egress_health", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_sc_egress_health", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["channel"], "expr": false, "keys": ["channel"], "name": "sc_egress_health_pkey", "primary": true, "where": null}
@@ -1333,9 +1711,25 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_max_sc_track_counters", "gated": false, "name": "zz_max", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "sc_track_counters_pkey", "primary": true, "where": null}
+   ]
+  },
+  "scd_unpublished_columns": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "col", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "tbl", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["tbl", "col"], "expr": false, "keys": ["tbl", "col"], "name": "scd_unpublished_columns_pkey", "primary": true, "where": null}
    ]
   },
   "search_terms": {
@@ -1347,6 +1741,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_search_terms", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["word"], "expr": false, "keys": ["word"], "name": "search_terms_pkey", "primary": true, "where": null}
@@ -1356,6 +1753,7 @@
    "columns": [
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "soundcloud_connection_id", "notnull": false, "type": "uuid"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
    ],
@@ -1363,6 +1761,12 @@
     {"cols": ["soundcloud_connection_id"], "name": "sessions_soundcloud_connection_fk", "on_delete": "n", "ref_cols": ["id"], "ref_table": "soundcloud_connections"}
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_sessions", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_orphan_sessions", "gated": false, "name": "zz_orphan", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_sessions", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_sessions", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_sessions", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "sessions_pkey", "primary": true, "where": null}
@@ -1389,6 +1793,7 @@
     {"default": null, "generated": false, "name": "retry_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "scope", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "soundcloud_user_id", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "token_v", "notnull": true, "type": "bigint"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "username", "notnull": false, "type": "text"}
    ],
@@ -1396,6 +1801,13 @@
     {"cols": ["oauth_app_id"], "name": "soundcloud_connections_oauth_app_id_fkey", "on_delete": "r", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_fk_soundcloud_connections", "gated": false, "name": "zz_fk", "pinned": false},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_soundcloud_connections", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_orphan_soundcloud_connections", "gated": false, "name": "zz_orphan", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_soundcloud_connections", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_soundcloud_connections", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "soundcloud_connections_pkey", "primary": true, "where": null}
@@ -1417,6 +1829,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "star_track_tiers_pkey", "primary": true, "where": null}
@@ -1436,6 +1849,7 @@
     {"cols": ["sc_track_id"], "name": "storage_event_state_sc_track_id_fkey", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "storage_event_state_pkey", "primary": true, "where": null}
@@ -1449,6 +1863,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "subscription_snapshot_state_pkey", "primary": true, "where": null}
@@ -1457,11 +1872,17 @@
   "subscriptions": {
    "columns": [
     {"default": null, "generated": false, "name": "exp_date", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_subscriptions", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_subscriptions", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_subscriptions", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_subscriptions", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_urn"], "expr": false, "keys": ["user_urn"], "name": "subscriptions_pkey", "primary": true, "where": null}
@@ -1470,11 +1891,14 @@
   "sync_queue": {
    "columns": [
     {"default": null, "generated": false, "name": "action_type", "notnull": true, "type": "character varying(32)"},
+    {"default": "false", "generated": false, "name": "cancelled", "notnull": true, "type": "boolean"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": "false", "generated": false, "name": "dead", "notnull": true, "type": "boolean"},
+    {"default": null, "generated": false, "name": "exec_generation", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "failed_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": "1", "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": "0", "generated": false, "name": "intent_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "lease_generation", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "lease_id", "notnull": false, "type": "uuid"},
@@ -1491,6 +1915,12 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_intent", "pinned": false},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_sync_queue", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_sync_queue", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_sync_queue", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "sync_queue_pkey", "primary": true, "where": null},
@@ -1510,6 +1940,9 @@
     {"cols": ["oauth_app_id"], "name": "sync_queue_action_pauses_oauth_app_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "oauth_apps"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_sync_queue_action_pauses", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["oauth_app_id", "action_type"], "expr": false, "keys": ["oauth_app_id", "action_type"], "name": "sync_queue_action_pauses_pkey", "primary": true, "where": null}
@@ -1534,6 +1967,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_taste_model_versions", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["collection"], "expr": false, "keys": ["collection"], "name": "taste_model_versions_collection_key", "primary": false, "where": null},
@@ -1551,6 +1987,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "taste_schedule_pkey", "primary": true, "where": null}
@@ -1561,6 +1998,7 @@
     {"default": null, "generated": false, "name": "artist_id", "notnull": true, "type": "uuid"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "note", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"}
    ],
    "fks": [
@@ -1568,6 +2006,12 @@
     {"cols": ["track_id"], "name": "track_artist_blocks_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_track_artist_blocks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_orphan_track_artist_blocks", "gated": false, "name": "zz_orphan", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_track_artist_blocks", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_track_artist_blocks", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_track_artist_blocks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id", "artist_id"], "expr": false, "keys": ["track_id", "artist_id"], "name": "track_artist_blocks_pkey", "primary": true, "where": null}
@@ -1588,7 +2032,10 @@
     {"cols": ["track_id"], "name": "track_artists_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
-    {"enabled": "O", "function": "track_artists_block_guard", "name": "track_artists_block_guard_trg"}
+    {"enabled": "A", "function": "track_artists_block_guard", "gated": true, "name": "track_artists_block_guard_trg", "pinned": true},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_track_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id", "artist_id", "role"], "expr": false, "keys": ["track_id", "artist_id", "role"], "name": "track_artists_pkey", "primary": true, "where": null}
@@ -1609,6 +2056,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_track_comments", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "track_comments_pkey", "primary": true, "where": null},
@@ -1624,6 +2074,7 @@
     {"cols": ["track_id"], "name": "track_work_aliases_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["track_id", "alias_key"], "expr": false, "keys": ["track_id", "alias_key"], "name": "track_work_aliases_pkey", "primary": true, "where": null}
@@ -1721,8 +2172,11 @@
     {"cols": ["superseded_by"], "name": "tracks_superseded_by_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
-    {"enabled": "O", "function": "lyrics_lookup_track_state_refresh", "name": "tracks_lyrics_lookup_state_refresh"},
-    {"enabled": "O", "function": "tracks_primary_block_guard", "name": "tracks_primary_block_guard_trg"}
+    {"enabled": "A", "function": "lyrics_lookup_track_state_refresh", "gated": true, "name": "tracks_lyrics_lookup_state_refresh", "pinned": true},
+    {"enabled": "A", "function": "tracks_primary_block_guard", "gated": true, "name": "tracks_primary_block_guard_trg", "pinned": true},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "tracks_pkey", "primary": true, "where": null},
@@ -1739,6 +2193,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sync_version"], "expr": false, "keys": ["sync_version"], "name": "transcription_sync_versions_pkey", "primary": true, "where": null}
@@ -1772,6 +2227,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "transcription_wire_state_pkey", "primary": true, "where": null}
@@ -1781,12 +2237,16 @@
    "columns": [
     {"default": null, "generated": false, "name": "aura_id", "notnull": true, "type": "character varying(32)"},
     {"default": null, "generated": false, "name": "custom_hex", "notnull": false, "type": "character varying(7)"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_auras", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_auras", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_urn"], "expr": false, "keys": ["user_urn"], "name": "user_auras_pkey", "primary": true, "where": null}
@@ -1798,6 +2258,7 @@
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "kind", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "name", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"},
     {"default": "'{}'::text[]", "generated": false, "name": "sc_user_ids", "notnull": true, "type": "text[]"},
     {"default": null, "generated": false, "name": "target_id", "notnull": true, "type": "text"}
@@ -1805,6 +2266,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_blocked_artists", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_user_blocked_artists", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_user_blocked_artists", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_blocked_artists", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_user_id", "kind", "target_id"], "expr": false, "keys": ["sc_user_id", "kind", "target_id"], "name": "user_blocked_artists_pkey", "primary": true, "where": null}
@@ -1819,6 +2285,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "collection"], "expr": false, "keys": ["user_id", "collection"], "name": "user_collection_sync_pkey", "primary": true, "where": null}
@@ -1837,6 +2304,8 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_skip_user_events", "gated": false, "name": "zz_skip", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "user_events_pkey", "primary": true, "where": null}
@@ -1854,6 +2323,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_followers", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "target_user_urn"], "expr": false, "keys": ["user_id", "target_user_urn"], "name": "user_followers_pkey", "primary": true, "where": null}
@@ -1865,13 +2337,21 @@
     {"default": null, "generated": false, "name": "last_read_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
     {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "synced_for_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "target_user_urn", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
-    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "wanted_v", "notnull": true, "type": "bigint"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_intent", "pinned": false},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_user_followings", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_user_followings", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_followings", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "target_user_urn"], "expr": false, "keys": ["user_id", "target_user_urn"], "name": "user_followings_pkey", "primary": true, "where": null}
@@ -1881,12 +2361,18 @@
    "columns": [
     {"default": null, "generated": false, "name": "like_created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "rank", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_like_ranks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_user_like_ranks", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_user_like_ranks", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_like_ranks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_like_ranks_pkey", "primary": true, "where": null}
@@ -1899,12 +2385,20 @@
     {"default": null, "generated": false, "name": "playlist_urn", "notnull": true, "type": "text"},
     {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
     {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "synced_for_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
-    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "wanted_v", "notnull": true, "type": "bigint"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_intent", "pinned": false},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_user_likes_playlists", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_user_likes_playlists", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_likes_playlists", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "playlist_urn"], "expr": false, "keys": ["user_id", "playlist_urn"], "name": "user_likes_playlists_pkey", "primary": true, "where": null}
@@ -1918,12 +2412,20 @@
     {"default": "false", "generated": false, "name": "progress", "notnull": true, "type": "boolean"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "synced_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "synced_for_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"},
-    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"}
+    {"default": "true", "generated": false, "name": "wanted_state", "notnull": true, "type": "boolean"},
+    {"default": "0", "generated": false, "name": "wanted_v", "notnull": true, "type": "bigint"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_intent", "pinned": false},
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard_result", "pinned": false},
+    {"enabled": "R", "function": "scd_merge_user_likes_tracks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "R", "function": "scd_purge_guard_user_likes_tracks", "gated": false, "name": "zz_purge_guard", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_likes_tracks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_likes_tracks_pkey", "primary": true, "where": null}
@@ -1941,6 +2443,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_owned_playlists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "playlist_urn"], "expr": false, "keys": ["user_id", "playlist_urn"], "name": "user_owned_playlists_pkey", "primary": true, "where": null}
@@ -1958,6 +2463,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_owned_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_owned_tracks_pkey", "primary": true, "where": null}
@@ -1973,6 +2481,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_profiles", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["soundcloud_user_id"], "expr": false, "keys": ["soundcloud_user_id"], "name": "user_profiles_pkey", "primary": true, "where": null}
@@ -1981,6 +2492,7 @@
   "user_superlike_ranks": {
    "columns": [
     {"default": null, "generated": false, "name": "rank", "notnull": true, "type": "bigint"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "superlike_created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
@@ -1988,6 +2500,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_superlike_ranks", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_user_superlike_ranks", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_user_superlike_ranks", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_superlike_ranks", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_superlike_ranks_pkey", "primary": true, "where": null}
@@ -1997,12 +2514,18 @@
    "columns": [
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "like_created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "user_id", "notnull": true, "type": "text"}
    ],
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_user_superlikes", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_user_superlikes", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_user_superlikes", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_user_superlikes", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["user_id", "sc_track_id"], "expr": false, "keys": ["user_id", "sc_track_id"], "name": "user_superlikes_pkey", "primary": true, "where": null}
@@ -2019,6 +2542,9 @@
     {"cols": ["version"], "name": "user_taste_vectors_version_fkey", "on_delete": "c", "ref_cols": ["version"], "ref_table": "taste_model_versions"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_taste_vectors", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_user_id", "version"], "expr": false, "keys": ["sc_user_id", "version"], "name": "user_taste_vectors_pkey", "primary": true, "where": null}
@@ -2034,6 +2560,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_user_web_profiles", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "user_web_profiles_pkey", "primary": true, "where": null}
@@ -2073,6 +2602,9 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_users", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["sc_user_id"], "expr": false, "keys": ["sc_user_id"], "name": "users_pkey", "primary": true, "where": null},
@@ -2090,6 +2622,9 @@
     {"cols": ["wanted_track_id"], "name": "wanted_track_albums_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_wanted_track_albums", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["wanted_track_id", "album_id"], "expr": false, "keys": ["wanted_track_id", "album_id"], "name": "wanted_track_albums_pkey", "primary": true, "where": null}
@@ -2107,6 +2642,9 @@
     {"cols": ["wanted_track_id"], "name": "wanted_track_artists_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_wanted_track_artists", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["wanted_track_id", "artist_id", "role"], "expr": false, "keys": ["wanted_track_id", "artist_id", "role"], "name": "wanted_track_artists_pkey", "primary": true, "where": null}
@@ -2121,6 +2659,7 @@
     {"cols": ["wanted_track_id"], "name": "wanted_track_work_aliases_wanted_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "wanted_tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
    ],
    "unique": [
     {"cols": ["wanted_track_id", "alias_key"], "expr": false, "keys": ["wanted_track_id", "alias_key"], "name": "wanted_track_work_aliases_pkey", "primary": true, "where": null}
@@ -2131,6 +2670,7 @@
     {"default": "now()", "generated": false, "name": "discovered_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "duration_ms", "notnull": false, "type": "integer"},
     {"default": null, "generated": false, "name": "external_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "fetched_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": "gen_random_uuid()", "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "isrc", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "normalized_title", "notnull": true, "type": "text"},
@@ -2155,6 +2695,9 @@
     {"cols": ["track_id"], "name": "wanted_tracks_track_id_fkey", "on_delete": "n", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
+    {"enabled": "R", "function": "scd_owner_wanted_tracks", "gated": false, "name": "zz_owner", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["source", "external_id"], "expr": false, "keys": ["source", "external_id"], "name": "wanted_tracks_external_uq", "primary": false, "where": "(external_id IS NOT NULL)"},

@@ -811,7 +811,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.access_token, t.created_at, t.expires_at, t.first_refresh_rejection_at, t.id, t.last_refresh_attempt_at, t.last_refresh_error, t.last_refresh_error_kind, t.last_refresh_success_at, t.oauth_app_id, t.refresh_failure_count, t.refresh_generation, t.refresh_lease_expires_at, t.refresh_lease_id, t.refresh_rejection_count, t.refresh_token, t.refresh_v, t.retry_at, t.scope, t.soundcloud_user_id, t.token_v, t.updated_at, t.username)::text) FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.access_token, t.created_at, t.expires_at, t.first_refresh_rejection_at, t.id, t.last_refresh_attempt_at, t.last_refresh_error, t.last_refresh_error_kind, t.last_refresh_success_at, t.oauth_app_id, t.refresh_failure_count, t.refresh_generation, t.refresh_lease_expires_at, t.refresh_lease_id, t.refresh_rejection_count, t.refresh_token, t.retry_at, t.scope, t.soundcloud_user_id, t.token_v, t.updated_at, t.username)::text) FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_star_track_tiers(k jsonb)
@@ -871,7 +871,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.action_type, t.cancelled, t.created_at, t.dead, t.exec_generation, t.failed_at, t.generation, t.id, t.intent_v, t.last_error, t.lease_generation, t.lease_id, t.locked_at, t.next_run_at, t.payload, t.remote_attempted_generation, t.remote_completed_generation, t.remote_result, t.result_v, t.retry_count, t.target_urn, t.user_id)::text) FROM public.sync_queue t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.action_type, t.cancelled, t.created_at, t.dead, t.exec_generation, t.failed_at, t.generation, t.id, t.intent_v, t.last_error, t.lease_generation, t.lease_id, t.locked_at, t.next_run_at, t.payload, t.remote_attempted_generation, t.remote_completed_generation, t.remote_result, t.retry_count, t.target_urn, t.user_id)::text) FROM public.sync_queue t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_sync_queue_action_pauses(k jsonb)
@@ -1063,7 +1063,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.created_at, t.progress, t.result_v, t.synced_at, t.synced_for_v, t.target_user_urn, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_followings t WHERE t.user_id = (k ->> 'user_id')::text AND t.target_user_urn = (k ->> 'target_user_urn')::text
+SELECT md5(ROW(t.created_at, t.progress, t.synced_at, t.synced_for_v, t.target_user_urn, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_followings t WHERE t.user_id = (k ->> 'user_id')::text AND t.target_user_urn = (k ->> 'target_user_urn')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_user_like_ranks(k jsonb)
@@ -1087,7 +1087,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.created_at, t.playlist_urn, t.progress, t.result_v, t.synced_at, t.synced_for_v, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_likes_playlists t WHERE t.user_id = (k ->> 'user_id')::text AND t.playlist_urn = (k ->> 'playlist_urn')::text
+SELECT md5(ROW(t.created_at, t.playlist_urn, t.progress, t.synced_at, t.synced_for_v, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_likes_playlists t WHERE t.user_id = (k ->> 'user_id')::text AND t.playlist_urn = (k ->> 'playlist_urn')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_user_likes_tracks(k jsonb)
@@ -1099,7 +1099,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.created_at, t.liked_at, t.progress, t.result_v, t.sc_track_id, t.synced_at, t.synced_for_v, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
+SELECT md5(ROW(t.created_at, t.liked_at, t.progress, t.sc_track_id, t.synced_at, t.synced_for_v, t.user_id, t.wanted_state, t.wanted_v)::text) FROM public.user_likes_tracks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_user_owned_playlists(k jsonb)
@@ -1243,7 +1243,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.discovered_at, t.duration_ms, t.external_id, t.id, t.isrc, t.normalized_title, t.primary_artist_id, t.recording_key, t.release_year, t.resolve_attempts, t.resolve_error, t.resolve_locked_at, t.resolve_next_run_at, t.source, t.status, t.title, t.track_id, t.updated_at, t.work_key, t.work_normalizer_version, t.work_reconciled_at)::text) FROM public.wanted_tracks t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.discovered_at, t.duration_ms, t.external_id, t.fetched_at, t.id, t.isrc, t.normalized_title, t.primary_artist_id, t.recording_key, t.release_year, t.resolve_attempts, t.resolve_error, t.resolve_locked_at, t.resolve_next_run_at, t.source, t.status, t.title, t.track_id, t.updated_at, t.work_key, t.work_normalizer_version, t.work_reconciled_at)::text) FROM public.wanted_tracks t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash(tbl text, k jsonb)

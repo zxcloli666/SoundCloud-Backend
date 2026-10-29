@@ -83,11 +83,16 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_followings;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_result_user_likes_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_oauth_app_request_cooldowns;
+CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_sessions;
+CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_soundcloud_connections;
+CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_track_artist_blocks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_followings;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_likes_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_user_likes_tracks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_restrict_oauth_apps;
 
 CREATE OR REPLACE FUNCTION public.scd_guard()
 RETURNS trigger
@@ -134,7 +139,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();
 ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.ai_resolver_budget FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_ai_resolver_budget', 'cmd', 'migration', 'repl');
@@ -164,7 +169,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();
 ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.album_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_album_tracks', 'cmd', 'migration', 'repl');
@@ -191,7 +196,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();
 ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_albums', 'cmd', 'migration', 'repl');
@@ -234,7 +239,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();
 ALTER TABLE public.albums ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.albums ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_attribution_revalidation FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_attribution_revalidation', 'cmd', 'migration', 'repl');
@@ -261,7 +266,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();
 ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_colike FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_colike', 'cmd', 'migration', 'repl');
@@ -288,7 +293,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();
 ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_coplay FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_coplay', 'cmd', 'migration', 'repl');
@@ -315,7 +320,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_sc_accounts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_sc_accounts', 'cmd', 'migration', 'repl');
@@ -351,7 +356,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();
 ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_socials FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_socials', 'cmd', 'migration', 'repl');
@@ -378,7 +383,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artists', 'cmd', 'migration', 'repl');
@@ -435,7 +440,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();
 ALTER TABLE public.artists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.audio_index_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_audio_index_wire_state', 'cmd', 'migration', 'repl');
@@ -466,7 +471,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();
 ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_jobs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_jobs', 'cmd', 'migration', 'repl');
@@ -497,7 +502,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_cursors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_cursors', 'cmd', 'migration', 'repl');
@@ -528,7 +533,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();
 ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_merge_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_merge_state', 'cmd', 'migration', 'repl');
@@ -541,9 +546,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.cdn_path := OLD.cdn_path;
             NEW.created_at := OLD.created_at;
             NEW.quality := OLD.quality;
@@ -554,17 +563,39 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.cdn_tracks t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.cdn_tracks t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.cdn_tracks t SET cdn_path = NEW.cdn_path, created_at = NEW.created_at, quality = NEW.quality, status = NEW.status, track_urn = NEW.track_urn, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.cdn_tracks t SET
+                cdn_path = CASE WHEN NEW.row_v > o.row_v THEN NEW.cdn_path ELSE o.cdn_path END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
+                status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
-    SELECT t.id INTO o FROM public.cdn_tracks t WHERE (t.track_urn, t.quality) = (NEW.track_urn, NEW.quality);
+    SELECT t.* INTO o FROM public.cdn_tracks t WHERE (t.track_urn, t.quality) = (NEW.track_urn, NEW.quality);
     IF FOUND THEN
         PERFORM nextval('public.scd_conflict_cdn_tracks'::regclass);
-        UPDATE public.cdn_tracks t SET cdn_path = NEW.cdn_path, created_at = NEW.created_at, quality = NEW.quality, status = NEW.status, track_urn = NEW.track_urn, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = o.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.cdn_tracks t SET
+                cdn_path = CASE WHEN NEW.row_v > o.row_v THEN NEW.cdn_path ELSE o.cdn_path END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
+                status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -592,7 +623,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.cdn_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_cdn_tracks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.cdn_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.cdn_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.cdn_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.cmd_dead FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_cmd_dead', 'cmd', 'migration', 'repl');
@@ -612,7 +643,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_bundles();
 ALTER TABLE public.diag_bundles ENABLE REPLICA TRIGGER zz_skip;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_bundles FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.diag_bundles ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_skip_diag_events()
@@ -630,7 +661,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_events();
 ALTER TABLE public.diag_events ENABLE REPLICA TRIGGER zz_skip;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_events FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.diag_events ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_diag_issue_days()
@@ -639,9 +670,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.events := OLD.events;
             NEW.first_at := OLD.first_at;
             NEW.kind := OLD.kind;
@@ -651,10 +686,19 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.diag_issue_days t WHERE (t.fingerprint, t.day, t.host, t.app_version) = (NEW.fingerprint, NEW.day, NEW.host, NEW.app_version);
+    SELECT t.* INTO o FROM public.diag_issue_days t WHERE (t.fingerprint, t.day, t.host, t.app_version) = (NEW.fingerprint, NEW.day, NEW.host, NEW.app_version);
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.diag_issue_days t SET events = NEW.events, first_at = NEW.first_at, kind = NEW.kind, last_at = NEW.last_at, title = NEW.title, row_v = NEW.row_v WHERE (t.fingerprint, t.day, t.host, t.app_version) = (NEW.fingerprint, NEW.day, NEW.host, NEW.app_version);
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.diag_issue_days t SET
+                events = CASE WHEN NEW.row_v > o.row_v THEN NEW.events ELSE o.events END,
+                first_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.first_at ELSE o.first_at END,
+                kind = CASE WHEN NEW.row_v > o.row_v THEN NEW.kind ELSE o.kind END,
+                last_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_at ELSE o.last_at END,
+                title = CASE WHEN NEW.row_v > o.row_v THEN NEW.title ELSE o.title END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.fingerprint, t.day, t.host, t.app_version) = (o.fingerprint, o.day, o.host, o.app_version);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -683,7 +727,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.diag_issue_days FOR EACH ROW EXECUTE FUNCTION public.scd_ver_diag_issue_days();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_days FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_days FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.diag_issue_days ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_skip_diag_issue_origins()
@@ -701,7 +745,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_issue_origins();
 ALTER TABLE public.diag_issue_origins ENABLE REPLICA TRIGGER zz_skip;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_origins FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.diag_issue_origins ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_discover_promoted()
@@ -710,9 +754,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.active := OLD.active;
             NEW.created_at := OLD.created_at;
             NEW.entity_id := OLD.entity_id;
@@ -724,17 +772,41 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.discover_promoted t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.discover_promoted t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.discover_promoted t SET active = NEW.active, created_at = NEW.created_at, entity_id = NEW.entity_id, entity_type = NEW.entity_type, note = NEW.note, "position" = NEW."position", updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.discover_promoted t SET
+                active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                entity_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_id ELSE o.entity_id END,
+                entity_type = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_type ELSE o.entity_type END,
+                note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
+                "position" = CASE WHEN NEW.row_v > o.row_v THEN NEW."position" ELSE o."position" END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
-    SELECT t.id INTO o FROM public.discover_promoted t WHERE (t.entity_type, t.entity_id) = (NEW.entity_type, NEW.entity_id);
+    SELECT t.* INTO o FROM public.discover_promoted t WHERE (t.entity_type, t.entity_id) = (NEW.entity_type, NEW.entity_id);
     IF FOUND THEN
         PERFORM nextval('public.scd_conflict_discover_promoted'::regclass);
-        UPDATE public.discover_promoted t SET active = NEW.active, created_at = NEW.created_at, entity_id = NEW.entity_id, entity_type = NEW.entity_type, note = NEW.note, "position" = NEW."position", updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = o.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.discover_promoted t SET
+                active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                entity_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_id ELSE o.entity_id END,
+                entity_type = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_type ELSE o.entity_type END,
+                note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
+                "position" = CASE WHEN NEW.row_v > o.row_v THEN NEW."position" ELSE o."position" END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -792,7 +864,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_promoted FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_promoted();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_promoted FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.discover_promoted ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_discover_settings()
@@ -801,9 +873,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.show_star := OLD.show_star;
             NEW.star_limit := OLD.star_limit;
             NEW.star_strategy := OLD.star_strategy;
@@ -812,10 +888,18 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.discover_settings t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.discover_settings t WHERE t.id = NEW.id;
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.discover_settings t SET show_star = NEW.show_star, star_limit = NEW.star_limit, star_strategy = NEW.star_strategy, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = NEW.id;
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.discover_settings t SET
+                show_star = CASE WHEN NEW.row_v > o.row_v THEN NEW.show_star ELSE o.show_star END,
+                star_limit = CASE WHEN NEW.row_v > o.row_v THEN NEW.star_limit ELSE o.star_limit END,
+                star_strategy = CASE WHEN NEW.row_v > o.row_v THEN NEW.star_strategy ELSE o.star_strategy END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -844,7 +928,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_settings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_settings();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_settings FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_settings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.discover_settings ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.discover_tag_counts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_discover_tag_counts', 'cmd', 'migration', 'repl');
@@ -871,7 +955,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();
 ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_disliked_tracks()
@@ -880,9 +964,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.sc_track_id := OLD.sc_track_id;
             NEW.sc_user_id := OLD.sc_user_id;
@@ -891,17 +979,35 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.disliked_tracks t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.disliked_tracks t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.disliked_tracks t SET created_at = NEW.created_at, sc_track_id = NEW.sc_track_id, sc_user_id = NEW.sc_user_id, track_data = NEW.track_data, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.disliked_tracks t SET
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                sc_track_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_track_id ELSE o.sc_track_id END,
+                sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                track_data = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_data ELSE o.track_data END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
-    SELECT t.id INTO o FROM public.disliked_tracks t WHERE (t.sc_user_id, t.sc_track_id) = (NEW.sc_user_id, NEW.sc_track_id);
+    SELECT t.* INTO o FROM public.disliked_tracks t WHERE (t.sc_user_id, t.sc_track_id) = (NEW.sc_user_id, NEW.sc_track_id);
     IF FOUND THEN
         PERFORM nextval('public.scd_conflict_disliked_tracks'::regclass);
-        UPDATE public.disliked_tracks t SET created_at = NEW.created_at, sc_track_id = NEW.sc_track_id, sc_user_id = NEW.sc_user_id, track_data = NEW.track_data, row_v = NEW.row_v WHERE t.id = o.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.disliked_tracks t SET
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                sc_track_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_track_id ELSE o.sc_track_id END,
+                sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                track_data = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_data ELSE o.track_data END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -959,7 +1065,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.disliked_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_disliked_tracks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.disliked_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.disliked_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.enrich_calibration FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_enrich_calibration', 'cmd', 'migration', 'repl');
@@ -989,7 +1095,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_entity_reads();
 ALTER TABLE public.entity_reads ENABLE REPLICA TRIGGER zz_max;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.entity_reads FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.entity_reads ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_featured_items()
@@ -998,9 +1104,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.active := OLD.active;
             NEW.created_at := OLD.created_at;
             NEW.sc_urn := OLD.sc_urn;
@@ -1010,10 +1120,19 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.featured_items t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.featured_items t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.featured_items t SET active = NEW.active, created_at = NEW.created_at, sc_urn = NEW.sc_urn, type = NEW.type, weight = NEW.weight, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.featured_items t SET
+                active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                sc_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_urn ELSE o.sc_urn END,
+                type = CASE WHEN NEW.row_v > o.row_v THEN NEW.type ELSE o.type END,
+                weight = CASE WHEN NEW.row_v > o.row_v THEN NEW.weight ELSE o.weight END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1072,7 +1191,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.featured_items FOR EACH ROW EXECUTE FUNCTION public.scd_ver_featured_items();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.featured_items FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.featured_items ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.job_status FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_job_status', 'cmd', 'migration', 'repl');
@@ -1099,7 +1218,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_link_requests()
@@ -1108,9 +1227,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.claim_token := OLD.claim_token;
             NEW.created_at := OLD.created_at;
             NEW.error := OLD.error;
@@ -1123,10 +1246,22 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.link_requests t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.link_requests t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.link_requests t SET claim_token = NEW.claim_token, created_at = NEW.created_at, error = NEW.error, expires_at = NEW.expires_at, mode = NEW.mode, source_session_id = NEW.source_session_id, status = NEW.status, target_session_id = NEW.target_session_id, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.link_requests t SET
+                claim_token = CASE WHEN NEW.row_v > o.row_v THEN NEW.claim_token ELSE o.claim_token END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
+                expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
+                mode = CASE WHEN NEW.row_v > o.row_v THEN NEW.mode ELSE o.mode END,
+                source_session_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.source_session_id ELSE o.source_session_id END,
+                status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                target_session_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.target_session_id ELSE o.target_session_id END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1185,7 +1320,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.link_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_link_requests();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.link_requests FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.link_requests ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_skip_listening_history()
@@ -1233,7 +1368,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_listening_history();
 ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zz_tomb_check;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_login_requests()
@@ -1242,9 +1377,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.code_verifier := OLD.code_verifier;
             NEW.created_at := OLD.created_at;
             NEW.error := OLD.error;
@@ -1263,10 +1402,28 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.login_requests t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.login_requests t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.login_requests t SET code_verifier = NEW.code_verifier, created_at = NEW.created_at, error = NEW.error, expires_at = NEW.expires_at, oauth_app_id = NEW.oauth_app_id, profile_ok = NEW.profile_ok, redirect_url = NEW.redirect_url, result_session_id = NEW.result_session_id, retry_count = NEW.retry_count, state = NEW.state, status = NEW.status, step = NEW.step, target_session_id = NEW.target_session_id, username = NEW.username, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.login_requests t SET
+                code_verifier = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_verifier ELSE o.code_verifier END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
+                expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
+                oauth_app_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
+                profile_ok = CASE WHEN NEW.row_v > o.row_v THEN NEW.profile_ok ELSE o.profile_ok END,
+                redirect_url = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_url ELSE o.redirect_url END,
+                result_session_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.result_session_id ELSE o.result_session_id END,
+                retry_count = CASE WHEN NEW.row_v > o.row_v THEN NEW.retry_count ELSE o.retry_count END,
+                state = CASE WHEN NEW.row_v > o.row_v THEN NEW.state ELSE o.state END,
+                status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                step = CASE WHEN NEW.row_v > o.row_v THEN NEW.step ELSE o.step END,
+                target_session_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.target_session_id ELSE o.target_session_id END,
+                username = CASE WHEN NEW.row_v > o.row_v THEN NEW.username ELSE o.username END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1325,7 +1482,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.login_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_login_requests();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.login_requests FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.login_requests ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_cache', 'cmd', 'migration', 'repl');
@@ -1352,7 +1509,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();
 ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_embedding_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_embedding_wire_state', 'cmd', 'migration', 'repl');
@@ -1392,7 +1549,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_oauth_app_request_cooldowns()
@@ -1401,9 +1558,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.failure_count := OLD.failure_count;
             NEW.retry_at := OLD.retry_at;
             NEW.updated_at := OLD.updated_at;
@@ -1411,10 +1572,17 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.oauth_app_request_cooldowns t WHERE t.oauth_app_id = NEW.oauth_app_id;
+    SELECT t.* INTO o FROM public.oauth_app_request_cooldowns t WHERE t.oauth_app_id = NEW.oauth_app_id;
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.oauth_app_request_cooldowns t SET failure_count = NEW.failure_count, retry_at = NEW.retry_at, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.oauth_app_id = NEW.oauth_app_id;
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.oauth_app_request_cooldowns t SET
+                failure_count = CASE WHEN NEW.row_v > o.row_v THEN NEW.failure_count ELSE o.failure_count END,
+                retry_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.retry_at ELSE o.retry_at END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.oauth_app_id = o.oauth_app_id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1423,6 +1591,20 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_app_request_cooldowns();
 ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_orphan_oauth_app_request_cooldowns()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.oauth_app_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.oauth_apps p WHERE p.id = NEW.oauth_app_id) THEN
+        PERFORM nextval('public.scd_orphan_oauth_app_request_cooldowns'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_oauth_app_request_cooldowns();
+ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zz_orphan;
 
 CREATE OR REPLACE FUNCTION public.scd_ver_oauth_app_request_cooldowns()
 RETURNS trigger
@@ -1443,7 +1625,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_app_request_cooldowns();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_token_issuance_reservations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_token_issuance_reservations', 'cmd', 'migration', 'repl');
@@ -1474,8 +1656,29 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();
 ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE FUNCTION public.scd_fk_oauth_apps()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('oauth_apps', jsonb_build_object('id', OLD.id)) ON CONFLICT DO NOTHING;
+        PERFORM nextval('public.scd_restrict_oauth_apps'::regclass);
+        RETURN NULL;
+    END IF;
+    DELETE FROM public.oauth_app_request_cooldowns c WHERE c.oauth_app_id = OLD.id;
+    UPDATE public.oauth_app_token_issuance_reservations c SET oauth_app_id = NULL WHERE c.oauth_app_id = OLD.id;
+    DELETE FROM public.oauth_app_token_refresh_state c WHERE c.oauth_app_id = OLD.id;
+    DELETE FROM public.oauth_app_tokens c WHERE c.oauth_app_id = OLD.id;
+    DELETE FROM public.sync_queue_action_pauses c WHERE c.oauth_app_id = OLD.id;
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_oauth_apps();
+ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zz_fk;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_oauth_apps()
 RETURNS trigger
@@ -1483,9 +1686,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.active := OLD.active;
             NEW.client_id := OLD.client_id;
             NEW.client_secret := OLD.client_secret;
@@ -1497,17 +1704,41 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.oauth_apps t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.oauth_apps t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.oauth_apps t SET active = NEW.active, client_id = NEW.client_id, client_secret = NEW.client_secret, created_at = NEW.created_at, name = NEW.name, redirect_uri = NEW.redirect_uri, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.oauth_apps t SET
+                active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
+                redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
-    SELECT t.id INTO o FROM public.oauth_apps t WHERE (btrim(t.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text)) = (btrim(NEW.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text));
+    SELECT t.* INTO o FROM public.oauth_apps t WHERE (btrim(t.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text)) = (btrim(NEW.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text));
     IF FOUND THEN
         PERFORM nextval('public.scd_conflict_oauth_apps'::regclass);
-        UPDATE public.oauth_apps t SET active = NEW.active, client_id = NEW.client_id, client_secret = NEW.client_secret, created_at = NEW.created_at, name = NEW.name, redirect_uri = NEW.redirect_uri, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = o.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.oauth_apps t SET
+                active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
+                client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
+                redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -1515,36 +1746,6 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_apps();
 ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zz_merge;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_oauth_apps()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('oauth_apps', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
-    RETURN NULL;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb AFTER DELETE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_oauth_apps();
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_check_oauth_apps()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    tv bigint;
-BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'oauth_apps' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_oauth_apps();
-ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zz_tomb_check;
 
 CREATE OR REPLACE FUNCTION public.scd_ver_oauth_apps()
 RETURNS trigger
@@ -1565,7 +1766,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_apps();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_apps FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.pipeline_event_receipts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_pipeline_event_receipts', 'cmd', 'migration', 'repl');
@@ -1603,7 +1804,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();
 ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_operations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_operations', 'cmd', 'migration', 'repl');
@@ -1646,7 +1847,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();
 ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_state', 'cmd', 'migration', 'repl');
@@ -1673,7 +1874,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();
 ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_reconcile_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_reconcile_runs', 'cmd', 'migration', 'repl');
@@ -1711,12 +1912,53 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();
 ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshot_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshot_tracks', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshots FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshots', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE FUNCTION public.scd_owner_playlist_remote_snapshots()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    r record;
+    k0 boolean := true;
+    k1 boolean := true;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+        RETURN NULL;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        k0 := (NEW.playlist_urn, NEW.content_fingerprint) IS DISTINCT FROM (OLD.playlist_urn, OLD.content_fingerprint);
+        k1 := (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (OLD.playlist_urn, OLD.id);
+    END IF;
+    IF k0 THEN
+        FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.content_fingerprint) = (NEW.playlist_urn, NEW.content_fingerprint) AND t.id IS DISTINCT FROM NEW.id LOOP
+            PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
+        END LOOP;
+    END IF;
+    IF k1 THEN
+        FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
+            PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
+        END LOOP;
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        UPDATE public.playlist_remote_snapshots t SET content_fingerprint = NEW.content_fingerprint, created_at = NEW.created_at, playlist_urn = NEW.playlist_urn, track_count = NEW.track_count WHERE t.id = NEW.id;
+        IF FOUND THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();
+ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zz_owner;
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_sweep_cursor FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_sweep_cursor', 'cmd', 'migration', 'repl');
 
@@ -1753,7 +1995,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlists', 'cmd', 'migration', 'repl');
@@ -1789,7 +2031,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();
 ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.recommendation_quality_models FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_recommendation_quality_models', 'cmd', 'migration', 'repl');
@@ -1819,7 +2061,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_repl_checksums();
 ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zz_max;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_checksums FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_repl_tombstones()
@@ -1828,18 +2070,27 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.v <= OLD.v THEN
+        IF NEW.v < OLD.v OR (core AND NEW.v = OLD.v) THEN
             NEW.at := OLD.at;
             NEW.v := OLD.v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.v INTO o FROM public.repl_tombstones t WHERE (t.tbl, t.pk) = (NEW.tbl, NEW.pk);
+    SELECT t.* INTO o FROM public.repl_tombstones t WHERE (t.tbl, t.pk) = (NEW.tbl, NEW.pk);
     IF FOUND THEN
         IF NEW.v > o.v THEN
-            UPDATE public.repl_tombstones t SET at = NEW.at, v = NEW.v WHERE (t.tbl, t.pk) = (NEW.tbl, NEW.pk);
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.repl_tombstones t SET
+                at = CASE WHEN NEW.v > o.v THEN NEW.at ELSE o.at END,
+                v = greatest(o.v, NEW.v)
+            WHERE (t.tbl, t.pk) = (o.tbl, o.pk);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1868,7 +2119,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW EXECUTE FUNCTION public.scd_ver_repl_tombstones();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_tombstones FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.repl_tombstones ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_sc_egress_health()
@@ -1877,9 +2128,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.open_until := OLD.open_until;
             NEW.opened_at := OLD.opened_at;
             NEW.opened_by := OLD.opened_by;
@@ -1887,10 +2142,17 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.sc_egress_health t WHERE t.channel = NEW.channel;
+    SELECT t.* INTO o FROM public.sc_egress_health t WHERE t.channel = NEW.channel;
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.sc_egress_health t SET open_until = NEW.open_until, opened_at = NEW.opened_at, opened_by = NEW.opened_by, row_v = NEW.row_v WHERE t.channel = NEW.channel;
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.sc_egress_health t SET
+                open_until = CASE WHEN NEW.row_v > o.row_v THEN NEW.open_until ELSE o.open_until END,
+                opened_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.opened_at ELSE o.opened_at END,
+                opened_by = CASE WHEN NEW.row_v > o.row_v THEN NEW.opened_by ELSE o.opened_by END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.channel = o.channel;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -1949,7 +2211,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sc_egress_health FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sc_egress_health();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_egress_health FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sc_egress_health ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_max_sc_track_counters()
@@ -1977,7 +2239,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_sc_track_counters();
 ALTER TABLE public.sc_track_counters ENABLE REPLICA TRIGGER zz_max;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_track_counters FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sc_track_counters ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.search_terms FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_search_terms', 'cmd', 'migration', 'repl');
@@ -2004,7 +2266,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();
 ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_sessions()
@@ -2013,9 +2275,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.soundcloud_connection_id := OLD.soundcloud_connection_id;
             NEW.updated_at := OLD.updated_at;
@@ -2023,10 +2289,17 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.sessions t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.sessions t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.sessions t SET created_at = NEW.created_at, soundcloud_connection_id = NEW.soundcloud_connection_id, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.id = NEW.id;
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.sessions t SET
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                soundcloud_connection_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.soundcloud_connection_id ELSE o.soundcloud_connection_id END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2035,6 +2308,20 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sessions();
 ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_orphan_sessions()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.soundcloud_connection_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.soundcloud_connections p WHERE p.id = NEW.soundcloud_connection_id) THEN
+        PERFORM nextval('public.scd_orphan_sessions'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF soundcloud_connection_id ON public.sessions FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_sessions();
+ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zz_orphan;
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_sessions()
 RETURNS trigger
@@ -2085,10 +2372,22 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sessions();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sessions FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zzz_suppress;
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, refresh_v, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'migration', 'repl');
+CREATE OR REPLACE FUNCTION public.scd_fk_soundcloud_connections()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    UPDATE public.sessions c SET soundcloud_connection_id = NULL WHERE c.soundcloud_connection_id = OLD.id;
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_soundcloud_connections();
+ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_fk;
+
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_soundcloud_connections()
 RETURNS trigger
@@ -2096,9 +2395,24 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.refresh_v <= OLD.refresh_v THEN
+        IF NEW.token_v < OLD.token_v OR (core AND NEW.token_v = OLD.token_v) THEN
+            NEW.soundcloud_user_id := OLD.soundcloud_user_id;
+            NEW.username := OLD.username;
+            NEW.created_at := OLD.created_at;
+            NEW.oauth_app_id := OLD.oauth_app_id;
+            NEW.access_token := OLD.access_token;
+            NEW.refresh_token := OLD.refresh_token;
+            NEW.expires_at := OLD.expires_at;
+            NEW.scope := OLD.scope;
+            NEW.token_v := OLD.token_v;
+        END IF;
+        IF core THEN
             NEW.refresh_generation := OLD.refresh_generation;
             NEW.refresh_failure_count := OLD.refresh_failure_count;
             NEW.refresh_lease_id := OLD.refresh_lease_id;
@@ -2111,25 +2425,37 @@ BEGIN
             NEW.refresh_rejection_count := OLD.refresh_rejection_count;
             NEW.first_refresh_rejection_at := OLD.first_refresh_rejection_at;
             NEW.updated_at := OLD.updated_at;
-            NEW.refresh_v := OLD.refresh_v;
-        END IF;
-        IF NEW.token_v <= OLD.token_v THEN
-            NEW.soundcloud_user_id := OLD.soundcloud_user_id;
-            NEW.username := OLD.username;
-            NEW.created_at := OLD.created_at;
-            NEW.oauth_app_id := OLD.oauth_app_id;
-            NEW.access_token := OLD.access_token;
-            NEW.refresh_token := OLD.refresh_token;
-            NEW.expires_at := OLD.expires_at;
-            NEW.scope := OLD.scope;
-            NEW.token_v := OLD.token_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.refresh_v, t.token_v INTO o FROM public.soundcloud_connections t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.soundcloud_connections t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.refresh_v > o.refresh_v OR NEW.token_v > o.token_v THEN
-            UPDATE public.soundcloud_connections t SET refresh_generation = NEW.refresh_generation, refresh_failure_count = NEW.refresh_failure_count, refresh_lease_id = NEW.refresh_lease_id, refresh_lease_expires_at = NEW.refresh_lease_expires_at, last_refresh_attempt_at = NEW.last_refresh_attempt_at, last_refresh_success_at = NEW.last_refresh_success_at, last_refresh_error_kind = NEW.last_refresh_error_kind, last_refresh_error = NEW.last_refresh_error, retry_at = NEW.retry_at, refresh_rejection_count = NEW.refresh_rejection_count, first_refresh_rejection_at = NEW.first_refresh_rejection_at, updated_at = NEW.updated_at, refresh_v = NEW.refresh_v, soundcloud_user_id = NEW.soundcloud_user_id, username = NEW.username, created_at = NEW.created_at, oauth_app_id = NEW.oauth_app_id, access_token = NEW.access_token, refresh_token = NEW.refresh_token, expires_at = NEW.expires_at, scope = NEW.scope, token_v = NEW.token_v WHERE t.id = NEW.id;
+        IF (NOT core AND (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at) IS DISTINCT FROM (o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.refresh_rejection_count, o.first_refresh_rejection_at, o.updated_at)) OR NEW.token_v > o.token_v OR ((NEW.token_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.soundcloud_connections t SET
+                refresh_generation = CASE WHEN core THEN o.refresh_generation ELSE NEW.refresh_generation END,
+                refresh_failure_count = CASE WHEN core THEN o.refresh_failure_count ELSE NEW.refresh_failure_count END,
+                refresh_lease_id = CASE WHEN core THEN o.refresh_lease_id ELSE NEW.refresh_lease_id END,
+                refresh_lease_expires_at = CASE WHEN core THEN o.refresh_lease_expires_at ELSE NEW.refresh_lease_expires_at END,
+                last_refresh_attempt_at = CASE WHEN core THEN o.last_refresh_attempt_at ELSE NEW.last_refresh_attempt_at END,
+                last_refresh_success_at = CASE WHEN core THEN o.last_refresh_success_at ELSE NEW.last_refresh_success_at END,
+                last_refresh_error_kind = CASE WHEN core THEN o.last_refresh_error_kind ELSE NEW.last_refresh_error_kind END,
+                last_refresh_error = CASE WHEN core THEN o.last_refresh_error ELSE NEW.last_refresh_error END,
+                retry_at = CASE WHEN core THEN o.retry_at ELSE NEW.retry_at END,
+                refresh_rejection_count = CASE WHEN core THEN o.refresh_rejection_count ELSE NEW.refresh_rejection_count END,
+                first_refresh_rejection_at = CASE WHEN core THEN o.first_refresh_rejection_at ELSE NEW.first_refresh_rejection_at END,
+                updated_at = CASE WHEN core THEN o.updated_at ELSE NEW.updated_at END,
+                soundcloud_user_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.soundcloud_user_id ELSE o.soundcloud_user_id END,
+                username = CASE WHEN NEW.token_v > o.token_v THEN NEW.username ELSE o.username END,
+                created_at = CASE WHEN (NEW.token_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.token_v > o.token_v THEN NEW.created_at ELSE o.created_at END,
+                oauth_app_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
+                access_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.access_token ELSE o.access_token END,
+                refresh_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.refresh_token ELSE o.refresh_token END,
+                expires_at = CASE WHEN NEW.token_v > o.token_v THEN NEW.expires_at ELSE o.expires_at END,
+                scope = CASE WHEN NEW.token_v > o.token_v THEN NEW.scope ELSE o.scope END,
+                token_v = greatest(o.token_v, NEW.token_v)
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2138,6 +2464,20 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_soundcloud_connections();
 ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_orphan_soundcloud_connections()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.oauth_app_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.oauth_apps p WHERE p.id = NEW.oauth_app_id) THEN
+        PERFORM nextval('public.scd_orphan_soundcloud_connections'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_soundcloud_connections();
+ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_orphan;
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_soundcloud_connections()
 RETURNS trigger
@@ -2164,16 +2504,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF public.scd_role() = 'core' AND coalesce(current_setting('scd.writer', true), '') <> 'api' THEN
-            NEW.refresh_v := public.scd_hlc(NEW.refresh_v);
-        END IF;
         NEW.token_v := public.scd_hlc(NEW.token_v);
         RETURN NEW;
-    END IF;
-    IF (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at) IS DISTINCT FROM (OLD.refresh_generation, OLD.refresh_failure_count, OLD.refresh_lease_id, OLD.refresh_lease_expires_at, OLD.last_refresh_attempt_at, OLD.last_refresh_success_at, OLD.last_refresh_error_kind, OLD.last_refresh_error, OLD.retry_at, OLD.refresh_rejection_count, OLD.first_refresh_rejection_at, OLD.updated_at) THEN
-        NEW.refresh_v := public.scd_hlc(greatest(OLD.refresh_v, NEW.refresh_v));
-    ELSE
-        NEW.refresh_v := greatest(OLD.refresh_v, NEW.refresh_v);
     END IF;
     IF (NEW.soundcloud_user_id, NEW.username, NEW.created_at, NEW.oauth_app_id, NEW.access_token, NEW.refresh_token, NEW.expires_at, NEW.scope) IS DISTINCT FROM (OLD.soundcloud_user_id, OLD.username, OLD.created_at, OLD.oauth_app_id, OLD.access_token, OLD.refresh_token, OLD.expires_at, OLD.scope) THEN
         NEW.token_v := public.scd_hlc(greatest(OLD.token_v, NEW.token_v));
@@ -2185,7 +2517,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW EXECUTE FUNCTION public.scd_ver_soundcloud_connections();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.soundcloud_connections FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.star_track_tiers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_star_track_tiers', 'cmd', 'migration', 'repl');
@@ -2200,18 +2532,27 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.exp_date := OLD.exp_date;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.subscriptions t WHERE t.user_urn = NEW.user_urn;
+    SELECT t.* INTO o FROM public.subscriptions t WHERE t.user_urn = NEW.user_urn;
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.subscriptions t SET exp_date = NEW.exp_date, row_v = NEW.row_v WHERE t.user_urn = NEW.user_urn;
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.subscriptions t SET
+                exp_date = CASE WHEN NEW.row_v > o.row_v THEN NEW.exp_date ELSE o.exp_date END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.user_urn = o.user_urn;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2270,12 +2611,12 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.subscriptions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_subscriptions();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.subscriptions FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.subscriptions ENABLE REPLICA TRIGGER zzz_suppress;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE UPDATE OF action_type, cancelled, created_at, generation, intent_v, payload, target_urn, user_id ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_sync_queue', 'mirror', 'migration', 'repl', 'api');
+CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF action_type, cancelled, created_at, generation, intent_v, payload, target_urn, user_id ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_sync_queue', 'mirror', 'migration', 'repl', 'api');
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF dead, exec_generation, failed_at, last_error, lease_generation, lease_id, locked_at, next_run_at, remote_attempted_generation, remote_completed_generation, remote_result, result_v, retry_count ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_sync_queue', 'migration', 'repl');
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF dead, exec_generation, failed_at, last_error, lease_generation, lease_id, locked_at, next_run_at, remote_attempted_generation, remote_completed_generation, remote_result, retry_count ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_sync_queue', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_sync_queue()
 RETURNS trigger
@@ -2283,9 +2624,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.intent_v <= OLD.intent_v THEN
+        IF NEW.intent_v < OLD.intent_v OR (core AND NEW.intent_v = OLD.intent_v) THEN
             NEW.user_id := OLD.user_id;
             NEW.action_type := OLD.action_type;
             NEW.target_urn := OLD.target_urn;
@@ -2295,7 +2640,7 @@ BEGIN
             NEW.cancelled := OLD.cancelled;
             NEW.intent_v := OLD.intent_v;
         END IF;
-        IF NEW.result_v <= OLD.result_v THEN
+        IF core THEN
             NEW.locked_at := OLD.locked_at;
             NEW.lease_id := OLD.lease_id;
             NEW.lease_generation := OLD.lease_generation;
@@ -2308,22 +2653,69 @@ BEGIN
             NEW.remote_completed_generation := OLD.remote_completed_generation;
             NEW.remote_result := OLD.remote_result;
             NEW.exec_generation := OLD.exec_generation;
-            NEW.result_v := OLD.result_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.intent_v, t.result_v INTO o FROM public.sync_queue t WHERE t.id = NEW.id;
+    SELECT t.* INTO o FROM public.sync_queue t WHERE t.id = NEW.id;
     IF FOUND THEN
-        IF NEW.intent_v > o.intent_v OR NEW.result_v > o.result_v THEN
-            UPDATE public.sync_queue t SET user_id = NEW.user_id, action_type = NEW.action_type, target_urn = NEW.target_urn, created_at = NEW.created_at, payload = NEW.payload, generation = NEW.generation, cancelled = NEW.cancelled, intent_v = NEW.intent_v, locked_at = NEW.locked_at, lease_id = NEW.lease_id, lease_generation = NEW.lease_generation, retry_count = NEW.retry_count, last_error = NEW.last_error, next_run_at = NEW.next_run_at, dead = NEW.dead, failed_at = NEW.failed_at, remote_attempted_generation = NEW.remote_attempted_generation, remote_completed_generation = NEW.remote_completed_generation, remote_result = NEW.remote_result, exec_generation = NEW.exec_generation, result_v = NEW.result_v WHERE t.id = NEW.id;
+        IF NEW.intent_v > o.intent_v OR ((NEW.intent_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.sync_queue t SET
+                user_id = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.user_id ELSE o.user_id END,
+                action_type = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.action_type ELSE o.action_type END,
+                target_urn = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.target_urn ELSE o.target_urn END,
+                created_at = CASE WHEN (NEW.intent_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
+                payload = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.payload ELSE o.payload END,
+                generation = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.generation ELSE o.generation END,
+                cancelled = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.cancelled ELSE o.cancelled END,
+                intent_v = greatest(o.intent_v, NEW.intent_v),
+                locked_at = CASE WHEN core THEN o.locked_at ELSE NEW.locked_at END,
+                lease_id = CASE WHEN core THEN o.lease_id ELSE NEW.lease_id END,
+                lease_generation = CASE WHEN core THEN o.lease_generation ELSE NEW.lease_generation END,
+                retry_count = CASE WHEN core THEN o.retry_count ELSE NEW.retry_count END,
+                last_error = CASE WHEN core THEN o.last_error ELSE NEW.last_error END,
+                next_run_at = CASE WHEN core THEN o.next_run_at ELSE NEW.next_run_at END,
+                dead = CASE WHEN core THEN o.dead ELSE NEW.dead END,
+                failed_at = CASE WHEN core THEN o.failed_at ELSE NEW.failed_at END,
+                remote_attempted_generation = CASE WHEN core THEN o.remote_attempted_generation ELSE NEW.remote_attempted_generation END,
+                remote_completed_generation = CASE WHEN core THEN o.remote_completed_generation ELSE NEW.remote_completed_generation END,
+                remote_result = CASE WHEN core THEN o.remote_result ELSE NEW.remote_result END,
+                exec_generation = CASE WHEN core THEN o.exec_generation ELSE NEW.exec_generation END
+            WHERE t.id = o.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
     IF (((NEW.action_type)::text <> 'comment'::text)) THEN
-        SELECT t.id INTO o FROM public.sync_queue t WHERE (t.user_id, t.action_type, t.target_urn) = (NEW.user_id, NEW.action_type, NEW.target_urn) AND (((t.action_type)::text <> 'comment'::text));
+        SELECT t.* INTO o FROM public.sync_queue t WHERE (t.user_id, t.action_type, t.target_urn) = (NEW.user_id, NEW.action_type, NEW.target_urn) AND (((t.action_type)::text <> 'comment'::text));
         IF FOUND THEN
             PERFORM nextval('public.scd_conflict_sync_queue'::regclass);
-            UPDATE public.sync_queue t SET user_id = NEW.user_id, action_type = NEW.action_type, target_urn = NEW.target_urn, created_at = NEW.created_at, payload = NEW.payload, generation = NEW.generation, cancelled = NEW.cancelled, intent_v = NEW.intent_v, locked_at = NEW.locked_at, lease_id = NEW.lease_id, lease_generation = NEW.lease_generation, retry_count = NEW.retry_count, last_error = NEW.last_error, next_run_at = NEW.next_run_at, dead = NEW.dead, failed_at = NEW.failed_at, remote_attempted_generation = NEW.remote_attempted_generation, remote_completed_generation = NEW.remote_completed_generation, remote_result = NEW.remote_result, exec_generation = NEW.exec_generation, result_v = NEW.result_v WHERE t.id = o.id;
+            IF NEW.intent_v > o.intent_v OR ((NEW.intent_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.sync_queue t SET
+                    user_id = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.user_id ELSE o.user_id END,
+                    action_type = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.action_type ELSE o.action_type END,
+                    target_urn = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.target_urn ELSE o.target_urn END,
+                    created_at = CASE WHEN (NEW.intent_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
+                    payload = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.payload ELSE o.payload END,
+                    generation = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.generation ELSE o.generation END,
+                    cancelled = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.cancelled ELSE o.cancelled END,
+                    intent_v = greatest(o.intent_v, NEW.intent_v),
+                    locked_at = CASE WHEN core THEN o.locked_at ELSE NEW.locked_at END,
+                    lease_id = CASE WHEN core THEN o.lease_id ELSE NEW.lease_id END,
+                    lease_generation = CASE WHEN core THEN o.lease_generation ELSE NEW.lease_generation END,
+                    retry_count = CASE WHEN core THEN o.retry_count ELSE NEW.retry_count END,
+                    last_error = CASE WHEN core THEN o.last_error ELSE NEW.last_error END,
+                    next_run_at = CASE WHEN core THEN o.next_run_at ELSE NEW.next_run_at END,
+                    dead = CASE WHEN core THEN o.dead ELSE NEW.dead END,
+                    failed_at = CASE WHEN core THEN o.failed_at ELSE NEW.failed_at END,
+                    remote_attempted_generation = CASE WHEN core THEN o.remote_attempted_generation ELSE NEW.remote_attempted_generation END,
+                    remote_completed_generation = CASE WHEN core THEN o.remote_completed_generation ELSE NEW.remote_completed_generation END,
+                    remote_result = CASE WHEN core THEN o.remote_result ELSE NEW.remote_result END,
+                    exec_generation = CASE WHEN core THEN o.exec_generation ELSE NEW.exec_generation END
+                WHERE t.id = o.id;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+            END IF;
             RETURN NULL;
         END IF;
     END IF;
@@ -2361,9 +2753,6 @@ BEGIN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
             NEW.intent_v := public.scd_hlc(NEW.intent_v);
         END IF;
-        IF public.scd_role() = 'core' AND coalesce(current_setting('scd.writer', true), '') <> 'api' THEN
-            NEW.result_v := public.scd_hlc(NEW.result_v);
-        END IF;
         RETURN NEW;
     END IF;
     IF (NEW.user_id, NEW.action_type, NEW.target_urn, NEW.created_at, NEW.payload, NEW.generation, NEW.cancelled) IS DISTINCT FROM (OLD.user_id, OLD.action_type, OLD.target_urn, OLD.created_at, OLD.payload, OLD.generation, OLD.cancelled) THEN
@@ -2371,17 +2760,12 @@ BEGIN
     ELSE
         NEW.intent_v := greatest(OLD.intent_v, NEW.intent_v);
     END IF;
-    IF (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (OLD.locked_at, OLD.lease_id, OLD.lease_generation, OLD.retry_count, OLD.last_error, OLD.next_run_at, OLD.dead, OLD.failed_at, OLD.remote_attempted_generation, OLD.remote_completed_generation, OLD.remote_result, OLD.exec_generation) THEN
-        NEW.result_v := public.scd_hlc(greatest(OLD.result_v, NEW.result_v));
-    ELSE
-        NEW.result_v := greatest(OLD.result_v, NEW.result_v);
-    END IF;
     RETURN NEW;
 END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sync_queue FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sync_queue();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sync_queue ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.sync_queue_action_pauses FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_sync_queue_action_pauses', 'cmd', 'migration', 'repl');
@@ -2408,7 +2792,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();
 ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_model_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_model_versions', 'cmd', 'migration', 'repl');
@@ -2458,7 +2842,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();
 ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_schedule FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_schedule', 'cmd', 'migration', 'repl');
@@ -2469,19 +2853,29 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.note := OLD.note;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.track_artist_blocks t WHERE (t.track_id, t.artist_id) = (NEW.track_id, NEW.artist_id);
+    SELECT t.* INTO o FROM public.track_artist_blocks t WHERE (t.track_id, t.artist_id) = (NEW.track_id, NEW.artist_id);
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.track_artist_blocks t SET created_at = NEW.created_at, note = NEW.note, row_v = NEW.row_v WHERE (t.track_id, t.artist_id) = (NEW.track_id, NEW.artist_id);
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.track_artist_blocks t SET
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.track_id, t.artist_id) = (o.track_id, o.artist_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2490,6 +2884,23 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_track_artist_blocks();
 ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_orphan_track_artist_blocks()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.artist_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.artists p WHERE p.id = NEW.artist_id) THEN
+        PERFORM nextval('public.scd_orphan_track_artist_blocks'::regclass);
+    END IF;
+    IF NEW.track_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.tracks p WHERE p.id = NEW.track_id) THEN
+        PERFORM nextval('public.scd_orphan_track_artist_blocks'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF artist_id, track_id ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_track_artist_blocks();
+ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_orphan;
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_track_artist_blocks()
 RETURNS trigger
@@ -2540,7 +2951,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_track_artist_blocks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artist_blocks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_artists', 'cmd', 'migration', 'repl');
@@ -2567,7 +2978,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();
 ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_comments FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_comments', 'cmd', 'migration', 'repl');
@@ -2603,7 +3014,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
@@ -2648,7 +3059,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();
 ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.transcription_sync_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_transcription_sync_versions', 'cmd', 'migration', 'repl');
@@ -2661,9 +3072,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.aura_id := OLD.aura_id;
             NEW.custom_hex := OLD.custom_hex;
             NEW.updated_at := OLD.updated_at;
@@ -2671,10 +3086,17 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.user_auras t WHERE t.user_urn = NEW.user_urn;
+    SELECT t.* INTO o FROM public.user_auras t WHERE t.user_urn = NEW.user_urn;
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.user_auras t SET aura_id = NEW.aura_id, custom_hex = NEW.custom_hex, updated_at = NEW.updated_at, row_v = NEW.row_v WHERE t.user_urn = NEW.user_urn;
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_auras t SET
+                aura_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.aura_id ELSE o.aura_id END,
+                custom_hex = CASE WHEN NEW.row_v > o.row_v THEN NEW.custom_hex ELSE o.custom_hex END,
+                updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE t.user_urn = o.user_urn;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2703,7 +3125,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_auras FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_auras();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_auras FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_auras FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_auras ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_blocked_artists()
@@ -2712,9 +3134,13 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.avatar_url := OLD.avatar_url;
             NEW.created_at := OLD.created_at;
             NEW.name := OLD.name;
@@ -2723,10 +3149,18 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.user_blocked_artists t WHERE (t.sc_user_id, t.kind, t.target_id) = (NEW.sc_user_id, NEW.kind, NEW.target_id);
+    SELECT t.* INTO o FROM public.user_blocked_artists t WHERE (t.sc_user_id, t.kind, t.target_id) = (NEW.sc_user_id, NEW.kind, NEW.target_id);
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.user_blocked_artists t SET avatar_url = NEW.avatar_url, created_at = NEW.created_at, name = NEW.name, sc_user_ids = NEW.sc_user_ids, row_v = NEW.row_v WHERE (t.sc_user_id, t.kind, t.target_id) = (NEW.sc_user_id, NEW.kind, NEW.target_id);
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_blocked_artists t SET
+                avatar_url = CASE WHEN NEW.row_v > o.row_v THEN NEW.avatar_url ELSE o.avatar_url END,
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
+                sc_user_ids = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_ids ELSE o.sc_user_ids END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.sc_user_id, t.kind, t.target_id) = (o.sc_user_id, o.kind, o.target_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2785,7 +3219,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_blocked_artists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_blocked_artists();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_blocked_artists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_blocked_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_collection_sync', 'cmd', 'migration', 'repl');
@@ -2805,7 +3239,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_user_events();
 ALTER TABLE public.user_events ENABLE REPLICA TRIGGER zz_skip;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_events FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_events ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_followers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_followers', 'cmd', 'migration', 'repl');
@@ -2832,12 +3266,12 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();
 ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zzz_suppress;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE UPDATE OF created_at, wanted_state, wanted_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_followings', 'mirror', 'migration', 'repl', 'api');
+CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_followings', 'mirror', 'migration', 'repl', 'api');
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, result_v, synced_at, synced_for_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_followings', 'migration', 'repl');
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_followings', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_followings()
 RETURNS trigger
@@ -2845,25 +3279,37 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.wanted_v <= OLD.wanted_v THEN
+        IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
             NEW.wanted_state := OLD.wanted_state;
             NEW.created_at := OLD.created_at;
             NEW.wanted_v := OLD.wanted_v;
         END IF;
-        IF NEW.result_v <= OLD.result_v THEN
+        IF core THEN
             NEW.progress := OLD.progress;
             NEW.synced_at := OLD.synced_at;
             NEW.synced_for_v := OLD.synced_for_v;
-            NEW.result_v := OLD.result_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.wanted_v, t.result_v INTO o FROM public.user_followings t WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
+    SELECT t.* INTO o FROM public.user_followings t WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
     IF FOUND THEN
-        IF NEW.wanted_v > o.wanted_v OR NEW.result_v > o.result_v THEN
-            UPDATE public.user_followings t SET wanted_state = NEW.wanted_state, created_at = NEW.created_at, wanted_v = NEW.wanted_v, progress = NEW.progress, synced_at = NEW.synced_at, synced_for_v = NEW.synced_for_v, result_v = NEW.result_v WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
+        IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_followings t SET
+                wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
+                created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                wanted_v = greatest(o.wanted_v, NEW.wanted_v),
+                progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
+                synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
+                synced_for_v = CASE WHEN core THEN o.synced_for_v ELSE NEW.synced_for_v END
+            WHERE (t.user_id, t.target_user_urn) = (o.user_id, o.target_user_urn);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -2901,9 +3347,6 @@ BEGIN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
             NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
         END IF;
-        IF public.scd_role() = 'core' AND coalesce(current_setting('scd.writer', true), '') <> 'api' THEN
-            NEW.result_v := public.scd_hlc(NEW.result_v);
-        END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
@@ -2911,17 +3354,12 @@ BEGIN
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
-    IF (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (OLD.progress, OLD.synced_at, OLD.synced_for_v) THEN
-        NEW.result_v := public.scd_hlc(greatest(OLD.result_v, NEW.result_v));
-    ELSE
-        NEW.result_v := greatest(OLD.result_v, NEW.result_v);
-    END IF;
     RETURN NEW;
 END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_followings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_followings();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followings FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_followings ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_like_ranks()
@@ -2930,19 +3368,29 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.like_created_at := OLD.like_created_at;
             NEW.rank := OLD.rank;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.user_like_ranks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+    SELECT t.* INTO o FROM public.user_like_ranks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.user_like_ranks t SET like_created_at = NEW.like_created_at, rank = NEW.rank, row_v = NEW.row_v WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_like_ranks t SET
+                like_created_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.like_created_at ELSE o.like_created_at END,
+                rank = CASE WHEN NEW.row_v > o.row_v THEN NEW.rank ELSE o.rank END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.user_id, t.sc_track_id) = (o.user_id, o.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -3001,12 +3449,12 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_like_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_like_ranks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_like_ranks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_like_ranks ENABLE REPLICA TRIGGER zzz_suppress;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_playlists', 'mirror', 'migration', 'repl', 'api');
+CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_playlists', 'mirror', 'migration', 'repl', 'api');
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, result_v, synced_at, synced_for_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_playlists', 'migration', 'repl');
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_playlists', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_likes_playlists()
 RETURNS trigger
@@ -3014,25 +3462,37 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.wanted_v <= OLD.wanted_v THEN
+        IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
             NEW.wanted_state := OLD.wanted_state;
             NEW.created_at := OLD.created_at;
             NEW.wanted_v := OLD.wanted_v;
         END IF;
-        IF NEW.result_v <= OLD.result_v THEN
+        IF core THEN
             NEW.progress := OLD.progress;
             NEW.synced_at := OLD.synced_at;
             NEW.synced_for_v := OLD.synced_for_v;
-            NEW.result_v := OLD.result_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.wanted_v, t.result_v INTO o FROM public.user_likes_playlists t WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
+    SELECT t.* INTO o FROM public.user_likes_playlists t WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
     IF FOUND THEN
-        IF NEW.wanted_v > o.wanted_v OR NEW.result_v > o.result_v THEN
-            UPDATE public.user_likes_playlists t SET wanted_state = NEW.wanted_state, created_at = NEW.created_at, wanted_v = NEW.wanted_v, progress = NEW.progress, synced_at = NEW.synced_at, synced_for_v = NEW.synced_for_v, result_v = NEW.result_v WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
+        IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_likes_playlists t SET
+                wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
+                created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                wanted_v = greatest(o.wanted_v, NEW.wanted_v),
+                progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
+                synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
+                synced_for_v = CASE WHEN core THEN o.synced_for_v ELSE NEW.synced_for_v END
+            WHERE (t.user_id, t.playlist_urn) = (o.user_id, o.playlist_urn);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -3070,9 +3530,6 @@ BEGIN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
             NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
         END IF;
-        IF public.scd_role() = 'core' AND coalesce(current_setting('scd.writer', true), '') <> 'api' THEN
-            NEW.result_v := public.scd_hlc(NEW.result_v);
-        END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
@@ -3080,22 +3537,17 @@ BEGIN
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
-    IF (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (OLD.progress, OLD.synced_at, OLD.synced_for_v) THEN
-        NEW.result_v := public.scd_hlc(greatest(OLD.result_v, NEW.result_v));
-    ELSE
-        NEW.result_v := greatest(OLD.result_v, NEW.result_v);
-    END IF;
     RETURN NEW;
 END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_playlists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_playlists();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_playlists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_likes_playlists ENABLE REPLICA TRIGGER zzz_suppress;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_tracks', 'mirror', 'migration', 'repl', 'api');
+CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_tracks', 'mirror', 'migration', 'repl', 'api');
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF liked_at, progress, result_v, synced_at, synced_for_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_tracks', 'migration', 'repl');
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF liked_at, progress, synced_at, synced_for_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_tracks', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_likes_tracks()
 RETURNS trigger
@@ -3103,26 +3555,39 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.wanted_v <= OLD.wanted_v THEN
+        IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
             NEW.wanted_state := OLD.wanted_state;
             NEW.created_at := OLD.created_at;
             NEW.wanted_v := OLD.wanted_v;
         END IF;
-        IF NEW.result_v <= OLD.result_v THEN
+        IF core THEN
             NEW.progress := OLD.progress;
             NEW.synced_at := OLD.synced_at;
             NEW.liked_at := OLD.liked_at;
             NEW.synced_for_v := OLD.synced_for_v;
-            NEW.result_v := OLD.result_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.wanted_v, t.result_v INTO o FROM public.user_likes_tracks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+    SELECT t.* INTO o FROM public.user_likes_tracks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
     IF FOUND THEN
-        IF NEW.wanted_v > o.wanted_v OR NEW.result_v > o.result_v THEN
-            UPDATE public.user_likes_tracks t SET wanted_state = NEW.wanted_state, created_at = NEW.created_at, wanted_v = NEW.wanted_v, progress = NEW.progress, synced_at = NEW.synced_at, liked_at = NEW.liked_at, synced_for_v = NEW.synced_for_v, result_v = NEW.result_v WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+        IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.liked_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.liked_at, o.synced_for_v)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_likes_tracks t SET
+                wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
+                created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                wanted_v = greatest(o.wanted_v, NEW.wanted_v),
+                progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
+                synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
+                liked_at = CASE WHEN core THEN o.liked_at ELSE NEW.liked_at END,
+                synced_for_v = CASE WHEN core THEN o.synced_for_v ELSE NEW.synced_for_v END
+            WHERE (t.user_id, t.sc_track_id) = (o.user_id, o.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -3160,9 +3625,6 @@ BEGIN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
             NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
         END IF;
-        IF public.scd_role() = 'core' AND coalesce(current_setting('scd.writer', true), '') <> 'api' THEN
-            NEW.result_v := public.scd_hlc(NEW.result_v);
-        END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
@@ -3170,17 +3632,12 @@ BEGIN
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
-    IF (NEW.progress, NEW.synced_at, NEW.liked_at, NEW.synced_for_v) IS DISTINCT FROM (OLD.progress, OLD.synced_at, OLD.liked_at, OLD.synced_for_v) THEN
-        NEW.result_v := public.scd_hlc(greatest(OLD.result_v, NEW.result_v));
-    ELSE
-        NEW.result_v := greatest(OLD.result_v, NEW.result_v);
-    END IF;
     RETURN NEW;
 END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_tracks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_likes_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_playlists', 'cmd', 'migration', 'repl');
@@ -3207,7 +3664,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();
 ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_tracks', 'cmd', 'migration', 'repl');
@@ -3234,7 +3691,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();
 ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_profiles', 'cmd', 'migration', 'repl');
@@ -3261,7 +3718,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();
 ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_superlike_ranks()
@@ -3270,19 +3727,29 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.rank := OLD.rank;
             NEW.superlike_created_at := OLD.superlike_created_at;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.user_superlike_ranks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+    SELECT t.* INTO o FROM public.user_superlike_ranks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
     IF FOUND THEN
         IF NEW.row_v > o.row_v THEN
-            UPDATE public.user_superlike_ranks t SET rank = NEW.rank, superlike_created_at = NEW.superlike_created_at, row_v = NEW.row_v WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_superlike_ranks t SET
+                rank = CASE WHEN NEW.row_v > o.row_v THEN NEW.rank ELSE o.rank END,
+                superlike_created_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.superlike_created_at ELSE o.superlike_created_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.user_id, t.sc_track_id) = (o.user_id, o.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -3341,7 +3808,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlike_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlike_ranks();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlike_ranks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_superlike_ranks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_superlikes()
@@ -3350,19 +3817,29 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     o record;
+    core boolean := public.scd_role() = 'core';
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v <= OLD.row_v THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.like_created_at := OLD.like_created_at;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
     END IF;
-    SELECT t.row_v INTO o FROM public.user_superlikes t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+    SELECT t.* INTO o FROM public.user_superlikes t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
     IF FOUND THEN
-        IF NEW.row_v > o.row_v THEN
-            UPDATE public.user_superlikes t SET created_at = NEW.created_at, like_created_at = NEW.like_created_at, row_v = NEW.row_v WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
+        IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_superlikes t SET
+                created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                like_created_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.like_created_at ELSE o.like_created_at END,
+                row_v = greatest(o.row_v, NEW.row_v)
+            WHERE (t.user_id, t.sc_track_id) = (o.user_id, o.sc_track_id);
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
         END IF;
         RETURN NULL;
     END IF;
@@ -3421,7 +3898,7 @@ END
 $f$;
 CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlikes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlikes();
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlikes FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_superlikes ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_taste_vectors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_taste_vectors', 'cmd', 'migration', 'repl');
@@ -3448,7 +3925,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();
 ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_web_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_web_profiles', 'cmd', 'migration', 'repl');
@@ -3475,7 +3952,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();
 ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.users FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_users', 'cmd', 'migration', 'repl');
@@ -3511,7 +3988,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();
 ALTER TABLE public.users ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.users ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_albums', 'cmd', 'migration', 'repl');
@@ -3538,7 +4015,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();
 ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_artists', 'cmd', 'migration', 'repl');
@@ -3565,7 +4042,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();
 ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_work_aliases', 'cmd', 'migration', 'repl');
@@ -3599,7 +4076,7 @@ BEGIN
         END LOOP;
     END IF;
     IF TG_OP = 'INSERT' THEN
-        UPDATE public.wanted_tracks t SET discovered_at = NEW.discovered_at, duration_ms = NEW.duration_ms, external_id = NEW.external_id, isrc = NEW.isrc, normalized_title = NEW.normalized_title, primary_artist_id = NEW.primary_artist_id, recording_key = NEW.recording_key, release_year = NEW.release_year, resolve_attempts = NEW.resolve_attempts, resolve_error = NEW.resolve_error, resolve_locked_at = NEW.resolve_locked_at, resolve_next_run_at = NEW.resolve_next_run_at, source = NEW.source, status = NEW.status, title = NEW.title, track_id = NEW.track_id, updated_at = NEW.updated_at, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version, work_reconciled_at = NEW.work_reconciled_at WHERE t.id = NEW.id;
+        UPDATE public.wanted_tracks t SET discovered_at = NEW.discovered_at, duration_ms = NEW.duration_ms, external_id = NEW.external_id, fetched_at = NEW.fetched_at, isrc = NEW.isrc, normalized_title = NEW.normalized_title, primary_artist_id = NEW.primary_artist_id, recording_key = NEW.recording_key, release_year = NEW.release_year, resolve_attempts = NEW.resolve_attempts, resolve_error = NEW.resolve_error, resolve_locked_at = NEW.resolve_locked_at, resolve_next_run_at = NEW.resolve_next_run_at, source = NEW.source, status = NEW.status, title = NEW.title, track_id = NEW.track_id, updated_at = NEW.updated_at, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version, work_reconciled_at = NEW.work_reconciled_at WHERE t.id = NEW.id;
         IF FOUND THEN
             RETURN NULL;
         END IF;
@@ -3610,7 +4087,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();
 ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zz_owner;
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE VIEW public.scd_counters AS
@@ -3701,11 +4178,16 @@ FROM (VALUES
     ('guard_result', 'user_followings', 'scd_guard_result_user_followings'),
     ('guard_result', 'user_likes_playlists', 'scd_guard_result_user_likes_playlists'),
     ('guard_result', 'user_likes_tracks', 'scd_guard_result_user_likes_tracks'),
+    ('orphan', 'oauth_app_request_cooldowns', 'scd_orphan_oauth_app_request_cooldowns'),
+    ('orphan', 'sessions', 'scd_orphan_sessions'),
+    ('orphan', 'soundcloud_connections', 'scd_orphan_soundcloud_connections'),
+    ('orphan', 'track_artist_blocks', 'scd_orphan_track_artist_blocks'),
     ('resend', 'soundcloud_connections', 'scd_resend_soundcloud_connections'),
     ('resend', 'sync_queue', 'scd_resend_sync_queue'),
     ('resend', 'user_followings', 'scd_resend_user_followings'),
     ('resend', 'user_likes_playlists', 'scd_resend_user_likes_playlists'),
-    ('resend', 'user_likes_tracks', 'scd_resend_user_likes_tracks')
+    ('resend', 'user_likes_tracks', 'scd_resend_user_likes_tracks'),
+    ('restrict', 'oauth_apps', 'scd_restrict_oauth_apps')
 ) AS c (counter, tbl, seq)
 LEFT JOIN pg_catalog.pg_sequences s ON s.schemaname = 'public' AND s.sequencename = c.seq;
 
@@ -3718,7 +4200,7 @@ BEGIN
         FROM pg_catalog.pg_trigger t
         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_ver', 'zzz_suppress')
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_ver', 'zzz_suppress')
         EXCEPT VALUES
             ('admin_maintenance_runs', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_owner'),
@@ -3832,6 +4314,7 @@ BEGIN
             ('lyrics_lookup_state', 'zz_owner'),
             ('lyrics_lookup_state', 'zzz_suppress'),
             ('oauth_app_request_cooldowns', 'zz_merge'),
+            ('oauth_app_request_cooldowns', 'zz_orphan'),
             ('oauth_app_request_cooldowns', 'zz_ver'),
             ('oauth_app_request_cooldowns', 'zzz_suppress'),
             ('oauth_app_token_issuance_reservations', 'zz_guard'),
@@ -3839,9 +4322,8 @@ BEGIN
             ('oauth_app_tokens', 'zz_guard'),
             ('oauth_app_tokens', 'zz_owner'),
             ('oauth_app_tokens', 'zzz_suppress'),
+            ('oauth_apps', 'zz_fk'),
             ('oauth_apps', 'zz_merge'),
-            ('oauth_apps', 'zz_tomb'),
-            ('oauth_apps', 'zz_tomb_check'),
             ('oauth_apps', 'zz_ver'),
             ('oauth_apps', 'zzz_suppress'),
             ('pipeline_event_receipts', 'zz_guard'),
@@ -3860,6 +4342,8 @@ BEGIN
             ('playlist_remote_observations', 'zzz_suppress'),
             ('playlist_remote_snapshot_tracks', 'zz_guard'),
             ('playlist_remote_snapshots', 'zz_guard'),
+            ('playlist_remote_snapshots', 'zz_owner'),
+            ('playlist_remote_snapshots', 'zzz_suppress'),
             ('playlist_sweep_cursor', 'zz_guard'),
             ('playlist_track_projection', 'zz_guard'),
             ('playlist_track_projection', 'zz_owner'),
@@ -3884,12 +4368,15 @@ BEGIN
             ('search_terms', 'zz_owner'),
             ('search_terms', 'zzz_suppress'),
             ('sessions', 'zz_merge'),
+            ('sessions', 'zz_orphan'),
             ('sessions', 'zz_tomb'),
             ('sessions', 'zz_tomb_check'),
             ('sessions', 'zz_ver'),
             ('sessions', 'zzz_suppress'),
+            ('soundcloud_connections', 'zz_fk'),
             ('soundcloud_connections', 'zz_guard_result'),
             ('soundcloud_connections', 'zz_merge'),
+            ('soundcloud_connections', 'zz_orphan'),
             ('soundcloud_connections', 'zz_purge_guard'),
             ('soundcloud_connections', 'zz_ver'),
             ('soundcloud_connections', 'zzz_suppress'),
@@ -3915,6 +4402,7 @@ BEGIN
             ('taste_model_versions', 'zzz_suppress'),
             ('taste_schedule', 'zz_guard'),
             ('track_artist_blocks', 'zz_merge'),
+            ('track_artist_blocks', 'zz_orphan'),
             ('track_artist_blocks', 'zz_tomb'),
             ('track_artist_blocks', 'zz_tomb_check'),
             ('track_artist_blocks', 'zz_ver'),
