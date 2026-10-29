@@ -1,8 +1,12 @@
 use chrono::{DateTime, SecondsFormat, Utc};
+use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::error::AppError;
+
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SPANS: usize = 2000;
 
 const KEPT_ATTRIBUTES: [&str; 13] = [
     "http.request.method",
@@ -60,10 +64,16 @@ pub async fn fetch(
             response.status()
         )));
     }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| AppError::service_unavailable(format!("jaeger: {error}")))?;
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|error| AppError::service_unavailable(format!("jaeger: {error}")))?;
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_BODY_BYTES {
+            return Err(AppError::service_unavailable("jaeger answer is too large"));
+        }
+    }
     Ok(compact(trace, &body))
 }
 
@@ -84,7 +94,7 @@ pub fn compact(trace: &str, body: &[u8]) -> Option<TraceView> {
             let scopes = resource.get("scopeSpans").and_then(Value::as_array);
             for scope in scopes.into_iter().flatten() {
                 let list = scope.get("spans").and_then(Value::as_array);
-                for span in list.into_iter().flatten() {
+                for span in list.into_iter().flatten().take(MAX_SPANS - spans.len()) {
                     spans.push(view(span, &service, &host));
                 }
             }
@@ -217,5 +227,45 @@ mod tests {
     fn nothing_in_the_body_means_no_trace() {
         assert!(compact("x", br#"{"result":{"resourceSpans":[]}}"#).is_none());
         assert!(compact("x", b"").is_none());
+    }
+
+    #[test]
+    fn a_trace_keeps_at_most_two_thousand_spans() {
+        let span = r#"{"traceId":"4bf92f3577b3da6a3ce929d0e0e4736f","spanId":"aaaaaaaaaaaaaaaa","name":"GET /x","startTimeUnixNano":"1760000000000000000","endTimeUnixNano":"1760000000001000000"}"#;
+        let spans = vec![span; 20_000].join(",");
+        let body = format!(
+            r#"{{"result":{{"resourceSpans":[{{"resource":{{"attributes":[]}},"scopeSpans":[{{"spans":[{spans}]}}]}}]}}}}"#
+        );
+
+        let view = compact("4bf92f3577b3da6a3ce929d0e0e4736f", body.as_bytes()).expect("spans");
+
+        assert_eq!(view.spans.len(), MAX_SPANS);
+    }
+
+    #[tokio::test]
+    async fn an_answer_over_eight_megabytes_is_refused() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let size = MAX_BODY_BYTES + 1024;
+            let head =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
+            stream.write_all(head.as_bytes()).await.ok();
+            stream.write_all(&vec![b' '; size]).await.ok();
+        });
+        let http = wreq::Client::builder().build().expect("client");
+
+        let result = fetch(
+            &http,
+            &format!("http://127.0.0.1:{port}"),
+            "4bf92f3577b3da6a3ce929d0e0e4736f",
+        )
+        .await;
+
+        assert!(result.is_err());
     }
 }
