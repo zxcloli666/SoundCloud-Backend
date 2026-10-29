@@ -502,6 +502,197 @@ async fn write_cache(redis: &RedisPool, sc_user_id: &str, affinity: &Affinity) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    const CALLERS: usize = 12;
+
+    async fn wide(small: &PgPool) -> anyhow::Result<PgPool> {
+        Ok(PgPoolOptions::new()
+            .max_connections(40)
+            .connect_with((*small.connect_options()).clone())
+            .await?)
+    }
+
+    async fn seed(pool: &PgPool) -> anyhow::Result<[Uuid; 3]> {
+        let artists = [1_u128, 2, 3].map(Uuid::from_u128);
+        for (index, artist) in artists.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO artists (id, name, normalized_name, source)
+                 VALUES ($1, $2, $2, 'test')",
+            )
+            .bind(artist)
+            .bind(format!("graph artist {index}"))
+            .execute(pool)
+            .await?;
+        }
+        sqlx::query(
+            "INSERT INTO artist_coplay (a_id, b_id, weight) VALUES ($1, $2, 0.5), ($1, $3, 0.25), ($2, $3, 0.75)",
+        )
+        .bind(artists[0])
+        .bind(artists[1])
+        .bind(artists[2])
+        .execute(pool)
+        .await?;
+        sqlx::query("INSERT INTO artist_colike (a_id, b_id, co, w) VALUES ($1, $2, 5, 0.4)")
+            .bind(artists[0])
+            .bind(artists[1])
+            .execute(pool)
+            .await?;
+        Ok(artists)
+    }
+
+    async fn waiting_on_edges(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND wait_event_type = 'Lock'
+               AND query LIKE '%FROM artist_coplay%'",
+        )
+        .fetch_one(pool)
+        .await?)
+    }
+
+    async fn expected(pool: &PgPool, artists: &[Uuid]) -> anyhow::Result<Adjacency> {
+        let edges = sqlx::query_file!(
+            "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+            artists
+        )
+        .fetch_all(pool)
+        .await?;
+        let edges = edges
+            .into_iter()
+            .map(|edge| (edge.src, edge.dst, edge.weight, edge.kind));
+        let mut adjacency: Adjacency = neighbors_by_artist(artists, edges)
+            .into_iter()
+            .map(|(artist, neighbors)| (artist, Arc::new(neighbors)))
+            .collect();
+        adjacency.retain(|_, neighbors| !neighbors.is_empty());
+        Ok(adjacency)
+    }
+
+    type Flat = Vec<(Uuid, i16, Vec<(Uuid, u32)>)>;
+
+    fn sorted(adjacency: &Adjacency) -> Flat {
+        let mut flat = Vec::new();
+        for (artist, neighbors) in adjacency {
+            for (kind, list) in neighbors.iter() {
+                let mut list: Vec<_> = list
+                    .iter()
+                    .map(|(dst, weight)| (*dst, weight.to_bits()))
+                    .collect();
+                list.sort();
+                flat.push((*artist, *kind, list));
+            }
+        }
+        flat.sort();
+        flat
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn concurrent_misses_for_one_artist_make_one_db_call(
+        small: PgPool,
+    ) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let want = expected(&pool, &artists[..2]).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let calls: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let pool = pool.clone();
+                let edges = edges.clone();
+                tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let waiting = waiting_on_edges(&pool).await?;
+        blocker.rollback().await?;
+
+        assert_eq!(waiting, 1);
+        for call in calls {
+            assert_eq!(sorted(&call.await?), sorted(&want));
+        }
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let cached = tokio::time::timeout(Duration::from_secs(2), edges.of(&pool, &artists[..2]))
+            .await
+            .expect("a cached artist must not touch the database");
+        assert_eq!(sorted(&cached), sorted(&want));
+        blocker.rollback().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn overlapping_callers_load_each_artist_once(small: PgPool) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let first = vec![artists[0], artists[1]];
+        let second = vec![artists[1], artists[2]];
+        let want_first = expected(&pool, &first).await?;
+        let want_second = expected(&pool, &second).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let one = {
+            let (pool, edges, first) = (pool.clone(), edges.clone(), first.clone());
+            tokio::spawn(async move { edges.of(&pool, &first).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let two = {
+            let (pool, edges, second) = (pool.clone(), edges.clone(), second.clone());
+            tokio::spawn(async move { edges.of(&pool, &second).await })
+        };
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waiting = waiting_on_edges(&pool).await?;
+        blocker.rollback().await?;
+
+        assert_eq!(waiting, 2, "the shared artist is not loaded twice");
+        assert_eq!(sorted(&one.await?), sorted(&want_first));
+        assert_eq!(sorted(&two.await?), sorted(&want_second));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_failed_owner_does_not_strand_the_waiters(small: PgPool) -> anyhow::Result<()> {
+        let pool = wide(&small).await?;
+        let artists = seed(&pool).await?;
+        let want = expected(&pool, &artists[..2]).await?;
+        let edges = Arc::new(GraphEdges::new());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE artist_coplay IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let owner = {
+            let (pool, edges) = (pool.clone(), edges.clone());
+            tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let waiter = {
+            let (pool, edges) = (pool.clone(), edges.clone());
+            tokio::spawn(async move { edges.of(&pool, &artists[..2]).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        owner.abort();
+        let _ = owner.await;
+        blocker.rollback().await?;
+
+        let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("the waiter must not hang")?;
+        assert_eq!(sorted(&got), sorted(&want));
+        Ok(())
+    }
 
     #[test]
     fn decay_fold_tz_case() {
