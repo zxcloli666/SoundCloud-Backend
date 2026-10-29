@@ -400,6 +400,31 @@ async fn a_recrawl_keeps_the_aliases_and_replaces_only_the_changed_ones(
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
+async fn the_single_row_alias_store_keeps_aliases_on_a_repeat(pool: PgPool) -> anyhow::Result<()> {
+    let primary = seed_artist(&pool, "Мокери").await?;
+    let mut page = page::Page::default();
+    page.add(&pool, draft("1", primary, &[])).await?;
+    page.flush(&pool).await?;
+    let wanted_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM wanted_tracks WHERE external_id = '1'")
+            .fetch_one(&pool)
+            .await?;
+    let set = |aliases: &[&str]| aliases.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["a", "b"])).await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["a", "b"])).await?;
+    let repeated = aliases_of(&pool, "1").await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &set(&["b", "c"])).await?;
+    let changed = aliases_of(&pool, "1").await?;
+    entities::store_wanted_aliases(&pool, wanted_id, &[]).await?;
+
+    assert_eq!(repeated, ["a", "b"]);
+    assert_eq!(changed, ["b", "c"]);
+    assert!(aliases_of(&pool, "1").await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
 async fn an_unchanged_recrawl_does_not_touch_the_wanted_row(pool: PgPool) -> anyhow::Result<()> {
     let primary = seed_artist(&pool, "Мокери").await?;
     let mut page = page::Page::default();
