@@ -72,4 +72,4 @@ SET co = excluded.co,
     w = excluded.w,
     updated_at = excluded.updated_at
 WHERE artist_colike.co IS DISTINCT FROM excluded.co
-   OR abs(artist_colike.w - excluded.w) > 0.02 * greatest(artist_colike.w, excluded.w)
+   OR artist_colike.w IS DISTINCT FROM excluded.w
