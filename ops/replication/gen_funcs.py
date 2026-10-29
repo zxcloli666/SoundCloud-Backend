@@ -1,5 +1,5 @@
 from model import purge_action
-from sqlbits import function, lit, pk_json, pk_match, q, refs, table, tup
+from sqlbits import function, lit, pk_json, pk_match, q, ref, refs, table, tup
 
 HASH_SETTINGS = (
     "\nSET timezone TO 'UTC'"
@@ -15,13 +15,45 @@ def hashed(model):
 
 
 def row_hash(model):
-    parts = []
     tables = hashed(model)
-    for t in tables:
-        body = "SELECT md5(ROW(%s)::text) FROM %s t WHERE %s" % (refs("t", t.replicated), table(t.name), pk_match("t", t))
-        parts.append(function("public.scd_row_hash_" + t.name, body, "text", "sql", "k jsonb", " STABLE" + HASH_SETTINGS))
-    parts.append(dispatcher("public.scd_row_hash", "text", [(t.name, "RETURN public.scd_row_hash_%s(k);" % t.name) for t in tables], " STABLE"))
-    return "\n".join(parts)
+    return "\n".join([row_hash_function(t) for t in tables] + [row_hash_dispatcher(tables)])
+
+
+def row_hash_function(t):
+    body = "SELECT md5(ROW(%s)::text) FROM %s t WHERE %s" % (refs("t", t.replicated), table(t.name), pk_match("t", t))
+    return function("public.scd_row_hash_" + t.name, body, "text", "sql", "k jsonb", " STABLE" + HASH_SETTINGS)
+
+
+def row_hash_dispatcher(tables):
+    return dispatcher("public.scd_row_hash", "text", [(t.name, "RETURN public.scd_row_hash_%s(k);" % t.name) for t in tables], " STABLE")
+
+
+def row_json(model):
+    tables = hashed(model)
+    return "\n".join([row_json_function(t) for t in tables] + [row_json_dispatcher(tables)])
+
+
+def row_json_dispatcher(tables):
+    return dispatcher("public.scd_row_json", "jsonb", [(t.name, "RETURN public.scd_row_json_%s(k);" % t.name) for t in tables], " STABLE")
+
+
+def row_json_function(t):
+    hidden = [c for c in t.columns if c not in t.replicated]
+    expr = "pg_catalog.to_jsonb(t)"
+    if hidden:
+        expr += " - ARRAY[%s]::text[]" % ", ".join(lit(c) for c in hidden)
+    body = "SELECT %s FROM %s t WHERE %s" % (expr, table(t.name), pk_match("t", t))
+    return function("public.scd_row_json_" + t.name, body, "jsonb", "sql", "k jsonb", " STABLE" + HASH_SETTINGS)
+
+
+def registry(model):
+    kinds = ",\n".join("    (%s, %s)" % (lit(k), "true" if spec.get("optimistic", True) else "false") for k, spec in sorted(model.kinds.items()))
+    classes = ",\n".join("    (%s, %s)" % (lit(t.name), lit(t.cls)) for t in model.installed())
+    return "\n".join([
+        function("public.scd_kinds", "VALUES\n" + kinds, "TABLE (kind text, optimistic boolean)", "sql", "", " STABLE"),
+        function("public.scd_table_class", "SELECT v.cls FROM (VALUES\n%s\n) AS v (tbl, cls) WHERE v.tbl = $1" % classes,
+                 "text", "sql", "tbl text", " STABLE"),
+    ])
 
 
 def dispatcher(name, returns, cases, extra=""):
@@ -37,6 +69,7 @@ def dispatcher(name, returns, cases, extra=""):
 
 def purge_tables(model):
     roots = [t for t in model.installed() if t.cls in ("C", "P") and t.pk]
+    roots += [c for p in model.fk_parents() for c, fk in model.children(p.name) if fk["on_delete"] == "c" and model.children(c.name)]
     seen = {}
     todo = list(roots)
     while todo:
@@ -62,12 +95,47 @@ def child_action(model, child, fk):
 
 
 def purge(model):
-    parts = []
     tables = purge_tables(model)
-    for t in tables:
-        parts.append(purge_function(model, t))
-    parts.append(dispatcher("public.scd_purge", "void", [(t.name, "PERFORM public.scd_purge_%s(k);" % t.name) for t in tables]))
-    return "\n".join(parts)
+    receipts = receipt_tables(model)
+    return "\n".join(
+        [purge_function(model, t) for t in tables] + [purge_dispatcher(tables)]
+        + [receipt_function(t) for t in receipts] + [receipt_dispatcher(receipts)]
+    )
+
+
+def purge_dispatcher(tables):
+    return dispatcher("public.scd_purge", "void", [(t.name, "PERFORM public.scd_purge_%s(k);" % t.name) for t in tables])
+
+
+def receipt_tables(model):
+    return [t for t in model.installed() if t.cls == "M" and t.pk and t.api_groups()]
+
+
+def receipt_dispatcher(tables):
+    return dispatcher("public.scd_purge_intent", "boolean", [(t.name, "RETURN public.scd_purge_intent_%s(k);" % t.name) for t in tables])
+
+
+def receipt_function(t):
+    versions = [ref("t", g["version"]) for _, g in t.api_groups()]
+    newest = versions[0] if len(versions) == 1 else "greatest(%s)" % ", ".join(versions)
+    body = "\n".join([
+        "DECLARE",
+        "    v bigint;",
+        "    key jsonb;",
+        "BEGIN",
+        "    IF public.scd_role() <> 'core' THEN",
+        "        RAISE EXCEPTION 'scd_purge_intent: only core purges %s' USING ERRCODE = 'insufficient_privilege';" % table(t.name),
+        "    END IF;",
+        "    SELECT %s, %s INTO v, key FROM %s t WHERE %s FOR UPDATE;" % (newest, pk_json("t", t.pk), table(t.name), pk_match("t", t)),
+        "    IF NOT FOUND THEN",
+        "        RETURN false;",
+        "    END IF;",
+        "    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES (%s, key, v);" % lit(t.name),
+        "    DELETE FROM %s t WHERE %s;" % (table(t.name), pk_match("t", t)),
+        "    RETURN true;",
+        "END",
+    ])
+    return function("public.scd_purge_intent_" + t.name, body, "boolean", "plpgsql", "k jsonb")
 
 
 def purge_function(model, t):

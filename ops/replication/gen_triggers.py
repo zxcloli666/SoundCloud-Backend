@@ -1,7 +1,7 @@
 from sqlbits import assign, function, indent, keys_tuple, index_pred, lit, pk_json, q, ref, same, table, tup
 
 GENERATED = (
-    "zz_guard", "zz_guard_intent", "zz_guard_result", "zz_max", "zz_merge", "zz_owner",
+    "zz_fk", "zz_guard", "zz_guard_intent", "zz_guard_result", "zz_max", "zz_merge", "zz_orphan", "zz_owner",
     "zz_purge_guard", "zz_skip", "zz_tomb", "zz_tomb_check", "zz_ver", "zzz_suppress",
 )
 SPLIT = "public.scd_mode() = 'split'"
@@ -10,36 +10,48 @@ CORE = "public.scd_role() = 'core'"
 
 
 def render(model):
-    parts = [guard_function()]
+    per, counters, expected = collect(model)
+    parts = [sequences(counters), guard_function()] + [per[n] for n in sorted(per)]
+    parts += [counters_view(counters), drop_stale(expected)]
+    return "\n".join(parts)
+
+
+def collect(model):
+    per = {}
     counters = []
     expected = []
     for t in model.installed():
         if not t.exists and not t.spec.get("columns"):
             continue
+        sqls = []
         for name, sql, seqs in table_triggers(model, t):
-            parts.append(sql)
+            sqls.append(sql)
             expected.append((t.name, name))
             counters += seqs
-    parts.insert(0, "".join("CREATE SEQUENCE IF NOT EXISTS public.%s;\n" % seq for _, _, seq in sorted(counters)))
-    parts.append(counters_view(sorted(counters)))
-    parts.append(drop_stale(sorted(expected)))
-    return "\n".join(parts)
+        if sqls:
+            per[t.name] = "\n".join(sqls)
+    return per, sorted(counters), sorted(expected)
+
+
+def sequences(counters):
+    return "".join("CREATE SEQUENCE IF NOT EXISTS public.%s;\n" % seq for _, _, seq in counters)
 
 
 def table_triggers(model, t):
     out = []
     if t.cls in ("C", "P"):
-        out.append(guard(t, "zz_guard", "", API, "scd_guard_" + t.name, ["cmd", "migration", "repl"], "guard"))
+        out.append(guard(t, "zz_guard", "BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE", API, "scd_guard_" + t.name,
+                         ["cmd", "migration", "repl"], "guard"))
     if t.cls == "C":
         out.append(owner(t))
     if t.cls == "M":
         intent = t.group_cols(("api",))
         result = t.group_cols(("core",))
         if intent:
-            out.append(guard(t, "zz_guard_intent", " OF " + ", ".join(q(c) for c in intent), CORE,
+            out.append(guard(t, "zz_guard_intent", "BEFORE INSERT OR UPDATE OF " + ", ".join(q(c) for c in intent), CORE,
                              "scd_guard_intent_" + t.name, ["mirror", "migration", "repl", "api"], "guard_intent"))
         if result:
-            out.append(guard(t, "zz_guard_result", " OF " + ", ".join(q(c) for c in result), API,
+            out.append(guard(t, "zz_guard_result", "BEFORE UPDATE OF " + ", ".join(q(c) for c in result), API,
                              "scd_guard_result_" + t.name, ["migration", "repl"], "guard_result"))
         out.append(purge_guard(t))
     if t.cls in ("M", "A") and t.versioned:
@@ -52,6 +64,10 @@ def table_triggers(model, t):
         out.append(tomb_check(t))
     if t.cls == "K":
         out.append(register(t))
+    if t in model.fk_parents():
+        out.append(fk_guard(model, t))
+    if model.orphan_fks(t):
+        out.append(orphan(model, t))
     if t.cls in ("C", "M", "A", "K"):
         out.append(("zzz_suppress", suppress(t), []))
     return sorted(out, key=lambda x: x[0])
@@ -92,15 +108,15 @@ def guard_function():
     return function("public.scd_guard", body)
 
 
-def guard(t, name, of, when, seq, writers, counter):
-    events = "BEFORE UPDATE" + of if of else "BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE"
+def guard(t, name, events, when, seq, writers, counter):
     args = ", ".join(lit(a) for a in ["public." + seq] + writers)
     return name, trigger(t, name, events, "public.scd_guard(%s)" % args, when, row=False), [(counter, t.name, seq)]
 
 
 def ver(t):
+    groups = t.versioned_groups()
     lines = ["BEGIN", "    IF TG_OP = 'INSERT' THEN"]
-    for gname, g in sorted(t.groups.items()):
+    for gname, g in groups:
         bump = "        NEW.%s := public.scd_hlc(NEW.%s);" % (q(g["version"]), q(g["version"]))
         cond = owns(g["owner"])
         if cond:
@@ -108,7 +124,7 @@ def ver(t):
         else:
             lines.append(bump)
     lines += ["        RETURN NEW;", "    END IF;"]
-    for gname, g in sorted(t.groups.items()):
+    for gname, g in groups:
         v = q(g["version"])
         lines += [
             "    IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", g["cols"]), tup("OLD", g["cols"])),
@@ -133,25 +149,29 @@ def owns(owner):
 
 def merge(t):
     groups = sorted(t.groups.items())
-    all_cols = [c for _, g in groups for c in g["cols"] + [g["version"]]]
-    newer = " OR ".join("NEW.%s > o.%s" % (q(g["version"]), q(g["version"])) for _, g in groups)
-    lines = ["DECLARE", "    o record;", "BEGIN", "    IF TG_OP = 'UPDATE' THEN"]
+    core_cols = [c for _, g in groups if not g["version"] for c in g["cols"]]
+    lines = ["DECLARE", "    o record;", "    core boolean := public.scd_role() = 'core';", "BEGIN"]
+    lines += ["    IF current_setting('scd.merging', true) = 'on' THEN", "        RETURN NEW;", "    END IF;"]
+    lines += ["    IF TG_OP = 'UPDATE' THEN"]
     for _, g in groups:
+        if not g["version"]:
+            continue
         v = q(g["version"])
-        lines += ["        IF NEW.%s <= OLD.%s THEN" % (v, v)]
+        lines += ["        IF NEW.%s < OLD.%s OR (core AND NEW.%s = OLD.%s) THEN" % (v, v, v, v)]
         lines += ["            NEW.%s := OLD.%s;" % (q(c), q(c)) for c in g["cols"] + [g["version"]]]
+        lines += ["        END IF;"]
+    if core_cols:
+        lines += ["        IF core THEN"]
+        lines += ["            NEW.%s := OLD.%s;" % (q(c), q(c)) for c in core_cols]
         lines += ["        END IF;"]
     lines += [
         "        RETURN NEW;",
         "    END IF;",
-        "    SELECT %s INTO o FROM %s t WHERE %s;" % (", ".join(ref("t", g["version"]) for _, g in groups), table(t.name), same("t", "NEW", t.pk)),
+        "    SELECT t.* INTO o FROM %s t WHERE %s;" % (table(t.name), same("t", "NEW", t.pk)),
         "    IF FOUND THEN",
-        "        IF %s THEN" % newer,
-        "            UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(all_cols, "NEW"), same("t", "NEW", t.pk)),
-        "        END IF;",
-        "        RETURN NULL;",
-        "    END IF;",
     ]
+    lines += indent(merge_into(t), 2)
+    lines += ["        RETURN NULL;", "    END IF;"]
     seqs = []
     for name, how in sorted(t.unique_decl.items()):
         u = t.unique_index(name)
@@ -165,13 +185,12 @@ def merge(t):
         if pred_t:
             where += " AND " + pred_t
         body = [
-            "SELECT %s INTO o FROM %s t WHERE %s;" % (", ".join(ref("t", c) for c in t.pk), table(t.name), where),
+            "SELECT t.* INTO o FROM %s t WHERE %s;" % (table(t.name), where),
             "IF FOUND THEN",
             "    PERFORM nextval('public.%s'::regclass);" % seq,
-            "    UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(all_cols, "NEW"), same("t", "o", t.pk)),
-            "    RETURN NULL;",
-            "END IF;",
         ]
+        body += indent(merge_into(t))
+        body += ["    RETURN NULL;", "END IF;"]
         if pred_new:
             body = ["IF %s THEN" % pred_new] + indent(body) + ["END IF;"]
         lines += indent(body)
@@ -179,6 +198,38 @@ def merge(t):
     sql = function(fn_name("merge", t), "\n".join(lines))
     sql += trigger(t, "zz_merge", "BEFORE INSERT OR UPDATE", fn_name("merge", t) + "()", SPLIT, replica=True)
     return "zz_merge", sql, seqs
+
+
+def merge_into(t):
+    conds = []
+    sets = []
+    for _, g in sorted(t.groups.items()):
+        if not g["version"]:
+            cols = g["cols"]
+            conds.append("(NOT core AND %s IS DISTINCT FROM %s)" % (tup("NEW", cols), tup("o", cols)))
+            sets += ["%s = CASE WHEN core THEN o.%s ELSE NEW.%s END" % (q(c), q(c), q(c)) for c in cols]
+            continue
+        v = q(g["version"])
+        newer = "NEW.%s > o.%s" % (v, v)
+        conds.append(newer)
+        born = "(NEW.%s & 15) <> public.scd_node_ord()" % v
+        for col in g["cols"]:
+            c = q(col)
+            if col in t.least:
+                conds.append("(%s AND NEW.%s < o.%s)" % (born, c, c))
+                sets.append("%s = CASE WHEN %s THEN least(o.%s, NEW.%s) WHEN %s THEN NEW.%s ELSE o.%s END" % (c, born, c, c, newer, c, c))
+            else:
+                sets.append("%s = CASE WHEN %s THEN NEW.%s ELSE o.%s END" % (c, newer, c, c))
+        sets.append("%s = greatest(o.%s, NEW.%s)" % (v, v, v))
+    return [
+        "IF %s THEN" % " OR ".join(conds),
+        "    PERFORM pg_catalog.set_config('scd.merging', 'on', true);",
+        "    UPDATE %s t SET" % table(t.name),
+    ] + ["        %s%s" % (x, "," if i < len(sets) - 1 else "") for i, x in enumerate(sets)] + [
+        "    WHERE %s;" % same("t", "o", t.pk),
+        "    PERFORM pg_catalog.set_config('scd.merging', '', true);",
+        "END IF;",
+    ]
 
 
 def skip(t):
@@ -329,7 +380,63 @@ def register(t):
 
 
 def suppress(t):
-    return trigger(t, "zzz_suppress", "BEFORE UPDATE", "pg_catalog.suppress_redundant_updates_trigger()", replica=True)
+    return trigger(t, "zzz_suppress", "BEFORE UPDATE", "pg_catalog.suppress_redundant_updates_trigger()", SPLIT, replica=True)
+
+
+def fk_guard(model, t):
+    refuse = []
+    actions = []
+    for child, fk in model.children(t.name):
+        where = "%s = %s" % (tup("c", fk["cols"]), tup("OLD", fk["ref_cols"]))
+        action = fk["on_delete"]
+        if action in ("a", "r"):
+            refuse.append("EXISTS (SELECT 1 FROM %s c WHERE %s)" % (table(child.name), where))
+        elif action == "c" and model.children(child.name):
+            actions += [
+                "    FOR r IN SELECT %s FROM %s c WHERE %s LOOP" % (", ".join(ref("c", c) for c in child.pk), table(child.name), where),
+                "        PERFORM %s(%s);" % (fn_name("purge", child), pk_json("r", child.pk)),
+                "    END LOOP;",
+            ]
+        elif action == "c":
+            actions.append("    DELETE FROM %s c WHERE %s;" % (table(child.name), where))
+        else:
+            value = "NULL" if action == "n" else "DEFAULT"
+            sets = ", ".join("%s = %s" % (q(c), value) for c in fk["cols"])
+            actions.append("    UPDATE %s c SET %s WHERE %s;" % (table(child.name), sets, where))
+    seq = "scd_restrict_" + t.name
+    lines = ["DECLARE", "    r record;", "BEGIN"] if any("FOR r IN" in a for a in actions) else ["BEGIN"]
+    if refuse:
+        lines += [
+            "    IF %s THEN" % " OR ".join(refuse),
+            "        INSERT INTO public.repl_resend (tbl, pk) VALUES (%s, %s) ON CONFLICT DO NOTHING;" % (lit(t.name), pk_json("OLD", t.pk)),
+            "        PERFORM nextval('public.%s'::regclass);" % seq,
+            "        RETURN NULL;",
+            "    END IF;",
+        ]
+    lines += actions + ["    RETURN OLD;", "END"]
+    sql = function(fn_name("fk", t), "\n".join(lines))
+    sql += trigger(t, "zz_fk", "BEFORE DELETE", fn_name("fk", t) + "()", CORE + " AND " + SPLIT, replica=True)
+    return "zz_fk", sql, [("restrict", t.name, seq)] if refuse else []
+
+
+def orphan(model, t):
+    fks = model.orphan_fks(t)
+    seq = "scd_orphan_" + t.name
+    lines = ["BEGIN"]
+    for fk in fks:
+        present = " AND ".join("NEW.%s IS NOT NULL" % q(c) for c in fk["cols"])
+        where = "%s = %s" % (tup("p", fk["ref_cols"]), tup("NEW", fk["cols"]))
+        lines += [
+            "    IF %s AND NOT EXISTS (SELECT 1 FROM %s p WHERE %s) THEN" % (present, table(fk["ref_table"]), where),
+            "        PERFORM nextval('public.%s'::regclass);" % seq,
+            "    END IF;",
+        ]
+    lines += ["    RETURN NEW;", "END"]
+    cols = sorted({c for fk in fks for c in fk["cols"]})
+    sql = function(fn_name("orphan", t), "\n".join(lines))
+    sql += trigger(t, "zz_orphan", "BEFORE INSERT OR UPDATE OF " + ", ".join(q(c) for c in cols), fn_name("orphan", t) + "()",
+                   CORE + " AND " + SPLIT, replica=True)
+    return "zz_orphan", sql, [("orphan", t.name, seq)]
 
 
 def counters_view(counters):

@@ -59,7 +59,9 @@ trg AS (
            jsonb_agg(jsonb_build_object(
                'name', t.tgname,
                'function', p.proname,
-               'enabled', t.tgenabled
+               'enabled', t.tgenabled,
+               'gated', pg_catalog.pg_get_triggerdef(t.oid) LIKE '%scd_derived()%',
+               'pinned', EXISTS (SELECT 1 FROM unnest(p.proconfig) AS c WHERE c LIKE 'search_path=%')
            ) ORDER BY t.tgname) AS list
     FROM pg_catalog.pg_trigger t
     JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid

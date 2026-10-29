@@ -10,6 +10,7 @@ import unittest
 
 import support
 import gen
+import gen_install
 import model
 import sqlbits
 
@@ -26,6 +27,7 @@ class Generated(unittest.TestCase):
     def setUpClass(cls):
         cls.m = model.load()
         cls.files = gen.render(cls.m)
+        cls.install = gen_install.render(cls.m)
 
     def test_deterministic(self):
         self.assertEqual(gen.render(model.load()), self.files)
@@ -70,8 +72,10 @@ class Generated(unittest.TestCase):
         self.assertEqual(triggers("tracks"), ["zz_guard", "zz_owner", "zzz_suppress"])
         self.assertEqual(triggers("background_jobs"), ["zz_guard"])
         self.assertEqual(triggers("user_likes_tracks"), ["zz_guard_intent", "zz_guard_result", "zz_merge", "zz_purge_guard", "zz_ver", "zzz_suppress"])
-        self.assertEqual(triggers("soundcloud_connections"), ["zz_guard_result", "zz_merge", "zz_purge_guard", "zz_ver", "zzz_suppress"])
-        self.assertEqual(triggers("sessions"), ["zz_merge", "zz_tomb", "zz_tomb_check", "zz_ver", "zzz_suppress"])
+        self.assertEqual(triggers("soundcloud_connections"),
+                         ["zz_fk", "zz_guard_result", "zz_merge", "zz_orphan", "zz_purge_guard", "zz_ver", "zzz_suppress"])
+        self.assertEqual(triggers("oauth_apps"), ["zz_fk", "zz_merge", "zz_ver", "zzz_suppress"])
+        self.assertEqual(triggers("sessions"), ["zz_merge", "zz_orphan", "zz_tomb", "zz_tomb_check", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("listening_history"), ["zz_skip", "zz_tomb", "zz_tomb_check", "zzz_suppress"])
         self.assertEqual(triggers("cdn_tracks"), ["zz_merge", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("entity_reads"), ["zz_max", "zzz_suppress"])
@@ -80,12 +84,84 @@ class Generated(unittest.TestCase):
 
     def test_replica_triggers_are_enabled_for_replica(self):
         text = self.files["triggers.sql"]
-        for name in ("zz_merge", "zz_owner", "zz_skip", "zz_tomb_check", "zz_purge_guard", "zz_max", "zzz_suppress"):
+        for name in ("zz_merge", "zz_owner", "zz_skip", "zz_tomb_check", "zz_purge_guard", "zz_max", "zz_fk", "zz_orphan", "zzz_suppress"):
             created = len(re.findall(r"CREATE OR REPLACE TRIGGER %s " % name, text))
             enabled = len(re.findall(r"ENABLE REPLICA TRIGGER %s;" % name, text))
             self.assertEqual(created, enabled, name)
         for name in ("zz_ver", "zz_tomb", "zz_guard"):
             self.assertNotIn("ENABLE REPLICA TRIGGER %s;" % name, text)
+
+    def test_replica_triggers_are_dormant_in_legacy(self):
+        text = self.files["triggers.sql"]
+        for m in re.finditer(r"CREATE OR REPLACE TRIGGER (zz\w+) ([^;]*);\nALTER TABLE \S+ ENABLE REPLICA TRIGGER", text):
+            self.assertIn("public.scd_mode() = 'split'", m.group(2), m.group(1))
+
+    def test_intent_guard_covers_inserts(self):
+        text = self.files["triggers.sql"]
+        self.assertRegex(text, r"CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF [^;]*wanted_state[^;]* ON public\.user_likes_tracks FOR EACH STATEMENT")
+        self.assertRegex(text, r"CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF [^;]* ON public\.user_likes_tracks FOR EACH STATEMENT")
+
+    def test_core_groups_carry_no_version(self):
+        for name in ("triggers.sql", "row_hash.sql", "publications.sql"):
+            self.assertNotIn("result_v", self.files[name])
+            self.assertNotIn("refresh_v", self.files[name])
+
+    def test_merge_keeps_core_results_on_core_and_takes_them_on_api(self):
+        text = self.files["triggers.sql"]
+        body = text[text.index("FUNCTION public.scd_merge_user_likes_tracks()"):text.index("TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_tracks")]
+        self.assertIn("IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN", body)
+        self.assertIn("        IF core THEN\n            NEW.progress := OLD.progress;", body)
+        self.assertIn("progress = CASE WHEN core THEN o.progress ELSE NEW.progress END", body)
+        self.assertIn("created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at)", body)
+        self.assertIn("pg_catalog.set_config('scd.merging', 'on', true)", body)
+
+    def test_fk_guard_refuses_restrict_and_applies_actions(self):
+        text = self.files["triggers.sql"]
+        body = text[text.index("FUNCTION public.scd_fk_oauth_apps()"):text.index("TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps")]
+        self.assertIn("IF EXISTS (SELECT 1 FROM public.soundcloud_connections c WHERE c.oauth_app_id = OLD.id) THEN", body)
+        self.assertIn("INSERT INTO public.repl_resend", body)
+        self.assertIn("DELETE FROM public.oauth_app_tokens c WHERE c.oauth_app_id = OLD.id;", body)
+        self.assertIn("UPDATE public.oauth_app_token_issuance_reservations c SET oauth_app_id = NULL", body)
+        self.assertIn("WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split')", text[text.index("TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps"):][:300])
+
+    def test_purge_intent_writes_the_receipt_before_the_delete(self):
+        text = self.files["purge_children.sql"]
+        body = text[text.index("FUNCTION public.scd_purge_intent_user_likes_tracks(k jsonb)"):]
+        body = body[:body.index("$f$;")]
+        self.assertIn("IF public.scd_role() <> 'core' THEN", body)
+        self.assertIn("SELECT t.wanted_v, jsonb_build_object('user_id', t.user_id, 'sc_track_id', t.sc_track_id) INTO v, key", body)
+        self.assertIn("FOR UPDATE;", body)
+        self.assertLess(body.index("INSERT INTO public.repl_purges"), body.index("DELETE FROM public.user_likes_tracks"))
+        self.assertIn("WHEN 'user_likes_tracks' THEN\n            RETURN public.scd_purge_intent_user_likes_tracks(k);", text)
+
+    def test_install_is_one_short_transaction_per_block(self):
+        text = self.install
+        self.assertTrue(text.startswith("-- no-transaction\nBEGIN;\nSET LOCAL lock_timeout = '5s';\n"))
+        blocks = text[len("-- no-transaction\n"):].split("COMMIT;\n")
+        self.assertEqual(blocks[-1], "")
+        for b in blocks[:-1]:
+            b = b.lstrip("\n")
+            self.assertTrue(b.startswith("BEGIN;\nSET LOCAL lock_timeout = '5s';\n"), b[:80])
+            locked = set(re.findall(r"(?:ON|ALTER TABLE) public\.(\w+) ", b))
+            self.assertLessEqual(len(locked), 1, sorted(locked))
+        for name in ("triggers.sql", "row_hash.sql", "row_json.sql", "purge_children.sql", "publications.sql", "registry.sql"):
+            for fn in re.findall(r"CREATE OR REPLACE FUNCTION (\S+)\(", self.files[name]):
+                self.assertIn("CREATE OR REPLACE FUNCTION %s(" % fn, text, fn)
+        self.assertEqual(sorted(re.findall(r"CREATE OR REPLACE TRIGGER .*", self.files["triggers.sql"])),
+                         sorted(re.findall(r"CREATE OR REPLACE TRIGGER .*", text)))
+
+    def test_install_drift_is_detected(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(gen.check_install(self.install, d), 1)
+            with open(os.path.join(d, "0001_scd_install.sql"), "w") as f:
+                f.write(self.install)
+            self.assertEqual(gen.check_install(self.install, d), 0)
+            with open(os.path.join(d, "0002_scd_install.sql"), "w") as f:
+                f.write(self.install + "\n")
+            self.assertEqual(gen.check_install(self.install, d), 1)
+
+    def test_checked_in_install_is_current(self):
+        self.assertEqual(gen.check_install(self.install, gen.MIGRATIONS), 0)
 
     def test_bad_yaml_fails_the_generator(self):
         with tempfile.TemporaryDirectory() as d:
