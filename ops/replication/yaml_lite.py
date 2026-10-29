@@ -19,9 +19,14 @@ def scalar(text):
 
 def strip_comment(line):
     quote = None
+    escaped = False
     for i, c in enumerate(line):
-        if quote:
-            if c == quote:
+        if escaped:
+            escaped = False
+        elif quote:
+            if quote == '"' and c == "\\":
+                escaped = True
+            elif c == quote:
                 quote = None
         elif c in "\"'":
             quote = c
