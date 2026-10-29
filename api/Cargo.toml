@@ -48,6 +48,8 @@ uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 bytes = "1"
 
 sha2 = "0.10"
+hmac = "0.12"
+regex = "1"
 base64 = "0.22"
 rand = "0.8"
 hex = "0.4"

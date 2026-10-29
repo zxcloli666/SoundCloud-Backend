@@ -4,12 +4,15 @@ const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const PREFIX: &str = "SCD-";
 const BODY_LEN: usize = 8;
 
-pub fn generate() -> String {
+pub fn generate(slot: u8) -> String {
     let mut rng = rand::thread_rng();
-    let body: String = (0..BODY_LEN)
+    let random: String = (1..BODY_LEN)
         .map(|_| char::from(ALPHABET[rng.gen_range(0..ALPHABET.len())]))
         .collect();
-    format!("{PREFIX}{body}")
+    format!(
+        "{PREFIX}{}{random}",
+        char::from(ALPHABET[usize::from(slot)])
+    )
 }
 
 pub fn normalize(input: &str) -> Option<String> {
@@ -38,9 +41,18 @@ mod tests {
     #[test]
     fn a_generated_code_survives_normalize() {
         for _ in 0..200 {
-            let code = generate();
+            let code = generate(0);
             assert_eq!(normalize(&code), Some(code.clone()));
             assert!(!code[4..].contains(['I', 'L', 'O', 'U']));
+        }
+    }
+
+    #[test]
+    fn each_host_slot_mints_codes_the_other_slots_never_do() {
+        for _ in 0..200 {
+            assert!(generate(0).starts_with("SCD-0"));
+            assert!(generate(1).starts_with("SCD-1"));
+            assert!(generate(31).starts_with("SCD-Z"));
         }
     }
 

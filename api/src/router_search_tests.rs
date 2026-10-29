@@ -13,8 +13,8 @@ use crate::cache::CacheService;
 use crate::common::admission::PublicAdmission;
 use crate::config::{
     AdminCfg, AdmissionCfg, AdmissionLimitCfg, AppConfig, ColdCfg, CollabTriggerCfg, DatabaseCfg,
-    DbSslCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg, StreamingCfg,
-    SubscriptionsCfg,
+    DbSslCfg, DiagCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg,
+    StreamingCfg, SubscriptionsCfg,
 };
 use crate::modules::auth::{AuthHealthService, AuthService, LinkService, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
@@ -61,8 +61,14 @@ fn config(redis: &str) -> AppConfig {
             token: String::new().into(),
             metrics_token: String::new().into(),
             diag_token: String::new().into(),
+        },
+        diag: DiagCfg {
+            host: "test".to_owned(),
+            code_slot: 0,
+            max_bytes: 1 << 30,
+            origin_key: "test-origin-key".to_owned().into(),
             jaeger_url: String::new(),
-            diag_sourcemaps_dir: String::new(),
+            sourcemaps_dir: String::new(),
         },
         redis: RedisCfg {
             url: redis.to_owned(),
@@ -81,6 +87,10 @@ fn config(redis: &str) -> AppConfig {
             room_join: limit,
             diag_bundle: limit,
             diag_events: limit,
+            diag_bytes: AdmissionLimitCfg {
+                per_client: 64 * 1024 * 1024,
+                global: 1 << 30,
+            },
             trusted_proxies: Vec::new(),
         },
         nats: NatsCfg {
@@ -231,11 +241,7 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
-        diag: crate::modules::diag::DiagService::new(
-            pg.clone(),
-            String::new(),
-            std::env::temp_dir().join("scd-test-sourcemaps"),
-        ),
+        diag: crate::modules::diag::DiagService::new(pg.clone(), &config.diag),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),
         soundcloud_search: crate::modules::soundcloud_search::SoundCloudSearch::new(

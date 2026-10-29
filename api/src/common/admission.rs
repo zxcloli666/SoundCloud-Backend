@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::header::{CACHE_CONTROL, RETRY_AFTER};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ORIGIN, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -34,23 +34,25 @@ local function remaining(key)
     return math.max(ttl, 1)
 end
 
+local cost = tonumber(ARGV[4])
+
 local global_count = tonumber(redis.call('GET', KEYS[1]) or '0')
-if global_count >= tonumber(ARGV[1]) then
+if global_count + cost > tonumber(ARGV[1]) then
     return {0, remaining(KEYS[1])}
 end
 
 local client_count = tonumber(redis.call('GET', KEYS[2]) or '0')
-if client_count >= tonumber(ARGV[2]) then
+if client_count + cost > tonumber(ARGV[2]) then
     return {0, remaining(KEYS[2])}
 end
 
-global_count = redis.call('INCR', KEYS[1])
-if global_count == 1 then
+global_count = redis.call('INCRBY', KEYS[1], cost)
+if global_count == cost then
     redis.call('PEXPIRE', KEYS[1], window)
 end
 
-client_count = redis.call('INCR', KEYS[2])
-if client_count == 1 then
+client_count = redis.call('INCRBY', KEYS[2], cost)
+if client_count == cost then
     redis.call('PEXPIRE', KEYS[2], window)
 end
 
@@ -82,7 +84,11 @@ pub enum Endpoint {
     RoomJoin,
     DiagBundle,
     DiagEvents,
+    DiagBytes,
 }
+
+#[derive(Clone, Debug)]
+pub struct ClientIdentity(pub String);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdmissionRejection {
@@ -130,7 +136,7 @@ impl PublicAdmission {
         endpoint: Endpoint,
         session: Uuid,
     ) -> Result<(), AdmissionRejection> {
-        match self.check(endpoint, session_identity(session)).await {
+        match self.check(endpoint, session_identity(session), 1).await {
             Decision::Allowed => Ok(()),
             Decision::Limited {
                 retry_after_seconds,
@@ -141,11 +147,15 @@ impl PublicAdmission {
         }
     }
 
-    async fn check(&self, endpoint: Endpoint, identity: String) -> Decision {
+    async fn check(&self, endpoint: Endpoint, identity: String, cost: u32) -> Decision {
         let Ok(_permit) = self.gate(endpoint).try_acquire() else {
             return Decision::Unavailable;
         };
-        match tokio::time::timeout(self.config.timeout, self.check_redis(endpoint, identity)).await
+        match tokio::time::timeout(
+            self.config.timeout,
+            self.check_redis(endpoint, identity, cost),
+        )
+        .await
         {
             Ok(Ok(decision)) => decision,
             Ok(Err(error)) => {
@@ -171,6 +181,7 @@ impl PublicAdmission {
         &self,
         endpoint: Endpoint,
         identity: String,
+        cost: u32,
     ) -> Result<Decision, StoreError> {
         let limits = self.limits(endpoint);
         let global_key = format!("{}:{{{}}}:global", self.namespace, endpoint.key());
@@ -188,6 +199,7 @@ impl PublicAdmission {
             .arg(limits.global)
             .arg(limits.per_client)
             .arg(window_milliseconds)
+            .arg(cost)
             .invoke_async(&mut connection)
             .await?;
 
@@ -199,13 +211,57 @@ impl PublicAdmission {
         })
     }
 
+    fn request_client(&self, request: &Request) -> Option<IpAddr> {
+        let Some(address) = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|connection| connection.0)
+        else {
+            if self.warning_due() {
+                warn!("Admission has no transport address");
+            }
+            return None;
+        };
+        Some(client_address(
+            address.ip(),
+            request.headers(),
+            &self.config.trusted_proxies,
+        ))
+    }
+
+    pub async fn admit_diag(
+        &self,
+        endpoint: Endpoint,
+        client: &ClientIdentity,
+        cost: usize,
+    ) -> Result<(), AppError> {
+        let cost = u32::try_from(cost).unwrap_or(u32::MAX);
+        match self.check(endpoint, client.0.clone(), cost).await {
+            Decision::Allowed => Ok(()),
+            Decision::Limited {
+                retry_after_seconds,
+            } => Err(AppError::coded(
+                StatusCode::TOO_MANY_REQUESTS,
+                "diag_admission_limited",
+                "Too many reports from this address, try later",
+            )
+            .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))),
+            Decision::Unavailable => Err(AppError::coded(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_admission_unavailable",
+                "Reports are temporarily unavailable",
+            )),
+        }
+    }
+
     fn gate(&self, endpoint: Endpoint) -> &Semaphore {
         match endpoint {
             Endpoint::Login
             | Endpoint::LinkCreate
             | Endpoint::Resolve
             | Endpoint::DiagBundle
-            | Endpoint::DiagEvents => &self.in_flight,
+            | Endpoint::DiagEvents
+            | Endpoint::DiagBytes => &self.in_flight,
             Endpoint::SoundCloudSearch
             | Endpoint::CatalogMiss
             | Endpoint::RoomList
@@ -216,7 +272,7 @@ impl PublicAdmission {
 
     fn window(&self, endpoint: Endpoint) -> Duration {
         match endpoint {
-            Endpoint::DiagBundle | Endpoint::DiagEvents => DIAG_WINDOW,
+            Endpoint::DiagBundle | Endpoint::DiagEvents | Endpoint::DiagBytes => DIAG_WINDOW,
             _ => self.config.window,
         }
     }
@@ -233,6 +289,7 @@ impl PublicAdmission {
             Endpoint::RoomJoin => self.config.room_join,
             Endpoint::DiagBundle => self.config.diag_bundle,
             Endpoint::DiagEvents => self.config.diag_events,
+            Endpoint::DiagBytes => self.config.diag_bytes,
         }
     }
 
@@ -273,6 +330,7 @@ impl Endpoint {
             Self::RoomJoin => "rooms-join",
             Self::DiagBundle => "diag-bundle",
             Self::DiagEvents => "diag-events",
+            Self::DiagBytes => "diag-bytes",
         }
     }
 
@@ -288,6 +346,7 @@ impl Endpoint {
             Self::RoomJoin => "/rooms/{code}/members",
             Self::DiagBundle => "/diag/bundles",
             Self::DiagEvents => "/diag/events",
+            Self::DiagBytes => "/diag/*",
         }
     }
 }
@@ -316,20 +375,35 @@ pub(crate) async fn admit_resolve(
     admit(Endpoint::Resolve, limiter, request, next).await
 }
 
-pub(crate) async fn admit_diag_bundle(
+pub(crate) async fn diag_gate(
     State(limiter): State<Arc<PublicAdmission>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    admit(Endpoint::DiagBundle, limiter, request, next).await
-}
-
-pub(crate) async fn admit_diag_events(
-    State(limiter): State<Arc<PublicAdmission>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    admit(Endpoint::DiagEvents, limiter, request, next).await
+    if request.headers().contains_key(ORIGIN) {
+        return AppError::forbidden("Diagnostics are not accepted from web pages").into_response();
+    }
+    let is_json = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"));
+    if !is_json {
+        return AppError::coded(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "diag_content_type",
+            "Diagnostics must be sent as application/json",
+        )
+        .into_response();
+    }
+    let Some(client) = limiter.request_client(&request) else {
+        return rejection(Endpoint::DiagBundle, AdmissionRejection::Unavailable);
+    };
+    request
+        .extensions_mut()
+        .insert(ClientIdentity(client_identity(client)));
+    next.run(request).await
 }
 
 async fn admit(
@@ -338,26 +412,10 @@ async fn admit(
     request: Request,
     next: Next,
 ) -> Response {
-    let Some(address) = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|connection| connection.0)
-    else {
-        if limiter.warning_due() {
-            warn!(
-                endpoint = endpoint.name(),
-                "Admission has no transport address"
-            );
-        }
+    let Some(client) = limiter.request_client(&request) else {
         return rejection(endpoint, AdmissionRejection::Unavailable);
     };
-
-    let client = client_address(
-        address.ip(),
-        request.headers(),
-        &limiter.config.trusted_proxies,
-    );
-    match limiter.check(endpoint, client_identity(client)).await {
+    match limiter.check(endpoint, client_identity(client), 1).await {
         Decision::Allowed => next.run(request).await,
         Decision::Limited {
             retry_after_seconds,
@@ -394,15 +452,6 @@ fn rejection(endpoint: Endpoint, kind: AdmissionRejection) -> Response {
         return response;
     }
     let (status, code, message) = match kind {
-        AdmissionRejection::Limited { .. }
-            if matches!(endpoint, Endpoint::DiagBundle | Endpoint::DiagEvents) =>
-        {
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                "diag_admission_limited",
-                "Too many reports from this address, try later",
-            )
-        }
         AdmissionRejection::Limited { .. } => (
             StatusCode::TOO_MANY_REQUESTS,
             "auth_admission_limited",
@@ -499,3 +548,11 @@ fn milliseconds_to_seconds(milliseconds: i64) -> u64 {
 #[cfg(test)]
 #[path = "admission/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "admission/diag_tests.rs"]
+mod diag_tests;
+
+#[cfg(test)]
+#[path = "admission/proxy_chain_tests.rs"]
+mod proxy_chain_tests;

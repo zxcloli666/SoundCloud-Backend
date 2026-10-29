@@ -38,7 +38,25 @@ impl MaintenanceHandler {
                     .execute(&self.pool)
                     .await
                     .map_err(JobError::retryable)?;
-            if bundles.rows_affected() + events.rows_affected() == 0 {
+            let days = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_issue_days.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let origins = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_issue_origins.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let removed = bundles.rows_affected()
+                + events.rows_affected()
+                + days.rows_affected()
+                + origins.rows_affected();
+            if removed == 0 {
                 return Ok(());
             }
         }

@@ -106,7 +106,12 @@ pub fn build(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
 }
 
-pub const CAPABILITY_HEADERS: &[&str] = &["x-session-id", "x-admin-token", "authorization"];
+pub const CAPABILITY_HEADERS: &[&str] = &[
+    "x-session-id",
+    "x-admin-token",
+    "x-diag-token",
+    "authorization",
+];
 
 async fn protect_sensitive_responses(req: Request, next: Next) -> Response {
     let sensitive = is_sensitive_path(req.uri().path()) || carries_capability(req.headers());
@@ -121,7 +126,7 @@ async fn protect_sensitive_responses(req: Request, next: Next) -> Response {
         headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
         headers.insert(
             VARY,
-            HeaderValue::from_static("x-session-id, x-admin-token"),
+            HeaderValue::from_static("x-session-id, x-admin-token, x-diag-token"),
         );
     }
     response
@@ -139,7 +144,7 @@ fn hands_out_capability(headers: &HeaderMap) -> bool {
 
 fn is_sensitive_path(path: &str) -> bool {
     let path = path.trim_end_matches('/');
-    if path == "/auth" || path.starts_with("/auth/") {
+    if path == "/auth" || path.starts_with("/auth/") || path.starts_with("/admin/diag/") {
         return true;
     }
     path.starts_with("/tracks/") && path.ends_with("/stream")
@@ -199,6 +204,10 @@ mod router_search_tests;
 #[cfg(test)]
 #[path = "router_identity_tests.rs"]
 mod router_identity_tests;
+
+#[cfg(test)]
+#[path = "router_diag_tests.rs"]
+mod router_diag_tests;
 
 #[cfg(test)]
 #[path = "router_projection_tests.rs"]

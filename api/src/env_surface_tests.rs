@@ -38,6 +38,8 @@ const READ_THROUGH_A_PREFIX: &[&str] = &[
     "DIAG_BUNDLE_GLOBAL",
     "DIAG_EVENTS_PER_CLIENT",
     "DIAG_EVENTS_GLOBAL",
+    "DIAG_BYTES_PER_CLIENT",
+    "DIAG_BYTES_GLOBAL",
 ];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

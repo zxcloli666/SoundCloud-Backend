@@ -4,6 +4,26 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use super::DiagService;
+use crate::common::admission::ClientIdentity;
+use crate::config::DiagCfg;
+
+pub(super) fn config() -> DiagCfg {
+    DiagCfg {
+        host: "main".to_owned(),
+        code_slot: 0,
+        max_bytes: 1 << 30,
+        origin_key: "test-origin-key".to_owned().into(),
+        jaeger_url: String::new(),
+        sourcemaps_dir: std::env::temp_dir()
+            .join("scd-test-sourcemaps")
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+pub(super) fn client(address: &str) -> ClientIdentity {
+    ClientIdentity(address.to_owned())
+}
 
 async fn install(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../../../migrations/0156_diag.sql"))
@@ -48,7 +68,7 @@ async fn a_stored_bundle_comes_back_by_any_spelling_of_its_code(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install(&pool).await?;
-    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
+    let service = DiagService::new(pool, &config());
 
     let (code, _) = service.store_bundle(&bundle()).await?;
     let fetched = service.bundle(&code.to_lowercase()).await?;
@@ -61,16 +81,16 @@ async fn a_stored_bundle_comes_back_by_any_spelling_of_its_code(
 #[sqlx::test(migrations = false)]
 async fn issues_count_installs_apart_from_events(pool: PgPool) -> anyhow::Result<()> {
     install(&pool).await?;
-    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
+    let service = DiagService::new(pool, &config());
 
     service
-        .store_events(&events("0123456789abcdef", "aaaaaaaaaaaa"))
+        .store_events(&events("0123456789abcdef", "aaaaaaaaaaaa"), &client("one"))
         .await?;
     service
-        .store_events(&events("0123456789abcdef", "aaaaaaaaaaaa"))
+        .store_events(&events("0123456789abcdef", "aaaaaaaaaaaa"), &client("one"))
         .await?;
     service
-        .store_events(&events("fedcba9876543210", "bbbbbbbbbbbb"))
+        .store_events(&events("fedcba9876543210", "bbbbbbbbbbbb"), &client("two"))
         .await?;
 
     let issues = service.issues(24, 50).await?;
@@ -84,7 +104,8 @@ async fn issues_count_installs_apart_from_events(pool: PgPool) -> anyhow::Result
         .issue("0123456789abcdef", 168)
         .await?
         .expect("found");
-    assert_eq!(detail.days.len(), 1);
+    assert_eq!(detail.events.len(), 2);
+    assert_eq!(detail.days.last().map(|day| day.installs), Some(1));
     assert!(service.issue("1111111111111111", 168).await?.is_none());
     Ok(())
 }
@@ -92,7 +113,7 @@ async fn issues_count_installs_apart_from_events(pool: PgPool) -> anyhow::Result
 #[sqlx::test(migrations = false)]
 async fn a_report_counts_traces_that_could_not_be_read(pool: PgPool) -> anyhow::Result<()> {
     install(&pool).await?;
-    let service = DiagService::new(pool, String::new(), std::env::temp_dir());
+    let service = DiagService::new(pool, &config());
     let mut with_attempt = bundle();
     with_attempt.attempts = serde_json::from_value(json!([{
         "at": "2026-10-29T10:00:00.000Z", "trace": "4bf92f3577b3da6a3ce929d0e0e4736f",

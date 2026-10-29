@@ -501,6 +501,197 @@
     "title": "scd-diagnostics events",
     "type": "object"
   },
+  "issue": {
+    "$defs": {
+      "IssueDay": {
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "events": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "installs": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "events",
+          "installs"
+        ],
+        "type": "object"
+      },
+      "IssueEvent": {
+        "properties": {
+          "app_version": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "os": {
+            "type": "string"
+          },
+          "trace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "app_version",
+          "os",
+          "context"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "daily": {
+        "items": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "days": {
+        "items": {
+          "$ref": "#/$defs/IssueDay"
+        },
+        "type": "array"
+      },
+      "events": {
+        "items": {
+          "$ref": "#/$defs/IssueEvent"
+        },
+        "type": "array"
+      },
+      "fingerprint": {
+        "type": "string"
+      },
+      "first_at": {
+        "type": "string"
+      },
+      "first_version": {
+        "type": "string"
+      },
+      "installs": {
+        "format": "int64",
+        "type": "integer"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "last_at": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "versions": {
+        "additionalProperties": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "fingerprint",
+      "kind",
+      "title",
+      "events",
+      "installs",
+      "first_at",
+      "last_at",
+      "first_version",
+      "versions",
+      "daily",
+      "days",
+      "events"
+    ],
+    "title": "scd-diagnostics issue",
+    "type": "object"
+  },
+  "issues": {
+    "$defs": {
+      "Issue": {
+        "properties": {
+          "daily": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "events": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_at": {
+            "type": "string"
+          },
+          "first_version": {
+            "type": "string"
+          },
+          "installs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_at": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "versions": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "kind",
+          "title",
+          "events",
+          "installs",
+          "first_at",
+          "last_at",
+          "first_version",
+          "versions",
+          "daily"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "items": {
+      "$ref": "#/$defs/Issue"
+    },
+    "title": "scd-diagnostics issues",
+    "type": "array"
+  },
   "max_bundle_bytes": 262144,
   "report": {
     "$defs": {

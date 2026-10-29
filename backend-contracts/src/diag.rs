@@ -357,9 +357,9 @@ fn timestamp(name: &str, value: &str) -> Result<(), String> {
 }
 
 fn hop(value: &str) -> Result<(), String> {
-    let numbered = value
-        .strip_prefix(['r', 'p'])
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+    let numbered = value.strip_prefix(['r', 'p']).is_some_and(|digits| {
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    });
     if value != "direct" && !numbered {
         return Err("attempt.hop must be direct, rN or pN".to_owned());
     }
@@ -402,6 +402,8 @@ pub fn diag_contract() -> Value {
         "bundle": root_schema::<Bundle>("scd-diagnostics bundle"),
         "events": root_schema::<EventsBody>("scd-diagnostics events"),
         "report": root_schema::<crate::diag_report::Report>("scd-diagnostics report"),
+        "issues": root_schema::<Vec<crate::diag_report::Issue>>("scd-diagnostics issues"),
+        "issue": root_schema::<crate::diag_report::IssueDetail>("scd-diagnostics issue"),
     })
 }
 
@@ -506,7 +508,11 @@ mod tests {
 
     #[test]
     fn a_timestamp_that_is_not_rfc3339_is_refused() {
-        for bad in ["10.9.8.7 sc-worker1 2026-10-29T10:00:30Z", "2026-10-29", "yesterday"] {
+        for bad in [
+            "10.9.8.7 sc-worker1 2026-10-29T10:00:30Z",
+            "2026-10-29",
+            "yesterday",
+        ] {
             let mut bundle = sample();
             bundle.at = bad.to_owned();
             assert!(bundle.check().is_err(), "{bad}");

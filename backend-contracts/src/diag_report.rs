@@ -180,3 +180,41 @@ pub struct Missing {
     pub trace_ids: Vec<String>,
     pub sourcemaps: SourcemapState,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Issue {
+    pub fingerprint: String,
+    pub kind: String,
+    pub title: String,
+    pub events: i64,
+    pub installs: i64,
+    pub first_at: String,
+    pub last_at: String,
+    pub first_version: String,
+    pub versions: BTreeMap<String, i64>,
+    pub daily: Vec<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IssueDay {
+    pub day: String,
+    pub events: i64,
+    pub installs: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IssueEvent {
+    pub at: String,
+    pub app_version: String,
+    pub os: String,
+    pub trace: Option<String>,
+    pub context: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IssueDetail {
+    #[serde(flatten)]
+    pub issue: Issue,
+    pub days: Vec<IssueDay>,
+    pub events: Vec<IssueEvent>,
+}

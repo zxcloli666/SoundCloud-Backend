@@ -53,6 +53,7 @@ fn admission() -> anyhow::Result<Arc<PublicAdmission>> {
             room_join: limit,
             diag_bundle: limit,
             diag_events: limit,
+            diag_bytes: limit,
             trusted_proxies: Vec::new(),
         },
     ))

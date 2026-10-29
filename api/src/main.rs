@@ -264,11 +264,7 @@ async fn main() {
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
     let port = config.port;
-    let diag = crate::modules::diag::DiagService::new(
-        pg.clone(),
-        config.admin.jaeger_url.clone(),
-        config.admin.diag_sourcemaps_dir.clone().into(),
-    );
+    let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
     let state = AppState {
         config: config.clone(),
         diag,

@@ -96,7 +96,7 @@ async fn stalled_redis_is_bounded_and_fails_closed() -> anyhow::Result<()> {
 
     let started = Instant::now();
     let decision = limiter
-        .check(Endpoint::Login, identity("127.0.0.1:1234".parse()?))
+        .check(Endpoint::Login, identity("127.0.0.1:1234".parse()?), 1)
         .await;
     stalled.abort();
 
@@ -114,19 +114,19 @@ async fn per_client_limit_is_shared_across_ports() -> anyhow::Result<()> {
     let other: SocketAddr = "192.0.2.8:1000".parse()?;
 
     assert_eq!(
-        limiter.check(Endpoint::Login, identity(first)).await,
+        limiter.check(Endpoint::Login, identity(first), 1).await,
         Decision::Allowed
     );
     assert_eq!(
-        limiter.check(Endpoint::Login, identity(second)).await,
+        limiter.check(Endpoint::Login, identity(second), 1).await,
         Decision::Allowed
     );
     assert!(matches!(
-        limiter.check(Endpoint::Login, identity(first)).await,
+        limiter.check(Endpoint::Login, identity(first), 1).await,
         Decision::Limited { .. }
     ));
     assert_eq!(
-        limiter.check(Endpoint::Login, identity(other)).await,
+        limiter.check(Endpoint::Login, identity(other), 1).await,
         Decision::Allowed
     );
     Ok(())
@@ -143,6 +143,7 @@ async fn concurrent_clients_cannot_exceed_the_global_limit() -> anyhow::Result<(
                 .check(
                     Endpoint::Login,
                     identity(SocketAddr::from(([198, 51, 100, last_octet], 443))),
+                    1,
                 )
                 .await
         }
@@ -224,6 +225,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             room_join: limits(15, 16),
             diag_bundle: limits(17, 18),
             diag_events: limits(19, 20),
+            diag_bytes: limits(21, 22),
             trusted_proxies: Vec::new(),
         },
         "test:public:admission:budgets",
@@ -478,6 +480,7 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         room_join: limit,
         diag_bundle: limit,
         diag_events: limit,
+        diag_bytes: limit,
         trusted_proxies: Vec::new(),
     }
 }

@@ -105,6 +105,7 @@ dependencies = [
  "flate2",
  "futures",
  "hex",
+ "hmac",
  "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
@@ -115,6 +116,7 @@ dependencies = [
  "rand_distr",
  "redact",
  "redis",
+ "regex",
  "sc-fingerprint",
  "sc-transport",
  "serde",
@@ -532,6 +534,7 @@ dependencies = [
 name = "backend-contracts"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "hex",
  "schemars",
  "serde",

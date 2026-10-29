@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub database: DatabaseCfg,
     pub streaming: StreamingCfg,
     pub admin: AdminCfg,
+    pub diag: DiagCfg,
     pub redis: RedisCfg,
     pub admission: AdmissionCfg,
     pub nats: NatsCfg,
@@ -88,8 +89,16 @@ pub struct AdminCfg {
     pub token: redact::Secret<String>,
     pub metrics_token: redact::Secret<String>,
     pub diag_token: redact::Secret<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiagCfg {
+    pub host: String,
+    pub code_slot: u8,
+    pub max_bytes: u64,
+    pub origin_key: redact::Secret<String>,
     pub jaeger_url: String,
-    pub diag_sourcemaps_dir: String,
+    pub sourcemaps_dir: String,
 }
 
 #[derive(Clone)]
@@ -126,11 +135,33 @@ pub struct AdmissionCfg {
     pub room_join: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
     pub diag_events: AdmissionLimitCfg,
+    pub diag_bytes: AdmissionLimitCfg,
     pub trusted_proxies: Vec<ipnet::IpNet>,
 }
 
-impl AdmissionCfg {
+impl DiagCfg {
     fn from_env() -> Self {
+        let host = env_opt("SCD_HOST");
+        let origin_key = env_str("DIAG_ORIGIN_KEY", "");
+        assert!(
+            host.is_none() || !origin_key.is_empty(),
+            "SCD_HOST is set, so DIAG_ORIGIN_KEY must hold the key shared by every host"
+        );
+        let code_slot = env_u32("DIAG_CODE_SLOT", 0);
+        assert!(code_slot < 32, "DIAG_CODE_SLOT must be below 32");
+        Self {
+            host: host.unwrap_or_else(|| "local".to_owned()),
+            code_slot: code_slot as u8,
+            max_bytes: env_u64("DIAG_MAX_BYTES", 2 * 1024 * 1024 * 1024),
+            origin_key: origin_key.into(),
+            jaeger_url: env_str("JAEGER_QUERY_URL", "http://jaeger:16686/jaeger"),
+            sourcemaps_dir: env_str("DIAG_SOURCEMAPS_DIR", "/tmp/scd-sourcemaps"),
+        }
+    }
+}
+
+impl AdmissionCfg {
+    pub(crate) fn from_env() -> Self {
         let login = admission_limit("AUTH_LOGIN", 15, 300);
         let link_create = admission_limit("AUTH_LINK_CREATE", 30, 600);
         let resolve = admission_limit("RESOLVE", 60, 1200);
@@ -139,8 +170,14 @@ impl AdmissionCfg {
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
-        let diag_bundle = admission_limit("DIAG_BUNDLE", 20, 20000);
-        let diag_events = admission_limit("DIAG_EVENTS", 30, 60000);
+        let diag_bundle = admission_limit("DIAG_BUNDLE", 10, 20000);
+        let diag_events = admission_limit("DIAG_EVENTS", 120, 60000);
+        let diag_bytes = admission_limit("DIAG_BYTES", 2 * 1024 * 1024, 200 * 1024 * 1024);
+        let trusted_proxies = trusted_proxies();
+        assert!(
+            !trusted_proxies.is_empty() || env_opt("SCD_HOST").is_none(),
+            "SCD_HOST is set, so TRUSTED_PROXIES or TRUSTED_PROXIES_FILE must list the proxies in front of this host"
+        );
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -157,14 +194,27 @@ impl AdmissionCfg {
             room_join,
             diag_bundle,
             diag_events,
-            trusted_proxies: trusted_proxies(&env_str("TRUSTED_PROXIES", "")),
+            diag_bytes,
+            trusted_proxies,
         }
     }
 }
 
-fn trusted_proxies(list: &str) -> Vec<ipnet::IpNet> {
-    list.split(',')
-        .map(str::trim)
+fn trusted_proxies() -> Vec<ipnet::IpNet> {
+    let mut entries: Vec<String> = env_str("TRUSTED_PROXIES", "")
+        .split(',')
+        .map(|entry| entry.trim().to_owned())
+        .collect();
+    if let Some(path) = env_opt("TRUSTED_PROXIES_FILE") {
+        let listed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("TRUSTED_PROXIES_FILE {path} is unreadable: {error}"));
+        entries.extend(listed.lines().map(|line| {
+            let line = line.split_once('#').map_or(line, |(entry, _)| entry);
+            line.trim().to_owned()
+        }));
+    }
+    entries
+        .into_iter()
         .filter(|entry| !entry.is_empty())
         .map(|entry| {
             entry
@@ -312,9 +362,9 @@ impl AppConfig {
                 token: env_str("ADMIN_TOKEN", "").into(),
                 metrics_token: env_str("METRICS_TOKEN", "").into(),
                 diag_token: env_str("DIAG_TOKEN", "").into(),
-                jaeger_url: env_str("JAEGER_QUERY_URL", "http://jaeger:16686/jaeger"),
-                diag_sourcemaps_dir: env_str("DIAG_SOURCEMAPS_DIR", "/tmp/scd-sourcemaps"),
             },
+
+            diag: DiagCfg::from_env(),
 
             redis: RedisCfg {
                 url: env_str("REDIS_URL", "redis://localhost:6379"),
@@ -463,8 +513,6 @@ mod tests {
             token: "s3cr3t-admin-token".to_owned().into(),
             metrics_token: "s3cr3t-metrics-token".to_owned().into(),
             diag_token: "s3cr3t-diag-token".to_owned().into(),
-            jaeger_url: String::new(),
-            diag_sourcemaps_dir: String::new(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),

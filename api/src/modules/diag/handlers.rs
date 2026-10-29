@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -12,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::common::admin::DiagAuth;
-use crate::common::admission::{PublicAdmission, admit_diag_bundle, admit_diag_events};
+use crate::common::admission::{ClientIdentity, Endpoint, PublicAdmission, diag_gate};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -23,11 +24,11 @@ pub fn router(admission: Arc<PublicAdmission>) -> Router<AppState> {
     Router::new()
         .route(
             "/diag/bundles",
-            post(post_bundle).route_layer(from_fn_with_state(admission.clone(), admit_diag_bundle)),
+            post(post_bundle).route_layer(from_fn_with_state(admission.clone(), diag_gate)),
         )
         .route(
             "/diag/events",
-            post(post_events).route_layer(from_fn_with_state(admission, admit_diag_events)),
+            post(post_events).route_layer(from_fn_with_state(admission, diag_gate)),
         )
         .route("/admin/diag/bundles/{code}", get(get_bundle))
         .route("/admin/diag/traces/{trace}", get(get_trace))
@@ -54,11 +55,24 @@ struct IssueQuery {
 
 async fn post_bundle(
     State(state): State<AppState>,
+    Extension(client): Extension<ClientIdentity>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    let bundle: Bundle = serde_json::from_slice(&body)
+    state.diag.ensure_room().await?;
+    state
+        .admission
+        .admit_diag(Endpoint::DiagBytes, &client, body.len())
+        .await?;
+    state
+        .admission
+        .admit_diag(Endpoint::DiagBundle, &client, 1)
+        .await?;
+    let mut bundle: Bundle = serde_json::from_slice(&body)
         .map_err(|error| AppError::bad_request(format!("bad bundle: {error}")))?;
     bundle.check().map_err(AppError::bad_request)?;
+    for error in &mut bundle.errors {
+        error.recompute_fingerprint();
+    }
     let (code, expires) = state.diag.store_bundle(&bundle).await?;
     Ok((
         StatusCode::CREATED,
@@ -66,11 +80,27 @@ async fn post_bundle(
     ))
 }
 
-async fn post_events(State(state): State<AppState>, body: Bytes) -> Result<StatusCode, AppError> {
-    let events: EventsBody = serde_json::from_slice(&body)
+async fn post_events(
+    State(state): State<AppState>,
+    Extension(client): Extension<ClientIdentity>,
+    body: Bytes,
+) -> Result<StatusCode, AppError> {
+    state.diag.ensure_room().await?;
+    state
+        .admission
+        .admit_diag(Endpoint::DiagBytes, &client, body.len())
+        .await?;
+    let mut events: EventsBody = serde_json::from_slice(&body)
         .map_err(|error| AppError::bad_request(format!("bad events: {error}")))?;
     events.check().map_err(AppError::bad_request)?;
-    state.diag.store_events(&events).await?;
+    state
+        .admission
+        .admit_diag(Endpoint::DiagEvents, &client, events.events.len())
+        .await?;
+    for event in &mut events.events {
+        event.recompute_fingerprint();
+    }
+    state.diag.store_events(&events, &client).await?;
     Ok(StatusCode::ACCEPTED)
 }
 

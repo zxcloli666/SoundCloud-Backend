@@ -8,4 +8,6 @@ pub use handlers::router;
 pub use service::DiagService;
 
 #[cfg(test)]
+mod security_tests;
+#[cfg(test)]
 mod tests;

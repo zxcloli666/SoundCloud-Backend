@@ -415,6 +415,7 @@ dependencies = [
 name = "backend-contracts"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "hex",
  "schemars",
  "serde",
