@@ -656,3 +656,73 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<crate::queue::LeasedJob> {
         .pop()
         .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
 }
+
+#[sqlx::test(migrations = false)]
+async fn wake_many_leaves_the_same_jobs_and_marks_as_one_wake_per_track(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    sqlx::raw_sql(
+        "CREATE FUNCTION refuse_broken_wake() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             IF NEW.dedup_key LIKE '%4' THEN RAISE EXCEPTION 'wake refused'; END IF;
+             RETURN NEW;
+         END $$;
+         CREATE TRIGGER refuse_broken_wake BEFORE INSERT ON background_jobs
+         FOR EACH ROW EXECUTE FUNCTION refuse_broken_wake();",
+    )
+    .execute(&pool)
+    .await?;
+    for prefix in ["a", "b"] {
+        for number in 1..=6 {
+            insert_track(&pool, &format!("{prefix}{number}"), "Track").await?;
+        }
+        sqlx::query(
+            "UPDATE lyrics_lookup_state SET wake_durable_at = now() WHERE sc_track_id = $1",
+        )
+        .bind(format!("{prefix}2"))
+        .execute(&pool)
+        .await?;
+    }
+    let queue = JobRepository::new(pool.clone(), "wake-many".to_owned());
+
+    let ids = |prefix: &str| {
+        ["1", "2", "3", "4", "5", "6", "missing"]
+            .map(|number| format!("{prefix}{number}"))
+            .to_vec()
+    };
+    let many = super::super::wake::enqueue_many(&pool, &queue, &ids("a")).await;
+    let mut per_track_failed = 0;
+    for id in ids("b") {
+        let mut transaction = pool.begin().await?;
+        match super::super::wake::enqueue_in(&queue, &mut transaction, &id).await {
+            Ok(()) => transaction.commit().await?,
+            Err(_) => per_track_failed += 1,
+        }
+    }
+
+    assert!(many.is_err());
+    assert_eq!(per_track_failed, 1);
+    let outcome = |prefix: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, bool, bool)>(
+                "SELECT substr(state.sc_track_id, 2),
+                        EXISTS (SELECT 1 FROM background_jobs AS job
+                                WHERE job.kind = 'lyrics.lookup' AND job.dedup_key = state.sc_track_id),
+                        state.wake_durable_at IS NOT NULL
+                 FROM lyrics_lookup_state AS state
+                 WHERE state.sc_track_id LIKE $1 || '%'
+                 ORDER BY 1",
+            )
+            .bind(prefix)
+            .fetch_all(&pool)
+            .await
+        }
+    };
+    let (many_rows, per_track_rows) = (outcome("a").await?, outcome("b").await?);
+    assert_eq!(many_rows, per_track_rows);
+    assert_eq!(many_rows.iter().filter(|row| row.1).count(), 4);
+    Ok(())
+}

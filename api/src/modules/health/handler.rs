@@ -12,6 +12,7 @@ use crate::state::AppState;
 
 const DATABASE_TIMEOUT: Duration = Duration::from_secs(2);
 const VERDICT_TTL: Duration = Duration::from_secs(5);
+const STALL_WINDOW: Duration = Duration::from_secs(60);
 
 type Verdict = Result<(), &'static str>;
 
@@ -24,7 +25,15 @@ pub struct HealthResponse {
 }
 
 pub async fn check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
-    let (code, status) = match cached_verdict(&state.pg).await {
+    answer(cached_verdict(&state.pg).await)
+}
+
+pub async fn live(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    answer(stalled(&state.pg, crate::db::core_pool_quiet_for()).await)
+}
+
+fn answer(verdict: Verdict) -> (StatusCode, Json<HealthResponse>) {
+    let (code, status) = match verdict {
         Ok(()) => (StatusCode::OK, "ok"),
         Err(reason) => (StatusCode::SERVICE_UNAVAILABLE, reason),
     };
@@ -35,6 +44,22 @@ pub async fn check(State(state): State<AppState>) -> (StatusCode, Json<HealthRes
             timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         }),
     )
+}
+
+async fn stalled(pool: &PgPool, quiet_for: Duration) -> Verdict {
+    if quiet_for < STALL_WINDOW {
+        return Ok(());
+    }
+    if let Ok(Ok(_)) = tokio::time::timeout(DATABASE_TIMEOUT, pool.acquire()).await {
+        return Ok(());
+    }
+    warn!(
+        quiet_secs = quiet_for.as_secs(),
+        open = pool.size(),
+        idle = pool.num_idle(),
+        "database pool stalled"
+    );
+    Err("database_pool_stalled")
 }
 
 async fn cached_verdict(pool: &PgPool) -> Verdict {
@@ -89,6 +114,29 @@ mod tests {
 
         drop(held);
         assert_eq!(database(&pool).await, Ok(()));
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_busy_pool_stays_alive_while_connections_keep_coming_back(
+        _: PgPoolOptions,
+        opts: PgConnectOptions,
+    ) -> anyhow::Result<()> {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(30))
+            .connect_with(opts)
+            .await?;
+        let held = pool.acquire().await?;
+
+        assert_eq!(stalled(&pool, Duration::from_secs(5)).await, Ok(()));
+        assert_eq!(
+            stalled(&pool, STALL_WINDOW).await,
+            Err("database_pool_stalled")
+        );
+
+        drop(held);
+        assert_eq!(stalled(&pool, STALL_WINDOW).await, Ok(()));
         Ok(())
     }
 }
