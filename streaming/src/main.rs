@@ -53,12 +53,17 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     tls_common::init_crypto();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "streaming=info,tower_http=info".parse().unwrap()),
-        )
-        .init();
+    let _telemetry = telemetry::init(
+        "streaming",
+        "streaming=info,tower_http=info",
+        &[
+            "streaming",
+            "telemetry",
+            "call_relay",
+            "sc_transport",
+            "tls_common",
+        ],
+    );
 
     metrics::init();
 
@@ -194,6 +199,7 @@ async fn main() {
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
         .layer(axum::middleware::from_fn(track_request))
+        .layer(axum::middleware::from_fn(telemetry::trace_requests))
         .with_state(state);
 
     if config.premium_only {

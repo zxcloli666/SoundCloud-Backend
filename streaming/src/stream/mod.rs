@@ -20,5 +20,6 @@ pub mod restricted;
 mod sources;
 pub mod storage;
 pub mod target;
+mod trace;
 mod upload_slots;
 pub mod validate;

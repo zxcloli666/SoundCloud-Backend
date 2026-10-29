@@ -6,6 +6,7 @@ mod error;
 mod lua_methods;
 mod mapping;
 mod pagination;
+mod trace;
 mod types;
 #[cfg(feature = "upload")]
 mod upload;

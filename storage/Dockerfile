@@ -8,6 +8,7 @@ FROM scratch AS sources
 COPY scripts/cargo-skeleton.sh /scripts/cargo-skeleton.sh
 COPY utils/entity-ref /utils/entity-ref
 COPY utils/sc-fingerprint /utils/sc-fingerprint
+COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
 COPY storage/Cargo.toml storage/Cargo.lock /storage/
 COPY storage/src /storage/src

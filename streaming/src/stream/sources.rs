@@ -50,18 +50,21 @@ pub(super) async fn try_session_oauth(
     hq_only: bool,
     premium: bool,
 ) -> Option<Fetched> {
-    let access_token = access_token?;
-    let ctx = super::oauth::OauthCtx {
-        client: &state.http_client,
-        pg: &state.pg,
-        proxy_url: &state.config.sc_proxy_url,
-        proxy_fallback: may_go_direct(state.config.sc_proxy_fallback, premium, hq_only),
-        fallback_session_count: state.config.sc_oauth_fallback_sessions,
-    };
-    let result =
-        super::oauth::try_oauth_stream(&ctx, access_token, track_urn, secret_token, hq_only)
-            .await?;
-    Some((result.data, result.content_type, result.quality))
+    super::trace::source("oauth", if hq_only { "hq" } else { "sq" }, async move {
+        let access_token = access_token?;
+        let ctx = super::oauth::OauthCtx {
+            client: &state.http_client,
+            pg: &state.pg,
+            proxy_url: &state.config.sc_proxy_url,
+            proxy_fallback: may_go_direct(state.config.sc_proxy_fallback, premium, hq_only),
+            fallback_session_count: state.config.sc_oauth_fallback_sessions,
+        };
+        let result =
+            super::oauth::try_oauth_stream(&ctx, access_token, track_urn, secret_token, hq_only)
+                .await?;
+        Some((result.data, result.content_type, result.quality))
+    })
+    .await
 }
 
 fn may_go_direct(allowed: bool, premium: bool, hq_only: bool) -> bool {
@@ -75,21 +78,25 @@ pub(super) async fn try_cookies(
     hq_only: bool,
     premium: bool,
 ) -> Option<Fetched> {
-    if !premium {
-        return None;
-    }
-    let cookies_client = state.cookies.as_ref()?;
-    match cookies_client.get_stream(track_urn, hq_only).await {
-        Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
-        Ok(None) => {
-            warn!("{tag} {track_urn} cookies returned nothing");
-            None
+    super::trace::source("cookies", if hq_only { "uq" } else { "sq" }, async move {
+        if !premium {
+            return None;
         }
-        Err(e) => {
-            warn!("{tag} {track_urn} cookies failed: {e}");
-            None
+        let cookies_client = state.cookies.as_ref()?;
+        match cookies_client.get_stream(track_urn, hq_only).await {
+            Ok(Some(result)) => Some((result.data, result.content_type, result.quality)),
+            Ok(None) => {
+                warn!("{tag} {track_urn} cookies returned nothing");
+                None
+            }
+            Err(e) => {
+                warn!("{tag} {track_urn} cookies failed: {e}");
+                super::trace::failed("error", &e.to_string());
+                None
+            }
         }
-    }
+    })
+    .await
 }
 
 pub(super) async fn try_anon(
@@ -98,17 +105,20 @@ pub(super) async fn try_anon(
     tag: &str,
     at_least: &'static str,
 ) -> Result<Option<Fetched>, Box<dyn std::error::Error + Send + Sync>> {
-    match state.anon.get_stream(track_urn, at_least).await {
-        Ok(Some(result)) => Ok(Some((result.data, result.content_type, result.quality))),
-        Ok(None) => {
-            info!("{tag} {track_urn} anon has nothing at {at_least} or above");
-            Ok(None)
+    super::trace::source("anon", at_least, async move {
+        match state.anon.get_stream(track_urn, at_least).await {
+            Ok(Some(result)) => Ok(Some((result.data, result.content_type, result.quality))),
+            Ok(None) => {
+                info!("{tag} {track_urn} anon has nothing at {at_least} or above");
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("{tag} {track_urn} anon failed: {e}");
+                Err(e)
+            }
         }
-        Err(e) => {
-            warn!("{tag} {track_urn} anon failed: {e}");
-            Err(e)
-        }
-    }
+    })
+    .await
 }
 
 async fn restricted_source(
@@ -126,7 +136,10 @@ async fn restricted_source(
     {
         Ok(Some(v)) => return Some(v),
         Ok(None) => {}
-        Err(e) => warn!("{tag} {track_urn} restricted(anon) failed: {e}"),
+        Err(e) => {
+            warn!("{tag} {track_urn} restricted(anon) failed: {e}");
+            super::trace::failed("error", &e.to_string());
+        }
     }
     if !premium {
         return None;
@@ -140,6 +153,7 @@ async fn restricted_source(
         Ok(None) => None,
         Err(e) => {
             warn!("{tag} {track_urn} restricted(cookies) failed: {e}");
+            super::trace::failed("error", &e.to_string());
             None
         }
     }
@@ -150,29 +164,33 @@ pub(super) async fn try_relay_track(
     track_urn: &str,
     quality: &'static str,
 ) -> Option<Fetched> {
-    let id = track_urn.rsplit(':').next()?;
-    if id.is_empty() || id == track_urn {
-        return None;
-    }
-    let client_id = state.anon.get_client_id().await.unwrap_or_default();
-    let fetched = crate::stream::proxy::get_track_via_relay(
-        id,
-        quality,
-        &client_id,
-        state.config.edge_wvd_url.as_deref(),
-        state.config.edge_wvd_token.as_deref(),
-    );
-    let Ok(fetched) = tokio::time::timeout(RELAY_TRACK_AT_MOST, fetched).await else {
-        warn!("[relay] {track_urn} sc.get_track gave nothing in {RELAY_TRACK_AT_MOST:?}");
-        crate::metrics::record_source("relay_track", "timeout");
-        return None;
-    };
-    let (audio, ct) = fetched?;
-    Some((
-        Bytes::from(audio),
-        crate::stream::hls::mime_to_content_type(&ct),
-        quality,
-    ))
+    super::trace::source("relay_track", quality, async move {
+        let id = track_urn.rsplit(':').next()?;
+        if id.is_empty() || id == track_urn {
+            return None;
+        }
+        let client_id = state.anon.get_client_id().await.unwrap_or_default();
+        let fetched = crate::stream::proxy::get_track_via_relay(
+            id,
+            quality,
+            &client_id,
+            state.config.edge_wvd_url.as_deref(),
+            state.config.edge_wvd_token.as_deref(),
+        );
+        let Ok(fetched) = tokio::time::timeout(RELAY_TRACK_AT_MOST, fetched).await else {
+            warn!("[relay] {track_urn} sc.get_track gave nothing in {RELAY_TRACK_AT_MOST:?}");
+            crate::metrics::record_source("relay_track", "timeout");
+            super::trace::failed("timeout", "sc.get_track gave nothing in time");
+            return None;
+        };
+        let (audio, ct) = fetched?;
+        Some((
+            Bytes::from(audio),
+            crate::stream::hls::mime_to_content_type(&ct),
+            quality,
+        ))
+    })
+    .await
 }
 
 pub(super) async fn try_restricted(
@@ -184,66 +202,75 @@ pub(super) async fn try_restricted(
     upload: UploadRule,
     slot: Option<Arc<FreeSlot>>,
 ) -> Option<(Response, &'static str)> {
-    let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
-    let quality = src.quality;
+    super::trace::source("restricted", at_least, async move {
+        let src = restricted_source(state, track_urn, tag, at_least, premium).await?;
+        let quality = src.quality;
 
-    if let (Some(wvd_url), Some(wvd_token)) = (
-        state.config.edge_wvd_url.as_deref(),
-        state.config.edge_wvd_token.as_deref(),
-    ) && let Some(audio) =
-        crate::stream::proxy::hls_decrypt_via_relay(&src.manifest, &src.token, wvd_url, wvd_token)
-            .await
-    {
-        let bytes = Bytes::from(audio);
-        if upload.takes(quality) && bytes.len() > 8192 {
-            state.storage.upload_in_background_with_quality(
-                track_urn.to_string(),
-                bytes.clone(),
+        if let (Some(wvd_url), Some(wvd_token)) = (
+            state.config.edge_wvd_url.as_deref(),
+            state.config.edge_wvd_token.as_deref(),
+        ) && let Some(audio) = crate::stream::proxy::hls_decrypt_via_relay(
+            &src.manifest,
+            &src.token,
+            wvd_url,
+            wvd_token,
+        )
+        .await
+        {
+            let bytes = Bytes::from(audio);
+            if upload.takes(quality) && bytes.len() > 8192 {
+                state.storage.upload_in_background_with_quality(
+                    track_urn.to_string(),
+                    bytes.clone(),
+                    quality,
+                );
+            }
+            return Some((
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", src.content_type)
+                    .header("x-audio-quality", quality)
+                    .body(Body::from(bytes))
+                    .unwrap(),
                 quality,
-            );
+            ));
         }
-        return Some((
+
+        let engine = state.decryptor.as_ref()?;
+        let fetcher: Arc<dyn decrypt::Fetcher> =
+            Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
+                client: state.http_client.clone(),
+                proxy_url: state.config.sc_proxy_url.clone(),
+            });
+        let stream = match engine
+            .process_stream(&src.manifest, &src.token, fetcher)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("{tag} {track_urn} restricted decode failed: {e}");
+                return None;
+            }
+        };
+
+        let keep = upload.takes(quality).then(|| {
+            let storage = state.storage.clone();
+            let urn = track_urn.to_string();
+            Box::new(move |whole: Bytes| {
+                storage.upload_in_background_with_quality(urn, whole, quality)
+            }) as Keep
+        });
+        Some((
             Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", src.content_type)
                 .header("x-audio-quality", quality)
-                .body(Body::from(bytes))
+                .body(decrypt_to_the_end(stream, keep, slot))
                 .unwrap(),
             quality,
-        ));
-    }
-
-    let engine = state.decryptor.as_ref()?;
-    let fetcher: Arc<dyn decrypt::Fetcher> = Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-        client: state.http_client.clone(),
-        proxy_url: state.config.sc_proxy_url.clone(),
-    });
-    let stream = match engine
-        .process_stream(&src.manifest, &src.token, fetcher)
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("{tag} {track_urn} restricted decode failed: {e}");
-            return None;
-        }
-    };
-
-    let keep = upload.takes(quality).then(|| {
-        let storage = state.storage.clone();
-        let urn = track_urn.to_string();
-        Box::new(move |whole: Bytes| storage.upload_in_background_with_quality(urn, whole, quality))
-            as Keep
-    });
-    Some((
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", src.content_type)
-            .header("x-audio-quality", quality)
-            .body(decrypt_to_the_end(stream, keep, slot))
-            .unwrap(),
-        quality,
-    ))
+        ))
+    })
+    .await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

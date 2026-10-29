@@ -484,12 +484,15 @@ async fn from_storage(req: &StreamRequest<'_>, tag: &str) -> Option<Response> {
         ..
     } = *req;
     let shown = stored_quality.unwrap_or("?");
+    let tier = stored_quality.unwrap_or("sq");
     if headers.contains_key("x-session-id") {
-        let response = state.storage.try_proxy(track_urn, stored_quality).await?;
+        let proxied = state.storage.try_proxy(track_urn, stored_quality);
+        let response = super::trace::source("storage", tier, proxied).await?;
         served(tag, track_urn, "cdn_proxy", shown);
         return Some(response);
     }
-    let cdn_url = state.storage.try_serve(track_urn).await?;
+    let serving = state.storage.try_serve(track_urn);
+    let cdn_url = super::trace::source("storage", tier, serving).await?;
     served(tag, track_urn, "cdn_redirect", shown);
     Some(Redirect::temporary(&cdn_url).into_response())
 }

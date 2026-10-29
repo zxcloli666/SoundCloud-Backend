@@ -11,6 +11,7 @@ use regex::Regex;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
+use tracing::Instrument;
 use wreq::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
 };
@@ -557,10 +558,15 @@ impl ScClient {
     ) -> Option<Value> {
         let relay = self.inner.relay.as_ref()?;
         let inputs = self.inject_client_id(inputs).await;
-        let out = match relay
+        let span = crate::trace::upstream(method_id, "relay");
+        let called = relay
             .call_method_rotated(method_id, script, Bytes::from(inputs), region_rotation)
-            .await
-        {
+            .instrument(span.clone())
+            .await;
+        if let Err(error) = &called {
+            crate::trace::record::<()>(&span, &Err(ScError::unreachable(error.to_string())));
+        }
+        let out = match called {
             Ok(b) => b,
             Err(e) => {
                 if !e.is_disabled() {
@@ -803,7 +809,13 @@ impl ScClient {
         headers: HeaderMap,
         body: Option<Bytes>,
     ) -> ScResult<Bytes> {
-        self.send(method, target_url, headers, body, false).await
+        let span = crate::trace::upstream("soundcloud", "direct");
+        let result = self
+            .send(method, target_url, headers, body, false)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
     }
 
     async fn send_proxy(
@@ -813,10 +825,32 @@ impl ScClient {
         headers: HeaderMap,
         body: Option<Bytes>,
     ) -> ScResult<Bytes> {
-        self.send(method, target_url, headers, body, true).await
+        let span = crate::trace::upstream("soundcloud", "proxy");
+        let result = self
+            .send(method, target_url, headers, body, true)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
     }
 
     async fn send_relay(
+        &self,
+        method: Method,
+        target_url: String,
+        headers: HeaderMap,
+        body: Option<Bytes>,
+    ) -> ScResult<Bytes> {
+        let span = crate::trace::upstream("soundcloud", "relay");
+        let result = self
+            .fetch_through_relay(method, target_url, headers, body)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
+    }
+
+    async fn fetch_through_relay(
         &self,
         method: Method,
         target_url: String,

@@ -3,10 +3,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
+use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::Method;
 use axum::routing::{delete, get, post};
-use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
@@ -54,12 +54,11 @@ impl AppState {
 #[tokio::main]
 async fn main() {
     tls_common::init_crypto();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "storage=info,tower_http=info".parse().unwrap()),
-        )
-        .init();
+    let _telemetry = telemetry::init(
+        "storage",
+        "storage=info,tower_http=info",
+        &["storage", "telemetry", "tls_common"],
+    );
 
     let config = Config::from_env();
     transcode::validate_binaries(&config.ffmpeg_bin, &config.ffprobe_bin)
@@ -172,6 +171,7 @@ async fn main() {
             get(routes::files::serve).head(routes::files::head),
         )
         .layer(cors)
+        .layer(axum::middleware::from_fn(telemetry::trace_requests))
         .with_state(state);
 
     if let Some(tls_cfg) = tls_common::TlsConfig::from_env() {

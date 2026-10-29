@@ -106,6 +106,9 @@ pub fn record_request(route: String, method: &'static str, status: u16, elapsed:
 }
 
 pub fn record_source(source: &'static str, outcome: &'static str) {
+    if source == "none" || outcome == "served" {
+        tracing::Span::current().record("scd.outcome", outcome);
+    }
     if HANDLE.get().is_none() {
         return;
     }

@@ -12,6 +12,7 @@ COPY utils/decrypt-client /utils/decrypt-client
 COPY utils/entity-ref /utils/entity-ref
 COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/stream-ticket /utils/stream-ticket
+COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
 COPY streaming/Cargo.toml streaming/Cargo.lock /streaming/
 COPY streaming/src /streaming/src
