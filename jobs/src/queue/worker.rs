@@ -81,12 +81,19 @@ impl QueueWorker {
     }
 
     async fn release_expired(&self) {
-        if let Err(error) = self
-            .repository
-            .release_expired(self.kinds, self.lane.claim_batch)
-            .await
-        {
-            tracing::warn!(error = %error, "expired background job release failed");
+        loop {
+            match self
+                .repository
+                .release_expired(self.kinds, self.lane.claim_batch)
+                .await
+            {
+                Ok(released) if released < self.lane.claim_batch as u64 => break,
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "expired background job release failed");
+                    break;
+                }
+            }
         }
     }
 
