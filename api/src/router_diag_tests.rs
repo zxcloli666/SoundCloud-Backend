@@ -257,3 +257,34 @@ async fn the_server_computes_the_fingerprint_and_ignores_the_clients(
     assert_eq!(stored.len(), 16);
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_premium_reserve_node_takes_reports_and_diag_reads_without_a_session(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let mut built = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let mut config = (*built.config).clone();
+    config.admin.diag_token = TOKEN.to_owned().into();
+    config.premium_reserve = true;
+    built.diag = DiagService::new(pool.clone(), &config.diag);
+    built.config = Arc::new(config);
+    let app = crate::router::build(built);
+
+    let posted = app
+        .clone()
+        .oneshot(post("/diag/bundles", "application/json", bundle()))
+        .await?;
+    assert_eq!(posted.status(), StatusCode::CREATED);
+
+    let read = app
+        .clone()
+        .oneshot(admin_get("/admin/diag/issues")?)
+        .await?;
+    assert_eq!(read.status(), StatusCode::OK);
+
+    let wrong_scope = Request::get("/admin/auth/overview")
+        .header("x-diag-token", TOKEN)
+        .body(Body::empty())?;
+    assert_ne!(app.oneshot(wrong_scope).await?.status(), StatusCode::OK);
+    Ok(())
+}

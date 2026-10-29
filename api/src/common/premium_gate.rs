@@ -43,4 +43,6 @@ fn is_open_path(path: &str) -> bool {
         || path == "/admin/metrics"
         || path.starts_with("/auth/")
         || path.starts_with("/.well-known/")
+        || path.starts_with("/diag/")
+        || path.starts_with("/admin/diag/")
 }

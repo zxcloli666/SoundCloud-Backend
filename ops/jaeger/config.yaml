@@ -28,7 +28,7 @@ extensions:
             values: /badger/values
           ephemeral: false
           ttl:
-            spans: ${env:TELEMETRY_TTL:-72h}
+            spans: ${env:TELEMETRY_TTL:-48h}
 
 receivers:
   otlp:
@@ -57,7 +57,7 @@ processors:
       - name: kept
         type: composite
         composite:
-          max_total_spans_per_second: ${env:TELEMETRY_SPANS_PER_SECOND:-10}
+          max_total_spans_per_second: ${env:TELEMETRY_SPANS_PER_SECOND:-100}
           policy_order: [errors, debug, slow, sample]
           composite_sub_policy:
             - name: errors
@@ -79,13 +79,13 @@ processors:
                 sampling_percentage: 2
           rate_allocation:
             - policy: errors
-              percent: 40
+              percent: 30
             - policy: debug
-              percent: 20
+              percent: 40
             - policy: slow
-              percent: 20
+              percent: 15
             - policy: sample
-              percent: 20
+              percent: 15
   batch:
     timeout: 2s
     send_batch_size: 512
