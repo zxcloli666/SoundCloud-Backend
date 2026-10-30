@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::any;
 use base64::Engine as _;
 use catalog_sources::{ExternalFetcher, GeniusCfg, GeniusService, LyricsSources};
+use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::config::LyricsConfig;
@@ -626,6 +627,109 @@ async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     .fetch_one(&pool)
     .await?;
     assert_eq!(durable, 2);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    insert_track(&pool, "51", "Track").await?;
+    let queue = JobRepository::new(pool.clone(), "lookup-test".to_owned());
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let listener = tokio::spawn(super::super::wake::listen(
+        pool.clone(),
+        queue,
+        cancellation.clone(),
+    ));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    sqlx::query("SELECT pg_notify('lyrics_wake', '51')")
+        .execute(&pool)
+        .await?;
+
+    let started = std::time::Instant::now();
+    loop {
+        let durable: bool = sqlx::query_scalar(
+            "SELECT wake_durable_at IS NOT NULL FROM lyrics_lookup_state WHERE sc_track_id = '51'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        if durable {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(5), "no job after notify");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'lyrics.lookup'")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(jobs, 1);
+    cancellation.cancel();
+    listener.await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs a real api node and core linked by logical replication: SCD_API_URL, SCD_CORE_URL"]
+async fn wake_from_an_api_node_reaches_core_through_the_apply_worker() -> anyhow::Result<()> {
+    let api = PgPool::connect(&std::env::var("SCD_API_URL")?).await?;
+    let core = PgPool::connect(&std::env::var("SCD_CORE_URL")?).await?;
+    let queue = JobRepository::new(core.clone(), "lookup-test".to_owned());
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let listener = tokio::spawn(super::super::wake::listen(
+        core.clone(),
+        queue,
+        cancellation.clone(),
+    ));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut millis = Vec::new();
+    for number in 0..50 {
+        let id = format!("9{number:03}");
+        insert_track(&core, &id, "Track").await?;
+        let started = std::time::Instant::now();
+        loop {
+            let found: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tracks WHERE sc_track_id = $1)")
+                .bind(&id)
+                .fetch_one(&api)
+                .await?;
+            if found {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(30), "track never replicated");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let at = Utc::now();
+        let started = std::time::Instant::now();
+        sqlx::query("SELECT scd_wt('lyrics.wake', jsonb_build_object('sc_track_id', $1::text, 'at', $2::timestamptz))")
+            .bind(&id)
+            .bind(at)
+            .execute(&api)
+            .await?;
+        loop {
+            let durable: Option<bool> = sqlx::query_scalar(
+                "SELECT wake_durable_at IS NOT NULL FROM lyrics_lookup_state WHERE sc_track_id = $1",
+            )
+            .bind(&id)
+            .fetch_optional(&core)
+            .await?;
+            if durable == Some(true) {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(30), "wake never reached core");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        millis.push(started.elapsed().as_millis());
+    }
+    cancellation.cancel();
+    listener.await?;
+    millis.sort_unstable();
+    println!(
+        "api call to published wake over 50 calls: p50 {} ms, max {} ms",
+        millis[25], millis[49]
+    );
     Ok(())
 }
 

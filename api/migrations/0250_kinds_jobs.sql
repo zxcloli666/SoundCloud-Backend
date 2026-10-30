@@ -132,13 +132,18 @@ BEGIN
     SET priority = 0,
         updated_at = stamp
     WHERE state.sc_track_id = track
-    RETURNING state.track_id, state.status, state.next_run_at, state.failure_streak, state.claim_job_id
+    RETURNING state.track_id, state.status, state.next_run_at, state.failure_streak, state.claim_job_id,
+              (state.wake_message_id IS NOT NULL AND state.wake_generation = state.generation
+               AND state.wake_durable_at IS NULL AND state.claim_job_id IS NULL) AS wake_open
     INTO wake;
 
     IF wake.track_id IS NULL THEN
         RETURN jsonb_build_object('touched', '[]'::jsonb, 'output', NULL);
     END IF;
     state_id := wake.track_id;
+    IF wake.wake_open AND public.scd_role() = 'core' THEN
+        PERFORM pg_notify('lyrics_wake', track);
+    END IF;
     RETURN jsonb_build_object(
         'touched', jsonb_build_array(jsonb_build_object('tbl', 'lyrics_lookup_state', 'pk', jsonb_build_object('track_id', state_id))),
         'output', jsonb_build_object(

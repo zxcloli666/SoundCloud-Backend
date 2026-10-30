@@ -288,6 +288,17 @@ mod tests {
         )
         .execute(&pool)
         .await?;
+        sqlx::raw_sql(
+            "ALTER FUNCTION scd_cmd_job_enqueue(jsonb) RENAME TO scd_cmd_job_enqueue_real;
+             CREATE TABLE enqueue_commands (n bigserial PRIMARY KEY);
+             CREATE FUNCTION scd_cmd_job_enqueue(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
+             BEGIN
+                 INSERT INTO enqueue_commands DEFAULT VALUES;
+                 RETURN scd_cmd_job_enqueue_real(args);
+             END $f$;",
+        )
+        .execute(&pool)
+        .await?;
         let nodes = [
             std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(1))),
             std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(2))),
@@ -315,6 +326,10 @@ mod tests {
         .fetch_one(&pool)
         .await?;
         assert_eq!(jobs, 1);
+        let commands: i64 = sqlx::query_scalar("SELECT count(*) FROM enqueue_commands")
+            .fetch_one(&pool)
+            .await?;
+        assert!((1..=2).contains(&commands), "{commands} enqueue commands reached core");
         Ok(())
     }
 

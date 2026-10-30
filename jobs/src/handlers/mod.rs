@@ -354,6 +354,10 @@ impl JobHandlers {
         self.collab.finish(result).await
     }
 
+    pub async fn listen_lyrics_wakes(&self, cancellation: tokio_util::sync::CancellationToken) {
+        self.lyrics.listen_wakes(cancellation).await
+    }
+
     pub async fn finish_lyrics_embedding(
         &self,
         result: backend_contracts::pipeline::LyricsEmbeddingResult,

@@ -89,6 +89,10 @@ impl LyricsLookupHandler {
         Ok(())
     }
 
+    pub async fn listen_wakes(&self, cancellation: tokio_util::sync::CancellationToken) {
+        super::wake::listen(self.pool.clone(), self.queue.clone(), cancellation).await
+    }
+
     pub async fn run_sweep(&self, job: &LeasedJob) -> JobResult {
         if job.dedup_key.as_deref() != Some("schedule") {
             return Err(JobError::permanent(anyhow::anyhow!(

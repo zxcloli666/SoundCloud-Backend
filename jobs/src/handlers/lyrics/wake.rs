@@ -1,11 +1,16 @@
 use backend_contracts::{JobKind, LyricsLookupPayload, Versioned};
 use chrono::Utc;
+use sqlx::postgres::PgListener;
 use sqlx::{PgPool, Postgres, Transaction};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use crate::queue::{JobError, JobRepository, JobResult, NewJob, QueueError};
 
 const PRIORITY: i16 = 10;
 const MAX_ATTEMPTS: i16 = 8;
+const CHANNEL: &str = "lyrics_wake";
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 pub async fn enqueue(pool: &PgPool, queue: &JobRepository, sc_track_id: &str) -> JobResult {
     enqueue_many(pool, queue, &[sc_track_id.to_owned()]).await
@@ -30,6 +35,36 @@ pub async fn enqueue_many(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+pub async fn listen(pool: PgPool, queue: JobRepository, cancellation: CancellationToken) {
+    while !cancellation.is_cancelled() {
+        if let Err(error) = listen_once(&pool, &queue, &cancellation).await {
+            tracing::warn!(%error, "lyrics wake listener lost its connection");
+        }
+        tokio::select! {
+            _ = cancellation.cancelled() => {}
+            _ = tokio::time::sleep(RECONNECT_DELAY) => {}
+        }
+    }
+}
+
+async fn listen_once(
+    pool: &PgPool,
+    queue: &JobRepository,
+    cancellation: &CancellationToken,
+) -> Result<(), sqlx::Error> {
+    let mut listener = PgListener::connect_with(pool).await?;
+    listener.listen(CHANNEL).await?;
+    loop {
+        let notification = tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            notification = listener.recv() => notification?,
+        };
+        if let Err(error) = enqueue(pool, queue, notification.payload()).await {
+            tracing::warn!(%error, "lyrics wake from notify failed, the sweep will retry it");
+        }
+    }
 }
 
 pub async fn enqueue_due(pool: &PgPool, queue: &JobRepository, limit: i64) -> JobResult {
