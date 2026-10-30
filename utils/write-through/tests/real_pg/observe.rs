@@ -31,6 +31,9 @@ const PROD_PLAYLIST: &str = "INSERT INTO public.playlists (
     VALUES ('soundcloud:playlists:1990011', 12, 'clean', '2026-11-01 00:00:00+00', '2026-10-28 08:00:00+00')";
 const HLC_1: i64 = 28_693_349_570_866_705;
 const HLC_2: i64 = 28_693_349_670_866_705;
+const CONFIRM_TRACK: &str =
+    include_str!("../../../../jobs/queries/sync_queue/actions/confirm_track_update.sql");
+const EDIT: &str = "Night Drive (Edit)";
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
@@ -359,6 +362,81 @@ async fn a_backlog_observation_never_overwrites_newer_core_data() {
             at("2026-10-30T10:05:00Z")
         )
     );
+    pair.finish().await;
+}
+
+fn confirmed_edit() -> String {
+    format!(
+        "{PROD_TRACK};
+         UPDATE public.tracks SET title = '{EDIT}', title_normalized = lower('{EDIT}'),
+             sc_desired = jsonb_build_object('title', '{EDIT}'),
+             sc_observation = {HLC_1}, sc_mutation_observation = {HLC_1}, sc_write_confirmed = false;
+         PREPARE confirm(text, jsonb) AS {CONFIRM_TRACK};
+         EXECUTE confirm('1874620031', jsonb_build_object('title', '{EDIT}'));
+         DEALLOCATE confirm"
+    )
+}
+
+async fn confirm_and_skew(pair: &Pair) -> (i64, i64) {
+    let confirmed = scalar(
+        &pair.core,
+        "SELECT sc_mutation_observation FROM public.tracks",
+    )
+    .await;
+    let skew = scalar(&pair.core, "SELECT public.scd_observation_skew()").await;
+    (confirmed, skew)
+}
+
+fn observed_edit(observation: i64) -> ObserveTracks {
+    tracks(
+        Mode::Upsert,
+        observation,
+        "2026-10-30T10:00:00Z",
+        vec![track("1874620031", EDIT, "2026-10-29T12:00:00Z", 5)],
+    )
+}
+
+#[tokio::test]
+async fn an_api_observation_up_to_the_skew_ahead_of_a_core_confirm_is_refused() {
+    let pair = Pair::new(&confirmed_edit()).await;
+    let (confirmed, skew) = confirm_and_skew(&pair).await;
+    assert!(confirmed > HLC_1);
+    assert_eq!(skew, 1_000_000 << 4);
+    for ahead in [1, skew / 2, skew] {
+        let output = pair
+            .run(&observed_edit(confirmed + ahead), &["lyrics_lookup_state"])
+            .await
+            .assert_same();
+        assert_eq!(output[0]["applied"], json!(false), "{ahead} ahead");
+    }
+    let row: (i64, bool, Value) =
+        sqlx::query_as("SELECT sc_observation, sc_write_confirmed, sc_desired FROM public.tracks")
+            .fetch_one(&pair.core)
+            .await
+            .unwrap();
+    assert_eq!(row, (confirmed, true, json!({"title": EDIT})));
+    pair.finish().await;
+}
+
+#[tokio::test]
+async fn an_observation_more_than_the_skew_after_a_confirm_is_accepted() {
+    let pair = Pair::new(&confirmed_edit()).await;
+    let (confirmed, skew) = confirm_and_skew(&pair).await;
+    let output = pair
+        .run(
+            &observed_edit(confirmed + skew + 1),
+            &["lyrics_lookup_state"],
+        )
+        .await
+        .assert_same();
+    assert_eq!(output[0]["applied"], json!(true));
+    let row: (i64, i64, bool, Value) = sqlx::query_as(
+        "SELECT sc_observation, sc_mutation_observation, sc_write_confirmed, sc_desired FROM public.tracks",
+    )
+    .fetch_one(&pair.core)
+    .await
+    .unwrap();
+    assert_eq!(row, (confirmed + skew + 1, confirmed, false, json!({})));
     pair.finish().await;
 }
 

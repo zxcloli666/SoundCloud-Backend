@@ -10,6 +10,8 @@ use crate::sc_payload::without_nul;
 use crate::user::ScUserFields;
 use crate::{AbsentInserted, IngestResult, Observation, TrackPriority};
 
+pub(super) const OBSERVATION_GUARD: &str =
+    include_str!("legacy/catalog_observation_is_current.sql");
 const TRACK_UPSERT: &str = include_str!("legacy/tracks_upsert.sql");
 const TRACK_BUMP: &str = include_str!("legacy/tracks_bump_priority.sql");
 const TRACK_ABSENT: &str = include_str!("legacy/tracks_insert_absent.sql");

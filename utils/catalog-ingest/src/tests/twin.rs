@@ -97,6 +97,10 @@ impl Twin {
         admin.close().await.unwrap();
         let legacy = pool(&names[0]).await;
         let split = pool(&names[1]).await;
+        sqlx::raw_sql(super::legacy::OBSERVATION_GUARD)
+            .execute(&legacy)
+            .await
+            .unwrap();
         for db in [&legacy, &split] {
             let mut connection = db.acquire().await.unwrap();
             execute(&mut connection, "SET session_replication_role = replica").await;

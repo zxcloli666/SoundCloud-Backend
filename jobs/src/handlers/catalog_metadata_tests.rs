@@ -25,6 +25,15 @@ async fn ingest_track(pool: &PgPool, value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub(super) async fn observation_past_the_skew(
+    pool: &PgPool,
+) -> anyhow::Result<catalog_ingest::Observation> {
+    sqlx::query("SELECT pg_sleep((public.scd_observation_skew() >> 4)::float8 / 1e6)")
+        .execute(pool)
+        .await?;
+    Ok(catalog_ingest::Observation::begin(pool).await?)
+}
+
 async fn observe_track(
     pool: &PgPool,
     value: &Value,
@@ -70,7 +79,7 @@ async fn catalog_metadata_confirmation_does_not_admit_an_older_response(
             .await?
             .metadata_applied
     );
-    let confirmed = Observation::begin(&pool).await?;
+    let confirmed = observation_past_the_skew(&pool).await?;
     assert!(
         observe_track(&pool, &track("private"), confirmed)
             .await?
@@ -201,7 +210,7 @@ async fn catalog_metadata_newer_source_versions_win_without_crossing_local_mutat
     .execute(&pool)
     .await?;
     current["sharing"] = json!("private");
-    let confirmation = Observation::begin(&pool).await?;
+    let confirmation = observation_past_the_skew(&pool).await?;
     assert!(
         observe_track(&pool, &current, confirmation)
             .await?

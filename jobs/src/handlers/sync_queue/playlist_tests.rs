@@ -206,7 +206,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
     catalog_ingest::upsert_playlist_from_sc(
         &pool,
         &fresh,
-        catalog_ingest::Observation::begin(&pool).await?,
+        crate::handlers::catalog_metadata_tests::observation_past_the_skew(&pool).await?,
     )
     .await?;
     let desired: Value = sqlx::query_scalar("SELECT sc_desired FROM playlists WHERE urn = $1")
