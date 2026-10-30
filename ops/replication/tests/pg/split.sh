@@ -9,7 +9,8 @@ BEGIN
         RAISE EXCEPTION 'test kind refused on %', public.scd_role() USING ERRCODE = 'check_violation';
     END IF;
     UPDATE public.tracks SET title = args ->> 'title', title_normalized = lower(args ->> 'title') WHERE urn = args ->> 'urn' RETURNING id INTO t;
-    RETURN CASE WHEN t IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('tbl', 'tracks', 'pk', jsonb_build_object('id', t))) END;
+    RETURN jsonb_build_object('output', args ->> 'title',
+        'touched', CASE WHEN t IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('tbl', 'tracks', 'pk', jsonb_build_object('id', t))) END);
 END
 $f$;
 CREATE OR REPLACE FUNCTION public.scd_cmd_track_delete(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
@@ -17,27 +18,27 @@ DECLARE
     t uuid;
 BEGIN
     DELETE FROM public.tracks WHERE urn = args ->> 'urn' RETURNING id INTO t;
-    RETURN CASE WHEN t IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('tbl', 'tracks', 'pk', jsonb_build_object('id', t))) END;
+    RETURN jsonb_build_object('touched', CASE WHEN t IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('tbl', 'tracks', 'pk', jsonb_build_object('id', t))) END);
 END
 $f$;
 CREATE OR REPLACE FUNCTION public.scd_cmd_observe_playlists(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
 BEGIN
     IF public.scd_role() = 'core' AND args ->> 'core' = 'skip' THEN
-        RETURN '[]'::jsonb;
+        RETURN '{"touched": []}'::jsonb;
     END IF;
     INSERT INTO public.playlists (urn, sc_playlist_id, title, title_normalized)
     VALUES (args ->> 'urn', args ->> 'sc_id', args ->> 'title', lower(args ->> 'title'))
     ON CONFLICT (urn) DO UPDATE SET title = EXCLUDED.title, title_normalized = EXCLUDED.title_normalized;
     INSERT INTO public.playlist_membership_state (playlist_urn) VALUES (args ->> 'urn') ON CONFLICT DO NOTHING;
-    RETURN jsonb_build_array(
+    RETURN jsonb_build_object('touched', jsonb_build_array(
         jsonb_build_object('tbl', 'playlists', 'pk', jsonb_build_object('urn', args ->> 'urn')),
-        jsonb_build_object('tbl', 'playlist_membership_state', 'pk', jsonb_build_object('playlist_urn', args ->> 'urn')));
+        jsonb_build_object('tbl', 'playlist_membership_state', 'pk', jsonb_build_object('playlist_urn', args ->> 'urn'))));
 END
 $f$;
 CREATE OR REPLACE FUNCTION public.scd_cmd_sync_queue_revive(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
 BEGIN
     UPDATE public.sync_queue SET dead = false, retry_count = 0 WHERE id = (args ->> 'id')::uuid;
-    RETURN '[]'::jsonb;
+    RETURN '{"touched": []}'::jsonb;
 END
 $f$;
 SQL
@@ -51,11 +52,12 @@ wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'ur
 wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'urn:t:e1')" "core's track reaches star"
 [ "$(val scd_b1_main "SELECT count(*) FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'")" = 1 ] \
   || { echo "FAIL the derived lyrics row did not replicate from core"; exit 1; }
-val scd_b1_main "SELECT public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Edited\"}');
+val scd_b1_main "SELECT id || ' ' || output FROM public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Edited\"}');
   SELECT title FROM public.tracks WHERE urn = 'urn:t:e1';
   SELECT count(*) FROM public.cmd_pending p JOIN public.cmd_outbox o ON o.node = p.node AND o.id = p.id WHERE o.done_at IS NULL;
   SELECT input_title FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'" > "$tmp/wt"
-cid="$(sed -n 1p "$tmp/wt")"
+cid="$(sed -n 1p "$tmp/wt" | cut -d' ' -f1)"
+[ "$(sed -n 1p "$tmp/wt" | cut -d' ' -f2-)" = '"Edited"' ] || { echo "FAIL scd_wt output on main: $(sed -n 1p "$tmp/wt")"; exit 1; }
 [ "$(sed -n '2,4p' "$tmp/wt" | tr '\n' ' ')" = "Edited 1 Old " ] \
   || { echo "FAIL inside the scd_wt tx on main: $(tr '\n' ' ' < "$tmp/wt")"; exit 1; }
 echo "ok main applies the edit at once, holds it pending and does not fire the derived trigger"
@@ -77,7 +79,7 @@ sql -d scd_b1_core -c "SET session_replication_role = replica" \
 echo "ok three re-sends of the same (node, id) change nothing"
 
 say "B2 dispatch: a dead command still repairs the api's optimistic row (D6)"
-cid="$(val scd_b1_main "SELECT public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Refused\", \"fail_on\": \"core\"}')")"
+cid="$(val scd_b1_main "SELECT id FROM public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Refused\", \"fail_on\": \"core\"}')")"
 wait_for scd_b1_core "SELECT status = 'dead' FROM public.cmd_done WHERE id = '$cid'" "core marks the command dead"
 [ "$(val scd_b1_core "SELECT sqlstate FROM public.cmd_dead WHERE id = '$cid'")" = 23514 ]
 wait_for scd_b1_main "SELECT title = 'Edited' FROM public.tracks WHERE urn = 'urn:t:e1'" "cmd_reassert puts core's title back on main"
@@ -85,7 +87,7 @@ settle ee13 ee14 ee15
 pairs tracks "urn = 'urn:t:e1'" "track equal on all nodes after a dead command"
 
 say "B2 dispatch: FK cascade and derived rows inside dispatch"
-cid="$(val scd_b1_star "SELECT public.scd_wt('track.delete', '{\"urn\": \"urn:t:e1\"}')")"
+cid="$(val scd_b1_star "SELECT id FROM public.scd_wt('track.delete', '{\"urn\": \"urn:t:e1\"}')")"
 wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'urn:t:e1')
   AND NOT EXISTS (SELECT 1 FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1')" "core's delete and its cascade reach main"
 settle ee16 ee17 ee18
@@ -93,7 +95,7 @@ pairs tracks "urn = 'urn:t:e1'" "deleted track gone on all nodes"
 pairs lyrics_lookup_state "sc_track_id = 'e1'" "cascaded lyrics row gone on all nodes"
 
 say "B2 dispatch: a key core does not create is purged on the api with its children (cmd_purge loop)"
-val scd_b1_main "SELECT public.scd_wt('observe.playlists', '{\"urn\": \"urn:p:1\", \"sc_id\": \"p1\", \"title\": \"P\", \"core\": \"skip\"}');
+val scd_b1_main "SELECT id FROM public.scd_wt('observe.playlists', '{\"urn\": \"urn:p:1\", \"sc_id\": \"p1\", \"title\": \"P\", \"core\": \"skip\"}');
   SELECT count(*) FROM public.playlist_membership_state WHERE playlist_urn = 'urn:p:1'" > "$tmp/wt"
 cid="$(sed -n 1p "$tmp/wt")"
 [ "$(sed -n 2p "$tmp/wt")" = 1 ] || { echo "FAIL main did not create the optimistic membership row"; exit 1; }
@@ -120,7 +122,7 @@ pairs playlist_remote_snapshots "true" "snapshots equal on all nodes"
 say "B2 non-optimistic kind: main ships it, only core runs it"
 sql -d scd_b1_core -c "INSERT INTO public.sync_queue (id, user_id, action_type, target_urn, dead, retry_count) VALUES ('00000000-0000-0000-0000-00000000a001', 'q1', 'like', 'urn:q:1', true, 7)"
 wait_for scd_b1_main "SELECT dead FROM public.sync_queue WHERE id = '00000000-0000-0000-0000-00000000a001'" "the dead row reaches main"
-cid="$(val scd_b1_main "SELECT public.scd_wt('sync_queue.revive', '{\"id\": \"00000000-0000-0000-0000-00000000a001\"}')")"
+cid="$(val scd_b1_main "SELECT id FROM public.scd_wt('sync_queue.revive', '{\"id\": \"00000000-0000-0000-0000-00000000a001\"}')")"
 [ "$(val scd_b1_main "SELECT touched FROM public.cmd_outbox WHERE id = '$cid'")" = "[]" ]
 wait_for scd_b1_star "SELECT NOT dead AND retry_count = 0 FROM public.sync_queue WHERE id = '00000000-0000-0000-0000-00000000a001'" "core's revive reaches star"
 settle ee1f ee20 ee21

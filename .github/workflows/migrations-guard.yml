@@ -70,16 +70,16 @@ jobs:
           esac
           RANGE="$BASE..HEAD"
           [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && RANGE="$BASE...HEAD"
-          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication .github/workflows/migrations-guard.yml; then
+          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through .github/workflows/migrations-guard.yml; then
             echo run=false >> "$GITHUB_OUTPUT"
           else
             echo run=true >> "$GITHUB_OUTPUT"
           fi
-      - name: postgres 17 with wal_level=logical
+      - name: postgres 17 with wal_level=logical and commit timestamps
         if: steps.changed.outputs.run == 'true'
         run: |
-          docker run -d --name scdpg -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
-            mirror.gcr.io/library/postgres:17-alpine -c wal_level=logical
+          docker run -d --name scdpg -p 5432:5432 -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
+            mirror.gcr.io/library/postgres:17-alpine -c wal_level=logical -c track_commit_timestamp=on
           for i in $(seq 1 60); do
             docker exec scdpg pg_isready -q -U scd -h 127.0.0.1 && break
             sleep 1
@@ -90,3 +90,23 @@ jobs:
         env:
           PSQL: docker exec -i scdpg psql -U scd
         run: bash ops/replication/tests/pg/run.sh
+      - name: toolchain
+        if: steps.changed.outputs.run == 'true'
+        run: sh scripts/ci-toolchain.sh
+      - uses: swatinem/rust-cache@v2
+        if: steps.changed.outputs.run == 'true'
+        with:
+          workspaces: utils/write-through -> target
+          key: write-through
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: write-through client, api and core on real Postgres
+        if: steps.changed.outputs.run == 'true'
+        env:
+          DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
+        run: |
+          docker exec scdpg createdb -U scd wt_build
+          for f in api/migrations/*.sql; do docker exec -i scdpg psql -X -q -v ON_ERROR_STOP=1 -U scd -d wt_build -c "SET client_min_messages = error" -f - < "$f"; done
+          cargo fmt --manifest-path utils/write-through/Cargo.toml --check
+          cargo clippy --manifest-path utils/write-through/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo test --manifest-path utils/write-through/Cargo.toml --all-features --locked

@@ -113,6 +113,22 @@ class KindRules(unittest.TestCase):
         self.assertEqual(self.kinds("RETURN '[]';", "nope_kind"), ["kind-unknown"])
 
 
+class ClientKinds(unittest.TestCase):
+    def names(self, source):
+        with tempfile.TemporaryDirectory() as root:
+            src = os.path.join(root, check_ownership.CLIENT_SRC)
+            os.makedirs(src)
+            with open(os.path.join(src, "kinds.rs"), "w") as f:
+                f.write(source)
+            return sorted(r[2] for r in check_ownership.client_kind_violations(model.load(), root))
+
+    def test_declared_kind_is_fine(self):
+        self.assertEqual(self.names('impl Kind for Edit {\n    const NAME: &\'static str = "track.edit";\n    type Output = ();\n}\n'), [])
+
+    def test_undeclared_kind(self):
+        self.assertEqual(self.names('impl Kind for Nope {\n    const NAME: &str = "track.nope";\n}\n'), ["track.nope"])
+
+
 class Baseline(unittest.TestCase):
     def run_check(self, root, baseline, *extra):
         cmd = [sys.executable, os.path.join(support.REPL, "check_ownership.py"), "--root", root, "--baseline", baseline] + list(extra)

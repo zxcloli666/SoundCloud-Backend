@@ -50,7 +50,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 | core-delete-m | jobs or other core code deletes an M row directly instead of `scd_purge_intent` (R7) |
 | a-insert-only-updated | an `insert_only` A table is updated |
 | clock | `nextval('catalog_metadata_clock')` |
-| unknown-kind | `scd_wt('<kind>'` with a kind not in `kinds:` |
+| unknown-kind | `scd_wt('<kind>'` or a `const NAME` in `utils/write-through/src` with a kind not in `kinds:` |
 | kind-* | a `scd_cmd_<kind>` function in migrations uses SKIP LOCKED, FOR UPDATE, LIMIT, writes outside `touches`, or has no kind |
 
 `baseline.txt` holds today's violations. CI fails on a new one and on a fixed one still listed: fix the code, then delete the line. `check_ownership.py --update-baseline` rewrites the file.
@@ -72,6 +72,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 6. `0202_scd_dispatch`: `scd_wt`, `scd_dispatch`, the appliers, `scd_drain_resend()`.
 7. `0203_scd_admin`: `scd_sync_publications()`, `scd_unpublish_column`, `scd_configure`, `scd_grant_repl`, `scd_repl_problems`.
 8. `0204_scd_uuid_v5`: `uuid-ossp`; `scd_uuid(ns, VARIADIC key)` is UUID v5 of `ns:key1\x1fkey2...` under namespace `e5f6011f-72fa-46e1-ad97-55586f6f1f83`, equal to Rust `Uuid::new_v5` of the same bytes; NULL when a part is NULL.
+9. `0205_scd_wt_output_race`: `scd_wt` returns `(id, output)`, kinds return `{touched, output}`; `scd_unique_race`, `scd_xact_origin`; dispatch leaves a raced 23505 to the apply retry.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
@@ -99,7 +100,13 @@ Guards only count (`public.scd_counters`) unless `scd.guard = 'enforce'`, then t
 
 Functions: `scd_row_hash(tbl, pk)` and `scd_row_hash_<tbl>(pk)` hash the replicated columns with fixed TimeZone, DateStyle, IntervalStyle, extra_float_digits and bytea_output. `scd_purge(tbl, pk)` and `scd_purge_<tbl>(pk)` delete a row and its FK children explicitly (cascades do not fire in apply): CASCADE children are deleted or recursed, SET NULL/DEFAULT applied, NO ACTION/RESTRICT children get their nullable FK columns cleared, else purged. `scd_purge_intent(tbl, pk)` and `scd_purge_intent_<tbl>(pk)` are the only way core purges an M row (R7): in one tx they lock the row, write `repl_purges` with the newest api version, then delete; on an api node they raise. `scd_row_json(tbl, pk)` returns the replicated columns as jsonb (cmd_reassert, repl_repair). `scd_kinds()` and `scd_table_class(tbl)` expose the registry. `scd_publication_lists()` returns (pubname, node, publish, tbl, cols); `scd_sync_publications()` applies it, intersected with existing columns and minus `scd_unpublished_columns`.
 
-Dispatch: `scd_wt(kind, args)` runs the kind locally unless the node is api in split mode, where it writes `cmd_pending` and `cmd_outbox`. On core the replica trigger on `cmd_outbox` runs the kind once per (node, id), writes `cmd_done` first, records a non-transient failure in `cmd_dead`, then compares touched C keys and answers with `cmd_reassert` or `cmd_purge`. `scd_drain_resend()` turns `repl_resend` rows into `repl_repair`.
+Kinds: `scd_cmd_<kind>(args jsonb) RETURNS jsonb` returns `{"touched": [{"tbl", "pk"}], "output": ...}`. A kind is deterministic: timestamps come from args, not `now()`, or core's row differs and gets reasserted. Anything other than an object is refused with 22023.
+
+Dispatch: `SELECT id, output FROM scd_wt(kind, args)`. On core and in legacy mode it runs the kind in place. On an api node in split mode it runs an optimistic kind, then writes `cmd_pending` and `cmd_outbox`; a non-optimistic kind only ships (output NULL). On core the replica trigger on `cmd_outbox` runs the kind once per (node, id), writes `cmd_done` first, records a non-transient failure in `cmd_dead`, then compares touched C keys and answers with `cmd_reassert` or `cmd_purge`. `scd_drain_resend()` turns `repl_resend` rows into `repl_repair`.
+
+Race (lab 3b): `INSERT ... ON CONFLICT` checks only its arbiter; a non-arbiter unique index that meets a row inserted by a concurrent apply raises 23505. `scd_wt` finds the conflicting row from the error (schema, table, index, `Key (...)=(...)` detail), and when its xmin is not in the snapshot taken before the kind and its commit has a replication origin it re-raises 23505 with HINT `scd_wt: retry the transaction, a concurrent apply inserted this key`. Any other 23505 keeps no hint. Needs `track_commit_timestamp = on` and English `lc_messages`, else nothing is retried. Under REPEATABLE READ the check cannot see the new row, so nothing is retried. In dispatch the same raced 23505 rolls back the apply tx, the worker retries it, a real one goes to `cmd_dead`.
+
+Client: `utils/write-through` (`wt` in api, jobs with `sqlx`, streaming with `tokio-postgres`). `wt::call(conn, &args)` is one `scd_wt` call and decodes the output into `Kind::Output`. `wt::retry(|| async { begin; call; commit })` runs the whole transaction again once when the error carries the race hint. Each `scd_wt` call is one subtransaction: batch rows into one call. `tests/real_pg` runs every kind on an api and a core database and compares outputs and row hashes; adding a kind there is a struct, an `impl Kind` and one `Pair::run`.
 
 PK values are `jsonb_build_object` of the PK columns by name everywhere: `cmd_pending.pk`, `repl_tombstones.pk`, `repl_purges.pk`, `repl_resend.pk`, the hash and purge functions.
 

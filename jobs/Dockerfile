@@ -24,6 +24,7 @@ COPY utils/redact /utils/redact
 COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/sc-transport /utils/sc-transport
 COPY utils/tls-common /utils/tls-common
+COPY utils/write-through /utils/write-through
 COPY jobs/Cargo.toml jobs/Cargo.lock /jobs/
 COPY jobs/src /jobs/src
 COPY jobs/queries /jobs/queries

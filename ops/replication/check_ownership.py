@@ -15,6 +15,8 @@ API_SIDE = ("api", "streaming")
 WT_RE = re.compile(r"\bscd_wt\s*\(\s*'([^']*)'")
 KIND_FN_RE = re.compile(r"create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?scd_cmd_(\w+)\s*\(", re.I)
 DOLLAR_RE = re.compile(r"\$([A-Za-z_]\w*)?\$")
+CLIENT_KIND_RE = re.compile(r"\bconst\s+NAME\s*:\s*&(?:'static\s+)?str\s*=\s*\"([^\"]*)\"")
+CLIENT_SRC = os.path.join("utils", "write-through", "src")
 
 
 def tables_of(o, name, known):
@@ -56,6 +58,15 @@ def statement_rules(t, verb, o, where, api_side):
         out.add(("core-delete-m", where, t.name))
     if t.cls == "A" and t.insert_only and (verb in ("update", "merge") or (verb == "insert" and o["upsert_do_update"])):
         out.add(("a-insert-only-updated", where, t.name))
+    return out
+
+
+def client_kind_violations(m, root):
+    out = set()
+    for path in sorted(glob.glob(os.path.join(root, CLIENT_SRC, "**", "*.rs"), recursive=True)):
+        for kind in CLIENT_KIND_RE.findall(read(path)):
+            if kind not in m.kinds:
+                out.add(("unknown-kind", os.path.relpath(path, root), kind))
     return out
 
 
@@ -131,6 +142,7 @@ def main():
         sys.exit(1)
     found = code_violations(m, codemap.scan(args.root))
     found |= kind_violations(m, os.path.join(args.root, "api", "migrations"))
+    found |= client_kind_violations(m, args.root)
     if args.update_baseline:
         write_baseline(args.baseline, found)
         print("baseline: %d entries" % len(found))

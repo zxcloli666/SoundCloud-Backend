@@ -1937,6 +1937,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wreq",
+ "write-through",
 ]
 
 [[package]]
@@ -4743,6 +4744,14 @@ dependencies = [
  "typed-builder",
  "wreq",
  "zstd",
+]
+
+[[package]]
+name = "write-through"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sqlx",
 ]
 
 [[package]]
