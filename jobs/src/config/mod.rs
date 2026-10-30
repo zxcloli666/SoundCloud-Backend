@@ -290,6 +290,7 @@ pub struct NatsConfig {
     pub max_age: Duration,
     pub job_stream_max_bytes: i64,
     pub impression_stream_max_bytes: i64,
+    pub storage_event_sources: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -938,8 +939,30 @@ impl NatsConfig {
                 "JOBS_NATS_IMPRESSION_STREAM_MAX_BYTES",
                 8 * 1024 * 1024 * 1024,
             )?,
+            storage_event_sources: jetstream_domains("JOBS_NATS_STORAGE_EVENT_SOURCES")?,
         })
     }
+}
+
+fn jetstream_domains(key: &str) -> Result<Vec<String>, ConfigError> {
+    let domains: Vec<String> = env::optional(key)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if let Some(bad) = domains.iter().find(|domain| {
+        !domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }) {
+        return Err(ConfigError::Invalid {
+            key: key.to_owned(),
+            reason: format!("{bad} is not a JetStream domain name"),
+        });
+    }
+    Ok(domains)
 }
 
 fn stream_bytes(key: &str, default: u64) -> Result<i64, ConfigError> {

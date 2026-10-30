@@ -14,13 +14,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, ensure};
 use async_nats::jetstream::ErrorCode;
-use async_nats::jetstream::consumer::{AckPolicy, pull};
+use async_nats::jetstream::consumer::{AckPolicy, Info as ConsumerInfo, pull};
 use async_nats::jetstream::context::GetStreamErrorKind;
 use async_nats::jetstream::object_store::{
     Config as ObjectStoreConfig, DeleteErrorKind, GetErrorKind,
 };
 use async_nats::jetstream::stream::{
-    Config as StreamConfig, DiscardPolicy, RetentionPolicy, StorageType,
+    Config as StreamConfig, DiscardPolicy, External, RetentionPolicy, Source, SourceInfo,
+    StorageType,
 };
 use async_nats::{Client, ConnectOptions, HeaderMap, Subscriber};
 use backend_contracts::{
@@ -73,6 +74,7 @@ const ENCODE_RESULT_CONSUMER: &str = "backend-done-encode";
 const ENCODE_RESULT_DEAD_LETTER_SUBJECT: &str = "jobs.dead.encode_results";
 const STORAGE_UPLOAD_CONSUMER: &str = "backend-storage-uploaded";
 const STORAGE_UPLOAD_DEAD_LETTER_SUBJECT: &str = "jobs.dead.storage_uploads";
+const SOURCE_SILENCE: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Bus {
@@ -106,7 +108,11 @@ impl Topology {
         Self {
             streams: owned
                 .into_iter()
-                .chain(PIPELINE_STREAMS.iter().map(pipeline_stream_config))
+                .chain(
+                    PIPELINE_STREAMS
+                        .iter()
+                        .map(|spec| owned_pipeline_stream_config(spec, config)),
+                )
                 .collect(),
             intact: AtomicBool::new(true),
         }
@@ -199,7 +205,7 @@ impl Bus {
             .await?;
         self.ensure_dead_letter_stream(config).await?;
         self.remove_retired_streams(RETIRED_STREAMS).await?;
-        self.ensure_pipeline_streams().await?;
+        self.ensure_pipeline_streams(config).await?;
         self.ensure_object_stores().await?;
         self.ensure_worker_consumers().await?;
 
@@ -348,6 +354,17 @@ impl Bus {
     }
 
     pub async fn unaccepted_storage_uploads(&self) -> anyhow::Result<u64> {
+        let (_, info) = self.storage_upload_progress().await?;
+        let in_flight = u64::try_from(info.num_ack_pending).unwrap_or(u64::MAX);
+        Ok(info.num_pending.saturating_add(in_flight))
+    }
+
+    pub async fn storage_events_settled(&self) -> anyhow::Result<bool> {
+        let (sources, info) = self.storage_upload_progress().await?;
+        Ok(info.num_pending == 0 && sources.iter().all(source_is_current))
+    }
+
+    async fn storage_upload_progress(&self) -> anyhow::Result<(Vec<SourceInfo>, ConsumerInfo)> {
         let stream = self
             .jetstream
             .get_stream(STORAGE_EVENTS_STREAM.name)
@@ -359,8 +376,7 @@ impl Bus {
             .with_context(|| {
                 format!("NATS consumer {STORAGE_UPLOAD_CONSUMER} could not be read")
             })?;
-        let in_flight = u64::try_from(info.num_ack_pending).unwrap_or(u64::MAX);
-        Ok(info.num_pending.saturating_add(in_flight))
+        Ok((stream.cached_info().sources.clone(), info))
     }
 
     pub async fn is_available(&self) -> bool {
@@ -687,9 +703,10 @@ impl Bus {
         Ok(())
     }
 
-    async fn ensure_pipeline_streams(&self) -> anyhow::Result<()> {
+    async fn ensure_pipeline_streams(&self, config: &NatsConfig) -> anyhow::Result<()> {
         for spec in PIPELINE_STREAMS {
-            self.ensure_stream(pipeline_stream_config(spec)).await?;
+            self.ensure_stream(owned_pipeline_stream_config(spec, config))
+                .await?;
         }
         Ok(())
     }
@@ -892,6 +909,33 @@ fn pipeline_stream_config(spec: &PipelineStreamSpec) -> StreamConfig {
     }
 }
 
+fn owned_pipeline_stream_config(spec: &PipelineStreamSpec, config: &NatsConfig) -> StreamConfig {
+    let mut stream = pipeline_stream_config(spec);
+    if spec.name == STORAGE_EVENTS_STREAM.name {
+        stream.sources = leaf_sources(&config.storage_event_sources);
+    }
+    stream
+}
+
+fn leaf_sources(domains: &[String]) -> Option<Vec<Source>> {
+    let sources: Vec<Source> = domains
+        .iter()
+        .map(|domain| Source {
+            name: STORAGE_EVENTS_STREAM.name.to_owned(),
+            external: Some(External {
+                api_prefix: format!("$JS.{domain}.API"),
+                delivery_prefix: Some(String::new()),
+            }),
+            ..Default::default()
+        })
+        .collect();
+    (!sources.is_empty()).then_some(sources)
+}
+
+fn source_is_current(source: &SourceInfo) -> bool {
+    source.lag == 0 && source.active.is_some_and(|active| active < SOURCE_SILENCE)
+}
+
 fn is_missing_stream(kind: &GetStreamErrorKind) -> bool {
     matches!(
         kind,
@@ -959,6 +1003,7 @@ fn managed_stream_config(mut current: StreamConfig, desired: &StreamConfig) -> S
     current.max_age = desired.max_age;
     current.max_message_size = desired.max_message_size;
     current.duplicate_window = desired.duplicate_window;
+    current.sources.clone_from(&desired.sources);
     current
 }
 

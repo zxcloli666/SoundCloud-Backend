@@ -459,6 +459,7 @@ async fn the_pipeline_topology_comes_back_while_jobs_runs_and_readiness_fails_wh
         max_age: Duration::from_secs(60 * 60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     bus.provision(&config).await?;
 

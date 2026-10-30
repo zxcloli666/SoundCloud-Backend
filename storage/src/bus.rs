@@ -1,123 +1,103 @@
-use async_nats::jetstream::{self, Context};
-use serde::Serialize;
-use tracing::{debug, info, warn};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_nats::ConnectOptions;
+use async_nats::jetstream;
+use serde_json::json;
+use tracing::{error, info};
+
+use crate::spool::Spool;
+
+const TRACK_UPLOADED: &str = "storage.track_uploaded";
+const TRACK_REJECTED: &str = "storage.track_rejected";
 
 #[derive(Clone)]
 pub struct BusClient {
-    js: Option<Context>,
+    spool: Option<Arc<Spool>>,
 }
 
 impl BusClient {
-    pub async fn connect(url: &str) -> Self {
+    pub async fn connect(url: &str, spool_dir: &str) -> Self {
         if url.is_empty() {
-            return Self { js: None };
+            return Self { spool: None };
         }
-        // user:pass из URL async-nats игнорирует — вытаскиваем и кладём в опции
+        let spool = Spool::open(PathBuf::from(spool_dir))
+            .await
+            .unwrap_or_else(|e| panic!("event spool {spool_dir} is not writable: {e}"));
+        let spool = Arc::new(spool);
         let (host_url, user, pass) = split_creds(url);
-        let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect();
+        let mut opts = ConnectOptions::new()
+            .max_reconnects(None)
+            .retry_on_initial_connect();
         if let (Some(u), Some(p)) = (user, pass) {
             opts = opts.user_and_password(u, p);
         }
+        if let Some(tls) = tls_common::ClientIdentity::from_env("NATS") {
+            opts = opts
+                .require_tls(true)
+                .add_root_certificates(tls.ca)
+                .add_client_certificate(tls.cert, tls.key);
+        }
         match opts.connect(&host_url).await {
             Ok(client) => {
-                info!("NATS connected → {host_url}");
-                Self {
-                    js: Some(jetstream::new(client)),
-                }
+                info!("NATS client started for {host_url}, event spool {spool_dir}");
+                tokio::spawn(spool.clone().run(jetstream::new(client)));
             }
             Err(e) => {
-                warn!("NATS connect {host_url} failed: {e}");
-                Self { js: None }
+                error!("NATS {host_url} is not usable: {e}; storage events stay in {spool_dir}")
             }
         }
+        Self { spool: Some(spool) }
     }
 
     pub fn enabled(&self) -> bool {
-        self.js.is_some()
+        self.spool.is_some()
     }
 
-    /// Fire-and-forget publish to `storage.track_rejected`: /upload забраковал
-    /// файл (duration mismatch / too short / too long). По этим событиям
-    /// backend копит страйки и уводит трек в редкий ретрай вместо перекачки
-    /// с SC каждые 5 минут.
-    pub fn publish_track_rejected(
+    pub async fn publish_track_rejected(
         &self,
         sc_track_id: String,
         reason: &'static str,
         actual_secs: f64,
         expected_duration_ms: Option<i64>,
     ) {
-        let Some(js) = self.js.clone() else {
-            return;
-        };
-        tokio::spawn(async move {
-            #[derive(Serialize)]
-            struct Payload {
-                sc_track_id: String,
-                reason: &'static str,
-                actual_secs: f64,
-                expected_duration_ms: Option<i64>,
-            }
-            let body = match serde_json::to_vec(&Payload {
-                sc_track_id,
-                reason,
-                actual_secs,
-                expected_duration_ms,
-            }) {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!("[bus] encode storage.track_rejected: {e}");
-                    return;
-                }
-            };
-            match js.publish("storage.track_rejected", body.into()).await {
-                Ok(ack) => match ack.await {
-                    Ok(_) => debug!("[bus] storage.track_rejected published"),
-                    Err(e) => warn!("[bus] storage.track_rejected ack failed: {e}"),
-                },
-                Err(e) => warn!("[bus] storage.track_rejected publish failed: {e}"),
-            }
-        });
+        self.spool_event(
+            TRACK_REJECTED,
+            json!({
+                "sc_track_id": sc_track_id,
+                "reason": reason,
+                "actual_secs": actual_secs,
+                "expected_duration_ms": expected_duration_ms,
+            }),
+        )
+        .await;
     }
 
-    /// Fire-and-forget publish to `storage.track_uploaded` jetstream subject.
-    /// No await on the ack — backend has its own dedup; payload loss is recoverable
-    /// via the periodic reaper in `IndexingService.reap`.
-    pub fn publish_track_uploaded(
+    pub async fn publish_track_uploaded(
         &self,
         sc_track_id: String,
         storage_url: String,
         quality: &'static str,
     ) {
-        let Some(js) = self.js.clone() else {
+        self.spool_event(
+            TRACK_UPLOADED,
+            json!({
+                "sc_track_id": sc_track_id,
+                "storage_url": storage_url,
+                "quality": quality,
+            }),
+        )
+        .await;
+    }
+
+    async fn spool_event(&self, subject: &str, payload: serde_json::Value) {
+        let Some(spool) = &self.spool else {
             return;
         };
-        tokio::spawn(async move {
-            #[derive(Serialize)]
-            struct Payload {
-                sc_track_id: String,
-                storage_url: String,
-                quality: &'static str,
-            }
-            let body = match serde_json::to_vec(&Payload {
-                sc_track_id,
-                storage_url,
-                quality,
-            }) {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!("[bus] encode storage.track_uploaded: {e}");
-                    return;
-                }
-            };
-            match js.publish("storage.track_uploaded", body.into()).await {
-                Ok(ack) => match ack.await {
-                    Ok(_) => debug!("[bus] storage.track_uploaded published"),
-                    Err(e) => warn!("[bus] storage.track_uploaded ack failed: {e}"),
-                },
-                Err(e) => warn!("[bus] storage.track_uploaded publish failed: {e}"),
-            }
-        });
+        let track = payload["sc_track_id"].clone();
+        if let Err(e) = spool.push(subject, payload).await {
+            error!("[bus] {subject} for track {track} could not be spooled: {e}");
+        }
     }
 }
 

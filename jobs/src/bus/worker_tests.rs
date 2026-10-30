@@ -34,6 +34,7 @@ pub(super) async fn live_bus(name: &str) -> anyhow::Result<Bus> {
         max_age: Duration::from_secs(60 * 60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     Bus::connect(&config, name).await
 }
@@ -181,6 +182,7 @@ async fn provision_builds_every_contract_stream_and_worker_consumer() -> anyhow:
         max_age: Duration::from_secs(60 * 60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
 
     bus.provision(&config).await?;

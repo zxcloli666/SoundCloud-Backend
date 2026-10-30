@@ -14,6 +14,7 @@ const READERS: &[&str] = &[
     "std::env::var",
     "schedule_interval(",
     "stream_bytes(",
+    "jetstream_domains(",
     "worker_backlog(",
 ];
 
