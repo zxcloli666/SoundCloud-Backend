@@ -53,6 +53,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_recommendation_quality_models;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_search_terms;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_star_track_tiers;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_storage_event_repairs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_storage_event_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_subscription_snapshot_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_sync_queue_action_pauses;
@@ -3818,6 +3819,8 @@ ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.star_track_tiers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_star_track_tiers', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_repairs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_repairs', 'cmd', 'migration', 'repl');
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_state', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.subscription_snapshot_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_subscription_snapshot_state', 'cmd', 'migration', 'repl');
@@ -6273,6 +6276,7 @@ FROM (VALUES
     ('guard', 'recommendation_quality_models', 'scd_guard_recommendation_quality_models'),
     ('guard', 'search_terms', 'scd_guard_search_terms'),
     ('guard', 'star_track_tiers', 'scd_guard_star_track_tiers'),
+    ('guard', 'storage_event_repairs', 'scd_guard_storage_event_repairs'),
     ('guard', 'storage_event_state', 'scd_guard_storage_event_state'),
     ('guard', 'subscription_snapshot_state', 'scd_guard_subscription_snapshot_state'),
     ('guard', 'sync_queue_action_pauses', 'scd_guard_sync_queue_action_pauses'),
@@ -6527,6 +6531,7 @@ BEGIN
             ('soundcloud_connections', 'zz_ver'),
             ('soundcloud_connections', 'zzz_suppress'),
             ('star_track_tiers', 'zz_guard'),
+            ('storage_event_repairs', 'zz_guard'),
             ('storage_event_state', 'zz_guard'),
             ('subscription_snapshot_state', 'zz_guard'),
             ('subscriptions', 'zz_merge'),

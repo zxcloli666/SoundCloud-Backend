@@ -1860,6 +1860,22 @@
     {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "star_track_tiers_pkey", "primary": true, "where": null}
    ]
   },
+  "storage_event_repairs": {
+   "columns": [
+    {"default": "now()", "generated": false, "name": "repaired_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "sc_track_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "uploaded_at", "notnull": true, "type": "timestamp without time zone"}
+   ],
+   "fks": [
+    {"cols": ["sc_track_id"], "name": "storage_event_repairs_sc_track_id_fkey", "on_delete": "c", "ref_cols": ["sc_track_id"], "ref_table": "tracks"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["sc_track_id"], "expr": false, "keys": ["sc_track_id"], "name": "storage_event_repairs_pkey", "primary": true, "where": null}
+   ]
+  },
   "storage_event_state": {
    "columns": [
     {"default": null, "generated": false, "name": "event_published_at", "notnull": true, "type": "timestamp with time zone"},

@@ -119,6 +119,7 @@ tables:
   playlist_tracks_v9_repair: {class: P, prod_only: true, note: "prod leftover, not in migrations, no code; drop candidate"}
   recommendation_quality_models: {class: P}
   star_track_tiers: {class: P, note: "read only by streaming-core once HQ upgrade runs on core (BREAK H1)"}
+  storage_event_repairs: {class: P, note: "jobs receipt of a re-announced upload (B10)"}
   storage_event_state: {class: P}
   subscription_snapshot_state: {class: P}
   taste_schedule: {class: P}

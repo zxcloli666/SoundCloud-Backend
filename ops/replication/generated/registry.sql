@@ -117,6 +117,7 @@ SELECT v.cls FROM (VALUES
     ('sessions', 'A'),
     ('soundcloud_connections', 'M'),
     ('star_track_tiers', 'P'),
+    ('storage_event_repairs', 'P'),
     ('storage_event_state', 'P'),
     ('subscription_snapshot_state', 'P'),
     ('subscriptions', 'A'),

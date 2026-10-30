@@ -759,6 +759,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_storage_event_repairs(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_storage_event_state(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -895,6 +910,7 @@ BEGIN
     DELETE FROM public.catalog_work_links c WHERE c.track_id = p.id;
     DELETE FROM public.lyrics_cache c WHERE c.track_id = p.id;
     DELETE FROM public.lyrics_lookup_state c WHERE c.track_id = p.id;
+    DELETE FROM public.storage_event_repairs c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.storage_event_state c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_artist_blocks c WHERE c.track_id = p.id;
     DELETE FROM public.track_artists c WHERE c.track_id = p.id;
@@ -1221,6 +1237,8 @@ BEGIN
             PERFORM public.scd_purge_search_terms(k);
         WHEN 'star_track_tiers' THEN
             PERFORM public.scd_purge_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            PERFORM public.scd_purge_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             PERFORM public.scd_purge_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN

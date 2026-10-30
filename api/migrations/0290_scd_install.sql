@@ -56,6 +56,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_recommendation_quality_models;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_search_terms;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_star_track_tiers;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_storage_event_repairs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_storage_event_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_subscription_snapshot_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_sync_queue_action_pauses;
@@ -253,6 +254,7 @@ SELECT v.cls FROM (VALUES
     ('sessions', 'A'),
     ('soundcloud_connections', 'M'),
     ('star_track_tiers', 'P'),
+    ('storage_event_repairs', 'P'),
     ('storage_event_state', 'P'),
     ('subscription_snapshot_state', 'P'),
     ('subscriptions', 'A'),
@@ -7002,6 +7004,50 @@ COMMIT;
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_storage_event_repairs(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.repaired_at, t.sc_track_id, t.uploaded_at)::text) FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_storage_event_repairs(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_storage_event_repairs(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.sc_track_id INTO p FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text;
+END
+$f$;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_repairs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_repairs', 'cmd', 'migration', 'repl');
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION public.scd_row_hash_storage_event_state(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -8222,6 +8268,7 @@ BEGIN
     DELETE FROM public.catalog_work_links c WHERE c.track_id = p.id;
     DELETE FROM public.lyrics_cache c WHERE c.track_id = p.id;
     DELETE FROM public.lyrics_lookup_state c WHERE c.track_id = p.id;
+    DELETE FROM public.storage_event_repairs c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.storage_event_state c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_artist_blocks c WHERE c.track_id = p.id;
     DELETE FROM public.track_artists c WHERE c.track_id = p.id;
@@ -10936,6 +10983,8 @@ BEGIN
             RETURN public.scd_row_hash_soundcloud_connections(k);
         WHEN 'star_track_tiers' THEN
             RETURN public.scd_row_hash_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            RETURN public.scd_row_hash_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             RETURN public.scd_row_hash_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN
@@ -11156,6 +11205,8 @@ BEGIN
             RETURN public.scd_row_json_soundcloud_connections(k);
         WHEN 'star_track_tiers' THEN
             RETURN public.scd_row_json_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            RETURN public.scd_row_json_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             RETURN public.scd_row_json_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN
@@ -11334,6 +11385,8 @@ BEGIN
             PERFORM public.scd_purge_search_terms(k);
         WHEN 'star_track_tiers' THEN
             PERFORM public.scd_purge_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            PERFORM public.scd_purge_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             PERFORM public.scd_purge_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN
@@ -11468,6 +11521,7 @@ FROM (VALUES
     ('guard', 'recommendation_quality_models', 'scd_guard_recommendation_quality_models'),
     ('guard', 'search_terms', 'scd_guard_search_terms'),
     ('guard', 'star_track_tiers', 'scd_guard_star_track_tiers'),
+    ('guard', 'storage_event_repairs', 'scd_guard_storage_event_repairs'),
     ('guard', 'storage_event_state', 'scd_guard_storage_event_state'),
     ('guard', 'subscription_snapshot_state', 'scd_guard_subscription_snapshot_state'),
     ('guard', 'sync_queue_action_pauses', 'scd_guard_sync_queue_action_pauses'),
@@ -11725,6 +11779,7 @@ BEGIN
             ('soundcloud_connections', 'zz_ver'),
             ('soundcloud_connections', 'zzz_suppress'),
             ('star_track_tiers', 'zz_guard'),
+            ('storage_event_repairs', 'zz_guard'),
             ('storage_event_state', 'zz_guard'),
             ('subscription_snapshot_state', 'zz_guard'),
             ('subscriptions', 'zz_merge'),

@@ -826,6 +826,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.star_track_tiers t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_storage_event_repairs(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_storage_event_state(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1390,6 +1402,8 @@ BEGIN
             RETURN public.scd_row_json_soundcloud_connections(k);
         WHEN 'star_track_tiers' THEN
             RETURN public.scd_row_json_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            RETURN public.scd_row_json_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             RETURN public.scd_row_json_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN

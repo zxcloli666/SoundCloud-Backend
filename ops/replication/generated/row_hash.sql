@@ -826,6 +826,18 @@ AS $f$
 SELECT md5(ROW(t.align_due, t.audio_due, t.embed_due, t.enrich_due, t.lookup_due, t.sc_track_id, t.tier, t.tiered_at, t.upgrade_from, t.upgrade_tried_at)::text) FROM public.star_track_tiers t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_storage_event_repairs(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.repaired_at, t.sc_track_id, t.uploaded_at)::text) FROM public.storage_event_repairs t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_storage_event_state(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1390,6 +1402,8 @@ BEGIN
             RETURN public.scd_row_hash_soundcloud_connections(k);
         WHEN 'star_track_tiers' THEN
             RETURN public.scd_row_hash_star_track_tiers(k);
+        WHEN 'storage_event_repairs' THEN
+            RETURN public.scd_row_hash_storage_event_repairs(k);
         WHEN 'storage_event_state' THEN
             RETURN public.scd_row_hash_storage_event_state(k);
         WHEN 'subscription_snapshot_state' THEN
