@@ -122,6 +122,7 @@ async fn main() {
     info!("Redis pool ready");
 
     let shutdown = CancellationToken::new();
+    tokio::spawn(repl_verify::Sweeper::new(pg.clone()).run(shutdown.clone()));
 
     let nats = NatsService::connect(&config.nats.url, shutdown.clone())
         .await

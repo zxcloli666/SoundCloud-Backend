@@ -319,6 +319,17 @@ pub async fn run() -> anyhow::Result<()> {
         maintenance_worker.run(cancellation.clone()),
     );
     supervisor.spawn("ops worker", ops_worker.run(cancellation.clone()));
+    supervisor.spawn(
+        "replication resend sweeper",
+        repl_verify::Sweeper::new(databases.main.fast.clone()).run(cancellation.clone()),
+    );
+    if config.repl_verify != repl_verify::Mode::Off {
+        supervisor.spawn(
+            "replication verify",
+            repl_verify::Verifier::new(databases.main.fast.clone(), config.repl_verify)
+                .run(cancellation.clone()),
+        );
+    }
 
     health.mark_ready();
     let result = supervisor.run_until_signal().await;

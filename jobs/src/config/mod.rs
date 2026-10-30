@@ -50,6 +50,7 @@ pub struct JobsConfig {
     pub subscriptions_always_premium: bool,
     pub schedules: JobScheduleConfig,
     pub oauth: OAuthConfig,
+    pub repl_verify: repl_verify::Mode,
     pub shutdown_grace: Duration,
 }
 
@@ -487,6 +488,7 @@ impl JobsConfig {
             subscriptions_always_premium: env::boolean("SUBSCRIPTIONS_ALWAYS_PREMIUM", false)?,
             schedules: JobScheduleConfig::from_env()?,
             oauth: OAuthConfig::from_env()?,
+            repl_verify: env::parse("REPL_VERIFY", "repair")?,
             shutdown_grace: Duration::from_secs(env::positive_u64(
                 "JOBS_SHUTDOWN_GRACE_SECONDS",
                 30,

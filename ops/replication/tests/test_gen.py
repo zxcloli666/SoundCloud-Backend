@@ -116,7 +116,7 @@ class Generated(unittest.TestCase):
         self.assertIn("IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN", body)
         self.assertIn("        IF core THEN\n            NEW.progress := OLD.progress;", body)
         self.assertIn("progress = CASE WHEN core THEN o.progress ELSE NEW.progress END", body)
-        self.assertIn("created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at)", body)
+        self.assertIn("created_at = CASE WHEN ((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) THEN least(o.created_at, NEW.created_at)", body)
         self.assertIn("pg_catalog.set_config('scd.merging', 'on', true)", body)
 
     def test_replica_inserts_merge_inside_the_trigger(self):

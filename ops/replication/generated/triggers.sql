@@ -959,11 +959,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.cdn_tracks t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.cdn_tracks t SET
                     cdn_path = CASE WHEN NEW.row_v > o.row_v THEN NEW.cdn_path ELSE o.cdn_path END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
                     status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
                     track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
@@ -981,11 +981,11 @@ BEGIN
         SELECT t.* INTO o FROM public.cdn_tracks t WHERE (t.track_urn, t.quality) = (NEW.track_urn, NEW.quality);
         IF FOUND THEN
             PERFORM nextval('public.scd_conflict_cdn_tracks'::regclass);
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.cdn_tracks t SET
                     cdn_path = CASE WHEN NEW.row_v > o.row_v THEN NEW.cdn_path ELSE o.cdn_path END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
                     status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
                     track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
@@ -1229,11 +1229,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.discover_promoted t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.discover_promoted t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     entity_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_id ELSE o.entity_id END,
                     entity_type = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_type ELSE o.entity_type END,
                     note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
@@ -1252,11 +1252,11 @@ BEGIN
         SELECT t.* INTO o FROM public.discover_promoted t WHERE (t.entity_type, t.entity_id) = (NEW.entity_type, NEW.entity_id);
         IF FOUND THEN
             PERFORM nextval('public.scd_conflict_discover_promoted'::regclass);
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.discover_promoted t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     entity_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_id ELSE o.entity_id END,
                     entity_type = CASE WHEN NEW.row_v > o.row_v THEN NEW.entity_type ELSE o.entity_type END,
                     note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
@@ -1538,10 +1538,10 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.disliked_tracks t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.disliked_tracks t SET
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     sc_track_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_track_id ELSE o.sc_track_id END,
                     sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
                     track_data = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_data ELSE o.track_data END,
@@ -1558,10 +1558,10 @@ BEGIN
         SELECT t.* INTO o FROM public.disliked_tracks t WHERE (t.sc_user_id, t.sc_track_id) = (NEW.sc_user_id, NEW.sc_track_id);
         IF FOUND THEN
             PERFORM nextval('public.scd_conflict_disliked_tracks'::regclass);
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.disliked_tracks t SET
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     sc_track_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_track_id ELSE o.sc_track_id END,
                     sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
                     track_data = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_data ELSE o.track_data END,
@@ -1759,11 +1759,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.featured_items t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.featured_items t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     sc_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_urn ELSE o.sc_urn END,
                     type = CASE WHEN NEW.row_v > o.row_v THEN NEW.type ELSE o.type END,
                     weight = CASE WHEN NEW.row_v > o.row_v THEN NEW.weight ELSE o.weight END,
@@ -1937,11 +1937,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.link_requests t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.link_requests t SET
                     claim_token = CASE WHEN NEW.row_v > o.row_v THEN NEW.claim_token ELSE o.claim_token END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
                     expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
                     mode = CASE WHEN NEW.row_v > o.row_v THEN NEW.mode ELSE o.mode END,
@@ -2146,11 +2146,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.login_requests t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.login_requests t SET
                     code_verifier = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_verifier ELSE o.code_verifier END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
                     expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
                     oauth_app_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
@@ -2595,13 +2595,13 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.oauth_apps t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.oauth_apps t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
                     client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
                     client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
                     redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
@@ -2618,13 +2618,13 @@ BEGIN
         SELECT t.* INTO o FROM public.oauth_apps t WHERE (btrim(t.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text)) = (btrim(NEW.client_id, E'\u0009\u000A\u000B\u000C\u000D \u0085\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000'::text));
         IF FOUND THEN
             PERFORM nextval('public.scd_conflict_oauth_apps'::regclass);
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.oauth_apps t SET
                     active = CASE WHEN NEW.row_v > o.row_v THEN NEW.active ELSE o.active END,
                     client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
                     client_secret = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_secret ELSE o.client_secret END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
                     redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.redirect_uri ELSE o.redirect_uri END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
@@ -3538,10 +3538,10 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.sessions t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.sessions t SET
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     soundcloud_connection_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.soundcloud_connection_id ELSE o.soundcloud_connection_id END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
                     row_v = greatest(o.row_v, NEW.row_v)
@@ -3712,7 +3712,7 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.soundcloud_connections t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF (NOT core AND (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at) IS DISTINCT FROM (o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.refresh_rejection_count, o.first_refresh_rejection_at, o.updated_at)) OR NEW.token_v > o.token_v OR ((NEW.token_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF (NOT core AND (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at) IS DISTINCT FROM (o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.refresh_rejection_count, o.first_refresh_rejection_at, o.updated_at)) OR NEW.token_v > o.token_v OR (((NEW.token_v & 15) <> public.scd_node_ord() OR NEW.token_v = o.token_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.soundcloud_connections t SET
                     refresh_generation = CASE WHEN core THEN o.refresh_generation ELSE NEW.refresh_generation END,
@@ -3729,7 +3729,7 @@ BEGIN
                     updated_at = CASE WHEN core THEN o.updated_at ELSE NEW.updated_at END,
                     soundcloud_user_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.soundcloud_user_id ELSE o.soundcloud_user_id END,
                     username = CASE WHEN NEW.token_v > o.token_v THEN NEW.username ELSE o.username END,
-                    created_at = CASE WHEN (NEW.token_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.token_v > o.token_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.token_v & 15) <> public.scd_node_ord() OR NEW.token_v = o.token_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.token_v > o.token_v THEN NEW.created_at ELSE o.created_at END,
                     oauth_app_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.oauth_app_id ELSE o.oauth_app_id END,
                     access_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.access_token ELSE o.access_token END,
                     refresh_token = CASE WHEN NEW.token_v > o.token_v THEN NEW.refresh_token ELSE o.refresh_token END,
@@ -4022,13 +4022,13 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.sync_queue t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.intent_v > o.intent_v OR ((NEW.intent_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
+            IF NEW.intent_v > o.intent_v OR (((NEW.intent_v & 15) <> public.scd_node_ord() OR NEW.intent_v = o.intent_v) AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.sync_queue t SET
                     user_id = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.user_id ELSE o.user_id END,
                     action_type = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.action_type ELSE o.action_type END,
                     target_urn = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.target_urn ELSE o.target_urn END,
-                    created_at = CASE WHEN (NEW.intent_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.intent_v & 15) <> public.scd_node_ord() OR NEW.intent_v = o.intent_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
                     payload = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.payload ELSE o.payload END,
                     generation = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.generation ELSE o.generation END,
                     cancelled = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.cancelled ELSE o.cancelled END,
@@ -4058,13 +4058,13 @@ BEGIN
             SELECT t.* INTO o FROM public.sync_queue t WHERE (t.user_id, t.action_type, t.target_urn) = (NEW.user_id, NEW.action_type, NEW.target_urn) AND (((t.action_type)::text <> 'comment'::text));
             IF FOUND THEN
                 PERFORM nextval('public.scd_conflict_sync_queue'::regclass);
-                IF NEW.intent_v > o.intent_v OR ((NEW.intent_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
+                IF NEW.intent_v > o.intent_v OR (((NEW.intent_v & 15) <> public.scd_node_ord() OR NEW.intent_v = o.intent_v) AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.locked_at, NEW.lease_id, NEW.lease_generation, NEW.retry_count, NEW.last_error, NEW.next_run_at, NEW.dead, NEW.failed_at, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.exec_generation) IS DISTINCT FROM (o.locked_at, o.lease_id, o.lease_generation, o.retry_count, o.last_error, o.next_run_at, o.dead, o.failed_at, o.remote_attempted_generation, o.remote_completed_generation, o.remote_result, o.exec_generation)) THEN
                     PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                     UPDATE public.sync_queue t SET
                         user_id = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.user_id ELSE o.user_id END,
                         action_type = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.action_type ELSE o.action_type END,
                         target_urn = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.target_urn ELSE o.target_urn END,
-                        created_at = CASE WHEN (NEW.intent_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
+                        created_at = CASE WHEN ((NEW.intent_v & 15) <> public.scd_node_ord() OR NEW.intent_v = o.intent_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.intent_v > o.intent_v THEN NEW.created_at ELSE o.created_at END,
                         payload = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.payload ELSE o.payload END,
                         generation = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.generation ELSE o.generation END,
                         cancelled = CASE WHEN NEW.intent_v > o.intent_v THEN NEW.cancelled ELSE o.cancelled END,
@@ -4306,10 +4306,10 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.track_artist_blocks t WHERE (t.track_id, t.artist_id) = (NEW.track_id, NEW.artist_id);
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.track_artist_blocks t SET
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     note = CASE WHEN NEW.row_v > o.row_v THEN NEW.note ELSE o.note END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE (t.track_id, t.artist_id) = (o.track_id, o.artist_id);
@@ -4736,11 +4736,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.user_blocked_artists t WHERE (t.sc_user_id, t.kind, t.target_id) = (NEW.sc_user_id, NEW.kind, NEW.target_id);
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.user_blocked_artists t SET
                     avatar_url = CASE WHEN NEW.row_v > o.row_v THEN NEW.avatar_url ELSE o.avatar_url END,
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     name = CASE WHEN NEW.row_v > o.row_v THEN NEW.name ELSE o.name END,
                     sc_user_ids = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_ids ELSE o.sc_user_ids END,
                     row_v = greatest(o.row_v, NEW.row_v)
@@ -4979,11 +4979,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.user_followings t WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
         IF FOUND THEN
-            IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
+            IF NEW.wanted_v > o.wanted_v OR (((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.user_followings t SET
                     wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
-                    created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
                     wanted_v = greatest(o.wanted_v, NEW.wanted_v),
                     progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
                     synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
@@ -5244,11 +5244,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.user_likes_playlists t WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
         IF FOUND THEN
-            IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
+            IF NEW.wanted_v > o.wanted_v OR (((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.synced_for_v)) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.user_likes_playlists t SET
                     wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
-                    created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
                     wanted_v = greatest(o.wanted_v, NEW.wanted_v),
                     progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
                     synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
@@ -5360,11 +5360,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.user_likes_tracks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
         IF FOUND THEN
-            IF NEW.wanted_v > o.wanted_v OR ((NEW.wanted_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.liked_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.liked_at, o.synced_for_v)) THEN
+            IF NEW.wanted_v > o.wanted_v OR (((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) AND NEW.created_at < o.created_at) OR (NOT core AND (NEW.progress, NEW.synced_at, NEW.liked_at, NEW.synced_for_v) IS DISTINCT FROM (o.progress, o.synced_at, o.liked_at, o.synced_for_v)) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.user_likes_tracks t SET
                     wanted_state = CASE WHEN NEW.wanted_v > o.wanted_v THEN NEW.wanted_state ELSE o.wanted_state END,
-                    created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.wanted_v > o.wanted_v THEN NEW.created_at ELSE o.created_at END,
                     wanted_v = greatest(o.wanted_v, NEW.wanted_v),
                     progress = CASE WHEN core THEN o.progress ELSE NEW.progress END,
                     synced_at = CASE WHEN core THEN o.synced_at ELSE NEW.synced_at END,
@@ -5759,10 +5759,10 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.user_superlikes t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR ((NEW.row_v & 15) <> public.scd_node_ord() AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.user_superlikes t SET
-                    created_at = CASE WHEN (NEW.row_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     like_created_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.like_created_at ELSE o.like_created_at END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE (t.user_id, t.sc_track_id) = (o.user_id, o.sc_track_id);
