@@ -1,13 +1,11 @@
 use std::sync::Arc;
-use std::time::Duration;
 
-use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::modules::auth::service::RefreshOutcome;
-use crate::modules::auth::{AuthHealthService, AuthService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
 
@@ -32,6 +30,7 @@ fn auth(pool: &PgPool) -> anyhow::Result<Arc<AuthService>> {
         sc,
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis, pool.clone()),
+        CoreRpc::unreachable(),
     ))
 }
 
@@ -75,68 +74,62 @@ async fn connect(
     Ok(())
 }
 
-fn finish_lease_later(pool: &PgPool, refreshed: bool) {
-    let pool = pool.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        if refreshed {
-            sqlx::query_file!(
-                "queries/auth/service/complete_connection_refresh.sql",
-                CONNECTION,
-                LEASE,
-                GENERATION,
-                "fresh-access",
-                "fresh-refresh",
-                Utc::now() + chrono::Duration::hours(1),
-                ""
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("the lease holder stores its token");
-        } else {
-            sqlx::query_file!(
-                "queries/auth/service/fail_connection_refresh_retryable.sql",
-                CONNECTION,
-                LEASE,
-                GENERATION,
-                "temporarily_unavailable",
-                "SoundCloud unavailable",
-                120_i32
-            )
-            .execute(&pool)
-            .await
-            .expect("the lease holder stores its failure");
-        }
-    });
+async fn untouched(pool: &PgPool) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT refresh_generation = $2
+            AND refresh_lease_id IS NULL
+            AND last_refresh_attempt_at IS NULL
+            AND last_refresh_error_kind IS NULL
+            AND retry_at IS NULL
+            AND access_token = 'access'
+         FROM soundcloud_connections WHERE id = $1",
+    )
+    .bind(CONNECTION)
+    .bind(GENERATION)
+    .fetch_one(pool)
+    .await?)
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_token_request_waits_for_a_refresh_running_elsewhere(pool: PgPool) -> anyhow::Result<()> {
+async fn core_down_gives_a_temporary_error_and_writes_nothing(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, APP, true).await?;
-    connect(&pool, Some(APP), -60, Some(LEASE)).await?;
-    finish_lease_later(&pool, true);
+    connect(&pool, Some(APP), -60, None).await?;
+    let auth = auth(&pool)?;
 
-    let token = auth(&pool)?.get_valid_access_token(SESSION).await?;
+    let token = auth.get_valid_access_token(SESSION).await;
+    let refreshed = auth.refresh_soundcloud(SESSION).await;
+    let rejected = auth.refresh_rejected_access_token(SESSION, "access").await;
+    let held = auth.mark_access_token_rejected(SESSION, "access").await?;
 
-    assert_eq!(token, "fresh-access");
+    assert!(matches!(
+        token,
+        Err(AppError::SoundCloudTemporarilyUnavailable { .. })
+    ));
+    assert!(matches!(
+        refreshed,
+        Err(AppError::SoundCloudTemporarilyUnavailable { .. })
+    ));
+    assert!(matches!(
+        rejected,
+        Err(AppError::SoundCloudTemporarilyUnavailable { .. })
+    ));
+    assert_eq!(held, None);
+    assert!(untouched(&pool).await?);
     Ok(())
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_refresh_failed_elsewhere_is_reported_once_its_lease_ends(
+async fn a_refresh_running_on_core_is_not_mistaken_for_a_logout(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     add_app(&pool, APP, true).await?;
     connect(&pool, Some(APP), -60, Some(LEASE)).await?;
-    finish_lease_later(&pool, false);
 
     let token = auth(&pool)?.get_valid_access_token(SESSION).await;
 
     assert!(matches!(
         token,
-        Err(AppError::SoundCloudTemporarilyUnavailable {
-            retry_after_sec: Some(100..=120)
-        })
+        Err(AppError::SoundCloudTemporarilyUnavailable { .. })
     ));
     Ok(())
 }
@@ -230,7 +223,7 @@ async fn a_fresh_token_stays_usable_while_its_app_is_inactive(pool: PgPool) -> a
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn an_upload_refreshes_a_token_about_to_expire_and_keeps_it_when_soundcloud_fails(
+async fn an_upload_keeps_a_token_about_to_expire_while_core_is_down(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     add_app(&pool, APP, true).await?;
@@ -239,12 +232,7 @@ async fn an_upload_refreshes_a_token_about_to_expire_and_keeps_it_when_soundclou
     let token = auth(&pool)?.get_lasting_access_token(SESSION).await?;
 
     assert_eq!(token, "access");
-    let generation: i64 =
-        sqlx::query_scalar("SELECT refresh_generation FROM soundcloud_connections WHERE id = $1")
-            .bind(CONNECTION)
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(generation, GENERATION + 1);
+    assert!(untouched(&pool).await?);
     Ok(())
 }
 

@@ -2,6 +2,7 @@ pub mod advisory;
 mod consumer;
 #[cfg(test)]
 mod reaper_tests;
+mod rpc;
 #[cfg(test)]
 mod tests;
 pub mod worker_consumers;

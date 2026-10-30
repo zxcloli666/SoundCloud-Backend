@@ -16,7 +16,7 @@ use crate::config::{
     DbSslCfg, DiagCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg,
     StreamingCfg, SubscriptionsCfg,
 };
-use crate::modules::auth::{AuthHealthService, AuthService, LinkService, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::sc::read_tests::SearchRelay;
 use crate::sc::{ScClient, ScReadService};
@@ -156,6 +156,7 @@ pub(super) async fn state(
         sc.clone(),
         oauth_apps.clone(),
         AuthHealthService::with_database(redis_pool.clone(), pg.clone()),
+        CoreRpc::unreachable(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
     let tokens = TokenProvider::new(auth.clone(), OAuthAppTokenService::new(pg.clone()));

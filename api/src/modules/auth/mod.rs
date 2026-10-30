@@ -1,9 +1,10 @@
 pub mod callback_page;
+pub mod core_rpc;
 pub mod dto;
 pub mod handlers;
 pub mod health;
 #[cfg(test)]
-mod lease_wait_tests;
+mod core_refresh_tests;
 pub mod link_service;
 #[cfg(test)]
 mod login_app_tests;
@@ -14,6 +15,7 @@ mod source_tests;
 pub mod token_provider;
 
 pub use handlers::router;
+pub use core_rpc::CoreRpc;
 pub use health::AuthHealthService;
 pub use link_service::LinkService;
 pub use service::AuthService;

@@ -6,6 +6,7 @@ use rand::RngCore;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -15,6 +16,7 @@ use crate::modules::auth::model::{LoginRequest, SoundCloudConnection};
 use crate::sc::{ScMe, ScReadService, ScTokenResponse};
 
 use super::AuthService;
+use super::replica::Feed;
 use super::oauth::{
     access_token_expiry, access_token_subject, oauth_app_failure_cooldown, public_error_message,
 };
@@ -22,6 +24,8 @@ use super::oauth::{
 pub(super) const LOGIN_REQUEST_TTL_SECS: i64 = 15 * 60;
 pub(super) const MAX_AUTH_RETRIES: i32 = 3;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
+const LOGIN_REQUEST_WAIT: Duration = Duration::from_secs(10);
+const LOGIN_REQUEST_POLL: Duration = Duration::from_millis(250);
 const PROFILE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -118,73 +122,88 @@ impl AuthService {
         code: &str,
         state: &str,
     ) -> AppResult<CallbackResult> {
-        let claimed = sqlx::query_file_as!(
+        let feed = self.feed().await?;
+        let deadline = Instant::now() + LOGIN_REQUEST_WAIT;
+        loop {
+            if let Some(login_request) = self.claim_login_request(state).await? {
+                return self.finish_callback(public, login_request, code).await;
+            }
+            if let Some(existing) = self.login_request_by_state(state).await? {
+                return Ok(existing_callback(existing));
+            }
+            if feed == Feed::Local || Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(LOGIN_REQUEST_POLL).await;
+        }
+        let error = if self.feed().await? == Feed::Stalled {
+            "This server has not received the login yet. Please try again in a minute."
+        } else {
+            "This login link is invalid or already used."
+        };
+        Ok(CallbackResult {
+            login_request_id: None,
+            initial_status: "failed".to_owned(),
+            username: None,
+            error: Some(error.to_owned()),
+        })
+    }
+
+    async fn claim_login_request(&self, state: &str) -> AppResult<Option<LoginRequest>> {
+        Ok(sqlx::query_file_as!(
             LoginRequest,
             "queries/auth/service/claim_login_request.sql",
             state
         )
         .fetch_optional(&self.pool)
-        .await?;
+        .await?)
+    }
 
-        if let Some(login_request) = claimed {
-            let request_id = login_request.id;
-            match tokio::time::timeout(
-                CALLBACK_TIMEOUT,
-                self.complete_login(public, login_request, code.to_owned()),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    error!(%error, "OAuth callback failed");
-                    let message =
-                        public_error_message(&error, "Authentication failed. Please try again.");
-                    self.mark_request_failed(request_id, &message).await?;
-                }
-                Err(_) => {
-                    warn!("OAuth callback timed out");
-                    self.mark_request_failed(
-                        request_id,
-                        "SoundCloud authentication timed out. Please try again.",
-                    )
-                    .await?;
-                }
-            }
-            let status = self.get_login_request_status(request_id).await?;
-            return Ok(CallbackResult {
-                login_request_id: Some(request_id),
-                initial_status: status.status,
-                username: status.username,
-                error: status.error,
-            });
-        }
-
-        let existing = sqlx::query_file_as!(
+    async fn login_request_by_state(&self, state: &str) -> AppResult<Option<LoginRequest>> {
+        Ok(sqlx::query_file_as!(
             LoginRequest,
             "queries/auth/service/get_login_request_by_state.sql",
             state
         )
         .fetch_optional(&self.pool)
-        .await?;
-        let Some(existing) = existing else {
-            return Ok(CallbackResult {
-                login_request_id: None,
-                initial_status: "failed".to_owned(),
-                username: None,
-                error: Some("This login link is invalid or already used.".to_owned()),
-            });
-        };
+        .await?)
+    }
 
-        let initial_status = match existing.status.as_str() {
-            "completed" => "completed",
-            "processing" => "pending",
-            _ => "failed",
-        };
+    async fn finish_callback(
+        &self,
+        public: &ScReadService,
+        login_request: LoginRequest,
+        code: &str,
+    ) -> AppResult<CallbackResult> {
+        let request_id = login_request.id;
+        match tokio::time::timeout(
+            CALLBACK_TIMEOUT,
+            self.complete_login(public, login_request, code.to_owned()),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                error!(%error, "OAuth callback failed");
+                let message =
+                    public_error_message(&error, "Authentication failed. Please try again.");
+                self.mark_request_failed(request_id, &message).await?;
+            }
+            Err(_) => {
+                warn!("OAuth callback timed out");
+                self.mark_request_failed(
+                    request_id,
+                    "SoundCloud authentication timed out. Please try again.",
+                )
+                .await?;
+            }
+        }
+        let status = self.get_login_request_status(request_id).await?;
         Ok(CallbackResult {
-            login_request_id: Some(existing.id),
-            initial_status: initial_status.to_owned(),
-            username: existing.username,
-            error: existing.error,
+            login_request_id: Some(request_id),
+            initial_status: status.status,
+            username: status.username,
+            error: status.error,
         })
     }
 
@@ -387,49 +406,12 @@ impl AuthService {
         };
 
         let previous_connection_id = target.as_ref().and_then(|row| row.soundcloud_connection_id);
-        let reusable_connection_id = if let Some(connection_id) = previous_connection_id {
-            let current_user = sqlx::query_file_scalar!(
-                "queries/auth/service/lock_connection_user.sql",
-                connection_id
-            )
-            .fetch_optional(&mut **transaction)
-            .await?;
-            current_user
-                .as_deref()
-                .filter(|current| *current == soundcloud_user_id)
-                .map(|_| connection_id)
-        } else {
-            None
-        };
-
-        let username = username.unwrap_or_default();
-        if let Some(connection_id) = reusable_connection_id {
-            let connection = sqlx::query_file_as!(
-                SoundCloudConnection,
-                "queries/auth/service/update_connection.sql",
-                connection_id,
-                soundcloud_user_id,
-                username,
-                oauth_app_id,
-                &token.access_token,
-                &token.refresh_token,
-                expires_at,
-                &token.scope
-            )
-            .fetch_one(&mut **transaction)
-            .await?;
-            return Ok(StoredConnection {
-                connection,
-                orphan_candidate: None,
-            });
-        }
-
         let connection = sqlx::query_file_as!(
             SoundCloudConnection,
             "queries/auth/service/insert_connection.sql",
             Uuid::now_v7(),
             soundcloud_user_id,
-            username,
+            username.unwrap_or_default(),
             oauth_app_id,
             &token.access_token,
             &token.refresh_token,
@@ -438,6 +420,23 @@ impl AuthService {
         )
         .fetch_one(&mut **transaction)
         .await?;
+        if let Some(previous) = previous_connection_id {
+            let previous_user = sqlx::query_file_scalar!(
+                "queries/auth/service/lock_connection_user.sql",
+                previous
+            )
+            .fetch_optional(&mut **transaction)
+            .await?;
+            if previous_user.as_deref() == Some(soundcloud_user_id) {
+                sqlx::query_file!(
+                    "queries/auth/service/move_connection_sessions.sql",
+                    previous,
+                    connection.id
+                )
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
         Ok(StoredConnection {
             connection,
             orphan_candidate: previous_connection_id,
@@ -583,6 +582,20 @@ pub(super) fn base64_url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+fn existing_callback(existing: LoginRequest) -> CallbackResult {
+    let initial_status = match existing.status.as_str() {
+        "completed" => "completed",
+        "processing" => "pending",
+        _ => "failed",
+    };
+    CallbackResult {
+        login_request_id: Some(existing.id),
+        initial_status: initial_status.to_owned(),
+        username: existing.username,
+        error: existing.error,
+    }
+}
+
 fn expired_login_status(message: &str) -> LoginStatusResult {
     LoginStatusResult {
         status: "expired".to_owned(),
@@ -624,6 +637,10 @@ fn normalize_login_profile(mut value: Value, user_id: &str) -> Option<Value> {
     object.insert("urn".into(), Value::String(urn));
     Some(value)
 }
+
+#[cfg(test)]
+#[path = "relogin_tests.rs"]
+mod relogin_tests;
 
 #[cfg(test)]
 mod tests {

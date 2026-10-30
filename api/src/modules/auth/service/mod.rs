@@ -1,6 +1,7 @@
 mod connection;
 pub(crate) mod login;
 mod oauth;
+mod replica;
 
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppResult;
+use crate::modules::auth::core_rpc::CoreRpc;
 use crate::modules::auth::health::AuthHealthService;
 use crate::modules::auth::model::{AuthSession, Session, SoundCloudConnection};
 use crate::modules::oauth_apps::OAuthAppsService;
@@ -21,6 +23,7 @@ pub struct AuthService {
     sc: ScClient,
     oauth_apps: Arc<OAuthAppsService>,
     health: Arc<AuthHealthService>,
+    core: Arc<CoreRpc>,
 }
 
 impl AuthService {
@@ -29,12 +32,14 @@ impl AuthService {
         sc: ScClient,
         oauth_apps: Arc<OAuthAppsService>,
         health: Arc<AuthHealthService>,
+        core: Arc<CoreRpc>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pool,
             sc,
             oauth_apps,
             health,
+            core,
         })
     }
 
