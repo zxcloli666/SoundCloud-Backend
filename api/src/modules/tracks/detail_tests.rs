@@ -42,7 +42,8 @@ async fn services_from(pool: &PgPool, deps: TracksServiceDependencies) -> anyhow
             sync_queue: deps.sync_queue.clone(),
             cold_refresh: deps.cold_refresh.clone(),
             tokens: deps.tokens.clone(),
-            background_jobs: background,
+            redis: deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
             miss: deps.miss.clone(),
         },
     );

@@ -7,7 +7,7 @@ VALUES
     ('cold_refresh.clear', true),
     ('comment.post', true),
     ('connection.drop_orphan', false),
-    ('job.enqueue', true),
+    ('job.enqueue', false),
     ('lyrics.wake', true),
     ('match.album_track', true),
     ('match.genius_song', true),

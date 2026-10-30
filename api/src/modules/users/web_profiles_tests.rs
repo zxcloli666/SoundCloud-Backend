@@ -23,6 +23,8 @@ async fn web_profiles_cold_miss_deduplicates_and_preserves_job_cooldown(
     );
     sqlx::query("UPDATE background_jobs SET available_at = now() + interval '10 minutes', attempts = 3 WHERE dedup_key = 'web_profiles:42:public'")
         .execute(&pool).await?;
+    sqlx::query("UPDATE job_status SET available_at = now() + interval '10 minutes' WHERE dedup_key = 'web_profiles:42:public'")
+        .execute(&pool).await?;
     let second = read(&pool, "7", "soundcloud:users:42")
         .await
         .err()

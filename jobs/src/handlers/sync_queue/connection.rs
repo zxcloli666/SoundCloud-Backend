@@ -129,7 +129,7 @@ impl ConnectionManager {
 
     pub async fn reject_app_token(&self, token: &AppToken) -> Result<(), ConnectionError> {
         sqlx::query_file!(
-            "../api/queries/oauth_apps/token_service/reject_generation.sql",
+            "queries/sync_queue/reject_app_token.sql",
             token.oauth_app_id,
             token.generation
         )

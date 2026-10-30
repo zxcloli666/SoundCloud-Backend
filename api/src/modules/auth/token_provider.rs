@@ -382,7 +382,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn public_unauthorized_marks_the_observed_token_due(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -408,7 +408,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn public_rate_limit_rotates_without_invalidating_token(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -433,12 +433,10 @@ mod tests {
 
     async fn install_public_token_schema(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::query(
-            "CREATE TABLE oauth_app_tokens (
-                 oauth_app_id uuid PRIMARY KEY,
-                 generation uuid NOT NULL,
-                 expires_at timestamptz NOT NULL
-             )",
+            "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+             VALUES ($1, 'app', 'client', 'secret', 'https://app.test/callback')",
         )
+        .bind(Uuid::from_u128(1))
         .execute(pool)
         .await?;
         Ok(())
@@ -467,7 +465,8 @@ mod tests {
 
     async fn public_token_is_due(pool: &sqlx::PgPool) -> anyhow::Result<bool> {
         Ok(
-            sqlx::query_scalar("SELECT expires_at <= now() FROM oauth_app_tokens")
+            sqlx::query_scalar("SELECT expires_at <= $1 FROM oauth_app_tokens")
+                .bind(chrono::Utc::now())
                 .fetch_one(pool)
                 .await?,
         )

@@ -1,16 +1,17 @@
-use std::sync::Arc;
-
 use backend_contracts::{JobKind, PlaylistObservePayload, STAR_PRIORITY_BONUS};
 use chrono::{DateTime, Utc};
+use deadpool_redis::Pool;
 use serde::Serialize;
 use sqlx::PgPool;
+use wt::ObserveClaim;
 
-use crate::background_jobs::{BackgroundJob, BackgroundJobs};
+use crate::background_jobs::queue;
 use crate::error::AppResult;
 use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 const EDIT_PRIORITY: i16 = 30;
 const FAILURE_STREAK_LIMIT: i32 = 5;
+const VIEW_CLAIM_SECS: u64 = 30;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,12 +108,12 @@ struct MembershipStatusRow {
 
 pub struct PlaylistMembership {
     pool: PgPool,
-    jobs: Arc<BackgroundJobs>,
+    redis: Pool,
 }
 
 impl PlaylistMembership {
-    pub fn new(pool: PgPool, jobs: Arc<BackgroundJobs>) -> Self {
-        Self { pool, jobs }
+    pub fn new(pool: PgPool, redis: Pool) -> Self {
+        Self { pool, redis }
     }
 
     pub async fn status(&self, playlist_urn: &str) -> AppResult<PlaylistMembershipStatus> {
@@ -137,37 +138,63 @@ impl PlaylistMembership {
     }
 
     pub async fn enqueue_observation_if_due(&self, playlist_urn: &str) {
-        let claim = claim_observation_enqueue(&self.pool, playlist_urn).await;
-        let Ok(Some(claimed_until)) = claim else {
+        let Ok(Some(due_at)) = sqlx::query_file_scalar!(
+            "queries/playlists/observe_due_at.sql",
+            playlist_urn,
+            wt::now()
+        )
+        .fetch_optional(&self.pool)
+        .await
+        else {
             return;
         };
-        if self.enqueue(playlist_urn, VIEWER_PRIORITY).await {
+        if !self.claim_view(playlist_urn, due_at).await {
             return;
         }
-
-        let _ = release_observation_enqueue(&self.pool, playlist_urn, claimed_until).await;
+        self.enqueue(playlist_urn, VIEWER_PRIORITY, true).await;
     }
 
     pub async fn enqueue_edit_observation(&self, playlist_urn: &str) -> bool {
-        self.enqueue(playlist_urn, EDIT_PRIORITY).await
+        self.enqueue(playlist_urn, EDIT_PRIORITY, false).await
     }
 
-    async fn enqueue(&self, playlist_urn: &str, priority: i16) -> bool {
+    async fn claim_view(&self, playlist_urn: &str, due_at: DateTime<Utc>) -> bool {
+        let Ok(mut connection) = self.redis.get().await else {
+            return true;
+        };
+        let claimed: Result<Option<String>, _> = deadpool_redis::redis::cmd("SET")
+            .arg(format!(
+                "playlist:observe:{playlist_urn}:{}",
+                due_at.timestamp_micros()
+            ))
+            .arg(1)
+            .arg("NX")
+            .arg("EX")
+            .arg(VIEW_CLAIM_SECS)
+            .query_async(&mut connection)
+            .await;
+        !matches!(claimed, Ok(None))
+    }
+
+    async fn enqueue(&self, playlist_urn: &str, priority: i16, claim: bool) -> bool {
         let priority = owner_priority(&self.pool, playlist_urn, priority)
             .await
             .unwrap_or(priority);
-        let job = BackgroundJob::coalescing(
+        let Ok(job) = queue::job(
             JobKind::PlaylistObserveShadow,
-            playlist_urn,
+            playlist_urn.to_owned(),
             PlaylistObservePayload {
                 playlist_urn: playlist_urn.to_owned(),
             },
-        )
-        .map(|job| job.if_absent().with_priority(priority));
-        match job {
-            Ok(job) => self.jobs.enqueue_opportunistic(&job).await,
-            Err(_) => false,
-        }
+            priority,
+        ) else {
+            return false;
+        };
+        let claim = claim.then(|| ObserveClaim {
+            playlist_urn: playlist_urn.to_owned(),
+            at: wt::now(),
+        });
+        queue::enqueue(&self.pool, vec![job], claim).await.is_ok()
     }
 }
 
@@ -199,30 +226,6 @@ async fn load_membership_status(
     .await
 }
 
-async fn claim_observation_enqueue(
-    pool: &PgPool,
-    playlist_urn: &str,
-) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
-    sqlx::query_file_scalar!("queries/playlists/claim_observe_enqueue.sql", playlist_urn)
-        .fetch_optional(pool)
-        .await
-}
-
-async fn release_observation_enqueue(
-    pool: &PgPool,
-    playlist_urn: &str,
-    claimed_until: DateTime<Utc>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query_file!(
-        "queries/playlists/release_observe_enqueue.sql",
-        playlist_urn,
-        claimed_until
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +233,23 @@ mod tests {
 
     const PLAYLIST: &str = "soundcloud:playlists:42";
     const OWNER: &str = "17";
+
+    async fn claimed(pool: &PgPool) -> anyhow::Result<bool> {
+        let job = queue::job(
+            JobKind::PlaylistObserveShadow,
+            PLAYLIST.to_owned(),
+            PlaylistObservePayload {
+                playlist_urn: PLAYLIST.to_owned(),
+            },
+            0,
+        )?;
+        let claim = ObserveClaim {
+            playlist_urn: PLAYLIST.to_owned(),
+            at: wt::now(),
+        };
+        let enqueued = queue::enqueue(pool, vec![job], Some(claim)).await?;
+        Ok(enqueued.is_some_and(|enqueued| enqueued.claimed))
+    }
 
     #[sqlx::test(migrations = "./migrations")]
     async fn observation_enqueue_is_throttled_and_count_mismatch_breaks_the_throttle(
@@ -240,14 +260,132 @@ mod tests {
             .execute(&pool)
             .await?;
 
-        assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_some());
-        assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_none());
+        assert!(claimed(&pool).await?);
+        assert!(!claimed(&pool).await?);
 
         test_schema::observe(&pool, PLAYLIST, OWNER, 2).await?;
-        assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_none());
+        assert!(!claimed(&pool).await?);
 
         test_schema::observe(&pool, PLAYLIST, OWNER, 3).await?;
-        assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_some());
+        assert!(claimed(&pool).await?);
+
+        let jobs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM background_jobs WHERE kind = 'playlists.observe_shadow'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        let statuses: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM job_status WHERE kind = 'playlists.observe_shadow' AND state = 'queued'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!((jobs, statuses), (1, 1));
+        Ok(())
+    }
+
+    async fn count_enqueue_commands(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::raw_sql(
+            "ALTER FUNCTION scd_cmd_job_enqueue(jsonb) RENAME TO scd_cmd_job_enqueue_real;
+             CREATE TABLE enqueue_commands (n bigserial PRIMARY KEY);
+             CREATE FUNCTION scd_cmd_job_enqueue(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
+             BEGIN
+                 INSERT INTO enqueue_commands DEFAULT VALUES;
+                 RETURN scd_cmd_job_enqueue_real(args);
+             END $f$;",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn enqueue_commands(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar("SELECT count(*) FROM enqueue_commands")
+            .fetch_one(pool)
+            .await?)
+    }
+
+    fn node_redis(database: u8) -> Pool {
+        let url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+        deadpool_redis::Config::from_url(format!("{url}/{database}"))
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("redis pool")
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_count_change_makes_the_next_view_enqueue_at_once(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        sqlx::query(
+            "UPDATE playlist_membership_state SET next_reconcile_at = now() - interval '1 hour'",
+        )
+        .execute(&pool)
+        .await?;
+        count_enqueue_commands(&pool).await?;
+        let node = PlaylistMembership::new(pool.clone(), node_redis(3));
+        let mut connection = node.redis.get().await?;
+        let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+            .query_async(&mut connection)
+            .await?;
+
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 1);
+
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 1);
+
+        test_schema::observe(&pool, PLAYLIST, OWNER, 3).await?;
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 2);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_thousand_views_on_two_nodes_make_one_background_job(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        sqlx::query(
+            "UPDATE playlist_membership_state SET next_reconcile_at = now() - interval '1 hour'",
+        )
+        .execute(&pool)
+        .await?;
+        count_enqueue_commands(&pool).await?;
+        let nodes = [
+            std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(1))),
+            std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(2))),
+        ];
+        for node in &nodes {
+            let mut connection = node.redis.get().await?;
+            let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+                .query_async(&mut connection)
+                .await?;
+        }
+
+        let mut views = tokio::task::JoinSet::new();
+        for view in 0..1000 {
+            let node = nodes[view % 2].clone();
+            views.spawn(async move { node.enqueue_observation_if_due(PLAYLIST).await });
+        }
+        while let Some(done) = views.join_next().await {
+            done?;
+        }
+
+        let jobs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM background_jobs WHERE kind = 'playlists.observe_shadow' AND dedup_key = $1",
+        )
+        .bind(PLAYLIST)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(jobs, 1);
+        let commands: i64 = sqlx::query_scalar("SELECT count(*) FROM enqueue_commands")
+            .fetch_one(&pool)
+            .await?;
+        assert!(
+            (1..=2).contains(&commands),
+            "{commands} enqueue commands reached core"
+        );
         Ok(())
     }
 
@@ -410,11 +548,10 @@ mod tests {
         test_schema::install(&pool).await?;
         test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
         let queued_at: DateTime<Utc> = sqlx::query_scalar(
-            "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
-             VALUES ($1, 'playlists.observe_shadow', 'core_bulk', $2, '{}')
-             RETURNING created_at",
+            "INSERT INTO job_status (kind, dedup_key, state)
+             VALUES ('playlists.observe_shadow', $1, 'queued')
+             RETURNING updated_at",
         )
-        .bind(uuid::Uuid::now_v7())
         .bind(PLAYLIST)
         .fetch_one(&pool)
         .await?;
@@ -439,9 +576,7 @@ mod tests {
         )
         .execute(&pool)
         .await?;
-        sqlx::query("DELETE FROM background_jobs")
-            .execute(&pool)
-            .await?;
+        sqlx::query("DELETE FROM job_status").execute(&pool).await?;
 
         let waiting = membership_status(load_membership_status(&pool, PLAYLIST).await?);
         assert!((599..=600).contains(&waiting.retry_after_seconds));

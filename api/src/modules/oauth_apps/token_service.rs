@@ -78,14 +78,17 @@ impl OAuthAppTokenService {
     }
 
     async fn persist_rejection(&self, token: PublicTokenId) -> Result<bool, sqlx::Error> {
-        let updated = sqlx::query_file_scalar!(
-            "queries/oauth_apps/token_service/reject_generation.sql",
-            token.oauth_app_id,
-            token.generation
-        )
-        .fetch_optional(&self.pg)
-        .await?;
-        Ok(updated.is_some())
+        let command = wt::AppTokenReject {
+            oauth_app_id: token.oauth_app_id,
+            generation: token.generation,
+            at: wt::now(),
+        };
+        wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            let rejected = wt::call(&mut transaction, &command).await?;
+            transaction.commit().await.map(|()| rejected)
+        })
+        .await
     }
 
     async fn snapshot_with<F, Fut, E>(&self, load: F) -> AppResult<Vec<PublicToken>>
@@ -237,15 +240,13 @@ mod tests {
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn rejection_marks_only_the_observed_generation_due(pool: PgPool) -> anyhow::Result<()> {
         sqlx::query(
-            "CREATE TABLE oauth_app_tokens (
-                 oauth_app_id uuid PRIMARY KEY,
-                 generation uuid NOT NULL,
-                 expires_at timestamptz NOT NULL
-             )",
+            "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+             VALUES ($1, 'app', 'client', 'secret', 'https://app.test/callback')",
         )
+        .bind(Uuid::from_u128(1))
         .execute(&pool)
         .await?;
         let app_id = Uuid::from_u128(1);
@@ -266,9 +267,10 @@ mod tests {
         service.reject(observed).await;
 
         let rejected_is_due: bool = sqlx::query_scalar(
-            "SELECT expires_at <= now() FROM oauth_app_tokens WHERE oauth_app_id = $1",
+            "SELECT expires_at <= $2 FROM oauth_app_tokens WHERE oauth_app_id = $1",
         )
         .bind(app_id)
+        .bind(Utc::now())
         .fetch_one(&pool)
         .await?;
         assert!(rejected_is_due);

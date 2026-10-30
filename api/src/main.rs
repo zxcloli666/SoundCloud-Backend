@@ -234,7 +234,7 @@ async fn main() {
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
-        background_jobs: background_jobs.clone(),
+        redis: redis_pool.clone(),
         miss: miss.clone(),
     });
     let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
@@ -247,7 +247,7 @@ async fn main() {
     );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
-    let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
+    let lyrics = LyricsService::new(pg.clone(), reserve);
 
     let likes = LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
 

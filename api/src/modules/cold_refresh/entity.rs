@@ -1,9 +1,8 @@
-use backend_contracts::{
-    CatalogEntity, CatalogRefreshPayload, JobKind, STAR_PRIORITY_BONUS, Versioned,
-};
+use backend_contracts::{CatalogEntity, CatalogRefreshPayload, JobKind, STAR_PRIORITY_BONUS};
 use sqlx::PgPool;
-use uuid::Uuid;
+use wt::EnqueuedJob;
 
+use crate::background_jobs::queue;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 
@@ -118,7 +117,6 @@ pub async fn enqueue_entity_in(
     if !payload.is_valid() || (urn.contains(':') && urn != entity.urn(&payload.sc_id)) {
         return Err(AppError::bad_request("Invalid catalog resource"));
     }
-    let dedup_key = payload.dedup_key();
     let star_candidates: Vec<String> = payload
         .owner_id
         .iter()
@@ -126,21 +124,18 @@ pub async fn enqueue_entity_in(
         .chain(reader.map(extract_sc_id))
         .map(str::to_owned)
         .collect();
-    let body = serde_json::to_value(Versioned::V1(payload))
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let kind = JobKind::CatalogRefresh;
-    sqlx::query_file!(
-        "queries/cold_refresh/enqueue_entity.sql",
-        Uuid::now_v7(),
-        kind.as_str(),
-        kind.lane().as_str(),
-        dedup_key,
-        body,
-        priority,
-        &star_candidates,
-        STAR_PRIORITY_BONUS
+    let dedup_key = payload.dedup_key();
+    let job = queue::job(JobKind::CatalogRefresh, dedup_key, payload, priority)?;
+    queue::enqueue_in(
+        connection,
+        vec![EnqueuedJob {
+            raise_priority: true,
+            star_candidates,
+            star_bonus: STAR_PRIORITY_BONUS,
+            ..job
+        }],
+        None,
     )
-    .execute(connection)
     .await?;
     Ok(())
 }

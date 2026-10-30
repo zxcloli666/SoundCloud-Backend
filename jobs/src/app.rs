@@ -232,6 +232,12 @@ pub async fn run() -> anyhow::Result<()> {
             },
         ),
     );
+    let wake_handlers = handlers.clone();
+    let wake_cancellation = cancellation.clone();
+    supervisor.spawn("lyrics wake listener", async move {
+        wake_handlers.listen_lyrics_wakes(wake_cancellation).await;
+        Ok::<(), anyhow::Error>(())
+    });
     let indexing_handlers = handlers.clone();
     supervisor.spawn(
         "audio index result consumer",

@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use backend_contracts::{CatalogCollection, CatalogCollectionPayload, JobKind};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
+use crate::background_jobs::queue;
 use crate::error::AppResult;
 use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
 use crate::modules::sync_queue::SyncQueueService;
@@ -62,13 +64,20 @@ impl MeService {
             self.sync_queue
                 .enqueue_on(&mut tx, sc_user_id, "follow_user", target_user_urn, None)
                 .await?;
-            sqlx::query_file!(
-                "queries/me/service/enqueue_followed_uploads.sql",
+            let due = sqlx::query_file_scalar!(
+                "queries/me/service/followed_uploads_due.sql",
                 &[crate::common::sc_ids::extract_sc_id(target_user_urn).to_owned()],
                 crate::common::sc_ids::extract_sc_id(sc_user_id)
             )
-            .execute(&mut *tx)
+            .fetch_all(&mut *tx)
             .await?;
+            let jobs = due
+                .into_iter()
+                .map(owned_tracks_job)
+                .collect::<AppResult<Vec<_>>>()?;
+            if !jobs.is_empty() {
+                queue::enqueue_in(&mut tx, jobs, None).await?;
+            }
             tx.commit().await?;
             Ok(())
         })
@@ -90,6 +99,15 @@ impl MeService {
             .await?;
         Ok(json!({ "status": "queued", "actionType": "unfollow_user" }))
     }
+}
+
+fn owned_tracks_job(subject_id: String) -> AppResult<wt::EnqueuedJob> {
+    let payload = CatalogCollectionPayload {
+        collection: CatalogCollection::OwnedTracks,
+        subject_id,
+        owner: false,
+    };
+    queue::job(JobKind::CatalogCollection, payload.dedup_key(), payload, 5)
 }
 
 pub fn premium_response(premium: bool) -> Value {

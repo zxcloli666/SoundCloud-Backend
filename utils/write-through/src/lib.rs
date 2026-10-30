@@ -5,9 +5,11 @@ mod sqlx_pg;
 pub mod tokio_pg;
 
 pub use kinds::{
-    AlbumSlot, ConnectionDropOrphan, Kind, MatchAlbumTrack, MatchGeniusSong, MatchScAccount,
-    MatchWantedLink, Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers,
-    ObservedPlaylist, ObservedTrack, ObservedUser, SyncQueuePurge, SyncQueueRevive,
+    AlbumSlot, AppTokenReject, ColdRefreshClear, ConnectionDropOrphan, Enqueued, EnqueuedJob,
+    JobEnqueue, Kind, LyricsWake, LyricsWakeState, MatchAlbumTrack, MatchGeniusSong,
+    MatchScAccount, MatchWantedLink, Mode, ObserveClaim, ObservePlaylists, ObserveProfile,
+    ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack, ObservedUser, SyncQueuePurge,
+    SyncQueueRevive,
 };
 #[cfg(feature = "sqlx")]
 pub use sqlx_pg::call;
