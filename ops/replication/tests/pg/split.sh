@@ -51,10 +51,13 @@ wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'ur
 wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'urn:t:e1')" "core's track reaches star"
 [ "$(val scd_b1_main "SELECT count(*) FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'")" = 1 ] \
   || { echo "FAIL the derived lyrics row did not replicate from core"; exit 1; }
-cid="$(val scd_b1_main "SELECT public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Edited\"}')")"
-[ "$(val scd_b1_main "SELECT title FROM public.tracks WHERE urn = 'urn:t:e1'")" = Edited ]
-[ "$(val scd_b1_main "SELECT count(*) FROM public.cmd_pending WHERE id = '$cid'")" = 1 ]
-[ "$(val scd_b1_main "SELECT input_title FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'")" = Old ]
+val scd_b1_main "SELECT public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Edited\"}');
+  SELECT title FROM public.tracks WHERE urn = 'urn:t:e1';
+  SELECT count(*) FROM public.cmd_pending p JOIN public.cmd_outbox o ON o.node = p.node AND o.id = p.id WHERE o.done_at IS NULL;
+  SELECT input_title FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'" > "$tmp/wt"
+cid="$(sed -n 1p "$tmp/wt")"
+[ "$(sed -n '2,4p' "$tmp/wt" | tr '\n' ' ')" = "Edited 1 Old " ] \
+  || { echo "FAIL inside the scd_wt tx on main: $(tr '\n' ' ' < "$tmp/wt")"; exit 1; }
 echo "ok main applies the edit at once, holds it pending and does not fire the derived trigger"
 wait_for scd_b1_core "SELECT status = 'ok' FROM public.cmd_done WHERE id = '$cid'" "core acks the command"
 wait_for scd_b1_main "SELECT done_at IS NOT NULL FROM public.cmd_outbox WHERE id = '$cid'" "main stamps done_at"
@@ -90,8 +93,10 @@ pairs tracks "urn = 'urn:t:e1'" "deleted track gone on all nodes"
 pairs lyrics_lookup_state "sc_track_id = 'e1'" "cascaded lyrics row gone on all nodes"
 
 say "B2 dispatch: a key core does not create is purged on the api with its children (cmd_purge loop)"
-cid="$(val scd_b1_main "SELECT public.scd_wt('observe.playlists', '{\"urn\": \"urn:p:1\", \"sc_id\": \"p1\", \"title\": \"P\", \"core\": \"skip\"}')")"
-[ "$(val scd_b1_main "SELECT count(*) FROM public.playlist_membership_state WHERE playlist_urn = 'urn:p:1'")" = 1 ]
+val scd_b1_main "SELECT public.scd_wt('observe.playlists', '{\"urn\": \"urn:p:1\", \"sc_id\": \"p1\", \"title\": \"P\", \"core\": \"skip\"}');
+  SELECT count(*) FROM public.playlist_membership_state WHERE playlist_urn = 'urn:p:1'" > "$tmp/wt"
+cid="$(sed -n 1p "$tmp/wt")"
+[ "$(sed -n 2p "$tmp/wt")" = 1 ] || { echo "FAIL main did not create the optimistic membership row"; exit 1; }
 wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.playlists WHERE urn = 'urn:p:1')
   AND NOT EXISTS (SELECT 1 FROM public.playlist_membership_state WHERE playlist_urn = 'urn:p:1')" "main purges the playlist and its membership row"
 [ "$(val scd_b1_core "SELECT count(*) FROM public.cmd_purge WHERE id = '$cid'")" = 2 ]
