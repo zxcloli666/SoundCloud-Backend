@@ -57,6 +57,36 @@ pub async fn connect(
         })
 }
 
+pub async fn ensure_same_scd_node(main: &PgPool, read: &PgPool) -> Result<(), DatabaseError> {
+    let (main_node, read_node) = tokio::try_join!(scd_node(main), scd_node(read))?;
+    same_node(main_node, read_node)
+}
+
+async fn scd_node(pool: &PgPool) -> Result<Option<String>, DatabaseError> {
+    sqlx::query_file_scalar!("queries/db/scd_node.sql")
+        .fetch_one(pool)
+        .await
+        .map_err(|source| DatabaseError {
+            stage: "node check",
+            source,
+        })
+}
+
+fn same_node(main: Option<String>, read: Option<String>) -> Result<(), DatabaseError> {
+    if main == read {
+        return Ok(());
+    }
+    Err(DatabaseError {
+        stage: "node check",
+        source: sqlx::Error::Configuration(
+            format!(
+                "JOBS_READ_DATABASE_URL reports scd.node {read:?} but DATABASE_URL reports {main:?}; the read database may only be a replica of the same node"
+            )
+            .into(),
+        ),
+    })
+}
+
 fn validate_pool(pool: &PoolConfig) -> Result<(), DatabaseError> {
     if pool.maximum > 0 && pool.minimum <= pool.maximum {
         return Ok(());
@@ -156,6 +186,29 @@ mod tests {
     const CANCELLED: &str = "57014";
     const POOL_OWNER: &str = "src/db/pool.rs";
     const BUILDER: &str = "PgPoolOptions::new()";
+
+    #[test]
+    fn a_read_database_of_another_node_is_refused() {
+        let node = |name: &str| Some(name.to_owned());
+        assert!(same_node(node("core"), node("core")).is_ok());
+        assert!(same_node(None, None).is_ok());
+        assert!(same_node(node("core"), node("main")).is_err());
+        assert!(same_node(node("core"), None).is_err());
+        assert!(same_node(None, node("star")).is_err());
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_read_database_reporting_another_node_is_refused(pool: PgPool) -> anyhow::Result<()> {
+        let options = (*pool.connect_options()).clone();
+        let star = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.options([("scd.node", "star")]))
+            .await?;
+
+        assert!(ensure_same_scd_node(&pool, &pool).await.is_ok());
+        assert!(ensure_same_scd_node(&pool, &star).await.is_err());
+        Ok(())
+    }
 
     #[test]
     fn session_duration_uses_postgres_milliseconds() {

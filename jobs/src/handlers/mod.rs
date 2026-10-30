@@ -33,6 +33,7 @@ mod playlist_legacy;
 mod playlist_legacy_tests;
 mod playlist_observe;
 mod recommendations;
+mod repl;
 mod search_terms;
 mod secret_link;
 pub(crate) mod star_priority;
@@ -47,8 +48,8 @@ use std::sync::Arc;
 
 use backend_contracts::{
     AdminMaintenancePayload, CollabTrainPayload, CrawlArtistPayload, EmptyPayload, ImpressionBatch,
-    IndexTrackPayload, JobKind, PlaylistObservePayload, StoredAudioDispatchPayload,
-    SyncQueueFlushPayload, Versioned,
+    IndexTrackPayload, JobKind, PlaylistObservePayload, ReplReplayPayload,
+    StoredAudioDispatchPayload, SyncQueueFlushPayload, Versioned,
 };
 use serde::de::DeserializeOwned;
 
@@ -78,6 +79,7 @@ use self::playlist_legacy::PlaylistLegacyHandler;
 use self::playlist_observe::PlaylistObserveHandler;
 use self::recommendations::RecommendationHandler;
 use self::recommendations::quality::QualityHandler;
+use self::repl::ReplHandler;
 use self::search_terms::SearchTermsHandler;
 use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
@@ -94,6 +96,7 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::DispatchTranscription,
     JobKind::LyricsEmbed,
     JobKind::OAuthAppsRefresh,
+    JobKind::ReplReplayDead,
     JobKind::SyncQueueFlush,
     JobKind::SyncQueueHeal,
 ];
@@ -136,6 +139,7 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::RecommendationQualityBackfill,
     JobKind::RecommendationQualityTrain,
     JobKind::RecommendationWavePriority,
+    JobKind::ReplRetention,
     JobKind::ResolveDurations,
     JobKind::ResolveWantedTracks,
     JobKind::StarTrackTiers,
@@ -168,6 +172,7 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
             | JobKind::LyricsLookup
             | JobKind::PlaylistObserveShadow
             | JobKind::RecordHardNegative
+            | JobKind::ReplReplayDead
             | JobKind::SyncQueueFlush
     )
 }
@@ -200,6 +205,7 @@ pub struct JobHandlers {
     playlist_observe: PlaylistObserveHandler,
     quality: QualityHandler,
     recommendations: RecommendationHandler,
+    repl: ReplHandler,
     search_terms: SearchTermsHandler,
     star_tiers: StarTiersHandler,
     subscriptions: SubscriptionSnapshotHandler,
@@ -322,6 +328,7 @@ impl JobHandlers {
                 databases.maintenance.clone(),
                 config.schedules.recommendation_wave_priority_shards,
             ),
+            repl: ReplHandler::new(databases.main.fast.clone()),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
             star_tiers: StarTiersHandler::new(
                 databases.maintenance.clone(),
@@ -604,6 +611,14 @@ impl JobHandlers {
             JobKind::LyricsReapTranscriptions => {
                 empty_payload(job)?;
                 self.lyrics.reap_transcriptions().await
+            }
+            JobKind::ReplReplayDead => {
+                let payload = payload::<ReplReplayPayload>(job)?;
+                self.repl.replay(payload).await
+            }
+            JobKind::ReplRetention => {
+                empty_payload(job)?;
+                self.repl.retain().await
             }
             JobKind::ResolveDurations => {
                 empty_payload(job)?;
