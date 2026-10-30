@@ -80,6 +80,8 @@ DECLARE
     pk jsonb;
     purged jsonb;
     receipted jsonb;
+    seen_col text;
+    seen_v bigint;
     rel text;
     from_j text;
     where_pk text;
@@ -123,8 +125,11 @@ BEGIN
             BEGIN
                 PERFORM set_config('scd.role', node_role, true);
                 PERFORM set_config('session_replication_role', 'replica', true);
+                PERFORM set_config('scd.merging', 'on', true);
                 j := pg_temp.step(t.name, node_role, 'replica insert', format('INSERT INTO %s %s RETURNING to_jsonb(%s.*)', rel, ins_new, quote_ident(t.name)));
+                PERFORM set_config('scd.merging', '', true);
                 IF j IS NULL THEN
+                    UPDATE pg_temp.exercised e SET outcome = 'no row' WHERE e.tbl = t.name AND e.role = node_role AND e.step = 'replica insert' AND e.outcome = 'ran';
                     SELECT coalesce(jsonb_agg(to_jsonb(e)), '[]') INTO done FROM pg_temp.exercised e WHERE e.tbl = t.name AND e.role = node_role;
                     RAISE EXCEPTION 'scd_exercise_done' USING DETAIL = done::text;
                 END IF;
@@ -149,7 +154,16 @@ BEGIN
                 IF node_role = 'core' AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc WHERE proname = 'scd_purge_intent_' || t.name) THEN
                     SELECT jsonb_object_agg(key, value) INTO purged FROM jsonb_each(j) WHERE quote_ident(key) = ANY (string_to_array(pk_cols, ', '));
                     PERFORM set_config('session_replication_role', 'origin', true);
-                    receipted := pg_temp.step(t.name, node_role, 'purge with receipt', format('SELECT to_jsonb(public.scd_purge_intent(%L, $1))', t.name), purged);
+                    receipted := pg_temp.step(t.name, node_role, 'purge with an unseen version', format('SELECT to_jsonb(public.scd_purge_intent(%L, $1, NULL))', t.name), purged);
+                    IF receipted IS DISTINCT FROM 'false' THEN
+                        RAISE EXCEPTION 'scd_purge_intent on % purged without the version the caller saw', t.name;
+                    END IF;
+                    FOREACH seen_col IN ARRAY versions LOOP
+                        EXECUTE format('SELECT %I FROM %s WHERE %s', seen_col, rel, where_pk) INTO seen_v USING j;
+                        receipted := pg_temp.step(t.name, node_role, 'purge with receipt at ' || seen_col,
+                            format('SELECT to_jsonb(public.scd_purge_intent(%L, $1, %s))', t.name, coalesce(seen_v::text, 'NULL')), purged);
+                        EXIT WHEN receipted = 'true';
+                    END LOOP;
                     IF receipted IS DISTINCT FROM 'true' OR NOT EXISTS (SELECT 1 FROM public.repl_purges x WHERE x.tbl = t.name AND x.pk = purged) THEN
                         RAISE EXCEPTION 'scd_purge_intent on % did not purge with a receipt: %', t.name,
                             (SELECT string_agg(e.step || ' ' || e.outcome, ', ') FROM pg_temp.exercised e WHERE e.tbl = t.name AND e.role = node_role);

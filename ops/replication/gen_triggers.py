@@ -424,6 +424,11 @@ def owner_purges(t, keys, flag):
 def owner(t):
     keys = list(t.uniques)
     cols = [c for c in t.replicated if c not in t.pk]
+    pending = [
+        "IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = %s AND p.pk = %s) THEN" % (lit(t.name), pk_json("NEW", t.pk)),
+        "    RETURN NULL;",
+        "END IF;",
+    ]
     lines = ["DECLARE", "    r record;", "    n bigint;"]
     lines += ["    k%d boolean;" % i for i in range(len(keys))]
     lines += [
@@ -431,16 +436,15 @@ def owner(t):
         "    IF current_setting('scd.merging', true) = 'on' THEN",
         "        RETURN NEW;",
         "    END IF;",
-        "    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = %s AND p.pk = %s) THEN" % (lit(t.name), pk_json("NEW", t.pk)),
-        "        RETURN NULL;",
-        "    END IF;",
         "    IF TG_OP = 'UPDATE' THEN",
     ]
+    lines += indent(pending, 2)
     for i, u in enumerate(keys):
         lines.append("        k%d := %s IS DISTINCT FROM %s;" % (i, keys_tuple(u, t.columns, "NEW", True), keys_tuple(u, t.columns, "OLD", True)))
     lines += indent(owner_purges(t, keys, True), 2)
     lines += ["        RETURN NEW;", "    END IF;"]
-    body = owner_purges(t, keys, False)
+    body = ["PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(t.name), same("t", "NEW", t.pk))] + pending
+    body += owner_purges(t, keys, False)
     if cols:
         body += ["UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(cols, "NEW"), same("t", "NEW", t.pk)), "IF FOUND THEN"]
     else:

@@ -137,13 +137,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.admin_maintenance_runs t WHERE t.kind = NEW.kind FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.admin_maintenance_runs t SET changed = NEW.changed, completed_at = NEW.completed_at, cursor_text = NEW.cursor_text, cursor_uuid = NEW.cursor_uuid, merged = NEW.merged, phase = NEW.phase, run_id = NEW.run_id, scanned = NEW.scanned, skipped = NEW.skipped, started_at = NEW.started_at, status = NEW.status, updated_at = NEW.updated_at WHERE t.kind = NEW.kind;
         IF FOUND THEN
             RETURN NULL;
@@ -184,13 +188,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.album_artists t WHERE (t.album_id, t.artist_id, t.role) = (NEW.album_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         IF EXISTS (SELECT 1 FROM public.album_artists t WHERE (t.album_id, t.artist_id, t.role) = (NEW.album_id, NEW.artist_id, NEW.role)) THEN
             RETURN NULL;
         END IF;
@@ -226,13 +234,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.album_tracks t WHERE (t.album_id, t.track_id) = (NEW.album_id, NEW.track_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.album_tracks t SET disc_number = NEW.disc_number, "position" = NEW."position" WHERE (t.album_id, t.track_id) = (NEW.album_id, NEW.track_id);
         IF FOUND THEN
             RETURN NULL;
@@ -271,10 +283,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.mb_release_id, ((NEW.mb_release_id IS NOT NULL))) IS DISTINCT FROM (OLD.mb_release_id, ((OLD.mb_release_id IS NOT NULL)));
         k1 := (NEW.spotify_album_id, ((NEW.spotify_album_id IS NOT NULL))) IS DISTINCT FROM (OLD.spotify_album_id, ((OLD.spotify_album_id IS NOT NULL)));
         IF k0 AND ((NEW.mb_release_id IS NOT NULL)) THEN
@@ -290,6 +302,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.albums t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         IF ((NEW.mb_release_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.albums t WHERE t.mb_release_id = NEW.mb_release_id AND ((t.mb_release_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_albums(jsonb_build_object('id', r.id));
@@ -336,13 +352,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_attribution_revalidation t WHERE t.singleton = NEW.singleton FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.artist_attribution_revalidation t SET credits_removed = NEW.credits_removed, identity_completed_at = NEW.identity_completed_at, identity_cursor_account = NEW.identity_cursor_account, identity_cursor_artist = NEW.identity_cursor_artist, tracks_reset = NEW.tracks_reset, updated_at = NEW.updated_at, walker_completed_at = NEW.walker_completed_at WHERE t.singleton = NEW.singleton;
         IF FOUND THEN
             RETURN NULL;
@@ -379,13 +399,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_colike t WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.artist_colike t SET co = NEW.co, updated_at = NEW.updated_at, w = NEW.w WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
         IF FOUND THEN
             RETURN NULL;
@@ -422,13 +446,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_coplay t WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.artist_coplay t SET last_seen = NEW.last_seen, weight = NEW.weight WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
         IF FOUND THEN
             RETURN NULL;
@@ -466,10 +494,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.sc_user_id, (NEW.verified)) IS DISTINCT FROM (OLD.sc_user_id, (OLD.verified));
         IF k0 AND (NEW.verified) THEN
             FOR r IN SELECT t.artist_id, t.sc_user_id FROM public.artist_sc_accounts t WHERE t.sc_user_id = NEW.sc_user_id AND (t.verified) AND (t.artist_id, t.sc_user_id) IS DISTINCT FROM (NEW.artist_id, NEW.sc_user_id) LOOP
@@ -479,6 +507,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_sc_accounts t WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         IF (NEW.verified) THEN
             FOR r IN SELECT t.artist_id, t.sc_user_id FROM public.artist_sc_accounts t WHERE t.sc_user_id = NEW.sc_user_id AND (t.verified) AND (t.artist_id, t.sc_user_id) IS DISTINCT FROM (NEW.artist_id, NEW.sc_user_id) LOOP
                 PERFORM public.scd_purge_artist_sc_accounts(jsonb_build_object('artist_id', r.artist_id, 'sc_user_id', r.sc_user_id));
@@ -520,13 +552,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artist_socials t WHERE (t.artist_id, t.url) = (NEW.artist_id, NEW.url) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.artist_socials t SET created_at = NEW.created_at, kind = NEW.kind, source = NEW.source, updated_at = NEW.updated_at, verified = NEW.verified WHERE (t.artist_id, t.url) = (NEW.artist_id, NEW.url);
         IF FOUND THEN
             RETURN NULL;
@@ -567,10 +603,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.genius_artist_id, ((NEW.genius_artist_id IS NOT NULL))) IS DISTINCT FROM (OLD.genius_artist_id, ((OLD.genius_artist_id IS NOT NULL)));
         k1 := (NEW.mb_artist_id, ((NEW.mb_artist_id IS NOT NULL))) IS DISTINCT FROM (OLD.mb_artist_id, ((OLD.mb_artist_id IS NOT NULL)));
         k2 := (NEW.normalized_name, ((NEW.merged_into IS NULL))) IS DISTINCT FROM (OLD.normalized_name, ((OLD.merged_into IS NULL)));
@@ -598,6 +634,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.artists t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         IF ((NEW.genius_artist_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.artists t WHERE t.genius_artist_id = NEW.genius_artist_id AND ((t.genius_artist_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
@@ -658,13 +698,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.background_job_failures t WHERE (t.id, t.generation) = (NEW.id, NEW.generation) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.background_job_failures t SET attempts = NEW.attempts, created_at = NEW.created_at, dedup_key = NEW.dedup_key, failed_at = NEW.failed_at, kind = NEW.kind, lane = NEW.lane, last_error = NEW.last_error, max_attempts = NEW.max_attempts, payload = NEW.payload, priority = NEW.priority WHERE (t.id, t.generation) = (NEW.id, NEW.generation);
         IF FOUND THEN
             RETURN NULL;
@@ -705,13 +749,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.catalog_audience t WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.catalog_audience t SET created_at = NEW.created_at, synced_at = NEW.synced_at WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn);
         IF FOUND THEN
             RETURN NULL;
@@ -752,13 +800,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.catalog_collection_sync t WHERE (t.subject_id, t.collection, t.scope) = (NEW.subject_id, NEW.collection, NEW.scope) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.catalog_collection_sync t SET complete = NEW.complete, generation = NEW.generation, item_count = NEW.item_count, job_id = NEW.job_id, next_cursor = NEW.next_cursor, page_count = NEW.page_count, snapshot_id = NEW.snapshot_id, started_at = NEW.started_at, synced_at = NEW.synced_at, updated_at = NEW.updated_at, verified_at = NEW.verified_at WHERE (t.subject_id, t.collection, t.scope) = (NEW.subject_id, NEW.collection, NEW.scope);
         IF FOUND THEN
             RETURN NULL;
@@ -1331,13 +1383,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.discover_tag_counts t WHERE t.tag = NEW.tag FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.discover_tag_counts t SET artist_count = NEW.artist_count, refreshed_at = NEW.refreshed_at WHERE t.tag = NEW.tag;
         IF FOUND THEN
             RETURN NULL;
@@ -1722,13 +1778,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.job_status t WHERE (t.kind, t.dedup_key) = (NEW.kind, NEW.dedup_key) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.job_status t SET available_at = NEW.available_at, state = NEW.state, updated_at = NEW.updated_at WHERE (t.kind, t.dedup_key) = (NEW.kind, NEW.dedup_key);
         IF FOUND THEN
             RETURN NULL;
@@ -2115,13 +2175,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.lyrics_cache t WHERE t.sc_track_id = NEW.sc_track_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.lyrics_cache t SET content_generation = NEW.content_generation, content_hash = NEW.content_hash, created_at = NEW.created_at, embedded_at = NEW.embedded_at, embedding_state = NEW.embedding_state, fts = NEW.fts, language = NEW.language, language_confidence = NEW.language_confidence, plain_source = NEW.plain_source, plain_text = NEW.plain_text, source = NEW.source, synced_lrc = NEW.synced_lrc, synced_source = NEW.synced_source, synced_version = NEW.synced_version, track_id = NEW.track_id, updated_at = NEW.updated_at WHERE t.sc_track_id = NEW.sc_track_id;
         IF FOUND THEN
             RETURN NULL;
@@ -2163,10 +2227,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id;
         IF k0 THEN
             FOR r IN SELECT t.track_id FROM public.lyrics_lookup_state t WHERE t.sc_track_id = NEW.sc_track_id AND t.track_id IS DISTINCT FROM NEW.track_id LOOP
@@ -2176,6 +2240,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.lyrics_lookup_state t WHERE t.track_id = NEW.track_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.track_id FROM public.lyrics_lookup_state t WHERE t.sc_track_id = NEW.sc_track_id AND t.track_id IS DISTINCT FROM NEW.track_id LOOP
             PERFORM public.scd_purge_lyrics_lookup_state(jsonb_build_object('track_id', r.track_id));
         END LOOP;
@@ -2311,13 +2379,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.oauth_app_tokens t WHERE t.oauth_app_id = NEW.oauth_app_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.oauth_app_tokens t SET access_token = NEW.access_token, expires_at = NEW.expires_at, generation = NEW.generation, last_refresh_error = NEW.last_refresh_error, last_used_at = NEW.last_used_at, refresh_attempts = NEW.refresh_attempts, refresh_token = NEW.refresh_token, refreshed_at = NEW.refreshed_at, scope = NEW.scope WHERE t.oauth_app_id = NEW.oauth_app_id;
         IF FOUND THEN
             RETURN NULL;
@@ -2487,10 +2559,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.queue_id IS DISTINCT FROM OLD.queue_id;
         IF k0 THEN
             FOR r IN SELECT t.archive_id FROM public.playlist_legacy_membership_intents t WHERE t.queue_id = NEW.queue_id AND t.archive_id IS DISTINCT FROM NEW.archive_id LOOP
@@ -2500,6 +2572,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = NEW.archive_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.archive_id FROM public.playlist_legacy_membership_intents t WHERE t.queue_id = NEW.queue_id AND t.archive_id IS DISTINCT FROM NEW.archive_id LOOP
             PERFORM public.scd_purge_playlist_legacy_membership_intents(jsonb_build_object('archive_id', r.archive_id));
         END LOOP;
@@ -2541,10 +2617,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.playlist_urn, NEW.idempotency_key) IS DISTINCT FROM (OLD.playlist_urn, OLD.idempotency_key);
         k1 := (NEW.playlist_urn, NEW.sequence) IS DISTINCT FROM (OLD.playlist_urn, OLD.sequence);
         IF k0 THEN
@@ -2560,6 +2636,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_membership_operations t WHERE t.operation_id = NEW.operation_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.idempotency_key) = (NEW.playlist_urn, NEW.idempotency_key) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
             PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
         END LOOP;
@@ -2602,13 +2682,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_membership_state t WHERE t.playlist_urn = NEW.playlist_urn FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.playlist_membership_state t SET baseline_generation = NEW.baseline_generation, baseline_observation_id = NEW.baseline_observation_id, candidate_fingerprint = NEW.candidate_fingerprint, committed_operation_sequence = NEW.committed_operation_sequence, conflict_code = NEW.conflict_code, last_error = NEW.last_error, last_operation_sequence = NEW.last_operation_sequence, latest_observation_id = NEW.latest_observation_id, next_reconcile_at = NEW.next_reconcile_at, owner_sc_user_id = NEW.owner_sc_user_id, projection_revision = NEW.projection_revision, projection_track_count = NEW.projection_track_count, reconcile_failure_streak = NEW.reconcile_failure_streak, reconcile_generation = NEW.reconcile_generation, remote_applied_at = NEW.remote_applied_at, remote_apply_fingerprint = NEW.remote_apply_fingerprint, remote_apply_generation = NEW.remote_apply_generation, sync_status = NEW.sync_status, updated_at = NEW.updated_at WHERE t.playlist_urn = NEW.playlist_urn;
         IF FOUND THEN
             RETURN NULL;
@@ -2648,10 +2732,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (OLD.playlist_urn, OLD.id);
         IF k0 THEN
             FOR r IN SELECT t.id FROM public.playlist_remote_observations t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
@@ -2661,6 +2745,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_remote_observations t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.id FROM public.playlist_remote_observations t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_playlist_remote_observations(jsonb_build_object('id', r.id));
         END LOOP;
@@ -2704,10 +2792,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.playlist_urn, NEW.content_fingerprint) IS DISTINCT FROM (OLD.playlist_urn, OLD.content_fingerprint);
         k1 := (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (OLD.playlist_urn, OLD.id);
         IF k0 THEN
@@ -2723,6 +2811,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_remote_snapshots t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.content_fingerprint) = (NEW.playlist_urn, NEW.content_fingerprint) AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
         END LOOP;
@@ -2768,10 +2860,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.playlist_urn, NEW.sc_track_id) IS DISTINCT FROM (OLD.playlist_urn, OLD.sc_track_id);
         IF k0 THEN
             FOR r IN SELECT t.playlist_urn, t."position" FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.sc_track_id) = (NEW.playlist_urn, NEW.sc_track_id) AND (t.playlist_urn, t."position") IS DISTINCT FROM (NEW.playlist_urn, NEW."position") LOOP
@@ -2781,6 +2873,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlist_track_projection t WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position") FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.playlist_urn, t."position" FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.sc_track_id) = (NEW.playlist_urn, NEW.sc_track_id) AND (t.playlist_urn, t."position") IS DISTINCT FROM (NEW.playlist_urn, NEW."position") LOOP
             PERFORM public.scd_purge_playlist_track_projection(jsonb_build_object('playlist_urn', r.playlist_urn, 'position', r."position"));
         END LOOP;
@@ -2821,10 +2917,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.sc_playlist_id IS DISTINCT FROM OLD.sc_playlist_id;
         IF k0 THEN
             FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
@@ -2834,6 +2930,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
             PERFORM public.scd_purge_playlists(jsonb_build_object('urn', r.urn));
         END LOOP;
@@ -3247,13 +3347,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.search_terms t WHERE t.word = NEW.word FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.search_terms t SET latin = NEW.latin, ndoc = NEW.ndoc WHERE t.word = NEW.word;
         IF FOUND THEN
             RETURN NULL;
@@ -3917,13 +4021,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.sync_queue_action_pauses t WHERE (t.oauth_app_id, t.action_type) = (NEW.oauth_app_id, NEW.action_type) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.sync_queue_action_pauses t SET paused_until = NEW.paused_until, reason = NEW.reason, strikes = NEW.strikes, updated_at = NEW.updated_at WHERE (t.oauth_app_id, t.action_type) = (NEW.oauth_app_id, NEW.action_type);
         IF FOUND THEN
             RETURN NULL;
@@ -3963,10 +4071,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.collection IS DISTINCT FROM OLD.collection;
         k1 := NEW.input_object IS DISTINCT FROM OLD.input_object;
         k2 := (((true)), (NEW.active)) IS DISTINCT FROM (((true)), (OLD.active));
@@ -3988,6 +4096,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.taste_model_versions t WHERE t.version = NEW.version FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE t.collection = NEW.collection AND t.version IS DISTINCT FROM NEW.version LOOP
             PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
         END LOOP;
@@ -4205,13 +4317,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_artists t WHERE (t.track_id, t.artist_id, t.role) = (NEW.track_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.track_artists t SET confidence = NEW.confidence, evidence = NEW.evidence, "position" = NEW."position", source = NEW.source WHERE (t.track_id, t.artist_id, t.role) = (NEW.track_id, NEW.artist_id, NEW.role);
         IF FOUND THEN
             RETURN NULL;
@@ -4249,10 +4365,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.sc_comment_id IS DISTINCT FROM OLD.sc_comment_id;
         IF k0 THEN
             FOR r IN SELECT t.id FROM public.track_comments t WHERE t.sc_comment_id = NEW.sc_comment_id AND t.id IS DISTINCT FROM NEW.id LOOP
@@ -4262,6 +4378,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.track_comments t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.id FROM public.track_comments t WHERE t.sc_comment_id = NEW.sc_comment_id AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_track_comments(jsonb_build_object('id', r.id));
         END LOOP;
@@ -4305,10 +4425,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id;
         k1 := NEW.urn IS DISTINCT FROM OLD.urn;
         IF k0 THEN
@@ -4324,6 +4444,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.tracks t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.id FROM public.tracks t WHERE t.sc_track_id = NEW.sc_track_id AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
         END LOOP;
@@ -4631,13 +4755,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_followers t WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_followers t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
         IF FOUND THEN
             RETURN NULL;
@@ -5154,13 +5282,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_owned_playlists t WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_owned_playlists t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
         IF FOUND THEN
             RETURN NULL;
@@ -5197,13 +5329,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_owned_tracks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_owned_tracks t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
         IF FOUND THEN
             RETURN NULL;
@@ -5240,13 +5376,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_profiles t WHERE t.soundcloud_user_id = NEW.soundcloud_user_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_profiles t SET profile_json = NEW.profile_json, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.soundcloud_user_id = NEW.soundcloud_user_id;
         IF FOUND THEN
             RETURN NULL;
@@ -5585,13 +5725,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_taste_vectors t WHERE (t.sc_user_id, t.version) = (NEW.sc_user_id, NEW.version) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_taste_vectors t SET updated_at = NEW.updated_at, vec = NEW.vec WHERE (t.sc_user_id, t.version) = (NEW.sc_user_id, NEW.version);
         IF FOUND THEN
             RETURN NULL;
@@ -5628,13 +5772,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.user_web_profiles t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.user_web_profiles t SET profiles = NEW.profiles, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.sc_user_id = NEW.sc_user_id;
         IF FOUND THEN
             RETURN NULL;
@@ -5672,10 +5820,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := NEW.urn IS DISTINCT FROM OLD.urn;
         IF k0 THEN
             FOR r IN SELECT t.sc_user_id FROM public.users t WHERE t.urn = NEW.urn AND t.sc_user_id IS DISTINCT FROM NEW.sc_user_id LOOP
@@ -5685,6 +5833,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.users t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+            RETURN NULL;
+        END IF;
         FOR r IN SELECT t.sc_user_id FROM public.users t WHERE t.urn = NEW.urn AND t.sc_user_id IS DISTINCT FROM NEW.sc_user_id LOOP
             PERFORM public.scd_purge_users(jsonb_build_object('sc_user_id', r.sc_user_id));
         END LOOP;
@@ -5724,13 +5876,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.wanted_track_albums t WHERE (t.wanted_track_id, t.album_id) = (NEW.wanted_track_id, NEW.album_id) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.wanted_track_albums t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.album_id) = (NEW.wanted_track_id, NEW.album_id);
         IF FOUND THEN
             RETURN NULL;
@@ -5767,13 +5923,17 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.wanted_track_artists t WHERE (t.wanted_track_id, t.artist_id, t.role) = (NEW.wanted_track_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+            RETURN NULL;
+        END IF;
         UPDATE public.wanted_track_artists t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.artist_id, t.role) = (NEW.wanted_track_id, NEW.artist_id, NEW.role);
         IF FOUND THEN
             RETURN NULL;
@@ -5814,10 +5974,10 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-        RETURN NULL;
-    END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         k0 := (NEW.source, NEW.external_id, ((NEW.external_id IS NOT NULL))) IS DISTINCT FROM (OLD.source, OLD.external_id, ((OLD.external_id IS NOT NULL)));
         k1 := (NEW.isrc, ((NEW.isrc IS NOT NULL))) IS DISTINCT FROM (OLD.isrc, ((OLD.isrc IS NOT NULL)));
         IF k0 AND ((NEW.external_id IS NOT NULL)) THEN
@@ -5833,6 +5993,10 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
+        PERFORM 1 FROM public.wanted_tracks t WHERE t.id = NEW.id FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
         IF ((NEW.external_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.wanted_tracks t WHERE (t.source, t.external_id) = (NEW.source, NEW.external_id) AND ((t.external_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_wanted_tracks(jsonb_build_object('id', r.id));

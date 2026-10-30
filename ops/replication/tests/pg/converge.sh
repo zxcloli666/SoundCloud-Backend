@@ -100,6 +100,20 @@ sql -d scd_b1_race -c "SET scd.mode = 'split'" -c "SET scd.role = 'core'" -c "SE
 race "apply into a row deleted under it on core" core core "DELETE FROM public.disliked_tracks WHERE sc_user_id = 'rd'" \
   "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, track_data, row_v) VALUES ('00000000-0000-0000-0000-0000000000f6', 'rd', 'x', '{\"by\": \"star\"}', public.scd_hlc(0) + (60000000 << 4) - 1)" \
   "SELECT count(*) || ' ' || max(track_data ->> 'by') FROM public.disliked_tracks WHERE sc_user_id = 'rd'" "1 star"
+sql -d scd_b1_race -c "SET scd.mode = 'split'" -c "SET scd.role = 'api'" -c "SET scd.node = 'main'" -c "SET session_replication_role = replica" \
+  -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000f7', 'Core', 'own', 'sc'), ('00000000-0000-0000-0000-0000000000f8', 'Core', 'cmdpurge', 'sc')"
+optimistic() {
+  echo "SET LOCAL scd.cmd = '$2'; UPDATE public.artists SET name = 'Opt' WHERE id = '$1';
+    INSERT INTO public.cmd_pending (tbl, pk, node, id) VALUES ('artists', jsonb_build_object('id', '$1'), 'main', '$2')"
+}
+race "a core row behind a local optimistic write waits for it and is skipped" api main \
+  "$(optimistic 00000000-0000-0000-0000-0000000000f7 00000000-0000-0000-0000-0000000000c7)" \
+  "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000f7', 'Repair', 'own', 'sc')" \
+  "SELECT max(name) FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000f7'" Opt
+race "a cmd_purge behind a local optimistic write waits for it and keeps the row" api main \
+  "$(optimistic 00000000-0000-0000-0000-0000000000f8 00000000-0000-0000-0000-0000000000c8)" \
+  "INSERT INTO public.cmd_purge (node, id, tbl, pk) VALUES ('main', '00000000-0000-0000-0000-0000000000c9', 'artists', '{\"id\": \"00000000-0000-0000-0000-0000000000f8\"}')" \
+  "SELECT count(*) || ' ' || max(name) FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000f8'" "1 Opt"
 sql -d postgres -c "DROP DATABASE scd_b1_race WITH (FORCE)"
 
 say "A tombstones: an update newer than a delete reaches core first and lives on every node"
@@ -132,6 +146,9 @@ calm
 pause main main_from_core
 undislike star cv3
 wait_for scd_b1_core "SELECT NOT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'cv3')" "core applies star's delete"
+mk=$((mk + 1)); echo3="$(printf '%04x' "$mk")"
+mark core "$echo3"
+wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.user_events WHERE id = '00000000-0000-0000-0000-00000000$echo3')" "star consumed the echo of its delete, so it cannot wait on the re-insert"
 tomb3="SELECT 1 FROM public.repl_tombstones WHERE tbl = 'disliked_tracks' AND pk = jsonb_build_object('id', public.scd_uuid('disliked_tracks', 'cv3', 'x')) AND v % 16 = 2"
 sql -d scd_b1_star -c "SET application_name = 'scd_skew'" -c "BEGIN" \
   -c "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, track_data) VALUES (public.scd_uuid('disliked_tracks', 'cv3', 'x'), 'cv3', 'x', '{\"v\": 3}')" \
@@ -184,6 +201,21 @@ resume star star_from_core
 quiet
 expect "the logout wins over a later touch" "SELECT count(*) FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000e5'" 0
 
+say "M: a re-like between the caller's check and the purge lock survives"
+sql -d scd_b1_main -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('pl', 't1')"
+calm
+sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'pl'"
+calm
+seen_v="$(val scd_b1_core "SELECT wanted_v FROM public.user_likes_tracks WHERE user_id = 'pl' AND NOT wanted_state")"
+[ -n "$seen_v" ] || { echo "FAIL core did not see the unlike"; exit 1; }
+echo "ok the caller on core sees the unlike at version $seen_v"
+sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = true WHERE user_id = 'pl'"
+calm
+purged="$(val scd_b1_core "SELECT public.scd_purge_intent('user_likes_tracks', '{\"user_id\": \"pl\", \"sc_track_id\": \"t1\"}', $seen_v)")"
+quiet
+expect "the purge skips a row that changed under the caller (purged=$purged), the re-like lives on every node" \
+  "SELECT coalesce(string_agg(wanted_state::text, ','), 'none') FROM public.user_likes_tracks WHERE user_id = 'pl'" true
+
 agree() {
   local n a b d out="" bad=0
   for n in $nodes; do rows "$n" "$1" "$2" > "$tmp/rows.$n"; done
@@ -204,6 +236,7 @@ agree() {
 agree disliked_tracks "sc_track_id <> 'other'" "whole table disliked_tracks after the tombstone cases, except the different-id R6 key"
 agree sessions true "whole table sessions after the tombstone cases"
 agree repl_tombstones true "whole table repl_tombstones after the tombstone cases"
+agree user_likes_tracks true "whole table user_likes_tracks after the purge case"
 
 
 [ "$failed" = 0 ] || { echo "FAIL $failed convergence or race checks"; exit 1; }

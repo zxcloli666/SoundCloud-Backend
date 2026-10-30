@@ -140,9 +140,9 @@ wait_for scd_b1_star "SELECT count(*) = 2 FROM public.user_likes_tracks WHERE us
 sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main DISABLE"
 wait_for scd_b1_core "SELECT NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_subscription WHERE subname = 'core_from_main' AND pid IS NOT NULL)" "core stops reading main"
 sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'r3'"
-[ "$(val scd_b1_core "SELECT count(*) FILTER (WHERE public.scd_purge_intent('user_likes_tracks', jsonb_build_object('user_id', user_id, 'sc_track_id', sc_track_id))) FROM (SELECT user_id, sc_track_id FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3') ORDER BY 1) x")" = 2 ]
+[ "$(val scd_b1_core "SELECT count(*) FILTER (WHERE public.scd_purge_intent('user_likes_tracks', jsonb_build_object('user_id', user_id, 'sc_track_id', sc_track_id), wanted_v)) FROM (SELECT user_id, sc_track_id, wanted_v FROM public.user_likes_tracks WHERE user_id IN ('r2', 'r3') ORDER BY 1) x")" = 2 ]
 [ "$(val scd_b1_core "SELECT count(*) FROM public.repl_purges WHERE tbl = 'user_likes_tracks' AND pk ->> 'user_id' IN ('r2', 'r3')")" = 2 ]
-if val scd_b1_main "SELECT public.scd_purge_intent('user_likes_tracks', '{\"user_id\": \"r3\", \"sc_track_id\": \"t1\"}')" 2>/dev/null; then
+if val scd_b1_main "SELECT public.scd_purge_intent('user_likes_tracks', '{\"user_id\": \"r3\", \"sc_track_id\": \"t1\"}', 0)" 2>/dev/null; then
   echo "FAIL scd_purge_intent ran on an api node"; exit 1
 fi
 echo "ok scd_purge_intent writes the receipt and deletes in one tx on core, refuses on an api node"

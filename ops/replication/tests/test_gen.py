@@ -135,6 +135,10 @@ class Generated(unittest.TestCase):
                                      "                IF n = 0 THEN\n                    CONTINUE;"), 2)
         owner = text[text.index("FUNCTION public.scd_owner_playlists()"):]
         owner = owner[:owner.index("$f$;")]
+        locked = owner.index("    FOR attempt IN 1..3 LOOP\n        PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;\n"
+                             "        IF EXISTS (SELECT 1 FROM public.cmd_pending p")
+        self.assertEqual(owner.count("FROM public.cmd_pending p"), 2)
+        self.assertLess(owner.index("IF TG_OP = 'UPDATE' THEN\n        IF EXISTS (SELECT 1 FROM public.cmd_pending p"), locked)
         self.assertNotIn("last_read_at = NEW.last_read_at", owner)
         self.assertIn("NEW.last_read_at", owner)
 
@@ -179,13 +183,16 @@ class Generated(unittest.TestCase):
 
     def test_purge_intent_writes_the_receipt_before_the_delete(self):
         text = self.files["purge_children.sql"]
-        body = text[text.index("FUNCTION public.scd_purge_intent_user_likes_tracks(k jsonb)"):]
+        body = text[text.index("FUNCTION public.scd_purge_intent_user_likes_tracks(k jsonb, seen bigint)"):]
         body = body[:body.index("$f$;")]
         self.assertIn("IF public.scd_role() <> 'core' THEN", body)
         self.assertIn("SELECT t.wanted_v, jsonb_build_object('user_id', t.user_id, 'sc_track_id', t.sc_track_id) INTO v, key", body)
-        self.assertIn("FOR UPDATE;", body)
+        self.assertIn("FOR UPDATE;\n    IF NOT FOUND OR v IS DISTINCT FROM seen THEN\n        RETURN false;", body)
         self.assertLess(body.index("INSERT INTO public.repl_purges"), body.index("DELETE FROM public.user_likes_tracks"))
-        self.assertIn("WHEN 'user_likes_tracks' THEN\n            RETURN public.scd_purge_intent_user_likes_tracks(k);", text)
+        self.assertIn("WHEN 'user_likes_tracks' THEN\n            RETURN public.scd_purge_intent_user_likes_tracks(k, seen);", text)
+        self.assertIn("FUNCTION public.scd_purge_intent(tbl text, k jsonb, seen bigint)", text)
+        self.assertIn("DROP FUNCTION IF EXISTS public.scd_purge_intent(text, jsonb);", text)
+        self.assertIn("DROP FUNCTION IF EXISTS public.scd_purge_intent_user_likes_tracks(jsonb);", text)
 
     def test_install_is_one_short_transaction_per_block(self):
         text = self.install

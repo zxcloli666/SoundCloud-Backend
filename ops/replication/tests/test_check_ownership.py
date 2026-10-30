@@ -60,7 +60,7 @@ class CodeRules(unittest.TestCase):
 
     def test_core_delete_on_m_needs_the_receipt_function(self):
         self.assertEqual(rules([stmt("jobs", "DELETE FROM user_likes_tracks WHERE user_id = $1", "jobs/queries/x.sql")]), ["core-delete-m"])
-        receipt = "SELECT public.scd_purge_intent('user_likes_tracks', $1)"
+        receipt = "SELECT public.scd_purge_intent('user_likes_tracks', $1, $2)"
         self.assertEqual(rules([stmt("jobs", receipt, "jobs/queries/x.sql")]), [])
 
     def test_api_delete_on_tombstone_a_is_fine(self):

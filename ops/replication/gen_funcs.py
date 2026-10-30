@@ -56,7 +56,7 @@ def registry(model):
     ])
 
 
-def dispatcher(name, returns, cases, extra=""):
+def dispatcher(name, returns, cases, extra="", args="tbl text, k jsonb"):
     lines = ["BEGIN", "    CASE tbl"]
     for tbl, stmt in cases:
         lines += ["        WHEN %s THEN" % lit(tbl), "            " + stmt]
@@ -64,7 +64,7 @@ def dispatcher(name, returns, cases, extra=""):
     if returns == "void":
         lines.append("    RETURN;")
     lines.append("END")
-    return function(name, "\n".join(lines), returns, "plpgsql", "tbl text, k jsonb", extra)
+    return function(name, "\n".join(lines), returns, "plpgsql", args, extra)
 
 
 def purge_tables(model):
@@ -112,7 +112,9 @@ def receipt_tables(model):
 
 
 def receipt_dispatcher(tables):
-    return dispatcher("public.scd_purge_intent", "boolean", [(t.name, "RETURN public.scd_purge_intent_%s(k);" % t.name) for t in tables])
+    cases = [(t.name, "RETURN public.scd_purge_intent_%s(k, seen);" % t.name) for t in tables]
+    drop = "DROP FUNCTION IF EXISTS public.scd_purge_intent(text, jsonb);\n"
+    return drop + dispatcher("public.scd_purge_intent", "boolean", cases, args="tbl text, k jsonb, seen bigint")
 
 
 def receipt_function(t):
@@ -127,7 +129,7 @@ def receipt_function(t):
         "        RAISE EXCEPTION 'scd_purge_intent: only core purges %s' USING ERRCODE = 'insufficient_privilege';" % table(t.name),
         "    END IF;",
         "    SELECT %s, %s INTO v, key FROM %s t WHERE %s FOR UPDATE;" % (newest, pk_json("t", t.pk), table(t.name), pk_match("t", t)),
-        "    IF NOT FOUND THEN",
+        "    IF NOT FOUND OR v IS DISTINCT FROM seen THEN",
         "        RETURN false;",
         "    END IF;",
         "    INSERT INTO public.repl_purges (tbl, pk, purged_v) VALUES (%s, key, v);" % lit(t.name),
@@ -135,7 +137,8 @@ def receipt_function(t):
         "    RETURN true;",
         "END",
     ])
-    return function("public.scd_purge_intent_" + t.name, body, "boolean", "plpgsql", "k jsonb")
+    drop = "DROP FUNCTION IF EXISTS public.scd_purge_intent_%s(jsonb);\n" % t.name
+    return drop + function("public.scd_purge_intent_" + t.name, body, "boolean", "plpgsql", "k jsonb, seen bigint")
 
 
 def purge_function(model, t):
