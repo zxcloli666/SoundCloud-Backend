@@ -297,7 +297,7 @@ impl IndexingHandler {
     fn stored_upload(&self, sc_track_id: &str) -> JobResult<serde_json::Value> {
         Ok(json!({
             "sc_track_id": sc_track_id,
-            "storage_url": self.storage_redirect_url(sc_track_id)?,
+            "storage_url": self.storage_audio_url(sc_track_id)?,
         }))
     }
 
@@ -306,11 +306,11 @@ impl IndexingHandler {
         self.queue.enqueue(&job).await.map_err(queue_error)
     }
 
-    fn storage_redirect_url(&self, sc_track_id: &str) -> JobResult<String> {
+    fn storage_audio_url(&self, sc_track_id: &str) -> JobResult<String> {
         let key = catalog_ingest::track_object_key(sc_track_id).ok_or_else(|| {
             JobError::permanent(anyhow::anyhow!("indexing has an invalid track id"))
         })?;
-        append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
+        append_path(self.storage_url.clone(), &[&key]).map(Into::into)
     }
 }
 

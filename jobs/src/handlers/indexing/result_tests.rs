@@ -292,7 +292,7 @@ fn settled(status: WorkerStatus, reason: WorkerReason) -> AudioIndexResult {
 fn lost_task(generation: i64, attempt: i64) -> anyhow::Result<Vec<u8>> {
     Ok(serde_json::to_vec(&AudioIndexRequest {
         sc_track_id: "42".to_owned(),
-        s3_url: "https://storage.example/redirect/soundcloud_tracks_42.m4a".to_owned(),
+        s3_url: "https://storage.example/soundcloud_tracks_42.m4a".to_owned(),
         upload_generation: generation,
         attempt,
     })?)

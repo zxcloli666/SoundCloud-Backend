@@ -113,12 +113,12 @@ pub async fn transcode_upload(
     let storage_base = state.config.storage_url.trim_end_matches('/');
     let key = format!("{filename}.m4a");
     let head_url = format!("{storage_base}/{key}");
-    let redirect_url = format!("{storage_base}/redirect/{key}");
+    let audio_url = format!("{storage_base}/{key}");
 
     if head_ok(&state.http_client, &head_url).await {
         return Ok(Json(TranscodeUploadResponse {
             status: "cached",
-            url: redirect_url,
+            url: audio_url,
             cached: true,
         }));
     }
@@ -168,7 +168,7 @@ pub async fn transcode_upload(
 
     Ok(Json(TranscodeUploadResponse {
         status: "accepted",
-        url: redirect_url,
+        url: audio_url,
         cached: false,
     }))
 }

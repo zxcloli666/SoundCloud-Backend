@@ -378,7 +378,7 @@ fn publish_uploaded(bus: &BusClient, config: &Config, filename: &str, quality: &
     let Some(sc_track_id) = bus::sc_track_id_from_filename(filename) else {
         return;
     };
-    let storage_url = format!("{}/redirect/{}.m4a", config.event_base_url, filename);
+    let storage_url = format!("{}/{}.m4a", config.event_base_url, filename);
     bus.publish_track_uploaded(sc_track_id, storage_url, quality);
 }
 

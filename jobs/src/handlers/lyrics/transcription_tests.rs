@@ -534,7 +534,7 @@ fn worker_lost_request(attempt: i64) -> TranscriptionRequest {
         sc_track_id: "42".to_owned(),
         upload_generation: 1,
         attempt,
-        audio_url: "https://storage.example/redirect/soundcloud_tracks_42.m4a".to_owned(),
+        audio_url: "https://storage.example/soundcloud_tracks_42.m4a".to_owned(),
         reference_text: "A sufficiently long generated lyrics line".to_owned(),
         reference_lines_total: 1,
         language: None,

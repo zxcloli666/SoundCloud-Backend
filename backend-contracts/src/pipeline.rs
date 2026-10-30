@@ -1055,13 +1055,13 @@ mod tests {
     fn storage_upload_keeps_real_and_synthetic_wire_shapes() {
         let real: StorageTrackUploaded = serde_json::from_value(serde_json::json!({
             "sc_track_id": "42",
-            "storage_url": "https://storage.example/redirect/42.m4a",
+            "storage_url": "https://storage.example/42.m4a",
             "quality": "hq"
         }))
         .expect("real storage upload deserializes");
         let synthetic: StorageTrackUploaded = serde_json::from_value(serde_json::json!({
             "sc_track_id": "42",
-            "storage_url": "https://storage.example/redirect/42.m4a"
+            "storage_url": "https://storage.example/42.m4a"
         }))
         .expect("synthetic storage upload deserializes");
 
