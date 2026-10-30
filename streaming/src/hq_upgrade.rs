@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod gate_tests;
 mod tiers;
 
 use std::sync::Arc;
@@ -83,6 +85,44 @@ pub fn spawn_hq_upgrade_task(
     });
 }
 
+async fn pick_on_core(pg: &PgPool, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
+    match pg.is_core().await {
+        Ok(true) => pick(pg, stored, tiers).await,
+        Ok(false) => {
+            debug!("[hq-upgrade] this database is not core, core upgrades the tracks");
+            Vec::new()
+        }
+        Err(e) => {
+            warn!("[hq-upgrade] node role unknown, nothing picked: {e}");
+            Vec::new()
+        }
+    }
+}
+
+async fn pick(pg: &PgPool, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
+    let mut urns: Vec<String> = Vec::new();
+    let mut round = Vec::new();
+    for &tier in tiers {
+        let left = BATCH - urns.len() as i64;
+        match pg
+            .pick_upgrade_candidates(stored, tier, left, RETRY_COOLDOWN_SEC)
+            .await
+        {
+            Ok(pick) => {
+                round.push(tiers::Picked {
+                    tier,
+                    count: pick.urns.len(),
+                    waiting_seconds: pick.waiting_seconds,
+                });
+                urns.extend(pick.urns);
+            }
+            Err(e) => warn!("[hq-upgrade] pick {stored} {} failed: {e}", tier.label()),
+        }
+    }
+    tiers::report(stored, &round);
+    urns
+}
+
 struct Upgrader {
     pg: PgPool,
     anon: Arc<AnonClient>,
@@ -106,7 +146,7 @@ impl Upgrader {
             );
             return;
         }
-        for urn in self.pick(stored, tiers).await {
+        for urn in pick_on_core(&self.pg, stored, tiers).await {
             if !self.storage.has_room_for_background_uploads() {
                 debug!(
                     stored,
@@ -127,31 +167,6 @@ impl Upgrader {
                 Err(e) => warn!(urn = %urn, "[hq-upgrade] error: {e}"),
             }
         }
-    }
-
-    async fn pick(&self, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
-        let mut urns: Vec<String> = Vec::new();
-        let mut round = Vec::new();
-        for &tier in tiers {
-            let left = BATCH - urns.len() as i64;
-            match self
-                .pg
-                .pick_upgrade_candidates(stored, tier, left, RETRY_COOLDOWN_SEC)
-                .await
-            {
-                Ok(pick) => {
-                    round.push(tiers::Picked {
-                        tier,
-                        count: pick.urns.len(),
-                        waiting_seconds: pick.waiting_seconds,
-                    });
-                    urns.extend(pick.urns);
-                }
-                Err(e) => warn!("[hq-upgrade] pick {stored} {} failed: {e}", tier.label()),
-            }
-        }
-        tiers::report(stored, &round);
-        urns
     }
 
     async fn upgrade_one(&self, track_urn: &str, stored: &'static str) -> UpgradeOutcome {

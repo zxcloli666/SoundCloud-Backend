@@ -1,6 +1,7 @@
 use std::env;
 
 use stream_ticket::{StreamTicketKey, StreamTicketKeys};
+use tracing::warn;
 
 const DEFAULT_REGIONS: &str = "geo-us,geo-de,geo-ru,geo-fr,geo-nl";
 
@@ -35,6 +36,7 @@ pub struct Config {
     pub edge_wvd_token: Option<String>,
     pub edge_wvd_url: Option<String>,
     pub ready_canary_track: Option<String>,
+    pub hq_upgrade: bool,
 }
 
 impl Config {
@@ -108,6 +110,7 @@ impl Config {
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            hq_upgrade: hq_upgrade_from_env(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
         }
     }
 
@@ -201,6 +204,17 @@ fn pool_max_from_env(raw: Option<&str>) -> usize {
         .min(MAX_POOL_MAX)
 }
 
+fn hq_upgrade_from_env(raw: Option<&str>) -> bool {
+    match raw.map(str::trim) {
+        None | Some("") | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            warn!("STREAMING_HQ_UPGRADE={other} is neither on nor off, the node role decides");
+            true
+        }
+    }
+}
+
 fn acquire_timeout_from_env(raw: Option<&str>) -> u64 {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -269,6 +283,26 @@ mod tests {
                 acquire_timeout_from_env(Some(raw)),
                 DEFAULT_ACQUIRE_TIMEOUT_SECS,
                 "{raw} must not disable the wait budget"
+            );
+        }
+    }
+
+    #[test]
+    fn hq_upgrades_stop_only_where_they_were_switched_off() {
+        assert!(!hq_upgrade_from_env(Some("off")));
+        assert!(!hq_upgrade_from_env(Some(" off\n")));
+        for raw in [
+            None,
+            Some(""),
+            Some("on"),
+            Some(" on "),
+            Some("OFF"),
+            Some("false"),
+            Some("0"),
+        ] {
+            assert!(
+                hq_upgrade_from_env(raw),
+                "{raw:?} must leave HQ upgrades to the node role, never stop them"
             );
         }
     }

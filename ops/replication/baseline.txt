@@ -81,7 +81,6 @@ api-write-c|api/queries/tracks/service/insert_owned.sql|user_owned_tracks
 api-write-c|api/queries/tracks/service/touch_last_read.sql|tracks
 api-write-c|api/queries/users/repository/touch_last_read.sql|users
 api-write-c|api/src/modules/admin/catalog.rs#artist_create|artists
-api-write-c|streaming/src/db/postgres.rs#mark_storage_lost|tracks
 api-write-c|utils/catalog-ingest/queries/playlists/ensure_membership_state.sql|playlist_membership_state
 api-write-c|utils/catalog-ingest/queries/playlists/insert_absent.sql|playlists
 api-write-c|utils/catalog-ingest/queries/playlists/upsert.sql|playlists
