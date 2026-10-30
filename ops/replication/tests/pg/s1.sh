@@ -61,7 +61,9 @@ want "verify repair settles the answers in the same order" \
   "artists user_followings user_likes_tracks sync_queue track_comments"
 sql -d postgres -c "DROP DATABASE scd_b1_order WITH (FORCE)" > /dev/null
 
-say "S1 legacy job_status: each legacy node keeps job_status from its own and from replicated queue writes (0294)"
+say "S1 legacy job_status: each legacy node keeps job_status from its own and from replicated queue writes (0294); the hub subscriptions pause to free apply worker slots"
+hub_subs="core:core_from_main core:core_from_star main:main_from_core star:star_from_core"
+for s in $hub_subs; do pause "${s%%:*}" "${s##*:}"; done
 fresh scd_b1_legacy_main scd_b1_tpl
 fresh scd_b1_legacy_star scd_b1_tpl
 sql -d scd_b1_legacy_main -c "CREATE PUBLICATION s1_legacy_pub FOR TABLE public.background_jobs" > /dev/null
@@ -82,5 +84,10 @@ wait_for scd_b1_legacy_star "SELECT NOT EXISTS (SELECT 1 FROM public.job_status)
 want "main drops it too" "$(only legacy_main "SELECT count(*) FROM public.job_status")" 0
 want "no apply error on legacy star" "$(only legacy_star "SELECT apply_error_count FROM pg_catalog.pg_stat_subscription_stats WHERE subname = 'legacy_star_from_main'")" 0
 sql -d scd_b1_legacy_star -c "ALTER SUBSCRIPTION legacy_star_from_main DISABLE" -c "ALTER SUBSCRIPTION legacy_star_from_main SET (slot_name = NONE)" -c "DROP SUBSCRIPTION legacy_star_from_main" > /dev/null
+wait_for postgres "SELECT NOT active FROM pg_catalog.pg_replication_slots WHERE slot_name = 'scd_b1_legacy_star_from_main'" "the legacy slot is free"
 val postgres "SELECT pg_catalog.pg_drop_replication_slot('scd_b1_legacy_star_from_main')" > /dev/null
 sql -d postgres -c "DROP DATABASE scd_b1_legacy_star WITH (FORCE)" -c "DROP DATABASE scd_b1_legacy_main WITH (FORCE)" > /dev/null
+for s in $hub_subs; do resume "${s%%:*}" "${s##*:}"; done
+for n in $nodes; do
+  wait_for "scd_b1_$n" "SELECT bool_and(pid IS NOT NULL) FROM pg_catalog.pg_stat_subscription WHERE relid IS NULL AND leader_pid IS NULL" "apply workers up again on $n"
+done
