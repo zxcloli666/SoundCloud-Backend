@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 203;
+const LATEST_SCHEMA_VERSION: i64 = 204;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(
@@ -796,5 +796,26 @@ async fn split_mode_is_refused_before_it_is_stored_while_grants_are_missing(
     };
     assert_eq!(problems, "role scd_repl does not exist");
     assert_eq!(node_settings(&pool).await?, "core/core/legacy");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn scd_uuid_equals_rust_uuid_v5_of_the_same_name(pool: PgPool) -> anyhow::Result<()> {
+    run_core(&pool, None).await?;
+    let namespace = Uuid::parse_str("e5f6011f-72fa-46e1-ad97-55586f6f1f83")?;
+    let cases: [(&str, Vec<&str>); 3] = [
+        ("like", vec!["u1", "t1"]),
+        ("k", vec!["\u{e9}"]),
+        ("follow", vec!["soundcloud:users:1", "soundcloud:users:2"]),
+    ];
+    for (ns, key) in cases {
+        let name = format!("{ns}:{}", key.join("\u{1f}"));
+        let stored: Uuid = sqlx::query_scalar("SELECT public.scd_uuid($1, VARIADIC $2)")
+            .bind(ns)
+            .bind(&key)
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(stored, Uuid::new_v5(&namespace, name.as_bytes()), "{name}");
+    }
     Ok(())
 }

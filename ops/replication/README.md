@@ -64,13 +64,14 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 
 ## Migrations and install order
 
-1. `0174_scd_core_functions`: `scd_node()`, `scd_role()`, `scd_mode()` (unset = core, core, legacy), `scd_node_ord()`, `scd_hlc(bigint)`, `scd_clock()`, `scd_uuid(ns, VARIADIC key)`, `scd_derived()`.
+1. `0174_scd_core_functions`: `scd_node()`, `scd_role()`, `scd_mode()` (unset = core, core, legacy), `scd_node_ord()`, `scd_hlc(bigint)`, `scd_clock()`, `scd_derived()`.
 2. `0175_scd_tables`: cmd_* and repl_* tables, `scd_unpublished_columns`.
 3. `0176`-`0199`: one version column add per table, `lock_timeout` 5s.
 4. `0200_scd_install`: the generated SQL, one short transaction per table (`gen.py --install`).
 5. `0201_scd_derived_always`: derived triggers ENABLE ALWAYS, gated, search_path pinned.
 6. `0202_scd_dispatch`: `scd_wt`, `scd_dispatch`, the appliers, `scd_drain_resend()`.
 7. `0203_scd_admin`: `scd_sync_publications()`, `scd_unpublish_column`, `scd_configure`, `scd_grant_repl`, `scd_repl_problems`.
+8. `0204_scd_uuid_v5`: `uuid-ossp`; `scd_uuid(ns, VARIADIC key)` is UUID v5 of `ns:key1\x1fkey2...` under namespace `e5f6011f-72fa-46e1-ad97-55586f6f1f83`, equal to Rust `Uuid::new_v5` of the same bytes; NULL when a part is NULL.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

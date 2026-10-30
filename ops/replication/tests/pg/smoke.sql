@@ -278,11 +278,12 @@ JOIN pg_catalog.pg_index i ON i.indrelid = ('public.' || l.tbl)::regclass AND i.
 JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
 WHERE NOT a.attname::text = ANY (l.cols);
 
-SELECT pg_temp.ok(public.scd_uuid_v3('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'python.org') = '6fa459ea-ee8a-3ca4-894e-db77e160355e',
-    'scd_uuid_v3: the RFC 4122 version 3 vector');
-SELECT pg_temp.ok(public.scd_uuid('like', 'u1', 't1') = 'f40a179c-e833-37f9-b060-e64530094322'
-    AND public.scd_uuid('k', E'\u00e9') = 'a71a42a5-f285-38c7-864f-9482a1793d1a',
-    'scd_uuid: fixed namespace, unit separator and UTF-8 bytes');
+SELECT pg_temp.ok(public.uuid_generate_v5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'python.org') = '886313e1-3b8a-5372-9b90-0c9aee199e5d',
+    'uuid_generate_v5: the RFC 4122 version 5 vector (DNS namespace, python.org)');
+SELECT pg_temp.ok(public.scd_uuid('like', 'u1', 't1') = '564fd801-7574-52a6-be4c-1bd16e134126'
+    AND public.scd_uuid('k', E'\u00e9') = 'b4d9d12d-63a8-5d3e-a365-9995907be3b5',
+    'scd_uuid: version 5, fixed namespace, unit separator and UTF-8 bytes');
+SELECT pg_temp.ok(to_regprocedure('public.scd_uuid_v3(uuid, text)') IS NULL, 'scd_uuid: the version 3 helper is gone, one id scheme');
 SELECT pg_temp.ok(public.scd_uuid('like', 'u1', NULL) IS NULL AND public.scd_uuid(NULL, 'u1') IS NULL
     AND public.scd_uuid('like', VARIADIC ARRAY[]::text[]) IS NULL, 'scd_uuid: a missing key part gives NULL');
 
