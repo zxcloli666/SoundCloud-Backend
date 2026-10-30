@@ -3,7 +3,7 @@ RETURNS TABLE (pubname text, node text, publish text, tbl text, cols text[])
 LANGUAGE sql IMMUTABLE
 AS $f$
 VALUES
-    ('scd_api_pub', 'api', 'insert, update, delete', 'cdn_tracks', ARRAY['cdn_path', 'created_at', 'id', 'quality', 'row_v', 'status', 'track_urn', 'updated_at']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'cdn_tracks', ARRAY['cdn_path', 'created_at', 'id', 'quality', 'row_v', 'status', 'stored_quality', 'track_urn', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'diag_bundles', ARRAY['app_version', 'at', 'body', 'code', 'os']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'diag_events', ARRAY['app_version', 'at', 'body', 'fingerprint', 'id', 'install', 'kind', 'os', 'title', 'trace']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'diag_issue_days', ARRAY['app_version', 'day', 'events', 'fingerprint', 'first_at', 'host', 'kind', 'last_at', 'row_v', 'title']::text[]),
@@ -50,7 +50,7 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'background_job_failures', ARRAY['attempts', 'created_at', 'dedup_key', 'failed_at', 'generation', 'id', 'kind', 'lane', 'last_error', 'max_attempts', 'payload', 'priority']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'catalog_audience', ARRAY['created_at', 'relation', 'subject_urn', 'synced_at', 'user_urn']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'catalog_collection_sync', ARRAY['collection', 'complete', 'generation', 'item_count', 'job_id', 'next_cursor', 'page_count', 'scope', 'snapshot_id', 'started_at', 'subject_id', 'synced_at', 'updated_at', 'verified_at']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'cdn_tracks', ARRAY['cdn_path', 'created_at', 'id', 'quality', 'row_v', 'status', 'track_urn', 'updated_at']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'cdn_tracks', ARRAY['cdn_path', 'created_at', 'id', 'quality', 'row_v', 'status', 'stored_quality', 'track_urn', 'updated_at']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'cmd_done', ARRAY['at', 'id', 'node', 'status']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'cmd_purge', ARRAY['id', 'node', 'pk', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'cmd_reassert', ARRAY['id', 'node', 'pk', 'row', 'tbl']::text[]),

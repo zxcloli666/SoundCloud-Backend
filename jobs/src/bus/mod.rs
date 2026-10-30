@@ -84,6 +84,11 @@ pub struct Bus {
     topology: Arc<Topology>,
 }
 
+pub struct StorageEventsProgress {
+    pub sources_behind: usize,
+    pub undelivered: u64,
+}
+
 struct Topology {
     streams: Vec<StreamConfig>,
     intact: AtomicBool,
@@ -355,17 +360,23 @@ impl Bus {
     }
 
     pub async fn unaccepted_storage_uploads(&self) -> anyhow::Result<u64> {
-        let (_, info) = self.storage_upload_progress().await?;
+        let (_, info) = self.storage_upload_state().await?;
         let in_flight = u64::try_from(info.num_ack_pending).unwrap_or(u64::MAX);
         Ok(info.num_pending.saturating_add(in_flight))
     }
 
-    pub async fn storage_events_settled(&self) -> anyhow::Result<bool> {
-        let (sources, info) = self.storage_upload_progress().await?;
-        Ok(info.num_pending == 0 && sources.iter().all(source_is_current))
+    pub async fn storage_events_progress(&self) -> anyhow::Result<StorageEventsProgress> {
+        let (sources, info) = self.storage_upload_state().await?;
+        Ok(StorageEventsProgress {
+            sources_behind: sources
+                .iter()
+                .filter(|source| !source_is_current(source))
+                .count(),
+            undelivered: info.num_pending,
+        })
     }
 
-    async fn storage_upload_progress(&self) -> anyhow::Result<(Vec<SourceInfo>, ConsumerInfo)> {
+    async fn storage_upload_state(&self) -> anyhow::Result<(Vec<SourceInfo>, ConsumerInfo)> {
         let stream = self
             .jetstream
             .get_stream(STORAGE_EVENTS_STREAM.name)

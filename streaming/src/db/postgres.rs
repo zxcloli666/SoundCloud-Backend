@@ -254,7 +254,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use super::{SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
+    use super::{PgPool, SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
 
     #[test]
     fn a_pool_that_cannot_serve_a_request_gives_up_instead_of_holding_it_forever() {
@@ -290,6 +290,44 @@ mod tests {
         );
         drop(held);
         assert!(pool.get().await.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a database with the latest API schema"]
+    async fn a_stored_upload_keeps_its_quality_and_a_utc_time_in_any_session_zone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut pg = PgConfig::new();
+        pg.url = Some(std::env::var("STREAMING_SCHEMA_TEST_DATABASE_URL")?);
+        pg.options = Some("-c TimeZone=America/New_York".to_owned());
+        pg.pool = Some(pool_config(2, 5));
+        let pg = PgPool {
+            pool: pg.create_pool(Some(Runtime::Tokio1), NoTls)?,
+        };
+        let urn = format!("soundcloud:tracks:quality-test-{}", Uuid::now_v7());
+
+        let id = pg.insert_cdn_track(&urn, "track.m4a", "pending").await?;
+        pg.mark_cdn_track_stored(&id, Some("hq")).await?;
+        let client = pg.pool.get().await?;
+        let row = client
+            .query_one(
+                "SELECT current_setting('TimeZone'),
+                        stored_quality,
+                        abs(extract(epoch FROM updated_at - (now() AT TIME ZONE 'UTC')))::float8
+                 FROM cdn_tracks WHERE track_urn = $1",
+                &[&urn],
+            )
+            .await?;
+        client
+            .execute("DELETE FROM cdn_tracks WHERE track_urn = $1", &[&urn])
+            .await?;
+
+        assert_eq!(row.get::<_, String>(0), "America/New_York");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("hq"));
+        assert!(
+            row.get::<_, f64>(2) < 60.0,
+            "updated_at must be UTC wall time whatever the session zone"
+        );
         Ok(())
     }
 

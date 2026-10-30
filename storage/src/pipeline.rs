@@ -38,6 +38,7 @@ pub enum PipelineError {
 
 pub struct PipelineOutput {
     pub duration_secs: f64,
+    pub quality: &'static str,
 }
 
 pub struct Pipeline {
@@ -298,6 +299,7 @@ fn spawn_commit(
         }
         let _ = job.reply.send(res.map(|()| PipelineOutput {
             duration_secs: out_secs,
+            quality: job.quality,
         }));
     });
 }

@@ -558,6 +558,7 @@
     {"default": null, "generated": false, "name": "quality", "notnull": true, "type": "character varying(16)"},
     {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": "'pending'::character varying", "generated": false, "name": "status", "notnull": true, "type": "character varying(16)"},
+    {"default": null, "generated": false, "name": "stored_quality", "notnull": false, "type": "character varying(8)"},
     {"default": null, "generated": false, "name": "track_urn", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "updated_at", "notnull": true, "type": "timestamp without time zone"}
    ],
