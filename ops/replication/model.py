@@ -117,6 +117,9 @@ class Table:
     def random_pk(self):
         return len(self.pk) == 1 and (self.defaults.get(self.pk[0]) or "").startswith("gen_random_uuid()")
 
+    def delete_wins(self):
+        return self.delete == "tombstone" and not self.id and len(self.pk) == 1 and self.types.get(self.pk[0]) == "uuid"
+
 
 def parse_decl(decl):
     text = str(decl)

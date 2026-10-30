@@ -173,6 +173,8 @@ wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM public.soundcloud_connections
 sql -d scd_b1_main -c "DELETE FROM public.oauth_apps WHERE client_id = 'cid-1'"
 wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM public.repl_resend WHERE tbl = 'oauth_apps')" "core refuses and queues a resend"
 [ "$(val scd_b1_core "SELECT n FROM public.scd_counters WHERE counter = 'restrict' AND tbl = 'oauth_apps'")" = 1 ]
+queued="$(val scd_b1_core "SELECT string_agg(tbl, ', ') FROM public.repl_resend")"
+[ "$queued" = oauth_apps ] || { echo "FAIL core should queue only the app, queued: $queued"; exit 1; }
 [ "$(val scd_b1_core "SELECT public.scd_drain_resend()")" = 1 ]
 resume main main_from_core
 wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.oauth_apps WHERE client_id = 'cid-1')" "main gets the app back through repl_repair"

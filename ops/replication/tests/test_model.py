@@ -85,6 +85,13 @@ class Model(unittest.TestCase):
         s["tables"]["events"] = {"class": "A", "delete": "tombstone", "insert_only": True}
         self.assertProblem("events: tombstone on an unversioned table needs a random uuid primary key", s, sc)
 
+    def test_delete_wins_only_for_random_uuid_keys(self):
+        m = model.load()
+        wins = sorted(t.name for t in m.installed() if t.delete_wins())
+        self.assertEqual(wins, ["featured_items", "link_requests", "listening_history", "login_requests", "sessions"])
+        for name in ("disliked_tracks", "discover_promoted", "subscriptions", "user_superlikes", "sc_egress_health"):
+            self.assertFalse(next(t for t in m.installed() if t.name == name).delete_wins(), name)
+
     def test_undeclared_trigger(self):
         sc = support.schema()
         sc["core"]["items"]["triggers"].append({"name": "items_touch", "function": "f", "enabled": "O"})

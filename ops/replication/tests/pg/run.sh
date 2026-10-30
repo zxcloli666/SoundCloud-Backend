@@ -111,6 +111,11 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_star ENABLE"
 wait_for scd_b1_star "SELECT NOT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_track_id = 'x2') AND EXISTS (SELECT 1 FROM public.repl_tombstones WHERE tbl = 'disliked_tracks')" "star applies the delete and the tombstone"
 wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM public.user_events WHERE id = '00000000-0000-0000-0000-00000000ee01')" "core consumed star's late insert (marker behind it arrived)"
 same_on_all "SELECT count(*) FROM public.disliked_tracks WHERE sc_track_id = 'x2'" "the late insert stays deleted on all nodes (0 rows)"
+queued="$(val scd_b1_core "SELECT string_agg(tbl || ' ' || pk::text, ', ') FROM public.repl_resend")"
+[ "$queued" = 'repl_tombstones {"pk": {"id": "00000000-0000-0000-0000-0000000000d2"}, "tbl": "disliked_tracks"}' ] \
+  || { echo "FAIL core should queue only the tombstone back toward star, queued: $queued"; exit 1; }
+[ "$(val scd_b1_core "SELECT public.scd_drain_resend()")" = 1 ]
+echo "ok core queues the tombstone back toward star and drains it"
 
 say "C: core wins a unique key over an optimistic api row"
 sql -d scd_b1_main -c "SET scd.cmd = '00000000-0000-0000-0000-000000000001'" \
@@ -147,6 +152,7 @@ wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.repl_resend WHERE pk =
 sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 
 . "$here/split.sh"
+. "$here/converge.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

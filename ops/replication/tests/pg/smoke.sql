@@ -123,8 +123,23 @@ INSERT INTO public.sessions (id, row_v) VALUES ('00000000-0000-0000-0000-0000000
 SELECT pg_temp.ok(count(*) = 0, 'zz_tomb_check: a late echo insert of a deleted row is blocked')
 FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000f1';
 INSERT INTO public.sessions (id, row_v) VALUES ('00000000-0000-0000-0000-0000000000f1', public.scd_hlc(0) + 1600000000);
-SELECT pg_temp.ok(count(*) = 1, 'zz_tomb_check: a re-create newer than the tombstone is applied')
+SELECT pg_temp.ok(count(*) = 0, 'zz_tomb_check: a random uuid key stays deleted even with a newer version')
 FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000f1';
+
+SET session_replication_role = origin;
+INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id) VALUES ('00000000-0000-0000-0000-0000000000d1', 'u9', 't1');
+INSERT INTO seen SELECT 'd1', row_v FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
+DELETE FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
+SET session_replication_role = replica;
+INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, row_v)
+VALUES ('00000000-0000-0000-0000-0000000000d1', 'u9', 't1', (SELECT v FROM seen WHERE k = 'd1'));
+SELECT pg_temp.ok(count(*) = 0 AND (SELECT count(*) FROM public.repl_resend WHERE tbl = 'repl_tombstones') = 1,
+    'zz_merge: an echo older than the tombstone is blocked and the tombstone is queued for resend')
+FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
+INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, row_v)
+VALUES ('00000000-0000-0000-0000-0000000000d1', 'u9', 't1', public.scd_hlc(0) + 1600000000);
+SELECT pg_temp.ok(count(*) = 1, 'zz_merge: a re-create newer than the tombstone is applied')
+FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
 
 SET session_replication_role = origin;
 INSERT INTO public.listening_history (id, soundcloud_user_id, sc_track_id, title, artist_name, duration)

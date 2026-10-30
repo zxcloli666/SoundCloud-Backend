@@ -77,6 +77,8 @@ class Generated(unittest.TestCase):
         self.assertEqual(triggers("oauth_apps"), ["zz_fk", "zz_merge", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("sessions"), ["zz_merge", "zz_orphan", "zz_tomb", "zz_tomb_check", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("listening_history"), ["zz_skip", "zz_tomb", "zz_tomb_check", "zzz_suppress"])
+        self.assertEqual(triggers("disliked_tracks"), ["zz_merge", "zz_tomb", "zz_tomb_check", "zz_tomb_guard", "zz_ver", "zzz_suppress"])
+        self.assertEqual(triggers("repl_tombstones"), ["zz_erase", "zz_merge", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("cdn_tracks"), ["zz_merge", "zz_ver", "zzz_suppress"])
         self.assertEqual(triggers("entity_reads"), ["zz_max", "zzz_suppress"])
         self.assertEqual(triggers("cmd_outbox"), [])
@@ -84,7 +86,8 @@ class Generated(unittest.TestCase):
 
     def test_replica_triggers_are_enabled_for_replica(self):
         text = self.files["triggers.sql"]
-        for name in ("zz_merge", "zz_owner", "zz_skip", "zz_tomb_check", "zz_purge_guard", "zz_max", "zz_fk", "zz_orphan", "zzz_suppress"):
+        for name in ("zz_merge", "zz_owner", "zz_skip", "zz_tomb_check", "zz_tomb_guard", "zz_erase", "zz_purge_guard", "zz_max", "zz_fk",
+                     "zz_orphan", "zzz_suppress"):
             created = len(re.findall(r"CREATE OR REPLACE TRIGGER %s " % name, text))
             enabled = len(re.findall(r"ENABLE REPLICA TRIGGER %s;" % name, text))
             self.assertEqual(created, enabled, name)
@@ -114,6 +117,56 @@ class Generated(unittest.TestCase):
         self.assertIn("progress = CASE WHEN core THEN o.progress ELSE NEW.progress END", body)
         self.assertIn("created_at = CASE WHEN (NEW.wanted_v & 15) <> public.scd_node_ord() THEN least(o.created_at, NEW.created_at)", body)
         self.assertIn("pg_catalog.set_config('scd.merging', 'on', true)", body)
+
+    def test_replica_inserts_merge_inside_the_trigger(self):
+        text = self.files["triggers.sql"]
+        for fn in ("scd_merge_disliked_tracks", "scd_merge_user_likes_tracks", "scd_merge_repl_tombstones", "scd_max_sc_track_counters",
+                   "scd_owner_playlists", "scd_skip_user_events"):
+            body = text[text.index("FUNCTION public.%s()" % fn):]
+            body = body[:body.index("$f$;")]
+            self.assertIn("IF current_setting('scd.merging', true) = 'on' THEN", body, fn)
+            self.assertIn("ON CONFLICT DO NOTHING;", body, fn)
+            if fn != "scd_skip_user_events":
+                self.assertIn("FOR attempt IN 1..3 LOOP", body, fn)
+                self.assertIn("USING ERRCODE = 'unique_violation'", body, fn)
+        merge = text[text.index("FUNCTION public.scd_merge_disliked_tracks()"):]
+        merge = merge[:merge.index("$f$;")]
+        self.assertEqual(merge.count("GET DIAGNOSTICS n = ROW_COUNT;\n                PERFORM pg_catalog.set_config('scd.merging', '', true);\n"
+                                     "                IF n = 0 THEN\n                    CONTINUE;"), 2)
+        owner = text[text.index("FUNCTION public.scd_owner_playlists()"):]
+        owner = owner[:owner.index("$f$;")]
+        self.assertNotIn("last_read_at = NEW.last_read_at", owner)
+        self.assertIn("NEW.last_read_at", owner)
+
+    def test_tombstones_are_versioned_deletes(self):
+        text = self.files["triggers.sql"]
+
+        def body(fn):
+            out = text[text.index("FUNCTION public.%s(" % fn):]
+            return out[:out.index("$f$;")]
+
+        self.assertIn("CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.disliked_tracks", text)
+        self.assertNotIn("AFTER DELETE", text)
+        self.assertIn("RETURN OLD;", body("scd_tomb_disliked_tracks"))
+        self.assertIn("IF FOUND AND NEW.row_v <= tv THEN", body("scd_tomb_check_disliked_tracks"))
+        self.assertIn("VALUES ('repl_tombstones', jsonb_build_object('tbl', 'disliked_tracks'", body("scd_tomb_check_disliked_tracks"))
+        self.assertIn("IF FOUND AND NEW.row_v <= tv THEN", body("scd_merge_disliked_tracks"))
+        self.assertIn("IF FOUND THEN\n        RETURN NULL;", body("scd_tomb_check_sessions"))
+        self.assertNotIn("repl_resend", body("scd_tomb_check_sessions"))
+        self.assertIn("AND t.row_v <= upto;", body("scd_erase_disliked_tracks"))
+        self.assertIn("VALUES ('disliked_tracks', k)", body("scd_erase_disliked_tracks"))
+        self.assertIn("DELETE FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid;", body("scd_erase_sessions"))
+        self.assertNotIn("repl_resend", body("scd_erase_sessions"))
+        self.assertIn("IF NOT FOUND OR OLD.row_v <= tv THEN", body("scd_tomb_guard_disliked_tracks"))
+        self.assertNotIn("FUNCTION public.scd_tomb_guard_sessions()", text)
+        self.assertIn("WHEN 'disliked_tracks' THEN\n            PERFORM public.scd_erase_disliked_tracks(k, upto);", body("scd_erase"))
+        self.assertIn("ELSE\n            NULL;", body("scd_erase"))
+        self.assertIn("CREATE OR REPLACE TRIGGER zz_erase AFTER INSERT OR UPDATE ON public.repl_tombstones", text)
+        self.assertIn("IF NEW.v <= o.v THEN\n                PERFORM public.scd_erase(NEW.tbl, NEW.pk, o.v);", body("scd_merge_repl_tombstones"))
+        self.assertIn("IF NEW.v <= OLD.v THEN\n            PERFORM public.scd_erase(NEW.tbl, NEW.pk, OLD.v);", body("scd_merge_repl_tombstones"))
+        self.assertNotIn("scd_erase", body("scd_merge_disliked_tracks"))
+        self.assertIn("NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x", body("scd_ver_disliked_tracks"))
+        self.assertNotIn("repl_tombstones", body("scd_ver_sessions"))
 
     def test_fk_guard_refuses_restrict_and_applies_actions(self):
         text = self.files["triggers.sql"]

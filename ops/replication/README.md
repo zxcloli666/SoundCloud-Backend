@@ -73,6 +73,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 7. `0203_scd_admin`: `scd_sync_publications()`, `scd_unpublish_column`, `scd_configure`, `scd_grant_repl`, `scd_repl_problems`.
 8. `0204_scd_uuid_v5`: `uuid-ossp`; `scd_uuid(ns, VARIADIC key)` is UUID v5 of `ns:key1\x1fkey2...` under namespace `e5f6011f-72fa-46e1-ad97-55586f6f1f83`, equal to Rust `Uuid::new_v5` of the same bytes; NULL when a part is NULL.
 9. `0205_scd_wt_output_race`: `scd_wt` returns `(id, output)`, kinds return `{touched, output}`; `scd_unique_race`, `scd_xact_origin`; dispatch leaves a raced 23505 to the apply retry.
+10. `0206_scd_install`: the generated SQL again: replica inserts merge inside the trigger, tombstones are versioned deletes (lab T3h).
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
@@ -82,10 +83,13 @@ Every public object is schema-qualified (`public.`); the apply worker runs with 
 
 | trigger | fires | tables | does |
 |---|---|---|---|
-| zz_ver | origin | M, versioned A | bumps a group version with `scd_hlc` when the group changes; on insert only for groups this node owns |
+| zz_ver | origin | M, versioned A | bumps a group version with `scd_hlc` when the group changes; on insert only for groups this node owns; an insert into an LWW tombstone table starts above the local tombstone |
 | zz_merge | replica, split | M, versioned A | keeps the higher version per versioned group, ties go to the incoming row on api and the stored row on core; core groups are taken from core as is; insert on an existing PK or R6 natural key becomes a merge (R6 conflict counted), `least` columns merge with least() for a row born on another node |
 | zz_skip | replica, split | insert-only A | skips an insert on an existing PK |
-| zz_tomb / zz_tomb_check | origin / replica, split | tombstone A | delete writes `repl_tombstones`; a late insert not newer than the tombstone is dropped |
+| zz_tomb | origin, split | tombstone A | BEFORE DELETE: writes `repl_tombstones` first, so the tombstone reaches a peer ahead of the key-only DELETE; its `v` is the delete's HLC |
+| zz_tomb_check | replica, split | tombstone A | drops an insert the tombstone covers; LWW tables queue a resend of the tombstone to the sender |
+| zz_tomb_guard | replica, split | LWW tombstone A | refuses a replicated DELETE of a row newer than the local tombstone and queues a resend of the row |
+| zz_erase | replica, split | repl_tombstones | AFTER the tombstone is written, deletes the rows it covers on this node (`scd_erase_<t>`), so core forwards the tombstone ahead of its DELETE; a newer local row stays and is queued for resend; a tombstone that changes nothing is applied by zz_merge |
 | zz_owner | replica, api, split | C | skips keys in `cmd_pending`; purges local rows that hold core's unique keys; insert on an existing PK becomes an update |
 | zz_purge_guard | replica, api, split | M | refuses a delete whose `repl_purges` receipt is older than the local api version, queues `repl_resend` |
 | zz_max | replica, core, split | K | keeps the max register |
@@ -97,6 +101,13 @@ Every public object is schema-qualified (`public.`); the apply worker runs with 
 | zz_guard_result | origin statement, api | M core columns, update | counts a write unless `scd.writer` is migration or repl |
 
 Guards only count (`public.scd_counters`) unless `scd.guard = 'enforce'`, then they raise.
+
+Replica inserts (zz_merge, zz_skip, zz_max, zz_owner) never return the row to the apply. They look the key up, merge into a found row, else insert it themselves with `INSERT ... ON CONFLICT DO NOTHING` under `scd.merging = on` and return NULL. A concurrent apply or local writer of the same key makes the insert wait and do nothing; the next of 3 attempts finds the row and merges. A merge whose row is deleted under it updates nothing and retries, so the tombstone decides. After 3 attempts it raises 23505. Two apply workers on core and an apply against a local writer no longer kill the worker (lab T3h: 100 restarts in 600 s).
+
+Tombstones (lab T3h). A replicated DELETE carries only the key, an UPDATE of a missing row is dropped, and a DELETE that finds no row on core writes nothing to forward. So a tombstone is a versioned delete:
+- LWW (natural or R6 keys): a row lives when its version is above every tombstone of its key. The tombstone travels before the DELETE; zz_erase deletes covered rows and keeps newer ones, zz_tomb_guard refuses a DELETE that would kill a newer row, and both queue the newer row for resend. A row a node still sends below the tombstone is dropped by zz_tomb_check, which resends the tombstone back to that node. Every disagreement ends in a resend toward the higher version, so `scd_drain_resend()` must run on every node, core included.
+- Delete-wins (a single uuid PK without an R6 `id:`, never reused: sessions, login_requests, link_requests, featured_items, listening_history): a tombstone deletes every row of its key and blocks every insert. A logout beats any concurrent touch.
+- REPLICA IDENTITY FULL was not used: a newer local row would turn every incoming UPDATE into update_missing (dropped), the WAL of big tables grows with full old tuples, and it gives no resend path.
 
 Functions: `scd_row_hash(tbl, pk)` and `scd_row_hash_<tbl>(pk)` hash the replicated columns with fixed TimeZone, DateStyle, IntervalStyle, extra_float_digits and bytea_output. `scd_purge(tbl, pk)` and `scd_purge_<tbl>(pk)` delete a row and its FK children explicitly (cascades do not fire in apply): CASCADE children are deleted or recursed, SET NULL/DEFAULT applied, NO ACTION/RESTRICT children get their nullable FK columns cleared, else purged. `scd_purge_intent(tbl, pk)` and `scd_purge_intent_<tbl>(pk)` are the only way core purges an M row (R7): in one tx they lock the row, write `repl_purges` with the newest api version, then delete; on an api node they raise. `scd_row_json(tbl, pk)` returns the replicated columns as jsonb (cmd_reassert, repl_repair). `scd_kinds()` and `scd_table_class(tbl)` expose the registry. `scd_publication_lists()` returns (pubname, node, publish, tbl, cols); `scd_sync_publications()` applies it, intersected with existing columns and minus `scd_unpublished_columns`.
 

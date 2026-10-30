@@ -2,8 +2,8 @@ psql_cmd="${PSQL:-psql}"
 socket="${PG_SOCKET:-/var/run/postgresql}"
 nodes="core main star"
 
-sql() { $psql_cmd -X -q -v ON_ERROR_STOP=1 "$@"; }
-val() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -At -d "$1" -c "$2"; }
+sql() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -v FETCH_COUNT=5000 "$@"; }
+val() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -v FETCH_COUNT=5000 -At -d "$1" -c "$2"; }
 say() { printf '== %s\n' "$*"; }
 
 teardown() {
@@ -15,7 +15,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
