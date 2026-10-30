@@ -11,8 +11,6 @@ DECLARE
     stamp timestamptz := (args ->> 'at')::timestamptz;
     key jsonb := jsonb_build_object('tbl', 'artist_sc_accounts', 'pk', jsonb_build_object('artist_id', (args ->> 'artist_id')::uuid, 'sc_user_id', args ->> 'sc_user_id'));
     artist_key jsonb := jsonb_build_object('tbl', 'artists', 'pk', jsonb_build_object('id', (args ->> 'artist_id')::uuid));
-    fresh boolean;
-    claims boolean;
     touched jsonb := '[]';
 BEGIN
     IF args ->> 'op' = 'delete' THEN
@@ -21,18 +19,7 @@ BEGIN
         IF NOT FOUND THEN
             RETURN jsonb_build_object('touched', touched, 'output', false);
         END IF;
-        touched := jsonb_build_array(key);
-        UPDATE public.artists AS a
-        SET has_sc_account = EXISTS (SELECT 1
-                                     FROM public.artist_sc_accounts AS other
-                                     WHERE other.artist_id = artist
-                                       AND (other.verified OR other.source = 'mb_resolve')
-                                       AND other.role IN ('main', 'alt', 'demo'))
-        WHERE a.id = artist;
-        IF FOUND THEN
-            touched := touched || jsonb_build_array(artist_key);
-        END IF;
-        RETURN jsonb_build_object('touched', touched, 'output', true);
+        RETURN jsonb_build_object('touched', jsonb_build_array(key), 'output', true);
     END IF;
     INSERT INTO public.artist_sc_accounts AS accounts (artist_id, sc_user_id, role, source, verified, created_at, updated_at)
     VALUES (artist, account, args ->> 'role', args ->> 'source', (args ->> 'verified')::boolean, stamp, stamp)
@@ -46,19 +33,10 @@ BEGIN
                              WHEN accounts.source = 'manual'
                                  THEN accounts.source
                              ELSE EXCLUDED.source END,
-            updated_at = stamp
-    RETURNING (accounts.xmax = 0), (accounts.verified OR accounts.source = 'mb_resolve') AND accounts.role IN ('main', 'alt', 'demo')
-    INTO fresh, claims;
+            updated_at = stamp;
     touched := jsonb_build_array(key);
     UPDATE public.artists AS a
     SET sc_user_id = COALESCE(a.sc_user_id, account),
-        has_sc_account = CASE
-                             WHEN fresh THEN a.has_sc_account OR claims
-                             ELSE EXISTS (SELECT 1
-                                          FROM public.artist_sc_accounts AS other
-                                          WHERE other.artist_id = artist
-                                            AND (other.verified OR other.source = 'mb_resolve')
-                                            AND other.role IN ('main', 'alt', 'demo')) END,
         updated_at = stamp
     WHERE a.id = artist;
     IF FOUND THEN

@@ -32,8 +32,15 @@ fn id(text: &str) -> Uuid {
     text.parse().unwrap()
 }
 
+async fn artist(pool: &sqlx::PgPool) -> (Option<String>, bool, DateTime<Utc>) {
+    sqlx::query_as("SELECT sc_user_id, has_sc_account, updated_at FROM public.artists")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
-async fn a_matched_account_backfills_the_artist_and_can_be_deleted() {
+async fn a_matched_account_backfills_the_artist_and_core_sets_its_flag() {
     let pair = Pair::new(CATALOG).await;
     let upsert = MatchScAccount::Upsert {
         artist_id: id(ARTIST_ID),
@@ -44,24 +51,21 @@ async fn a_matched_account_backfills_the_artist_and_can_be_deleted() {
         at: at("2026-10-30T10:00:00Z"),
     };
     assert_eq!(pair.run(&upsert, &[]).await.assert_same(), json!(true));
-    let artist: (Option<String>, bool, DateTime<Utc>) =
-        sqlx::query_as("SELECT sc_user_id, has_sc_account, updated_at FROM public.artists")
-            .fetch_one(&pair.api)
-            .await
-            .unwrap();
+    let matched = (Some("204411307".to_owned()), at("2026-10-30T10:00:00Z"));
     assert_eq!(
-        artist,
-        (
-            Some("204411307".to_owned()),
-            true,
-            at("2026-10-30T10:00:00Z")
-        )
+        artist(&pair.api).await,
+        (matched.0.clone(), false, matched.1)
+    );
+    assert_eq!(
+        artist(&pair.core).await,
+        (matched.0.clone(), true, matched.1)
     );
     let delete = MatchScAccount::Delete {
         artist_id: id(ARTIST_ID),
         sc_user_id: "204411307".to_owned(),
     };
     assert_eq!(pair.run(&delete, &[]).await.assert_same(), json!(true));
+    assert_eq!(artist(&pair.core).await, (matched.0, false, matched.1));
     assert_eq!(pair.run(&delete, &[]).await.assert_same(), json!(false));
     pair.finish().await;
 }

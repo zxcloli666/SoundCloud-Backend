@@ -9,6 +9,8 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
+DECLARE
+    core text[];
 BEGIN
     FOR tbl IN
         SELECT c.relname::text FROM pg_catalog.pg_class c
@@ -16,7 +18,8 @@ BEGIN
           AND public.scd_table_class(c.relname) IN ('C', 'P', 'M', 'A', 'K')
         ORDER BY 1
     LOOP
-        EXECUTE format('SELECT md5(coalesce(string_agg(r::text, E''\n'' ORDER BY r::text), '''')) FROM public.%I r', tbl) INTO hash;
+        core := ARRAY(SELECT k.col FROM public.scd_core_columns() AS k WHERE k.tbl = table_hashes.tbl);
+        EXECUTE format('SELECT md5(coalesce(string_agg(j::text, E''\n'' ORDER BY j::text), '''')) FROM (SELECT to_jsonb(r) - %L::text[] AS j FROM public.%I r) s', core, tbl) INTO hash;
         RETURN NEXT;
     END LOOP;
 END
