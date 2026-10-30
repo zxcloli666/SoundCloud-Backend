@@ -329,7 +329,10 @@ mod tests {
         let commands: i64 = sqlx::query_scalar("SELECT count(*) FROM enqueue_commands")
             .fetch_one(&pool)
             .await?;
-        assert!((1..=2).contains(&commands), "{commands} enqueue commands reached core");
+        assert!(
+            (1..=2).contains(&commands),
+            "{commands} enqueue commands reached core"
+        );
         Ok(())
     }
 

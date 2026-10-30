@@ -664,12 +664,16 @@ async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
         if durable {
             break;
         }
-        assert!(started.elapsed() < Duration::from_secs(5), "no job after notify");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "no job after notify"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'lyrics.lookup'")
-        .fetch_one(&pool)
-        .await?;
+    let jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'lyrics.lookup'")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(jobs, 1);
     cancellation.cancel();
     listener.await?;
@@ -692,17 +696,27 @@ async fn wake_from_an_api_node_reaches_core_through_the_apply_worker() -> anyhow
     let mut millis = Vec::new();
     for number in 0..50 {
         let id = format!("9{number:03}");
-        insert_track(&core, &id, "Track").await?;
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, uploader_username, duration_ms, index_priority)
+             VALUES ($1, 'soundcloud:tracks:' || $1, 'Track', 'track', 'artist', 180000, 5)",
+        )
+        .bind(&id)
+        .execute(&core)
+        .await?;
         let started = std::time::Instant::now();
         loop {
-            let found: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tracks WHERE sc_track_id = $1)")
-                .bind(&id)
-                .fetch_one(&api)
-                .await?;
+            let found: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tracks WHERE sc_track_id = $1)")
+                    .bind(&id)
+                    .fetch_one(&api)
+                    .await?;
             if found {
                 break;
             }
-            assert!(started.elapsed() < Duration::from_secs(30), "track never replicated");
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "track never replicated"
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let at = Utc::now();
@@ -722,7 +736,10 @@ async fn wake_from_an_api_node_reaches_core_through_the_apply_worker() -> anyhow
             if durable == Some(true) {
                 break;
             }
-            assert!(started.elapsed() < Duration::from_secs(30), "wake never reached core");
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "wake never reached core"
+            );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         millis.push(started.elapsed().as_millis());
