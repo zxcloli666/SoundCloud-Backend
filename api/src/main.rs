@@ -130,15 +130,16 @@ async fn main() {
     info!("NATS client started");
 
     let qdrant = QdrantService::connect(&config.qdrant).expect("Failed to configure Qdrant");
-    tokio::spawn({
-        let qdrant = qdrant.clone();
-        async move {
-            match qdrant.prepare_required_collections().await {
-                Ok(()) => info!("Qdrant ready"),
-                Err(error) => warn!(%error, "Qdrant is not ready; vector features degrade"),
-            }
-        }
-    });
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        qdrant.prepare_required_collections(),
+    )
+    .await
+    {
+        Ok(Ok(())) => info!("Qdrant ready"),
+        Ok(Err(error)) => warn!(%error, "Qdrant is not ready; vector features degrade"),
+        Err(_) => warn!("Qdrant validation timed out; vector features degrade"),
+    }
 
     let http_client = sc_fingerprint::builder(None)
         .tcp_keepalive(Duration::from_secs(60))
