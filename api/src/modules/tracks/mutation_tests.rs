@@ -18,6 +18,10 @@ async fn track_mutations_persist_and_merge_without_sessions_tokens_or_redis(
 ) -> anyhow::Result<()> {
     let service = setup(&pool).await?;
     service.update("17", "42", &json!({"track": {"title": "Updated", "downloadable": false, "isrc": "USABC2600042", "metadata_artist": "Artist"}})).await?;
+    let first: i64 =
+        sqlx::query_scalar("SELECT generation FROM sync_queue WHERE action_type = 'track_update'")
+            .fetch_one(&pool)
+            .await?;
     service
         .update(
             "soundcloud:users:17",
@@ -41,7 +45,7 @@ async fn track_mutations_persist_and_merge_without_sessions_tokens_or_redis(
         payload,
         json!({"track": {"title": "Updated", "downloadable": false, "isrc": "USABC2600042", "metadata_artist": "Artist", "sharing": "private"}})
     );
-    assert_eq!(generation, 2);
+    assert!(generation > first);
     let projected = super::super::project_many(&pool, &["42".into()])
         .await?
         .into_iter()
@@ -123,9 +127,10 @@ async fn track_delete_supersedes_updates_and_prevents_refresh_resurrection(
     )
     .await?;
     assert!(!ingest.metadata_applied);
-    let actions: Vec<String> = sqlx::query_scalar("SELECT action_type FROM sync_queue")
-        .fetch_all(&pool)
-        .await?;
+    let actions: Vec<String> =
+        sqlx::query_scalar("SELECT action_type FROM sync_queue WHERE NOT cancelled")
+            .fetch_all(&pool)
+            .await?;
     assert_eq!(actions, ["track_delete"]);
     let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM user_owned_tracks")
         .fetch_one(&pool)
@@ -146,6 +151,9 @@ async fn coalesced_track_update_cannot_exceed_the_delivery_payload_limit(
             &json!({"track": {"description": "a".repeat(40000)}}),
         )
         .await?;
+    let first: i64 = sqlx::query_scalar("SELECT generation FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
     assert!(
         service
             .update(
@@ -161,7 +169,7 @@ async fn coalesced_track_update_cannot_exceed_the_delivery_payload_limit(
     )
     .fetch_one(&pool)
     .await?;
-    assert_eq!(generation, 1);
+    assert_eq!(generation, first);
     assert!(tags.is_empty());
     Ok(())
 }
@@ -205,9 +213,10 @@ async fn track_delete_cancels_an_update_that_was_uncommitted_when_delete_started
     blocker.commit().await?;
     updating.await??;
     deleting.await??;
-    let actions: Vec<String> = sqlx::query_scalar("SELECT action_type FROM sync_queue")
-        .fetch_all(&pool)
-        .await?;
+    let actions: Vec<String> =
+        sqlx::query_scalar("SELECT action_type FROM sync_queue WHERE NOT cancelled")
+            .fetch_all(&pool)
+            .await?;
     assert_eq!(actions, ["track_delete"]);
     Ok(())
 }

@@ -56,6 +56,16 @@ pub async fn superlike(
     track: &EntityRef,
     premium: bool,
 ) -> AppResult<Superliked> {
+    crate::db::retry_conflicts(|| superlike_once(pg, sync_queue, sc_user_id, track, premium)).await
+}
+
+async fn superlike_once(
+    pg: &PgPool,
+    sync_queue: &SyncQueueService,
+    sc_user_id: &str,
+    track: &EntityRef,
+    premium: bool,
+) -> AppResult<Superliked> {
     let variants = user_id_variants(sc_user_id);
     let sc_track_id = &track.sc_id();
     let mut transaction = pg.begin().await?;
@@ -75,7 +85,11 @@ pub async fn superlike(
     if Quota::of(used, premium).is_full() {
         return Err(limit_reached());
     }
-    let newly_liked = like_track_on(&mut transaction, sync_queue, sc_user_id, track).await?;
+    let newly_liked = if is_liked(&mut transaction, &variants, sc_track_id).await? {
+        false
+    } else {
+        like_track_on(&mut transaction, sync_queue, sc_user_id, track).await?
+    };
     let written = sqlx::query_file!("queries/superlikes/insert.sql", &variants, sc_track_id)
         .execute(&mut *transaction)
         .await?;
@@ -113,6 +127,17 @@ async fn is_live(
         .fetch_one(connection)
         .await?;
     Ok(live)
+}
+
+async fn is_liked(
+    connection: &mut PgConnection,
+    variants: &[String],
+    sc_track_id: &str,
+) -> AppResult<bool> {
+    let liked = sqlx::query_file_scalar!("queries/superlikes/is_liked.sql", variants, sc_track_id)
+        .fetch_one(connection)
+        .await?;
+    Ok(liked)
 }
 
 #[cfg(test)]

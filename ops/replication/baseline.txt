@@ -1,13 +1,4 @@
-api-delete-shared|api/queries/admin/sync_queue/purge.sql|sync_queue
-api-delete-shared|api/queries/auth/service/delete_orphan_connection.sql|soundcloud_connections
 api-delete-shared|api/queries/oauth_apps/service/delete_by_id.sql|oauth_apps
-api-delete-shared|api/queries/playlists/service/cancel_updates.sql|sync_queue
-api-delete-shared|api/queries/sync_queue/service/cancel_inverse.sql|sync_queue
-api-delete-shared|api/queries/sync_queue/service/revive_dead.sql|sync_queue
-api-delete-shared|api/queries/tracks/service/cancel_updates.sql|sync_queue
-api-delete-shared|api/src/modules/sync_queue/mirror.rs#clear_wanted|user_followings
-api-delete-shared|api/src/modules/sync_queue/mirror.rs#clear_wanted|user_likes_playlists
-api-delete-shared|api/src/modules/sync_queue/mirror.rs#clear_wanted|user_likes_tracks
 api-write-c|api/queries/admin/catalog/accept_credit.sql|track_artists
 api-write-c|api/queries/admin/catalog/album_tracks_delete_by_track.sql|album_tracks
 api-write-c|api/queries/admin/catalog/album_tracks_insert.sql|album_tracks
@@ -85,10 +76,3 @@ api-write-c|streaming/src/db/postgres.rs#mark_storage_lost|tracks
 api-write-p|api/queries/cold_refresh/enqueue_entity.sql|background_jobs
 api-write-p|api/queries/me/service/enqueue_followed_uploads.sql|background_jobs
 core-delete-m|jobs/queries/playlist_observe/retire_remotely_deleted.sql|sync_queue
-core-delete-m|jobs/queries/sync_queue/actions/unfollow_user.sql|user_followings
-core-delete-m|jobs/queries/sync_queue/actions/unlike_playlist.sql|user_likes_playlists
-core-delete-m|jobs/queries/sync_queue/actions/unlike_track.sql|user_likes_tracks
-core-delete-m|jobs/queries/sync_queue/delete_completed.sql|sync_queue
-core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_followings
-core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_likes_playlists
-core-delete-m|jobs/src/handlers/catalog_collection/mirror.rs#reconcile|user_likes_tracks

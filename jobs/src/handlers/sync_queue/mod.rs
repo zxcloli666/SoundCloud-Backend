@@ -2,6 +2,8 @@ mod actions;
 mod client;
 mod connection;
 mod create_check;
+#[cfg(test)]
+mod intent_tests;
 mod model;
 #[cfg(test)]
 mod playlist_tests;
@@ -95,6 +97,11 @@ impl SyncQueueHandler {
         self.pauses_restored
             .get_or_init(|| self.restore_pauses())
             .await;
+        self.repository.adopt().await.map_err(JobError::retryable)?;
+        self.repository
+            .settle_cancelled()
+            .await
+            .map_err(JobError::retryable)?;
         let deadline = Instant::now() + PACED_DRAIN_BUDGET;
         let mut round = Round::new("sync_queue");
         for _ in 0..MAX_DRAIN_BATCHES {
@@ -168,6 +175,9 @@ impl SyncQueueHandler {
         }
         if mutation.has_remote_result() {
             return self.finalize(&mutation).await;
+        }
+        if self.repository.drop_superseded(&mutation).await? {
+            return Ok(());
         }
         if mutation.action_type == "comment" && mutation.has_ambiguous_remote_attempt() {
             self.repository

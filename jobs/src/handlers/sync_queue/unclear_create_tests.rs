@@ -198,7 +198,8 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(FakeSoundCloud, SyncQueueHandle
         "17",
         "playlist_create",
         "new:7d4c4c56-8c0f-4c2e-9a37-1b0e8a4f3e21",
-        &json!({"playlist": {"title": "Mix", "sharing": "private"}})
+        &json!({"playlist": {"title": "Mix", "sharing": "private"}}),
+        false
     )
     .execute(pool)
     .await?;
@@ -212,6 +213,7 @@ pub(super) async fn run(pool: &PgPool, handler: &SyncQueueHandler) -> anyhow::Re
     sqlx::query("UPDATE sync_queue SET next_run_at = now()")
         .execute(pool)
         .await?;
+    handler.repository.adopt().await?;
     let mutation = handler
         .repository
         .claim(1)

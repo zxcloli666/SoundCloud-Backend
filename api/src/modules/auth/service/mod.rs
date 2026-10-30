@@ -91,11 +91,10 @@ impl AuthService {
             .fetch_optional(&mut *transaction)
             .await?;
         if let Some(connection_id) = deleted.and_then(|row| row.soundcloud_connection_id) {
-            sqlx::query_file!(
-                "queries/auth/service/delete_orphan_connection.sql",
-                connection_id
+            wt::call(
+                &mut transaction,
+                &wt::ConnectionDropOrphan { connection_id },
             )
-            .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;

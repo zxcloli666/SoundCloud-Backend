@@ -2,7 +2,10 @@ UPDATE sync_queue
 SET lease_id = NULL,
     lease_generation = NULL,
     locked_at = NULL,
-    remote_attempted_generation = NULL,
+    remote_attempted_generation = CASE
+        WHEN action_type IN ('like_track', 'unlike_track', 'like_playlist', 'unlike_playlist', 'follow_user', 'unfollow_user')
+        THEN remote_attempted_generation
+    END,
     last_error = $4,
     next_run_at = now() + $5::bigint * interval '1 second'
 WHERE id = $1

@@ -1,4 +1,4 @@
-DELETE
+SELECT count(*) AS "purgeable!"
 FROM sync_queue
 WHERE retry_count >= $1
   AND lease_id IS NULL

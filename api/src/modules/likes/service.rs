@@ -40,9 +40,15 @@ impl LikesService {
             sc_user_id,
         )
         .await?;
-        let mut transaction = self.pg.begin().await?;
-        let liked = like_track_on(&mut transaction, &self.sync_queue, sc_user_id, &track).await?;
-        transaction.commit().await?;
+        let track = &track;
+        let liked = crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            let liked =
+                like_track_on(&mut transaction, &self.sync_queue, sc_user_id, track).await?;
+            transaction.commit().await?;
+            Ok(liked)
+        })
+        .await?;
         if liked {
             self.events
                 .record(sc_user_id, sc_track_id, "like", None)

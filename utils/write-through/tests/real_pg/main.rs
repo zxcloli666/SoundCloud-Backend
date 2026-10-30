@@ -5,3 +5,4 @@ mod harness;
 mod matching;
 mod observe;
 mod race;
+mod sync_queue;

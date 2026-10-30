@@ -12,7 +12,8 @@ async fn update(pool: &PgPool, body: &Value) -> anyhow::Result<()> {
         "17",
         "track_update",
         "soundcloud:tracks:42",
-        body
+        body,
+        false
     )
     .execute(&mut *tx)
     .await?;
@@ -87,13 +88,14 @@ async fn newer_track_intent_fences_old_ack_and_confirmation_is_durable(
             .fetch_one(&pool)
             .await?;
     assert_eq!(row, ("private".into(), false));
+    repository.adopt().await?;
     let current = repository
         .claim(1)
         .await?
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("track mutation was not claimed"))?;
-    assert_eq!(current.generation, 2);
+    assert!(current.generation > old.generation);
     assert!(repository.record_remote_attempt(&current).await?);
     assert!(
         repository
