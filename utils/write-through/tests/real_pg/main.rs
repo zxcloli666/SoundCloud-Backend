@@ -2,6 +2,7 @@ mod client;
 mod db;
 mod dispatch;
 mod harness;
+mod jobs;
 mod matching;
 mod observe;
 mod race;

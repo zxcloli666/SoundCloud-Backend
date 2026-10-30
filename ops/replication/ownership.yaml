@@ -29,7 +29,7 @@ kinds:
   lyrics.wake: {touches: [lyrics_lookup_state], from: "api lyrics ensure_lookup_state, request_lookup, mark_wake_durable"}
   comment.post: {touches: [track_comments], from: "api tracks comments insert_pending"}
   cold_refresh.clear: {touches: [catalog_audience, track_comments, catalog_collection_sync], from: "api cold_refresh audience_clear, comments_clear"}
-  job.enqueue: {touches: [background_jobs], from: "api cold_refresh enqueue_entity, me enqueue_followed_uploads, featured create/update, playlist observe after the Redis claim"}
+  job.enqueue: {touches: [background_jobs, job_status, playlist_membership_state], optimistic: false, from: "api cold_refresh enqueue_entity, me enqueue_followed_uploads, featured create/update, playlist observe after the Redis claim"}
   owned.insert: {touches: [user_owned_tracks], from: "api tracks insert_owned"}
   owned.delete: {touches: [user_owned_tracks, user_owned_playlists], from: "api tracks and playlists delete_owned"}
   app_token.reject: {touches: [oauth_app_tokens], from: "api oauth_apps token_service reject_generation"}

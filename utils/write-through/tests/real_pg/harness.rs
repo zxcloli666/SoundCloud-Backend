@@ -192,6 +192,34 @@ impl Pair {
     }
 }
 
+impl Pair {
+    pub async fn redeliver(&self) -> bool {
+        let (id, kind, args, touched): (String, String, Value, Value) = sqlx::query_as(
+            "SELECT id::text, kind, args, touched FROM public.cmd_outbox ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_one(&self.api)
+        .await
+        .unwrap();
+        let command = Command {
+            id,
+            kind,
+            args,
+            touched,
+            keys: 0,
+            pending: 0,
+        };
+        let before = hashes(&self.core).await;
+        let verdict = command.dispatch(&self.core).await;
+        let done: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM public.cmd_done WHERE id = $1::uuid")
+                .bind(&command.id)
+                .fetch_one(&self.core)
+                .await
+                .unwrap();
+        before == hashes(&self.core).await && verdict.status.as_deref() == Some("ok") && done == 1
+    }
+}
+
 impl Run {
     pub fn assert_same(self) -> Value {
         assert!(
