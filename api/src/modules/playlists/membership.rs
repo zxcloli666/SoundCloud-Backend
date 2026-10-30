@@ -11,7 +11,7 @@ use crate::modules::cold_refresh::VIEWER_PRIORITY;
 
 const EDIT_PRIORITY: i16 = 30;
 const FAILURE_STREAK_LIMIT: i32 = 5;
-const VIEW_THROTTLE_SECS: u64 = 300;
+const VIEW_CLAIM_SECS: u64 = 30;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,7 +138,17 @@ impl PlaylistMembership {
     }
 
     pub async fn enqueue_observation_if_due(&self, playlist_urn: &str) {
-        if !self.claim_view(playlist_urn).await {
+        let Ok(Some(due_at)) = sqlx::query_file_scalar!(
+            "queries/playlists/observe_due_at.sql",
+            playlist_urn,
+            wt::now()
+        )
+        .fetch_optional(&self.pool)
+        .await
+        else {
+            return;
+        };
+        if !self.claim_view(playlist_urn, due_at).await {
             return;
         }
         self.enqueue(playlist_urn, VIEWER_PRIORITY, true).await;
@@ -148,16 +158,19 @@ impl PlaylistMembership {
         self.enqueue(playlist_urn, EDIT_PRIORITY, false).await
     }
 
-    async fn claim_view(&self, playlist_urn: &str) -> bool {
+    async fn claim_view(&self, playlist_urn: &str, due_at: DateTime<Utc>) -> bool {
         let Ok(mut connection) = self.redis.get().await else {
             return true;
         };
         let claimed: Result<Option<String>, _> = deadpool_redis::redis::cmd("SET")
-            .arg(format!("playlist:observe:{playlist_urn}"))
+            .arg(format!(
+                "playlist:observe:{playlist_urn}:{}",
+                due_at.timestamp_micros()
+            ))
             .arg(1)
             .arg("NX")
             .arg("EX")
-            .arg(VIEW_THROTTLE_SECS)
+            .arg(VIEW_CLAIM_SECS)
             .query_async(&mut connection)
             .await;
         !matches!(claimed, Ok(None))
@@ -270,12 +283,62 @@ mod tests {
         Ok(())
     }
 
+    async fn count_enqueue_commands(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::raw_sql(
+            "ALTER FUNCTION scd_cmd_job_enqueue(jsonb) RENAME TO scd_cmd_job_enqueue_real;
+             CREATE TABLE enqueue_commands (n bigserial PRIMARY KEY);
+             CREATE FUNCTION scd_cmd_job_enqueue(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
+             BEGIN
+                 INSERT INTO enqueue_commands DEFAULT VALUES;
+                 RETURN scd_cmd_job_enqueue_real(args);
+             END $f$;",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn enqueue_commands(pool: &PgPool) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar("SELECT count(*) FROM enqueue_commands")
+            .fetch_one(pool)
+            .await?)
+    }
+
     fn node_redis(database: u8) -> Pool {
         let url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
         deadpool_redis::Config::from_url(format!("{url}/{database}"))
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("redis pool")
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_count_change_makes_the_next_view_enqueue_at_once(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        sqlx::query(
+            "UPDATE playlist_membership_state SET next_reconcile_at = now() - interval '1 hour'",
+        )
+        .execute(&pool)
+        .await?;
+        count_enqueue_commands(&pool).await?;
+        let node = PlaylistMembership::new(pool.clone(), node_redis(3));
+        let mut connection = node.redis.get().await?;
+        let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+            .query_async(&mut connection)
+            .await?;
+
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 1);
+
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 1);
+
+        test_schema::observe(&pool, PLAYLIST, OWNER, 3).await?;
+        node.enqueue_observation_if_due(PLAYLIST).await;
+        assert_eq!(enqueue_commands(&pool).await?, 2);
+        Ok(())
     }
 
     #[sqlx::test(migrations = "./migrations")]
@@ -288,17 +351,7 @@ mod tests {
         )
         .execute(&pool)
         .await?;
-        sqlx::raw_sql(
-            "ALTER FUNCTION scd_cmd_job_enqueue(jsonb) RENAME TO scd_cmd_job_enqueue_real;
-             CREATE TABLE enqueue_commands (n bigserial PRIMARY KEY);
-             CREATE FUNCTION scd_cmd_job_enqueue(args jsonb) RETURNS jsonb LANGUAGE plpgsql AS $f$
-             BEGIN
-                 INSERT INTO enqueue_commands DEFAULT VALUES;
-                 RETURN scd_cmd_job_enqueue_real(args);
-             END $f$;",
-        )
-        .execute(&pool)
-        .await?;
+        count_enqueue_commands(&pool).await?;
         let nodes = [
             std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(1))),
             std::sync::Arc::new(PlaylistMembership::new(pool.clone(), node_redis(2))),
