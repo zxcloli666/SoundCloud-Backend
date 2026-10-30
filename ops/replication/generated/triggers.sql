@@ -951,6 +951,7 @@ BEGIN
             NEW.created_at := OLD.created_at;
             NEW.quality := OLD.quality;
             NEW.status := OLD.status;
+            NEW.stored_quality := OLD.stored_quality;
             NEW.track_urn := OLD.track_urn;
             NEW.updated_at := OLD.updated_at;
             NEW.row_v := OLD.row_v;
@@ -967,6 +968,7 @@ BEGIN
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
                     status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                    stored_quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.stored_quality ELSE o.stored_quality END,
                     track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
                     row_v = greatest(o.row_v, NEW.row_v)
@@ -989,6 +991,7 @@ BEGIN
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.quality ELSE o.quality END,
                     status = CASE WHEN NEW.row_v > o.row_v THEN NEW.status ELSE o.status END,
+                    stored_quality = CASE WHEN NEW.row_v > o.row_v THEN NEW.stored_quality ELSE o.stored_quality END,
                     track_urn = CASE WHEN NEW.row_v > o.row_v THEN NEW.track_urn ELSE o.track_urn END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
                     row_v = greatest(o.row_v, NEW.row_v)
@@ -1002,8 +1005,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.cdn_tracks (cdn_path, created_at, id, last_accessed_at, quality, row_v, status, track_urn, updated_at)
-        VALUES (NEW.cdn_path, NEW.created_at, NEW.id, NEW.last_accessed_at, NEW.quality, NEW.row_v, NEW.status, NEW.track_urn, NEW.updated_at)
+        INSERT INTO public.cdn_tracks (cdn_path, created_at, id, last_accessed_at, quality, row_v, status, stored_quality, track_urn, updated_at)
+        VALUES (NEW.cdn_path, NEW.created_at, NEW.id, NEW.last_accessed_at, NEW.quality, NEW.row_v, NEW.status, NEW.stored_quality, NEW.track_urn, NEW.updated_at)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -1026,7 +1029,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
     END IF;
-    IF (NEW.cdn_path, NEW.created_at, NEW.quality, NEW.status, NEW.track_urn, NEW.updated_at) IS DISTINCT FROM (OLD.cdn_path, OLD.created_at, OLD.quality, OLD.status, OLD.track_urn, OLD.updated_at) THEN
+    IF (NEW.cdn_path, NEW.created_at, NEW.quality, NEW.status, NEW.stored_quality, NEW.track_urn, NEW.updated_at) IS DISTINCT FROM (OLD.cdn_path, OLD.created_at, OLD.quality, OLD.status, OLD.stored_quality, OLD.track_urn, OLD.updated_at) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);

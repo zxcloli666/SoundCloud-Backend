@@ -283,7 +283,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.cdn_path, t.created_at, t.id, t.quality, t.row_v, t.status, t.track_urn, t.updated_at)::text) FROM public.cdn_tracks t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.cdn_path, t.created_at, t.id, t.quality, t.row_v, t.status, t.stored_quality, t.track_urn, t.updated_at)::text) FROM public.cdn_tracks t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_cmd_dead(k jsonb)
