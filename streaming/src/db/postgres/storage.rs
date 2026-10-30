@@ -15,8 +15,7 @@ const INSERT_CDN_TRACK: &str = r#"INSERT INTO cdn_tracks (id, track_urn, quality
    ON CONFLICT (track_urn, quality) DO UPDATE SET status = $4, cdn_path = $3, updated_at = NOW() AT TIME ZONE 'UTC'
    RETURNING id"#;
 
-const SET_CDN_STATUS: &str =
-    r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() AT TIME ZONE 'UTC' WHERE id = $1::text::uuid"#;
+const SET_CDN_STATUS: &str = r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() AT TIME ZONE 'UTC' WHERE id = $1::text::uuid"#;
 
 #[derive(Debug)]
 pub struct CdnTrackRecord {
