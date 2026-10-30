@@ -43,6 +43,7 @@ pub struct LockedMutation {
     pub lease_generation: Option<i64>,
     pub remote_completed_generation: Option<i64>,
     pub remote_result: Option<Value>,
+    pub intent_v: i64,
 }
 
 impl LockedMutation {
@@ -56,6 +57,40 @@ impl LockedMutation {
             && self.generation == mutation.lease_generation
             && self.remote_completed_generation == Some(mutation.lease_generation)
             && self.remote_result.is_some()
+    }
+}
+
+#[derive(Debug, PartialEq, FromRow)]
+pub struct SettledRow {
+    pub id: Uuid,
+    pub user_id: String,
+    pub action_type: String,
+    pub target_urn: String,
+    pub cancelled: bool,
+    pub intent_v: i64,
+    pub idle: bool,
+    pub finished: bool,
+    pub wanted: Option<bool>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Settlement<'a> {
+    Drop,
+    DropBoth(&'a SettledRow),
+    Revive,
+}
+
+impl<'a> Settlement<'a> {
+    pub fn of(queued: &SettledRow, opposite: Option<&'a SettledRow>) -> Self {
+        match opposite {
+            Some(opposite) if !opposite.cancelled => Settlement::Drop,
+            Some(opposite) if !opposite.idle => Settlement::Revive,
+            Some(opposite) if !queued.finished && !opposite.finished => {
+                Settlement::DropBoth(opposite)
+            }
+            _ if queued.wanted == Some(true) => Settlement::Revive,
+            _ => Settlement::Drop,
+        }
     }
 }
 

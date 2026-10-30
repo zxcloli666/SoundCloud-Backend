@@ -97,19 +97,21 @@ impl SyncQueueService {
     ) -> AppResult<()> {
         let user_id = crate::common::sc_ids::extract_sc_id(user_id);
         let target_urn = canonical_target(action_type, target_urn);
-        if let Some(inverse) = inverse(action_type) {
-            let cancelled = sqlx::query_file!(
-                "queries/sync_queue/service/cancel_inverse.sql",
-                user_id,
-                inverse,
-                &target_urn
-            )
-            .execute(&mut *connection)
-            .await?;
-            if cancelled.rows_affected() > 0 {
-                return Ok(());
+        let annuls = match inverse(action_type) {
+            Some(inverse) => {
+                sqlx::query_file!(
+                    "queries/sync_queue/service/cancel_inverse.sql",
+                    user_id,
+                    inverse,
+                    &target_urn
+                )
+                .execute(&mut *connection)
+                .await?
+                .rows_affected()
+                    > 0
             }
-        }
+            None => false,
+        };
 
         if action_type == "comment" {
             sqlx::query(
@@ -130,6 +132,7 @@ impl SyncQueueService {
             .bind(action_type)
             .bind(&target_urn)
             .bind(payload)
+            .bind(annuls)
             .execute(&mut *connection)
             .await?;
         }

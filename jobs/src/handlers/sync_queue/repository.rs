@@ -4,9 +4,11 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use super::actions::{self, ActionError};
-use super::model::{ClaimedMutation, LockedMutation, NextWaiting};
+use super::model::{ClaimedMutation, LockedMutation, NextWaiting, SettledRow, Settlement};
 
 pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
+const SETTLE_BATCH: i64 = 500;
+const SETTLE_ROUNDS: usize = 20;
 const LIKES_AND_UNLIKES: [&str; 4] = [
     "like_track",
     "unlike_track",
@@ -236,15 +238,93 @@ impl SyncQueueRepository {
             .await?;
         actions::apply_local(&mut transaction, mutation, remote_result).await?;
         sqlx::query_file!(
-            "queries/sync_queue/delete_completed.sql",
+            "queries/sync_queue/release_lease.sql",
             mutation.id,
             mutation.lease_id,
             mutation.lease_generation
         )
         .execute(&mut *transaction)
         .await?;
+        sqlx::query_file_scalar!("queries/sync_queue/purge.sql", mutation.id, locked.intent_v)
+            .fetch_one(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub async fn adopt(&self) -> Result<u64, sqlx::Error> {
+        let mut adopted = 0;
+        for _ in 0..SETTLE_ROUNDS {
+            let batch = sqlx::query_file!("queries/sync_queue/adopt.sql", SETTLE_BATCH)
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
+            adopted += batch;
+            if batch < SETTLE_BATCH as u64 {
+                break;
+            }
+        }
+        Ok(adopted)
+    }
+
+    pub async fn settle_cancelled(&self) -> Result<u64, sqlx::Error> {
+        let pairs = sqlx::query_file!("queries/sync_queue/cancelled.sql", SETTLE_BATCH)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut settled = 0;
+        for pair in pairs {
+            let ids: Vec<uuid::Uuid> = std::iter::once(pair.id).chain(pair.opposite_id).collect();
+            match self.settle(&ids).await {
+                Ok(true) => settled += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(id = %pair.id, error = %error, "cancelled sync mutation was not settled")
+                }
+            }
+        }
+        Ok(settled)
+    }
+
+    async fn settle(&self, ids: &[uuid::Uuid]) -> Result<bool, FinalizeError> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
+            .fetch_one(&mut *transaction)
+            .await?;
+        let rows = sqlx::query_file_as!(SettledRow, "queries/sync_queue/lock_settled.sql", ids)
+            .fetch_all(&mut *transaction)
+            .await?;
+        let Some(queued) = rows
+            .iter()
+            .find(|row| row.id == ids[0] && row.cancelled && row.idle)
+        else {
+            transaction.commit().await?;
+            return Ok(false);
+        };
+        let opposite = rows.iter().find(|row| row.id != queued.id);
+        match Settlement::of(queued, opposite) {
+            Settlement::Drop => {
+                purge(&mut transaction, queued).await?;
+            }
+            Settlement::DropBoth(opposite) => {
+                for row in [queued, opposite] {
+                    purge(&mut transaction, row).await?;
+                    actions::settle_mirror(
+                        &mut transaction,
+                        &row.action_type,
+                        &row.user_id,
+                        &row.target_urn,
+                    )
+                    .await?;
+                }
+            }
+            Settlement::Revive => {
+                sqlx::query_file!("queries/sync_queue/uncancel.sql", queued.id)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(true)
     }
 
     async fn enqueue_confirmation(
@@ -382,6 +462,12 @@ impl SyncQueueRepository {
     fn lease_milliseconds(&self) -> i64 {
         i64::try_from(self.lease_duration.as_millis()).unwrap_or(i64::MAX)
     }
+}
+
+async fn purge(connection: &mut sqlx::PgConnection, row: &SettledRow) -> Result<bool, sqlx::Error> {
+    sqlx::query_file_scalar!("queries/sync_queue/purge.sql", row.id, row.intent_v)
+        .fetch_one(connection)
+        .await
 }
 
 fn bounded_message(message: &str) -> String {

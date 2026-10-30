@@ -165,6 +165,8 @@ async fn liking_a_liked_track_again_keeps_its_superlike_and_its_place(
     assert_eq!(status, StatusCode::OK);
     let liked_at = "SELECT extract(epoch FROM created_at)::float8 FROM user_likes_tracks";
     let before: f64 = sqlx::query_scalar(liked_at).fetch_one(&pool).await?;
+    let sync_generation = "SELECT generation FROM sync_queue WHERE action_type = 'like_track'";
+    let queued: i64 = sqlx::query_scalar(sync_generation).fetch_one(&pool).await?;
 
     let (status, body) = send(&app, session, "POST", "/likes/tracks/soundcloud:tracks:5").await?;
 
@@ -179,10 +181,7 @@ async fn liking_a_liked_track_again_keeps_its_superlike_and_its_place(
     )
     .await?;
     assert_eq!(events, 1);
-    let sync_generation: i64 =
-        sqlx::query_scalar("SELECT generation FROM sync_queue WHERE action_type = 'like_track'")
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(sync_generation, 1, "a repeat like queues no second sync");
+    let requeued: i64 = sqlx::query_scalar(sync_generation).fetch_one(&pool).await?;
+    assert_eq!(requeued, queued, "a repeat like queues no second sync");
     Ok(())
 }

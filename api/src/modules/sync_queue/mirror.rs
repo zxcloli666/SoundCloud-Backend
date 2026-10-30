@@ -29,11 +29,10 @@ pub async fn set_wanted(
 ) -> AppResult<bool> {
     let user_id = crate::common::sc_ids::extract_sc_id(user_id);
     let sql = format!(
-        "INSERT INTO {table} (user_id, {key_col}, wanted_state, progress) \
-         VALUES ($1, $2, true, true) \
+        "INSERT INTO {table} (user_id, {key_col}, wanted_state) \
+         VALUES ($1, $2, true) \
          ON CONFLICT (user_id, {key_col}) DO UPDATE SET \
              wanted_state = true, \
-             progress = false, \
              created_at = now() \
          WHERE {table}.wanted_state = false",
         table = m.table,
@@ -54,44 +53,16 @@ pub async fn clear_wanted(
     key: &str,
 ) -> AppResult<()> {
     let user_id = crate::common::sc_ids::extract_sc_id(user_id);
-    let select_sql = format!(
-        "SELECT progress, wanted_state FROM {table} WHERE user_id = $1 AND {key_col} = $2",
+    let sql = format!(
+        "UPDATE {table} SET wanted_state = false \
+         WHERE user_id = $1 AND {key_col} = $2 AND wanted_state",
         table = m.table,
         key_col = m.key_col,
     );
-    let row: Option<(bool, bool)> = sqlx::query_as(&select_sql)
+    sqlx::query(&sql)
         .bind(user_id)
         .bind(key)
-        .fetch_optional(&mut *connection)
+        .execute(connection)
         .await?;
-    match row {
-        None | Some((_, false)) => Ok(()),
-        Some((true, true)) => {
-            let sql = format!(
-                "DELETE FROM {table} WHERE user_id = $1 AND {key_col} = $2",
-                table = m.table,
-                key_col = m.key_col,
-            );
-            sqlx::query(&sql)
-                .bind(user_id)
-                .bind(key)
-                .execute(connection)
-                .await?;
-            Ok(())
-        }
-        Some((_, true)) => {
-            let sql = format!(
-                "UPDATE {table} SET wanted_state = false, progress = true \
-                 WHERE user_id = $1 AND {key_col} = $2",
-                table = m.table,
-                key_col = m.key_col,
-            );
-            sqlx::query(&sql)
-                .bind(user_id)
-                .bind(key)
-                .execute(connection)
-                .await?;
-            Ok(())
-        }
-    }
+    Ok(())
 }
