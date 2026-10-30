@@ -125,6 +125,13 @@ FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000f1';
 INSERT INTO public.sessions (id, row_v) VALUES ('00000000-0000-0000-0000-0000000000f1', public.scd_hlc(0) + 1600000000);
 SELECT pg_temp.ok(count(*) = 0, 'zz_tomb_check: a random uuid key stays deleted even with a newer version')
 FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000f1';
+SET session_replication_role = origin;
+INSERT INTO public.sessions (id) VALUES ('00000000-0000-0000-0000-0000000000f2');
+SET session_replication_role = replica;
+INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('sessions', '{"id": "00000000-0000-0000-0000-0000000000f2"}', 18);
+SELECT pg_temp.ok(count(*) = 0 AND (SELECT count(*) FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000f2') = 1,
+    'zz_erase: a tombstone deletes a live delete-wins row whatever its version, and is kept')
+FROM public.sessions WHERE id = '00000000-0000-0000-0000-0000000000f2';
 
 SET session_replication_role = origin;
 INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id) VALUES ('00000000-0000-0000-0000-0000000000d1', 'u9', 't1');
@@ -140,6 +147,36 @@ INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, row_v)
 VALUES ('00000000-0000-0000-0000-0000000000d1', 'u9', 't1', public.scd_hlc(0) + 1600000000);
 SELECT pg_temp.ok(count(*) = 1, 'zz_merge: a re-create newer than the tombstone is applied')
 FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
+DELETE FROM public.repl_resend;
+SET session_replication_role = origin;
+DELETE FROM public.disliked_tracks WHERE id = '00000000-0000-0000-0000-0000000000d1';
+SELECT pg_temp.ok(count(*) = 2 AND count(DISTINCT v) = 2 AND max(v) > (SELECT v FROM seen WHERE k = 'd1'),
+    'zz_tomb: a second delete of the key adds a newer tombstone row')
+FROM public.repl_tombstones WHERE tbl = 'disliked_tracks' AND pk = '{"id": "00000000-0000-0000-0000-0000000000d1"}';
+DO $d$
+BEGIN
+    UPDATE public.repl_tombstones SET at = now() WHERE tbl = 'disliked_tracks';
+    RAISE EXCEPTION 'smoke failed: a tombstone update went through';
+EXCEPTION WHEN feature_not_supported THEN
+    RAISE NOTICE 'ok zz_ver: a tombstone update is refused, rows are immutable';
+END
+$d$;
+INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id) VALUES
+    ('00000000-0000-0000-0000-0000000000d2', 'u9', 't2'), ('00000000-0000-0000-0000-0000000000d3', 'u9', 't3');
+SET session_replication_role = replica;
+INSERT INTO public.repl_tombstones (tbl, pk, v)
+SELECT 'disliked_tracks', jsonb_build_object('id', id), CASE sc_track_id WHEN 't2' THEN row_v + 16 ELSE row_v - 16 END
+FROM public.disliked_tracks WHERE id IN ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d3');
+SELECT pg_temp.ok(array_agg(sc_track_id) = ARRAY['t3']
+    AND (SELECT array_agg(pk ->> 'id') FROM public.repl_resend WHERE tbl = 'disliked_tracks') = ARRAY['00000000-0000-0000-0000-0000000000d3']
+    AND (SELECT count(*) FROM public.repl_tombstones WHERE pk ->> 'id' IN ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d3')) = 2,
+    'zz_erase: a tombstone deletes the live row it covers; a newer row stays and is queued for resend')
+FROM public.disliked_tracks WHERE id IN ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d3');
+INSERT INTO public.repl_tombstones (tbl, pk, v)
+SELECT tbl, pk, v FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000d2';
+SELECT pg_temp.ok(count(*) = 1, 'zz_erase: an echo of a tombstone the node has is a no-op')
+FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000d2';
+DELETE FROM public.repl_resend;
 
 SET session_replication_role = origin;
 INSERT INTO public.listening_history (id, soundcloud_user_id, sc_track_id, title, artist_name, duration)
@@ -204,6 +241,34 @@ DELETE FROM public.cmd_pending;
 INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000b3', 'P', 'p', 'sc');
 SELECT pg_temp.ok(count(*) = 1, 'zz_owner: the same row applies once the command is acked')
 FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000b3';
+INSERT INTO public.cmd_pending (tbl, pk, node, id)
+VALUES ('artists', '{"id": "00000000-0000-0000-0000-0000000000b3"}', 'main', '00000000-0000-0000-0000-000000000005');
+UPDATE public.artists SET name = 'P core', has_sc_account = true WHERE id = '00000000-0000-0000-0000-0000000000b3';
+SELECT pg_temp.ok(name = 'P' AND has_sc_account, 'zz_owner: a pending command keeps the optimistic row but takes core columns from core')
+FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000b3';
+UPDATE public.artists SET has_sc_account = false WHERE id = '00000000-0000-0000-0000-0000000000b3';
+INSERT INTO public.artists (id, name, normalized_name, source, has_sc_account) VALUES ('00000000-0000-0000-0000-0000000000b3', 'P core', 'p', 'sc', true);
+SELECT pg_temp.ok(name = 'P' AND has_sc_account, 'zz_owner: a pending command keeps the optimistic row; a core insert still sets core columns')
+FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000b3';
+SET session_replication_role = origin;
+SET scd.cmd = '00000000-0000-0000-0000-000000000005';
+UPDATE public.artists SET has_sc_account = false, name = 'P api' WHERE id = '00000000-0000-0000-0000-0000000000b3';
+RESET scd.cmd;
+SELECT pg_temp.ok(name = 'P api' AND has_sc_account AND pg_temp.n('core_col', 'artists') = 1,
+    'zz_core_col: an api write of a core column keeps core''s value and is counted')
+FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000b3';
+CREATE TEMP TABLE core_hash AS SELECT public.scd_row_hash('artists', '{"id": "00000000-0000-0000-0000-0000000000b3"}') AS h;
+SET session_replication_role = replica;
+UPDATE public.artists SET has_sc_account = false WHERE id = '00000000-0000-0000-0000-0000000000b3';
+SELECT pg_temp.ok(h = public.scd_row_hash('artists', '{"id": "00000000-0000-0000-0000-0000000000b3"}'), 'scd_row_hash: core columns are not hashed')
+FROM core_hash;
+DELETE FROM public.cmd_pending;
+INSERT INTO public.artist_sc_accounts (artist_id, sc_user_id, role, source, verified, created_at, updated_at)
+VALUES ('00000000-0000-0000-0000-0000000000b3', 'scu-same', 'main', 'sc', true, '2026-01-03', '2026-01-03');
+INSERT INTO public.artist_sc_accounts (artist_id, sc_user_id, role, source, verified, created_at, updated_at)
+VALUES ('00000000-0000-0000-0000-0000000000b3', 'scu-same', 'main', 'sc', true, '2026-01-03', '2026-01-03');
+SELECT pg_temp.ok(count(*) = 1, 'zz_owner: a core row equal to the local row applies as a no-op')
+FROM public.artist_sc_accounts WHERE artist_id = '00000000-0000-0000-0000-0000000000b3';
 
 INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
 VALUES ('00000000-0000-0000-0000-0000000000d1', 'urn:t:1', 'sc1', 'Core title', 'core title', 2000);

@@ -45,7 +45,7 @@ tables:
   artist_attribution_revalidation: {class: C, note: "singleton written by the artist flag trigger and the walker; trigger role-gated (R8)"}
   artist_colike: {class: C, hold: "replicated by scd_graph_pub until A6, then into scd_core_pub"}
   artist_coplay: {class: C}
-  artist_sc_accounts: {class: C, derived: [artist_sc_account_flag_trg]}
+  artist_sc_accounts: {class: C, derived: {artist_sc_account_flag_trg: {writes: [artists.has_sc_account]}}}
   artist_socials: {class: C}
   artists: {class: C}
   background_job_failures: {class: C, note: "jobs writes, api status reads"}
@@ -57,7 +57,7 @@ tables:
     pk: [kind, dedup_key]
     columns: {kind: text, dedup_key: text, state: "text NOT NULL", available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
     note: "jobs writes on state change of the 3 kinds the api reads"
-  lyrics_cache: {class: C, derived: [lyrics_cache_fts_trg]}
+  lyrics_cache: {class: C, derived: {lyrics_cache_fts_trg: {writes: [lyrics_cache.fts]}}}
   lyrics_lookup_state: {class: C, note: "rows come from the tracks derived trigger on core; api only through lyrics.wake"}
   oauth_app_tokens: {class: C}
   playlist_membership_operations: {class: C, note: "core assigns sequence and runs the acceptance check (was mixed)"}
@@ -71,13 +71,15 @@ tables:
   discover_tag_counts: {class: C}
   sync_queue_action_pauses: {class: C}
   taste_model_versions: {class: C}
-  track_artists: {class: C, derived: [track_artists_block_guard_trg]}
+  track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}}}
   track_comments: {class: C, note: "sc_comment_id filled by core"}
   tracks:
     class: C
     id: {ns: tracks, from: [urn]}
     local: [last_read_at]
-    derived: [tracks_lyrics_lookup_state_refresh, tracks_primary_block_guard_trg]
+    derived:
+      tracks_lyrics_lookup_state_refresh: {rows: [lyrics_lookup_state]}
+      tracks_primary_block_guard_trg: {vetoes: [tracks.primary_artist_id]}
     note: "last_read_at moves to entity_reads (B5a); jobs-private columns go to narrow P tables in A7"
   user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
@@ -221,11 +223,11 @@ tables:
   repl_tombstones:
     class: A
     delete: core
+    insert_only: true
     planned: B2
-    pk: [tbl, pk]
+    pk: [tbl, pk, v]
     columns: {tbl: text, pk: jsonb, v: "bigint NOT NULL DEFAULT 0", at: "timestamptz NOT NULL DEFAULT now()"}
-    groups: {row: {version: v, cols: rest}}
-    note: "core purges after 7 days"
+    note: "one immutable row per delete, keyed by its HLC; core purges after 7 days"
   sc_egress_health: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}, note: "breaker rows, every node writes"}
   sessions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   subscriptions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}

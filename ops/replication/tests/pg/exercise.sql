@@ -58,6 +58,9 @@ BEGIN
 EXCEPTION WHEN data_exception OR integrity_constraint_violation THEN
     INSERT INTO pg_temp.exercised VALUES (tbl, role, name, 'data: ' || SQLSTATE);
     RETURN NULL;
+WHEN feature_not_supported THEN
+    INSERT INTO pg_temp.exercised VALUES (tbl, role, name, 'refused: ' || SQLSTATE);
+    RETURN NULL;
 END
 $f$;
 

@@ -1,6 +1,7 @@
 import json
 import os
 
+import derived
 import yaml_lite
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,8 @@ class Table:
         self.id = spec.get("id")
         self.unique_decl = dict(spec.get("unique") or {})
         self.hold = spec.get("hold")
-        self.derived = list(spec.get("derived") or [])
+        self.derived = dict(spec.get("derived") or {})
+        self.core_cols = []
         self.unpublished_fks = list(spec.get("unpublished_fks") or [])
         self.publish_to = list(spec.get("publish") or [])
         self.types = {}
@@ -146,6 +148,9 @@ class Model:
         for name, tspec in sorted((spec.get("tables") or {}).items()):
             db = (tspec or {}).get("db", "core")
             self.tables[name] = Table(name, tspec or {}, schema.get(db, {}).get(name))
+        for name, cols in derived.core_columns(self).items():
+            if name in self.tables:
+                self.tables[name].core_cols = cols
 
     def by_class(self, *classes):
         return [t for t in self.tables.values() if t.cls in classes]
@@ -210,6 +215,7 @@ class Model:
         for pub, p in sorted(self.publications.items()):
             if p.get("node") not in ("core", "api"):
                 out.append("publication %s: node must be core or api" % pub)
+        out += derived.problems(self)
         out += cycle_problems(self)
         out += insert_problems(self)
         return out

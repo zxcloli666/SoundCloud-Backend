@@ -20,7 +20,8 @@ def row_hash(model):
 
 
 def row_hash_function(t):
-    body = "SELECT md5(ROW(%s)::text) FROM %s t WHERE %s" % (refs("t", t.replicated), table(t.name), pk_match("t", t))
+    cols = [c for c in t.replicated if c not in t.core_cols]
+    body = "SELECT md5(ROW(%s)::text) FROM %s t WHERE %s" % (refs("t", cols), table(t.name), pk_match("t", t))
     return function("public.scd_row_hash_" + t.name, body, "text", "sql", "k jsonb", " STABLE" + HASH_SETTINGS)
 
 
@@ -49,11 +50,35 @@ def row_json_function(t):
 def registry(model):
     kinds = ",\n".join("    (%s, %s)" % (lit(k), "true" if spec.get("optimistic", True) else "false") for k, spec in sorted(model.kinds.items()))
     classes = ",\n".join("    (%s, %s)" % (lit(t.name), lit(t.cls)) for t in model.installed())
+    cores = ",\n".join("    (%s, %s)" % (lit(t.name), lit(c)) for t in model.installed() for c in t.core_cols)
     return "\n".join([
         function("public.scd_kinds", "VALUES\n" + kinds, "TABLE (kind text, optimistic boolean)", "sql", "", " STABLE"),
         function("public.scd_table_class", "SELECT v.cls FROM (VALUES\n%s\n) AS v (tbl, cls) WHERE v.tbl = $1" % classes,
                  "text", "sql", "tbl text", " STABLE"),
+        function("public.scd_core_columns", "VALUES\n" + cores, "TABLE (tbl text, col text)", "sql", "", " STABLE"),
+        resend(model),
     ])
+
+
+def resend(model):
+    tables = [t for t in hashed(model) if t.cls in ("C", "M", "A", "K")]
+    cases = [(t.name, "INSERT INTO public.repl_resend (tbl, pk) SELECT %s, %s FROM %s t ON CONFLICT DO NOTHING;" % (
+        lit(t.name), pk_json("t", t.pk), table(t.name))) for t in tables]
+    rows = ",\n".join("        (%s, %s)" % (lit(t.name), lit(t.cls)) for t in tables if not t.hold)
+    body = "\n".join([
+        "DECLARE",
+        "    sent text[] := CASE public.scd_role() WHEN 'core' THEN ARRAY['C', 'M', 'A'] ELSE ARRAY['M', 'A', 'K'] END;",
+        "    r record;",
+        "BEGIN",
+        "    FOR r IN SELECT v.tbl FROM (VALUES",
+        rows,
+        "    ) AS v (tbl, cls) WHERE v.cls = ANY (sent) ORDER BY v.tbl LOOP",
+        "        PERFORM public.scd_resend(r.tbl);",
+        "    END LOOP;",
+        "    RETURN (SELECT count(*) FROM public.repl_resend);",
+        "END",
+    ])
+    return dispatcher("public.scd_resend", "void", cases, args="tbl text") + function("public.scd_resend_all", body, "bigint")
 
 
 def dispatcher(name, returns, cases, extra="", args="tbl text, k jsonb"):

@@ -62,7 +62,10 @@ trg AS (
                'enabled', t.tgenabled,
                'gated', pg_catalog.pg_get_triggerdef(t.oid) LIKE '%scd_derived()%',
                'pinned', EXISTS (SELECT 1 FROM unnest(p.proconfig) AS c WHERE c LIKE 'search_path=%')
-           ) ORDER BY t.tgname) AS list
+           ) || CASE WHEN t.tgname LIKE 'zz%' THEN '{}'::jsonb ELSE jsonb_build_object(
+               'before', (t.tgtype & 2) <> 0,
+               'source', p.prosrc
+           ) END ORDER BY t.tgname) AS list
     FROM pg_catalog.pg_trigger t
     JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
     WHERE NOT t.tgisinternal AND t.tgrelid IN (SELECT oid FROM rels)

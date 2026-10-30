@@ -3,6 +3,8 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_discover_promoted;
 CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_disliked_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_oauth_apps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_sync_queue;
+CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_artists;
+CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_lyrics_cache;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_maintenance_runs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_budget;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_cache;
@@ -133,6 +135,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -145,11 +148,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.admin_maintenance_runs t WHERE t.kind = NEW.kind FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.admin_maintenance_runs t SET changed = NEW.changed, completed_at = NEW.completed_at, cursor_text = NEW.cursor_text, cursor_uuid = NEW.cursor_uuid, merged = NEW.merged, phase = NEW.phase, run_id = NEW.run_id, scanned = NEW.scanned, skipped = NEW.skipped, started_at = NEW.started_at, status = NEW.status, updated_at = NEW.updated_at WHERE t.kind = NEW.kind;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.admin_maintenance_runs t SET changed = NEW.changed, completed_at = NEW.completed_at, cursor_text = NEW.cursor_text, cursor_uuid = NEW.cursor_uuid, merged = NEW.merged, phase = NEW.phase, run_id = NEW.run_id, scanned = NEW.scanned, skipped = NEW.skipped, started_at = NEW.started_at, status = NEW.status, updated_at = NEW.updated_at WHERE t.kind = NEW.kind;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -184,6 +188,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -196,10 +201,11 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.album_artists t WHERE (t.album_id, t.artist_id, t.role) = (NEW.album_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
             RETURN NULL;
         END IF;
-        IF EXISTS (SELECT 1 FROM public.album_artists t WHERE (t.album_id, t.artist_id, t.role) = (NEW.album_id, NEW.artist_id, NEW.role)) THEN
+        IF held THEN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -230,6 +236,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -242,11 +249,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.album_tracks t WHERE (t.album_id, t.track_id) = (NEW.album_id, NEW.track_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.album_tracks t SET disc_number = NEW.disc_number, "position" = NEW."position" WHERE (t.album_id, t.track_id) = (NEW.album_id, NEW.track_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.album_tracks t SET disc_number = NEW.disc_number, "position" = NEW."position" WHERE (t.album_id, t.track_id) = (NEW.album_id, NEW.track_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -277,6 +285,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -303,6 +312,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.albums t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
@@ -316,8 +326,8 @@ BEGIN
                 PERFORM public.scd_purge_albums(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        UPDATE public.albums t SET aggregates_updated_at = NEW.aggregates_updated_at, confidence = NEW.confidence, cover_url = NEW.cover_url, created_at = NEW.created_at, genius_album_id = NEW.genius_album_id, is_star_artist = NEW.is_star_artist, mb_release_id = NEW.mb_release_id, normalized_title = NEW.normalized_title, popularity_score = NEW.popularity_score, primary_artist_id = NEW.primary_artist_id, release_date = NEW.release_date, release_year = NEW.release_year, source = NEW.source, spotify_album_id = NEW.spotify_album_id, title = NEW.title, total_duration_ms = NEW.total_duration_ms, track_count = NEW.track_count, type = NEW.type, updated_at = NEW.updated_at WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.albums t SET aggregates_updated_at = NEW.aggregates_updated_at, confidence = NEW.confidence, cover_url = NEW.cover_url, created_at = NEW.created_at, genius_album_id = NEW.genius_album_id, is_star_artist = NEW.is_star_artist, mb_release_id = NEW.mb_release_id, normalized_title = NEW.normalized_title, popularity_score = NEW.popularity_score, primary_artist_id = NEW.primary_artist_id, release_date = NEW.release_date, release_year = NEW.release_year, source = NEW.source, spotify_album_id = NEW.spotify_album_id, title = NEW.title, total_duration_ms = NEW.total_duration_ms, track_count = NEW.track_count, type = NEW.type, updated_at = NEW.updated_at WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -348,6 +358,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -360,11 +371,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artist_attribution_revalidation t WHERE t.singleton = NEW.singleton FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.artist_attribution_revalidation t SET credits_removed = NEW.credits_removed, identity_completed_at = NEW.identity_completed_at, identity_cursor_account = NEW.identity_cursor_account, identity_cursor_artist = NEW.identity_cursor_artist, tracks_reset = NEW.tracks_reset, updated_at = NEW.updated_at, walker_completed_at = NEW.walker_completed_at WHERE t.singleton = NEW.singleton;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artist_attribution_revalidation t SET credits_removed = NEW.credits_removed, identity_completed_at = NEW.identity_completed_at, identity_cursor_account = NEW.identity_cursor_account, identity_cursor_artist = NEW.identity_cursor_artist, tracks_reset = NEW.tracks_reset, updated_at = NEW.updated_at, walker_completed_at = NEW.walker_completed_at WHERE t.singleton = NEW.singleton;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -395,6 +407,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -407,11 +420,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artist_colike t WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.artist_colike t SET co = NEW.co, updated_at = NEW.updated_at, w = NEW.w WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artist_colike t SET co = NEW.co, updated_at = NEW.updated_at, w = NEW.w WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -442,6 +456,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -454,11 +469,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artist_coplay t WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.artist_coplay t SET last_seen = NEW.last_seen, weight = NEW.weight WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artist_coplay t SET last_seen = NEW.last_seen, weight = NEW.weight WHERE (t.a_id, t.b_id) = (NEW.a_id, NEW.b_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -489,6 +505,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -508,6 +525,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artist_sc_accounts t WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
             RETURN NULL;
         END IF;
@@ -516,8 +534,8 @@ BEGIN
                 PERFORM public.scd_purge_artist_sc_accounts(jsonb_build_object('artist_id', r.artist_id, 'sc_user_id', r.sc_user_id));
             END LOOP;
         END IF;
-        UPDATE public.artist_sc_accounts t SET created_at = NEW.created_at, notes = NEW.notes, role = NEW.role, source = NEW.source, updated_at = NEW.updated_at, verified = NEW.verified WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artist_sc_accounts t SET created_at = NEW.created_at, notes = NEW.notes, role = NEW.role, source = NEW.source, updated_at = NEW.updated_at, verified = NEW.verified WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -548,6 +566,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -560,11 +579,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artist_socials t WHERE (t.artist_id, t.url) = (NEW.artist_id, NEW.url) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.artist_socials t SET created_at = NEW.created_at, kind = NEW.kind, source = NEW.source, updated_at = NEW.updated_at, verified = NEW.verified WHERE (t.artist_id, t.url) = (NEW.artist_id, NEW.url);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artist_socials t SET created_at = NEW.created_at, kind = NEW.kind, source = NEW.source, updated_at = NEW.updated_at, verified = NEW.verified WHERE (t.artist_id, t.url) = (NEW.artist_id, NEW.url);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -586,6 +606,20 @@ ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_core_col_artists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN
+        NEW.has_sc_account := OLD.has_sc_account;
+        PERFORM nextval('public.scd_core_col_artists'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF has_sc_account ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_artists();
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artists', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artists()
@@ -595,6 +629,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
     k2 boolean;
@@ -605,6 +640,50 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN
+                NEW.account_walk_locked_at := OLD.account_walk_locked_at;
+                NEW.aggregates_updated_at := OLD.aggregates_updated_at;
+                NEW.album_count_denorm := OLD.album_count_denorm;
+                NEW.avatar_url := OLD.avatar_url;
+                NEW.bio := OLD.bio;
+                NEW.confidence := OLD.confidence;
+                NEW.country := OLD.country;
+                NEW.crawl_attempts := OLD.crawl_attempts;
+                NEW.crawl_dead := OLD.crawl_dead;
+                NEW.crawl_fail_count := OLD.crawl_fail_count;
+                NEW.created_at := OLD.created_at;
+                NEW.genius_artist_id := OLD.genius_artist_id;
+                NEW.genius_crawl_offset := OLD.genius_crawl_offset;
+                NEW.genius_crawled_at := OLD.genius_crawled_at;
+                NEW.genius_locked_at := OLD.genius_locked_at;
+                NEW.genius_next_run_at := OLD.genius_next_run_at;
+                NEW.interest_score := OLD.interest_score;
+                NEW.is_star := OLD.is_star;
+                NEW.isni := OLD.isni;
+                NEW.last_account_walk_at := OLD.last_account_walk_at;
+                NEW.last_crawled_at := OLD.last_crawled_at;
+                NEW.mb_artist_id := OLD.mb_artist_id;
+                NEW.mb_crawl_offset := OLD.mb_crawl_offset;
+                NEW.mb_crawled_at := OLD.mb_crawled_at;
+                NEW.mb_locked_at := OLD.mb_locked_at;
+                NEW.mb_next_run_at := OLD.mb_next_run_at;
+                NEW.merged_into := OLD.merged_into;
+                NEW.monthly_listeners := OLD.monthly_listeners;
+                NEW.name := OLD.name;
+                NEW.normalized_name := OLD.normalized_name;
+                NEW.popularity_score := OLD.popularity_score;
+                NEW.sc_user_id := OLD.sc_user_id;
+                NEW.source := OLD.source;
+                NEW.spotify_artist_id := OLD.spotify_artist_id;
+                NEW.star_aura_id := OLD.star_aura_id;
+                NEW.star_custom_hex := OLD.star_custom_hex;
+                NEW.tags := OLD.tags;
+                NEW.track_count_featured := OLD.track_count_featured;
+                NEW.track_count_primary := OLD.track_count_primary;
+                NEW.trending_score := OLD.trending_score;
+                NEW.updated_at := OLD.updated_at;
+                RETURN NEW;
+            END IF;
             RETURN NULL;
         END IF;
         k0 := (NEW.genius_artist_id, ((NEW.genius_artist_id IS NOT NULL))) IS DISTINCT FROM (OLD.genius_artist_id, ((OLD.genius_artist_id IS NOT NULL)));
@@ -635,7 +714,11 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.artists t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.artists t SET has_sc_account = NEW.has_sc_account WHERE t.id = NEW.id AND t.has_sc_account IS DISTINCT FROM NEW.has_sc_account;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
             RETURN NULL;
         END IF;
         IF ((NEW.genius_artist_id IS NOT NULL)) THEN
@@ -658,8 +741,8 @@ BEGIN
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        UPDATE public.artists t SET account_walk_locked_at = NEW.account_walk_locked_at, aggregates_updated_at = NEW.aggregates_updated_at, album_count_denorm = NEW.album_count_denorm, avatar_url = NEW.avatar_url, bio = NEW.bio, confidence = NEW.confidence, country = NEW.country, crawl_attempts = NEW.crawl_attempts, crawl_dead = NEW.crawl_dead, crawl_fail_count = NEW.crawl_fail_count, created_at = NEW.created_at, genius_artist_id = NEW.genius_artist_id, genius_crawl_offset = NEW.genius_crawl_offset, genius_crawled_at = NEW.genius_crawled_at, genius_locked_at = NEW.genius_locked_at, genius_next_run_at = NEW.genius_next_run_at, has_sc_account = NEW.has_sc_account, interest_score = NEW.interest_score, is_star = NEW.is_star, isni = NEW.isni, last_account_walk_at = NEW.last_account_walk_at, last_crawled_at = NEW.last_crawled_at, mb_artist_id = NEW.mb_artist_id, mb_crawl_offset = NEW.mb_crawl_offset, mb_crawled_at = NEW.mb_crawled_at, mb_locked_at = NEW.mb_locked_at, mb_next_run_at = NEW.mb_next_run_at, merged_into = NEW.merged_into, monthly_listeners = NEW.monthly_listeners, name = NEW.name, normalized_name = NEW.normalized_name, popularity_score = NEW.popularity_score, sc_user_id = NEW.sc_user_id, source = NEW.source, spotify_artist_id = NEW.spotify_artist_id, star_aura_id = NEW.star_aura_id, star_custom_hex = NEW.star_custom_hex, tags = NEW.tags, track_count_featured = NEW.track_count_featured, track_count_primary = NEW.track_count_primary, trending_score = NEW.trending_score, updated_at = NEW.updated_at WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.artists t SET account_walk_locked_at = NEW.account_walk_locked_at, aggregates_updated_at = NEW.aggregates_updated_at, album_count_denorm = NEW.album_count_denorm, avatar_url = NEW.avatar_url, bio = NEW.bio, confidence = NEW.confidence, country = NEW.country, crawl_attempts = NEW.crawl_attempts, crawl_dead = NEW.crawl_dead, crawl_fail_count = NEW.crawl_fail_count, created_at = NEW.created_at, genius_artist_id = NEW.genius_artist_id, genius_crawl_offset = NEW.genius_crawl_offset, genius_crawled_at = NEW.genius_crawled_at, genius_locked_at = NEW.genius_locked_at, genius_next_run_at = NEW.genius_next_run_at, has_sc_account = NEW.has_sc_account, interest_score = NEW.interest_score, is_star = NEW.is_star, isni = NEW.isni, last_account_walk_at = NEW.last_account_walk_at, last_crawled_at = NEW.last_crawled_at, mb_artist_id = NEW.mb_artist_id, mb_crawl_offset = NEW.mb_crawl_offset, mb_crawled_at = NEW.mb_crawled_at, mb_locked_at = NEW.mb_locked_at, mb_next_run_at = NEW.mb_next_run_at, merged_into = NEW.merged_into, monthly_listeners = NEW.monthly_listeners, name = NEW.name, normalized_name = NEW.normalized_name, popularity_score = NEW.popularity_score, sc_user_id = NEW.sc_user_id, source = NEW.source, spotify_artist_id = NEW.spotify_artist_id, star_aura_id = NEW.star_aura_id, star_custom_hex = NEW.star_custom_hex, tags = NEW.tags, track_count_featured = NEW.track_count_featured, track_count_primary = NEW.track_count_primary, trending_score = NEW.trending_score, updated_at = NEW.updated_at WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -694,6 +777,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -706,11 +790,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.background_job_failures t WHERE (t.id, t.generation) = (NEW.id, NEW.generation) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.background_job_failures t SET attempts = NEW.attempts, created_at = NEW.created_at, dedup_key = NEW.dedup_key, failed_at = NEW.failed_at, kind = NEW.kind, lane = NEW.lane, last_error = NEW.last_error, max_attempts = NEW.max_attempts, payload = NEW.payload, priority = NEW.priority WHERE (t.id, t.generation) = (NEW.id, NEW.generation);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.background_job_failures t SET attempts = NEW.attempts, created_at = NEW.created_at, dedup_key = NEW.dedup_key, failed_at = NEW.failed_at, kind = NEW.kind, lane = NEW.lane, last_error = NEW.last_error, max_attempts = NEW.max_attempts, payload = NEW.payload, priority = NEW.priority WHERE (t.id, t.generation) = (NEW.id, NEW.generation);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -745,6 +830,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -757,11 +843,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.catalog_audience t WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.catalog_audience t SET created_at = NEW.created_at, synced_at = NEW.synced_at WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.catalog_audience t SET created_at = NEW.created_at, synced_at = NEW.synced_at WHERE (t.subject_urn, t.relation, t.user_urn) = (NEW.subject_urn, NEW.relation, NEW.user_urn);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -796,6 +883,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -808,11 +896,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.catalog_collection_sync t WHERE (t.subject_id, t.collection, t.scope) = (NEW.subject_id, NEW.collection, NEW.scope) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.catalog_collection_sync t SET complete = NEW.complete, generation = NEW.generation, item_count = NEW.item_count, job_id = NEW.job_id, next_cursor = NEW.next_cursor, page_count = NEW.page_count, snapshot_id = NEW.snapshot_id, started_at = NEW.started_at, synced_at = NEW.synced_at, updated_at = NEW.updated_at, verified_at = NEW.verified_at WHERE (t.subject_id, t.collection, t.scope) = (NEW.subject_id, NEW.collection, NEW.scope);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.catalog_collection_sync t SET complete = NEW.complete, generation = NEW.generation, item_count = NEW.item_count, job_id = NEW.job_id, next_cursor = NEW.next_cursor, page_count = NEW.page_count, snapshot_id = NEW.snapshot_id, started_at = NEW.started_at, synced_at = NEW.synced_at, updated_at = NEW.updated_at, verified_at = NEW.verified_at WHERE (t.subject_id, t.collection, t.scope) = (NEW.subject_id, NEW.collection, NEW.scope);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1178,9 +1267,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'discover_promoted', 'pk', jsonb_build_object('id', NEW.id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'discover_promoted', 'pk', jsonb_build_object('id', NEW.id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_discover_promoted'::regclass);
             RETURN NULL;
         END IF;
@@ -1206,8 +1295,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('discover_promoted', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('discover_promoted', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -1234,9 +1322,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'discover_promoted', 'pk', jsonb_build_object('id', NEW.id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'discover_promoted', 'pk', jsonb_build_object('id', NEW.id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_discover_promoted'::regclass);
         RETURN NULL;
     END IF;
@@ -1256,8 +1344,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', OLD.id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', OLD.id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('discover_promoted', jsonb_build_object('id', OLD.id)) ON CONFLICT DO NOTHING;
@@ -1274,7 +1362,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'discover_promoted' AND x.pk = jsonb_build_object('id', NEW.id))));
         RETURN NEW;
     END IF;
     IF (NEW.active, NEW.created_at, NEW.entity_id, NEW.entity_type, NEW.note, NEW."position", NEW.updated_at) IS DISTINCT FROM (OLD.active, OLD.created_at, OLD.entity_id, OLD.entity_type, OLD.note, OLD."position", OLD.updated_at) THEN
@@ -1379,6 +1467,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -1391,11 +1480,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.discover_tag_counts t WHERE t.tag = NEW.tag FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.discover_tag_counts t SET artist_count = NEW.artist_count, refreshed_at = NEW.refreshed_at WHERE t.tag = NEW.tag;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.discover_tag_counts t SET artist_count = NEW.artist_count, refreshed_at = NEW.refreshed_at WHERE t.tag = NEW.tag;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1480,9 +1570,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'disliked_tracks', 'pk', jsonb_build_object('id', NEW.id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'disliked_tracks', 'pk', jsonb_build_object('id', NEW.id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_disliked_tracks'::regclass);
             RETURN NULL;
         END IF;
@@ -1508,8 +1598,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('disliked_tracks', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('disliked_tracks', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -1536,9 +1625,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'disliked_tracks', 'pk', jsonb_build_object('id', NEW.id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'disliked_tracks', 'pk', jsonb_build_object('id', NEW.id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_disliked_tracks'::regclass);
         RETURN NULL;
     END IF;
@@ -1558,8 +1647,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', OLD.id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', OLD.id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('disliked_tracks', jsonb_build_object('id', OLD.id)) ON CONFLICT DO NOTHING;
@@ -1576,7 +1665,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'disliked_tracks' AND x.pk = jsonb_build_object('id', NEW.id))));
         RETURN NEW;
     END IF;
     IF (NEW.created_at, NEW.sc_track_id, NEW.sc_user_id, NEW.track_data) IS DISTINCT FROM (OLD.created_at, OLD.sc_track_id, OLD.sc_user_id, OLD.track_data) THEN
@@ -1683,8 +1772,8 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'featured_items' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND THEN
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'featured_items' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1709,8 +1798,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('featured_items', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('featured_items', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -1733,8 +1821,8 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'featured_items' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'featured_items' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -1774,6 +1862,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -1786,11 +1875,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.job_status t WHERE (t.kind, t.dedup_key) = (NEW.kind, NEW.dedup_key) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.job_status t SET available_at = NEW.available_at, state = NEW.state, updated_at = NEW.updated_at WHERE (t.kind, t.dedup_key) = (NEW.kind, NEW.dedup_key);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.job_status t SET available_at = NEW.available_at, state = NEW.state, updated_at = NEW.updated_at WHERE (t.kind, t.dedup_key) = (NEW.kind, NEW.dedup_key);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1863,8 +1953,8 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'link_requests' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND THEN
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'link_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1889,8 +1979,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('link_requests', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('link_requests', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -1913,8 +2002,8 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'link_requests' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'link_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -1959,8 +2048,8 @@ BEGIN
     IF FOUND THEN
         RETURN NULL;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'listening_history' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'listening_history' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -1980,8 +2069,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('listening_history', jsonb_build_object('id', OLD.id), 0, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('listening_history', jsonb_build_object('id', OLD.id), 0, now());
     RETURN OLD;
 END
 $f$;
@@ -2004,8 +2092,8 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'listening_history' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'listening_history' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -2080,8 +2168,8 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'login_requests' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND THEN
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'login_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2106,8 +2194,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('login_requests', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('login_requests', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -2130,8 +2217,8 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'login_requests' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'login_requests' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -2162,6 +2249,20 @@ CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.login_request
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.login_requests ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_core_col_lyrics_cache()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.fts IS DISTINCT FROM OLD.fts THEN
+        NEW.fts := OLD.fts;
+        PERFORM nextval('public.scd_core_col_lyrics_cache'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF fts ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_lyrics_cache();
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_cache', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_lyrics_cache()
@@ -2171,23 +2272,46 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+            IF NEW.fts IS DISTINCT FROM OLD.fts THEN
+                NEW.content_generation := OLD.content_generation;
+                NEW.content_hash := OLD.content_hash;
+                NEW.created_at := OLD.created_at;
+                NEW.embedded_at := OLD.embedded_at;
+                NEW.embedding_state := OLD.embedding_state;
+                NEW.language := OLD.language;
+                NEW.language_confidence := OLD.language_confidence;
+                NEW.plain_source := OLD.plain_source;
+                NEW.plain_text := OLD.plain_text;
+                NEW.source := OLD.source;
+                NEW.synced_lrc := OLD.synced_lrc;
+                NEW.synced_source := OLD.synced_source;
+                NEW.synced_version := OLD.synced_version;
+                NEW.track_id := OLD.track_id;
+                NEW.updated_at := OLD.updated_at;
+                RETURN NEW;
+            END IF;
             RETURN NULL;
         END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.lyrics_cache t WHERE t.sc_track_id = NEW.sc_track_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.lyrics_cache t SET fts = NEW.fts WHERE t.sc_track_id = NEW.sc_track_id AND t.fts IS DISTINCT FROM NEW.fts;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
             RETURN NULL;
         END IF;
-        UPDATE public.lyrics_cache t SET content_generation = NEW.content_generation, content_hash = NEW.content_hash, created_at = NEW.created_at, embedded_at = NEW.embedded_at, embedding_state = NEW.embedding_state, fts = NEW.fts, language = NEW.language, language_confidence = NEW.language_confidence, plain_source = NEW.plain_source, plain_text = NEW.plain_text, source = NEW.source, synced_lrc = NEW.synced_lrc, synced_source = NEW.synced_source, synced_version = NEW.synced_version, track_id = NEW.track_id, updated_at = NEW.updated_at WHERE t.sc_track_id = NEW.sc_track_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.lyrics_cache t SET content_generation = NEW.content_generation, content_hash = NEW.content_hash, created_at = NEW.created_at, embedded_at = NEW.embedded_at, embedding_state = NEW.embedding_state, fts = NEW.fts, language = NEW.language, language_confidence = NEW.language_confidence, plain_source = NEW.plain_source, plain_text = NEW.plain_text, source = NEW.source, synced_lrc = NEW.synced_lrc, synced_source = NEW.synced_source, synced_version = NEW.synced_version, track_id = NEW.track_id, updated_at = NEW.updated_at WHERE t.sc_track_id = NEW.sc_track_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2222,6 +2346,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2241,14 +2366,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.lyrics_lookup_state t WHERE t.track_id = NEW.track_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.track_id FROM public.lyrics_lookup_state t WHERE t.sc_track_id = NEW.sc_track_id AND t.track_id IS DISTINCT FROM NEW.track_id LOOP
             PERFORM public.scd_purge_lyrics_lookup_state(jsonb_build_object('track_id', r.track_id));
         END LOOP;
-        UPDATE public.lyrics_lookup_state t SET algorithm_version = NEW.algorithm_version, attempts = NEW.attempts, claim_expires_at = NEW.claim_expires_at, claim_job_generation = NEW.claim_job_generation, claim_job_id = NEW.claim_job_id, claim_job_lease_id = NEW.claim_job_lease_id, claim_state_generation = NEW.claim_state_generation, created_at = NEW.created_at, failure_streak = NEW.failure_streak, generation = NEW.generation, input_artist = NEW.input_artist, input_duration_ms = NEW.input_duration_ms, input_genius_song_id = NEW.input_genius_song_id, input_genius_url = NEW.input_genius_url, input_release_date = NEW.input_release_date, input_sc_created_at = NEW.input_sc_created_at, input_title = NEW.input_title, last_attempt_at = NEW.last_attempt_at, last_error = NEW.last_error, last_outcome = NEW.last_outcome, miss_streak = NEW.miss_streak, next_run_at = NEW.next_run_at, priority = NEW.priority, retry_after_at = NEW.retry_after_at, sc_track_id = NEW.sc_track_id, source_set_version = NEW.source_set_version, status = NEW.status, updated_at = NEW.updated_at, wake_durable_at = NEW.wake_durable_at, wake_generation = NEW.wake_generation, wake_message_id = NEW.wake_message_id WHERE t.track_id = NEW.track_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.lyrics_lookup_state t SET algorithm_version = NEW.algorithm_version, attempts = NEW.attempts, claim_expires_at = NEW.claim_expires_at, claim_job_generation = NEW.claim_job_generation, claim_job_id = NEW.claim_job_id, claim_job_lease_id = NEW.claim_job_lease_id, claim_state_generation = NEW.claim_state_generation, created_at = NEW.created_at, failure_streak = NEW.failure_streak, generation = NEW.generation, input_artist = NEW.input_artist, input_duration_ms = NEW.input_duration_ms, input_genius_song_id = NEW.input_genius_song_id, input_genius_url = NEW.input_genius_url, input_release_date = NEW.input_release_date, input_sc_created_at = NEW.input_sc_created_at, input_title = NEW.input_title, last_attempt_at = NEW.last_attempt_at, last_error = NEW.last_error, last_outcome = NEW.last_outcome, miss_streak = NEW.miss_streak, next_run_at = NEW.next_run_at, priority = NEW.priority, retry_after_at = NEW.retry_after_at, sc_track_id = NEW.sc_track_id, source_set_version = NEW.source_set_version, status = NEW.status, updated_at = NEW.updated_at, wake_durable_at = NEW.wake_durable_at, wake_generation = NEW.wake_generation, wake_message_id = NEW.wake_message_id WHERE t.track_id = NEW.track_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2375,6 +2501,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -2387,11 +2514,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.oauth_app_tokens t WHERE t.oauth_app_id = NEW.oauth_app_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.oauth_app_tokens t SET access_token = NEW.access_token, expires_at = NEW.expires_at, generation = NEW.generation, last_refresh_error = NEW.last_refresh_error, last_used_at = NEW.last_used_at, refresh_attempts = NEW.refresh_attempts, refresh_token = NEW.refresh_token, refreshed_at = NEW.refreshed_at, scope = NEW.scope WHERE t.oauth_app_id = NEW.oauth_app_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.oauth_app_tokens t SET access_token = NEW.access_token, expires_at = NEW.expires_at, generation = NEW.generation, last_refresh_error = NEW.last_refresh_error, last_used_at = NEW.last_used_at, refresh_attempts = NEW.refresh_attempts, refresh_token = NEW.refresh_token, refreshed_at = NEW.refreshed_at, scope = NEW.scope WHERE t.oauth_app_id = NEW.oauth_app_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2554,6 +2682,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2573,14 +2702,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = NEW.archive_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.archive_id FROM public.playlist_legacy_membership_intents t WHERE t.queue_id = NEW.queue_id AND t.archive_id IS DISTINCT FROM NEW.archive_id LOOP
             PERFORM public.scd_purge_playlist_legacy_membership_intents(jsonb_build_object('archive_id', r.archive_id));
         END LOOP;
-        UPDATE public.playlist_legacy_membership_intents t SET archived_at = NEW.archived_at, classification = NEW.classification, legacy_desired_revision = NEW.legacy_desired_revision, legacy_synced_revision = NEW.legacy_synced_revision, legacy_user_id = NEW.legacy_user_id, local_snapshot_id = NEW.local_snapshot_id, playlist_urn = NEW.playlist_urn, prior_classification = NEW.prior_classification, queue_created_at = NEW.queue_created_at, queue_failed_at = NEW.queue_failed_at, queue_generation = NEW.queue_generation, queue_id = NEW.queue_id, queue_last_error = NEW.queue_last_error, queue_next_run_at = NEW.queue_next_run_at, queue_payload = NEW.queue_payload, queue_retry_count = NEW.queue_retry_count, remote_attempted_generation = NEW.remote_attempted_generation, remote_completed_generation = NEW.remote_completed_generation, remote_result = NEW.remote_result, resolved_at = NEW.resolved_at, source = NEW.source WHERE t.archive_id = NEW.archive_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_legacy_membership_intents t SET archived_at = NEW.archived_at, classification = NEW.classification, legacy_desired_revision = NEW.legacy_desired_revision, legacy_synced_revision = NEW.legacy_synced_revision, legacy_user_id = NEW.legacy_user_id, local_snapshot_id = NEW.local_snapshot_id, playlist_urn = NEW.playlist_urn, prior_classification = NEW.prior_classification, queue_created_at = NEW.queue_created_at, queue_failed_at = NEW.queue_failed_at, queue_generation = NEW.queue_generation, queue_id = NEW.queue_id, queue_last_error = NEW.queue_last_error, queue_next_run_at = NEW.queue_next_run_at, queue_payload = NEW.queue_payload, queue_retry_count = NEW.queue_retry_count, remote_attempted_generation = NEW.remote_attempted_generation, remote_completed_generation = NEW.remote_completed_generation, remote_result = NEW.remote_result, resolved_at = NEW.resolved_at, source = NEW.source WHERE t.archive_id = NEW.archive_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2611,6 +2741,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -2637,6 +2768,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_membership_operations t WHERE t.operation_id = NEW.operation_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
             RETURN NULL;
         END IF;
@@ -2646,8 +2778,8 @@ BEGIN
         FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.sequence) = (NEW.playlist_urn, NEW.sequence) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
             PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
         END LOOP;
-        UPDATE public.playlist_membership_operations t SET accepted_projection_revision = NEW.accepted_projection_revision, actor_sc_user_id = NEW.actor_sc_user_id, base_baseline_generation = NEW.base_baseline_generation, base_observation_id = NEW.base_observation_id, boundary = NEW.boundary, conflict_code = NEW.conflict_code, created_at = NEW.created_at, expected_projection_revision = NEW.expected_projection_revision, idempotency_key = NEW.idempotency_key, kind = NEW.kind, left_anchor_track_id = NEW.left_anchor_track_id, ordered_track_ids = NEW.ordered_track_ids, outcome = NEW.outcome, playlist_urn = NEW.playlist_urn, request_fingerprint = NEW.request_fingerprint, resolved_at = NEW.resolved_at, right_anchor_track_id = NEW.right_anchor_track_id, sequence = NEW.sequence, track_id = NEW.track_id WHERE t.operation_id = NEW.operation_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_membership_operations t SET accepted_projection_revision = NEW.accepted_projection_revision, actor_sc_user_id = NEW.actor_sc_user_id, base_baseline_generation = NEW.base_baseline_generation, base_observation_id = NEW.base_observation_id, boundary = NEW.boundary, conflict_code = NEW.conflict_code, created_at = NEW.created_at, expected_projection_revision = NEW.expected_projection_revision, idempotency_key = NEW.idempotency_key, kind = NEW.kind, left_anchor_track_id = NEW.left_anchor_track_id, ordered_track_ids = NEW.ordered_track_ids, outcome = NEW.outcome, playlist_urn = NEW.playlist_urn, request_fingerprint = NEW.request_fingerprint, resolved_at = NEW.resolved_at, right_anchor_track_id = NEW.right_anchor_track_id, sequence = NEW.sequence, track_id = NEW.track_id WHERE t.operation_id = NEW.operation_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2678,6 +2810,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -2690,11 +2823,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_membership_state t WHERE t.playlist_urn = NEW.playlist_urn FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.playlist_membership_state t SET baseline_generation = NEW.baseline_generation, baseline_observation_id = NEW.baseline_observation_id, candidate_fingerprint = NEW.candidate_fingerprint, committed_operation_sequence = NEW.committed_operation_sequence, conflict_code = NEW.conflict_code, last_error = NEW.last_error, last_operation_sequence = NEW.last_operation_sequence, latest_observation_id = NEW.latest_observation_id, next_reconcile_at = NEW.next_reconcile_at, owner_sc_user_id = NEW.owner_sc_user_id, projection_revision = NEW.projection_revision, projection_track_count = NEW.projection_track_count, reconcile_failure_streak = NEW.reconcile_failure_streak, reconcile_generation = NEW.reconcile_generation, remote_applied_at = NEW.remote_applied_at, remote_apply_fingerprint = NEW.remote_apply_fingerprint, remote_apply_generation = NEW.remote_apply_generation, sync_status = NEW.sync_status, updated_at = NEW.updated_at WHERE t.playlist_urn = NEW.playlist_urn;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_membership_state t SET baseline_generation = NEW.baseline_generation, baseline_observation_id = NEW.baseline_observation_id, candidate_fingerprint = NEW.candidate_fingerprint, committed_operation_sequence = NEW.committed_operation_sequence, conflict_code = NEW.conflict_code, last_error = NEW.last_error, last_operation_sequence = NEW.last_operation_sequence, latest_observation_id = NEW.latest_observation_id, next_reconcile_at = NEW.next_reconcile_at, owner_sc_user_id = NEW.owner_sc_user_id, projection_revision = NEW.projection_revision, projection_track_count = NEW.projection_track_count, reconcile_failure_streak = NEW.reconcile_failure_streak, reconcile_generation = NEW.reconcile_generation, remote_applied_at = NEW.remote_applied_at, remote_apply_fingerprint = NEW.remote_apply_fingerprint, remote_apply_generation = NEW.remote_apply_generation, sync_status = NEW.sync_status, updated_at = NEW.updated_at WHERE t.playlist_urn = NEW.playlist_urn;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2727,6 +2861,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2746,14 +2881,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_remote_observations t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.id FROM public.playlist_remote_observations t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_playlist_remote_observations(jsonb_build_object('id', r.id));
         END LOOP;
-        UPDATE public.playlist_remote_observations t SET all_items_identified = NEW.all_items_identified, authority = NEW.authority, declared_track_count = NEW.declared_track_count, error_kind = NEW.error_kind, observed_at = NEW.observed_at, observed_track_count = NEW.observed_track_count, outcome = NEW.outcome, pagination_complete = NEW.pagination_complete, playlist_urn = NEW.playlist_urn, retry_at = NEW.retry_at, sc_last_modified = NEW.sc_last_modified, snapshot_id = NEW.snapshot_id WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_remote_observations t SET all_items_identified = NEW.all_items_identified, authority = NEW.authority, declared_track_count = NEW.declared_track_count, error_kind = NEW.error_kind, observed_at = NEW.observed_at, observed_track_count = NEW.observed_track_count, outcome = NEW.outcome, pagination_complete = NEW.pagination_complete, playlist_urn = NEW.playlist_urn, retry_at = NEW.retry_at, sc_last_modified = NEW.sc_last_modified, snapshot_id = NEW.snapshot_id WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2786,6 +2922,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -2812,6 +2949,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_remote_snapshots t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
@@ -2821,8 +2959,8 @@ BEGIN
         FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
         END LOOP;
-        UPDATE public.playlist_remote_snapshots t SET content_fingerprint = NEW.content_fingerprint, created_at = NEW.created_at, playlist_urn = NEW.playlist_urn, track_count = NEW.track_count WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_remote_snapshots t SET content_fingerprint = NEW.content_fingerprint, created_at = NEW.created_at, playlist_urn = NEW.playlist_urn, track_count = NEW.track_count WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2855,6 +2993,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2874,14 +3013,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlist_track_projection t WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position") FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.playlist_urn, t."position" FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.sc_track_id) = (NEW.playlist_urn, NEW.sc_track_id) AND (t.playlist_urn, t."position") IS DISTINCT FROM (NEW.playlist_urn, NEW."position") LOOP
             PERFORM public.scd_purge_playlist_track_projection(jsonb_build_object('playlist_urn', r.playlist_urn, 'position', r."position"));
         END LOOP;
-        UPDATE public.playlist_track_projection t SET sc_track_id = NEW.sc_track_id WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position");
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlist_track_projection t SET sc_track_id = NEW.sc_track_id WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position");
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2912,6 +3052,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -2931,14 +3072,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
             PERFORM public.scd_purge_playlists(jsonb_build_object('urn', r.urn));
         END LOOP;
-        UPDATE public.playlists t SET artwork_url = NEW.artwork_url, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, genre = NEW.genre, kind = NEW.kind, label_name = NEW.label_name, likes_count_sc = NEW.likes_count_sc, owner_sc_user_id = NEW.owner_sc_user_id, owner_urn = NEW.owner_urn, owner_username = NEW.owner_username, permalink_url = NEW.permalink_url, playlist_type = NEW.playlist_type, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_playlist_id = NEW.sc_playlist_id, sc_synced_at = NEW.sc_synced_at, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, track_count = NEW.track_count, updated_at = NEW.updated_at WHERE t.urn = NEW.urn;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.playlists t SET artwork_url = NEW.artwork_url, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, genre = NEW.genre, kind = NEW.kind, label_name = NEW.label_name, likes_count_sc = NEW.likes_count_sc, owner_sc_user_id = NEW.owner_sc_user_id, owner_urn = NEW.owner_urn, owner_username = NEW.owner_username, permalink_url = NEW.permalink_url, playlist_type = NEW.playlist_type, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_playlist_id = NEW.sc_playlist_id, sc_synced_at = NEW.sc_synced_at, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, track_count = NEW.track_count, updated_at = NEW.updated_at WHERE t.urn = NEW.urn;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -3006,6 +3148,45 @@ ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zz_max;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_tomb_lock(tbl text, k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    CASE tbl
+        WHEN 'discover_promoted' THEN
+            PERFORM 1 FROM public.discover_promoted t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'disliked_tracks' THEN
+            PERFORM 1 FROM public.disliked_tracks t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'featured_items' THEN
+            PERFORM 1 FROM public.featured_items t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'link_requests' THEN
+            PERFORM 1 FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'listening_history' THEN
+            PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'login_requests' THEN
+            PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'sc_egress_health' THEN
+            PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
+        WHEN 'sessions' THEN
+            PERFORM 1 FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'subscriptions' THEN
+            PERFORM 1 FROM public.subscriptions t WHERE t.user_urn = (k ->> 'user_urn')::text FOR UPDATE;
+        WHEN 'track_artist_blocks' THEN
+            PERFORM 1 FROM public.track_artist_blocks t WHERE t.track_id = (k ->> 'track_id')::uuid AND t.artist_id = (k ->> 'artist_id')::uuid FOR UPDATE;
+        WHEN 'user_blocked_artists' THEN
+            PERFORM 1 FROM public.user_blocked_artists t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text AND t.kind = (k ->> 'kind')::text AND t.target_id = (k ->> 'target_id')::text FOR UPDATE;
+        WHEN 'user_like_ranks' THEN
+            PERFORM 1 FROM public.user_like_ranks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
+        WHEN 'user_superlike_ranks' THEN
+            PERFORM 1 FROM public.user_superlike_ranks t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
+        WHEN 'user_superlikes' THEN
+            PERFORM 1 FROM public.user_superlikes t WHERE t.user_id = (k ->> 'user_id')::text AND t.sc_track_id = (k ->> 'sc_track_id')::text FOR UPDATE;
+        ELSE
+            NULL;
+    END CASE;
+END
+$f$;
 CREATE OR REPLACE FUNCTION public.scd_erase(tbl text, k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -3050,85 +3231,30 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $f$
 BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    PERFORM public.scd_tomb_lock(NEW.tbl, NEW.pk);
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at) VALUES (NEW.tbl, NEW.pk, NEW.v, NEW.at) ON CONFLICT DO NOTHING;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
     PERFORM public.scd_erase(NEW.tbl, NEW.pk, NEW.v);
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_erase AFTER INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_erase_repl_tombstones();
+CREATE OR REPLACE TRIGGER zz_erase BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_erase_repl_tombstones();
 ALTER TABLE public.repl_tombstones ENABLE REPLICA TRIGGER zz_erase;
-
-CREATE OR REPLACE FUNCTION public.scd_merge_repl_tombstones()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    o record;
-    core boolean := public.scd_role() = 'core';
-    n bigint;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.v < OLD.v OR (core AND NEW.v = OLD.v) THEN
-            NEW.at := OLD.at;
-            NEW.v := OLD.v;
-        END IF;
-        IF NEW.v <= OLD.v THEN
-            PERFORM public.scd_erase(NEW.tbl, NEW.pk, OLD.v);
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        SELECT t.* INTO o FROM public.repl_tombstones t WHERE (t.tbl, t.pk) = (NEW.tbl, NEW.pk);
-        IF FOUND THEN
-            IF NEW.v > o.v THEN
-                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-                UPDATE public.repl_tombstones t SET
-                    at = CASE WHEN NEW.v > o.v THEN NEW.at ELSE o.at END,
-                    v = greatest(o.v, NEW.v)
-                WHERE (t.tbl, t.pk) = (o.tbl, o.pk);
-                GET DIAGNOSTICS n = ROW_COUNT;
-                PERFORM pg_catalog.set_config('scd.merging', '', true);
-                IF n = 0 THEN
-                    CONTINUE;
-                END IF;
-            END IF;
-            IF NEW.v <= o.v THEN
-                PERFORM public.scd_erase(NEW.tbl, NEW.pk, o.v);
-            END IF;
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.repl_tombstones (at, pk, tbl, v)
-        VALUES (NEW.at, NEW.pk, NEW.tbl, NEW.v)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.repl_tombstones still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_repl_tombstones();
-ALTER TABLE public.repl_tombstones ENABLE REPLICA TRIGGER zz_merge;
 
 CREATE OR REPLACE FUNCTION public.scd_ver_repl_tombstones()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $f$
 BEGIN
-    IF TG_OP = 'INSERT' THEN
-        NEW.v := public.scd_hlc(NEW.v);
-        RETURN NEW;
+    IF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'scd: public.repl_tombstones rows are immutable, a delete adds a row' USING ERRCODE = 'feature_not_supported',
+            HINT = 'to send tombstones again run public.scd_resend_all() and drain with public.scd_drain_resend()';
     END IF;
-    IF NEW.at IS DISTINCT FROM OLD.at THEN
-        NEW.v := public.scd_hlc(greatest(OLD.v, NEW.v));
-    ELSE
-        NEW.v := greatest(OLD.v, NEW.v);
-    END IF;
+    NEW.v := public.scd_hlc(greatest(NEW.v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = NEW.tbl AND x.pk = NEW.pk)));
     RETURN NEW;
 END
 $f$;
@@ -3178,9 +3304,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'sc_egress_health', 'pk', jsonb_build_object('channel', NEW.channel))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'sc_egress_health', 'pk', jsonb_build_object('channel', NEW.channel), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_sc_egress_health'::regclass);
             RETURN NULL;
         END IF;
@@ -3206,8 +3332,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('sc_egress_health', jsonb_build_object('channel', OLD.channel), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('sc_egress_health', jsonb_build_object('channel', OLD.channel), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -3234,9 +3359,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'sc_egress_health', 'pk', jsonb_build_object('channel', NEW.channel))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'sc_egress_health', 'pk', jsonb_build_object('channel', NEW.channel), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_sc_egress_health'::regclass);
         RETURN NULL;
     END IF;
@@ -3256,8 +3381,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', OLD.channel);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', OLD.channel));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('sc_egress_health', jsonb_build_object('channel', OLD.channel)) ON CONFLICT DO NOTHING;
@@ -3274,7 +3399,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sc_egress_health' AND x.pk = jsonb_build_object('channel', NEW.channel))));
         RETURN NEW;
     END IF;
     IF (NEW.open_until, NEW.opened_at, NEW.opened_by) IS DISTINCT FROM (OLD.open_until, OLD.opened_at, OLD.opened_by) THEN
@@ -3343,6 +3468,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -3355,11 +3481,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.search_terms t WHERE t.word = NEW.word FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.search_terms t SET latin = NEW.latin, ndoc = NEW.ndoc WHERE t.word = NEW.word;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.search_terms t SET latin = NEW.latin, ndoc = NEW.ndoc WHERE t.word = NEW.word;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -3422,8 +3549,8 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'sessions' AND x.pk = jsonb_build_object('id', NEW.id);
-        IF FOUND THEN
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sessions' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -3462,8 +3589,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('sessions', jsonb_build_object('id', OLD.id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('sessions', jsonb_build_object('id', OLD.id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -3486,8 +3612,8 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'sessions' AND x.pk = jsonb_build_object('id', NEW.id);
-    IF FOUND THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'sessions' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
         RETURN NULL;
     END IF;
     RETURN NEW;
@@ -3722,9 +3848,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'subscriptions', 'pk', jsonb_build_object('user_urn', NEW.user_urn))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'subscriptions', 'pk', jsonb_build_object('user_urn', NEW.user_urn), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_subscriptions'::regclass);
             RETURN NULL;
         END IF;
@@ -3750,8 +3876,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('subscriptions', jsonb_build_object('user_urn', OLD.user_urn), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('subscriptions', jsonb_build_object('user_urn', OLD.user_urn), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -3778,9 +3903,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'subscriptions', 'pk', jsonb_build_object('user_urn', NEW.user_urn))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'subscriptions', 'pk', jsonb_build_object('user_urn', NEW.user_urn), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_subscriptions'::regclass);
         RETURN NULL;
     END IF;
@@ -3800,8 +3925,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', OLD.user_urn);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', OLD.user_urn));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('subscriptions', jsonb_build_object('user_urn', OLD.user_urn)) ON CONFLICT DO NOTHING;
@@ -3818,7 +3943,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn))));
         RETURN NEW;
     END IF;
     IF NEW.exp_date IS DISTINCT FROM OLD.exp_date THEN
@@ -4017,6 +4142,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -4029,11 +4155,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.sync_queue_action_pauses t WHERE (t.oauth_app_id, t.action_type) = (NEW.oauth_app_id, NEW.action_type) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.sync_queue_action_pauses t SET paused_until = NEW.paused_until, reason = NEW.reason, strikes = NEW.strikes, updated_at = NEW.updated_at WHERE (t.oauth_app_id, t.action_type) = (NEW.oauth_app_id, NEW.action_type);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.sync_queue_action_pauses t SET paused_until = NEW.paused_until, reason = NEW.reason, strikes = NEW.strikes, updated_at = NEW.updated_at WHERE (t.oauth_app_id, t.action_type) = (NEW.oauth_app_id, NEW.action_type);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4064,6 +4191,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
     k2 boolean;
@@ -4097,6 +4225,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.taste_model_versions t WHERE t.version = NEW.version FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
             RETURN NULL;
         END IF;
@@ -4111,8 +4240,8 @@ BEGIN
                 PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
             END LOOP;
         END IF;
-        UPDATE public.taste_model_versions t SET active = NEW.active, applied_at = NEW.applied_at, collection = NEW.collection, created_at = NEW.created_at, dim = NEW.dim, input_object = NEW.input_object, items_count = NEW.items_count, metrics = NEW.metrics, pooling = NEW.pooling, refreshed_through = NEW.refreshed_through, trained_at = NEW.trained_at, users_count = NEW.users_count WHERE t.version = NEW.version;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.taste_model_versions t SET active = NEW.active, applied_at = NEW.applied_at, collection = NEW.collection, created_at = NEW.created_at, dim = NEW.dim, input_object = NEW.input_object, items_count = NEW.items_count, metrics = NEW.metrics, pooling = NEW.pooling, refreshed_through = NEW.refreshed_through, trained_at = NEW.trained_at, users_count = NEW.users_count WHERE t.version = NEW.version;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4175,9 +4304,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'track_artist_blocks', 'pk', jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'track_artist_blocks', 'pk', jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_track_artist_blocks'::regclass);
             RETURN NULL;
         END IF;
@@ -4220,8 +4349,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('track_artist_blocks', jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('track_artist_blocks', jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -4248,9 +4376,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'track_artist_blocks', 'pk', jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'track_artist_blocks', 'pk', jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_track_artist_blocks'::regclass);
         RETURN NULL;
     END IF;
@@ -4270,8 +4398,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('track_artist_blocks', jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id)) ON CONFLICT DO NOTHING;
@@ -4288,7 +4416,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'track_artist_blocks' AND x.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id))));
         RETURN NEW;
     END IF;
     IF (NEW.created_at, NEW.note) IS DISTINCT FROM (OLD.created_at, OLD.note) THEN
@@ -4313,6 +4441,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -4325,11 +4454,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.track_artists t WHERE (t.track_id, t.artist_id, t.role) = (NEW.track_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.track_artists t SET confidence = NEW.confidence, evidence = NEW.evidence, "position" = NEW."position", source = NEW.source WHERE (t.track_id, t.artist_id, t.role) = (NEW.track_id, NEW.artist_id, NEW.role);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.track_artists t SET confidence = NEW.confidence, evidence = NEW.evidence, "position" = NEW."position", source = NEW.source WHERE (t.track_id, t.artist_id, t.role) = (NEW.track_id, NEW.artist_id, NEW.role);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4360,6 +4490,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -4379,14 +4510,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.track_comments t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.id FROM public.track_comments t WHERE t.sc_comment_id = NEW.sc_comment_id AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_track_comments(jsonb_build_object('id', r.id));
         END LOOP;
-        UPDATE public.track_comments t SET body = NEW.body, created_at = NEW.created_at, sc_comment_id = NEW.sc_comment_id, sc_created_at = NEW.sc_created_at, sc_track_id = NEW.sc_track_id, synced_at = NEW.synced_at, track_position_ms = NEW.track_position_ms, user_urn = NEW.user_urn WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.track_comments t SET body = NEW.body, created_at = NEW.created_at, sc_comment_id = NEW.sc_comment_id, sc_created_at = NEW.sc_created_at, sc_track_id = NEW.sc_track_id, synced_at = NEW.synced_at, track_position_ms = NEW.track_position_ms, user_urn = NEW.user_urn WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4419,6 +4551,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -4445,6 +4578,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.tracks t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
@@ -4454,8 +4588,8 @@ BEGIN
         FOR r IN SELECT t.id FROM public.tracks t WHERE t.urn = NEW.urn AND t.id IS DISTINCT FROM NEW.id LOOP
             PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
         END LOOP;
-        UPDATE public.tracks t SET album_id = NEW.album_id, album_position = NEW.album_position, artwork_url = NEW.artwork_url, audio_fingerprint = NEW.audio_fingerprint, canonical_track_id = NEW.canonical_track_id, comments_count_sc = NEW.comments_count_sc, cover_of_artist_id = NEW.cover_of_artist_id, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, duration_resolve_attempts = NEW.duration_resolve_attempts, duration_resolve_retry_at = NEW.duration_resolve_retry_at, enrich_attempts = NEW.enrich_attempts, enrich_confidence = NEW.enrich_confidence, enrich_error = NEW.enrich_error, enrich_locked_at = NEW.enrich_locked_at, enrich_next_run_at = NEW.enrich_next_run_at, enrich_source = NEW.enrich_source, enrich_state = NEW.enrich_state, enriched_at = NEW.enriched_at, genius_song_id = NEW.genius_song_id, genius_url = NEW.genius_url, genre = NEW.genre, hq_upgrade_attempts = NEW.hq_upgrade_attempts, hq_upgrade_last_at = NEW.hq_upgrade_last_at, hq_upgrade_pending = NEW.hq_upgrade_pending, index_attempts = NEW.index_attempts, index_priority = NEW.index_priority, index_state = NEW.index_state, indexed_at = NEW.indexed_at, is_cover = NEW.is_cover, isrc = NEW.isrc, language = NEW.language, language_confidence = NEW.language_confidence, likes_count_sc = NEW.likes_count_sc, metadata_artist = NEW.metadata_artist, needs_duration_resolve = NEW.needs_duration_resolve, permalink_url = NEW.permalink_url, pipeline_held = NEW.pipeline_held, play_count_sc = NEW.play_count_sc, primary_artist_id = NEW.primary_artist_id, quality_model_version = NEW.quality_model_version, quality_score = NEW.quality_score, recording_key = NEW.recording_key, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, s3_missing_at = NEW.s3_missing_at, s3_verified_at = NEW.s3_verified_at, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, sc_track_id = NEW.sc_track_id, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, storage_attempts = NEW.storage_attempts, storage_priority = NEW.storage_priority, storage_quality = NEW.storage_quality, storage_state = NEW.storage_state, superseded_by = NEW.superseded_by, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, transcribe_at = NEW.transcribe_at, transcribe_state = NEW.transcribe_state, updated_at = NEW.updated_at, upload_kind = NEW.upload_kind, uploader_avatar_url = NEW.uploader_avatar_url, uploader_sc_user_id = NEW.uploader_sc_user_id, uploader_urn = NEW.uploader_urn, uploader_username = NEW.uploader_username, urn = NEW.urn, waveform_url = NEW.waveform_url, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.tracks t SET album_id = NEW.album_id, album_position = NEW.album_position, artwork_url = NEW.artwork_url, audio_fingerprint = NEW.audio_fingerprint, canonical_track_id = NEW.canonical_track_id, comments_count_sc = NEW.comments_count_sc, cover_of_artist_id = NEW.cover_of_artist_id, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, duration_resolve_attempts = NEW.duration_resolve_attempts, duration_resolve_retry_at = NEW.duration_resolve_retry_at, enrich_attempts = NEW.enrich_attempts, enrich_confidence = NEW.enrich_confidence, enrich_error = NEW.enrich_error, enrich_locked_at = NEW.enrich_locked_at, enrich_next_run_at = NEW.enrich_next_run_at, enrich_source = NEW.enrich_source, enrich_state = NEW.enrich_state, enriched_at = NEW.enriched_at, genius_song_id = NEW.genius_song_id, genius_url = NEW.genius_url, genre = NEW.genre, hq_upgrade_attempts = NEW.hq_upgrade_attempts, hq_upgrade_last_at = NEW.hq_upgrade_last_at, hq_upgrade_pending = NEW.hq_upgrade_pending, index_attempts = NEW.index_attempts, index_priority = NEW.index_priority, index_state = NEW.index_state, indexed_at = NEW.indexed_at, is_cover = NEW.is_cover, isrc = NEW.isrc, language = NEW.language, language_confidence = NEW.language_confidence, likes_count_sc = NEW.likes_count_sc, metadata_artist = NEW.metadata_artist, needs_duration_resolve = NEW.needs_duration_resolve, permalink_url = NEW.permalink_url, pipeline_held = NEW.pipeline_held, play_count_sc = NEW.play_count_sc, primary_artist_id = NEW.primary_artist_id, quality_model_version = NEW.quality_model_version, quality_score = NEW.quality_score, recording_key = NEW.recording_key, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, s3_missing_at = NEW.s3_missing_at, s3_verified_at = NEW.s3_verified_at, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, sc_track_id = NEW.sc_track_id, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, storage_attempts = NEW.storage_attempts, storage_priority = NEW.storage_priority, storage_quality = NEW.storage_quality, storage_state = NEW.storage_state, superseded_by = NEW.superseded_by, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, transcribe_at = NEW.transcribe_at, transcribe_state = NEW.transcribe_state, updated_at = NEW.updated_at, upload_kind = NEW.upload_kind, uploader_avatar_url = NEW.uploader_avatar_url, uploader_sc_user_id = NEW.uploader_sc_user_id, uploader_urn = NEW.uploader_urn, uploader_username = NEW.uploader_username, urn = NEW.urn, waveform_url = NEW.waveform_url, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4602,9 +4736,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_blocked_artists', 'pk', jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_blocked_artists', 'pk', jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_user_blocked_artists'::regclass);
             RETURN NULL;
         END IF;
@@ -4630,8 +4764,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('user_blocked_artists', jsonb_build_object('sc_user_id', OLD.sc_user_id, 'kind', OLD.kind, 'target_id', OLD.target_id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('user_blocked_artists', jsonb_build_object('sc_user_id', OLD.sc_user_id, 'kind', OLD.kind, 'target_id', OLD.target_id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -4658,9 +4791,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_blocked_artists', 'pk', jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_blocked_artists', 'pk', jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_user_blocked_artists'::regclass);
         RETURN NULL;
     END IF;
@@ -4680,8 +4813,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id, 'kind', OLD.kind, 'target_id', OLD.target_id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id, 'kind', OLD.kind, 'target_id', OLD.target_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_blocked_artists', jsonb_build_object('sc_user_id', OLD.sc_user_id, 'kind', OLD.kind, 'target_id', OLD.target_id)) ON CONFLICT DO NOTHING;
@@ -4698,7 +4831,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_blocked_artists' AND x.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'kind', NEW.kind, 'target_id', NEW.target_id))));
         RETURN NEW;
     END IF;
     IF (NEW.avatar_url, NEW.created_at, NEW.name, NEW.sc_user_ids) IS DISTINCT FROM (OLD.avatar_url, OLD.created_at, OLD.name, OLD.sc_user_ids) THEN
@@ -4751,6 +4884,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -4763,11 +4897,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_followers t WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_followers t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_followers t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.target_user_urn) = (NEW.user_id, NEW.target_user_urn);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -4937,9 +5072,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_like_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_like_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_user_like_ranks'::regclass);
             RETURN NULL;
         END IF;
@@ -4965,8 +5100,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('user_like_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('user_like_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -4993,9 +5127,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_like_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_like_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_user_like_ranks'::regclass);
         RETURN NULL;
     END IF;
@@ -5015,8 +5149,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_like_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) ON CONFLICT DO NOTHING;
@@ -5033,7 +5167,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_like_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
         RETURN NEW;
     END IF;
     IF (NEW.like_created_at, NEW.rank) IS DISTINCT FROM (OLD.like_created_at, OLD.rank) THEN
@@ -5278,6 +5412,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5290,11 +5425,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_owned_playlists t WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_owned_playlists t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_owned_playlists t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.playlist_urn) = (NEW.user_id, NEW.playlist_urn);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5325,6 +5461,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5337,11 +5474,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_owned_tracks t WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_owned_tracks t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_owned_tracks t SET created_at = NEW.created_at, progress = NEW.progress, synced_at = NEW.synced_at WHERE (t.user_id, t.sc_track_id) = (NEW.user_id, NEW.sc_track_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5372,6 +5510,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5384,11 +5523,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_profiles t WHERE t.soundcloud_user_id = NEW.soundcloud_user_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_profiles t SET profile_json = NEW.profile_json, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.soundcloud_user_id = NEW.soundcloud_user_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_profiles t SET profile_json = NEW.profile_json, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.soundcloud_user_id = NEW.soundcloud_user_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5449,9 +5589,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlike_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlike_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_user_superlike_ranks'::regclass);
             RETURN NULL;
         END IF;
@@ -5477,8 +5617,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('user_superlike_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('user_superlike_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -5505,9 +5644,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlike_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlike_ranks', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_user_superlike_ranks'::regclass);
         RETURN NULL;
     END IF;
@@ -5527,8 +5666,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_superlike_ranks', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) ON CONFLICT DO NOTHING;
@@ -5545,7 +5684,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlike_ranks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
         RETURN NEW;
     END IF;
     IF (NEW.rank, NEW.superlike_created_at) IS DISTINCT FROM (OLD.rank, OLD.superlike_created_at) THEN
@@ -5600,9 +5739,9 @@ BEGIN
             END IF;
             RETURN NULL;
         END IF;
-        SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-        IF FOUND AND NEW.row_v <= tv THEN
-            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlikes', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+        IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+            INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlikes', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
             PERFORM nextval('public.scd_resend_user_superlikes'::regclass);
             RETURN NULL;
         END IF;
@@ -5628,8 +5767,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('user_superlikes', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now())
-    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;
+    VALUES ('user_superlikes', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id), OLD.row_v, now());
     RETURN OLD;
 END
 $f$;
@@ -5656,9 +5794,9 @@ AS $f$
 DECLARE
     tv bigint;
 BEGIN
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id);
-    IF FOUND AND NEW.row_v <= tv THEN
-        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlikes', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))) ON CONFLICT DO NOTHING;
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+    IF tv IS NOT NULL AND NEW.row_v <= tv THEN
+        INSERT INTO public.repl_resend (tbl, pk) VALUES ('repl_tombstones', jsonb_build_object('tbl', 'user_superlikes', 'pk', jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id), 'v', tv)) ON CONFLICT DO NOTHING;
         PERFORM nextval('public.scd_resend_user_superlikes'::regclass);
         RETURN NULL;
     END IF;
@@ -5678,8 +5816,8 @@ BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN OLD;
     END IF;
-    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id);
-    IF NOT FOUND OR OLD.row_v <= tv THEN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id));
+    IF tv IS NULL OR OLD.row_v <= tv THEN
         RETURN OLD;
     END IF;
     INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_superlikes', jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) ON CONFLICT DO NOTHING;
@@ -5696,7 +5834,7 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
+        NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'user_superlikes' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
         RETURN NEW;
     END IF;
     IF (NEW.created_at, NEW.like_created_at) IS DISTINCT FROM (OLD.created_at, OLD.like_created_at) THEN
@@ -5721,6 +5859,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5733,11 +5872,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_taste_vectors t WHERE (t.sc_user_id, t.version) = (NEW.sc_user_id, NEW.version) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_taste_vectors t SET updated_at = NEW.updated_at, vec = NEW.vec WHERE (t.sc_user_id, t.version) = (NEW.sc_user_id, NEW.version);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_taste_vectors t SET updated_at = NEW.updated_at, vec = NEW.vec WHERE (t.sc_user_id, t.version) = (NEW.sc_user_id, NEW.version);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5768,6 +5908,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5780,11 +5921,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.user_web_profiles t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.user_web_profiles t SET profiles = NEW.profiles, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.sc_user_id = NEW.sc_user_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.user_web_profiles t SET profiles = NEW.profiles, sc_observation = NEW.sc_observation, synced_at = NEW.synced_at WHERE t.sc_user_id = NEW.sc_user_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5815,6 +5957,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
@@ -5834,14 +5977,15 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.users t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.sc_user_id FROM public.users t WHERE t.urn = NEW.urn AND t.sc_user_id IS DISTINCT FROM NEW.sc_user_id LOOP
             PERFORM public.scd_purge_users(jsonb_build_object('sc_user_id', r.sc_user_id));
         END LOOP;
-        UPDATE public.users t SET avatar_url = NEW.avatar_url, city = NEW.city, comments_count = NEW.comments_count, country = NEW.country, created_at = NEW.created_at, description = NEW.description, first_name = NEW.first_name, followers_count = NEW.followers_count, followings_count = NEW.followings_count, full_name = NEW.full_name, kind = NEW.kind, last_name = NEW.last_name, permalink = NEW.permalink, permalink_url = NEW.permalink_url, playlists_count = NEW.playlists_count, reposts_count = NEW.reposts_count, sc_created_at = NEW.sc_created_at, sc_last_modified = NEW.sc_last_modified, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, tracks_count = NEW.tracks_count, updated_at = NEW.updated_at, urn = NEW.urn, username = NEW.username, username_normalized = NEW.username_normalized, verified = NEW.verified WHERE t.sc_user_id = NEW.sc_user_id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.users t SET avatar_url = NEW.avatar_url, city = NEW.city, comments_count = NEW.comments_count, country = NEW.country, created_at = NEW.created_at, description = NEW.description, first_name = NEW.first_name, followers_count = NEW.followers_count, followings_count = NEW.followings_count, full_name = NEW.full_name, kind = NEW.kind, last_name = NEW.last_name, permalink = NEW.permalink, permalink_url = NEW.permalink_url, playlists_count = NEW.playlists_count, reposts_count = NEW.reposts_count, sc_created_at = NEW.sc_created_at, sc_last_modified = NEW.sc_last_modified, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, tracks_count = NEW.tracks_count, updated_at = NEW.updated_at, urn = NEW.urn, username = NEW.username, username_normalized = NEW.username_normalized, verified = NEW.verified WHERE t.sc_user_id = NEW.sc_user_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5872,6 +6016,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5884,11 +6029,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.wanted_track_albums t WHERE (t.wanted_track_id, t.album_id) = (NEW.wanted_track_id, NEW.album_id) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.wanted_track_albums t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.album_id) = (NEW.wanted_track_id, NEW.album_id);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.wanted_track_albums t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.album_id) = (NEW.wanted_track_id, NEW.album_id);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5919,6 +6065,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
@@ -5931,11 +6078,12 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.wanted_track_artists t WHERE (t.wanted_track_id, t.artist_id, t.role) = (NEW.wanted_track_id, NEW.artist_id, NEW.role) FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
             RETURN NULL;
         END IF;
-        UPDATE public.wanted_track_artists t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.artist_id, t.role) = (NEW.wanted_track_id, NEW.artist_id, NEW.role);
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.wanted_track_artists t SET "position" = NEW."position" WHERE (t.wanted_track_id, t.artist_id, t.role) = (NEW.wanted_track_id, NEW.artist_id, NEW.role);
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -5968,6 +6116,7 @@ AS $f$
 DECLARE
     r record;
     n bigint;
+    held boolean;
     k0 boolean;
     k1 boolean;
 BEGIN
@@ -5994,6 +6143,7 @@ BEGIN
     END IF;
     FOR attempt IN 1..3 LOOP
         PERFORM 1 FROM public.wanted_tracks t WHERE t.id = NEW.id FOR UPDATE;
+        held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
@@ -6007,8 +6157,8 @@ BEGIN
                 PERFORM public.scd_purge_wanted_tracks(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        UPDATE public.wanted_tracks t SET discovered_at = NEW.discovered_at, duration_ms = NEW.duration_ms, external_id = NEW.external_id, fetched_at = NEW.fetched_at, isrc = NEW.isrc, normalized_title = NEW.normalized_title, primary_artist_id = NEW.primary_artist_id, recording_key = NEW.recording_key, release_year = NEW.release_year, resolve_attempts = NEW.resolve_attempts, resolve_error = NEW.resolve_error, resolve_locked_at = NEW.resolve_locked_at, resolve_next_run_at = NEW.resolve_next_run_at, source = NEW.source, status = NEW.status, title = NEW.title, track_id = NEW.track_id, updated_at = NEW.updated_at, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version, work_reconciled_at = NEW.work_reconciled_at WHERE t.id = NEW.id;
-        IF FOUND THEN
+        IF held THEN
+            UPDATE public.wanted_tracks t SET discovered_at = NEW.discovered_at, duration_ms = NEW.duration_ms, external_id = NEW.external_id, fetched_at = NEW.fetched_at, isrc = NEW.isrc, normalized_title = NEW.normalized_title, primary_artist_id = NEW.primary_artist_id, recording_key = NEW.recording_key, release_year = NEW.release_year, resolve_attempts = NEW.resolve_attempts, resolve_error = NEW.resolve_error, resolve_locked_at = NEW.resolve_locked_at, resolve_next_run_at = NEW.resolve_next_run_at, source = NEW.source, status = NEW.status, title = NEW.title, track_id = NEW.track_id, updated_at = NEW.updated_at, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version, work_reconciled_at = NEW.work_reconciled_at WHERE t.id = NEW.id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -6038,6 +6188,8 @@ FROM (VALUES
     ('conflict', 'disliked_tracks', 'scd_conflict_disliked_tracks'),
     ('conflict', 'oauth_apps', 'scd_conflict_oauth_apps'),
     ('conflict', 'sync_queue', 'scd_conflict_sync_queue'),
+    ('core_col', 'artists', 'scd_core_col_artists'),
+    ('core_col', 'lyrics_cache', 'scd_core_col_lyrics_cache'),
     ('guard', 'admin_maintenance_runs', 'scd_guard_admin_maintenance_runs'),
     ('guard', 'ai_resolver_budget', 'scd_guard_ai_resolver_budget'),
     ('guard', 'ai_resolver_cache', 'scd_guard_ai_resolver_cache'),
@@ -6149,7 +6301,7 @@ BEGIN
         FROM pg_catalog.pg_trigger t
         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_core_col', 'zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
         EXCEPT VALUES
             ('admin_maintenance_runs', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_owner'),
@@ -6180,6 +6332,7 @@ BEGIN
             ('artist_socials', 'zz_guard'),
             ('artist_socials', 'zz_owner'),
             ('artist_socials', 'zzz_suppress'),
+            ('artists', 'zz_core_col'),
             ('artists', 'zz_guard'),
             ('artists', 'zz_owner'),
             ('artists', 'zzz_suppress'),
@@ -6256,6 +6409,7 @@ BEGIN
             ('login_requests', 'zz_tomb_check'),
             ('login_requests', 'zz_ver'),
             ('login_requests', 'zzz_suppress'),
+            ('lyrics_cache', 'zz_core_col'),
             ('lyrics_cache', 'zz_guard'),
             ('lyrics_cache', 'zz_owner'),
             ('lyrics_cache', 'zzz_suppress'),
@@ -6306,7 +6460,6 @@ BEGIN
             ('repl_checksums', 'zz_max'),
             ('repl_checksums', 'zzz_suppress'),
             ('repl_tombstones', 'zz_erase'),
-            ('repl_tombstones', 'zz_merge'),
             ('repl_tombstones', 'zz_ver'),
             ('repl_tombstones', 'zzz_suppress'),
             ('sc_egress_health', 'zz_merge'),
@@ -6459,3 +6612,4 @@ BEGIN
     END LOOP;
 END
 $d$;
+DROP FUNCTION IF EXISTS public.scd_merge_repl_tombstones();

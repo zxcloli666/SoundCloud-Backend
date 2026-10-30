@@ -140,7 +140,7 @@ class Model(unittest.TestCase):
 
     def test_derived_trigger_must_be_always_gated_and_pinned(self):
         s = support.spec()
-        s["tables"]["items"]["derived"] = ["items_touch"]
+        s["tables"]["items"]["derived"] = {"items_touch": {}}
         sc = support.schema()
         sc["core"]["items"]["triggers"].append({"name": "items_touch", "function": "touch", "enabled": "O", "gated": False, "pinned": False})
         found = problems(s, sc)
@@ -149,6 +149,40 @@ class Model(unittest.TestCase):
         self.assertIn("items: derived trigger function touch needs SET search_path (lab D3)", found)
         sc["core"]["items"]["triggers"][-1].update(enabled="A", gated=True, pinned=True)
         self.assertEqual(problems(s, sc), [])
+
+    def test_derived_writes_must_be_declared(self):
+        s = support.spec()
+        s["tables"]["items"]["derived"] = {"items_touch": {}}
+        sc = support.schema()
+        source = "BEGIN UPDATE public.items AS i SET title = upper(NEW.title), last_read_at = coalesce(i.last_read_at, now()) WHERE i.id = NEW.id; RETURN NULL; END"
+        sc["core"]["items"]["triggers"].append({"name": "items_touch", "function": "touch", "enabled": "A", "gated": True, "pinned": True,
+                                                "before": False, "source": source})
+        found = problems(s, sc)
+        self.assertIn("items: derived trigger items_touch writes items.title; register it under writes (a core column) or vetoes", found)
+        self.assertIn("items: derived trigger items_touch writes items.last_read_at; register it under writes (a core column) or vetoes", found)
+        s["tables"]["items"]["derived"] = {"items_touch": {"writes": ["items.title", "items.last_read_at", "items.gone"]}}
+        found = problems(s, sc)
+        self.assertIn("items: derived trigger items_touch does not write items.gone; drop it from the declaration", found)
+        self.assertIn("items.last_read_at: a core column must be a replicated non-key column", found)
+        s["tables"]["items"]["derived"] = {"items_touch": {"writes": ["items.title"], "vetoes": ["items.last_read_at"]}}
+        self.assertEqual(problems(s, sc), [])
+        self.assertEqual(support.build(s, sc).tables["items"].core_cols, ["title"])
+
+    def test_derived_rows_and_vetoes(self):
+        s = support.spec()
+        s["tables"]["items"]["derived"] = {"items_touch": {}}
+        s["kinds"] = {"item.edit": {"touches": ["items", "item_tags"]}}
+        sc = support.schema()
+        source = "BEGIN IF EXISTS (SELECT 1) THEN NEW.title := NULL; RETURN NULL; END IF; DELETE FROM item_tags WHERE item_id = NEW.id; RETURN NEW; END"
+        sc["core"]["items"]["triggers"].append({"name": "items_touch", "function": "touch", "enabled": "A", "gated": True, "pinned": True,
+                                                "before": True, "source": source})
+        found = problems(s, sc)
+        self.assertIn("items: derived trigger items_touch writes rows of item_tags; list it under rows or vetoes", found)
+        self.assertIn("items: derived trigger items_touch writes rows of items; list it under rows or vetoes", found)
+        s["tables"]["items"]["derived"] = {"items_touch": {"vetoes": ["items", "items.title"], "rows": ["item_tags"]}}
+        self.assertEqual([p for p in problems(s, sc) if "items_touch" in p],
+                         ["kind item.edit: touches items and item_tags, whose rows the derived trigger items_touch writes on core only"])
+        self.assertEqual(support.build(s, sc).tables["items"].core_cols, [])
 
     def test_fk_parents_and_orphan_fks(self):
         sc = support.schema()

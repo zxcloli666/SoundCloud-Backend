@@ -49,9 +49,9 @@ seen() {
 }
 
 race() {
-  local label="$1" role="$2" node="$3" first="$4" second="$5" check="$6" want="$7" got
+  local label="$1" role="$2" node="$3" first="$4" second="$5" check="$6" want="$7" after="${8:-SELECT 1}" got
   sql -d scd_b1_race -c "SET application_name = 'scd_race'" -c "SET scd.mode = 'split'" -c "SET scd.role = '$role'" -c "SET scd.node = '$node'" \
-    -c "BEGIN" -c "$first" -c "SELECT pg_sleep(2)" -c "COMMIT" > "$tmp/race.out" 2>&1 &
+    -c "BEGIN" -c "$first" -c "SELECT pg_sleep(2)" -c "$after" -c "COMMIT" > "$tmp/race.out" 2>&1 &
   local holder=$!
   wait_for scd_b1_race "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'scd_race' AND wait_event = 'PgSleep')" "$label: the first insert is in flight"
   if ! sql -d scd_b1_race -c "SET scd.mode = 'split'" -c "SET scd.role = '$role'" -c "SET scd.node = '$node'" \
@@ -86,9 +86,17 @@ race "K register on core" core core "$replica; INSERT INTO public.sc_track_count
 race "insert-only skip on core" core core "$replica; INSERT INTO public.user_events (id, sc_user_id, sc_track_id, event_type, weight) VALUES ('00000000-0000-0000-0000-0000000000f2', 're', 't', 'play', 1)" \
   "INSERT INTO public.user_events (id, sc_user_id, sc_track_id, event_type, weight) VALUES ('00000000-0000-0000-0000-0000000000f2', 're', 't', 'play', 1)" \
   "SELECT count(*) FROM public.user_events WHERE sc_user_id = 're'" 1
-race "tombstone merge on core" core core "$replica; INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', '{\"id\": \"00000000-0000-0000-0000-0000000000f3\"}', 1602)" \
+race "two tombstones for one key on core" core core "$replica; INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', '{\"id\": \"00000000-0000-0000-0000-0000000000f3\"}', 1602)" \
   "INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', '{\"id\": \"00000000-0000-0000-0000-0000000000f3\"}', 3203)" \
-  "SELECT count(*) || ' ' || max(v) FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000f3'" "1 3203"
+  "SELECT count(*) || ' ' || max(v) FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000f3'" "2 3203"
+sql -d scd_b1_race -c "SET scd.mode = 'split'" -c "SET scd.role = 'api'" -c "SET scd.node = 'main'" -c "SET session_replication_role = replica" \
+  -c "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, row_v) VALUES ('00000000-0000-0000-0000-0000000000fa', 'rx', 'x', public.scd_hlc(0))" \
+  -c "INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', '{\"id\": \"00000000-0000-0000-0000-0000000000fa\"}', 1602)"
+race "a tombstone apply against a local delete of the same row on an api node (lab T3h deadlock)" api main \
+  "SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'rx' FOR UPDATE" \
+  "INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', '{\"id\": \"00000000-0000-0000-0000-0000000000fa\"}', public.scd_hlc(0) + (60000000 << 4) - 13)" \
+  "SELECT (SELECT count(*) FROM public.disliked_tracks WHERE sc_user_id = 'rx') || ' ' || count(*) FROM public.repl_tombstones WHERE pk ->> 'id' = '00000000-0000-0000-0000-0000000000fa'" "0 3" \
+  "DELETE FROM public.disliked_tracks WHERE sc_user_id = 'rx'"
 race "C owner on an api node" api main "$replica; INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000f4', 'First', 'race', 'sc')" \
   "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000f4', 'Second', 'race', 'sc')" \
   "SELECT count(*) || ' ' || max(name) FROM public.artists WHERE normalized_name = 'race'" "1 Second"
@@ -188,6 +196,52 @@ calm
 dislike star cv5 2
 quiet
 expect "the re-insert lives on every node" "$(seen cv5)" 2
+
+say "A tombstones: deletes made on main while core's slot on main is lost reach core through scd_resend_all (lab T9)"
+dislike main ls1 1
+dislike main ls2 1
+calm
+pause core core_from_main
+undislike main ls1
+redislike main ls2 2
+sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main SET (slot_name = NONE)" -c "DROP SUBSCRIPTION core_from_main"
+val scd_b1_main "SELECT pg_catalog.pg_drop_replication_slot('scd_b1_core_from_main')" > /dev/null
+subscribe core main "scd_api_pub, scd_cmd_pub" "origin = none"
+wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_subscription WHERE subname = 'core_from_main' AND pid IS NOT NULL)" "core reads main from a new slot"
+calm
+[ "$(val scd_b1_core "SELECT count(*) FROM public.disliked_tracks WHERE sc_user_id = 'ls1'")" = 1 ] || { echo "FAIL the lost slot did not lose main's delete"; exit 1; }
+[ "$(val scd_b1_main "SELECT public.scd_resend_all() > 0")" = t ]
+quiet
+expect "the delete made in the gap is applied on every node" "$(seen ls1)" none
+expect "the update made in the gap reaches every node" "$(seen ls2)" 2
+expect "one tombstone per delete on every node, still main's version" \
+  "SELECT count(*) || ' ' || bool_and(v % 16 = 2) FROM public.repl_tombstones WHERE pk = jsonb_build_object('id', public.scd_uuid('disliked_tracks', 'ls1', 'x'))" "1 true"
+
+say "C: a kind on an api node touches artists, core's derived has_sc_account comes back as a core write, no reassert"
+kind_sql="CREATE OR REPLACE FUNCTION public.scd_cmd_match_sc_account(args jsonb) RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_catalog AS \$f\$
+BEGIN
+    INSERT INTO public.artist_sc_accounts (artist_id, sc_user_id, role, source, verified, created_at, updated_at)
+    VALUES ((args ->> 'artist_id')::uuid, args ->> 'sc_user_id', 'main', 'sc', true, (args ->> 'at')::timestamptz, (args ->> 'at')::timestamptz)
+    ON CONFLICT (artist_id, sc_user_id) DO NOTHING;
+    UPDATE public.artists SET sc_user_id = coalesce(sc_user_id, args ->> 'sc_user_id') WHERE id = (args ->> 'artist_id')::uuid;
+    RETURN jsonb_build_object('output', true, 'touched', jsonb_build_array(
+        jsonb_build_object('tbl', 'artist_sc_accounts', 'pk', jsonb_build_object('artist_id', (args ->> 'artist_id')::uuid, 'sc_user_id', args ->> 'sc_user_id')),
+        jsonb_build_object('tbl', 'artists', 'pk', jsonb_build_object('id', (args ->> 'artist_id')::uuid))));
+END
+\$f\$"
+for n in $nodes; do sql -d "scd_b1_$n" -c "$kind_sql"; done
+sql -d scd_b1_core -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000000a9', 'Acct', 'acct', 'sc')"
+calm
+cid="$(val scd_b1_main "SELECT id FROM public.scd_wt('match.sc_account', jsonb_build_object('artist_id', '00000000-0000-0000-0000-0000000000a9', 'sc_user_id', 'scu-9', 'at', '2026-10-30 00:00:00+00'))")"
+wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.cmd_outbox WHERE id = '$cid' AND done_at IS NOT NULL)" "core ran main's command"
+calm
+reasserted="$(val scd_b1_core "SELECT count(*) FROM public.cmd_reassert WHERE id = '$cid'")"
+[ "$reasserted" = 0 ] && echo "ok core reasserted nothing for main's command" || { echo "FAIL core reasserted $reasserted row(s) for main's command"; failed=$((failed + 1)); }
+[ "$(val scd_b1_core "SELECT count(*) FROM public.cmd_dead WHERE id = '$cid'")" = 0 ] || { echo "FAIL main's command died on core"; exit 1; }
+expect "the artist row is equal on every node with core's derived flag" \
+  "SELECT sc_user_id || ' ' || has_sc_account FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000a9'" "scu-9 true"
+pairs artists "id = '00000000-0000-0000-0000-0000000000a9'" "artist row equal on all nodes"
+pairs artist_sc_accounts "artist_id = '00000000-0000-0000-0000-0000000000a9'" "account row equal on all nodes"
 
 say "A delete-wins: a session updated after its delete stays deleted"
 sql -d scd_b1_star -c "INSERT INTO public.sessions (id) VALUES ('00000000-0000-0000-0000-0000000000e5')"

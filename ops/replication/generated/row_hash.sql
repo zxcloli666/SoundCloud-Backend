@@ -139,7 +139,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.account_walk_locked_at, t.aggregates_updated_at, t.album_count_denorm, t.avatar_url, t.bio, t.confidence, t.country, t.crawl_attempts, t.crawl_dead, t.crawl_fail_count, t.created_at, t.genius_artist_id, t.genius_crawl_offset, t.genius_crawled_at, t.genius_locked_at, t.genius_next_run_at, t.has_sc_account, t.id, t.interest_score, t.is_star, t.isni, t.last_account_walk_at, t.last_crawled_at, t.mb_artist_id, t.mb_crawl_offset, t.mb_crawled_at, t.mb_locked_at, t.mb_next_run_at, t.merged_into, t.monthly_listeners, t.name, t.normalized_name, t.popularity_score, t.sc_user_id, t.source, t.spotify_artist_id, t.star_aura_id, t.star_custom_hex, t.tags, t.track_count_featured, t.track_count_primary, t.trending_score, t.updated_at)::text) FROM public.artists t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.account_walk_locked_at, t.aggregates_updated_at, t.album_count_denorm, t.avatar_url, t.bio, t.confidence, t.country, t.crawl_attempts, t.crawl_dead, t.crawl_fail_count, t.created_at, t.genius_artist_id, t.genius_crawl_offset, t.genius_crawled_at, t.genius_locked_at, t.genius_next_run_at, t.id, t.interest_score, t.is_star, t.isni, t.last_account_walk_at, t.last_crawled_at, t.mb_artist_id, t.mb_crawl_offset, t.mb_crawled_at, t.mb_locked_at, t.mb_next_run_at, t.merged_into, t.monthly_listeners, t.name, t.normalized_name, t.popularity_score, t.sc_user_id, t.source, t.spotify_artist_id, t.star_aura_id, t.star_custom_hex, t.tags, t.track_count_featured, t.track_count_primary, t.trending_score, t.updated_at)::text) FROM public.artists t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_audio_index_wire_state(k jsonb)
@@ -487,7 +487,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.content_generation, t.content_hash, t.created_at, t.embedded_at, t.embedding_state, t.fts, t.language, t.language_confidence, t.plain_source, t.plain_text, t.sc_track_id, t.source, t.synced_lrc, t.synced_source, t.synced_version, t.track_id, t.updated_at)::text) FROM public.lyrics_cache t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+SELECT md5(ROW(t.content_generation, t.content_hash, t.created_at, t.embedded_at, t.embedding_state, t.language, t.language_confidence, t.plain_source, t.plain_text, t.sc_track_id, t.source, t.synced_lrc, t.synced_source, t.synced_version, t.track_id, t.updated_at)::text) FROM public.lyrics_cache t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_embedding_wire_state(k jsonb)
@@ -751,7 +751,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.at, t.pk, t.tbl, t.v)::text) FROM public.repl_tombstones t WHERE t.tbl = (k ->> 'tbl')::text AND t.pk = (k ->> 'pk')::jsonb
+SELECT md5(ROW(t.at, t.pk, t.tbl, t.v)::text) FROM public.repl_tombstones t WHERE t.tbl = (k ->> 'tbl')::text AND t.pk = (k ->> 'pk')::jsonb AND t.v = (k ->> 'v')::bigint
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_sc_egress_health(k jsonb)

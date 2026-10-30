@@ -751,7 +751,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.repl_tombstones t WHERE t.tbl = (k ->> 'tbl')::text AND t.pk = (k ->> 'pk')::jsonb
+SELECT pg_catalog.to_jsonb(t) FROM public.repl_tombstones t WHERE t.tbl = (k ->> 'tbl')::text AND t.pk = (k ->> 'pk')::jsonb AND t.v = (k ->> 'v')::bigint
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_sc_egress_health(k jsonb)

@@ -1,9 +1,10 @@
 from sqlbits import assign, function, indent, keys_tuple, index_pred, lit, pk_json, pk_match, q, ref, refs, same, table, tup
 
 GENERATED = (
-    "zz_erase", "zz_fk", "zz_guard", "zz_guard_intent", "zz_guard_result", "zz_max", "zz_merge", "zz_orphan",
+    "zz_core_col", "zz_erase", "zz_fk", "zz_guard", "zz_guard_intent", "zz_guard_result", "zz_max", "zz_merge", "zz_orphan",
     "zz_owner", "zz_purge_guard", "zz_skip", "zz_tomb", "zz_tomb_check", "zz_tomb_guard", "zz_ver", "zzz_suppress",
 )
+RETIRED = ("public.scd_merge_repl_tombstones()",)
 SPLIT = "public.scd_mode() = 'split'"
 API = "public.scd_role() = 'api'"
 CORE = "public.scd_role() = 'core'"
@@ -44,6 +45,8 @@ def table_triggers(model, t):
                          ["cmd", "migration", "repl"], "guard"))
     if t.cls == "C":
         out.append(owner(t))
+    if t.cls == "C" and t.core_cols:
+        out.append(core_col(t))
     if t.cls == "M":
         intent = t.group_cols(("api",))
         result = t.group_cols(("core",))
@@ -57,15 +60,15 @@ def table_triggers(model, t):
     if t.cls in ("M", "A") and t.versioned:
         out.append(ver(t))
         out.append(merge(t))
-    if t.cls == "A" and t.insert_only:
+    if t.name == "repl_tombstones":
+        out += [stamp(t), erase(model, t)]
+    elif t.cls == "A" and t.insert_only:
         out.append(skip(t))
     if t.cls == "A" and t.delete == "tombstone":
         out.append(tomb(t))
         out.append(tomb_check(t))
         if lww(t):
             out.append(tomb_guard(t))
-    if t.name == "repl_tombstones":
-        out.append(erase(model, t))
     if t.cls == "K":
         out.append(register(t))
     if t in model.fk_parents():
@@ -123,7 +126,7 @@ def ver(t):
     for gname, g in groups:
         prev = "NEW." + q(g["version"])
         if lww(t) and g["version"] == row_version(t):
-            prev = "greatest(%s, (SELECT x.v FROM public.repl_tombstones x WHERE x.tbl = %s AND x.pk = %s))" % (prev, lit(t.name), pk_json("NEW", t.pk))
+            prev = "greatest(%s, %s)" % (prev, newest_tomb(lit(t.name), pk_json("NEW", t.pk)))
         bump = "        NEW.%s := public.scd_hlc(%s);" % (q(g["version"]), prev)
         cond = owns(g["owner"])
         if cond:
@@ -175,10 +178,9 @@ def merge(t):
         lines += ["        IF core THEN"]
         lines += ["            NEW.%s := OLD.%s;" % (q(c), q(c)) for c in core_cols]
         lines += ["        END IF;"]
-    lines += indent(erase_unchanged(t, "OLD"), 2)
     lines += ["        RETURN NEW;", "    END IF;"]
     body = ["SELECT t.* INTO o FROM %s t WHERE %s;" % (table(t.name), same("t", "NEW", t.pk)), "IF FOUND THEN"]
-    body += indent(merge_into(t) + erase_unchanged(t, "o"))
+    body += indent(merge_into(t))
     body += ["    RETURN NULL;", "END IF;"]
     seqs = []
     for name, how in sorted(t.unique_decl.items()):
@@ -311,13 +313,16 @@ def tomb_tables(model):
     return [x for x in model.installed() if x.cls == "A" and x.delete == "tombstone" and (x.exists or x.spec.get("columns"))]
 
 
+def newest_tomb(tbl, key):
+    return "(SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = %s AND x.pk = %s)" % (tbl, key)
+
+
 def tomb(t):
     v = row_version(t)
     body = "\n".join([
         "BEGIN",
         "    INSERT INTO public.repl_tombstones (tbl, pk, v, at)",
-        "    VALUES (%s, %s, %s, now())" % (lit(t.name), pk_json("OLD", t.pk), "OLD." + q(v) if v else "0"),
-        "    ON CONFLICT (tbl, pk) DO UPDATE SET v = EXCLUDED.v, at = EXCLUDED.at;",
+        "    VALUES (%s, %s, %s, now());" % (lit(t.name), pk_json("OLD", t.pk), "OLD." + q(v) if v else "0"),
         "    RETURN OLD;",
         "END",
     ])
@@ -345,12 +350,12 @@ def erase_rows(t):
 
 def tomb_block(t):
     key = pk_json("NEW", t.pk)
-    lines = ["SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = %s AND x.pk = %s;" % (lit(t.name), key)]
+    lines = ["tv := %s;" % newest_tomb(lit(t.name), key)]
     if not lww(t):
-        return lines + ["IF FOUND THEN", "    RETURN NULL;", "END IF;"], []
+        return lines + ["IF tv IS NOT NULL THEN", "    RETURN NULL;", "END IF;"], []
     seq = "scd_resend_" + t.name
-    lines += ["IF FOUND AND NEW.%s <= tv THEN" % q(row_version(t))]
-    lines += indent(resend("'repl_tombstones'", "jsonb_build_object('tbl', %s, 'pk', %s)" % (lit(t.name), key), seq))
+    lines += ["IF tv IS NOT NULL AND NEW.%s <= tv THEN" % q(row_version(t))]
+    lines += indent(resend("'repl_tombstones'", "jsonb_build_object('tbl', %s, 'pk', %s, 'v', tv)" % (lit(t.name), key), seq))
     lines += ["    RETURN NULL;", "END IF;"]
     return lines, [("resend", t.name, seq)]
 
@@ -373,8 +378,8 @@ def tomb_guard(t):
         "    IF current_setting('scd.merging', true) = 'on' THEN",
         "        RETURN OLD;",
         "    END IF;",
-        "    SELECT x.v INTO tv FROM public.repl_tombstones x WHERE x.tbl = %s AND x.pk = %s;" % (lit(t.name), key),
-        "    IF NOT FOUND OR OLD.%s <= tv THEN" % q(row_version(t)),
+        "    tv := %s;" % newest_tomb(lit(t.name), key),
+        "    IF tv IS NULL OR OLD.%s <= tv THEN" % q(row_version(t)),
         "        RETURN OLD;",
         "    END IF;",
     ]
@@ -384,22 +389,50 @@ def tomb_guard(t):
     return "zz_tomb_guard", sql, [("resend", t.name, seq)]
 
 
+def stamp(t):
+    body = "\n".join([
+        "BEGIN",
+        "    IF TG_OP = 'UPDATE' THEN",
+        "        RAISE EXCEPTION 'scd: %s rows are immutable, a delete adds a row' USING ERRCODE = 'feature_not_supported'," % table(t.name),
+        "            HINT = 'to send tombstones again run public.scd_resend_all() and drain with public.scd_drain_resend()';",
+        "    END IF;",
+        "    NEW.v := public.scd_hlc(greatest(NEW.v, %s));" % newest_tomb("NEW.tbl", "NEW.pk"),
+        "    RETURN NEW;",
+        "END",
+    ])
+    sql = function(fn_name("ver", t), body)
+    sql += trigger(t, "zz_ver", "BEFORE INSERT OR UPDATE", fn_name("ver", t) + "()")
+    return "zz_ver", sql, []
+
+
 def erase(model, t):
+    tables = tomb_tables(model)
+    locks = ["BEGIN", "    CASE tbl"]
+    for x in tables:
+        locks += ["        WHEN %s THEN" % lit(x.name), "            PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(x.name), pk_match("t", x))]
+    locks += ["        ELSE", "            NULL;", "    END CASE;", "END"]
+    sql = function("public.scd_tomb_lock", "\n".join(locks), "void", "plpgsql", "tbl text, k jsonb")
     lines = ["BEGIN", "    CASE tbl"]
-    for x in tomb_tables(model):
+    for x in tables:
         lines += ["        WHEN %s THEN" % lit(x.name), "            PERFORM %s(k, upto);" % fn_name("erase", x)]
     lines += ["        ELSE", "            NULL;", "    END CASE;", "END"]
-    sql = function("public.scd_erase", "\n".join(lines), "void", "plpgsql", "tbl text, k jsonb, upto bigint")
-    body = "\n".join(["BEGIN", "    PERFORM public.scd_erase(NEW.tbl, NEW.pk, NEW.v);", "    RETURN NULL;", "END"])
+    sql += function("public.scd_erase", "\n".join(lines), "void", "plpgsql", "tbl text, k jsonb, upto bigint")
+    body = "\n".join([
+        "BEGIN",
+        "    IF current_setting('scd.merging', true) = 'on' THEN",
+        "        RETURN NEW;",
+        "    END IF;",
+        "    PERFORM public.scd_tomb_lock(NEW.tbl, NEW.pk);",
+        "    PERFORM pg_catalog.set_config('scd.merging', 'on', true);",
+        "    INSERT INTO %s (tbl, pk, v, at) VALUES (NEW.tbl, NEW.pk, NEW.v, NEW.at) ON CONFLICT DO NOTHING;" % table(t.name),
+        "    PERFORM pg_catalog.set_config('scd.merging', '', true);",
+        "    PERFORM public.scd_erase(NEW.tbl, NEW.pk, NEW.v);",
+        "    RETURN NULL;",
+        "END",
+    ])
     sql += function(fn_name("erase", t), body)
-    sql += trigger(t, "zz_erase", "AFTER INSERT OR UPDATE", fn_name("erase", t) + "()", SPLIT, replica=True)
+    sql += trigger(t, "zz_erase", "BEFORE INSERT OR UPDATE", fn_name("erase", t) + "()", SPLIT, replica=True)
     return "zz_erase", sql, []
-
-
-def erase_unchanged(t, stored):
-    if t.name != "repl_tombstones":
-        return []
-    return ["IF NEW.v <= %s.v THEN" % stored, "    PERFORM public.scd_erase(NEW.tbl, NEW.pk, %s.v);" % stored, "END IF;"]
 
 
 def owner_purges(t, keys, flag):
@@ -421,15 +454,52 @@ def owner_purges(t, keys, flag):
     return lines
 
 
-def owner(t):
-    keys = list(t.uniques)
-    cols = [c for c in t.replicated if c not in t.pk]
-    pending = [
+def pending(t, carry):
+    return [
         "IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = %s AND p.pk = %s) THEN" % (lit(t.name), pk_json("NEW", t.pk)),
+    ] + indent(carry) + [
         "    RETURN NULL;",
         "END IF;",
     ]
-    lines = ["DECLARE", "    r record;", "    n bigint;"]
+
+
+def carry_updated(t):
+    if not t.core_cols:
+        return []
+    kept = [c for c in t.replicated if c not in t.pk and c not in t.core_cols]
+    return [
+        "IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", t.core_cols), tup("OLD", t.core_cols)),
+    ] + ["    NEW.%s := OLD.%s;" % (q(c), q(c)) for c in kept] + [
+        "    RETURN NEW;",
+        "END IF;",
+    ]
+
+
+def carry_inserted(t):
+    if not t.core_cols:
+        return []
+    return [
+        "PERFORM pg_catalog.set_config('scd.merging', 'on', true);",
+        "UPDATE %s t SET %s WHERE %s AND %s IS DISTINCT FROM %s;" % (
+            table(t.name), assign(t.core_cols, "NEW"), same("t", "NEW", t.pk), tup("t", t.core_cols), tup("NEW", t.core_cols)),
+        "PERFORM pg_catalog.set_config('scd.merging', '', true);",
+    ]
+
+
+def core_col(t):
+    seq = "scd_core_col_" + t.name
+    lines = ["BEGIN", "    IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", t.core_cols), tup("OLD", t.core_cols))]
+    lines += ["        NEW.%s := OLD.%s;" % (q(c), q(c)) for c in t.core_cols]
+    lines += ["        PERFORM nextval('public.%s'::regclass);" % seq, "    END IF;", "    RETURN NEW;", "END"]
+    sql = function(fn_name("core_col", t), "\n".join(lines))
+    sql += trigger(t, "zz_core_col", "BEFORE UPDATE OF " + ", ".join(q(c) for c in t.core_cols), fn_name("core_col", t) + "()", API + " AND " + SPLIT)
+    return "zz_core_col", sql, [("core_col", t.name, seq)]
+
+
+def owner(t):
+    keys = list(t.uniques)
+    cols = [c for c in t.replicated if c not in t.pk]
+    lines = ["DECLARE", "    r record;", "    n bigint;", "    held boolean;"]
     lines += ["    k%d boolean;" % i for i in range(len(keys))]
     lines += [
         "BEGIN",
@@ -438,17 +508,17 @@ def owner(t):
         "    END IF;",
         "    IF TG_OP = 'UPDATE' THEN",
     ]
-    lines += indent(pending, 2)
+    lines += indent(pending(t, carry_updated(t)), 2)
     for i, u in enumerate(keys):
         lines.append("        k%d := %s IS DISTINCT FROM %s;" % (i, keys_tuple(u, t.columns, "NEW", True), keys_tuple(u, t.columns, "OLD", True)))
     lines += indent(owner_purges(t, keys, True), 2)
     lines += ["        RETURN NEW;", "    END IF;"]
-    body = ["PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(t.name), same("t", "NEW", t.pk))] + pending
+    body = ["PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(t.name), same("t", "NEW", t.pk)), "held := FOUND;"]
+    body += pending(t, carry_inserted(t))
     body += owner_purges(t, keys, False)
+    body += ["IF held THEN"]
     if cols:
-        body += ["UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(cols, "NEW"), same("t", "NEW", t.pk)), "IF FOUND THEN"]
-    else:
-        body += ["IF EXISTS (SELECT 1 FROM %s t WHERE %s) THEN" % (table(t.name), same("t", "NEW", t.pk))]
+        body += ["    UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(cols, "NEW"), same("t", "NEW", t.pk))]
     body += ["    RETURN NULL;", "END IF;"] + insert_self(t)
     lines += ["    FOR attempt IN 1..3 LOOP"] + indent(body, 2) + ["    END LOOP;"]
     lines += indent(give_up(t)) + ["END"]
@@ -601,5 +671,4 @@ def drop_stale(expected):
         "    END LOOP;",
         "END",
         "$d$;",
-        "",
-    ])
+    ] + ["DROP FUNCTION IF EXISTS %s;" % f for f in RETIRED] + [""])
