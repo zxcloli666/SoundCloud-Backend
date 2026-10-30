@@ -95,10 +95,12 @@ fn config(redis: &str) -> AppConfig {
         },
         nats: NatsCfg {
             url: "nats://127.0.0.1:1".to_owned(),
+            tls: None,
         },
         qdrant: QdrantCfg {
             grpc_url: "http://127.0.0.1:1".to_owned(),
             api_key: String::new().into(),
+            tls: None,
         },
         storage: StorageCfg { url: String::new() },
         subscriptions: SubscriptionsCfg {

@@ -938,6 +938,12 @@ fn connection(
         .name(format!("scd-jobs:{instance_id}"))
         .max_reconnects(None)
         .retry_on_initial_connect();
+    if let Some(tls) = tls_common::ClientIdentity::from_env("NATS") {
+        options = options
+            .require_tls(true)
+            .add_root_certificates(tls.ca)
+            .add_client_certificate(tls.cert, tls.key);
+    }
     if let Some(username) = username {
         options = options.user_and_password(username, password);
     }

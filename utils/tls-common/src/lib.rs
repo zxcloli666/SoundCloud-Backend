@@ -1,6 +1,7 @@
 mod acceptor;
 mod acme;
 mod config;
+mod mtls;
 pub mod probe;
 mod proxy;
 mod redirect;
@@ -9,6 +10,7 @@ mod shutdown;
 
 pub use acme::{acme_acceptor, AcmeAcceptor, AcmeParams, TlsStream};
 pub use config::{ProxyProtocolConfig, TlsConfig};
+pub use mtls::{tunnel_url, ClientIdentity};
 pub use serve::{serve, serve_http};
 pub use shutdown::shutdown_signal;
 
