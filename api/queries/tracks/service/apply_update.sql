@@ -1,5 +1,5 @@
 WITH observation AS MATERIALIZED (
-    SELECT nextval('catalog_metadata_clock') AS sequence
+    SELECT public.scd_clock() AS sequence
 )
 UPDATE tracks AS track
 SET title = CASE WHEN $3::jsonb ? 'title' THEN $3->>'title' ELSE track.title END,

@@ -1,5 +1,5 @@
 WITH observation AS MATERIALIZED (
-    SELECT nextval('catalog_metadata_clock') AS sequence
+    SELECT public.scd_clock() AS sequence
 )
 UPDATE playlists AS playlist
 SET sharing = 'private', sc_desired = '{}',

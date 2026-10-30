@@ -1,6 +1,7 @@
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
+use wt::MatchScAccount;
 
 const VERIFIED_IDENTITY_INDEX: &str = "artist_sc_accounts_verified_identity_uq";
 
@@ -46,24 +47,20 @@ pub async fn upsert_account(
     if sc_user_id.is_empty() {
         return Ok(());
     }
-    sqlx::query_file!(
-        "queries/upsert_account.sql",
+    let upsert = MatchScAccount::Upsert {
         artist_id,
-        sc_user_id,
-        role.as_str(),
-        source,
-        verified
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query_file!(
-        "queries/backfill_artist_sc_user_id.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
+        sc_user_id: sc_user_id.to_owned(),
+        role: role.as_str().to_owned(),
+        source: source.to_owned(),
+        verified,
+        at: wt::now(),
+    };
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        wt::call(&mut transaction, &upsert).await?;
+        transaction.commit().await
+    })
+    .await
 }
 
 pub async fn delete_account(
@@ -71,10 +68,17 @@ pub async fn delete_account(
     artist_id: Uuid,
     sc_user_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let deleted = sqlx::query_file!("queries/delete_account.sql", artist_id, sc_user_id)
-        .execute(pool)
-        .await?;
-    Ok(deleted.rows_affected() > 0)
+    let delete = MatchScAccount::Delete {
+        artist_id,
+        sc_user_id: sc_user_id.to_owned(),
+    };
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let deleted = wt::call(&mut transaction, &delete).await?;
+        transaction.commit().await?;
+        Ok(deleted)
+    })
+    .await
 }
 
 pub fn claims_another_artist(error: &sqlx::Error) -> bool {

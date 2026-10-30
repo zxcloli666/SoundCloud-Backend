@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
+use wt::{Mode, ObservePlaylists};
 
 use crate::Observation;
 use crate::release_date;
@@ -12,10 +13,13 @@ pub async fn upsert_playlist_from_sc(
     payload: &Value,
     observation: Observation,
 ) -> Result<bool, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let inserted = upsert_playlist_in(&mut transaction, payload, observation).await?;
-    transaction.commit().await?;
-    Ok(inserted)
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let inserted = upsert_playlist_in(&mut transaction, payload, observation).await?;
+        transaction.commit().await?;
+        Ok(inserted)
+    })
+    .await
 }
 
 pub async fn upsert_playlist_in(
@@ -23,75 +27,56 @@ pub async fn upsert_playlist_in(
     payload: &Value,
     observation: Observation,
 ) -> Result<bool, sqlx::Error> {
+    upsert_playlist_at(connection, payload, observation, wt::now()).await
+}
+
+pub(crate) async fn upsert_playlist_at(
+    connection: &mut PgConnection,
+    payload: &Value,
+    observation: Observation,
+    observed_at: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
     let payload = &without_nul(payload);
     let Some(fields) = ScPlaylistFields::from_sc(payload) else {
         return Ok(false);
     };
-    sqlx::query_file_scalar!("queries/playlists/lock_membership.sql", &fields.urn)
-        .fetch_optional(&mut **connection)
-        .await?;
-    let row = sqlx::query_file!(
-        "queries/playlists/upsert.sql",
-        &fields.urn,
-        &fields.sc_playlist_id,
-        &fields.title,
-        &fields.title_normalized,
-        fields.description.as_deref(),
-        fields.genre.as_deref(),
-        &fields.tags,
-        fields.artwork_url.as_deref(),
-        fields.permalink_url.as_deref(),
-        fields.owner_sc_user_id.as_deref(),
-        fields.owner_urn.as_deref(),
-        fields.owner_username.as_deref(),
-        fields.track_count,
-        fields.duration_ms,
-        fields.playlist_type.as_deref(),
-        fields.kind.as_deref(),
-        &fields.sharing,
-        fields.release_year,
-        fields.release_date,
-        fields.label_name.as_deref(),
-        fields.likes_count_sc,
-        fields.reposts_count_sc,
-        fields.sc_created_at,
-        fields.sc_last_modified,
-        observation.sequence(),
-        &crate::playlist_metadata::metadata_from_sc(payload)
-    )
-    .fetch_optional(&mut **connection)
-    .await?;
-    sqlx::query_file!("queries/playlists/ensure_membership_state.sql", &fields.urn)
-        .execute(&mut **connection)
-        .await?;
-    Ok(row.map(|r| r.was_new).unwrap_or(false))
+    let upsert = ObservePlaylists {
+        mode: Mode::Upsert,
+        observed_at,
+        observation: observation.sequence(),
+        rows: vec![fields.row(payload)],
+    };
+    Ok(wt::call(connection, &upsert)
+        .await?
+        .first()
+        .is_some_and(|playlist| playlist.was_new))
 }
 
 pub(crate) struct ScPlaylistFields {
-    urn: String,
-    sc_playlist_id: String,
-    title: String,
-    title_normalized: String,
-    description: Option<String>,
-    genre: Option<String>,
-    tags: Vec<String>,
-    artwork_url: Option<String>,
-    permalink_url: Option<String>,
-    owner_sc_user_id: Option<String>,
-    owner_urn: Option<String>,
-    owner_username: Option<String>,
-    track_count: i32,
-    duration_ms: Option<i64>,
-    playlist_type: Option<String>,
-    kind: Option<String>,
-    sharing: String,
-    release_year: Option<i16>,
-    release_date: Option<NaiveDate>,
-    label_name: Option<String>,
-    likes_count_sc: Option<i64>,
-    reposts_count_sc: Option<i64>,
-    sc_created_at: Option<DateTime<Utc>>,
-    sc_last_modified: Option<DateTime<Utc>>,
+    pub(crate) urn: String,
+    pub(crate) sc_playlist_id: String,
+    pub(crate) title: String,
+    pub(crate) title_normalized: String,
+    pub(crate) description: Option<String>,
+    pub(crate) genre: Option<String>,
+    pub(crate) tags: Vec<String>,
+    pub(crate) artwork_url: Option<String>,
+    pub(crate) permalink_url: Option<String>,
+    pub(crate) owner_sc_user_id: Option<String>,
+    pub(crate) owner_urn: Option<String>,
+    pub(crate) owner_username: Option<String>,
+    pub(crate) track_count: i32,
+    pub(crate) duration_ms: Option<i64>,
+    pub(crate) playlist_type: Option<String>,
+    pub(crate) kind: Option<String>,
+    pub(crate) sharing: String,
+    pub(crate) release_year: Option<i16>,
+    pub(crate) release_date: Option<NaiveDate>,
+    pub(crate) label_name: Option<String>,
+    pub(crate) likes_count_sc: Option<i64>,
+    pub(crate) reposts_count_sc: Option<i64>,
+    pub(crate) sc_created_at: Option<DateTime<Utc>>,
+    pub(crate) sc_last_modified: Option<DateTime<Utc>>,
 }
 
 impl ScPlaylistFields {

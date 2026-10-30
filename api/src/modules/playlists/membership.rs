@@ -231,12 +231,11 @@ mod tests {
     const PLAYLIST: &str = "soundcloud:playlists:42";
     const OWNER: &str = "17";
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn observation_enqueue_is_throttled_and_count_mismatch_breaks_the_throttle(
         pool: PgPool,
     ) -> anyhow::Result<()> {
-        test_schema::install(&pool).await?;
-        test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
+        test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
         sqlx::query("UPDATE playlist_membership_state SET next_reconcile_at = now()")
             .execute(&pool)
             .await?;
@@ -244,15 +243,10 @@ mod tests {
         assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_some());
         assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_none());
 
-        sqlx::query("UPDATE playlists SET track_count = 3")
-            .execute(&pool)
-            .await?;
-        sqlx::query_file!(
-            "../utils/catalog-ingest/queries/playlists/ensure_membership_state.sql",
-            PLAYLIST
-        )
-        .execute(&pool)
-        .await?;
+        test_schema::observe(&pool, PLAYLIST, OWNER, 2).await?;
+        assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_none());
+
+        test_schema::observe(&pool, PLAYLIST, OWNER, 3).await?;
         assert!(claim_observation_enqueue(&pool, PLAYLIST).await?.is_some());
         Ok(())
     }
