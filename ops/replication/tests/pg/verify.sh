@@ -31,16 +31,24 @@ only_on() {
   val "scd_b1_$1" "SELECT count(*) FROM public.$2 WHERE $3"
 }
 
+reach() {
+  local c out
+  mk=$((mk + 1)); c="$(printf '%04x' "$mk")"
+  mark core "$c"
+  out="$(for n in main star; do wait_for "scd_b1_$n" "SELECT EXISTS (SELECT 1 FROM public.user_events WHERE id = '00000000-0000-0000-0000-00000000$c')" "$n applied core's stream"; done)" || { echo "$out"; exit 1; }
+}
+
 verify_cycle() {
   local dry="$1" out="$2" round rep
   : > "$out"
+  : > "$out.recheck"
   val scd_b1_core "SELECT state || ' ' || probes || ' ' || wrapped FROM public.scd_verify_probe(100000, ${3:-500})" > "$tmp/probe.out"
   for round in 1 2 3 4 5 6 7 8 9 10; do
     calm
     sweep_all > /dev/null
     calm
     rep="$(val scd_b1_core "SELECT peer || ' ' || rel || ' ' || coalesce(k::text, '-') || ' ' || action || ' ' || attempt FROM public.scd_verify_repair($dry, 1000)")"
-    [ -n "$rep" ] && printf '%s\n' "$rep" >> "$out"
+    [ -n "$rep" ] && printf '%s\n' "$rep" | awk -v out="$out" '$(NF-1) == "recheck" {print >> (out ".recheck"); next} {print >> out}'
     if [ -z "$rep" ] && [ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node <> 'core'")" = 0 ] \
       && [ "$(val scd_b1_main "SELECT count(*) FROM public.repl_resend")" = 0 ] && [ "$(val scd_b1_star "SELECT count(*) FROM public.repl_resend")" = 0 ]; then
       return 0
@@ -111,6 +119,7 @@ for n in main star; do
   [ -z "$d" ] && echo "ok core and $n agree on every verified table" || { echo "FAIL core and $n differ: $d"; exit 1; }
 done
 probe_sent="$(val scd_b1_core "SELECT state || ' ' || probes || ' ' || wrapped FROM public.scd_verify_probe(100000, 500)")"
+reach
 calm
 sweep_all > /dev/null
 calm
@@ -132,6 +141,10 @@ calm
 vm_v="$(val scd_b1_core "SELECT string_agg(user_id || '=' || wanted_v, ' ' ORDER BY user_id) FROM public.user_likes_tracks WHERE user_id IN ('vm1', 'vm2') AND NOT wanted_state")"
 case "$vm_v" in "vm1="*" vm2="*) ;; *) echo "FAIL core did not see both unlikes: $vm_v"; exit 1 ;; esac
 pause main main_from_core
+dislike star ct1 1
+wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'ct1')" "core has star's row of the gap"
+dislike main ct1 2
+wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'ct1' AND track_data ->> 'v' = '2')" "core merges main's insert of the same key, main never saw star's"
 sql -d scd_b1_core -c "DELETE FROM public.artists WHERE id IN ('$(art 1)', '$(art 4)')" \
   -c "UPDATE public.artists SET name = 'Gap 2 renamed' WHERE id = '$(art 2)'" \
   -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('$(art 5)', 'Gap 5', 'gap5', 'sc')" \
@@ -153,6 +166,9 @@ swept
 expect "scd_resend_all heals the C update of the gap" "SELECT coalesce(max(name), 'none') FROM public.artists WHERE id = '$(art 2)'" "Gap 2 renamed"
 expect "scd_resend_all heals the C insert of the gap" "SELECT count(*) FROM public.artists WHERE id = '$(art 5)'" 1
 expect "scd_resend_all heals the A tombstone of the gap" "$(seen vt1)" none
+ct="$(val scd_b1_core "SELECT extract(epoch FROM created_at)::text FROM public.disliked_tracks WHERE sc_user_id = 'ct1'")"
+expect "scd_resend_all heals created_at of a key main inserted again in the gap (least of the same version)" \
+  "SELECT extract(epoch FROM created_at)::text || '/' || (track_data ->> 'v') FROM public.disliked_tracks WHERE sc_user_id = 'ct1'" "$ct/2"
 before="artists $(only_on main artists "id IN ('$(art 1)', '$(art 4)')"), user_likes_tracks $(only_on main user_likes_tracks "user_id IN ('vm1', 'vm2')"), diag_events $(only_on main diag_events "id = '00000000-0000-0000-0000-0000000013d1'"), drift $(drift main)"
 [ "$before" = "artists 2, user_likes_tracks 2, diag_events 1, drift artists diag_events user_likes_tracks" ] \
   && echo "ok without repair main keeps what core removed in the gap: $before" \
@@ -203,6 +219,19 @@ resume core core_from_main
 verify_cycle false "$tmp/verify.flight"
 grep -q "13d2" "$tmp/verify.flight" && { echo "FAIL the in-flight row was acted on"; cat "$tmp/verify.flight"; failed=$((failed + 1)); } || echo "ok the answer comes after the row, core has it and does nothing"
 expect "the in-flight row lives on every node" "SELECT count(*) FROM public.diag_events WHERE id = '00000000-0000-0000-0000-0000000013d2'" 1
+
+say "B13 verify: a row core writes after its probe is not repaired against the api's older chunk"
+pause main main_from_core
+val scd_b1_core "SELECT probes FROM public.scd_verify_probe(100000, 500)" > /dev/null
+sql -d scd_b1_core -c "INSERT INTO public.diag_events (id, app_version, body, fingerprint, install, kind, os, title) VALUES ('00000000-0000-0000-0000-0000000013d3', '1', '{}', 'fp', 'in', 'k', 'os', 'after the probe')"
+sql -d scd_b1_main -c "INSERT INTO public.diag_events (id, app_version, body, fingerprint, install, kind, os, title) VALUES ('00000000-0000-0000-0000-0000000013d4', '1', '{}', 'fp', 'in', 'k', 'os', 'local')"
+resume main main_from_core
+wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.repl_resend WHERE tbl = 'repl_checksums')" "main answers: its chunk holds its own new row, core's probe does not"
+verify_cycle false "$tmp/verify.late"
+grep -q diag_events "$tmp/verify.late.recheck" && echo "ok core compares the differing chunk key by key at a new point of its stream" \
+  || { echo "FAIL no key-by-key compare of diag_events"; cat "$tmp/verify.late.recheck"; failed=$((failed + 1)); }
+[ -s "$tmp/verify.late" ] && { echo "FAIL rows written after the probe were repaired"; cat "$tmp/verify.late"; failed=$((failed + 1)); } || echo "ok nothing repaired: core's newer row and main's in-flight row are equal at the second compare"
+expect "both rows live on every node" "SELECT count(*) FROM public.diag_events WHERE id IN ('00000000-0000-0000-0000-0000000013d3', '00000000-0000-0000-0000-0000000013d4')" 2
 
 say "B13 verify: an api node still on the 0202 applier ignores verify ops (rollout order)"
 newdef="$(val scd_b1_star "SELECT pg_get_functiondef('public.scd_on_repl_repair()'::regprocedure)")"

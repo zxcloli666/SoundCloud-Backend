@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub const LAST_ATTEMPT: i32 = 3;
 
@@ -59,6 +59,10 @@ impl Repair {
 
     pub fn unresolved(&self) -> bool {
         self.attempt >= LAST_ATTEMPT
+    }
+
+    pub fn recheck(&self) -> bool {
+        self.action == "recheck"
     }
 }
 
@@ -142,6 +146,12 @@ impl Verifier {
 
 fn report(repair: &Repair, dry: bool) {
     let key = repair.k.as_deref().unwrap_or("-");
+    if repair.recheck() {
+        metrics::counter!("scd_repl_verify_rechecks_total", "peer" => repair.peer.clone(), "tbl" => repair.rel.clone())
+            .increment(1);
+        debug!(peer = %repair.peer, tbl = %repair.rel, range = key, "scd verify: a chunk differs, comparing it key by key");
+        return;
+    }
     let action = if repair.failed() {
         "error"
     } else {

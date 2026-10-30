@@ -106,6 +106,7 @@ async fn verify_cycle(pool: &PgPool, dry: bool) -> Result<(), sqlx::Error> {
     println!("probed every table: {probes} chunks");
     let mut quiet = 0;
     let mut repairs = 0;
+    let mut rechecks = 0;
     while quiet < QUIET_POLLS {
         tokio::time::sleep(POLL).await;
         let rows = repair_once(pool, dry, 1000).await?;
@@ -115,6 +116,10 @@ async fn verify_cycle(pool: &PgPool, dry: bool) -> Result<(), sqlx::Error> {
         }
         quiet = 0;
         for row in rows {
+            if row.recheck() {
+                rechecks += 1;
+                continue;
+            }
             repairs += 1;
             println!(
                 "{}\t{}\t{}\t{}\t{}{}",
@@ -128,7 +133,7 @@ async fn verify_cycle(pool: &PgPool, dry: bool) -> Result<(), sqlx::Error> {
         }
     }
     println!(
-        "{repairs} {} after {} quiet seconds",
+        "{repairs} {} after {} quiet seconds, {rechecks} chunks compared key by key",
         if dry { "differences" } else { "repairs" },
         QUIET_POLLS * POLL.as_secs() as u32
     );

@@ -162,7 +162,7 @@ BEGIN
         hi := public.scd_verify_next(walk, lo, size);
         SELECT * INTO c FROM public.scd_verify_chunk(walk, lo, hi, shown);
         PERFORM public.scd_verify_send(walk, jsonb_build_object('lo', lo, 'hi', hi),
-            jsonb_build_object('scd_op', 'probe', 'n', c.n, 'h', c.h, 'attempt', 1, 'cols', to_jsonb(shown)));
+            jsonb_build_object('scd_op', 'probe', 'n', c.n, 'h', c.h, 'attempt', 0, 'cols', to_jsonb(shown)));
         probes := probes + 1;
         IF hi IS NOT NULL THEN
             lo := hi;
@@ -187,18 +187,27 @@ SET search_path = public, pg_catalog
 AS $f$
 DECLARE
     c record;
+    diff jsonb;
 BEGIN
     IF EXISTS (SELECT 1 FROM public.repl_resend x WHERE (CASE WHEN x.tbl = 'repl_tombstones' THEN x.pk ->> 'tbl' ELSE x.tbl END) = rel) THEN
         RETURN;
     END IF;
     SELECT * INTO c FROM public.scd_verify_chunk(rel, nullif(k -> 'lo', 'null'), nullif(k -> 'hi', 'null'),
         ARRAY(SELECT jsonb_array_elements_text(op -> 'cols')));
-    IF c.n = (op ->> 'n')::bigint AND c.h = op ->> 'h' THEN
+    IF jsonb_typeof(op -> 'keys') = 'object' THEN
+        diff := (SELECT jsonb_object_agg(coalesce(m.key, t.key), m.value)
+                 FROM jsonb_each_text(c.keys) m
+                 FULL JOIN jsonb_each_text(op -> 'keys') t ON t.key = m.key
+                 WHERE m.value IS DISTINCT FROM t.value);
+        IF diff IS NULL THEN
+            RETURN;
+        END IF;
+    ELSIF c.n = (op ->> 'n')::bigint AND c.h = op ->> 'h' THEN
         RETURN;
     END IF;
     INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
     VALUES (public.scd_node(), rel, probe::text,
-        jsonb_build_object('lo', k -> 'lo', 'hi', k -> 'hi', 'attempt', op -> 'attempt', 'n', c.n, 'keys', c.keys)::text, now())
+        jsonb_build_object('lo', k -> 'lo', 'hi', k -> 'hi', 'attempt', op -> 'attempt', 'n', c.n, 'keys', diff)::text, now())
     ON CONFLICT DO NOTHING;
     INSERT INTO public.repl_resend (tbl, pk)
     VALUES ('repl_checksums', jsonb_build_object('node', public.scd_node(), 'tbl', rel, 'range', probe::text))
@@ -337,7 +346,7 @@ DECLARE
     tombs boolean := EXISTS (SELECT 1 FROM pg_catalog.pg_trigger g WHERE g.tgrelid = ('public.' || quote_ident(rel))::regclass AND g.tgname = 'zz_tomb');
     lo jsonb := nullif(body -> 'lo', 'null');
     hi jsonb := nullif(body -> 'hi', 'null');
-    attempt integer := coalesce((body ->> 'attempt')::integer, 1);
+    attempt integer := coalesce((body ->> 'attempt')::integer, 0);
     mine record;
     d record;
     k jsonb;
@@ -349,11 +358,15 @@ DECLARE
     report jsonb := '[]';
 BEGIN
     SELECT * INTO mine FROM public.scd_verify_chunk(rel, lo, hi);
+    IF jsonb_typeof(body -> 'keys') IS DISTINCT FROM 'object' THEN
+        PERFORM public.scd_verify_send(rel, jsonb_build_object('lo', lo, 'hi', hi),
+            jsonb_build_object('scd_op', 'probe', 'attempt', 1, 'cols', to_jsonb(public.scd_verify_shown(rel)), 'keys', mine.keys));
+        RETURN jsonb_build_array(jsonb_build_object('k', jsonb_build_object('lo', lo, 'hi', hi), 'action', 'recheck', 'attempt', 0));
+    END IF;
     FOR d IN
-        SELECT coalesce(c.key, p.key) AS key, c.value AS ours, p.value AS theirs
-        FROM jsonb_each_text(mine.keys) c
-        FULL JOIN jsonb_each_text(coalesce(body -> 'keys', '{}')) p ON p.key = c.key
-        WHERE c.value IS DISTINCT FROM p.value
+        SELECT p.key, mine.keys ->> p.key AS ours, p.value AS theirs
+        FROM jsonb_each_text(body -> 'keys') p
+        WHERE (mine.keys ->> p.key) IS DISTINCT FROM p.value
         ORDER BY 1
     LOOP
         k := d.key::jsonb;
@@ -391,7 +404,7 @@ BEGIN
     END LOOP;
     IF jsonb_array_length(report) > 0 AND NOT dry AND attempt < 3 THEN
         PERFORM public.scd_verify_send(rel, jsonb_build_object('lo', lo, 'hi', hi),
-            jsonb_build_object('scd_op', 'probe', 'n', mine.n, 'h', mine.h, 'attempt', attempt + 1, 'cols', to_jsonb(public.scd_verify_shown(rel))));
+            jsonb_build_object('scd_op', 'probe', 'attempt', attempt + 1, 'cols', to_jsonb(public.scd_verify_shown(rel)), 'keys', mine.keys));
     END IF;
     RETURN report;
 END

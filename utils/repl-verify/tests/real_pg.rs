@@ -159,7 +159,18 @@ async fn core_probes_and_settles_an_answer() {
     let probe = probe_once(&pool, 100_000, 500).await.unwrap();
     assert_eq!(probe.state, "ran");
     assert!(probe.probes > 0 && probe.wrapped, "{probe:?}");
-    let answer = "INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
+    sqlx::query(
+        "INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
+        VALUES ('star', 'artists', gen_random_uuid()::text,
+                jsonb_build_object('lo', NULL, 'hi', NULL, 'attempt', 0, 'n', 1, 'keys', NULL)::text, now())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let rows = repair_once(&pool, false, 50).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].recheck() && rows[0].attempt == 0, "{rows:?}");
+    let answer ="INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
         VALUES ('main', 'artists', gen_random_uuid()::text,
                 jsonb_build_object('lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 1,
                     'keys', jsonb_build_object('{\"id\": \"00000000-0000-0000-0000-0000000000e1\"}', 'x'))::text, now())";
