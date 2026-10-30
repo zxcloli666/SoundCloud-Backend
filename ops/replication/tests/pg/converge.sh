@@ -48,6 +48,12 @@ seen() {
   echo "SELECT coalesce(string_agg(track_data ->> 'v', ','), 'none') FROM public.disliked_tracks WHERE sc_user_id = '$1'"
 }
 
+hold() {
+  sql -d "$1" -c "SET application_name = '$2'" -c "BEGIN" -c "$3" \
+    -c "DO \$\$ BEGIN FOR i IN 1..600 LOOP PERFORM pg_stat_clear_snapshot(); IF $4 THEN RETURN; END IF; PERFORM pg_sleep(0.1); END LOOP; RAISE EXCEPTION 'the awaited state never came'; END \$\$" \
+    -c "COMMIT" > "$tmp/$2.out" 2>&1 &
+}
+
 race() {
   local label="$1" role="$2" node="$3" first="$4" second="$5" check="$6" want="$7" after="${8:-SELECT 1}" got
   sql -d scd_b1_race -c "SET application_name = 'scd_race'" -c "SET scd.mode = 'split'" -c "SET scd.role = '$role'" -c "SET scd.node = '$node'" \
@@ -217,6 +223,77 @@ expect "the update made in the gap reaches every node" "$(seen ls2)" 2
 expect "one tombstone per delete on every node, still main's version" \
   "SELECT count(*) || ' ' || bool_and(v % 16 = 2) FROM public.repl_tombstones WHERE pk = jsonb_build_object('id', public.scd_uuid('disliked_tracks', 'ls1', 'x'))" "1 true"
 
+say "A tombstones: star updates rows main deleted before the delete reaches star (lab T7 W3); the newer rows come back through the drain"
+w3_keys="SELECT jsonb_build_object('id', public.scd_uuid('disliked_tracks', u, 'x')) FROM unnest(ARRAY['w3a', 'w3b', 'w3c']) u"
+for u in w3a w3b w3c; do dislike main "$u" 1; done
+calm
+pause star star_from_core
+for u in w3a w3b w3c; do undislike main "$u"; done
+wait_for scd_b1_core "SELECT NOT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id LIKE 'w3%')" "core applies main's deletes"
+sql -d scd_b1_star -c "UPDATE public.disliked_tracks SET track_data = track_data || '{\"late\": 1}' WHERE sc_user_id LIKE 'w3%'"
+resume star star_from_core
+calm
+w3="core $(val scd_b1_core "SELECT count(*) FROM public.disliked_tracks WHERE sc_user_id LIKE 'w3%'"), star $(val scd_b1_star "SELECT count(*) FROM public.disliked_tracks WHERE sc_user_id LIKE 'w3%'"), queued $(val scd_b1_star "SELECT count(*) FROM public.repl_resend WHERE tbl = 'disliked_tracks' AND pk IN ($w3_keys)")"
+[ "$w3" = "core 0, star 3, queued 3" ] && echo "ok before the drain it is the lab shape: core and main dropped star's update, star keeps its rows and queues them ($w3)" \
+  || { echo "FAIL before the drain: $w3 (want core 0, star 3, queued 3)"; failed=$((failed + 1)); }
+quiet
+expect "after the drain star's newer rows live on every node" \
+  "SELECT count(*) FILTER (WHERE track_data ->> 'late' = '1') FROM public.disliked_tracks WHERE sc_user_id LIKE 'w3%'" 3
+
+say "A tombstones: a local update commits while a drain holds an older image of the row; the update is not lost (lab T3h divergence)"
+dislike star sx 1
+calm
+pause star star_from_core
+pause core core_from_star
+undislike main sx
+wait_for scd_b1_core "SELECT NOT EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'sx')" "core applies main's delete"
+redislike star sx 2
+resume star star_from_core
+wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.repl_resend WHERE tbl = 'disliked_tracks' AND pk = jsonb_build_object('id', public.scd_uuid('disliked_tracks', 'sx', 'x')))" "star keeps its newer row and queues it for resend"
+hold scd_b1_star scd_drain_hold "SELECT public.scd_drain_resend()" \
+  "EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'scd_late' AND wait_event_type = 'Lock')
+   OR EXISTS (SELECT 1 FROM public.disliked_tracks WHERE sc_user_id = 'sx' AND track_data ->> 'v' = '3')"
+drainer=$!
+wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'scd_drain_hold' AND wait_event = 'PgSleep')" "star's drain holds its image of the row"
+sql -d scd_b1_star -c "SET application_name = 'scd_late'" -c "UPDATE public.disliked_tracks SET track_data = '{\"v\": 3}' WHERE sc_user_id = 'sx'" > "$tmp/late.out" 2>&1 &
+late=$!
+wait "$drainer" || { echo "FAIL star's drain: $(cat "$tmp/scd_drain_hold.out")"; exit 1; }
+wait "$late" || { echo "FAIL star's late update: $(cat "$tmp/late.out")"; exit 1; }
+resume core core_from_star
+quiet
+expect "the late update lives on every node, not the drain's older image" "$(seen sx)" 3
+
+say "A tombstones: main and star resend tombstones of the same two keys in opposite orders; core applies both batches without a deadlock (lab T3h core deadlocks)"
+ka="$(val scd_b1_core "SELECT public.scd_uuid('disliked_tracks', 'dla', 'x')")"
+kb="$(val scd_b1_core "SELECT public.scd_uuid('disliked_tracks', 'dlb', 'x')")"
+sql -d scd_b1_core -c "SET session_replication_role = replica" \
+  -c "INSERT INTO public.disliked_tracks (id, sc_user_id, sc_track_id, track_data, row_v) SELECT k::uuid, u, 'x', '{\"v\": 1}', ((extract(epoch FROM now() + interval '1 day') * 1000000)::bigint << 4) + 1 FROM (VALUES ('$ka', 'dla'), ('$kb', 'dlb')) AS r (k, u)"
+calm
+tomb() { sql -d "scd_b1_$1" -c "INSERT INTO public.repl_tombstones (tbl, pk, v) VALUES ('disliked_tracks', jsonb_build_object('id', '$2'::uuid), 0)"; }
+tomb main "$ka"; tomb main "$kb"
+tomb star "$kb"; tomb star "$ka"
+calm
+for n in main star; do
+  ord=$([ "$n" = main ] && echo 2 || echo 3)
+  sql -d "scd_b1_$n" -c "DELETE FROM public.repl_resend WHERE tbl = 'disliked_tracks' AND pk ->> 'id' IN ('$ka', '$kb')" > /dev/null
+  sql -d "scd_b1_$n" -c "INSERT INTO public.repl_resend (tbl, pk) SELECT 'repl_tombstones', jsonb_build_object('tbl', tbl, 'pk', pk, 'v', v)
+    FROM public.repl_tombstones WHERE tbl = 'disliked_tracks' AND pk ->> 'id' IN ('$ka', '$kb') AND v % 16 = $ord ON CONFLICT DO NOTHING" > /dev/null
+done
+errs="SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats WHERE subname IN ('core_from_main', 'core_from_star')"
+errs_before="$(val scd_b1_core "$errs")"
+hold scd_b1_core scd_lock_hold "SELECT count(*) FROM (SELECT 1 FROM public.disliked_tracks WHERE id IN ('$ka', '$kb') FOR UPDATE) s" \
+  "(SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE backend_type = 'logical replication apply worker' AND wait_event_type = 'Lock') >= 2"
+holder=$!
+wait_for scd_b1_core "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'scd_lock_hold' AND wait_event = 'PgSleep')" "core holds both rows"
+for n in main star; do val "scd_b1_$n" "SELECT public.scd_drain_resend()" > /dev/null; done
+wait "$holder" || { echo "FAIL the two repair batches never both waited on core: $(cat "$tmp/scd_lock_hold.out")"; exit 1; }
+echo "ok both repair batches waited on core's locked rows"
+quiet
+errs_after="$(val scd_b1_core "$errs")"
+[ "$errs_after" = "$errs_before" ] && echo "ok no apply error on core from the two repair batches" \
+  || { echo "FAIL core apply errors went from $errs_before to $errs_after (deadlock between repair batches)"; failed=$((failed + 1)); }
+expect "both rows live on every node above their tombstones" "SELECT count(*) FROM public.disliked_tracks WHERE id IN ('$ka', '$kb')" 2
+
 say "C: a kind on an api node touches artists, core's derived has_sc_account comes back as a core write, no reassert"
 kind_sql="CREATE OR REPLACE FUNCTION public.scd_cmd_match_sc_account(args jsonb) RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_catalog AS \$f\$
 BEGIN
@@ -242,6 +319,42 @@ expect "the artist row is equal on every node with core's derived flag" \
   "SELECT sc_user_id || ' ' || has_sc_account FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000a9'" "scu-9 true"
 pairs artists "id = '00000000-0000-0000-0000-0000000000a9'" "artist row equal on all nodes"
 pairs artist_sc_accounts "artist_id = '00000000-0000-0000-0000-0000000000a9'" "account row equal on all nodes"
+
+say "C: core columns reach main and star as core writes (artists.has_sc_account above, lyrics_cache.fts from core and from an api kind)"
+published="$(val scd_b1_core "SELECT string_agg(l.tbl || '.' || c.col || '=' || coalesce(c.col = ANY (l.cols), true)::text, ',' ORDER BY l.tbl)
+  FROM public.scd_core_columns() c JOIN public.scd_publication_lists() l ON l.tbl = c.tbl AND l.pubname = 'scd_core_pub'")"
+[ "$published" = "artists.has_sc_account=true,lyrics_cache.fts=true" ] && echo "ok core columns are published to main and star: $published" \
+  || { echo "FAIL core columns not all published: $published"; exit 1; }
+lyrics_sql="CREATE OR REPLACE FUNCTION public.scd_cmd_match_sc_account(args jsonb) RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_catalog AS \$f\$
+BEGIN
+    INSERT INTO public.lyrics_cache (sc_track_id, plain_text, source, created_at, updated_at)
+    VALUES (args ->> 'track', args ->> 'text', 'lrclib', (args ->> 'at')::timestamp, (args ->> 'at')::timestamptz)
+    ON CONFLICT (sc_track_id) DO UPDATE SET plain_text = EXCLUDED.plain_text;
+    RETURN jsonb_build_object('output', true, 'touched', jsonb_build_array(
+        jsonb_build_object('tbl', 'lyrics_cache', 'pk', jsonb_build_object('sc_track_id', args ->> 'track'))));
+END
+\$f\$"
+for n in $nodes; do sql -d "scd_b1_$n" -c "$lyrics_sql"; done
+sql -d scd_b1_core -c "INSERT INTO public.lyrics_cache (sc_track_id, plain_text, source, created_at) VALUES ('lyr-core', 'alpha beta', 'lrclib', '2026-10-30')"
+calm
+expect "fts from a core write arrives on every node" \
+  "SELECT coalesce((SELECT (fts @@ to_tsquery('simple', 'alpha & beta'))::text FROM public.lyrics_cache WHERE sc_track_id = 'lyr-core'), 'none')" true
+for pair in "lyr-core gamma" "lyr-api zeta"; do
+  track="${pair%% *}"; word="${pair##* }"
+  cid="$(val scd_b1_main "SELECT id FROM public.scd_wt('match.sc_account', jsonb_build_object('track', '$track', 'text', '$word words', 'at', '2026-10-30 00:00:00'))")"
+  wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.cmd_outbox WHERE id = '$cid' AND done_at IS NOT NULL)" "core ran main's lyrics command for $track"
+  [ "$(val scd_b1_core "SELECT count(*) FROM public.cmd_reassert WHERE id = '$cid'")" = 0 ] && echo "ok core reasserted nothing for $track" \
+    || { echo "FAIL core reasserted main's lyrics command for $track"; failed=$((failed + 1)); }
+done
+quiet
+expect "fts computed by core for main's kind arrives on every node, the old fts is gone" \
+  "SELECT string_agg(sc_track_id || '=' || (fts @@ to_tsquery('simple', CASE sc_track_id WHEN 'lyr-core' THEN 'gamma & words' ELSE 'zeta & words' END))::text
+     || '/' || (fts @@ to_tsquery('simple', 'alpha'))::text, ',' ORDER BY sc_track_id) FROM public.lyrics_cache WHERE sc_track_id LIKE 'lyr-%'" \
+  "lyr-api=true/false,lyr-core=true/false"
+expect "has_sc_account set by core's trigger is still core's value on every node after the drains" \
+  "SELECT has_sc_account::text FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000a9'" true
+pairs lyrics_cache "sc_track_id LIKE 'lyr-%'" "lyrics rows equal on all nodes, fts included"
+pairs artists "id = '00000000-0000-0000-0000-0000000000a9'" "artist row equal on all nodes, has_sc_account included"
 
 say "A delete-wins: a session updated after its delete stays deleted"
 sql -d scd_b1_star -c "INSERT INTO public.sessions (id) VALUES ('00000000-0000-0000-0000-0000000000e5')"
