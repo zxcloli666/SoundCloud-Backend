@@ -5,7 +5,6 @@ SET exec_generation = generation,
     next_run_at = now(),
     dead = false,
     failed_at = NULL,
-    remote_attempted_generation = NULL,
     remote_completed_generation = NULL,
     remote_result = NULL
 WHERE id IN (

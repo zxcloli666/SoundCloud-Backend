@@ -281,6 +281,48 @@ async fn an_unlike_that_annulled_a_like_core_already_sent_and_purged_is_still_se
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_like_after_an_unlike_that_was_sent_and_requeued_is_not_annulled_away(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    tap(&pool, true).await?;
+    let like = run_on_core(&repository).await?.remove(0);
+    complete(&repository, &like).await?;
+    tap(&pool, false).await?;
+    let unlike = run_on_core(&repository).await?.remove(0);
+    assert!(repository.record_remote_attempt(&unlike).await?);
+    tap(&pool, false).await?;
+    assert!(
+        !repository
+            .record_remote_success(&unlike, &json!({"ok": true}))
+            .await?
+    );
+    repository.release(&unlike).await?;
+    repository.adopt().await?;
+    tap(&pool, true).await?;
+    assert_eq!(
+        queue(&pool).await?,
+        vec![
+            ("like_track".to_owned(), false),
+            ("unlike_track".to_owned(), false)
+        ]
+    );
+
+    let mut sent = Vec::new();
+    for _ in 0..4 {
+        for mutation in run_on_core(&repository).await? {
+            sent.push(mutation.action_type.clone());
+            complete(&repository, &mutation).await?;
+        }
+    }
+
+    assert_eq!(sent, ["unlike_track", "like_track"]);
+    assert!(queue(&pool).await?.is_empty());
+    assert_eq!(mirror(&pool).await?, (true, false, true));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_new_intent_on_a_dead_row_is_adopted_before_the_claim(
     pool: PgPool,
 ) -> anyhow::Result<()> {

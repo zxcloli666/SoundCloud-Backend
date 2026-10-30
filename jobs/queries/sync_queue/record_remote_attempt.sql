@@ -6,6 +6,6 @@ WHERE id = $1
   AND generation = $4
   AND (
       remote_attempted_generation IS NULL
-      OR remote_attempted_generation = $4
+      OR remote_attempted_generation <= $4
   )
   AND remote_completed_generation IS NULL
