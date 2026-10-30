@@ -13,7 +13,7 @@ resume core core_from_main
 quiet
 want "core takes the intent with its own columns at their defaults" \
   "$(only core "SELECT format('%s %s %s %s %s', wanted_state, progress, synced_at IS NULL, liked_at IS NULL, synced_for_v) FROM public.user_likes_tracks WHERE user_id = 'ri'")" \
-  "false false true true 0"
+  "f f t t 0"
 pairs user_likes_tracks "user_id = 'ri'" "the repaired M row is equal on all nodes"
 
 say "S1 lock order: core's drain and verify repair take the mirrors right before sync_queue, like the api tap (0292)"
