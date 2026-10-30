@@ -69,6 +69,7 @@ pub async fn service(pg: PgPool) -> anyhow::Result<Arc<RecommendationsService>> 
     let qdrant = QdrantService::connect(&QdrantCfg {
         grpc_url: qdrant_url(),
         api_key: String::new().into(),
+        tls: None,
     })?;
     let redis = deadpool_redis::Config::from_url(redis_url())
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;

@@ -45,7 +45,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::bus::nats::NatsService;
 use crate::cache::CacheService;
@@ -123,23 +123,22 @@ async fn main() {
 
     let shutdown = CancellationToken::new();
 
-    let nats = NatsService::connect(&config.nats.url, shutdown.clone())
-        .await
-        .expect("Failed to connect to NATS");
-    info!("NATS connected");
+    let nats =
+        NatsService::connect_with(&config.nats.url, config.nats.tls.as_ref(), shutdown.clone())
+            .await
+            .expect("Failed to configure NATS");
+    info!("NATS client started");
 
-    let qdrant = match QdrantService::connect(&config.qdrant) {
-        Ok(qdrant) => qdrant,
-        Err(error) => {
-            error!(%error, "Qdrant client initialization failed");
-            std::process::exit(1);
+    let qdrant = QdrantService::connect(&config.qdrant).expect("Failed to configure Qdrant");
+    tokio::spawn({
+        let qdrant = qdrant.clone();
+        async move {
+            match qdrant.prepare_required_collections().await {
+                Ok(()) => info!("Qdrant ready"),
+                Err(error) => warn!(%error, "Qdrant is not ready; vector features degrade"),
+            }
         }
-    };
-    if let Err(error) = qdrant.prepare_required_collections().await {
-        error!(%error, "Qdrant startup validation failed");
-        std::process::exit(1);
-    }
-    info!("Qdrant ready");
+    });
 
     let http_client = sc_fingerprint::builder(None)
         .tcp_keepalive(Duration::from_secs(60))
