@@ -5,9 +5,9 @@ mod sqlx_pg;
 pub mod tokio_pg;
 
 pub use kinds::{
-    AlbumSlot, Kind, MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWantedLink, Mode,
-    ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack,
-    ObservedUser,
+    AlbumSlot, ConnectionDropOrphan, Kind, MatchAlbumTrack, MatchGeniusSong, MatchScAccount,
+    MatchWantedLink, Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers,
+    ObservedPlaylist, ObservedTrack, ObservedUser, SyncQueuePurge, SyncQueueRevive,
 };
 #[cfg(feature = "sqlx")]
 pub use sqlx_pg::call;

@@ -10,7 +10,11 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 219;
+mod retry;
+
+pub use retry::retry_conflicts;
+
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 237;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -46,7 +50,7 @@ fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     }
 
     Ok(opts
-        .options([("jit", "off")])
+        .options([("jit", "off"), ("scd.writer", "api")])
         .log_statements(LevelFilter::Debug)
         .log_slow_statements(LevelFilter::Warn, Duration::from_millis(500)))
 }
@@ -336,6 +340,9 @@ mod tests {
         let core_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
             .fetch_one(&core)
             .await?;
+        let core_writer: String = sqlx::query_scalar("SHOW scd.writer")
+            .fetch_one(&core)
+            .await?;
         let recommendations_jit: String = sqlx::query_scalar("SHOW jit")
             .fetch_one(&recommendations)
             .await?;
@@ -344,6 +351,7 @@ mod tests {
             .await?;
 
         assert_eq!(core_jit, "off");
+        assert_eq!(core_writer, "api");
         assert_ne!(core_timeout, "15s");
         assert_eq!(recommendations_jit, "off");
         assert_eq!(recommendations_timeout, "15s");

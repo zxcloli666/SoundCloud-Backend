@@ -15,7 +15,8 @@ async fn update(pool: &PgPool, fields: Value) -> anyhow::Result<()> {
         "17",
         "playlist_update",
         PLAYLIST,
-        &body
+        &body,
+        false
     )
     .execute(&mut *tx)
     .await?;
@@ -65,7 +66,8 @@ async fn enqueue_membership(pool: &PgPool, generation: i64) -> anyhow::Result<()
         "17",
         "playlist_membership",
         PLAYLIST,
-        &payload
+        &payload,
+        false
     )
     .execute(pool)
     .await?;
@@ -176,6 +178,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
             .fetch_one(&pool)
             .await?;
     assert!(!confirmed);
+    repository.adopt().await?;
     let current = repository
         .claim(1)
         .await?

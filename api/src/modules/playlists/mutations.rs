@@ -48,6 +48,17 @@ impl PlaylistMutations {
         metadata: Option<&PlaylistUpdate>,
         membership: Option<(MembershipRequest, Uuid)>,
     ) -> AppResult<PlaylistMutationOutcome> {
+        crate::db::retry_conflicts(|| self.update_once(user, target, metadata, membership.clone()))
+            .await
+    }
+
+    async fn update_once(
+        &self,
+        user: &str,
+        target: &str,
+        metadata: Option<&PlaylistUpdate>,
+        membership: Option<(MembershipRequest, Uuid)>,
+    ) -> AppResult<PlaylistMutationOutcome> {
         let target = target_urn(target)?;
         let mut tx = self.begin(&target).await?;
         if let Some(metadata) = metadata {
@@ -119,6 +130,10 @@ impl PlaylistMutations {
     }
 
     pub(super) async fn delete(&self, user: &str, target: &str) -> AppResult<Value> {
+        crate::db::retry_conflicts(|| self.delete_once(user, target)).await
+    }
+
+    async fn delete_once(&self, user: &str, target: &str) -> AppResult<Value> {
         let target = target_urn(target)?;
         let mut tx = self.begin(&target).await?;
         sqlx::query_file!(

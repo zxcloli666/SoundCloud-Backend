@@ -27,6 +27,10 @@ impl TrackMutations {
     }
 
     pub(super) async fn update(&self, user: &str, target: &str, body: &Value) -> AppResult<Value> {
+        crate::db::retry_conflicts(|| self.update_once(user, target, body)).await
+    }
+
+    async fn update_once(&self, user: &str, target: &str, body: &Value) -> AppResult<Value> {
         let target = target_urn(target)?;
         let update = TrackUpdate::parse(body).map_err(AppError::bad_request)?;
         let mut tx = self.begin(&target).await?;
@@ -57,6 +61,10 @@ impl TrackMutations {
     }
 
     pub(super) async fn delete(&self, user: &str, target: &str) -> AppResult<Value> {
+        crate::db::retry_conflicts(|| self.delete_once(user, target)).await
+    }
+
+    async fn delete_once(&self, user: &str, target: &str) -> AppResult<Value> {
         let target = target_urn(target)?;
         let mut tx = self.begin(&target).await?;
         sqlx::query_file!(

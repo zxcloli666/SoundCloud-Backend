@@ -334,11 +334,10 @@ impl AuthService {
             .await?;
 
         if let Some(connection_id) = stored.orphan_candidate {
-            sqlx::query_file!(
-                "queries/auth/service/delete_orphan_connection.sql",
-                connection_id
+            wt::call(
+                &mut transaction,
+                &wt::ConnectionDropOrphan { connection_id },
             )
-            .execute(&mut *transaction)
             .await?;
         }
 

@@ -175,63 +175,19 @@ pub async fn apply_local(
     mutation: &ClaimedMutation,
     remote_result: &Value,
 ) -> Result<(), ActionError> {
+    if settle_mirror(
+        &mut *connection,
+        &mutation.action_type,
+        &mutation.user_id,
+        &mutation.target_urn,
+    )
+    .await?
+    {
+        return Ok(());
+    }
     let user_id = extract_sc_id(&mutation.user_id);
     let target = &mutation.target_urn;
     match mutation.action_type.as_str() {
-        "like_track" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/like_track.sql",
-                user_id,
-                extract_sc_id(target)
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unlike_track" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unlike_track.sql",
-                user_id,
-                extract_sc_id(target)
-            )
-            .execute(connection)
-            .await?;
-        }
-        "like_playlist" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/like_playlist.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unlike_playlist" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unlike_playlist.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "follow_user" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/follow_user.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unfollow_user" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unfollow_user.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
         "playlist_create" => {
             playlist::finalize_create(connection, mutation.id, user_id, remote_result).await?;
         }
@@ -297,6 +253,73 @@ pub async fn apply_local(
         action => return Err(ActionError::UnknownAction(action.to_owned())),
     }
     Ok(())
+}
+
+pub async fn settle_mirror(
+    connection: &mut PgConnection,
+    action_type: &str,
+    user_id: &str,
+    target: &str,
+) -> Result<bool, sqlx::Error> {
+    let user_id = extract_sc_id(user_id);
+    match action_type {
+        "like_track" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/like_track.sql",
+                user_id,
+                extract_sc_id(target)
+            )
+            .execute(connection)
+            .await?
+        }
+        "unlike_track" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unlike_track.sql",
+                user_id,
+                extract_sc_id(target)
+            )
+            .execute(connection)
+            .await?
+        }
+        "like_playlist" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/like_playlist.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "unlike_playlist" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unlike_playlist.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "follow_user" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/follow_user.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "unfollow_user" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unfollow_user.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        _ => return Ok(false),
+    };
+    Ok(true)
 }
 
 fn required_payload(mutation: &ClaimedMutation) -> Result<&Value, ActionError> {

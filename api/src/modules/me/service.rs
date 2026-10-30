@@ -50,25 +50,29 @@ impl MeService {
     pub async fn follow_user(&self, sc_user_id: &str, target_user_urn: &str) -> AppResult<Value> {
         let target_user_urn = super::feed::target_urn(target_user_urn)?;
         let target_user_urn = target_user_urn.as_str();
-        let mut tx = self.pg.begin().await?;
-        crate::modules::sync_queue::mirror::set_wanted(
-            &mut tx,
-            FOLLOWINGS_MIRROR,
-            sc_user_id,
-            target_user_urn,
-        )
-        .await?;
-        self.sync_queue
-            .enqueue_on(&mut tx, sc_user_id, "follow_user", target_user_urn, None)
+        crate::db::retry_conflicts(|| async move {
+            let mut tx = self.pg.begin().await?;
+            crate::modules::sync_queue::mirror::set_wanted(
+                &mut tx,
+                FOLLOWINGS_MIRROR,
+                sc_user_id,
+                target_user_urn,
+            )
             .await?;
-        sqlx::query_file!(
-            "queries/me/service/enqueue_followed_uploads.sql",
-            &[crate::common::sc_ids::extract_sc_id(target_user_urn).to_owned()],
-            crate::common::sc_ids::extract_sc_id(sc_user_id)
-        )
-        .execute(&mut *tx)
+            self.sync_queue
+                .enqueue_on(&mut tx, sc_user_id, "follow_user", target_user_urn, None)
+                .await?;
+            sqlx::query_file!(
+                "queries/me/service/enqueue_followed_uploads.sql",
+                &[crate::common::sc_ids::extract_sc_id(target_user_urn).to_owned()],
+                crate::common::sc_ids::extract_sc_id(sc_user_id)
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(())
+        })
         .await?;
-        tx.commit().await?;
         Ok(json!({ "status": "queued", "actionType": "follow_user" }))
     }
 

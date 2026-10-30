@@ -479,6 +479,11 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
              AND to_regclass('user_likes_tracks_sync_heal_idx') IS NOT NULL
              AND to_regclass('user_likes_playlists_sync_heal_idx') IS NOT NULL
              AND to_regclass('user_followings_sync_heal_idx') IS NOT NULL
+             AND to_regclass('sync_queue_cancelled_idx') IS NOT NULL
+             AND to_regclass('sync_queue_fresh_idx') IS NOT NULL
+             AND to_regclass('user_likes_tracks_intent_idx') IS NOT NULL
+             AND to_regclass('user_likes_playlists_intent_idx') IS NOT NULL
+             AND to_regclass('user_followings_intent_idx') IS NOT NULL
              AND (SELECT count(*) = 6
                   FROM information_schema.columns
                   WHERE table_schema = current_schema()
