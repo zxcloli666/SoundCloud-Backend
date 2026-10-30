@@ -78,6 +78,7 @@ catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 redact = { version = "0.1.0", path = "../utils/redact" }
 telemetry = { version = "0.1.0", path = "../utils/telemetry" }
+wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }

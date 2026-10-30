@@ -1,6 +1,7 @@
 pub(crate) mod database;
 mod env;
 mod oauth;
+mod scd;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ pub use database::{DatabaseConfig, PoolConfig, PoolCoverage, SessionLimits};
 use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_from_env};
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
+pub use scd::ScdNode;
 
 const DURATION_MAX_BATCH_SIZE: i64 = 500;
 const DURATION_MAX_CONCURRENCY: usize = 32;
