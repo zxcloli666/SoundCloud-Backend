@@ -31,14 +31,13 @@ BEGIN
         SELECT j.id, j.kind, j.dedup_key, j.lease_id, j.last_error, j.available_at
         FROM public.background_jobs j
         WHERE j.id >= coalesce(after, '00000000-0000-0000-0000-000000000000'::uuid) AND j.id IS DISTINCT FROM after
-          AND j.kind = ANY (public.scd_job_status_kinds())
         ORDER BY j.id
         LIMIT batch
     ), ins AS (
         INSERT INTO public.job_status (kind, dedup_key, state, available_at, updated_at)
         SELECT p.kind, p.dedup_key, public.scd_job_status_state(p.lease_id IS NOT NULL, p.last_error IS NOT NULL), p.available_at, now()
         FROM page p
-        WHERE p.dedup_key IS NOT NULL
+        WHERE p.dedup_key IS NOT NULL AND p.kind = ANY (public.scd_job_status_kinds())
         ON CONFLICT (kind, dedup_key) DO NOTHING
         RETURNING 1
     )
