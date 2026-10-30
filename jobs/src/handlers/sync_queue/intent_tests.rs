@@ -32,11 +32,15 @@ async fn tap(pool: &PgPool, like: bool) -> anyhow::Result<()> {
         .await?;
     let mirror = if like {
         "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state) VALUES ($1, $2, true)
-         ON CONFLICT (user_id, sc_track_id) DO UPDATE SET wanted_state = true, created_at = now()
-         WHERE user_likes_tracks.wanted_state = false"
+         ON CONFLICT (user_id, sc_track_id) DO UPDATE SET
+             wanted_state = true,
+             created_at = CASE WHEN user_likes_tracks.wanted_state THEN user_likes_tracks.created_at ELSE now() END,
+             wanted_v = public.scd_hlc(user_likes_tracks.wanted_v)"
     } else {
-        "UPDATE user_likes_tracks SET wanted_state = false
-         WHERE user_id = $1 AND sc_track_id = $2 AND wanted_state"
+        "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state) VALUES ($1, $2, false)
+         ON CONFLICT (user_id, sc_track_id) DO UPDATE SET
+             wanted_state = false,
+             wanted_v = public.scd_hlc(user_likes_tracks.wanted_v)"
     };
     sqlx::query(mirror)
         .bind(USER)
@@ -63,6 +67,30 @@ async fn tap(pool: &PgPool, like: bool) -> anyhow::Result<()> {
     .bind(annuls)
     .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn late(pool: &PgPool, action: &str, generation: i64) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL scd.writer = 'api'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(include_str!(
+        "../../../../api/queries/sync_queue/service/enqueue.sql"
+    ))
+    .bind(USER)
+    .bind(action)
+    .bind(TARGET)
+    .bind(None::<Value>)
+    .bind(false)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE sync_queue SET generation = $1 WHERE action_type = $2")
+        .bind(generation)
+        .bind(action)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -101,6 +129,56 @@ async fn run_on_core(repository: &SyncQueueRepository) -> anyhow::Result<Vec<Cla
     Ok(repository.claim(10).await?)
 }
 
+async fn sent(repository: &SyncQueueRepository) -> anyhow::Result<Vec<String>> {
+    let mut sent = Vec::new();
+    for _ in 0..4 {
+        for mutation in run_on_core(repository).await? {
+            if repository.drop_superseded(&mutation).await? {
+                continue;
+            }
+            sent.push(mutation.action_type.clone());
+            complete(repository, &mutation).await?;
+        }
+    }
+    Ok(sent)
+}
+
+async fn regress(pool: &PgPool, generation: i64, cancel: bool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL scd.writer = 'api'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE sync_queue SET generation = $1, cancelled = $2 WHERE action_type = 'like_track'",
+    )
+    .bind(generation)
+    .bind(cancel)
+    .execute(&mut *tx)
+    .await?;
+    if cancel {
+        sqlx::query(include_str!(
+            "../../../../api/queries/sync_queue/service/enqueue.sql"
+        ))
+        .bind(USER)
+        .bind("unlike_track")
+        .bind(TARGET)
+        .bind(None::<Value>)
+        .bind(true)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE user_likes_tracks SET wanted_state = false, wanted_v = public.scd_hlc(wanted_v)
+             WHERE user_id = $1 AND sc_track_id = $2",
+        )
+        .bind(USER)
+        .bind(TRACK)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn complete(
     repository: &SyncQueueRepository,
     mutation: &ClaimedMutation,
@@ -116,7 +194,7 @@ async fn complete(
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_like_undone_before_any_claim_sends_nothing_and_the_mirror_is_served(
+async fn a_like_undone_before_any_claim_sends_only_the_unlike_the_mirror_wants(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let repository = setup(&pool).await?;
@@ -132,9 +210,11 @@ async fn a_like_undone_before_any_claim_sends_nothing_and_the_mirror_is_served(
 
     let claimed = run_on_core(&repository).await?;
 
-    assert!(claimed.is_empty());
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].action_type, "unlike_track");
+    assert_eq!(receipts(&pool, "sync_queue").await?, 1);
+    complete(&repository, &claimed[0]).await?;
     assert!(queue(&pool).await?.is_empty());
-    assert_eq!(receipts(&pool, "sync_queue").await?, 2);
     assert_eq!(mirror(&pool).await?, (false, false, true));
     Ok(())
 }
@@ -308,15 +388,7 @@ async fn a_like_after_an_unlike_that_was_sent_and_requeued_is_not_annulled_away(
         ]
     );
 
-    let mut sent = Vec::new();
-    for _ in 0..4 {
-        for mutation in run_on_core(&repository).await? {
-            sent.push(mutation.action_type.clone());
-            complete(&repository, &mutation).await?;
-        }
-    }
-
-    assert_eq!(sent, ["unlike_track", "like_track"]);
+    assert_eq!(sent(&repository).await?, ["like_track"]);
     assert!(queue(&pool).await?.is_empty());
     assert_eq!(mirror(&pool).await?, (true, false, true));
     Ok(())
@@ -441,5 +513,96 @@ async fn heal_brings_back_a_lost_like_above_its_queue_receipt(pool: PgPool) -> a
     assert!(healed.1);
     assert_eq!(healed.2, Some(healed.3));
     assert_eq!(run_on_core(&repository).await?.len(), 1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_older_unlike_that_reaches_core_after_a_newer_like_ran_is_dropped_unsent(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    tap(&pool, true).await?;
+    let like = run_on_core(&repository).await?.remove(0);
+    complete(&repository, &like).await?;
+
+    late(&pool, "unlike_track", like.generation - 16).await?;
+    let unlike = run_on_core(&repository).await?;
+    assert_eq!(unlike.len(), 1);
+    assert!(repository.drop_superseded(&unlike[0]).await?);
+
+    assert!(queue(&pool).await?.is_empty());
+    assert_eq!(mirror(&pool).await?, (true, false, true));
+    assert_eq!(receipts(&pool, "sync_queue").await?, 2);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_like_older_than_the_purge_of_its_unlike_is_dropped_and_a_newer_one_runs(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    tap(&pool, true).await?;
+    let like = run_on_core(&repository).await?.remove(0);
+    complete(&repository, &like).await?;
+    tap(&pool, false).await?;
+    let unlike = run_on_core(&repository).await?.remove(0);
+    complete(&repository, &unlike).await?;
+    let purged_v: i64 = sqlx::query_scalar(
+        "SELECT wanted_v FROM user_likes_tracks
+         WHERE public.scd_purge_intent(
+             'user_likes_tracks',
+             jsonb_build_object('user_id', user_id, 'sc_track_id', sc_track_id),
+             wanted_v
+         )",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    late(&pool, "like_track", like.generation).await?;
+    let older = run_on_core(&repository).await?.remove(0);
+    assert!(repository.drop_superseded(&older).await?);
+    assert!(queue(&pool).await?.is_empty());
+
+    late(&pool, "like_track", purged_v + 16).await?;
+    let newer = run_on_core(&repository).await?.remove(0);
+    assert!(!repository.drop_superseded(&newer).await?);
+    complete(&repository, &newer).await?;
+    assert!(queue(&pool).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_like_cancelled_by_a_lagging_node_below_its_attempt_is_dropped_and_the_unlike_runs(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    tap(&pool, true).await?;
+    let like = run_on_core(&repository).await?.remove(0);
+    assert!(repository.record_remote_attempt(&like).await?);
+    repository.release(&like).await?;
+
+    regress(&pool, like.generation - 16, true).await?;
+
+    assert_eq!(sent(&repository).await?, ["unlike_track"]);
+    assert!(queue(&pool).await?.is_empty());
+    assert_eq!(mirror(&pool).await?, (false, false, true));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_like_retapped_by_a_lagging_node_below_its_attempt_is_still_sent(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    tap(&pool, true).await?;
+    let like = run_on_core(&repository).await?.remove(0);
+    assert!(repository.record_remote_attempt(&like).await?);
+    repository.release(&like).await?;
+
+    regress(&pool, like.generation - 16, false).await?;
+
+    assert_eq!(sent(&repository).await?, ["like_track"]);
+    assert!(queue(&pool).await?.is_empty());
+    assert_eq!(mirror(&pool).await?, (true, false, true));
     Ok(())
 }

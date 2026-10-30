@@ -4,7 +4,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use super::actions::{self, ActionError};
-use super::model::{ClaimedMutation, LockedMutation, NextWaiting, SettledRow, Settlement};
+use super::model::{ClaimedMutation, LockedMutation, NextWaiting, SettledRow};
 
 pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
 const SETTLE_BATCH: i64 = 500;
@@ -187,6 +187,18 @@ impl SyncQueueRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn drop_superseded(&self, mutation: &ClaimedMutation) -> Result<bool, sqlx::Error> {
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/drop_superseded.sql",
+            mutation.id,
+            mutation.lease_id,
+            mutation.lease_generation,
+            mutation.generation
+        )
+        .fetch_one(&self.pool)
+        .await
+    }
+
     pub async fn record_remote_attempt(
         &self,
         mutation: &ClaimedMutation,
@@ -205,6 +217,14 @@ impl SyncQueueRepository {
 
     pub async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), FinalizeError> {
         let mut transaction = self.pool.begin().await?;
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/lock_mirror.sql",
+            mutation.action_type,
+            mutation.user_id,
+            mutation.target_urn
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
         let locked = sqlx::query_file_as!(
             LockedMutation,
             "queries/sync_queue/lock_for_finalize.sql",
@@ -268,60 +288,37 @@ impl SyncQueueRepository {
     }
 
     pub async fn settle_cancelled(&self) -> Result<u64, sqlx::Error> {
-        let pairs = sqlx::query_file!("queries/sync_queue/cancelled.sql", SETTLE_BATCH)
+        let ids = sqlx::query_file_scalar!("queries/sync_queue/cancelled.sql", SETTLE_BATCH)
             .fetch_all(&self.pool)
             .await?;
         let mut settled = 0;
-        for pair in pairs {
-            let ids: Vec<uuid::Uuid> = std::iter::once(pair.id).chain(pair.opposite_id).collect();
-            match self.settle(&ids).await {
+        for id in ids {
+            match self.settle(id).await {
                 Ok(true) => settled += 1,
                 Ok(false) => {}
                 Err(error) => {
-                    tracing::warn!(id = %pair.id, error = %error, "cancelled sync mutation was not settled")
+                    tracing::warn!(id = %id, error = %error, "cancelled sync mutation was not settled")
                 }
             }
         }
         Ok(settled)
     }
 
-    async fn settle(&self, ids: &[uuid::Uuid]) -> Result<bool, FinalizeError> {
+    async fn settle(&self, id: uuid::Uuid) -> Result<bool, sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
-            .fetch_one(&mut *transaction)
+        let queued = sqlx::query_file_as!(SettledRow, "queries/sync_queue/lock_settled.sql", id)
+            .fetch_optional(&mut *transaction)
             .await?;
-        let rows = sqlx::query_file_as!(SettledRow, "queries/sync_queue/lock_settled.sql", ids)
-            .fetch_all(&mut *transaction)
-            .await?;
-        let Some(queued) = rows
-            .iter()
-            .find(|row| row.id == ids[0] && row.cancelled && row.idle)
-        else {
+        let Some(queued) = queued.filter(|row| row.cancelled && row.idle) else {
             transaction.commit().await?;
             return Ok(false);
         };
-        let opposite = rows.iter().find(|row| row.id != queued.id);
-        match Settlement::of(queued, opposite) {
-            Settlement::Drop => {
-                purge(&mut transaction, queued).await?;
-            }
-            Settlement::DropBoth(opposite) => {
-                for row in [queued, opposite] {
-                    purge(&mut transaction, row).await?;
-                    actions::settle_mirror(
-                        &mut transaction,
-                        &row.action_type,
-                        &row.user_id,
-                        &row.target_urn,
-                    )
-                    .await?;
-                }
-            }
-            Settlement::Revive => {
-                sqlx::query_file!("queries/sync_queue/uncancel.sql", queued.id)
-                    .execute(&mut *transaction)
-                    .await?;
-            }
+        if queued.wanted == Some(true) {
+            sqlx::query_file!("queries/sync_queue/uncancel.sql", queued.id)
+                .execute(&mut *transaction)
+                .await?;
+        } else {
+            purge(&mut transaction, &queued).await?;
         }
         transaction.commit().await?;
         Ok(true)

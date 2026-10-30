@@ -29,21 +29,25 @@ pub async fn set_wanted(
 ) -> AppResult<bool> {
     let user_id = crate::common::sc_ids::extract_sc_id(user_id);
     let sql = format!(
-        "INSERT INTO {table} (user_id, {key_col}, wanted_state) \
+        "WITH before AS ( \
+             SELECT wanted_state FROM {table} WHERE user_id = $1 AND {key_col} = $2 \
+         ) \
+         INSERT INTO {table} (user_id, {key_col}, wanted_state) \
          VALUES ($1, $2, true) \
          ON CONFLICT (user_id, {key_col}) DO UPDATE SET \
              wanted_state = true, \
-             created_at = now() \
-         WHERE {table}.wanted_state = false",
+             created_at = CASE WHEN {table}.wanted_state THEN {table}.created_at ELSE now() END, \
+             wanted_v = public.scd_hlc({table}.wanted_v) \
+         RETURNING NOT coalesce((SELECT wanted_state FROM before), false)",
         table = m.table,
         key_col = m.key_col,
     );
-    let written = sqlx::query(&sql)
+    let flipped: bool = sqlx::query_scalar(&sql)
         .bind(user_id)
         .bind(key)
-        .execute(connection)
+        .fetch_one(connection)
         .await?;
-    Ok(written.rows_affected() > 0)
+    Ok(flipped)
 }
 
 pub async fn clear_wanted(
@@ -54,8 +58,11 @@ pub async fn clear_wanted(
 ) -> AppResult<()> {
     let user_id = crate::common::sc_ids::extract_sc_id(user_id);
     let sql = format!(
-        "UPDATE {table} SET wanted_state = false \
-         WHERE user_id = $1 AND {key_col} = $2 AND wanted_state",
+        "INSERT INTO {table} (user_id, {key_col}, wanted_state) \
+         VALUES ($1, $2, false) \
+         ON CONFLICT (user_id, {key_col}) DO UPDATE SET \
+             wanted_state = false, \
+             wanted_v = public.scd_hlc({table}.wanted_v)",
         table = m.table,
         key_col = m.key_col,
     );

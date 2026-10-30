@@ -10,7 +10,11 @@ use tracing::log::LevelFilter;
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 236;
+mod retry;
+
+pub use retry::retry_conflicts;
+
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 237;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 

@@ -176,6 +176,9 @@ impl SyncQueueHandler {
         if mutation.has_remote_result() {
             return self.finalize(&mutation).await;
         }
+        if self.repository.drop_superseded(&mutation).await? {
+            return Ok(());
+        }
         if mutation.action_type == "comment" && mutation.has_ambiguous_remote_attempt() {
             self.repository
                 .park(

@@ -182,6 +182,9 @@ async fn liking_a_liked_track_again_keeps_its_superlike_and_its_place(
     .await?;
     assert_eq!(events, 1);
     let requeued: i64 = sqlx::query_scalar(sync_generation).fetch_one(&pool).await?;
-    assert_eq!(requeued, queued, "a repeat like queues no second sync");
+    assert!(
+        requeued > queued,
+        "a repeat like is a new intent, the node cannot know its copy is current"
+    );
     Ok(())
 }

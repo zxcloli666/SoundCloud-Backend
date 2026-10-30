@@ -288,13 +288,18 @@ impl TracksService {
         let sc_track_id = self.readable_sc_track_id(sc_user_id, track_urn).await?;
         let comment = super::comments::submitted(body)?;
         let target = super::mutations::target_urn(track_urn)?;
-        let mut transaction = self.pg.begin().await?;
-        self.sync_queue
-            .enqueue_on(&mut transaction, sc_user_id, "comment", &target, Some(body))
-            .await?;
-        super::comments::record_pending(&mut transaction, &sc_track_id, sc_user_id, &comment)
-            .await?;
-        transaction.commit().await?;
+        let (queued, sc_track_id, comment) = (&target, &sc_track_id, &comment);
+        crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            self.sync_queue
+                .enqueue_on(&mut transaction, sc_user_id, "comment", queued, Some(body))
+                .await?;
+            super::comments::record_pending(&mut transaction, sc_track_id, sc_user_id, comment)
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await?;
         Ok(json!({ "status": "queued", "actionType": "comment", "targetUrn": target }))
     }
 
