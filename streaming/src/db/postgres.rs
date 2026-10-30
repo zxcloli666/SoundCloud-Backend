@@ -235,8 +235,8 @@ impl PgPool {
         let row = client
             .query_one(
                 r#"INSERT INTO cdn_tracks (id, track_urn, quality, cdn_path, status, created_at, updated_at, last_accessed_at)
-                   VALUES ($1::text::uuid, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $5, cdn_path = $4, updated_at = NOW()
+                   VALUES ($1::text::uuid, $2, $3, $4, $5, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC', NOW())
+                   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $5, cdn_path = $4, updated_at = NOW() AT TIME ZONE 'UTC'
                    RETURNING id"#,
                 &[&id, &track_urn, &quality, &cdn_path, &status],
             )
@@ -262,8 +262,25 @@ impl PgPool {
         let client = self.connection().await?;
         client
             .execute(
-                r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() WHERE id = $1::text::uuid"#,
+                r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() AT TIME ZONE 'UTC' WHERE id = $1::text::uuid"#,
                 &[&id, &status],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_cdn_track_stored(
+        &self,
+        id: &str,
+        stored_quality: Option<&str>,
+    ) -> Result<(), PgError> {
+        let client = self.connection().await?;
+        client
+            .execute(
+                r#"UPDATE cdn_tracks
+                   SET status = 'ok', stored_quality = $2, updated_at = NOW() AT TIME ZONE 'UTC'
+                   WHERE id = $1::text::uuid"#,
+                &[&id, &stored_quality],
             )
             .await?;
         Ok(())
@@ -423,6 +440,44 @@ mod tests {
         assert!(
             cached.is_some(),
             "a track uploaded twice must still be served from storage"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a database with the latest API schema"]
+    async fn a_stored_upload_keeps_its_quality_and_a_utc_time_in_any_session_zone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut pg = PgConfig::new();
+        pg.url = Some(std::env::var("STREAMING_SCHEMA_TEST_DATABASE_URL")?);
+        pg.options = Some("-c TimeZone=America/New_York".to_owned());
+        pg.pool = Some(pool_config(2, 5));
+        let pg = PgPool {
+            pool: pg.create_pool(Some(Runtime::Tokio1), NoTls)?,
+        };
+        let urn = format!("soundcloud:tracks:quality-test-{}", Uuid::now_v7());
+
+        let id = pg.insert_cdn_track(&urn, "track.m4a", "pending").await?;
+        pg.mark_cdn_track_stored(&id, Some("hq")).await?;
+        let client = pg.pool.get().await?;
+        let row = client
+            .query_one(
+                "SELECT current_setting('TimeZone'),
+                        stored_quality,
+                        abs(extract(epoch FROM updated_at - (now() AT TIME ZONE 'UTC')))::float8
+                 FROM cdn_tracks WHERE track_urn = $1",
+                &[&urn],
+            )
+            .await?;
+        client
+            .execute("DELETE FROM cdn_tracks WHERE track_urn = $1", &[&urn])
+            .await?;
+
+        assert_eq!(row.get::<_, String>(0), "America/New_York");
+        assert_eq!(row.get::<_, Option<String>>(1).as_deref(), Some("hq"));
+        assert!(
+            row.get::<_, f64>(2) < 60.0,
+            "updated_at must be UTC wall time whatever the session zone"
         );
         Ok(())
     }
