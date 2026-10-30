@@ -796,6 +796,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -807,6 +808,7 @@ dependencies = [
  "sqlx",
  "url",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -5773,8 +5775,11 @@ dependencies = [
 name = "write-through"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
+ "serde_json",
  "sqlx",
+ "uuid",
 ]
 
 [[package]]

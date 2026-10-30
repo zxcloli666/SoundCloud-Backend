@@ -1,3 +1,4 @@
+use serde_json::json;
 use sqlx::PgPool;
 
 pub async fn install(pool: &PgPool) -> anyhow::Result<()> {
@@ -133,6 +134,58 @@ pub async fn seed_playlist(
             .execute(pool)
             .await?;
     }
+    baseline(pool, playlist_urn, track_ids).await
+}
+
+pub async fn observe(
+    pool: &PgPool,
+    playlist_urn: &str,
+    owner: &str,
+    track_count: i32,
+) -> anyhow::Result<()> {
+    catalog_ingest::upsert_playlist_from_sc(
+        pool,
+        &json!({
+            "urn": playlist_urn, "title": "Mix", "sharing": "public", "track_count": track_count,
+            "user": {"urn": format!("soundcloud:users:{owner}")}
+        }),
+        catalog_ingest::Observation::begin(pool).await?,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn seed_observed_playlist(
+    pool: &PgPool,
+    playlist_urn: &str,
+    owner: &str,
+    track_ids: &[&str],
+) -> anyhow::Result<uuid::Uuid> {
+    observe(pool, playlist_urn, owner, track_ids.len() as i32).await?;
+    sqlx::query("INSERT INTO user_owned_playlists (user_id, playlist_urn) VALUES ($1, $2)")
+        .bind(owner)
+        .bind(playlist_urn)
+        .execute(pool)
+        .await?;
+    for sc_track_id in track_ids {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+             VALUES ($1, $2, $3, $3, 120000)",
+        )
+        .bind(sc_track_id)
+        .bind(format!("soundcloud:tracks:{sc_track_id}"))
+        .bind(format!("track {sc_track_id}"))
+        .execute(pool)
+        .await?;
+    }
+    baseline(pool, playlist_urn, track_ids).await
+}
+
+async fn baseline(
+    pool: &PgPool,
+    playlist_urn: &str,
+    track_ids: &[&str],
+) -> anyhow::Result<uuid::Uuid> {
     let snapshot_id: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO playlist_remote_snapshots (playlist_urn, content_fingerprint, track_count)
          VALUES ($1, sha256($2::bytea), $3)
