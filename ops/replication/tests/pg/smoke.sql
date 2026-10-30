@@ -278,4 +278,21 @@ JOIN pg_catalog.pg_index i ON i.indrelid = ('public.' || l.tbl)::regclass AND i.
 JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
 WHERE NOT a.attname::text = ANY (l.cols);
 
+SELECT pg_temp.ok(public.scd_uuid_v3('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'python.org') = '6fa459ea-ee8a-3ca4-894e-db77e160355e',
+    'scd_uuid_v3: the RFC 4122 version 3 vector');
+SELECT pg_temp.ok(public.scd_uuid('like', 'u1', 't1') = 'f40a179c-e833-37f9-b060-e64530094322'
+    AND public.scd_uuid('k', E'\u00e9') = 'a71a42a5-f285-38c7-864f-9482a1793d1a',
+    'scd_uuid: fixed namespace, unit separator and UTF-8 bytes');
+SELECT pg_temp.ok(public.scd_uuid('like', 'u1', NULL) IS NULL AND public.scd_uuid(NULL, 'u1') IS NULL
+    AND public.scd_uuid('like', VARIADIC ARRAY[]::text[]) IS NULL, 'scd_uuid: a missing key part gives NULL');
+
+SET scd.node = 'star';
+CREATE TEMP TABLE clock AS SELECT public.scd_hlc(0) AS v1, public.scd_hlc(4611686018427387904) AS far;
+SELECT pg_temp.ok(v1 & 15 = 3 AND public.scd_hlc(v1) > v1 AND far = 4611686018427387904 + 16 + 3
+    AND abs(public.scd_hlc_offset_ms(v1)) < 5000, 'scd_hlc: node ordinal in the low bits, strictly above prev, wall clock otherwise')
+FROM clock;
+SET scd.node = 'nowhere';
+SELECT pg_temp.ok(public.scd_hlc(0) IS NULL, 'scd_hlc: an unknown node gives NULL, so a version write fails');
+SET scd.node = 'main';
+
 SELECT 'smoke ok' AS result;
