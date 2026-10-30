@@ -10,14 +10,15 @@ sqlx = ["dep:sqlx"]
 tokio-postgres = ["dep:tokio-postgres"]
 
 [dependencies]
-serde = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "json"], optional = true }
-tokio-postgres = { version = "0.7", features = ["with-serde_json-1"], optional = true }
-
-[dev-dependencies]
+chrono = { version = "0.4.35", default-features = false, features = ["std", "now", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "json"], optional = true }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"], optional = true }
+uuid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "json", "uuid", "chrono"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
 

@@ -48,12 +48,11 @@ async fn state(pool: &PgPool) -> anyhow::Result<(i64, i64, i32, String)> {
     Ok(row)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_pending_local_edit_does_not_defeat_the_observation_throttle(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
-    test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
+    test_schema::seed_observed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
     journal
@@ -72,12 +71,7 @@ async fn a_pending_local_edit_does_not_defeat_the_observation_throttle(
     .bind(PLAYLIST)
     .execute(&pool)
     .await?;
-    sqlx::query_file!(
-        "../utils/catalog-ingest/queries/playlists/ensure_membership_state.sql",
-        PLAYLIST
-    )
-    .execute(&pool)
-    .await?;
+    test_schema::observe(&pool, PLAYLIST, OWNER, 2).await?;
 
     let due: bool = sqlx::query_scalar(
         "SELECT next_reconcile_at <= clock_timestamp()

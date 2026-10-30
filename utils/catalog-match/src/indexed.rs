@@ -1,6 +1,7 @@
 use catalog_normalize::{TitleForms, normalize_title, title_forms, works_match};
 use sqlx::PgPool;
 use uuid::Uuid;
+use wt::MatchGeniusSong;
 
 use crate::score::title_score;
 
@@ -80,11 +81,15 @@ pub async fn attach_genius_song(
     track_id: Uuid,
     genius_song_id: i64,
 ) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_file_scalar!(
-        "queries/set_track_genius_song.sql",
+    let attach = MatchGeniusSong {
         track_id,
-        genius_song_id
-    )
-    .fetch_optional(pool)
+        genius_song_id,
+    };
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let attached = wt::call(&mut transaction, &attach).await?;
+        transaction.commit().await?;
+        Ok(attached)
+    })
     .await
 }

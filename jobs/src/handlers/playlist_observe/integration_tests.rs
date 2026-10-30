@@ -247,6 +247,16 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0174_scd_core_functions.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0204_scd_uuid_v5.sql"
+    ))
+    .execute(pool)
+    .await?;
     seed_legacy_playlist(pool).await?;
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0077_playlist_membership_shadow.sql"
