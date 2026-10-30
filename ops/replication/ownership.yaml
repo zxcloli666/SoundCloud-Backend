@@ -261,7 +261,7 @@ tables:
     planned: B2
     pk: [tbl, pk, id]
     columns: {tbl: text, pk: jsonb, node: "text NOT NULL", id: uuid}
-  oauth_app_tokens_local: {class: L, planned: B11}
+  oauth_app_tokens_local: {class: L, planned: B8, note: "fallback app tokens of this node: B11 issues them, streaming and the api read them with oauth_app_tokens"}
   repl_resend:
     class: L
     planned: B2

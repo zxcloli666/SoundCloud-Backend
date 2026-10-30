@@ -1,6 +1,7 @@
 mod jobs;
 mod matching;
 mod observe;
+mod storage;
 mod sync_queue;
 
 use std::fmt::Debug;
@@ -17,6 +18,7 @@ pub use observe::{
     Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers, ObservedPlaylist,
     ObservedTrack, ObservedUser,
 };
+pub use storage::TrackStorageLost;
 pub use sync_queue::{ConnectionDropOrphan, SyncQueuePurge, SyncQueueRevive};
 
 pub trait Kind: Serialize + Debug + Sync {

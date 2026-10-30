@@ -6,4 +6,5 @@ mod jobs;
 mod matching;
 mod observe;
 mod race;
+mod storage;
 mod sync_queue;

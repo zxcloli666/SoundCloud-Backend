@@ -91,8 +91,7 @@ impl StorageClient {
                 self.public_track_url(track_urn)
             }
             VerifyResult::Missing => {
-                let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
-                let _ = self.pg.mark_storage_lost(track_urn).await;
+                let _ = self.pg.mark_storage_lost(&cached.id, track_urn).await;
                 None
             }
             VerifyResult::Unavailable => None,
@@ -116,8 +115,7 @@ impl StorageClient {
                 if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
             {
                 self.mark_available();
-                let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
-                let _ = self.pg.mark_storage_lost(track_urn).await;
+                let _ = self.pg.mark_storage_lost(&cached.id, track_urn).await;
                 return None;
             }
             Ok(_) | Err(_) => {

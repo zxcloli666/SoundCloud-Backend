@@ -1243,6 +1243,23 @@
     {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_tokens_pkey", "primary": true, "where": null}
    ]
   },
+  "oauth_app_tokens_local": {
+   "columns": [
+    {"default": null, "generated": false, "name": "access_token", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": "gen_random_uuid()", "generated": false, "name": "generation", "notnull": true, "type": "uuid"},
+    {"default": "now()", "generated": false, "name": "issued_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "oauth_app_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "scope", "notnull": false, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+   ],
+   "unique": [
+    {"cols": ["oauth_app_id"], "expr": false, "keys": ["oauth_app_id"], "name": "oauth_app_tokens_local_pkey", "primary": true, "where": null}
+   ]
+  },
   "oauth_apps": {
    "columns": [
     {"default": "true", "generated": false, "name": "active", "notnull": true, "type": "boolean"},

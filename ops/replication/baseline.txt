@@ -62,5 +62,4 @@ api-write-c|api/queries/tracks/service/insert_owned.sql|user_owned_tracks
 api-write-c|api/queries/tracks/service/touch_last_read.sql|tracks
 api-write-c|api/queries/users/repository/touch_last_read.sql|users
 api-write-c|api/src/modules/admin/catalog.rs#artist_create|artists
-api-write-c|streaming/src/db/postgres.rs#mark_storage_lost|tracks
 core-delete-m|jobs/queries/playlist_observe/retire_remotely_deleted.sql|sync_queue

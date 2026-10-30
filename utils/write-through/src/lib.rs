@@ -9,7 +9,7 @@ pub use kinds::{
     JobEnqueue, Kind, LyricsWake, LyricsWakeState, MatchAlbumTrack, MatchGeniusSong,
     MatchScAccount, MatchWantedLink, Mode, ObserveClaim, ObservePlaylists, ObserveProfile,
     ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack, ObservedUser, SyncQueuePurge,
-    SyncQueueRevive,
+    SyncQueueRevive, TrackStorageLost,
 };
 #[cfg(feature = "sqlx")]
 pub use sqlx_pg::call;
