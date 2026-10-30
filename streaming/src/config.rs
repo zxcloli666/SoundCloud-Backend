@@ -1,6 +1,7 @@
 use std::env;
 
 use stream_ticket::{StreamTicketKey, StreamTicketKeys};
+use tracing::warn;
 
 const DEFAULT_REGIONS: &str = "geo-us,geo-de,geo-ru,geo-fr,geo-nl";
 
@@ -109,7 +110,7 @@ impl Config {
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
-            hq_upgrade: switched_on(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
+            hq_upgrade: hq_upgrade_from_env(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
         }
     }
 
@@ -203,8 +204,15 @@ fn pool_max_from_env(raw: Option<&str>) -> usize {
         .min(MAX_POOL_MAX)
 }
 
-fn switched_on(raw: Option<&str>) -> bool {
-    raw.map(str::trim) == Some("on")
+fn hq_upgrade_from_env(raw: Option<&str>) -> bool {
+    match raw.map(str::trim) {
+        None | Some("") | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            warn!("STREAMING_HQ_UPGRADE={other} is neither on nor off, the node role decides");
+            true
+        }
+    }
 }
 
 fn acquire_timeout_from_env(raw: Option<&str>) -> u64 {
@@ -280,18 +288,22 @@ mod tests {
     }
 
     #[test]
-    fn hq_upgrades_run_only_where_they_were_switched_on() {
-        assert!(switched_on(Some("on")));
-        assert!(switched_on(Some(" on\n")));
+    fn hq_upgrades_stop_only_where_they_were_switched_off() {
+        assert!(!hq_upgrade_from_env(Some("off")));
+        assert!(!hq_upgrade_from_env(Some(" off\n")));
         for raw in [
             None,
             Some(""),
-            Some("off"),
-            Some("true"),
-            Some("ON"),
-            Some("1"),
+            Some("on"),
+            Some(" on "),
+            Some("OFF"),
+            Some("false"),
+            Some("0"),
         ] {
-            assert!(!switched_on(raw), "{raw:?} must leave HQ upgrades off");
+            assert!(
+                hq_upgrade_from_env(raw),
+                "{raw:?} must leave HQ upgrades to the node role, never stop them"
+            );
         }
     }
 

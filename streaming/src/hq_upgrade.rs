@@ -89,7 +89,7 @@ async fn pick_on_core(pg: &PgPool, stored: &'static str, tiers: &[UpgradeTier]) 
     match pg.is_core().await {
         Ok(true) => pick(pg, stored, tiers).await,
         Ok(false) => {
-            warn!("[hq-upgrade] STREAMING_HQ_UPGRADE is on, but this database is not core");
+            debug!("[hq-upgrade] this database is not core, core upgrades the tracks");
             Vec::new()
         }
         Err(e) => {

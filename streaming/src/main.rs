@@ -166,7 +166,7 @@ async fn main() {
             config.sc_proxy_url.clone(),
         );
     } else {
-        info!("[hq-upgrade] STREAMING_HQ_UPGRADE is not on, core upgrades the tracks");
+        info!("[hq-upgrade] STREAMING_HQ_UPGRADE=off, this node never upgrades");
     }
 
     let state = AppState {
