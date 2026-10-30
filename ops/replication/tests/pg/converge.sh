@@ -270,6 +270,37 @@ quiet
 expect "the purge skips a row that changed under the caller (purged=$purged), the re-like lives on every node" \
   "SELECT coalesce(string_agg(wanted_state::text, ','), 'none') FROM public.user_likes_tracks WHERE user_id = 'pl'" true
 
+say "M: a stale row after its purge is refused on core and on the api nodes; a re-like after the purge lives"
+sr_pk='{"user_id": "sr", "sc_track_id": "t1"}'
+blocked() { val "scd_b1_$1" "SELECT n FROM public.scd_counters WHERE counter = 'purge_block' AND tbl = 'user_likes_tracks'"; }
+sql -d scd_b1_main -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('sr', 't1')"
+calm
+sql -d scd_b1_main -c "UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'sr'"
+calm
+sr_v="$(val scd_b1_core "SELECT wanted_v FROM public.user_likes_tracks WHERE user_id = 'sr' AND NOT wanted_state")"
+stale="$(val scd_b1_main "SELECT public.scd_row_json('user_likes_tracks', '$sr_pk')")"
+[ -n "$sr_v" ] && [ -n "$stale" ] || { echo "FAIL core did not see the unlike of sr"; exit 1; }
+core_before="$(blocked core)"; main_before="$(blocked main)"; star_before="$(blocked star)"
+pause star star_from_core
+[ "$(val scd_b1_core "SELECT public.scd_purge_intent('user_likes_tracks', '$sr_pk', $sr_v)")" = t ] || { echo "FAIL core did not purge sr"; exit 1; }
+wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.user_likes_tracks WHERE user_id = 'sr')" "main applies the purge"
+sql -d scd_b1_star -c "INSERT INTO public.repl_resend (tbl, pk) VALUES ('user_likes_tracks', '$sr_pk')" -c "SELECT public.scd_drain_resend()" > /dev/null
+wait_for scd_b1_core "SELECT n > $core_before FROM public.scd_counters WHERE counter = 'purge_block' AND tbl = 'user_likes_tracks'" "core refuses star's stale resend and counts it"
+[ "$(val scd_b1_core "SELECT count(*) FROM public.user_likes_tracks WHERE user_id = 'sr'")" = 0 ] \
+  && echo "ok core keeps the purged row gone" || { echo "FAIL core took back the purged row"; failed=$((failed + 1)); }
+sql -d scd_b1_core -c "INSERT INTO public.repl_repair (id, src_node, tbl, pk, \"row\") VALUES ('00000000-0000-0000-0000-0000000000a5', 'core', 'user_likes_tracks', '$sr_pk', '$stale')" \
+  -c "DELETE FROM public.repl_repair WHERE id = '00000000-0000-0000-0000-0000000000a5'" > /dev/null
+wait_for scd_b1_main "SELECT n > $main_before FROM public.scd_counters WHERE counter = 'purge_block' AND tbl = 'user_likes_tracks'" "main refuses a stale repair from core and counts it"
+resume star star_from_core
+quiet
+[ "$(blocked star)" -gt "$star_before" ] && echo "ok star refuses the stale repair after its own purge" \
+  || { echo "FAIL star did not refuse the stale repair"; failed=$((failed + 1)); }
+expect "the purged row stays gone on every node" "SELECT count(*) FROM public.user_likes_tracks WHERE user_id = 'sr'" 0
+sql -d scd_b1_star -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('sr', 't1')"
+quiet
+expect "a re-like after the purge lives on every node, above the purged version" \
+  "SELECT coalesce(string_agg((wanted_state AND wanted_v > $sr_v)::text, ','), 'none') FROM public.user_likes_tracks WHERE user_id = 'sr'" true
+
 agree() {
   local n a b d out="" bad=0
   for n in $nodes; do rows "$n" "$1" "$2" > "$tmp/rows.$n"; done

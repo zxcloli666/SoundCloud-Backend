@@ -127,6 +127,8 @@ def ver(t):
         prev = "NEW." + q(g["version"])
         if lww(t) and g["version"] == row_version(t):
             prev = "greatest(%s, %s)" % (prev, newest_tomb(lit(t.name), pk_json("NEW", t.pk)))
+        if purge_floored(t, g):
+            prev = "greatest(%s, %s)" % (prev, newest_purge(lit(t.name), pk_json("NEW", t.pk)))
         bump = "        NEW.%s := public.scd_hlc(%s);" % (q(g["version"]), prev)
         cond = owns(g["owner"])
         if cond:
@@ -136,9 +138,10 @@ def ver(t):
     lines += ["        RETURN NEW;", "    END IF;"]
     for gname, g in groups:
         v = q(g["version"])
+        floor = ", " + newest_purge(lit(t.name), pk_json("NEW", t.pk)) if purge_floored(t, g) else ""
         lines += [
             "    IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", g["cols"]), tup("OLD", g["cols"])),
-            "        NEW.%s := public.scd_hlc(greatest(OLD.%s, NEW.%s));" % (v, v, v),
+            "        NEW.%s := public.scd_hlc(greatest(OLD.%s, NEW.%s%s));" % (v, v, v, floor),
             "    ELSE",
             "        NEW.%s := greatest(OLD.%s, NEW.%s);" % (v, v, v),
             "    END IF;",
@@ -147,6 +150,34 @@ def ver(t):
     sql = function(fn_name("ver", t), "\n".join(lines))
     sql += trigger(t, "zz_ver", "BEFORE INSERT OR UPDATE", fn_name("ver", t) + "()")
     return "zz_ver", sql, []
+
+
+def purgeable(t):
+    return t.cls == "M" and bool(t.pk) and bool(t.api_groups())
+
+
+def purge_floored(t, g):
+    return purgeable(t) and g["owner"] in ("api", "both")
+
+
+def newest_purge(tbl, key):
+    return "(SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = %s AND x.pk = %s)" % (tbl, key)
+
+
+def api_newest(t, rec):
+    versions = ["%s.%s" % (rec, q(g["version"])) for _, g in t.api_groups()]
+    return versions[0] if len(versions) == 1 else "greatest(%s)" % ", ".join(versions)
+
+
+def purge_block(t):
+    seq = "scd_purge_block_" + t.name
+    return [
+        "pv := %s;" % newest_purge(lit(t.name), pk_json("NEW", t.pk)),
+        "IF pv IS NOT NULL AND %s <= pv THEN" % api_newest(t, "NEW"),
+        "    PERFORM nextval('public.%s'::regclass);" % seq,
+        "    RETURN NULL;",
+        "END IF;",
+    ], [("purge_block", t.name, seq)]
 
 
 def owns(owner):
@@ -164,8 +195,14 @@ def merge(t):
     lines = ["DECLARE", "    o record;", "    core boolean := public.scd_role() = 'core';", "    n bigint;"]
     if tombs:
         lines.append("    tv bigint;")
+    if purgeable(t):
+        lines.append("    pv bigint;")
     lines += ["BEGIN"]
     lines += ["    IF current_setting('scd.merging', true) = 'on' THEN", "        RETURN NEW;", "    END IF;"]
+    seqs = []
+    if purgeable(t):
+        blocked, seqs = purge_block(t)
+        lines += indent(blocked)
     lines += ["    IF TG_OP = 'UPDATE' THEN"]
     for _, g in groups:
         if not g["version"]:
@@ -182,7 +219,6 @@ def merge(t):
     body = ["SELECT t.* INTO o FROM %s t WHERE %s;" % (table(t.name), same("t", "NEW", t.pk)), "IF FOUND THEN"]
     body += indent(merge_into(t))
     body += ["    RETURN NULL;", "END IF;"]
-    seqs = []
     for name, how in sorted(t.unique_decl.items()):
         u = t.unique_index(name)
         if how != "id" or u is None:

@@ -89,6 +89,11 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_oauth_app_request_cooldowns;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_sessions;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_soundcloud_connections;
 CREATE SEQUENCE IF NOT EXISTS public.scd_orphan_track_artist_blocks;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_soundcloud_connections;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_sync_queue;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_followings;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_likes_playlists;
+CREATE SEQUENCE IF NOT EXISTS public.scd_purge_block_user_likes_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_discover_promoted;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_disliked_tracks;
 CREATE SEQUENCE IF NOT EXISTS public.scd_resend_sc_egress_health;
@@ -3666,9 +3671,15 @@ DECLARE
     o record;
     core boolean := public.scd_role() = 'core';
     n bigint;
+    pv bigint;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF pv IS NOT NULL AND NEW.token_v <= pv THEN
+        PERFORM nextval('public.scd_purge_block_soundcloud_connections'::regclass);
+        RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.token_v < OLD.token_v OR (core AND NEW.token_v = OLD.token_v) THEN
@@ -3789,11 +3800,11 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.token_v := public.scd_hlc(NEW.token_v);
+        NEW.token_v := public.scd_hlc(greatest(NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id))));
         RETURN NEW;
     END IF;
     IF (NEW.soundcloud_user_id, NEW.username, NEW.created_at, NEW.oauth_app_id, NEW.access_token, NEW.refresh_token, NEW.expires_at, NEW.scope) IS DISTINCT FROM (OLD.soundcloud_user_id, OLD.username, OLD.created_at, OLD.oauth_app_id, OLD.access_token, OLD.refresh_token, OLD.expires_at, OLD.scope) THEN
-        NEW.token_v := public.scd_hlc(greatest(OLD.token_v, NEW.token_v));
+        NEW.token_v := public.scd_hlc(greatest(OLD.token_v, NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id))));
     ELSE
         NEW.token_v := greatest(OLD.token_v, NEW.token_v);
     END IF;
@@ -3971,9 +3982,15 @@ DECLARE
     o record;
     core boolean := public.scd_role() = 'core';
     n bigint;
+    pv bigint;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'sync_queue' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF pv IS NOT NULL AND NEW.intent_v <= pv THEN
+        PERFORM nextval('public.scd_purge_block_sync_queue'::regclass);
+        RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.intent_v < OLD.intent_v OR (core AND NEW.intent_v = OLD.intent_v) THEN
@@ -4116,12 +4133,12 @@ AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
-            NEW.intent_v := public.scd_hlc(NEW.intent_v);
+            NEW.intent_v := public.scd_hlc(greatest(NEW.intent_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'sync_queue' AND x.pk = jsonb_build_object('id', NEW.id))));
         END IF;
         RETURN NEW;
     END IF;
     IF (NEW.user_id, NEW.action_type, NEW.target_urn, NEW.created_at, NEW.payload, NEW.generation, NEW.cancelled) IS DISTINCT FROM (OLD.user_id, OLD.action_type, OLD.target_urn, OLD.created_at, OLD.payload, OLD.generation, OLD.cancelled) THEN
-        NEW.intent_v := public.scd_hlc(greatest(OLD.intent_v, NEW.intent_v));
+        NEW.intent_v := public.scd_hlc(greatest(OLD.intent_v, NEW.intent_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'sync_queue' AND x.pk = jsonb_build_object('id', NEW.id))));
     ELSE
         NEW.intent_v := greatest(OLD.intent_v, NEW.intent_v);
     END IF;
@@ -4936,9 +4953,15 @@ DECLARE
     o record;
     core boolean := public.scd_role() = 'core';
     n bigint;
+    pv bigint;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_followings' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn));
+    IF pv IS NOT NULL AND NEW.wanted_v <= pv THEN
+        PERFORM nextval('public.scd_purge_block_user_followings'::regclass);
+        RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
@@ -5016,12 +5039,12 @@ AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
-            NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
+            NEW.wanted_v := public.scd_hlc(greatest(NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_followings' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn))));
         END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
-        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v));
+        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_followings' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn))));
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
@@ -5195,9 +5218,15 @@ DECLARE
     o record;
     core boolean := public.scd_role() = 'core';
     n bigint;
+    pv bigint;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_playlists' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn));
+    IF pv IS NOT NULL AND NEW.wanted_v <= pv THEN
+        PERFORM nextval('public.scd_purge_block_user_likes_playlists'::regclass);
+        RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
@@ -5275,12 +5304,12 @@ AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
-            NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
+            NEW.wanted_v := public.scd_hlc(greatest(NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_playlists' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn))));
         END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
-        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v));
+        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_playlists' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn))));
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
@@ -5304,9 +5333,15 @@ DECLARE
     o record;
     core boolean := public.scd_role() = 'core';
     n bigint;
+    pv bigint;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_tracks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id));
+    IF pv IS NOT NULL AND NEW.wanted_v <= pv THEN
+        PERFORM nextval('public.scd_purge_block_user_likes_tracks'::regclass);
+        RETURN NULL;
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.wanted_v < OLD.wanted_v OR (core AND NEW.wanted_v = OLD.wanted_v) THEN
@@ -5386,12 +5421,12 @@ AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF public.scd_role() = 'api' OR current_setting('scd.writer', true) = 'api' THEN
-            NEW.wanted_v := public.scd_hlc(NEW.wanted_v);
+            NEW.wanted_v := public.scd_hlc(greatest(NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_tracks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
         END IF;
         RETURN NEW;
     END IF;
     IF (NEW.wanted_state, NEW.created_at) IS DISTINCT FROM (OLD.wanted_state, OLD.created_at) THEN
-        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v));
+        NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_tracks' AND x.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id))));
     ELSE
         NEW.wanted_v := greatest(OLD.wanted_v, NEW.wanted_v);
     END IF;
@@ -6274,6 +6309,11 @@ FROM (VALUES
     ('orphan', 'sessions', 'scd_orphan_sessions'),
     ('orphan', 'soundcloud_connections', 'scd_orphan_soundcloud_connections'),
     ('orphan', 'track_artist_blocks', 'scd_orphan_track_artist_blocks'),
+    ('purge_block', 'soundcloud_connections', 'scd_purge_block_soundcloud_connections'),
+    ('purge_block', 'sync_queue', 'scd_purge_block_sync_queue'),
+    ('purge_block', 'user_followings', 'scd_purge_block_user_followings'),
+    ('purge_block', 'user_likes_playlists', 'scd_purge_block_user_likes_playlists'),
+    ('purge_block', 'user_likes_tracks', 'scd_purge_block_user_likes_tracks'),
     ('resend', 'discover_promoted', 'scd_resend_discover_promoted'),
     ('resend', 'disliked_tracks', 'scd_resend_disliked_tracks'),
     ('resend', 'sc_egress_health', 'scd_resend_sc_egress_health'),

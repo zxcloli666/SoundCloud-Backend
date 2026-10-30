@@ -79,6 +79,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 13. `0209_scd_tombstones_version_index`: unique index on `repl_tombstones (tbl, pk, v)`, concurrently.
 14. `0210_scd_tombstones_version_key`: that index becomes the primary key; one immutable row per delete.
 15. `0211_scd_install`: the generated SQL again: a tombstone that arrives locks the live row, is written, then deletes what it covers (lab T3h deadlock, T9 lost slot); core columns (derived on core) stay out of the hash; `scd_resend_all()`; zz_owner applies a core row equal to the local one instead of raising 23505.
+16. `0212_scd_install`: the generated SQL again: an M row at or below its `repl_purges` version is refused on every node and counted (`purge_block`); a local M write starts above it.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
@@ -88,8 +89,8 @@ Every public object is schema-qualified (`public.`); the apply worker runs with 
 
 | trigger | fires | tables | does |
 |---|---|---|---|
-| zz_ver | origin | M, versioned A, repl_tombstones | bumps a group version with `scd_hlc` when the group changes; on insert only for groups this node owns; an insert into an LWW tombstone table starts above the newest local tombstone; a tombstone gets a fresh HLC above the key's newest, an UPDATE of `repl_tombstones` raises 0A000 |
-| zz_merge | replica, split | M, versioned A | keeps the higher version per versioned group, ties go to the incoming row on api and the stored row on core; core groups are taken from core as is; insert on an existing PK or R6 natural key becomes a merge (R6 conflict counted), `least` columns merge with least() for a row born on another node |
+| zz_ver | origin | M, versioned A, repl_tombstones | bumps a group version with `scd_hlc` when the group changes; on insert only for groups this node owns; an insert into an LWW tombstone table starts above the newest local tombstone; an M api group starts or moves above the key's newest `repl_purges` version; a tombstone gets a fresh HLC above the key's newest, an UPDATE of `repl_tombstones` raises 0A000 |
+| zz_merge | replica, split | M, versioned A | refuses an M row (insert or update) whose api version is at or below the key's newest `repl_purges` version and counts it, on every apply path (apply, `scd_apply_row` in repair and reassert, resend); keeps the higher version per versioned group, ties go to the incoming row on api and the stored row on core; core groups are taken from core as is; insert on an existing PK or R6 natural key becomes a merge (R6 conflict counted), `least` columns merge with least() for a row born on another node |
 | zz_skip | replica, split | insert-only A | skips an insert on an existing PK |
 | zz_tomb | origin, split | tombstone A | BEFORE DELETE: writes `repl_tombstones` first, so the tombstone reaches a peer ahead of the key-only DELETE; its `v` is the delete's HLC |
 | zz_tomb_check | replica, split | tombstone A | drops an insert the tombstone covers; LWW tables queue a resend of the tombstone to the sender |

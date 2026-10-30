@@ -319,6 +319,31 @@ SELECT pg_temp.ok(
     AND (SELECT count(*) FROM public.repl_resend WHERE tbl = 'user_likes_tracks') = 2
     AND pg_temp.n('resend', 'user_likes_tracks') = 2,
     'zz_purge_guard: a purge covered by its receipt applies; newer or unreceipted intent is kept and queued for resend');
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_v)
+SELECT 'u2', 't1', purged_v FROM public.repl_purges WHERE tbl = 'user_likes_tracks' AND pk ->> 'user_id' = 'u2';
+SELECT pg_temp.ok(NOT EXISTS (SELECT 1 FROM public.user_likes_tracks WHERE user_id = 'u2') AND pg_temp.n('purge_block', 'user_likes_tracks') = 1,
+    'zz_merge: an M row at or below its purge is refused and counted');
+CREATE TEMP TABLE u3_before AS SELECT wanted_v FROM public.user_likes_tracks WHERE user_id = 'u3';
+UPDATE public.user_likes_tracks t SET wanted_v = p.purged_v, wanted_state = false
+FROM public.repl_purges p WHERE p.tbl = 'user_likes_tracks' AND p.pk ->> 'user_id' = 'u3' AND t.user_id = 'u3';
+SELECT pg_temp.ok(t.wanted_v = b.wanted_v AND t.wanted_state AND pg_temp.n('purge_block', 'user_likes_tracks') = 2,
+    'zz_merge: an M update at or below its purge is refused and counted')
+FROM public.user_likes_tracks t, u3_before b WHERE t.user_id = 'u3';
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_v)
+SELECT 'u2', 't1', purged_v + 16 FROM public.repl_purges WHERE tbl = 'user_likes_tracks' AND pk ->> 'user_id' = 'u2';
+SELECT pg_temp.ok(count(*) = 1 AND pg_temp.n('purge_block', 'user_likes_tracks') = 2, 'zz_merge: an M row above its purge applies')
+FROM public.user_likes_tracks WHERE user_id = 'u2';
+SET session_replication_role = origin;
+INSERT INTO public.repl_purges (tbl, pk, purged_v)
+VALUES ('user_likes_tracks', '{"user_id": "u6", "sc_track_id": "t1"}', public.scd_hlc(0) + (3600000000::bigint << 4));
+INSERT INTO public.user_likes_tracks (user_id, sc_track_id) VALUES ('u6', 't1');
+SELECT pg_temp.ok(t.wanted_v > p.purged_v, 'zz_ver: a like after a purge ahead of the clock starts above the purge')
+FROM public.user_likes_tracks t, public.repl_purges p WHERE t.user_id = 'u6' AND p.pk ->> 'user_id' = 'u6';
+UPDATE public.repl_purges SET purged_v = purged_v + (7200000000::bigint << 4) WHERE pk ->> 'user_id' = 'u6';
+UPDATE public.user_likes_tracks SET wanted_state = false WHERE user_id = 'u6';
+SELECT pg_temp.ok(t.wanted_v > p.purged_v, 'zz_ver: an intent change after a purge ahead of the clock goes above the purge')
+FROM public.user_likes_tracks t, public.repl_purges p WHERE t.user_id = 'u6' AND p.pk ->> 'user_id' = 'u6';
+SET session_replication_role = replica;
 
 SET scd.role = 'core';
 SET session_replication_role = origin;

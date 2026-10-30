@@ -145,6 +145,28 @@ class Generated(unittest.TestCase):
         self.assertNotIn("last_read_at = NEW.last_read_at", owner)
         self.assertIn("NEW.last_read_at", owner)
 
+    def test_purged_m_rows_never_come_back(self):
+        text = self.files["triggers.sql"]
+
+        def body(fn):
+            out = text[text.index("FUNCTION public.%s(" % fn):]
+            return out[:out.index("$f$;")]
+
+        merge = body("scd_merge_user_likes_tracks")
+        lookup = "pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'user_likes_tracks'"
+        self.assertLess(merge.index(lookup), merge.index("IF TG_OP = 'UPDATE' THEN"))
+        self.assertLess(merge.index("IF current_setting('scd.merging', true) = 'on' THEN"), merge.index(lookup))
+        self.assertIn("    IF pv IS NOT NULL AND NEW.wanted_v <= pv THEN\n"
+                      "        PERFORM nextval('public.scd_purge_block_user_likes_tracks'::regclass);\n"
+                      "        RETURN NULL;\n", merge)
+        ver = body("scd_ver_user_likes_tracks")
+        self.assertEqual(ver.count("FROM public.repl_purges x WHERE x.tbl = 'user_likes_tracks'"), 2)
+        self.assertIn("NEW.wanted_v := public.scd_hlc(greatest(OLD.wanted_v, NEW.wanted_v, (SELECT max(x.purged_v)", ver)
+        for fn in ("scd_merge_disliked_tracks", "scd_ver_disliked_tracks"):
+            self.assertNotIn("repl_purges", body(fn), fn)
+        for tbl in ("soundcloud_connections", "sync_queue", "user_followings", "user_likes_playlists", "user_likes_tracks"):
+            self.assertIn("('purge_block', '%s', 'scd_purge_block_%s')" % (tbl, tbl), text)
+
     def test_tombstones_are_versioned_deletes(self):
         text = self.files["triggers.sql"]
 
