@@ -619,6 +619,182 @@
           "legendFormat": "{{kind}}"
         }
       ]
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Replication",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Core apply: received but not applied",
+      "description": "Bytes the apply worker of each api stream holds. Flat zero when idle; a steady climb means apply does not keep up.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "scd_cmd_backlog",
+          "legendFormat": "{{sub}}"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Core apply: seconds without progress while data waits",
+      "description": "Zero when nothing waits. A growing line is a stuck worker, usually a row lock held on a replicated table.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "scd_cmd_age_seconds",
+          "legendFormat": "{{sub}}"
+        },
+        {
+          "refId": "B",
+          "expr": "scd_cmd_sub_up == 0",
+          "legendFormat": "{{sub}} down"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Dead commands by kind",
+      "description": "Commands whose kind failed for good. Replay with the repl.replay_dead job after fixing the cause. Deleted after 7 days.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (scd_cmd_dead)",
+          "legendFormat": "{{kind}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (kind) (scd_cmd_dead_oldest_seconds)",
+          "legendFormat": "oldest {{kind}} (s)"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Retention",
+      "description": "Rows deleted per hour by table, and 1 while the guard holds the table back (inactive slot or subscription, lag, or pending resends).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 93
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (table) (increase(scd_repl_retention_deleted_total[1h]))",
+          "legendFormat": "deleted/h {{table}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (table) (scd_repl_retention_held)",
+          "legendFormat": "held {{table}}"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Resend queues and verify",
+      "description": "Keys waiting for resend per node, and keys verify could not repair.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "scd_repl_resend_queued",
+          "legendFormat": "queued {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (peer, tbl) (increase(scd_repl_verify_unresolved_total[1h]))",
+          "legendFormat": "unresolved {{peer}} {{tbl}}"
+        }
+      ]
     }
   ]
 }

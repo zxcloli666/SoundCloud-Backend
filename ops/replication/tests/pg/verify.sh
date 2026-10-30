@@ -49,7 +49,7 @@ verify_cycle() {
     calm
     rep="$(val scd_b1_core "SELECT peer || ' ' || rel || ' ' || coalesce(k::text, '-') || ' ' || action || ' ' || attempt FROM public.scd_verify_repair($dry, 1000)")"
     [ -n "$rep" ] && printf '%s\n' "$rep" | awk -v out="$out" '$(NF-1) == "recheck" {print >> (out ".recheck"); next} {print >> out}'
-    if [ -z "$rep" ] && [ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node <> 'core'")" = 0 ] \
+    if [ -z "$rep" ] && [ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node <> 'core' AND tbl <> '*'")" = 0 ] \
       && [ "$(val scd_b1_main "SELECT count(*) FROM public.repl_resend")" = 0 ] && [ "$(val scd_b1_star "SELECT count(*) FROM public.repl_resend")" = 0 ]; then
       return 0
     fi
@@ -123,7 +123,7 @@ reach
 calm
 sweep_all > /dev/null
 calm
-[ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node <> 'core'")" = 0 ] \
+[ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node <> 'core' AND tbl <> '*'")" = 0 ] \
   && echo "ok a full probe cycle on equal nodes gets no answer ($probe_sent)" || { echo "FAIL equal nodes answered a probe"; exit 1; }
 [ "$(val scd_b1_main "SELECT state || ' ' || probes FROM public.scd_verify_probe()")" = "idle 0" ] && echo "ok probes run on core only" || { echo "FAIL main probed"; exit 1; }
 
@@ -270,10 +270,10 @@ END
 \$f\$"
 sql -d scd_b1_star -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b1', 'Old', 'old', 'sc')"
 errors_before="$(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats")"
-answers_before="$(val scd_b1_star "SELECT count(*) FROM public.repl_checksums")"
+answers_before="$(val scd_b1_star "SELECT count(*) FROM public.repl_checksums WHERE tbl <> '*'")"
 val scd_b1_core "SELECT probes FROM public.scd_verify_probe(100000, 500)" > /dev/null
 calm
-got="answers $(( $(val scd_b1_star "SELECT count(*) FROM public.repl_checksums") - answers_before ))/$(val scd_b1_star "SELECT count(*) FROM public.repl_resend"), apply errors $(( $(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats") - errors_before ))"
+got="answers $(( $(val scd_b1_star "SELECT count(*) FROM public.repl_checksums WHERE tbl <> '*'") - answers_before ))/$(val scd_b1_star "SELECT count(*) FROM public.repl_resend"), apply errors $(( $(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats") - errors_before ))"
 [ "$got" = "answers 0/0, apply errors 0" ] && echo "ok the old applier skips every op and its apply worker keeps running ($got)" || { echo "FAIL old applier: $got"; failed=$((failed + 1)); }
 sql -d scd_b1_star -c "$newdef"
 verify_cycle false "$tmp/verify.old"

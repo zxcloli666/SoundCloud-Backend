@@ -396,3 +396,86 @@ groups:
         annotations:
           summary: "jobs recreated the worker consumer of lane {{ $labels.lane }}"
           description: "NATS refused to update a field in place, so the durable was deleted and created again. Tasks in the work queue survive; somebody changed the consumer by hand or an old owner is still around."
+
+  - name: scd-replication
+    interval: 30s
+    rules:
+      - alert: ReplDeadCommand
+        expr: sum by (kind) (scd_cmd_dead) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Dead commands of kind {{ $labels.kind }} wait on core"
+          description: "Core ran an api command and the kind failed with an error that retrying cannot fix. The api already got core's row back (reassert or purge). Read cmd_dead, fix the cause, then replay with the repl.replay_dead job. Dead letters are deleted after 7 days."
+
+      - alert: ReplDeadCommandAged
+        expr: max by (kind) (scd_cmd_dead_oldest_seconds) > 5 * 24 * 3600
+        for: 10m
+        labels:
+          severity: critical
+          service: jobs
+        annotations:
+          summary: "A dead command of kind {{ $labels.kind }} is older than 5 days"
+          description: "Retention deletes dead letters after 7 days, and a deleted letter can no longer be replayed."
+
+      - alert: ReplSubscriptionDown
+        expr: scd_cmd_sub_up == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: jobs
+        annotations:
+          summary: "Core does not apply the stream of {{ $labels.sub }}"
+          description: "The subscription is disabled or its apply worker is gone. Commands of that api node wait in its outbox and retention keeps every tombstone and receipt."
+
+      - alert: ReplApplyStuck
+        expr: scd_cmd_age_seconds > 120 and scd_cmd_backlog > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: jobs
+        annotations:
+          summary: "The apply worker of {{ $labels.sub }} has not moved for {{ $value | humanizeDuration }}"
+          description: "Data is received but not applied. Usual causes are a row lock held by a long job on a replicated table, or a poison transaction the worker retries every 5 seconds."
+
+      - alert: ReplApplyBacklog
+        expr: scd_cmd_backlog > 256 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "{{ $labels.sub }} holds {{ $value | humanize1024 }}B received and not applied"
+          description: "Apply does not keep up with the api node. Command latency for its users grows with this."
+
+      - alert: ReplRetentionHeld
+        expr: max by (table) (scd_repl_retention_held) == 1
+        for: 6h
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Retention of {{ $labels.table }} is held back for 6 hours"
+          description: "A slot or subscription of core is inactive or behind, or a node still has pending resends. The held tables only grow meanwhile. The reason is in the jobs log, line 'replication retention held back'."
+
+      - alert: ReplResendQueueStuck
+        expr: min_over_time(scd_repl_resend_queued[30m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "A node has kept resend keys queued for 30 minutes"
+          description: "The sweeper ships pending resends within seconds. Retention of tombstones and receipts waits for every queue to be empty."
+
+      - alert: ReplVerifyUnresolved
+        expr: increase(scd_repl_verify_unresolved_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Verify cannot repair {{ $labels.tbl }} on {{ $labels.peer }}"
+          description: "A key still differs after three repair attempts, for example two ids for one natural key."
