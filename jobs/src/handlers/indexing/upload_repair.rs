@@ -61,7 +61,7 @@ impl IndexingHandler {
         for upload in lost {
             let event = json!({
                 "sc_track_id": upload.sc_track_id,
-                "storage_url": self.storage_redirect_url(&upload.sc_track_id)?,
+                "storage_url": self.storage_audio_url(&upload.sc_track_id)?,
                 "quality": upload.stored_quality,
             });
             self.bus
