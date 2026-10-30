@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use backend_contracts::pipeline::StorageTrackUploaded;
+use sqlx::postgres::PgPoolOptions;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{DurationConfig, IndexingConfig, NatsConfig, QdrantConfig};
@@ -69,9 +70,11 @@ fn handler(pool: PgPool, bus: Bus) -> anyhow::Result<IndexingHandler> {
 struct Tracks {
     lost: String,
     lost_again: String,
+    lost_upgrade: String,
     lost_later: String,
     via_leaf: String,
     too_fresh: String,
+    too_old: String,
     stored: String,
 }
 
@@ -82,45 +85,79 @@ impl Tracks {
         Self {
             lost: id(0),
             lost_again: id(1),
-            lost_later: id(2),
-            via_leaf: id(3),
-            too_fresh: id(4),
-            stored: id(5),
+            lost_upgrade: id(2),
+            lost_later: id(3),
+            via_leaf: id(4),
+            too_fresh: id(5),
+            too_old: id(6),
+            stored: id(7),
         }
     }
 }
 
-async fn seed(
-    pool: &PgPool,
-    sc_track_id: &str,
-    storage_state: &str,
+struct Upload<'a> {
+    sc_track_id: &'a str,
+    storage_state: &'a str,
+    storage_quality: Option<&'a str>,
+    stored_quality: Option<&'a str>,
     uploaded_minutes_ago: i64,
     event_minutes_ago: Option<i64>,
-) -> anyhow::Result<()> {
+}
+
+async fn pool_in_zone(pool: &PgPool, zone: &'static str) -> anyhow::Result<PgPool> {
+    let options = (*pool.connect_options()).clone();
+    Ok(PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(move |connection, _| {
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('TimeZone', $1, false)")
+                    .bind(zone)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await?)
+}
+
+async fn zone_of(pool: &PgPool) -> anyhow::Result<String> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT current_setting('TimeZone')")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn seed(writer: &PgPool, upload: Upload<'_>) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (
              sc_track_id, urn, title, title_normalized, duration_ms,
-             storage_state, index_state, created_at
+             storage_state, storage_quality, index_state, created_at
          )
          VALUES ($1, 'soundcloud:tracks:' || $1, 'Song', 'song', 180000,
-                 $2, 'pending', now() - interval '1 day')",
+                 $2, $3, 'pending', now() - interval '5 days')",
     )
-    .bind(sc_track_id)
-    .bind(storage_state)
-    .execute(pool)
+    .bind(upload.sc_track_id)
+    .bind(upload.storage_state)
+    .bind(upload.storage_quality)
+    .execute(writer)
     .await?;
     sqlx::query(
-        "INSERT INTO cdn_tracks (id, track_urn, quality, cdn_path, status, created_at, updated_at)
-         VALUES ($1, 'soundcloud:tracks:' || $2, 'single', $2 || '.m4a', 'ok',
-                 LOCALTIMESTAMP - $3 * interval '1 minute',
-                 LOCALTIMESTAMP - $3 * interval '1 minute')",
+        "INSERT INTO cdn_tracks (
+             id, track_urn, quality, cdn_path, status, stored_quality, created_at, updated_at
+         )
+         VALUES ($1, 'soundcloud:tracks:' || $2, 'single', $2 || '.m4a', 'ok', $3,
+                 (NOW() AT TIME ZONE 'UTC') - $4 * interval '1 minute',
+                 (NOW() AT TIME ZONE 'UTC') - $4 * interval '1 minute')",
     )
     .bind(Uuid::now_v7())
-    .bind(sc_track_id)
-    .bind(uploaded_minutes_ago)
-    .execute(pool)
+    .bind(upload.sc_track_id)
+    .bind(upload.stored_quality)
+    .bind(upload.uploaded_minutes_ago)
+    .execute(writer)
     .await?;
-    if let Some(minutes) = event_minutes_ago {
+    if let Some(minutes) = upload.event_minutes_ago {
         sqlx::query(
             "INSERT INTO storage_event_state (
                  sc_track_id, stream, stream_sequence, event_published_at,
@@ -129,21 +166,21 @@ async fn seed(
              VALUES ($1, 'STORAGE_EVENTS', 1, now() - $2 * interval '1 minute',
                      1, now() - $2 * interval '1 minute')",
         )
-        .bind(sc_track_id)
+        .bind(upload.sc_track_id)
         .bind(minutes)
-        .execute(pool)
+        .execute(writer)
         .await?;
     }
     Ok(())
 }
 
-async fn storage_state(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<String> {
-    Ok(
-        sqlx::query_scalar::<_, String>("SELECT storage_state FROM tracks WHERE sc_track_id = $1")
-            .bind(sc_track_id)
-            .fetch_one(pool)
-            .await?,
+async fn stored_as(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<(String, Option<String>)> {
+    Ok(sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT storage_state, storage_quality FROM tracks WHERE sc_track_id = $1",
     )
+    .bind(sc_track_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 async fn repairs(pool: &PgPool) -> anyhow::Result<Vec<(String, chrono::DateTime<Utc>)>> {
@@ -154,12 +191,13 @@ async fn repairs(pool: &PgPool) -> anyhow::Result<Vec<(String, chrono::DateTime<
     .await?)
 }
 
-async fn wait_until_stored(pool: &PgPool, tracks: &[&str]) -> anyhow::Result<()> {
+async fn wait_until_stored(pool: &PgPool, expected: &[(&str, Option<&str>)]) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let mut stored = true;
-            for track in tracks {
-                stored &= storage_state(pool, track).await? == "ok";
+            for (track, quality) in expected {
+                let (state, stored_quality) = stored_as(pool, track).await?;
+                stored &= state == "ok" && stored_quality.as_deref() == *quality;
             }
             if stored {
                 return Ok::<_, anyhow::Error>(());
@@ -179,14 +217,28 @@ fn delivered(deliveries: &Mutex<Vec<String>>) -> Vec<String> {
     seen
 }
 
+async fn settled(bus: &Bus) -> anyhow::Result<bool> {
+    let progress = bus.storage_events_progress().await?;
+    Ok(progress.sources_behind == 0 && progress.undelivered == 0)
+}
+
 async fn wait_until_settled(bus: &Bus) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(20), async {
-        while !bus.storage_events_settled().await? {
+        while !settled(bus).await? {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Ok::<_, anyhow::Error>(())
     })
     .await?
+}
+
+async fn paused_seconds(pool: &PgPool, reason: &str) -> anyhow::Result<Option<f64>> {
+    let series = format!("jobs_storage_repair_paused_seconds{{reason=\"{reason}\"}} ");
+    Ok(crate::metrics::render(pool, &[]).await.and_then(|body| {
+        body.lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .and_then(|value| value.trim().parse().ok())
+    }))
 }
 
 async fn sweep(indexing: &IndexingHandler) -> anyhow::Result<()> {
@@ -203,21 +255,62 @@ async fn connect(config: &NatsConfig, name: &str) -> anyhow::Result<Bus> {
 #[ignore = "requires the T12 lab (core sourcing STORAGE_EVENTS from leaf domain main); debug builds need RUST_MIN_STACK=8388608"]
 async fn an_upload_without_a_storage_event_is_announced_once(pool: PgPool) -> anyhow::Result<()> {
     tls_common::init_crypto();
+    crate::metrics::init();
     let config = core(&["main"]);
     let bus = connect(&config, "upload-repair-test").await?;
     let consumers = Box::pin(bus.provision(&config)).await?;
     bus.restore_topology().await;
     let topology_intact = bus.is_available().await;
 
+    let writer = pool_in_zone(&pool, "America/New_York").await?;
+    let sweeper = pool_in_zone(&pool, "Europe/Moscow").await?;
+    let zones = (zone_of(&writer).await?, zone_of(&sweeper).await?);
     let tracks = Tracks::new();
-    seed(&pool, &tracks.lost, "pending", 60, None).await?;
-    seed(&pool, &tracks.lost_again, "missing", 60, Some(180)).await?;
-    seed(&pool, &tracks.lost_later, "missing", 60, Some(59)).await?;
-    seed(&pool, &tracks.via_leaf, "pending", 60, None).await?;
-    seed(&pool, &tracks.too_fresh, "pending", 5, None).await?;
-    seed(&pool, &tracks.stored, "ok", 60, None).await?;
+    let upload = |sc_track_id, storage_state, uploaded_minutes_ago, event_minutes_ago| Upload {
+        sc_track_id,
+        storage_state,
+        storage_quality: None,
+        stored_quality: None,
+        uploaded_minutes_ago,
+        event_minutes_ago,
+    };
+    seed(&writer, upload(&tracks.lost, "pending", 60, None)).await?;
+    seed(
+        &writer,
+        Upload {
+            stored_quality: Some("sq"),
+            ..upload(&tracks.lost_again, "missing", 60, Some(180))
+        },
+    )
+    .await?;
+    seed(
+        &writer,
+        Upload {
+            storage_quality: Some("sq"),
+            stored_quality: Some("hq"),
+            ..upload(&tracks.lost_upgrade, "ok", 60, Some(180))
+        },
+    )
+    .await?;
+    seed(&writer, upload(&tracks.lost_later, "missing", 60, Some(59))).await?;
+    seed(&writer, upload(&tracks.via_leaf, "pending", 60, None)).await?;
+    seed(&writer, upload(&tracks.too_fresh, "pending", 5, None)).await?;
+    seed(
+        &writer,
+        upload(&tracks.too_old, "pending", 3 * 24 * 60, None),
+    )
+    .await?;
+    seed(
+        &writer,
+        Upload {
+            storage_quality: Some("sq"),
+            stored_quality: Some("sq"),
+            ..upload(&tracks.stored, "ok", 60, None)
+        },
+    )
+    .await?;
 
-    let indexing = Arc::new(handler(pool.clone(), bus.clone())?);
+    let indexing = Arc::new(handler(sweeper.clone(), bus.clone())?);
     let deliveries = Arc::new(Mutex::new(Vec::<String>::new()));
     let cancellation = CancellationToken::new();
     let uploads = tokio::spawn({
@@ -246,19 +339,29 @@ async fn an_upload_without_a_storage_event_is_announced_once(pool: PgPool) -> an
         &format!("leaf-upload:{}", tracks.via_leaf),
     )
     .await?;
-    wait_until_stored(&pool, &[&tracks.via_leaf]).await?;
+    wait_until_stored(&pool, &[(&tracks.via_leaf, Some("hq"))]).await?;
 
     let unheard = core(&["main", "unheard"]);
     let unheard_bus = connect(&unheard, "upload-repair-unheard").await?;
     Box::pin(unheard_bus.provision(&unheard)).await?;
-    let unheard_settled = unheard_bus.storage_events_settled().await?;
-    sweep(&handler(pool.clone(), unheard_bus)?).await?;
+    let unheard_settled = settled(&unheard_bus).await?;
+    sweep(&handler(sweeper.clone(), unheard_bus)?).await?;
     let repairs_while_a_leaf_is_unheard = repairs(&pool).await?.len();
+    let paused_while_unheard = paused_seconds(&pool, "leaf_source_behind").await?;
     Box::pin(bus.provision(&config)).await?;
 
     wait_until_settled(&bus).await?;
     sweep(&indexing).await?;
-    wait_until_stored(&pool, &[&tracks.lost, &tracks.lost_again]).await?;
+    let paused_after_a_sweep = paused_seconds(&pool, "leaf_source_behind").await?;
+    wait_until_stored(
+        &pool,
+        &[
+            (&tracks.lost, None),
+            (&tracks.lost_again, Some("sq")),
+            (&tracks.lost_upgrade, Some("hq")),
+        ],
+    )
+    .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let first = repairs(&pool).await?;
     let delivered_after_first = delivered(&deliveries);
@@ -272,12 +375,20 @@ async fn an_upload_without_a_storage_event_is_announced_once(pool: PgPool) -> an
     cancellation.cancel();
     uploads.await??;
 
-    let mut expected = vec![tracks.lost.clone(), tracks.lost_again.clone()];
+    let mut expected = vec![
+        tracks.lost.clone(),
+        tracks.lost_again.clone(),
+        tracks.lost_upgrade.clone(),
+    ];
     expected.sort();
     let repaired: Vec<String> = first.iter().map(|(track, _)| track.clone()).collect();
     let mut expected_deliveries = expected.clone();
     expected_deliveries.push(tracks.via_leaf.clone());
     expected_deliveries.sort();
+    assert_eq!(
+        zones,
+        ("America/New_York".to_owned(), "Europe/Moscow".to_owned())
+    );
     assert!(
         topology_intact,
         "the sourced stream must match the jobs contract"
@@ -287,12 +398,27 @@ async fn an_upload_without_a_storage_event_is_announced_once(pool: PgPool) -> an
         "a listed leaf that never answered must hold the sweep"
     );
     assert_eq!(repairs_while_a_leaf_is_unheard, 0);
+    assert!(paused_while_unheard.is_some_and(|seconds| seconds > 0.0));
+    assert_eq!(paused_after_a_sweep, Some(0.0));
     assert_eq!(repaired, expected);
     assert_eq!(second, first, "a second sweep must not repair again");
     assert_eq!(delivered_after_second, delivered_after_first);
     assert_eq!(delivered_after_first, expected_deliveries);
-    assert_eq!(storage_state(&pool, &tracks.lost_later).await?, "missing");
-    assert_eq!(storage_state(&pool, &tracks.too_fresh).await?, "pending");
-    assert_eq!(storage_state(&pool, &tracks.stored).await?, "ok");
+    assert_eq!(
+        stored_as(&pool, &tracks.lost_later).await?,
+        ("missing".to_owned(), None)
+    );
+    assert_eq!(
+        stored_as(&pool, &tracks.too_fresh).await?,
+        ("pending".to_owned(), None)
+    );
+    assert_eq!(
+        stored_as(&pool, &tracks.too_old).await?,
+        ("pending".to_owned(), None)
+    );
+    assert_eq!(
+        stored_as(&pool, &tracks.stored).await?,
+        ("ok".to_owned(), Some("sq".to_owned()))
+    );
     Ok(())
 }

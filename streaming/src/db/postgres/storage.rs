@@ -11,12 +11,12 @@ use super::{PgError, PgPool};
 const QUALITY: &str = "single";
 
 const INSERT_CDN_TRACK: &str = r#"INSERT INTO cdn_tracks (id, track_urn, quality, cdn_path, status, created_at, updated_at, last_accessed_at)
-   VALUES (public.scd_uuid('cdn_tracks', $1::text, $2::text), $1, $2, $3, $4, NOW(), NOW(), NOW())
-   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $4, cdn_path = $3, updated_at = NOW()
+   VALUES (public.scd_uuid('cdn_tracks', $1::text, $2::text), $1, $2, $3, $4, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC', NOW())
+   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $4, cdn_path = $3, updated_at = NOW() AT TIME ZONE 'UTC'
    RETURNING id"#;
 
 const SET_CDN_STATUS: &str =
-    r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() WHERE id = $1::text::uuid"#;
+    r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() AT TIME ZONE 'UTC' WHERE id = $1::text::uuid"#;
 
 #[derive(Debug)]
 pub struct CdnTrackRecord {
@@ -73,6 +73,23 @@ impl PgPool {
     pub async fn update_cdn_track_status(&self, id: &str, status: &str) -> Result<(), PgError> {
         let client = self.connection().await?;
         client.execute(SET_CDN_STATUS, &[&id, &status]).await?;
+        Ok(())
+    }
+
+    pub async fn mark_cdn_track_stored(
+        &self,
+        id: &str,
+        stored_quality: Option<&str>,
+    ) -> Result<(), PgError> {
+        let client = self.connection().await?;
+        client
+            .execute(
+                r#"UPDATE cdn_tracks
+                   SET status = 'ok', stored_quality = $2, updated_at = NOW() AT TIME ZONE 'UTC'
+                   WHERE id = $1::text::uuid"#,
+                &[&id, &stored_quality],
+            )
+            .await?;
         Ok(())
     }
 

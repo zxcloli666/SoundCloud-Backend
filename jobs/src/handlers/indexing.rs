@@ -61,6 +61,7 @@ pub struct IndexingHandler {
     backlog: WorkerBacklog,
     audio_backlog: i64,
     turns: Turns,
+    repair_pause: std::sync::Mutex<upload_repair::RepairPause>,
 }
 
 #[derive(Default)]
@@ -98,6 +99,7 @@ impl IndexingHandler {
             backlog: WorkerBacklog::new(bus),
             audio_backlog,
             turns: Turns::default(),
+            repair_pause: std::sync::Mutex::new(upload_repair::RepairPause::starting_now()),
         })
     }
 
