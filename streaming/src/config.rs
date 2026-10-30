@@ -35,6 +35,7 @@ pub struct Config {
     pub edge_wvd_token: Option<String>,
     pub edge_wvd_url: Option<String>,
     pub ready_canary_track: Option<String>,
+    pub hq_upgrade: bool,
 }
 
 impl Config {
@@ -108,6 +109,7 @@ impl Config {
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            hq_upgrade: switched_on(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
         }
     }
 
@@ -201,6 +203,10 @@ fn pool_max_from_env(raw: Option<&str>) -> usize {
         .min(MAX_POOL_MAX)
 }
 
+fn switched_on(raw: Option<&str>) -> bool {
+    raw.map(str::trim) == Some("on")
+}
+
 fn acquire_timeout_from_env(raw: Option<&str>) -> u64 {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -270,6 +276,22 @@ mod tests {
                 DEFAULT_ACQUIRE_TIMEOUT_SECS,
                 "{raw} must not disable the wait budget"
             );
+        }
+    }
+
+    #[test]
+    fn hq_upgrades_run_only_where_they_were_switched_on() {
+        assert!(switched_on(Some("on")));
+        assert!(switched_on(Some(" on\n")));
+        for raw in [
+            None,
+            Some(""),
+            Some("off"),
+            Some("true"),
+            Some("ON"),
+            Some("1"),
+        ] {
+            assert!(!switched_on(raw), "{raw:?} must leave HQ upgrades off");
         }
     }
 

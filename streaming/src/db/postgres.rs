@@ -10,6 +10,10 @@ use uuid::Uuid;
 
 use crate::config::Config;
 
+pub mod storage;
+#[cfg(test)]
+pub mod test_nodes;
+pub mod tokens;
 pub mod upgrade;
 
 #[derive(Debug, thiserror::Error)]
@@ -79,11 +83,6 @@ impl TrackRecord {
     }
 }
 
-#[derive(Debug)]
-pub struct CdnTrackRecord {
-    pub id: String,
-}
-
 fn pool_config(pool_max: usize, acquire_timeout_secs: u64) -> PoolConfig {
     let budget = Duration::from_secs(acquire_timeout_secs);
     let mut pool = PoolConfig::new(pool_max);
@@ -150,7 +149,7 @@ impl PgPool {
                 "SELECT EXISTS (
                      SELECT 1
                      FROM _sqlx_migrations
-                     WHERE version = 70
+                     WHERE version = 261
                        AND success = true
                  )
                  AND to_regclass('soundcloud_connections') IS NOT NULL",
@@ -160,7 +159,7 @@ impl PgPool {
             .get(0);
         if !schema_ready {
             return Err(
-                "PostgreSQL schema is incompatible; apply core migrations through 0070".into(),
+                "PostgreSQL schema is incompatible; apply core migrations through 0261".into(),
             );
         }
         info!(pool_max = config.database_pool_max, "PostgreSQL connected");
@@ -194,99 +193,6 @@ impl PgPool {
             storage_quality: row.get(1),
             storage_ok: row.get(2),
         }))
-    }
-
-    pub async fn find_cached_track(
-        &self,
-        track_urn: &str,
-    ) -> Result<Option<CdnTrackRecord>, PgError> {
-        let client = self.connection().await?;
-        let row = client
-            .query_opt(
-                r#"SELECT id
-                   FROM cdn_tracks
-                   WHERE track_urn = $1 AND quality = 'single' AND status = 'ok'"#,
-                &[&track_urn],
-            )
-            .await?;
-        Ok(row.as_ref().map(row_to_cdn_track))
-    }
-
-    pub async fn update_last_accessed(&self, id: &str) -> Result<(), PgError> {
-        let client = self.connection().await?;
-        client
-            .execute(
-                r#"UPDATE cdn_tracks SET last_accessed_at = NOW() WHERE id = $1::text::uuid"#,
-                &[&id],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn insert_cdn_track(
-        &self,
-        track_urn: &str,
-        cdn_path: &str,
-        status: &str,
-    ) -> Result<String, PgError> {
-        let id = Uuid::now_v7().to_string();
-        let quality = "single";
-        let client = self.connection().await?;
-        let row = client
-            .query_one(
-                r#"INSERT INTO cdn_tracks (id, track_urn, quality, cdn_path, status, created_at, updated_at, last_accessed_at)
-                   VALUES ($1::text::uuid, $2, $3, $4, $5, NOW(), NOW(), NOW())
-                   ON CONFLICT (track_urn, quality) DO UPDATE SET status = $5, cdn_path = $4, updated_at = NOW()
-                   RETURNING id"#,
-                &[&id, &track_urn, &quality, &cdn_path, &status],
-            )
-            .await?;
-        Ok(row.get::<_, Uuid>(0).to_string())
-    }
-
-    pub async fn mark_storage_lost(&self, track_urn: &str) -> Result<(), PgError> {
-        let client = self.connection().await?;
-        client
-            .execute(
-                r#"UPDATE tracks
-                   SET storage_state = 'pending', storage_quality = NULL, s3_verified_at = NULL,
-                       s3_missing_at = NOW(), updated_at = NOW()
-                   WHERE urn = $1 AND storage_state = 'ok'"#,
-                &[&track_urn],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn update_cdn_track_status(&self, id: &str, status: &str) -> Result<(), PgError> {
-        let client = self.connection().await?;
-        client
-            .execute(
-                r#"UPDATE cdn_tracks SET status = $2, updated_at = NOW() WHERE id = $1::text::uuid"#,
-                &[&id, &status],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn get_app_tokens(&self, exclude_token: &str) -> Result<Vec<String>, PgError> {
-        let client = self.connection().await?;
-        let rows = client
-            .query(
-                r#"SELECT token.access_token
-                   FROM oauth_app_tokens AS token
-                   JOIN oauth_apps AS app ON app.id = token.oauth_app_id
-                   WHERE app.active
-                     AND token.expires_at > NOW() + INTERVAL '30 seconds'
-                     AND token.access_token <> ''
-                     AND token.access_token <> $1"#,
-                &[&exclude_token],
-            )
-            .await?;
-        let mut tokens: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
-        use rand::seq::SliceRandom;
-        tokens.shuffle(&mut rand::thread_rng());
-        Ok(tokens)
     }
 
     pub async fn get_trusted_duration_ms(&self, track_urn: &str) -> Result<Option<i64>, PgError> {
@@ -340,12 +246,6 @@ fn user_id_variants(user_id: &str) -> Vec<String> {
     variants
 }
 
-fn row_to_cdn_track(row: &tokio_postgres::Row) -> CdnTrackRecord {
-    CdnTrackRecord {
-        id: row.get::<_, Uuid>(0).to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -354,7 +254,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use super::{PgPool, SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
+    use super::{SESSION_QUERY, TrackRecord, pool_config, user_id_variants};
 
     #[test]
     fn a_pool_that_cannot_serve_a_request_gives_up_instead_of_holding_it_forever() {
@@ -390,40 +290,6 @@ mod tests {
         );
         drop(held);
         assert!(pool.get().await.is_ok());
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires a database with the latest API schema"]
-    async fn a_track_uploaded_again_is_marked_ok_on_the_row_it_already_has()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut pg = PgConfig::new();
-        pg.url = Some(std::env::var("STREAMING_SCHEMA_TEST_DATABASE_URL")?);
-        pg.pool = Some(pool_config(2, 5));
-        let pg = PgPool {
-            pool: pg.create_pool(Some(Runtime::Tokio1), NoTls)?,
-        };
-        let urn = format!("soundcloud:tracks:upsert-test-{}", Uuid::now_v7());
-
-        let first = pg.insert_cdn_track(&urn, "first.m4a", "pending").await?;
-        pg.update_cdn_track_status(&first, "ok").await?;
-        let again = pg.insert_cdn_track(&urn, "again.m4a", "pending").await?;
-        pg.update_cdn_track_status(&again, "ok").await?;
-        let cached = pg.find_cached_track(&urn).await?;
-
-        pg.pool
-            .get()
-            .await?
-            .execute("DELETE FROM cdn_tracks WHERE track_urn = $1", &[&urn])
-            .await?;
-        assert_eq!(
-            again, first,
-            "the second upload must report the row it updated"
-        );
-        assert!(
-            cached.is_some(),
-            "a track uploaded twice must still be served from storage"
-        );
         Ok(())
     }
 

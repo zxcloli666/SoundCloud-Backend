@@ -1,7 +1,11 @@
+mod storage;
+
 use std::fmt::Debug;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+pub use storage::TrackStorageLost;
 
 pub trait Kind: Serialize + Debug + Sync {
     const NAME: &'static str;

@@ -4,7 +4,7 @@ mod sqlx_pg;
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_pg;
 
-pub use kinds::Kind;
+pub use kinds::{Kind, TrackStorageLost};
 #[cfg(feature = "sqlx")]
 pub use sqlx_pg::call;
 
