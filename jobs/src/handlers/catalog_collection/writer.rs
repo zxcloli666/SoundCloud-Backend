@@ -107,7 +107,7 @@ impl CollectionWriter {
                 .map(|urn| catalog_ingest::extract_sc_id(urn).to_owned())
                 .collect();
             sqlx::query_file!(
-                "../api/queries/me/service/enqueue_followed_uploads.sql",
+                "queries/catalog_collection/enqueue_followed_uploads.sql",
                 &subjects,
                 &payload.subject_id
             )

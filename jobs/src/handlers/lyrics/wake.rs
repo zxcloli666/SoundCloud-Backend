@@ -32,6 +32,20 @@ pub async fn enqueue_many(
     first_error.map_or(Ok(()), Err)
 }
 
+pub async fn enqueue_due(pool: &PgPool, queue: &JobRepository, limit: i64) -> JobResult {
+    let due = sqlx::query_file_scalar!("queries/lyrics/lookup_due_wakes.sql", limit)
+        .fetch_all(pool)
+        .await
+        .map_err(JobError::retryable)?;
+    let mut first_error = None;
+    for sc_track_id in due {
+        if let Err(error) = enqueue_pending(pool, queue, &sc_track_id).await {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
 async fn enqueue_pending(pool: &PgPool, queue: &JobRepository, sc_track_id: &str) -> JobResult {
     let mut transaction = pool.begin().await.map_err(JobError::retryable)?;
     enqueue_in(queue, &mut transaction, sc_track_id).await?;

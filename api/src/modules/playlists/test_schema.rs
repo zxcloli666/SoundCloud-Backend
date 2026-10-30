@@ -59,6 +59,11 @@ pub async fn install(pool: &PgPool) -> anyhow::Result<()> {
              weight double precision NOT NULL,
              created_at timestamp NOT NULL DEFAULT now()
          );
+         CREATE TABLE job_status (
+             kind text NOT NULL, dedup_key text NOT NULL, state text NOT NULL,
+             available_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now(),
+             PRIMARY KEY (kind, dedup_key)
+         );
          CREATE TABLE disliked_tracks (
              id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
              sc_user_id text NOT NULL,

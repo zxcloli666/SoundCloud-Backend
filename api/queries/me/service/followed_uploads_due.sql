@@ -1,9 +1,4 @@
-INSERT INTO background_jobs (id, kind, lane, dedup_key, payload, priority, max_attempts)
-SELECT gen_random_uuid(), 'catalog.collection', 'core_bulk',
-       'owned-tracks:' || subject_id || ':public',
-       jsonb_build_object('version', '1', 'payload', jsonb_build_object(
-           'collection', 'owned-tracks', 'subject_id', subject_id, 'owner', false
-       )), 5, 8
+SELECT subjects.subject_id AS "subject_id!"
 FROM (SELECT DISTINCT unnest($1::text[]) AS subject_id) subjects
 WHERE subject_id ~ '^[1-9][0-9]*$'
   AND (
@@ -24,4 +19,3 @@ WHERE subject_id ~ '^[1-9][0-9]*$'
         AND f.failed_at > now() - interval '6 hours'
         AND split_part(f.last_error, ':', 1) IN ('not_found', 'forbidden')
   )
-ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING

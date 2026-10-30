@@ -25,6 +25,7 @@ use super::text::lyrics_text;
 
 const MAX_ATTEMPTS: i16 = 8;
 const EXPIRED_RELEASE_BATCH: i64 = 256;
+const DUE_WAKE_BATCH: i64 = 256;
 const INSUFFICIENT_METADATA_DELAY: i64 = 7 * 24 * 60 * 60;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(180);
 
@@ -108,6 +109,8 @@ impl LyricsLookupHandler {
         .fetch_one(&self.pool)
         .await
         .map_err(JobError::retryable)?;
+
+        super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
 
         let claims = tiered::claim(
             &self.pool,

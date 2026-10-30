@@ -596,6 +596,40 @@ async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Res
 }
 
 #[sqlx::test(migrations = false)]
+async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    for id in ["41", "42", "43"] {
+        insert_track(&pool, id, "Track").await?;
+    }
+    sqlx::query(
+        "UPDATE lyrics_lookup_state SET claim_job_id = gen_random_uuid() WHERE sc_track_id = '43'",
+    )
+    .execute(&pool)
+    .await?;
+    let queue = JobRepository::new(pool.clone(), "lookup-test".to_owned());
+
+    super::super::wake::enqueue_due(&pool, &queue, 10).await?;
+    super::super::wake::enqueue_due(&pool, &queue, 10).await?;
+
+    let jobs: Vec<String> = sqlx::query_scalar(
+        "SELECT dedup_key FROM background_jobs WHERE kind = 'lyrics.lookup' ORDER BY dedup_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(jobs, ["41", "42"]);
+    let durable: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM lyrics_lookup_state WHERE wake_durable_at IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(durable, 2);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldest_share(
     pool: PgPool,
 ) -> anyhow::Result<()> {

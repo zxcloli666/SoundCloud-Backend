@@ -1,17 +1,12 @@
 use std::sync::Arc;
 
-use backend_contracts::{JobKind, LyricsLookupPayload};
 use catalog_normalize::{name_similarity, normalize_title};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
-use uuid::Uuid;
 
-use crate::background_jobs::{BackgroundJob, BackgroundJobs};
 use crate::error::{AppError, AppResult};
 
-const LOOKUP_PRIORITY: i16 = 10;
-const LOOKUP_MAX_ATTEMPTS: i16 = 8;
 const MAX_OPERATIONAL_FAILURES: i32 = 8;
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,7 +33,6 @@ pub struct LyricsHints {
 
 #[derive(Debug, Clone, FromRow)]
 struct LyricsStatusRow {
-    track_id: Uuid,
     synced_lrc: Option<String>,
     plain_text: Option<String>,
     source: Option<String>,
@@ -64,17 +58,12 @@ struct LyricsSearchRow {
 
 pub struct LyricsService {
     pg: PgPool,
-    background_jobs: Arc<BackgroundJobs>,
     reserve: bool,
 }
 
 impl LyricsService {
-    pub fn new(pg: PgPool, background_jobs: Arc<BackgroundJobs>, reserve: bool) -> Arc<Self> {
-        Arc::new(Self {
-            pg,
-            background_jobs,
-            reserve,
-        })
+    pub fn new(pg: PgPool, reserve: bool) -> Arc<Self> {
+        Arc::new(Self { pg, reserve })
     }
 
     pub async fn ensure_lyrics(&self, sc_track_id: &str) -> AppResult<LyricsResponse> {
@@ -103,18 +92,7 @@ impl LyricsService {
             ));
         }
 
-        let mut transaction = self.pg.begin().await?;
-        sqlx::query_file!(
-            "queries/lyrics/service/ensure_lookup_state.sql",
-            &sc_track_id
-        )
-        .execute(&mut *transaction)
-        .await?;
-        let wake = sqlx::query_file!("queries/lyrics/service/request_lookup.sql", &sc_track_id)
-            .fetch_optional(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-
+        let wake = self.wake(&sc_track_id).await?;
         let Some(wake) = wake else {
             let status = self.status(&sc_track_id).await?;
             return match status {
@@ -131,38 +109,6 @@ impl LyricsService {
             return Err(AppError::service_unavailable(
                 "lyrics lookup is temporarily unavailable",
             ));
-        }
-        if wake.claim_job_id.is_none()
-            && wake.wake_durable_at.is_none()
-            && let (Some(message_id), Some(generation)) =
-                (wake.wake_message_id, wake.wake_generation)
-        {
-            let job = BackgroundJob::coalescing(
-                JobKind::LyricsLookup,
-                &sc_track_id,
-                LyricsLookupPayload {
-                    sc_track_id: sc_track_id.clone(),
-                },
-            )?
-            .with_id(message_id)
-            .with_priority(LOOKUP_PRIORITY)
-            .with_max_attempts(LOOKUP_MAX_ATTEMPTS)?
-            .if_absent();
-            match self.background_jobs.enqueue(&job).await {
-                Ok(_) => {
-                    sqlx::query_file!(
-                        "queries/lyrics/service/mark_wake_durable.sql",
-                        status.track_id,
-                        generation,
-                        message_id
-                    )
-                    .execute(&self.pg)
-                    .await?;
-                }
-                Err(error) => {
-                    tracing::warn!(track = %sc_track_id, %error, "lyrics wake publish deferred to sweep");
-                }
-            }
         }
         Ok(pending_response(Some(&sc_track_id)))
     }
@@ -215,6 +161,19 @@ impl LyricsService {
             language_confidence: candidate.language_confidence,
             status: "found".to_owned(),
         })
+    }
+
+    async fn wake(&self, sc_track_id: &str) -> AppResult<Option<wt::LyricsWakeState>> {
+        let command = wt::LyricsWake {
+            sc_track_id: sc_track_id.to_owned(),
+            at: wt::now(),
+        };
+        Ok(wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            let wake = wt::call(&mut transaction, &command).await?;
+            transaction.commit().await.map(|()| wake)
+        })
+        .await?)
     }
 
     async fn status(&self, sc_track_id: &str) -> AppResult<Option<LyricsStatusRow>> {
@@ -343,16 +302,7 @@ mod tests {
     }
 
     async fn service(pool: &sqlx::PgPool, reserve: bool) -> anyhow::Result<Arc<LyricsService>> {
-        let nats = crate::bus::nats::NatsService::connect(
-            "nats://127.0.0.1:1",
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await?;
-        Ok(LyricsService::new(
-            pool.clone(),
-            BackgroundJobs::new(nats),
-            reserve,
-        ))
+        Ok(LyricsService::new(pool.clone(), reserve))
     }
 
     async fn seed_track(pool: &sqlx::PgPool) -> anyhow::Result<()> {
