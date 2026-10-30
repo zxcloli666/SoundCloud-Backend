@@ -153,6 +153,7 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 
 . "$here/split.sh"
 . "$here/converge.sh"
+. "$here/verify.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

@@ -264,12 +264,12 @@ def merge_into(t):
         v = q(g["version"])
         newer = "NEW.%s > o.%s" % (v, v)
         conds.append(newer)
-        born = "(NEW.%s & 15) <> public.scd_node_ord()" % v
+        merged = "((NEW.%s & 15) <> public.scd_node_ord() OR NEW.%s = o.%s)" % (v, v, v)
         for col in g["cols"]:
             c = q(col)
             if col in t.least:
-                conds.append("(%s AND NEW.%s < o.%s)" % (born, c, c))
-                sets.append("%s = CASE WHEN %s THEN least(o.%s, NEW.%s) WHEN %s THEN NEW.%s ELSE o.%s END" % (c, born, c, c, newer, c, c))
+                conds.append("(%s AND NEW.%s < o.%s)" % (merged, c, c))
+                sets.append("%s = CASE WHEN %s THEN least(o.%s, NEW.%s) WHEN %s THEN NEW.%s ELSE o.%s END" % (c, merged, c, c, newer, c, c))
             else:
                 sets.append("%s = CASE WHEN %s THEN NEW.%s ELSE o.%s END" % (c, newer, c, c))
         sets.append("%s = greatest(o.%s, NEW.%s)" % (v, v, v))

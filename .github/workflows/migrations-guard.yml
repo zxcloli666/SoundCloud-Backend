@@ -70,7 +70,7 @@ jobs:
           esac
           RANGE="$BASE..HEAD"
           [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && RANGE="$BASE...HEAD"
-          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through .github/workflows/migrations-guard.yml; then
+          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/repl-verify .github/workflows/migrations-guard.yml; then
             echo run=false >> "$GITHUB_OUTPUT"
           else
             echo run=true >> "$GITHUB_OUTPUT"
@@ -96,7 +96,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: steps.changed.outputs.run == 'true'
         with:
-          workspaces: utils/write-through -> target
+          workspaces: |
+            utils/write-through -> target
+            utils/repl-verify -> target
           key: write-through
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -110,3 +112,11 @@ jobs:
           cargo fmt --manifest-path utils/write-through/Cargo.toml --check
           cargo clippy --manifest-path utils/write-through/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo test --manifest-path utils/write-through/Cargo.toml --all-features --locked
+      - name: resend sweeper and verify loop on real Postgres
+        if: steps.changed.outputs.run == 'true'
+        env:
+          DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
+        run: |
+          cargo fmt --manifest-path utils/repl-verify/Cargo.toml --check
+          cargo clippy --manifest-path utils/repl-verify/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo test --manifest-path utils/repl-verify/Cargo.toml --all-features --locked

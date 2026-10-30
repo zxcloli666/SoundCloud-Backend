@@ -18,6 +18,7 @@ catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 sc-transport = { version = "0.1.0", path = "../utils/sc-transport" }
 redact = { version = "0.1.0", path = "../utils/redact" }
 wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
+repl-verify = { version = "0.1.0", path = "../utils/repl-verify" }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 futures = "0.3"
 qdrant-client = "1"

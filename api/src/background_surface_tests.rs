@@ -10,6 +10,8 @@ const DETACHED: &[&str] = &[
 
 const AWAITED_BLOCKING_WORK: &str = "src/modules/diag/report/sourcemaps.rs";
 
+const NODE_REPLICATION_SWEEPER: (&str, &str) = ("src/main.rs", "repl_verify::Sweeper::new");
+
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -96,7 +98,10 @@ fn the_serving_process_starts_no_work_of_its_own() {
         for (number, line) in body.lines().enumerate() {
             for pattern in DETACHED {
                 let awaited = *pattern == "spawn_blocking" && file == AWAITED_BLOCKING_WORK;
-                if line.contains(pattern) && !awaited {
+                let node_local = *pattern == "tokio::spawn"
+                    && file == NODE_REPLICATION_SWEEPER.0
+                    && line.contains(NODE_REPLICATION_SWEEPER.1);
+                if line.contains(pattern) && !awaited && !node_local {
                     detached.push(format!("{file}:{}: {}", number + 1, line.trim()));
                 }
             }
