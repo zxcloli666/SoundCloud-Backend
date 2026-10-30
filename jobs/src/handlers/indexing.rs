@@ -9,6 +9,9 @@ mod storage_events;
 mod storage_uploaded;
 #[cfg(test)]
 mod test_schema;
+mod upload_repair;
+#[cfg(test)]
+mod upload_repair_live_tests;
 
 use anyhow::anyhow;
 use backend_contracts::pipeline::STORAGE_TRACK_UPLOADED;
@@ -273,7 +276,7 @@ impl IndexingHandler {
             let tier = tiers.get(&sc_track_id).copied().unwrap_or(Tier::Rest);
             self.enqueue(sc_track_id, tier).await?;
         }
-        Ok(())
+        self.repair_lost_uploads().await
     }
 
     async fn finish_cached(&self, sc_track_id: &str) -> JobResult {
