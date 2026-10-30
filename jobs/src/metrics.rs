@@ -23,6 +23,7 @@ const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
 const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "jobs_star_priority_waiting_seconds";
 const STAR_PRIORITY_QUEUED_WAITING: &str = "jobs_star_priority_queued_waiting_seconds";
+const STORAGE_REPAIR_PAUSED: &str = "jobs_storage_repair_paused_seconds";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -111,6 +112,7 @@ fn register_series_that_start_at_zero() {
     for reason in CollabSkipReason::ALL {
         metrics::counter!(COLLAB_SKIPPED, "reason" => reason.as_str()).increment(0);
     }
+    record_storage_repair_paused(None);
     for spec in &WORKER_LANES {
         let lane = spec.lane.as_str();
         metrics::gauge!(WORKER_LANE_STATUS_AGE, "lane" => lane).set(0.0);
@@ -196,6 +198,38 @@ impl CollabSkipReason {
             Self::EmptyVocab => "empty_vocab",
             Self::BelowBaseline => "below_baseline",
             Self::InFlight => "in_flight",
+        }
+    }
+}
+
+pub fn record_storage_repair_paused(paused: Option<(RepairPauseReason, Duration)>) {
+    for reason in RepairPauseReason::ALL {
+        let seconds = paused
+            .filter(|(held_by, _)| *held_by == reason)
+            .map_or(0.0, |(_, held)| held.as_secs_f64());
+        metrics::gauge!(STORAGE_REPAIR_PAUSED, "reason" => reason.as_str()).set(seconds);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairPauseReason {
+    LeafSourceBehind,
+    UploadsUndelivered,
+    StorageEventsUnreadable,
+}
+
+impl RepairPauseReason {
+    pub const ALL: [Self; 3] = [
+        Self::LeafSourceBehind,
+        Self::UploadsUndelivered,
+        Self::StorageEventsUnreadable,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LeafSourceBehind => "leaf_source_behind",
+            Self::UploadsUndelivered => "uploads_undelivered",
+            Self::StorageEventsUnreadable => "storage_events_unreadable",
         }
     }
 }

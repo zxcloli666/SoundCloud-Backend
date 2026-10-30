@@ -284,6 +284,16 @@ groups:
           summary: "Jobs are being cut off by statement_timeout"
           description: "A separate outcome from an ordinary retry: the bulk statement was cancelled by PostgreSQL."
 
+      - alert: JobsStorageRepairPaused
+        expr: max by (reason) (jobs_storage_repair_paused_seconds) > 3600
+        for: 10m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Repairs of uploads without a storage event have been paused for {{ $value }}s ({{ $labels.reason }})"
+          description: "The sweep in IndexingRequeueStuck waits while a leaf in JOBS_NATS_STORAGE_EVENT_SOURCES is behind or uploads are undelivered. leaf_source_behind for an hour means a leaf link is down or the leaf is gone for good: fix the link or drop the domain from the list."
+
   - name: scd-worker
     interval: 30s
     rules:
