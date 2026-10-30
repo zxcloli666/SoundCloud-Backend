@@ -181,7 +181,7 @@ END
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_verify_answer(probe uuid, rel text, k jsonb, op jsonb)
-RETURNS void
+RETURNS boolean
 LANGUAGE plpgsql
 SET search_path = public, pg_catalog
 AS $f$
@@ -190,7 +190,12 @@ DECLARE
     diff jsonb;
 BEGIN
     IF EXISTS (SELECT 1 FROM public.repl_resend x WHERE (CASE WHEN x.tbl = 'repl_tombstones' THEN x.pk ->> 'tbl' ELSE x.tbl END) = rel) THEN
-        RETURN;
+        IF current_setting('session_replication_role') = 'replica' THEN
+            INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
+            VALUES (public.scd_node(), rel, 'wait ' || probe::text, jsonb_build_object('key', k, 'op', op)::text, now())
+            ON CONFLICT DO NOTHING;
+        END IF;
+        RETURN false;
     END IF;
     SELECT * INTO c FROM public.scd_verify_chunk(rel, nullif(k -> 'lo', 'null'), nullif(k -> 'hi', 'null'),
         ARRAY(SELECT jsonb_array_elements_text(op -> 'cols')));
@@ -200,18 +205,21 @@ BEGIN
                  FULL JOIN jsonb_each_text(op -> 'keys') t ON t.key = m.key
                  WHERE m.value IS DISTINCT FROM t.value);
         IF diff IS NULL THEN
-            RETURN;
+            RETURN true;
         END IF;
     ELSIF c.n = (op ->> 'n')::bigint AND c.h = op ->> 'h' THEN
-        RETURN;
+        RETURN true;
     END IF;
     INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
     VALUES (public.scd_node(), rel, probe::text,
         jsonb_build_object('lo', k -> 'lo', 'hi', k -> 'hi', 'attempt', op -> 'attempt', 'n', c.n, 'keys', diff)::text, now())
     ON CONFLICT DO NOTHING;
-    INSERT INTO public.repl_resend (tbl, pk)
-    VALUES ('repl_checksums', jsonb_build_object('node', public.scd_node(), 'tbl', rel, 'range', probe::text))
-    ON CONFLICT DO NOTHING;
+    IF current_setting('session_replication_role') = 'replica' THEN
+        INSERT INTO public.repl_resend (tbl, pk)
+        VALUES ('repl_checksums', jsonb_build_object('node', public.scd_node(), 'tbl', rel, 'range', probe::text))
+        ON CONFLICT DO NOTHING;
+    END IF;
+    RETURN true;
 END
 $f$;
 
@@ -312,7 +320,7 @@ BEGIN
     END IF;
     FOR a IN
         SELECT x.node, x.tbl, x.range, x.hash FROM public.repl_checksums x
-        WHERE x.node <> 'core'
+        WHERE x.node <> 'core' AND x.range NOT LIKE 'wait %'
         ORDER BY x.at
         LIMIT answers
         FOR UPDATE SKIP LOCKED

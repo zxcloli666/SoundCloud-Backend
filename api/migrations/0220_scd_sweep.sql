@@ -55,6 +55,8 @@ CREATE OR REPLACE FUNCTION public.scd_sweep(batch integer DEFAULT 500, OUT state
 LANGUAGE plpgsql
 SET search_path = public, pg_catalog
 AS $f$
+DECLARE
+    w record;
 BEGIN
     sent := 0;
     skipped := 0;
@@ -72,6 +74,17 @@ BEGIN
     SELECT c.sent, c.skipped, c.gone INTO sent, skipped, gone FROM public.scd_drain_resend_counts(batch) c;
     IF public.scd_role() = 'api' THEN
         DELETE FROM public.repl_checksums x WHERE x.node = public.scd_node() AND x.at < now() - interval '1 day';
+        FOR w IN
+            SELECT x.tbl, x.range, x.hash::jsonb AS body FROM public.repl_checksums x
+            WHERE x.node = public.scd_node() AND x.range LIKE 'wait %'
+              AND NOT EXISTS (SELECT 1 FROM public.repl_resend r WHERE (CASE WHEN r.tbl = 'repl_tombstones' THEN r.pk ->> 'tbl' ELSE r.tbl END) = x.tbl)
+            ORDER BY x.at
+            LIMIT 10
+        LOOP
+            IF public.scd_verify_answer(substr(w.range, 6)::uuid, w.tbl, w.body -> 'key', w.body -> 'op') THEN
+                DELETE FROM public.repl_checksums x WHERE x.node = public.scd_node() AND x.tbl = w.tbl AND x.range = w.range;
+            END IF;
+        END LOOP;
     END IF;
     queued := (SELECT count(*) FROM (SELECT 1 FROM public.repl_resend LIMIT 100000) x);
 END

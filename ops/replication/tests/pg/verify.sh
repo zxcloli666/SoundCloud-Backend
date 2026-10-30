@@ -233,6 +233,23 @@ grep -q diag_events "$tmp/verify.late.recheck" && echo "ok core compares the dif
 [ -s "$tmp/verify.late" ] && { echo "FAIL rows written after the probe were repaired"; cat "$tmp/verify.late"; failed=$((failed + 1)); } || echo "ok nothing repaired: core's newer row and main's in-flight row are equal at the second compare"
 expect "both rows live on every node" "SELECT count(*) FROM public.diag_events WHERE id IN ('00000000-0000-0000-0000-0000000013d3', '00000000-0000-0000-0000-0000000013d4')" 2
 
+say "B13 verify: a probe that meets a pending resend of its table waits for the sweeper"
+sql -d scd_b1_main -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b2', 'Waits', 'waits', 'sc')"
+sql -d scd_b1_main -c "INSERT INTO public.repl_resend (tbl, pk) VALUES ('artists', jsonb_build_object('id', '00000000-0000-0000-0000-0000000013bf'::uuid))"
+val scd_b1_core "SELECT probes FROM public.scd_verify_probe(100000, 500)" > /dev/null
+reach
+waiting() { val scd_b1_main "SELECT count(*) FILTER (WHERE range LIKE 'wait %') || ' waiting, ' || count(*) FILTER (WHERE range NOT LIKE 'wait %') || ' answered' FROM public.repl_checksums WHERE node = 'main' AND tbl = 'artists'"; }
+got="$(waiting)"
+[ "$got" = "1 waiting, 0 answered" ] && echo "ok main holds the artists probe while a resend of artists is pending ($got)" || { echo "FAIL held probe: $got"; failed=$((failed + 1)); }
+got="$(val scd_b1_main "SELECT state || ' gone=' || gone FROM public.scd_sweep()") then $(waiting)"
+[ "$got" = "ran gone=1 then 0 waiting, 1 answered" ] && echo "ok the sweep ships the resend, then answers the held probe ($got)" || { echo "FAIL held probe after the sweep: $got"; failed=$((failed + 1)); }
+calm
+[ "$(val scd_b1_core "SELECT count(*) FROM public.repl_checksums WHERE node = 'main' AND tbl = 'artists'")" = 1 ] && echo "ok the late answer reaches core" || { echo "FAIL the late answer did not reach core"; failed=$((failed + 1)); }
+verify_cycle false "$tmp/verify.wait"
+has "$tmp/verify.wait" 'main artists {"id": "00000000-0000-0000-0000-0000000013b2"} drop 1' "the late answer drops main's stray C row"
+swept
+[ -z "$(drift main)" ] && echo "ok core and main agree again" || { echo "FAIL main drift: $(drift main)"; failed=$((failed + 1)); }
+
 say "B13 verify: an api node still on the 0202 applier ignores verify ops (rollout order)"
 newdef="$(val scd_b1_star "SELECT pg_get_functiondef('public.scd_on_repl_repair()'::regprocedure)")"
 sql -d scd_b1_star -c "CREATE OR REPLACE FUNCTION public.scd_on_repl_repair()
