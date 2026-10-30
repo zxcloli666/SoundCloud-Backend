@@ -238,7 +238,8 @@ sql -d scd_b1_main -c "INSERT INTO public.artists (id, name, normalized_name, so
 sql -d scd_b1_main -c "INSERT INTO public.repl_resend (tbl, pk) VALUES ('artists', jsonb_build_object('id', '00000000-0000-0000-0000-0000000013bf'::uuid))"
 val scd_b1_core "SELECT probes FROM public.scd_verify_probe(100000, 500)" > /dev/null
 reach
-waiting() { val scd_b1_main "SELECT count(*) FILTER (WHERE range LIKE 'wait %') || ' waiting, ' || count(*) FILTER (WHERE range NOT LIKE 'wait %') || ' answered' FROM public.repl_checksums WHERE node = 'main' AND tbl = 'artists'"; }
+answered="$(val scd_b1_main "SELECT count(*) FROM public.repl_checksums WHERE node = 'main' AND tbl = 'artists' AND range NOT LIKE 'wait %'")"
+waiting() { val scd_b1_main "SELECT count(*) FILTER (WHERE range LIKE 'wait %') || ' waiting, ' || count(*) FILTER (WHERE range NOT LIKE 'wait %') - $answered || ' answered' FROM public.repl_checksums WHERE node = 'main' AND tbl = 'artists'"; }
 got="$(waiting)"
 [ "$got" = "1 waiting, 0 answered" ] && echo "ok main holds the artists probe while a resend of artists is pending ($got)" || { echo "FAIL held probe: $got"; failed=$((failed + 1)); }
 got="$(val scd_b1_main "SELECT state || ' gone=' || gone FROM public.scd_sweep()") then $(waiting)"
@@ -269,9 +270,10 @@ END
 \$f\$"
 sql -d scd_b1_star -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b1', 'Old', 'old', 'sc')"
 errors_before="$(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats")"
+answers_before="$(val scd_b1_star "SELECT count(*) FROM public.repl_checksums")"
 val scd_b1_core "SELECT probes FROM public.scd_verify_probe(100000, 500)" > /dev/null
 calm
-got="answers $(val scd_b1_star "SELECT count(*) FROM public.repl_checksums")/$(val scd_b1_star "SELECT count(*) FROM public.repl_resend"), apply errors $(( $(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats") - errors_before ))"
+got="answers $(( $(val scd_b1_star "SELECT count(*) FROM public.repl_checksums") - answers_before ))/$(val scd_b1_star "SELECT count(*) FROM public.repl_resend"), apply errors $(( $(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats") - errors_before ))"
 [ "$got" = "answers 0/0, apply errors 0" ] && echo "ok the old applier skips every op and its apply worker keeps running ($got)" || { echo "FAIL old applier: $got"; failed=$((failed + 1)); }
 sql -d scd_b1_star -c "$newdef"
 verify_cycle false "$tmp/verify.old"
