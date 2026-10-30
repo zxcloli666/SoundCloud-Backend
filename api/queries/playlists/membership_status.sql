@@ -25,8 +25,8 @@ SELECT state.baseline_generation,
             ELSE 0
        END AS "retry_after_seconds!",
        (
-           SELECT job.created_at
-           FROM background_jobs AS job
+           SELECT job.updated_at
+           FROM job_status AS job
            WHERE job.kind = 'playlists.observe_shadow'
              AND job.dedup_key = state.playlist_urn
        ) AS "queued_since?"

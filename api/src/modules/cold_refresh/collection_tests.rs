@@ -4,28 +4,6 @@ use uuid::Uuid;
 
 use super::collection::ensure;
 
-async fn install(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(include_str!("../../../migrations/0057_background_jobs.sql"))
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0090_catalog_collection_progress.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(
-        "CREATE TABLE subscriptions (user_urn text PRIMARY KEY, exp_date bigint NOT NULL);
-         CREATE TABLE soundcloud_connections (
-             soundcloud_user_id text NOT NULL,
-             created_at timestamptz NOT NULL DEFAULT now(),
-             last_refresh_success_at timestamptz
-         );",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 async fn fail_for_good(
     pool: &PgPool,
     dedup_key: &str,
@@ -54,11 +32,10 @@ async fn queued(pool: &PgPool) -> anyhow::Result<i64> {
         .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_cold_read_enqueues_without_a_session_token_or_redis_and_coalesces_by_scope(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     let (first, second) = tokio::join!(
         ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600),
         ensure(
@@ -89,9 +66,8 @@ async fn a_cold_read_enqueues_without_a_session_token_or_redis_and_coalesces_by_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn only_a_completed_snapshot_can_make_a_collection_fresh(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     sqlx::query("INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, page_count)
         VALUES ('42', 'followings', 'owner', $1, 1, $2, 12)")
         .bind(Uuid::now_v7()).bind(Uuid::now_v7()).execute(&pool).await?;
@@ -132,9 +108,8 @@ async fn only_a_completed_snapshot_can_make_a_collection_fresh(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_invalid_collection_identity_cannot_schedule_work(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     assert!(
         ensure(
             &pool,
@@ -153,13 +128,12 @@ async fn an_invalid_collection_identity_cannot_schedule_work(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
-    sqlx::query("UPDATE background_jobs SET available_at = now() + interval '15 minutes'")
+    sqlx::query("UPDATE job_status SET available_at = now() + interval '15 minutes'")
         .execute(&pool)
         .await?;
     let sync = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
@@ -171,9 +145,8 @@ async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     sqlx::query(
         "INSERT INTO subscriptions (user_urn, exp_date) VALUES
              ('42', extract(epoch FROM now())::bigint + 3600),
@@ -205,11 +178,10 @@ async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     ensure(&pool, CatalogCollection::LikedTracks, "42", false, 600).await?;
     ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
     let priorities: Vec<(String, i16)> =
@@ -236,11 +208,10 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_collection_that_failed_for_good_is_held_for_six_hours(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     fail_for_good(
         &pool,
         "liked-tracks:42:public",
@@ -259,11 +230,10 @@ async fn a_collection_that_failed_for_good_is_held_for_six_hours(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn after_the_hold_the_collection_is_queued_again_and_still_reports_the_error(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     fail_for_good(
         &pool,
         "liked-tracks:42:public",
@@ -288,9 +258,8 @@ async fn after_the_hold_the_collection_is_queued_again_and_still_reports_the_err
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_successful_pass_clears_the_error(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     fail_for_good(
         &pool,
         "followings:42:owner",
@@ -318,8 +287,8 @@ async fn a_successful_pass_clears_the_error(pool: PgPool) -> anyhow::Result<()> 
 
 async fn sign_out_the_owner(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO soundcloud_connections (soundcloud_user_id, created_at)
-         VALUES ('42', now() - interval '40 days')",
+        "INSERT INTO soundcloud_connections (id, soundcloud_user_id, access_token, refresh_token, expires_at, scope, created_at)
+         VALUES (gen_random_uuid(), '42', 'a', 'r', now(), '*', now() - interval '40 days')",
     )
     .execute(pool)
     .await?;
@@ -332,9 +301,8 @@ async fn sign_out_the_owner(pool: &PgPool) -> anyhow::Result<()> {
     .await
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     sign_out_the_owner(&pool).await?;
 
     for age in ["1 hour", "29 days"] {
@@ -349,7 +317,8 @@ async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<(
     }
 
     sqlx::query(
-        "INSERT INTO soundcloud_connections (soundcloud_user_id) VALUES ('soundcloud:users:42')",
+        "INSERT INTO soundcloud_connections (id, soundcloud_user_id, access_token, refresh_token, expires_at, scope)
+         VALUES (gen_random_uuid(), 'soundcloud:users:42', 'a', 'r', now(), '*')",
     )
     .execute(&pool)
     .await?;
@@ -361,11 +330,10 @@ async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn signing_in_again_on_the_same_session_lifts_auth_required(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     sign_out_the_owner(&pool).await?;
     sqlx::query("UPDATE soundcloud_connections SET last_refresh_success_at = now()")
         .execute(&pool)
@@ -379,12 +347,11 @@ async fn signing_in_again_on_the_same_session_lifts_auth_required(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_queued_collection_reports_since_when(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     let first = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
     let created_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
-        "UPDATE background_jobs SET created_at = now() - interval '20 minutes' RETURNING created_at",
+        "UPDATE job_status SET updated_at = now() - interval '20 minutes' RETURNING updated_at",
     )
     .fetch_one(&pool)
     .await?;
