@@ -606,7 +606,11 @@ async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
         insert_track(&pool, id, "Track").await?;
     }
     sqlx::query(
-        "UPDATE lyrics_lookup_state SET claim_job_id = gen_random_uuid() WHERE sc_track_id = '43'",
+        "UPDATE lyrics_lookup_state
+         SET claim_job_id = gen_random_uuid(), claim_job_generation = 1,
+             claim_job_lease_id = gen_random_uuid(), claim_state_generation = generation,
+             claim_expires_at = now() + interval '1 hour'
+         WHERE sc_track_id = '43'",
     )
     .execute(&pool)
     .await?;
