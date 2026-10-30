@@ -233,11 +233,11 @@ bj "UPDATE public.background_jobs SET lease_id = NULL, lease_generation = NULL, 
 wait_for scd_b1_main "SELECT state = 'retry_wait' AND available_at > now() + interval '9 minutes' FROM public.job_status WHERE dedup_key = 'b7:one'" "main reads retry_wait with its retry time"
 bj "DELETE FROM public.background_jobs WHERE dedup_key = 'b7:one'"
 wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.job_status WHERE dedup_key = 'b7:one')" "a finished job leaves no status"
-sql -d scd_b1_core -c "ALTER TABLE public.background_jobs DISABLE TRIGGER zz_job_status_insert" -c "INSERT INTO public.background_jobs (id, kind, lane, dedup_key, payload) VALUES ('00000000-0000-0000-0000-0000000b7022', 'playlists.observe_shadow', 'core_bulk', 'b7:late', '{}')" -c "ALTER TABLE public.background_jobs ENABLE TRIGGER zz_job_status_insert" > /dev/null
+sql -d scd_b1_core -c "ALTER TABLE public.background_jobs DISABLE TRIGGER zz_job_status_insert" -c "INSERT INTO public.background_jobs (id, kind, lane, dedup_key, payload) VALUES ('00000000-0000-0000-0000-0000000b7022', 'playlists.observe_shadow', 'core_bulk', 'b7:late', '{}')" -c "ALTER TABLE public.background_jobs ENABLE ALWAYS TRIGGER zz_job_status_insert" > /dev/null
 want "a job queued before the trigger has no status" "$(only core "SELECT count(*) FROM public.job_status WHERE dedup_key = 'b7:late'")" 0
 want "the backfill adds it" "$(only core "SELECT sum(added) FROM public.scd_job_status_backfill(NULL, 1000)")" 1
 wait_for scd_b1_main "SELECT state = 'queued' FROM public.job_status WHERE dedup_key = 'b7:late'" "main reads the backfilled status"
-sql -d scd_b1_core -c "ALTER TABLE public.background_jobs DISABLE TRIGGER zz_job_status_delete" -c "DELETE FROM public.background_jobs WHERE dedup_key = 'b7:late'" -c "ALTER TABLE public.background_jobs ENABLE TRIGGER zz_job_status_delete" > /dev/null
+sql -d scd_b1_core -c "ALTER TABLE public.background_jobs DISABLE TRIGGER zz_job_status_delete" -c "DELETE FROM public.background_jobs WHERE dedup_key = 'b7:late'" -c "ALTER TABLE public.background_jobs ENABLE ALWAYS TRIGGER zz_job_status_delete" > /dev/null
 want "the prune removes a status without a job" "$(only core "SELECT public.scd_job_status_prune(1000)")" 1
 wait_for scd_b1_star "SELECT NOT EXISTS (SELECT 1 FROM public.job_status WHERE dedup_key = 'b7:late')" "star loses the pruned status"
 only core "DELETE FROM public.background_jobs WHERE dedup_key LIKE 'b7:%'" > /dev/null

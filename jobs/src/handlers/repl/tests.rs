@@ -179,8 +179,8 @@ async fn job_status_follows_the_queue_and_the_reconcile_repairs_gaps(
          INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
              VALUES (gen_random_uuid(), 'catalog.collection', 'core_bulk', 'k3', '{}');
          DELETE FROM background_jobs WHERE dedup_key = 'k1';
-         ALTER TABLE background_jobs ENABLE TRIGGER zz_job_status_insert;
-         ALTER TABLE background_jobs ENABLE TRIGGER zz_job_status_delete",
+         ALTER TABLE background_jobs ENABLE ALWAYS TRIGGER zz_job_status_insert;
+         ALTER TABLE background_jobs ENABLE ALWAYS TRIGGER zz_job_status_delete",
     )
     .execute(&split)
     .await?;
@@ -192,5 +192,62 @@ async fn job_status_follows_the_queue_and_the_reconcile_repairs_gaps(
             .fetch_all(&split)
             .await?;
     assert_eq!(seen, vec![("k3".to_owned(), "queued".to_owned())]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn job_status_is_kept_on_a_legacy_node_for_local_and_replicated_writes(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+             VALUES (gen_random_uuid(), 'catalog.refresh', 'core_bulk', 'k1', '{}');
+         SET session_replication_role = replica;
+         INSERT INTO background_jobs (id, kind, lane, dedup_key, payload) VALUES
+             (gen_random_uuid(), 'catalog.collection', 'core_bulk', 'k2', '{}'),
+             (gen_random_uuid(), 'crawl.artist', 'core_bulk', 'k3', '{}');
+         UPDATE background_jobs SET lease_id = gen_random_uuid(), lease_generation = 1, leased_by = 'w',
+                lease_expires_at = now() + interval '1 minute' WHERE dedup_key = 'k1';
+         RESET session_replication_role",
+    )
+    .execute(&pool)
+    .await?;
+    let seen: Vec<(String, String)> =
+        sqlx::query_as("SELECT dedup_key, state FROM job_status ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        seen,
+        vec![
+            ("k1".to_owned(), "running".to_owned()),
+            ("k2".to_owned(), "queued".to_owned())
+        ]
+    );
+
+    sqlx::raw_sql(
+        "ALTER TABLE background_jobs DISABLE TRIGGER zz_job_status_insert;
+         ALTER TABLE background_jobs DISABLE TRIGGER zz_job_status_delete;
+         INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+             VALUES (gen_random_uuid(), 'playlists.observe_shadow', 'core_bulk', 'k4', '{}');
+         DELETE FROM background_jobs WHERE dedup_key = 'k1';
+         ALTER TABLE background_jobs ENABLE ALWAYS TRIGGER zz_job_status_insert;
+         ALTER TABLE background_jobs ENABLE ALWAYS TRIGGER zz_job_status_delete",
+    )
+    .execute(&pool)
+    .await?;
+
+    ReplHandler::new(pool.clone()).retain().await?;
+
+    let seen: Vec<(String, String)> =
+        sqlx::query_as("SELECT dedup_key, state FROM job_status ORDER BY dedup_key")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        seen,
+        vec![
+            ("k2".to_owned(), "queued".to_owned()),
+            ("k4".to_owned(), "queued".to_owned())
+        ]
+    );
     Ok(())
 }

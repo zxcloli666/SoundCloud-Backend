@@ -398,9 +398,9 @@
    ],
    "triggers": [
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
-    {"enabled": "O", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_delete", "pinned": true},
-    {"enabled": "O", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_insert", "pinned": true},
-    {"enabled": "O", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_update", "pinned": true}
+    {"enabled": "A", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_delete", "pinned": true},
+    {"enabled": "A", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_insert", "pinned": true},
+    {"enabled": "A", "function": "scd_job_status_sync", "gated": false, "name": "zz_job_status_update", "pinned": true}
    ],
    "unique": [
     {"cols": ["kind", "dedup_key"], "expr": false, "keys": ["kind", "dedup_key"], "name": "background_jobs_dedup_idx", "primary": false, "where": "(dedup_key IS NOT NULL)"},

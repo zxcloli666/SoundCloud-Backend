@@ -158,6 +158,36 @@ async fn a_batch_inserts_each_new_job_and_only_the_api_read_kinds_get_a_status()
 }
 
 #[tokio::test]
+async fn the_enqueue_writes_a_status_for_exactly_the_kinds_the_status_list_names() {
+    let pair = Pair::new(
+        "ALTER TABLE public.background_jobs DISABLE TRIGGER zz_job_status_insert;
+        CREATE OR REPLACE FUNCTION public.scd_job_status_kinds() RETURNS text[] LANGUAGE sql IMMUTABLE
+        AS $f$ SELECT ARRAY['lyrics.lookup'] $f$",
+    )
+    .await;
+    let run = pair
+        .run(
+            &enqueue(vec![
+                job("catalog.refresh", "track:42:public", 5, false),
+                job("lyrics.lookup", "42", 10, false),
+            ]),
+            &CORE_CLOCK,
+        )
+        .await;
+    assert_eq!(run.core, json!({"claimed": true, "inserted": 2}));
+    run.assert_same();
+    assert_eq!(
+        queued(&pair.core, "lyrics.lookup", "42").await,
+        Some((10, Some("queued".to_owned())))
+    );
+    assert_eq!(
+        queued(&pair.core, "catalog.refresh", "track:42:public").await,
+        Some((5, None))
+    );
+    pair.finish().await;
+}
+
+#[tokio::test]
 async fn a_replayed_enqueue_command_is_a_no_op() {
     let pair = Pair::new("").await;
     pair.run(
