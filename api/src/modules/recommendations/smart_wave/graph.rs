@@ -26,9 +26,11 @@ const FRONTIER_CAP: usize = 320;
 const TOTAL_CAP: usize = 1500;
 const DISLIKE_ARTIST_MIN: i64 = 3;
 const ANTISPREAD_MU: f32 = 0.6;
-const CACHE_TTL_SECS: u64 = 90;
-const EDGES_TTL: Duration = Duration::from_secs(600);
+const CACHE_TTL_SECS: u64 = 600;
+const EDGES_TTL: Duration = Duration::from_secs(3600);
 const EDGES_KEPT: u64 = 4_000_000;
+const EDGES_TOP_K: i64 = 256;
+const EDGES_CACHE: &str = "graph_edges";
 
 pub enum GraphSeed {
     User,
@@ -43,6 +45,7 @@ type Adjacency = HashMap<Uuid, Arc<Neighbors>>;
 pub struct GraphEdges {
     by_artist: Cache<Uuid, Arc<Neighbors>>,
     loading: Mutex<HashMap<Uuid, Arc<Semaphore>>>,
+    top_k: i64,
 }
 
 struct Loading<'a> {
@@ -66,6 +69,10 @@ impl Drop for Loading<'_> {
 
 impl GraphEdges {
     pub fn new() -> Self {
+        Self::with_top_k(EDGES_TOP_K)
+    }
+
+    pub fn with_top_k(top_k: i64) -> Self {
         Self {
             by_artist: Cache::builder()
                 .max_capacity(EDGES_KEPT)
@@ -73,6 +80,7 @@ impl GraphEdges {
                 .time_to_live(EDGES_TTL)
                 .build(),
             loading: Mutex::new(HashMap::new()),
+            top_k,
         }
     }
 
@@ -82,9 +90,13 @@ impl GraphEdges {
         for artist in artists {
             match self.by_artist.get(artist) {
                 Some(neighbors) => {
+                    crate::metrics::record_cache(EDGES_CACHE, true);
                     adjacency.insert(*artist, neighbors);
                 }
-                None => missing.push(*artist),
+                None => {
+                    crate::metrics::record_cache(EDGES_CACHE, false);
+                    missing.push(*artist);
+                }
             }
         }
         let (loading, awaited) = self.claim(&missing);
@@ -151,7 +163,8 @@ impl GraphEdges {
         }
         let edges = sqlx::query_file!(
             "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
-            &artists
+            &artists,
+            self.top_k
         )
         .fetch_all(pg)
         .await
@@ -165,6 +178,11 @@ impl GraphEdges {
             self.by_artist.insert(artist, neighbors.clone());
             adjacency.insert(artist, neighbors);
         }
+        crate::metrics::set_cache_size(
+            EDGES_CACHE,
+            self.by_artist.entry_count(),
+            self.by_artist.weighted_size(),
+        );
         Some(adjacency)
     }
 }
@@ -218,43 +236,53 @@ pub async fn build_affinity(
         };
     }
 
-    let mut seeds = match seed {
-        GraphSeed::User => {
-            let mut s = load_user_seeds(&svc.pg, &variants).await;
-            for v in s.values_mut() {
-                *v = v.ln_1p();
-            }
-            s
-        }
-        GraphSeed::Track(t) => load_track_seeds(&svc.pg, t).await,
-        GraphSeed::Artist(a) => {
-            let mut m = HashMap::new();
-            m.insert(a, 1.0f32);
-            m
-        }
-    };
-    for d in &disliked {
-        seeds.remove(d);
-    }
-    if seeds.is_empty() {
-        return GraphResult {
-            affinity: HashMap::new(),
-            disliked_artists: disliked,
-        };
-    }
-    normalize_by_max(&mut seeds);
+    let affinity = affinity_from(&svc.graph_edges, &svc.pg, &variants, &disliked, &seed).await;
 
-    let mut affinity = propagate(&svc.graph_edges, &svc.pg, &seeds, &disliked).await;
-    anti_spread(&svc.graph_edges, &svc.pg, &mut affinity, &disliked).await;
-    cap_top(&mut affinity, TOTAL_CAP);
-
-    if let GraphSeed::User = seed {
+    if let GraphSeed::User = seed
+        && !affinity.is_empty()
+    {
         write_cache(&svc.redis, sc_user_id, &affinity).await;
     }
     GraphResult {
         affinity,
         disliked_artists: disliked,
     }
+}
+
+pub async fn affinity_from(
+    edges: &GraphEdges,
+    pg: &PgPool,
+    variants: &[String],
+    disliked: &[Uuid],
+    seed: &GraphSeed,
+) -> Affinity {
+    let mut seeds = match seed {
+        GraphSeed::User => {
+            let mut s = load_user_seeds(pg, variants).await;
+            for v in s.values_mut() {
+                *v = v.ln_1p();
+            }
+            s
+        }
+        GraphSeed::Track(t) => load_track_seeds(pg, *t).await,
+        GraphSeed::Artist(a) => {
+            let mut m = HashMap::new();
+            m.insert(*a, 1.0f32);
+            m
+        }
+    };
+    for d in disliked {
+        seeds.remove(d);
+    }
+    if seeds.is_empty() {
+        return HashMap::new();
+    }
+    normalize_by_max(&mut seeds);
+
+    let mut affinity = propagate(edges, pg, &seeds, disliked).await;
+    anti_spread(edges, pg, &mut affinity, disliked).await;
+    cap_top(&mut affinity, TOTAL_CAP);
+    affinity
 }
 
 async fn propagate(
@@ -402,7 +430,7 @@ async fn load_track_seeds(pg: &PgPool, sc_track_id: u64) -> Affinity {
     rows.into_iter().map(|r| (r.artist_id, r.w)).collect()
 }
 
-async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
+pub async fn load_disliked_artists(pg: &PgPool, variants: &[String]) -> Vec<Uuid> {
     sqlx::query_file_scalar!(
         "queries/recommendations/smart_wave/graph/load_disliked_artists.sql",
         variants,
@@ -555,7 +583,8 @@ mod tests {
     async fn expected(pool: &PgPool, artists: &[Uuid]) -> anyhow::Result<Adjacency> {
         let edges = sqlx::query_file!(
             "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
-            artists
+            artists,
+            i64::MAX
         )
         .fetch_all(pool)
         .await?;
@@ -691,6 +720,188 @@ mod tests {
             .await
             .expect("the waiter must not hang")?;
         assert_eq!(sorted(&got), sorted(&want));
+        Ok(())
+    }
+
+    const OLD_EDGES: &str = "SELECT a_id, b_id, weight::real, 0::int2 FROM artist_coplay
+        WHERE a_id = ANY ($1) AND weight > 0
+        UNION ALL SELECT b_id, a_id, weight::real, 0::int2 FROM artist_coplay
+        WHERE b_id = ANY ($1) AND weight > 0
+        UNION ALL SELECT a_id, b_id, w, 1::int2 FROM artist_colike
+        WHERE a_id = ANY ($1) AND w > 0
+        UNION ALL SELECT b_id, a_id, w, 1::int2 FROM artist_colike
+        WHERE b_id = ANY ($1) AND w > 0";
+
+    const LOW_HUB: u128 = 1;
+    const HIGH_HUB: u128 = 1000;
+    const NEIGHBORS: u128 = 60;
+
+    type Edge = (Uuid, Uuid, u32, i16);
+
+    async fn hubs(pool: &PgPool) -> anyhow::Result<Vec<Uuid>> {
+        let ids: Vec<Uuid> = std::iter::once(LOW_HUB)
+            .chain(100..100 + NEIGHBORS)
+            .chain(std::iter::once(HIGH_HUB))
+            .map(Uuid::from_u128)
+            .collect();
+        sqlx::query(
+            "INSERT INTO artists (id, name, normalized_name, source)
+             SELECT id, id::text, id::text, 'test' FROM unnest($1::uuid[]) AS id",
+        )
+        .bind(&ids)
+        .execute(pool)
+        .await?;
+        for (rank, neighbor) in (100..100 + NEIGHBORS).enumerate() {
+            let weight = 1.0 + rank as f32 / 100.0;
+            let (low, high) = (Uuid::from_u128(LOW_HUB), Uuid::from_u128(neighbor));
+            let top = Uuid::from_u128(HIGH_HUB);
+            for (a, b, w) in [(low, high, weight), (high, top, weight + 0.005)] {
+                sqlx::query("INSERT INTO artist_coplay (a_id, b_id, weight) VALUES ($1, $2, $3)")
+                    .bind(a)
+                    .bind(b)
+                    .bind(w)
+                    .execute(pool)
+                    .await?;
+                sqlx::query("INSERT INTO artist_colike (a_id, b_id, co, w) VALUES ($1, $2, 5, $3)")
+                    .bind(a)
+                    .bind(b)
+                    .bind(w / 10.0)
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        Ok(ids)
+    }
+
+    fn flat(rows: impl IntoIterator<Item = (Uuid, Uuid, f32, i16)>) -> Vec<Edge> {
+        let mut rows: Vec<Edge> = rows
+            .into_iter()
+            .map(|(src, dst, weight, kind)| (src, dst, weight.to_bits(), kind))
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    async fn new_edges(pool: &PgPool, artists: &[Uuid], k: i64) -> anyhow::Result<Vec<Edge>> {
+        let rows = sqlx::query_file!(
+            "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+            artists,
+            k
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(flat(
+            rows.into_iter().map(|e| (e.src, e.dst, e.weight, e.kind)),
+        ))
+    }
+
+    async fn old_edges(
+        pool: &PgPool,
+        artists: &[Uuid],
+    ) -> anyhow::Result<Vec<(Uuid, Uuid, f32, i16)>> {
+        Ok(sqlx::query_as(OLD_EDGES)
+            .bind(artists)
+            .fetch_all(pool)
+            .await?)
+    }
+
+    fn cut_to_top(rows: &[(Uuid, Uuid, f32, i16)], k: usize) -> Vec<Edge> {
+        let mut kept = Vec::new();
+        let sources: std::collections::HashSet<Uuid> = rows.iter().map(|r| r.0).collect();
+        for source in sources {
+            for kind in [0_i16, 1] {
+                let mut own: Vec<_> = rows
+                    .iter()
+                    .filter(|r| r.0 == source && r.3 == kind)
+                    .collect();
+                own.sort_by(|a, b| b.2.total_cmp(&a.2));
+                let by_side = |low_side: bool| {
+                    own.iter()
+                        .filter(move |r| (source < r.1) == low_side)
+                        .take(k)
+                        .map(|r| (**r).clone())
+                        .collect::<Vec<_>>()
+                };
+                kept.extend(by_side(true));
+                kept.extend(by_side(false));
+            }
+        }
+        flat(kept)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn an_unbounded_top_k_returns_the_old_edges(pool: PgPool) -> anyhow::Result<()> {
+        let ids = hubs(&pool).await?;
+        let old = flat(old_edges(&pool, &ids).await?);
+        assert!(old.len() > 4 * NEIGHBORS as usize);
+        assert_eq!(new_edges(&pool, &ids, i64::MAX).await?, old);
+        assert_eq!(new_edges(&pool, &ids, 10_000).await?, old);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_small_top_k_keeps_the_heaviest_edges_of_each_side(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        let ids = hubs(&pool).await?;
+        let old = old_edges(&pool, &ids).await?;
+        for k in [1_usize, 7, 59, 60] {
+            let new = new_edges(&pool, &ids, k as i64).await?;
+            assert_eq!(new, cut_to_top(&old, k), "k = {k}");
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn top_k_keeps_the_heaviest_edge_so_normalisation_is_unchanged(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        hubs(&pool).await?;
+        let hub = Uuid::from_u128(LOW_HUB);
+        let full = GraphEdges::with_top_k(i64::MAX);
+        let cut = GraphEdges::with_top_k(5);
+        let full = full.of(&pool, &[hub]).await;
+        let cut = cut.of(&pool, &[hub]).await;
+        let (full, cut) = (merge_normalized(&full[&hub]), merge_normalized(&cut[&hub]));
+        assert_eq!(cut.len(), 5);
+        assert!(cut.values().any(|e| *e == 1.0));
+        for (dst, e) in &cut {
+            assert_eq!(full[dst], *e);
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn the_edge_query_walks_the_covering_indexes(pool: PgPool) -> anyhow::Result<()> {
+        let ids = hubs(&pool).await?;
+        sqlx::query("ANALYZE artist_coplay").execute(&pool).await?;
+        sqlx::query("ANALYZE artist_colike").execute(&pool).await?;
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL enable_sort = off")
+            .execute(&mut *tx)
+            .await?;
+        let plan: Vec<String> = sqlx::query_scalar(&format!(
+            "EXPLAIN (COSTS OFF) {}",
+            include_str!(
+                "../../../../queries/recommendations/smart_wave/graph/load_graph_edges.sql"
+            )
+        ))
+        .bind(&ids)
+        .bind(50_i64)
+        .fetch_all(&mut *tx)
+        .await?;
+        let plan = plan.join("\n");
+        for index in [
+            "artist_coplay_a_edges_idx",
+            "artist_coplay_b_edges_idx",
+            "artist_colike_a_edges_idx",
+            "artist_colike_b_edges_idx",
+        ] {
+            assert!(plan.contains(index), "{index} missing in\n{plan}");
+        }
         Ok(())
     }
 
