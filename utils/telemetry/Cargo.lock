@@ -710,6 +710,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "redact"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -880,6 +887,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "redact",
  "tokio",
  "tower",
  "tower-http",

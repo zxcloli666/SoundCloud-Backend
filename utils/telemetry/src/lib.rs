@@ -5,5 +5,4 @@ mod traceparent;
 mod uncached;
 
 pub use init::{Guard, init};
-pub use scrub::text as scrubbed;
 pub use request::{fail, finish, root_span, trace_id, trace_requests};

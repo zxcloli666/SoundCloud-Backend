@@ -7,6 +7,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, SdkTracer, SdkTracerProvider};
 use tracing::{Level, Metadata, Subscriber};
 use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, fmt, prelude::*};
 
@@ -34,6 +35,7 @@ pub fn init(service: &'static str, default_filter: &str, own: &'static [&'static
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
 
+    let scrubbed_stdout = || redact::Scrubbing::new(std::io::stdout());
     let provider = exporter_provider(service);
     let otel = provider
         .as_ref()
@@ -41,7 +43,7 @@ pub fn init(service: &'static str, default_filter: &str, own: &'static [&'static
 
     tracing_subscriber::registry()
         .with(otel)
-        .with(log_layer(filter, json))
+        .with(log_layer(filter, json, scrubbed_stdout))
         .init();
 
     Guard(provider)
@@ -60,13 +62,15 @@ where
         .with_filter(Uncached(filter_fn(move |meta| ours(meta, own))))
 }
 
-fn log_layer<S>(filter: EnvFilter, json: bool) -> Box<dyn Layer<S> + Send + Sync>
+fn log_layer<S, W>(filter: EnvFilter, json: bool, writer: W) -> Box<dyn Layer<S> + Send + Sync>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
     if json {
         fmt::layer()
             .json()
+            .with_writer(writer)
             .with_current_span(true)
             .with_span_list(false)
             .with_filter(Uncached(filter))
@@ -74,6 +78,7 @@ where
     } else {
         fmt::layer()
             .with_target(true)
+            .with_writer(writer)
             .with_filter(Uncached(filter))
             .boxed()
     }
@@ -139,7 +144,11 @@ mod tests {
             .build();
         let subscriber = tracing_subscriber::registry()
             .with(Some(otel_layer(provider.tracer("test"), &["telemetry"])))
-            .with(log_layer(EnvFilter::new("info,sqlx=warn"), false));
+            .with(log_layer(
+                EnvFilter::new("info,sqlx=warn"),
+                false,
+                std::io::sink,
+            ));
         let sqlx_check = log::Metadata::builder()
             .level(log::Level::Debug)
             .target("sqlx::query")
@@ -153,5 +162,46 @@ mod tests {
         });
 
         assert_eq!(exporter.get_finished_spans().expect("spans").len(), 10);
+    }
+
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("sink").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn log_lines_never_carry_query_strings_secrets_or_ids() {
+        const CLIENT_ID: &str = "aB3dE5gH7jK9mN1pQ3sT5vX7zC9eF1hJ";
+        for json in [false, true] {
+            let sink = Sink::default();
+            let writer = {
+                let sink = sink.clone();
+                move || redact::Scrubbing::new(sink.clone())
+            };
+            let subscriber = tracing_subscriber::registry().with(log_layer(
+                EnvFilter::new("info"),
+                json,
+                writer,
+            ));
+
+            tracing::subscriber::with_default(subscriber, || {
+                let uri = format!("https://api-v2.soundcloud.com/tracks/1?client_id={CLIENT_ID}");
+                tracing::warn!(url = %uri, client_id = CLIENT_ID, "send failed for uri ({uri})");
+            });
+
+            let written = String::from_utf8(sink.0.lock().expect("sink").clone()).expect("utf8");
+            assert!(written.contains("send failed"), "{written}");
+            assert!(!written.contains(CLIENT_ID), "{written}");
+            assert!(!written.contains('?'), "{written}");
+        }
     }
 }
