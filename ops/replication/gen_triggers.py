@@ -323,23 +323,43 @@ def resend(tbl, pk, seq):
 
 def skip(t):
     tombs = t.cls == "A" and t.delete == "tombstone"
-    lines = ["DECLARE", "    tv bigint;", "BEGIN"] if tombs else ["BEGIN"]
+    decl = (["    tv bigint;"] if tombs else []) + (["    o record;"] if t.least else [])
+    lines = (["DECLARE"] + decl if decl else []) + ["BEGIN"]
     lines += [
         "    IF current_setting('scd.merging', true) = 'on' THEN",
         "        RETURN NEW;",
         "    END IF;",
-        "    PERFORM 1 FROM %s t WHERE %s;" % (table(t.name), same("t", "NEW", t.pk)),
-        "    IF FOUND THEN",
-        "        RETURN NULL;",
-        "    END IF;",
     ]
+    if t.least:
+        lines += ["    IF TG_OP = 'UPDATE' THEN"]
+        lines += ["        NEW.%s := least(OLD.%s, NEW.%s);" % (q(c), q(c), q(c)) for c in t.least]
+        lines += ["        RETURN NEW;", "    END IF;"]
+        lines += [
+            "    SELECT %s INTO o FROM %s t WHERE %s;" % (refs("t", t.least), table(t.name), same("t", "NEW", t.pk)),
+            "    IF FOUND THEN",
+            "        IF %s THEN" % " OR ".join("NEW.%s < o.%s" % (q(c), q(c)) for c in t.least),
+            "            PERFORM pg_catalog.set_config('scd.merging', 'on', true);",
+            "            UPDATE %s t SET %s WHERE %s;" % (table(t.name), ", ".join("%s = least(t.%s, NEW.%s)" % (q(c), q(c), q(c)) for c in t.least),
+                                                    same("t", "NEW", t.pk)),
+            "            PERFORM pg_catalog.set_config('scd.merging', '', true);",
+            "        END IF;",
+            "        RETURN NULL;",
+            "    END IF;",
+        ]
+    else:
+        lines += [
+            "    PERFORM 1 FROM %s t WHERE %s;" % (table(t.name), same("t", "NEW", t.pk)),
+            "    IF FOUND THEN",
+            "        RETURN NULL;",
+            "    END IF;",
+        ]
     seqs = []
     if tombs:
         blocked, seqs = tomb_block(t)
         lines += indent(blocked)
     lines += indent(insert_self(t, counted=False)) + ["    RETURN NULL;", "END"]
     sql = function(fn_name("skip", t), "\n".join(lines))
-    sql += trigger(t, "zz_skip", "BEFORE INSERT", fn_name("skip", t) + "()", SPLIT, replica=True)
+    sql += trigger(t, "zz_skip", "BEFORE INSERT OR UPDATE" if t.least else "BEFORE INSERT", fn_name("skip", t) + "()", SPLIT, replica=True)
     return "zz_skip", sql, seqs
 
 
@@ -496,9 +516,13 @@ def owner_purges(t, keys, flag):
     return lines
 
 
+def is_pending(t, rec):
+    return "EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = %s AND p.pk = %s)" % (lit(t.name), pk_json(rec, t.pk))
+
+
 def pending(t, carry):
     return [
-        "IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = %s AND p.pk = %s) THEN" % (lit(t.name), pk_json("NEW", t.pk)),
+        "IF %s THEN" % is_pending(t, "NEW"),
     ] + indent(carry) + [
         "    RETURN NULL;",
         "END IF;",
@@ -538,6 +562,24 @@ def core_col(t):
     return "zz_core_col", sql, [("core_col", t.name, seq)]
 
 
+def moved(t):
+    cols = [c for c in t.columns if c not in t.generated and c not in t.added]
+    return [
+        "IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", t.pk), tup("OLD", t.pk)),
+        "    IF %s THEN" % is_pending(t, "OLD"),
+        "        IF NOT %s THEN" % is_pending(t, "NEW"),
+        "            INSERT INTO %s (%s) VALUES (%s);" % (table(t.name), ", ".join(q(c) for c in cols), refs("NEW", cols)),
+        "        END IF;",
+        "        RETURN NULL;",
+        "    END IF;",
+        "    IF %s THEN" % is_pending(t, "NEW"),
+        "        DELETE FROM %s t WHERE %s;" % (table(t.name), same("t", "OLD", t.pk)),
+        "        RETURN NULL;",
+        "    END IF;",
+        "ELSE",
+    ] + indent(pending(t, carry_updated(t))) + ["END IF;"]
+
+
 def owner(t):
     keys = list(t.uniques)
     cols = [c for c in t.replicated if c not in t.pk]
@@ -546,11 +588,20 @@ def owner(t):
     lines += [
         "BEGIN",
         "    IF current_setting('scd.merging', true) = 'on' THEN",
+        "        IF TG_OP = 'DELETE' THEN",
+        "            RETURN OLD;",
+        "        END IF;",
         "        RETURN NEW;",
+        "    END IF;",
+        "    IF TG_OP = 'DELETE' THEN",
+        "        IF pg_catalog.pg_trigger_depth() = 1 AND %s THEN" % is_pending(t, "OLD"),
+        "            RETURN NULL;",
+        "        END IF;",
+        "        RETURN OLD;",
         "    END IF;",
         "    IF TG_OP = 'UPDATE' THEN",
     ]
-    lines += indent(pending(t, carry_updated(t)), 2)
+    lines += indent(moved(t), 2)
     for i, u in enumerate(keys):
         lines.append("        k%d := %s IS DISTINCT FROM %s;" % (i, keys_tuple(u, t.columns, "NEW", True), keys_tuple(u, t.columns, "OLD", True)))
     lines += indent(owner_purges(t, keys, True), 2)
@@ -565,7 +616,7 @@ def owner(t):
     lines += ["    FOR attempt IN 1..3 LOOP"] + indent(body, 2) + ["    END LOOP;"]
     lines += indent(give_up(t)) + ["END"]
     sql = function(fn_name("owner", t), "\n".join(lines))
-    sql += trigger(t, "zz_owner", "BEFORE INSERT OR UPDATE", fn_name("owner", t) + "()", API + " AND " + SPLIT, replica=True)
+    sql += trigger(t, "zz_owner", "BEFORE INSERT OR UPDATE OR DELETE", fn_name("owner", t) + "()", API + " AND " + SPLIT, replica=True)
     return "zz_owner", sql, []
 
 

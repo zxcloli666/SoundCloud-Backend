@@ -16,6 +16,12 @@ pub async fn finalize_create(
     remote_result: &Value,
 ) -> Result<(), ActionError> {
     let playlist = CreatedPlaylist::parse(remote_result)?;
+    sqlx::query_file_scalar!(
+        "queries/playlist_observe/lock_membership.sql",
+        &playlist.urn
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
     sqlx::query_file!(
         "queries/sync_queue/actions/upsert_created_playlist.sql",
         &playlist.urn,

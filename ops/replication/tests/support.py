@@ -64,7 +64,7 @@ SPEC = {
     },
     "kinds": {"item.edit": {"touches": ["items"]}},
     "tables": {
-        "items": {"class": "C", "local": ["last_read_at"]},
+        "items": {"class": "C", "local": ["last_read_at"], "unique": {"items_urn_uq": "key"}},
         "item_tags": {"class": "C"},
         "jobs_q": {"class": "P"},
         "likes": {

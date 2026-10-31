@@ -144,4 +144,14 @@ RETURNING queued.id,
           queued.remote_completed_generation,
           queued.remote_result,
           queued.created_at,
-          (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!"
+          (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!",
+          CASE queued.action_type
+              WHEN 'track_update' THEN (
+                  SELECT track.sc_desired FROM tracks AS track
+                  WHERE track.urn = queued.target_urn AND track.deleted_at IS NULL
+              )
+              WHEN 'playlist_update' THEN (
+                  SELECT playlist.sc_desired FROM playlists AS playlist
+                  WHERE playlist.urn = queued.target_urn AND playlist.deleted_at IS NULL
+              )
+          END AS desired

@@ -10,6 +10,14 @@ async fn update(pool: &PgPool, fields: Value) -> anyhow::Result<()> {
     let body = json!({"playlist": fields});
     let update = catalog_ingest::PlaylistUpdate::parse(&body).map_err(anyhow::Error::msg)?;
     let mut tx = pool.begin().await?;
+    let edit = wt::PlaylistEdit {
+        urn: PLAYLIST.to_owned(),
+        owner: "17".to_owned(),
+        desired: update.desired().clone(),
+        observation: catalog_ingest::Observation::begin(pool).await?.sequence(),
+        at: wt::now(),
+    };
+    anyhow::ensure!(wt::call(&mut tx, &edit).await?.is_some());
     sqlx::query_file!(
         "../api/queries/sync_queue/service/enqueue.sql",
         "17",
@@ -19,14 +27,6 @@ async fn update(pool: &PgPool, fields: Value) -> anyhow::Result<()> {
         false
     )
     .execute(&mut *tx)
-    .await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/apply_update.sql",
-        PLAYLIST,
-        "17",
-        update.desired()
-    )
-    .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
@@ -167,7 +167,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
     assert!(repository.record_remote_attempt(&old).await?);
     assert!(
         repository
-            .record_remote_success(&old, &json!({"urn": PLAYLIST}))
+            .record_remote_success(&old, &json!({"desired": old.desired}))
             .await?
     );
     update(&pool, json!({"sharing": "private"})).await?;
@@ -188,7 +188,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
     assert!(repository.record_remote_attempt(&current).await?);
     assert!(
         repository
-            .record_remote_success(&current, &json!({"urn": PLAYLIST}))
+            .record_remote_success(&current, &json!({"desired": current.desired}))
             .await?
     );
     repository.finalize(&current).await?;
@@ -217,5 +217,36 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
         .fetch_one(&pool)
         .await?;
     assert_eq!(desired, json!({}));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unconfirmed_playlist_edit_without_a_queue_row_is_healed_into_a_push(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    super::track_tests::connect_owner(&pool).await?;
+    let remote = json!({"urn": PLAYLIST, "title": "Original", "sharing": "public", "user": {"urn": "soundcloud:users:17"}});
+    catalog_ingest::upsert_playlist_from_sc(
+        &pool,
+        &remote,
+        catalog_ingest::Observation::begin(&pool).await?,
+    )
+    .await?;
+    update(&pool, json!({"title": "Renamed"})).await?;
+    sqlx::query("DELETE FROM sync_queue").execute(&pool).await?;
+
+    super::track_tests::heal(&pool, "playlists").await?;
+
+    let repository = SyncQueueRepository::new(pool.clone(), Duration::from_secs(60));
+    let healed = repository
+        .claim(1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("healed playlist edit was not claimed"))?;
+    assert_eq!(healed.action_type, "playlist_update");
+    let desired = healed.desired.clone().unwrap_or_default();
+    assert_eq!(desired["title"], json!("Renamed"));
     Ok(())
 }

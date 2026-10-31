@@ -129,6 +129,44 @@ impl TrackUpdate {
         })
     }
 
+    pub fn from_desired(desired: &Value) -> Result<Self, &'static str> {
+        let desired = desired
+            .as_object()
+            .ok_or("desired track state is not an object")?;
+        let mut track = Map::new();
+        for key in [
+            "title",
+            "description",
+            "genre",
+            "sharing",
+            "isrc",
+            "metadata_artist",
+            "release_date",
+        ] {
+            if let Some(value) = desired.get(key) {
+                track.insert(key.into(), sent_string(value));
+            }
+        }
+        if let Some(tags) = desired.get("tags").and_then(Value::as_array) {
+            let tags: Vec<&str> = tags.iter().filter_map(Value::as_str).collect();
+            track.insert("tag_list".into(), json!(tags.join(" ")));
+        }
+        for (key, value) in desired
+            .get("sc_metadata")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            let value = if BOOLEANS.contains(&key.as_str()) {
+                value.clone()
+            } else {
+                sent_string(value)
+            };
+            track.insert(key.clone(), value);
+        }
+        Self::parse(&json!({ "track": track }))
+    }
+
     pub fn body(&self) -> &Value {
         &self.body
     }
@@ -170,6 +208,10 @@ pub(crate) fn metadata_from_sc(value: &Value) -> Value {
         );
     }
     Value::Object(metadata)
+}
+
+pub(crate) fn sent_string(value: &Value) -> Value {
+    json!(value.as_str().unwrap_or_default())
 }
 
 fn normalized_string(value: &str) -> Value {
@@ -245,6 +287,23 @@ mod tests {
         ] {
             assert!(TrackUpdate::parse(&body).is_err(), "{body}");
         }
+    }
+
+    #[test]
+    fn the_body_rebuilt_from_a_desired_state_parses_back_to_the_same_state() {
+        for body in [
+            json!({"track": {"title": "New title", "description": "", "sharing": "private", "downloadable": false, "release_date": "2026-09-07", "purchase_url": "https://example.com"}}),
+            json!({"track": {"tag_list": "night  drive synthwave", "genre": " Synthwave ", "release_date": "", "license": "cc-by", "permalink": "night-drive", "isrc": ""}}),
+        ] {
+            let update = TrackUpdate::parse(&body).unwrap();
+            let rebuilt = TrackUpdate::from_desired(update.desired()).unwrap();
+            assert_eq!(rebuilt.desired(), update.desired(), "{body}");
+        }
+        let merged = json!({"title": "A", "title_normalized": "a", "sharing": "public", "sc_metadata": {"license": "cc-by"}});
+        assert_eq!(
+            TrackUpdate::from_desired(&merged).unwrap().body(),
+            &json!({"track": {"title": "A", "sharing": "public", "license": "cc-by"}})
+        );
     }
 
     #[test]

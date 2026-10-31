@@ -19,6 +19,7 @@ pub struct ClaimedMutation {
     pub remote_result: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub star: bool,
+    pub desired: Option<Value>,
 }
 
 impl ClaimedMutation {

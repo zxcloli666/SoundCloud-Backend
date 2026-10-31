@@ -128,11 +128,25 @@ impl PlaylistMembership {
     }
 
     pub async fn track_if_untracked(&self, playlist_urn: &str) -> AppResult<()> {
-        sqlx::query_file!(
-            "queries/playlists/ensure_membership_tracked.sql",
-            playlist_urn
-        )
-        .execute(&self.pool)
+        let untracked = sqlx::query_file_scalar!("queries/playlists/untracked.sql", playlist_urn)
+            .fetch_one(&self.pool)
+            .await?;
+        if !untracked {
+            return Ok(());
+        }
+        let command = wt::MembershipOp {
+            playlist_urn: playlist_urn.to_owned(),
+            actor: String::new(),
+            variants: Vec::new(),
+            expected_projection_revision: None,
+            operations: Vec::new(),
+            at: wt::now(),
+        };
+        wt::retry(|| async {
+            let mut transaction = self.pool.begin().await?;
+            wt::call(&mut transaction, &command).await?;
+            transaction.commit().await
+        })
         .await?;
         Ok(())
     }
@@ -389,9 +403,8 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn status_reports_projection_and_pending_operations(pool: PgPool) -> anyhow::Result<()> {
-        test_schema::install(&pool).await?;
         let observation_id =
             test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
         sqlx::query(
@@ -541,11 +554,10 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrations = "./migrations")]
     async fn status_reports_the_queued_read_and_a_retry_only_while_waiting_on_a_failure(
         pool: PgPool,
     ) -> anyhow::Result<()> {
-        test_schema::install(&pool).await?;
         test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
         let queued_at: DateTime<Utc> = sqlx::query_scalar(
             "INSERT INTO job_status (kind, dedup_key, state)

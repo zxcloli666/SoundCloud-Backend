@@ -31,6 +31,8 @@ VERB_RE = re.compile(
     r"\b(select|insert|update|delete|merge|truncate|values|call|do|set|show|create|alter|drop|vacuum|analyze|refresh|reindex"
     r"|listen|notify|begin|commit|explain|lock|copy)\b"
 )
+SET_TARGET_RE = re.compile(r'\s*(\([^()]*\)|"[^"]+"|\w+)\s*=(?!=)')
+DO_UPDATE_RE = re.compile(r"\bdo\s+update\s+set\b")
 PH_FMT = re.compile(r"\{(\w*)(?::[^{}]*)?\}")
 DOLLAR_TAG = re.compile(r"\$([A-Za-z_]\w*)?\$")
 
@@ -271,11 +273,64 @@ def analyze(sql_text, dynamic=False):
         "ops": sorted(set(verbs)),
         "reads": reads,
         "upsert_do_update": bool(re.search(r"on conflict[^;]*?do update", clean)),
+        "assigned": assigned_columns(clean, cte),
         "for_update": bool(re.search(r"\bfor\s+(no\s+key\s+)?update\b", clean)),
         "skip_locked": "skip locked" in clean,
         "limit": bool(re.search(r"\blimit\b", clean)),
         "clock": uses_clock(raw),
     }
+
+
+def set_columns(s, pos):
+    cols = []
+    depth = 0
+    start = True
+    i = pos
+    while i < len(s):
+        if depth == 0 and start:
+            m = SET_TARGET_RE.match(s, i)
+            if not m:
+                break
+            target = m.group(1)
+            names = target[1:-1].split(",") if target.startswith("(") else [target]
+            cols += [clean_name(x.strip()) for x in names]
+            i = m.end()
+            start = False
+            continue
+        c = s[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and c == ",":
+            start = True
+        elif depth == 0 and c == ";":
+            break
+        elif depth == 0 and (c.isalpha() or c == "_") and (i == 0 or not (s[i - 1].isalnum() or s[i - 1] == "_")):
+            w = re.compile(r"\w+").match(s, i)
+            if w.group(0) in ("where", "from", "returning"):
+                break
+            i = w.end()
+            continue
+        i += 1
+    return cols
+
+
+def assigned_columns(clean, cte):
+    out = set()
+    for m in WRITE_RE[1][1].finditer(clean):
+        t = clean_name(m.group(1))
+        if t not in cte and t not in KEYWORDS:
+            out |= {(t, c) for c in set_columns(clean, m.end())}
+    for m in WRITE_RE[0][1].finditer(clean):
+        t = clean_name(m.group(1))
+        stop = re.compile(r";|\binsert\s+into\b").search(clean, m.end())
+        d = DO_UPDATE_RE.search(clean, m.end(), stop.start() if stop else len(clean))
+        if d and t not in cte and t not in KEYWORDS:
+            out |= {(t, c) for c in set_columns(clean, d.end())}
+    return sorted(out)
 
 
 def uses_clock(sql_text):
