@@ -570,7 +570,13 @@ impl ScClient {
             Ok(b) => b,
             Err(e) => {
                 if !e.is_disabled() {
-                    tracing::debug!(error = %e, method = method_id, "relay lua method failed");
+                    tracing::debug!(
+                        target: "scd_event",
+                        channel = "relay",
+                        method = method_id,
+                        error_type = "relay_method_failed",
+                        "relay lua method failed"
+                    );
                 }
                 return None;
             }
@@ -694,7 +700,12 @@ impl ScClient {
                     .await
                 {
                     Ok(b) => return Ok(b),
-                    Err(e) => tracing::debug!(error = %e, "direct failed, racing relay&proxy"),
+                    Err(e) => tracing::debug!(
+                        target: "scd_event",
+                        channel = "direct",
+                        error_type = e.kind(),
+                        "direct failed, racing relay and proxy"
+                    ),
                 }
                 self.race_relay_proxy(method, target_url, headers, body)
                     .await
@@ -760,7 +771,19 @@ impl ScClient {
             };
             match r {
                 Ok(b) => return Ok(b),
-                Err(e) => last = Some(e),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "scd_event",
+                        channel = match ch {
+                            Channel::Direct => "direct",
+                            Channel::Proxy => "proxy",
+                            Channel::Relay => "relay",
+                        },
+                        error_type = e.kind(),
+                        "channel failed, trying the next"
+                    );
+                    last = Some(e);
+                }
             }
         }
         Err(last.unwrap_or_else(|| ScError::invalid("no channels available")))
@@ -787,7 +810,12 @@ impl ScClient {
                     .await;
                 match relayed {
                     Err(error) if !is_semantic_miss(&error) => {
-                        tracing::debug!(%error, "relay read failed, falling back to the proxy");
+                        tracing::debug!(
+                            target: "scd_event",
+                            channel = "relay",
+                            error_type = error.kind(),
+                            "relay read failed, falling back to the proxy"
+                        );
                         self.send_proxy(method, target_url, headers, body).await
                     }
                     answered => answered,

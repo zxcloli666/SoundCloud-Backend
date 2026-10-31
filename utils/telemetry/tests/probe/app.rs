@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::Router;
@@ -12,6 +14,49 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Instrument;
 
+pub static STORAGE: OnceLock<SocketAddr> = OnceLock::new();
+
+pub fn storage() -> Router {
+    Router::new()
+        .route("/files/{id}", get(file))
+        .layer(from_fn(telemetry::trace_requests))
+}
+
+async fn file(Path(id): Path<u64>) -> String {
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    id.to_string()
+}
+
+async fn hop() -> StatusCode {
+    let addr = *STORAGE.get().expect("storage address");
+    let call = telemetry::peer_call("storage", "GET", "/files/{id}");
+    let mut request = hyper::Request::get("/files/1").header("host", "storage");
+    for (name, value) in telemetry::headers(&call) {
+        request = request.header(name, value);
+    }
+    let sent = async {
+        let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(stream))
+                .await
+                .expect("handshake");
+        tokio::spawn(connection);
+        sender
+            .send_request(
+                request
+                    .body(http_body_util::Empty::<hyper::body::Bytes>::new())
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+            .status()
+    }
+    .instrument(call.clone())
+    .await;
+    telemetry::answered(&call, sent.as_u16());
+    StatusCode::OK
+}
+
 pub fn build() -> Router {
     Router::new()
         .route("/fast/{id}", get(fast))
@@ -19,21 +64,16 @@ pub fn build() -> Router {
         .route("/spawned", get(spawned))
         .route("/nested", get(nested))
         .route("/broken", get(broken))
+        .route("/hop", get(hop))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(CompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
-            }),
-        )
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &Request| tracing::debug_span!("http_request", method = %request.method()),
+        ))
         .layer(from_fn(track_http))
         .layer(from_fn(premium_gate))
         .layer(
@@ -79,7 +119,14 @@ async fn fast(Path(id): Path<u64>) -> String {
 async fn query(millis: u64) {
     tokio::time::sleep(Duration::from_millis(millis)).await;
     if log::log_enabled!(target: "sqlx::query", log::Level::Debug) {
-        tracing::debug!(target: "sqlx::query", summary = "SELECT 1", rows_returned = 1);
+        tracing::debug!(
+            target: "sqlx::query",
+            summary = "SELECT 1",
+            db.statement = "SELECT id FROM probe WHERE id = $1",
+            rows_returned = 1u64,
+            rows_affected = 0u64,
+            elapsed_secs = millis as f64 / 1000.0,
+        );
     }
 }
 

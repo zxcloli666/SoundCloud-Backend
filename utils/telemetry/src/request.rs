@@ -7,6 +7,8 @@ use tracing::field::Empty;
 use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::debug_cap;
+use crate::dependency;
 use crate::init::HOST;
 use crate::traceparent;
 
@@ -31,10 +33,27 @@ pub fn root_span(req: &Request) -> Span {
         scd.debug = Empty,
         scd.host = host,
         scd.outcome = Empty,
+        scd.app_version = Empty,
+        scd.hop = Empty,
+        db.queries = Empty,
+        db.rows = Empty,
+        db.time_ms = Empty,
+        redis.calls = Empty,
+        redis.time_ms = Empty,
+        qdrant.calls = Empty,
+        qdrant.time_ms = Empty,
         error.message = Empty,
         request_id = Empty,
     );
+    dependency::attach(&span);
+    span.record("scd.app_version", app_version(req.headers()));
+    span.record("scd.hop", hop(req.headers()));
     if let Some(incoming) = incoming(req.headers()) {
+        let incoming = if incoming.debug() && !debug_cap::admit() {
+            incoming.demoted()
+        } else {
+            incoming
+        };
         if incoming.debug() {
             span.record("scd.debug", true);
         }
@@ -45,7 +64,59 @@ pub fn root_span(req: &Request) -> Span {
 
 fn incoming(headers: &HeaderMap) -> Option<traceparent::Incoming> {
     let value = headers.get("traceparent")?.to_str().ok()?;
-    traceparent::parse(value)
+    let state = headers
+        .get("tracestate")
+        .and_then(|value| value.to_str().ok());
+    traceparent::parse(value).map(|incoming| incoming.with_state(state))
+}
+
+fn label<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+    longest: usize,
+    allowed: fn(char) -> bool,
+) -> Option<&'a str> {
+    let value = headers.get(name)?.to_str().ok()?.trim();
+    let first = value.chars().next()?;
+    let fits = value.len() <= longest && value.chars().all(allowed);
+    (fits && first.is_ascii_alphanumeric()).then_some(value)
+}
+
+fn hop(headers: &HeaderMap) -> &str {
+    match headers.get("x-scd-hop") {
+        None => "direct",
+        Some(_) => label(headers, "x-scd-hop", 8, hop_char).unwrap_or("other"),
+    }
+}
+
+fn app_version(headers: &HeaderMap) -> &str {
+    let Some(value) = headers.get("x-scd-version") else {
+        return "unknown";
+    };
+    value
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|version| release(version))
+        .unwrap_or("other")
+}
+
+fn release(version: &str) -> bool {
+    let (numbers, suffix) = version.split_once('-').unwrap_or((version, "a"));
+    let parts: Vec<&str> = numbers.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| (1..=4).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()))
+        && !suffix.is_empty()
+        && suffix.len() <= 12
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+}
+
+fn hop_char(character: char) -> bool {
+    character.is_ascii_digit() || character.is_ascii_lowercase()
 }
 
 pub fn trace_id(span: &Span, headers: &HeaderMap) -> Option<String> {
@@ -62,6 +133,7 @@ pub fn finish(span: &Span, status: u16) {
     if status >= 500 {
         span.record("otel.status_code", "ERROR");
     }
+    dependency::flush(span);
 }
 
 pub fn fail(span: &Span, message: &str) {
@@ -192,5 +264,45 @@ mod tests {
         assert!(has("scd.debug"));
         assert!(has("http.response.status_code"));
         assert!(has("error.message"));
+    }
+
+    #[test]
+    fn the_hop_label_accepts_the_edge_names_and_calls_a_missing_header_direct() {
+        for edge in ["r1", "r2", "call1", "legacy", "landing"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-hop", edge.parse().expect("header"));
+            assert_eq!(hop(&headers), edge);
+        }
+        assert_eq!(hop(&HeaderMap::new()), "direct");
+        for forged in ["R1", "r1;drop", "a-very-long-hop", "", "r 1"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-hop", forged.parse().expect("header"));
+            assert_eq!(hop(&headers), "other", "{forged}");
+        }
+    }
+
+    #[test]
+    fn the_app_version_label_is_a_release_a_missing_header_or_other() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-version", value.parse().expect("header"));
+            headers
+        };
+
+        assert_eq!(app_version(&with("8.7.1")), "8.7.1");
+        assert_eq!(app_version(&with("8.7.1-beta.2")), "8.7.1-beta.2");
+        assert_eq!(app_version(&HeaderMap::new()), "unknown");
+        for junk in [
+            "",
+            "latest",
+            "8.7",
+            "8.7.1.4",
+            "8.7.x",
+            "<script>",
+            "8.7.1;drop",
+            "99999.1.1",
+        ] {
+            assert_eq!(app_version(&with(junk)), "other", "{junk}");
+        }
     }
 }

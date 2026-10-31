@@ -13,6 +13,7 @@ const POOL_WAIT_LAST: &str = "streaming_pg_pool_wait_last_seconds";
 const SOURCE_TOTAL: &str = "streaming_source_total";
 const STAR_PRIORITY_PICKED: &str = "streaming_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "streaming_star_priority_waiting_seconds";
+const DEBUG_CAPPED: &str = "streaming_trace_debug_capped_total";
 
 const HTTP_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0];
 const POOL_WAIT_BUCKETS: &[f64] = &[
@@ -57,6 +58,7 @@ fn start_upkeep(handle: PrometheusHandle) {
         .spawn(move || {
             loop {
                 std::thread::sleep(UPKEEP_EVERY);
+                metrics::counter!(DEBUG_CAPPED).absolute(telemetry::debug_capped_total());
                 handle.run_upkeep();
             }
         });

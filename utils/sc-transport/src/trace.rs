@@ -10,17 +10,23 @@ pub(crate) fn upstream(name: &str, route: &'static str) -> Span {
         otel.kind = "client",
         otel.status_code = Empty,
         otel.status_description = Empty,
+        peer.service = "soundcloud",
         scd.upstream = name,
         scd.route = route,
+        scd.outcome = Empty,
         http.response.status_code = Empty,
+        error_type = Empty,
         error.message = Empty,
     )
 }
 
 pub(crate) fn record<T>(span: &Span, result: &ScResult<T>) {
     let Err(error) = result else {
+        span.record("scd.outcome", "ok");
         return;
     };
+    span.record("scd.outcome", "error");
+    span.record("error_type", error.kind());
     let message = error.to_string();
     if let Some(status) = error.status() {
         span.record("http.response.status_code", i64::from(status));

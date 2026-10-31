@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{info, warn};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tracing::{Instrument, Span, info, warn};
 
 use crate::backend::{self, Backend, BackendError};
 use crate::bus::{self, BusClient};
@@ -54,6 +54,7 @@ struct PipelineJob {
     /// `duration_tolerance_secs`, иначе реджект. `None` — только min/max гейты.
     expected_duration_ms: Option<i64>,
     reply: oneshot::Sender<Result<PipelineOutput, PipelineError>>,
+    span: Span,
 }
 
 impl Pipeline {
@@ -82,6 +83,7 @@ impl Pipeline {
                 quality,
                 expected_duration_ms,
                 reply: tx,
+                span: Span::current(),
             })
             .await
             .is_err()
@@ -178,10 +180,7 @@ async fn run_batch(
 
     // 2. ffmpeg: try multi-input batch first; on failure, fall back per-file.
     let started = Instant::now();
-    let inputs: Vec<&Path> = accepted
-        .iter()
-        .map(|(j, _)| j.source.as_path())
-        .collect();
+    let inputs: Vec<&Path> = accepted.iter().map(|(j, _)| j.source.as_path()).collect();
     let outputs: Vec<PathBuf> = accepted.iter().map(|(_, o)| o.clone()).collect();
     let bitrates: Vec<&str> = accepted
         .iter()
@@ -275,34 +274,38 @@ fn spawn_commit(
     let wp = writer.clone();
     let cfg = config.clone();
     let bs = bus.clone();
-    tokio::spawn(async move {
-        // Финальная проверка по готовому m4a перед заливкой: source-probe у
-        // склеенного HLS оценочный, у m4a длительность из moov точная.
-        let probed = transcode::probe_duration(&out, &cfg.ffprobe_bin).await;
-        let Some(out_secs) = probed.filter(|s| *s > 0.0) else {
-            // Свой же m4a не читается — брак, но без rejected-страйка:
-            // неотличимо от transient-проблем хоста.
-            let _ = tokio::fs::remove_file(&out).await;
+    let span = job.span.clone();
+    tokio::spawn(
+        async move {
+            // Финальная проверка по готовому m4a перед заливкой: source-probe у
+            // склеенного HLS оценочный, у m4a длительность из moov точная.
+            let probed = transcode::probe_duration(&out, &cfg.ffprobe_bin).await;
+            let Some(out_secs) = probed.filter(|s| *s > 0.0) else {
+                // Свой же m4a не читается — брак, но без rejected-страйка:
+                // неотличимо от transient-проблем хоста.
+                let _ = tokio::fs::remove_file(&out).await;
+                let _ = tokio::fs::remove_file(&job.source).await;
+                let _ = job.reply.send(Err(PipelineError::Ffmpeg(
+                    "transcoded output is unreadable for ffprobe".into(),
+                )));
+                return;
+            };
+            if let Some(err) = gate_duration(&cfg, job.expected_duration_ms, out_secs) {
+                let _ = tokio::fs::remove_file(&out).await;
+                reject(&bs, job, err).await;
+                return;
+            }
+            let res = commit_single(&bk, &wp, &cfg, &job.filename, out).await;
             let _ = tokio::fs::remove_file(&job.source).await;
-            let _ = job.reply.send(Err(PipelineError::Ffmpeg(
-                "transcoded output is unreadable for ffprobe".into(),
-            )));
-            return;
-        };
-        if let Some(err) = gate_duration(&cfg, job.expected_duration_ms, out_secs) {
-            let _ = tokio::fs::remove_file(&out).await;
-            reject(&bs, job, err).await;
-            return;
+            if res.is_ok() {
+                publish_uploaded(&bs, &cfg, &job.filename, job.quality);
+            }
+            let _ = job.reply.send(res.map(|()| PipelineOutput {
+                duration_secs: out_secs,
+            }));
         }
-        let res = commit_single(&bk, &wp, &cfg, &job.filename, out).await;
-        let _ = tokio::fs::remove_file(&job.source).await;
-        if res.is_ok() {
-            publish_uploaded(&bs, &cfg, &job.filename, job.quality);
-        }
-        let _ = job.reply.send(res.map(|()| PipelineOutput {
-            duration_secs: out_secs,
-        }));
-    });
+        .instrument(span),
+    );
 }
 
 fn gate_duration(cfg: &Config, expected_ms: Option<i64>, secs: f64) -> Option<PipelineError> {

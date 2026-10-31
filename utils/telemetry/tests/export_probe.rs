@@ -31,6 +31,13 @@ fn every_request_span_reaches_jaeger_under_concurrent_load() {
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
+    let storage = server
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .expect("bind storage");
+    probe::app::STORAGE
+        .set(storage.local_addr().expect("storage addr"))
+        .expect("storage address set once");
+    server.spawn(async move { axum::serve(storage, probe::app::storage()).await });
     server.spawn(async move { axum::serve(listener, probe::app::build()).await });
 
     let stamp = SystemTime::now()
@@ -74,5 +81,14 @@ fn every_request_span_reaches_jaeger_under_concurrent_load() {
         found * 100 >= sent.debug.len() * 98,
         "only {found} of {} debug traces reached Jaeger",
         sent.debug.len()
+    );
+    let hop = sent
+        .hops
+        .first()
+        .expect("a debug request went through the hop");
+    let spans = client.block_on(load::spans_of(jaeger, hop));
+    assert!(
+        spans >= 3,
+        "the hop trace should hold the api root, the storage call and the storage root, saw {spans}"
     );
 }

@@ -5,7 +5,7 @@ use axum::response::Response;
 use bytes::Bytes;
 use entity_ref::{EntityKind, EntityRef};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, Span, debug, info, warn};
 use wreq::Client;
 
 use super::breaker::Breaker;
@@ -110,7 +110,13 @@ impl StorageClient {
 
         let internal_url = self.internal_url(track_urn)?;
         let cached = self.pg.find_cached_track(track_urn).await.ok()??;
-        let response = match self.passthrough.get(internal_url).send().await {
+        let call = telemetry::peer_call("storage", "GET", "/internal/{track}");
+        let sent = traced(self.passthrough.get(internal_url), &call)
+            .send()
+            .instrument(call.clone())
+            .await;
+        record(&call, &sent);
+        let response = match sent {
             Ok(response) if response.status().is_success() => response,
             Ok(response)
                 if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
@@ -177,54 +183,58 @@ impl StorageClient {
         let pg = self.pg.clone();
         let failing = self.uploads_failing.clone();
 
-        tokio::spawn(async move {
-            let _slot = slot;
-            let id = match pg.insert_cdn_track(&track_urn, &cdn_path, "pending").await {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!("[storage] insert pending failed: {e}");
-                    return;
-                }
-            };
-
-            let expected_ms = lookup_expected_duration_ms(&pg, &track_urn).await;
-            match upload_to_storage(
-                &client,
-                &upload_url,
-                &auth_token,
-                &filename,
-                &data,
-                quality,
-                expected_ms,
-            )
-            .await
-            {
-                Ok(()) => {
-                    failing.succeed();
-                    let _ = pg.update_cdn_track_status(&id, "ok").await;
-                    info!(
-                        "[storage] uploaded {} {} ({:.1} MB)",
-                        filename,
-                        quality,
-                        data.len() as f64 / 1024.0 / 1024.0
-                    );
-                }
-                Err(UploadError::Rejected { status, body }) => {
-                    failing.succeed();
-                    info!("[storage] upload rejected for {filename} ({status}): {body}");
-                    let st = settle_failed_status(&client, &verify_target).await;
-                    let _ = pg.update_cdn_track_status(&id, st).await;
-                }
-                Err(e) => {
-                    if let Some(failures) = failing.fail() {
-                        warn!("[storage] uploads paused after {failures} upload failures");
+        let background = telemetry::detached("background storage upload");
+        tokio::spawn(
+            async move {
+                let _slot = slot;
+                let id = match pg.insert_cdn_track(&track_urn, &cdn_path, "pending").await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        warn!("[storage] insert pending failed: {e}");
+                        return;
                     }
-                    warn!("[storage] upload failed for {filename}: {e}");
-                    let st = settle_failed_status(&client, &verify_target).await;
-                    let _ = pg.update_cdn_track_status(&id, st).await;
+                };
+
+                let expected_ms = lookup_expected_duration_ms(&pg, &track_urn).await;
+                match upload_to_storage(
+                    &client,
+                    &upload_url,
+                    &auth_token,
+                    &filename,
+                    &data,
+                    quality,
+                    expected_ms,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        failing.succeed();
+                        let _ = pg.update_cdn_track_status(&id, "ok").await;
+                        info!(
+                            "[storage] uploaded {} {} ({:.1} MB)",
+                            filename,
+                            quality,
+                            data.len() as f64 / 1024.0 / 1024.0
+                        );
+                    }
+                    Err(UploadError::Rejected { status, body }) => {
+                        failing.succeed();
+                        info!("[storage] upload rejected for {filename} ({status}): {body}");
+                        let st = settle_failed_status(&client, &verify_target).await;
+                        let _ = pg.update_cdn_track_status(&id, st).await;
+                    }
+                    Err(e) => {
+                        if let Some(failures) = failing.fail() {
+                            warn!("[storage] uploads paused after {failures} upload failures");
+                        }
+                        warn!("[storage] upload failed for {filename}: {e}");
+                        let st = settle_failed_status(&client, &verify_target).await;
+                        let _ = pg.update_cdn_track_status(&id, st).await;
+                    }
                 }
             }
-        });
+            .instrument(background),
+        );
     }
 
     async fn verify_url(&self, url: &str) -> VerifyResult {
@@ -232,13 +242,18 @@ impl StorageClient {
             return VerifyResult::Unavailable;
         }
 
-        match self
-            .client
-            .head(url)
-            .timeout(std::time::Duration::from_secs(3))
-            .send()
-            .await
-        {
+        let call = telemetry::peer_call("storage", "HEAD", "/files/{path}");
+        let sent = traced(
+            self.client
+                .head(url)
+                .timeout(std::time::Duration::from_secs(3)),
+            &call,
+        )
+        .send()
+        .instrument(call.clone())
+        .await;
+        record(&call, &sent);
+        match sent {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 if (200..300).contains(&status) {
@@ -340,14 +355,20 @@ pub(crate) async fn upload_to_storage(
         form = form.text("expected_duration_ms", ms.to_string());
     }
 
-    let resp = client
-        .post(format!("{base_url}/upload"))
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .multipart(form)
-        .timeout(UPLOAD_BUDGET)
-        .send()
-        .await
-        .map_err(|e| UploadError::Transport(e.without_uri().into()))?;
+    let call = telemetry::peer_call("storage", "POST", "/upload");
+    let sent = traced(
+        client
+            .post(format!("{base_url}/upload"))
+            .header("Authorization", format!("Bearer {auth_token}"))
+            .multipart(form)
+            .timeout(UPLOAD_BUDGET),
+        &call,
+    )
+    .send()
+    .instrument(call.clone())
+    .await;
+    record(&call, &sent);
+    let resp = sent.map_err(|e| UploadError::Transport(e.without_uri().into()))?;
 
     let status = resp.status();
     if status.is_success() {
@@ -369,6 +390,21 @@ pub(crate) async fn upload_to_storage(
     Err(UploadError::Transport(
         format!("storage responded {status}").into(),
     ))
+}
+
+fn traced(request: wreq::RequestBuilder, call: &Span) -> wreq::RequestBuilder {
+    telemetry::headers(call)
+        .into_iter()
+        .fold(request, |request, (name, value)| {
+            request.header(name, value)
+        })
+}
+
+fn record(call: &Span, sent: &Result<wreq::Response, wreq::Error>) {
+    match sent {
+        Ok(response) => telemetry::answered(call, response.status().as_u16()),
+        Err(_) => telemetry::broke(call, "storage request failed"),
+    }
 }
 
 pub fn is_canonical_track_urn(track_urn: &str) -> bool {

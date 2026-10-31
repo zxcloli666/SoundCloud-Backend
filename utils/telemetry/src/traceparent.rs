@@ -1,27 +1,54 @@
 use opentelemetry::Context;
 use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState};
 
+pub const STATE_KEY: &str = "scd";
+
 pub struct Incoming {
     pub trace: TraceId,
     pub span: SpanId,
     pub flags: u8,
+    pub state: Option<bool>,
 }
 
 impl Incoming {
     pub fn debug(&self) -> bool {
-        self.flags & 1 == 1
+        self.state.unwrap_or(self.flags & 1 == 1)
+    }
+
+    pub fn demoted(mut self) -> Self {
+        self.state = Some(false);
+        self
+    }
+
+    pub fn with_state(mut self, header: Option<&str>) -> Self {
+        self.state = header.and_then(debug_entry);
+        self
     }
 
     pub fn context(&self) -> Context {
+        let value = if self.debug() { "d" } else { "n" };
+        let state = TraceState::from_key_value([(STATE_KEY, value)]).unwrap_or_default();
         let remote = SpanContext::new(
             self.trace,
             self.span,
             TraceFlags::new(self.flags),
             true,
-            TraceState::default(),
+            state,
         );
         Context::new().with_remote_span_context(remote)
     }
+}
+
+fn debug_entry(header: &str) -> Option<bool> {
+    header
+        .split(',')
+        .filter_map(|entry| entry.trim().split_once('='))
+        .find(|(key, _)| *key == STATE_KEY)
+        .and_then(|(_, value)| match value {
+            "d" => Some(true),
+            "n" => Some(false),
+            _ => None,
+        })
 }
 
 pub fn parse(value: &str) -> Option<Incoming> {
@@ -51,6 +78,7 @@ pub fn parse(value: &str) -> Option<Incoming> {
         trace,
         span,
         flags: u8::from_str_radix(flags, 16).ok()?,
+        state: None,
     })
 }
 
@@ -99,5 +127,20 @@ mod tests {
         ] {
             assert!(parse(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_carried_state_overrides_the_flags_both_ways() {
+        let from_a_service = parse(GOOD).expect("valid").with_state(Some("scd=n"));
+        let from_a_debug_service = parse(&GOOD.replace("-01", "-00"))
+            .expect("valid")
+            .with_state(Some("vendor=x, scd=d"));
+        let from_a_client = parse(GOOD).expect("valid").with_state(None);
+        let garbage = parse(GOOD).expect("valid").with_state(Some("scd=maybe"));
+
+        assert!(!from_a_service.debug());
+        assert!(from_a_debug_service.debug());
+        assert!(from_a_client.debug());
+        assert!(garbage.debug());
     }
 }

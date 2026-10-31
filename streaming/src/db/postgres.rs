@@ -30,14 +30,73 @@ impl PgPool {
         self.pool.status()
     }
 
-    async fn connection(&self) -> Result<deadpool_postgres::Object, PgError> {
+    async fn connection(&self) -> Result<Timed, PgError> {
         let started = std::time::Instant::now();
         let taken = self.pool.get().await;
         crate::metrics::record_pool_wait(
             if taken.is_ok() { "ok" } else { "refused" },
             started.elapsed(),
         );
-        Ok(taken?)
+        Ok(Timed(taken?))
+    }
+}
+
+struct Timed(deadpool_postgres::Object);
+
+impl std::ops::Deref for Timed {
+    type Target = deadpool_postgres::Object;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type Params<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
+
+impl Timed {
+    async fn query_opt(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Option<tokio_postgres::Row>, tokio_postgres::Error> {
+        let started = std::time::Instant::now();
+        let row = self.0.query_opt(sql, params).await;
+        telemetry::statement(
+            sql,
+            u64::from(matches!(row, Ok(Some(_)))),
+            started.elapsed(),
+        );
+        row
+    }
+
+    async fn query_one(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<tokio_postgres::Row, tokio_postgres::Error> {
+        let started = std::time::Instant::now();
+        let row = self.0.query_one(sql, params).await;
+        telemetry::statement(sql, u64::from(row.is_ok()), started.elapsed());
+        row
+    }
+
+    async fn query(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Vec<tokio_postgres::Row>, tokio_postgres::Error> {
+        let started = std::time::Instant::now();
+        let rows = self.0.query(sql, params).await;
+        let count = rows.as_ref().map_or(0, |rows| rows.len() as u64);
+        telemetry::statement(sql, count, started.elapsed());
+        rows
+    }
+
+    async fn execute(&self, sql: &str, params: Params<'_>) -> Result<u64, tokio_postgres::Error> {
+        let started = std::time::Instant::now();
+        let affected = self.0.execute(sql, params).await;
+        telemetry::statement(sql, *affected.as_ref().unwrap_or(&0), started.elapsed());
+        affected
     }
 }
 

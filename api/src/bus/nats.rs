@@ -4,7 +4,7 @@ use async_nats::{ConnectOptions, HeaderMap};
 use bytes::Bytes;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{Instrument, info};
 
 use crate::error::{AppError, AppResult};
 
@@ -82,14 +82,28 @@ impl NatsService {
             serde_json::to_vec(payload)
                 .map_err(|error| AppError::internal(format!("publish encode: {error}")))?,
         );
-        let acknowledgement = self
-            .js
-            .publish_with_headers(subject.to_owned(), headers, body)
-            .await
-            .map_err(|error| AppError::internal(format!("jetstream publish {subject}: {error}")))?;
-        acknowledgement
-            .await
-            .map_err(|error| AppError::internal(format!("jetstream ack {subject}: {error}")))?;
-        Ok(())
+        let span = tracing::info_span!(
+            "publish",
+            otel.name = %format!("publish {subject}"),
+            otel.kind = "producer",
+            peer.service = "nats",
+            messaging.system = "nats",
+            messaging.destination.name = subject,
+        );
+        async {
+            let acknowledgement = self
+                .js
+                .publish_with_headers(subject.to_owned(), headers, body)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("jetstream publish {subject}: {error}"))
+                })?;
+            acknowledgement
+                .await
+                .map_err(|error| AppError::internal(format!("jetstream ack {subject}: {error}")))?;
+            Ok::<(), AppError>(())
+        }
+        .instrument(span)
+        .await
     }
 }
