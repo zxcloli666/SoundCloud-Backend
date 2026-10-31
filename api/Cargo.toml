@@ -12,7 +12,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 
-catalog-match = { path = "../utils/catalog-match" }
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
 wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 
@@ -78,6 +77,8 @@ catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 redact = { version = "0.1.0", path = "../utils/redact" }
 telemetry = { version = "0.1.0", path = "../utils/telemetry" }
+wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
+repl-verify = { version = "0.1.0", path = "../utils/repl-verify" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }

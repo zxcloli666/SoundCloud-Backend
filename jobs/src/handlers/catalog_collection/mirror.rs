@@ -83,10 +83,20 @@ pub(super) async fn persist(
             )));
         }
     };
-    let (wanted_column, wanted_value) = if wanted {
-        (", wanted_state", ", true")
+    let (wanted_column, wanted_value, floor) = if wanted {
+        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(JobError::retryable)?;
+        (
+            ", wanted_state, wanted_v, synced_for_v",
+            ", true, floor.v, floor.v",
+            format!(
+                "CROSS JOIN LATERAL (SELECT public.scd_purge_floor('{table}', jsonb_build_object('user_id', $1::text, '{key}', item.key)) AS v) AS floor"
+            ),
+        )
     } else {
-        ("", "")
+        ("", "", String::new())
     };
     let delete_guard = if payload.collection == CatalogCollection::OwnedPlaylists {
         "AND NOT EXISTS (SELECT 1 FROM sync_queue q WHERE q.user_id = ANY($5) AND q.action_type = 'playlist_delete' AND q.target_urn = item.key)
@@ -100,6 +110,7 @@ pub(super) async fn persist(
     let sql = format!("INSERT INTO {table} (user_id, {key}, progress, synced_at, created_at{wanted_column})
         SELECT $1, item.key, false, $3, $3 - ($4 + item.ordinal)::double precision * interval '1 microsecond'{wanted_value}
         FROM unnest($2::text[]) WITH ORDINALITY AS item(key, ordinal)
+        {floor}
         WHERE NOT EXISTS (SELECT 1 FROM {table} existing WHERE existing.user_id = ANY($5) AND existing.{key} = item.key)
         {delete_guard}
         ON CONFLICT (user_id, {key}) DO NOTHING");
@@ -192,11 +203,18 @@ pub(super) async fn reconcile(
     };
     let unseen = unseen(key, wanted);
     let wanted_filter = wanted_filter(wanted);
-    let sql = format!("DELETE FROM {table} m
-        WHERE {unseen}
-        AND (SELECT count(*) * 2 FROM catalog_collection_seen s
+    let served = served(wanted);
+    let enough_seen = format!("(SELECT count(*) * 2 FROM catalog_collection_seen s
              WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner' AND s.snapshot_id = $5)
-            >= (SELECT count(*) FROM {table} m WHERE m.user_id = ANY($1) {wanted_filter} AND m.progress = false)");
+            >= (SELECT count(*) FROM {table} m WHERE m.user_id = ANY($1) {wanted_filter} AND {served})");
+    let sql = if wanted {
+        format!("WITH gone AS MATERIALIZED (SELECT m.user_id, m.{key}, m.wanted_v FROM {table} m
+            WHERE {unseen} AND {enough_seen})
+            SELECT count(*) FROM gone
+            WHERE public.scd_purge_intent('{table}', jsonb_build_object('user_id', gone.user_id, '{key}', gone.{key}), gone.wanted_v)")
+    } else {
+        format!("DELETE FROM {table} m WHERE {unseen} AND {enough_seen}")
+    };
     sqlx::query(&sql)
         .bind(catalog_ingest::user_id_variants(&payload.subject_id))
         .bind(snapshot.started_at)
@@ -217,10 +235,19 @@ fn wanted_filter(wanted: bool) -> &'static str {
     }
 }
 
+fn served(wanted: bool) -> &'static str {
+    if wanted {
+        "m.synced_for_v >= m.wanted_v AND NOT (m.wanted_v = 0 AND m.progress)"
+    } else {
+        "m.progress = false"
+    }
+}
+
 fn unseen(key: &str, wanted: bool) -> String {
     let wanted_filter = wanted_filter(wanted);
+    let served = served(wanted);
     format!(
-        "m.user_id = ANY($1) {wanted_filter} AND m.progress = false
+        "m.user_id = ANY($1) {wanted_filter} AND {served}
         AND m.synced_at < $2 - interval '5 minutes' AND m.created_at < $2 - interval '5 minutes'
         AND NOT EXISTS (SELECT 1 FROM catalog_collection_seen s
             WHERE s.subject_id = $3 AND s.collection = $4 AND s.scope = 'owner'

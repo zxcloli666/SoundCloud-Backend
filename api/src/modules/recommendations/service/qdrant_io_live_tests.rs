@@ -48,6 +48,7 @@ async fn qdrant() -> anyhow::Result<Arc<QdrantService>> {
     Ok(QdrantService::connect(&QdrantCfg {
         grpc_url: qdrant_url(),
         api_key: String::new().into(),
+        tls: None,
     })?)
 }
 

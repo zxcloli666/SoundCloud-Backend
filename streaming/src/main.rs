@@ -155,15 +155,19 @@ async fn main() {
 
     let config = Arc::new(config);
 
-    hq_upgrade::spawn_hq_upgrade_task(
-        pg.clone(),
-        anon.clone(),
-        cookies.clone(),
-        storage.clone(),
-        decryptor.clone(),
-        http_client.clone(),
-        config.sc_proxy_url.clone(),
-    );
+    if config.hq_upgrade {
+        hq_upgrade::spawn_hq_upgrade_task(
+            pg.clone(),
+            anon.clone(),
+            cookies.clone(),
+            storage.clone(),
+            decryptor.clone(),
+            http_client.clone(),
+            config.sc_proxy_url.clone(),
+        );
+    } else {
+        info!("[hq-upgrade] STREAMING_HQ_UPGRADE=off, this node never upgrades");
+    }
 
     let state = AppState {
         config: config.clone(),

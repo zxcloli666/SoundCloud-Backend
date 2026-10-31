@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::{TracksService, TracksServiceDependencies};
 use crate::config::ColdCfg;
-use crate::modules::auth::{AuthHealthService, AuthService, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, TokenProvider};
 use crate::modules::cold_refresh::ColdRefreshService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::modules::sync_queue::SyncQueueService;
@@ -42,7 +42,8 @@ async fn services_from(pool: &PgPool, deps: TracksServiceDependencies) -> anyhow
             sync_queue: deps.sync_queue.clone(),
             cold_refresh: deps.cold_refresh.clone(),
             tokens: deps.tokens.clone(),
-            background_jobs: background,
+            redis: deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
             miss: deps.miss.clone(),
         },
     );
@@ -285,6 +286,7 @@ async fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies
         sc.clone(),
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis.clone(), pool.clone()),
+        CoreRpc::unreachable(),
     );
     let tokens = TokenProvider::new(auth, OAuthAppTokenService::new(pool.clone()));
     Ok(TracksServiceDependencies {

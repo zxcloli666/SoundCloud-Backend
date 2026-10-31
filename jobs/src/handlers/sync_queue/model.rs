@@ -19,6 +19,7 @@ pub struct ClaimedMutation {
     pub remote_result: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub star: bool,
+    pub desired: Option<Value>,
 }
 
 impl ClaimedMutation {
@@ -43,6 +44,7 @@ pub struct LockedMutation {
     pub lease_generation: Option<i64>,
     pub remote_completed_generation: Option<i64>,
     pub remote_result: Option<Value>,
+    pub intent_v: i64,
 }
 
 impl LockedMutation {
@@ -57,6 +59,15 @@ impl LockedMutation {
             && self.remote_completed_generation == Some(mutation.lease_generation)
             && self.remote_result.is_some()
     }
+}
+
+#[derive(Debug, PartialEq, FromRow)]
+pub struct SettledRow {
+    pub id: Uuid,
+    pub cancelled: bool,
+    pub intent_v: i64,
+    pub idle: bool,
+    pub wanted: Option<bool>,
 }
 
 #[derive(Clone, FromRow)]

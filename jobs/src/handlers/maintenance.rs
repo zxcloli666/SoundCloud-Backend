@@ -9,6 +9,8 @@ const CLEANUP_BATCH: i64 = 1_000;
 const RECEIPT_BATCH: u64 = 10_000;
 const RECEIPT_SWEEP_BATCHES: usize = 100;
 const RECEIPTS_FULL_SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+const PURGE_BATCH: i64 = 500;
+const PURGE_ROUNDS: usize = 20;
 
 pub struct MaintenanceHandler {
     pool: PgPool,
@@ -120,6 +122,10 @@ impl MaintenanceHandler {
 
     pub async fn heal_sync_queue(&self) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
+        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
         sqlx::query_file!("queries/maintenance/heal_track_likes.sql")
             .execute(&mut *transaction)
             .await
@@ -132,7 +138,45 @@ impl MaintenanceHandler {
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_track_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_playlist_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
         transaction.commit().await.map_err(JobError::retryable)?;
+        self.purge_served_unwanted()
+            .await
+            .map_err(JobError::retryable)?;
+        Ok(())
+    }
+
+    async fn purge_served_unwanted(&self) -> Result<(), sqlx::Error> {
+        for _ in 0..PURGE_ROUNDS {
+            let purged = sqlx::query_file_scalar!(
+                "queries/maintenance/purge_unliked_tracks.sql",
+                PURGE_BATCH
+            )
+            .fetch_one(&self.pool)
+            .await?
+                + sqlx::query_file_scalar!(
+                    "queries/maintenance/purge_unliked_playlists.sql",
+                    PURGE_BATCH
+                )
+                .fetch_one(&self.pool)
+                .await?
+                + sqlx::query_file_scalar!(
+                    "queries/maintenance/purge_unfollowed_users.sql",
+                    PURGE_BATCH
+                )
+                .fetch_one(&self.pool)
+                .await?;
+            if purged < PURGE_BATCH {
+                break;
+            }
+        }
         Ok(())
     }
 }

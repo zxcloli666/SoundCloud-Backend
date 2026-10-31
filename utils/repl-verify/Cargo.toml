@@ -1,0 +1,21 @@
+[package]
+name = "repl-verify"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "scd resend sweeper and node retention on every node, and the core-side replication verify and repair loop"
+
+[features]
+cli = ["dep:tracing-subscriber"]
+
+[dependencies]
+metrics = "0.24"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[[bin]]
+name = "repl-verify"
+required-features = ["cli"]

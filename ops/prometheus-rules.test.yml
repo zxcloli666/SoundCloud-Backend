@@ -1,0 +1,146 @@
+rule_files:
+  - prometheus-rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'scd_cmd_dead{kind="track.edit"}'
+        values: '0 0 1+0x30'
+      - series: 'scd_cmd_dead{kind="comment.post"}'
+        values: '0+0x32'
+      - series: 'scd_cmd_dead_oldest_seconds{kind="track.edit"}'
+        values: '0 0 100+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReplDeadCommand
+      - eval_time: 25m
+        alertname: ReplDeadCommand
+        exp_alerts:
+          - exp_labels:
+              kind: track.edit
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Dead commands of kind track.edit wait on core"
+              description: "Core ran an api command and the kind failed with an error that retrying cannot fix. The api already got core's row back (reassert or purge). Read cmd_dead, fix the cause, then replay with the repl.replay_dead job. Dead letters are deleted after 7 days."
+      - eval_time: 25m
+        alertname: ReplDeadCommandAged
+
+  - interval: 1m
+    input_series:
+      - series: 'scd_cmd_dead_oldest_seconds{kind="track.edit"}'
+        values: '500000+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ReplDeadCommandAged
+        exp_alerts:
+          - exp_labels:
+              kind: track.edit
+              severity: critical
+              service: jobs
+            exp_annotations:
+              summary: "A dead command of kind track.edit is older than 5 days"
+              description: "Retention deletes dead letters after 7 days, and a deleted letter can no longer be replayed."
+
+  - interval: 1m
+    input_series:
+      - series: 'scd_cmd_sub_up{sub="core_from_main"}'
+        values: '1+0x10 0+0x30'
+      - series: 'scd_cmd_sub_up{sub="core_from_star"}'
+        values: '1+0x40'
+      - series: 'scd_cmd_age_seconds{sub="core_from_main"}'
+        values: '0+0x10 300+0x30'
+      - series: 'scd_cmd_backlog{sub="core_from_main"}'
+        values: '0+0x10 1048576+0x30'
+      - series: 'scd_cmd_age_seconds{sub="core_from_star"}'
+        values: '300+0x40'
+      - series: 'scd_cmd_backlog{sub="core_from_star"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReplSubscriptionDown
+      - eval_time: 20m
+        alertname: ReplSubscriptionDown
+        exp_alerts:
+          - exp_labels:
+              sub: core_from_main
+              severity: critical
+              service: jobs
+            exp_annotations:
+              summary: "Core does not apply the stream of core_from_main"
+              description: "The subscription is disabled or its apply worker is gone. Commands of that api node wait in its outbox and retention keeps every tombstone and receipt."
+      - eval_time: 25m
+        alertname: ReplApplyStuck
+        exp_alerts:
+          - exp_labels:
+              sub: core_from_main
+              severity: critical
+              service: jobs
+            exp_annotations:
+              summary: "The apply worker of core_from_main has not moved for 5m 0s"
+              description: "Data is received but not applied. Usual causes are a row lock held by a long job on a replicated table, or a poison transaction the worker retries every 5 seconds."
+
+  - interval: 1m
+    input_series:
+      - series: 'scd_repl_retention_held{instance="core",table="repl_tombstones",reason="slot"}'
+        values: '0+0x10 1+0x450'
+      - series: 'scd_repl_retention_held{instance="core",table="repl_tombstones",reason="resend"}'
+        values: '0+0x450'
+      - series: 'scd_repl_retention_held{instance="core",table="cmd_done",reason="slot"}'
+        values: '1+0x100 0+0x450'
+      - series: 'scd_repl_retention_held{instance="main",table="cmd_outbox",reason="pending"}'
+        values: '0+0x80 1+0x450'
+      - series: 'scd_repl_retention_held{instance="star",table="cmd_outbox",reason="pending"}'
+        values: '0+0x450'
+      - series: 'scd_repl_resend_queued{instance="main"}'
+        values: '0+0x10 5+0x60'
+      - series: 'scd_repl_resend_queued{instance="star"}'
+        values: '0+0x10 5+0x10 0+0x50'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: ReplRetentionHeld
+      - eval_time: 7h
+        alertname: ReplRetentionHeld
+        exp_alerts:
+          - exp_labels:
+              instance: core
+              table: repl_tombstones
+              reason: slot
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Retention of repl_tombstones on core is held back for 6 hours (slot)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
+      - eval_time: 7h30m
+        alertname: ReplRetentionHeld
+        exp_alerts:
+          - exp_labels:
+              instance: core
+              table: repl_tombstones
+              reason: slot
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Retention of repl_tombstones on core is held back for 6 hours (slot)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
+          - exp_labels:
+              instance: main
+              table: cmd_outbox
+              reason: pending
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Retention of cmd_outbox on main is held back for 6 hours (pending)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
+      - eval_time: 60m
+        alertname: ReplResendQueueStuck
+        exp_alerts:
+          - exp_labels:
+              instance: main
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "A node has kept resend keys queued for 30 minutes"
+              description: "The sweeper ships pending resends within seconds. Retention of tombstones and receipts waits for every queue to be empty."

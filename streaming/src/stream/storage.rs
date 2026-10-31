@@ -91,8 +91,7 @@ impl StorageClient {
                 self.public_track_url(track_urn)
             }
             VerifyResult::Missing => {
-                let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
-                let _ = self.pg.mark_storage_lost(track_urn).await;
+                let _ = self.pg.mark_storage_lost(&cached.id, track_urn).await;
                 None
             }
             VerifyResult::Unavailable => None,
@@ -116,8 +115,7 @@ impl StorageClient {
                 if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) =>
             {
                 self.mark_available();
-                let _ = self.pg.update_cdn_track_status(&cached.id, "error").await;
-                let _ = self.pg.mark_storage_lost(track_urn).await;
+                let _ = self.pg.mark_storage_lost(&cached.id, track_urn).await;
                 return None;
             }
             Ok(_) | Err(_) => {
@@ -199,9 +197,9 @@ impl StorageClient {
             )
             .await
             {
-                Ok(()) => {
+                Ok(stored_quality) => {
                     failing.succeed();
-                    let _ = pg.update_cdn_track_status(&id, "ok").await;
+                    let _ = pg.mark_cdn_track_stored(&id, stored_quality).await;
                     info!(
                         "[storage] uploaded {} {} ({:.1} MB)",
                         filename,
@@ -326,7 +324,7 @@ pub(crate) async fn upload_to_storage(
     data: &Bytes,
     quality: &str,
     expected_duration_ms: Option<i64>,
-) -> Result<(), UploadError> {
+) -> Result<Option<&'static str>, UploadError> {
     let file_part = wreq::multipart::Part::stream_with_length(data.clone(), data.len() as u64)
         .file_name("audio")
         .mime_str("audio/mpeg")
@@ -351,7 +349,7 @@ pub(crate) async fn upload_to_storage(
 
     let status = resp.status();
     if status.is_success() {
-        return Ok(());
+        return Ok(stored_quality(&resp.text().await.unwrap_or_default()));
     }
     if status == wreq::StatusCode::CONFLICT {
         let body: String = resp
@@ -371,6 +369,21 @@ pub(crate) async fn upload_to_storage(
     ))
 }
 
+#[derive(serde::Deserialize)]
+struct StoredUpload {
+    quality: Option<String>,
+}
+
+fn stored_quality(reply: &str) -> Option<&'static str> {
+    let stored: StoredUpload = serde_json::from_str(reply).ok()?;
+    match stored.quality.as_deref() {
+        Some("sq") => Some("sq"),
+        Some("hq") => Some("hq"),
+        Some("uq") => Some("uq"),
+        _ => None,
+    }
+}
+
 pub fn is_canonical_track_urn(track_urn: &str) -> bool {
     entity_ref::is_canonical_urn(EntityKind::Track, track_urn)
 }
@@ -385,7 +398,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{StorageClient, canonical_track_urn, is_canonical_track_urn, upload_to_storage};
+    use super::{
+        StorageClient, canonical_track_urn, is_canonical_track_urn, stored_quality,
+        upload_to_storage,
+    };
 
     fn declared_length(head: &str) -> Option<usize> {
         head.lines().find_map(|line| {
@@ -459,6 +475,19 @@ mod tests {
             track.len(),
             "the multipart body must carry every byte of the track"
         );
+    }
+
+    #[test]
+    fn the_quality_storage_measured_is_read_from_its_reply() {
+        let reply = r#"{"filename":"soundcloud_tracks_1","path":"soundcloud_tracks_1.m4a","duration_secs":180.0,"quality":"hq"}"#;
+
+        assert_eq!(stored_quality(reply), Some("hq"));
+        assert_eq!(
+            stored_quality(r#"{"filename":"soundcloud_tracks_1"}"#),
+            None
+        );
+        assert_eq!(stored_quality(r#"{"quality":"lossless"}"#), None);
+        assert_eq!(stored_quality(""), None);
     }
 
     #[test]

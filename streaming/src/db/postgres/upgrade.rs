@@ -169,6 +169,14 @@ impl PgPool {
         })
     }
 
+    pub async fn is_core(&self) -> Result<bool, PgError> {
+        let client = self.connection().await?;
+        let row = client
+            .query_one("SELECT public.scd_role() = 'core'", &[])
+            .await?;
+        Ok(row.get(0))
+    }
+
     pub async fn mark_hq_upgrade_failed(&self, urn: &str) -> Result<(), PgError> {
         let client = self.connection().await?;
         client

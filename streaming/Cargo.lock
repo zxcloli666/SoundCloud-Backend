@@ -2157,6 +2157,8 @@ dependencies = [
  "chrono",
  "fallible-iterator",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
  "uuid",
 ]
 
@@ -2851,6 +2853,7 @@ dependencies = [
  "url",
  "uuid",
  "wreq",
+ "write-through",
 ]
 
 [[package]]
@@ -3075,6 +3078,7 @@ dependencies = [
  "socket2",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",
@@ -3509,6 +3513,7 @@ checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -4046,6 +4051,17 @@ dependencies = [
  "typed-builder",
  "wreq",
  "zstd",
+]
+
+[[package]]
+name = "write-through"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]

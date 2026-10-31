@@ -21,25 +21,41 @@ holds AS (
     WHERE pause.paused_until > now() - interval '10 minutes'
 ),
 rows AS (
-    SELECT queued.dead,
-           queued.retry_count,
+    SELECT state.dead,
+           state.retry_count,
            queued.action_type IN (
                'like_track', 'unlike_track', 'like_playlist', 'unlike_playlist',
                'follow_user', 'unfollow_user'
            ) AS healed,
            CASE
-               WHEN queued.dead THEN NULL
+               WHEN state.dead THEN NULL
                WHEN hold.action_type IS NOT NULL THEN GREATEST(hold.paused_until, now())
-               WHEN queued.retry_count = 0
+               WHEN state.retry_count = 0
+                    AND NOT state.fresh
                     AND queued.last_error IS NOT NULL
                     AND queued.next_run_at > now() THEN queued.next_run_at
            END AS delayed_until
     FROM sync_queue AS queued
+    CROSS JOIN LATERAL (
+        SELECT fresh,
+               queued.dead AND NOT fresh AS dead,
+               CASE WHEN fresh THEN 0 ELSE queued.retry_count END AS retry_count
+        FROM (
+            SELECT queued.exec_generation IS DISTINCT FROM queued.generation
+                   AND (queued.exec_generation IS NOT NULL OR queued.intent_v > 0) AS fresh
+        ) AS adopted
+    ) AS state
     LEFT JOIN holds AS hold ON hold.action_type = queued.action_type
     WHERE queued.user_id = ANY ($1)
-      AND NOT (queued.dead AND queued.action_type = 'comment')
+      AND NOT (
+          queued.cancelled
+          AND queued.lease_id IS NULL
+          AND queued.remote_attempted_generation IS NULL
+          AND queued.remote_completed_generation IS NULL
+      )
+      AND NOT (state.dead AND queued.action_type = 'comment')
       AND (
-          NOT queued.dead
+          NOT state.dead
           OR queued.failed_at > now() - interval '30 days'
           OR queued.action_type IN (
               'like_track', 'unlike_track', 'like_playlist', 'unlike_playlist',

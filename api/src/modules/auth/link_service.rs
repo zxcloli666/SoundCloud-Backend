@@ -50,7 +50,7 @@ impl LinkService {
         if let Some(session_id) = source_session_id {
             let session = self
                 .auth
-                .get_session(session_id)
+                .find_session(session_id)
                 .await?
                 .ok_or_else(|| AppError::unauthorized("Source session not found"))?;
             if session.soundcloud_connection_id.is_none() {

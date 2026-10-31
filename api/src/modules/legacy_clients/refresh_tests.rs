@@ -75,6 +75,7 @@ async fn a_rejected_soundcloud_grant_is_the_401_old_clients_sign_in_on() -> anyh
             Ok(RefreshAttempt {
                 outcome: RefreshOutcome::NotConnected,
                 connection: None,
+                retry_after_sec: None,
             }),
             "soundcloud_not_connected",
         ),
@@ -217,6 +218,7 @@ fn attempt(outcome: RefreshOutcome, connection: SoundCloudConnection) -> Refresh
     RefreshAttempt {
         outcome,
         connection: Some(connection),
+        retry_after_sec: None,
     }
 }
 
@@ -245,7 +247,6 @@ fn connection(
         soundcloud_user_id: "42".to_owned(),
         oauth_app_id: Some(OAUTH_APP),
         access_token: "access".to_owned(),
-        refresh_token: "refresh".to_owned(),
         expires_at,
         scope: String::new(),
         refresh_generation: 1,

@@ -1,12 +1,14 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::response::Response;
+use backend_contracts::admin_catalog::{AdminCommand, WantedLink, WantedStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::forward::{RequestKey, forward};
 use crate::common::admin::AdminAuth;
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::state::AppState;
-use catalog_match::link_wanted_to_sc;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -113,66 +115,29 @@ pub async fn list(
     }))
 }
 
-#[derive(Deserialize)]
-pub struct LinkBody {
-    pub sc_track_id: String,
-}
-
 #[tracing::instrument(skip_all)]
 pub async fn link(
     _: AdminAuth,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<LinkBody>,
-) -> AppResult<Json<serde_json::Value>> {
-    let sc = body.sc_track_id.trim();
-    if sc.is_empty() {
-        return Err(AppError::bad_request("sc_track_id is required"));
-    }
-    let linked = link_wanted_to_sc(&state.pg, id, sc).await?;
-
-    let row = sqlx::query_file!("queries/admin/wanted/get_status_track.sql", id)
-        .fetch_optional(&state.pg)
-        .await?;
-    match row {
-        None => Err(AppError::not_found("wanted track not found")),
-        Some(_) if !linked => Err(AppError::bad_request(
-            "no tracks row matches sc_track_id; wanted track left unlinked",
-        )),
-        Some(r) => Ok(Json(serde_json::json!({
-            "ok": true,
-            "linked": r.track_id.is_some(),
-            "status": r.status,
-            "track_id": r.track_id,
-        }))),
-    }
+    key: RequestKey,
+    Path(wanted_id): Path<Uuid>,
+    Json(body): Json<WantedLink>,
+) -> AppResult<Response> {
+    forward(&state, key, AdminCommand::WantedLink { wanted_id, body }).await
 }
-
-#[derive(Deserialize)]
-pub struct StatusBody {
-    pub status: String,
-}
-
-const ALLOWED_STATUS: [&str; 4] = ["wanted", "linked", "unresolvable", "skipped"];
 
 #[tracing::instrument(skip_all)]
 pub async fn set_status(
     _: AdminAuth,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<StatusBody>,
-) -> AppResult<Json<serde_json::Value>> {
-    let status = body.status.trim();
-    if !ALLOWED_STATUS.contains(&status) {
-        return Err(AppError::bad_request(
-            "status must be one of: wanted, linked, unresolvable, skipped",
-        ));
-    }
-    let res = sqlx::query_file!("queries/admin/wanted/update_status.sql", status, id)
-        .execute(&state.pg)
-        .await?;
-    if res.rows_affected() == 0 {
-        return Err(AppError::not_found("wanted track not found"));
-    }
-    Ok(Json(serde_json::json!({ "ok": true, "status": status })))
+    key: RequestKey,
+    Path(wanted_id): Path<Uuid>,
+    Json(body): Json<WantedStatus>,
+) -> AppResult<Response> {
+    forward(
+        &state,
+        key,
+        AdminCommand::WantedSetStatus { wanted_id, body },
+    )
+    .await
 }

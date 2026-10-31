@@ -1,1 +1,1 @@
-SELECT nextval('catalog_metadata_clock') AS "observation!"
+SELECT public.scd_clock() AS "observation!"

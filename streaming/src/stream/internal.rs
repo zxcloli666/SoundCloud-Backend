@@ -155,7 +155,7 @@ pub async fn transcode_upload(
         )
         .await
         {
-            Ok(()) => info!(
+            Ok(_) => info!(
                 "[internal/transcode-upload] {task_urn} uploaded {:.1}MB",
                 data.len() as f64 / 1024.0 / 1024.0
             ),

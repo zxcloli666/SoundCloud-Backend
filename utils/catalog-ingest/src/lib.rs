@@ -6,6 +6,8 @@ mod playlist_metadata;
 mod release_date;
 mod sc_ids;
 mod sc_payload;
+#[cfg(test)]
+mod tests;
 mod track_metadata;
 mod upsert;
 mod user;
