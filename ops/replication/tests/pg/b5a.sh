@@ -136,10 +136,12 @@ done
 sql -d scd_b1_core > /dev/null <<SQL
 CREATE TEMP TABLE seed_reads (entity_urn text, last_read_at timestamptz);
 CREATE TEMP TABLE seed_counters (sc_track_id text, play_count bigint, likes_count bigint, reposts_count bigint, comment_count bigint, fetched_at timestamptz);
-\copy seed_reads FROM '$tmp/reads.main'
-\copy seed_reads FROM '$tmp/reads.star'
-\copy seed_counters FROM '$tmp/counters.main'
-\copy seed_counters FROM '$tmp/counters.star'
+COPY seed_reads FROM STDIN;
+$(cat "$tmp/reads.main" "$tmp/reads.star")
+\.
+COPY seed_counters FROM STDIN;
+$(cat "$tmp/counters.main" "$tmp/counters.star")
+\.
 INSERT INTO public.entity_reads AS r (entity_urn, last_read_at)
 SELECT entity_urn, max(last_read_at) FROM seed_reads GROUP BY entity_urn
 ON CONFLICT (entity_urn) DO UPDATE SET last_read_at = EXCLUDED.last_read_at WHERE r.last_read_at < EXCLUDED.last_read_at;

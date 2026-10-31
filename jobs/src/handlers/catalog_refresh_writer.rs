@@ -105,7 +105,7 @@ impl CatalogWriter {
                         sc_track_id: fields.sc_track_id.clone(),
                         at: wt::now(),
                     };
-                    wt::call(&mut **connection, &too_long)
+                    wt::call(connection, &too_long)
                         .await
                         .map_err(JobError::retryable)?;
                 } else if result.was_new {

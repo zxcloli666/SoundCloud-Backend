@@ -84,7 +84,10 @@ async fn a_too_long_upload_is_marked_and_still_owned(pool: PgPool) -> anyhow::Re
         )
         .await?;
 
-    assert_eq!(stored(&pool, "32").await?, (Some("too_long".to_owned()), true));
+    assert_eq!(
+        stored(&pool, "32").await?,
+        (Some("too_long".to_owned()), true)
+    );
     Ok(())
 }
 

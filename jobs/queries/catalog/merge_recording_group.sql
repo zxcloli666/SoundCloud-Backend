@@ -33,7 +33,7 @@ WITH members AS (SELECT track.id,
      canonical AS (SELECT coalesce(
                                   (SELECT track.canonical_track_id
                                    FROM tracks AS track
-                                   WHERE track.id = ANY ((SELECT ids FROM locked))
+                                   WHERE track.id = ANY ((SELECT ids FROM locked)::uuid[])
                                      AND track.canonical_track_id IS NOT NULL
                                    ORDER BY track.canonical_track_id
                                    LIMIT 1),
@@ -49,7 +49,7 @@ WITH members AS (SELECT track.id,
                                   WHEN track.id IN (SELECT id FROM losers) THEN now()
                                   ELSE track.updated_at
                      END
-             WHERE track.id = ANY ((SELECT ids FROM locked))
+             WHERE track.id = ANY ((SELECT ids FROM locked)::uuid[])
                  AND (track.canonical_track_id IS NULL OR track.id IN (SELECT id FROM losers))
              RETURNING track.id IN (SELECT id FROM losers) AS superseded)
 SELECT (SELECT count(*) FROM merged WHERE superseded) AS "superseded!",

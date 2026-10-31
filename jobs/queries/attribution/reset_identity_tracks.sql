@@ -28,7 +28,7 @@ WITH doomed AS (SELECT track.id
                  enrich_attempts = 0,
                  enrich_next_run_at = now() + random() * interval '30 minutes',
                  updated_at = now()
-             WHERE track.id = ANY ((SELECT ids FROM locked))
+             WHERE track.id = ANY ((SELECT ids FROM locked)::uuid[])
              RETURNING track.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

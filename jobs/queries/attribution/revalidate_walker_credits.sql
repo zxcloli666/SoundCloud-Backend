@@ -35,7 +35,7 @@ WITH doomed AS (SELECT credit.track_id,
              FROM removed
              WHERE track.id = removed.track_id
                  AND track.primary_artist_id = removed.artist_id
-                 AND track.id = ANY ((SELECT ids FROM locked))
+                 AND track.id = ANY ((SELECT ids FROM locked)::uuid[])
              RETURNING track.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

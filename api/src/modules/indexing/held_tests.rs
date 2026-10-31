@@ -127,7 +127,11 @@ async fn opening_or_a_full_ingest_releases_a_held_track(pool: PgPool) -> anyhow:
     assert!(!held(&pool, "6").await?);
     assert!(!is_held(&pool, "6").await?);
     assert!(lyrics_state(&pool, "6").await?);
-    assert_eq!(release(&pool, "6").await?, None, "a released track is kicked once");
+    assert_eq!(
+        release(&pool, "6").await?,
+        None,
+        "a released track is kicked once"
+    );
 
     let fields = catalog_ingest::ScTrackFields::from_sc(&seen(7, "Other", 77)).unwrap();
     let observation = catalog_ingest::Observation::begin(&pool).await?;

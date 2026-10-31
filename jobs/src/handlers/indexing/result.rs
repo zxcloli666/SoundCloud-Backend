@@ -246,7 +246,11 @@ impl AudioIndexResultHandler {
                 }
                 None => None,
             };
-            if tries == 1 && locks.as_ref().is_some_and(FingerprintLocks::neighbour_moved) {
+            if tries == 1
+                && locks
+                    .as_ref()
+                    .is_some_and(FingerprintLocks::neighbour_moved)
+            {
                 transaction.rollback().await.map_err(JobError::retryable)?;
                 continue;
             }
@@ -405,7 +409,11 @@ async fn apply_fingerprint(
     .execute(&mut **transaction)
     .await
     .map_err(JobError::retryable)?;
-    let Some(neighbour) = locks.neighbour.as_ref().filter(|neighbour| neighbour.unchanged) else {
+    let Some(neighbour) = locks
+        .neighbour
+        .as_ref()
+        .filter(|neighbour| neighbour.unchanged)
+    else {
         return Ok(());
     };
     let Some(canonical_id) = joined_canonical_id(locks.track_canonical, neighbour.canonical) else {

@@ -14,7 +14,7 @@ pub use kinds::{
     TrackEdit, TrackReleaseHeld, TrackS3State, TrackStorageLost, TrackTooLong,
 };
 #[cfg(feature = "sqlx")]
-pub use sqlx_pg::call;
+pub use sqlx_pg::{call, conflicted};
 
 pub fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6)

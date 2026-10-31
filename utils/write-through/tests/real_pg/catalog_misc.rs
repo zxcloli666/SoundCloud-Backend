@@ -10,23 +10,23 @@ const DERIVED: &[&str] = &["lyrics_lookup_state"];
 const TRACKS: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, pipeline_held,
         storage_state, storage_quality, index_state, s3_verified_at, s3_missing_at,
-        created_at, updated_at)
+        created_at, updated_at, transcribe_state)
     VALUES
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a01', '2001', 'soundcloud:tracks:2001',
          'Held', 'held', 213000, true, 'pending', NULL, 'pending', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00'),
+         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a02', '2002', 'soundcloud:tracks:2002',
          'Long mix', 'long mix', 3600000, false, 'pending', NULL, 'pending', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00'),
+         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a03', '2003', 'soundcloud:tracks:2003',
          'Stored', 'stored', 200000, false, 'ok', 'hq', 'indexed', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00'),
+         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a04', '2004', 'soundcloud:tracks:2004',
          'Lost', 'lost', 200000, false, 'missing', 'sq', 'indexed', NULL, '2026-10-20 10:00:00+00',
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00'),
+         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', DEFAULT),
         ('3a6e1d20-5b8c-4f19-9d27-0c4b8e7f2a05', '2005', 'soundcloud:tracks:2005',
          'Too long', 'too long', 9000000, false, 'too_long', NULL, 'too_long', NULL, NULL,
-         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00')";
+         '2026-10-01 10:00:00+00', '2026-10-01 10:00:00+00', 'disabled')";
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
@@ -106,7 +106,10 @@ async fn a_too_long_track_is_marked_the_same_on_api_and_core() {
             at("2026-10-31T08:00:00Z")
         )
     );
-    assert!(pair.redeliver().await, "a redelivered command changes nothing");
+    assert!(
+        pair.redeliver().await,
+        "a redelivered command changes nothing"
+    );
     pair.finish().await;
 }
 
@@ -206,7 +209,10 @@ async fn s3_verdicts_land_the_same_on_api_and_core_and_skip_too_long_tracks() {
         storage(&pair.core, "2005").await,
         ("too_long".to_owned(), None, None, None)
     );
-    assert!(pair.redeliver().await, "a redelivered command changes nothing");
+    assert!(
+        pair.redeliver().await,
+        "a redelivered command changes nothing"
+    );
     pair.finish().await;
 }
 
@@ -220,7 +226,7 @@ async fn a_track_found_and_missing_in_one_batch_ends_missing_and_is_touched_once
         .assert_same();
 
     assert_eq!(changed, json!(1));
-    let touched: i64 = sqlx::query_scalar(
+    let touched: i32 = sqlx::query_scalar(
         "SELECT jsonb_array_length(touched) FROM public.cmd_outbox ORDER BY created_at DESC LIMIT 1",
     )
     .fetch_one(&pair.api)

@@ -11,20 +11,13 @@ where
     let mut attempt = 1;
     loop {
         match transaction().await {
-            Err(error) if attempt < ATTEMPTS && conflicted(&error) => {
+            Err(error) if attempt < ATTEMPTS && wt::conflicted(&error) => {
                 tokio::time::sleep(Duration::from_millis(u64::from(attempt) * 20)).await;
                 attempt += 1;
             }
             result => return result,
         }
     }
-}
-
-fn conflicted(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|error| error.code())
-        .is_some_and(|code| code == "40P01" || code == "40001")
 }
 
 #[cfg(test)]

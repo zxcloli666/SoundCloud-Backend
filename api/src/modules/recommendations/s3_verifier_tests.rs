@@ -89,7 +89,10 @@ async fn a_writing_node_stores_both_verdicts_through_the_kind(pool: PgPool) -> a
     assert!(verified.is_none() && gone.is_some());
     let (state, _, verified, gone) = stored(&pool, "7003").await?;
     assert_eq!(state, "too_long");
-    assert!(verified.is_none() && gone.is_none(), "a too long track is never marked");
+    assert!(
+        verified.is_none() && gone.is_none(),
+        "a too long track is never marked"
+    );
 
     let probed = storage.heads.load(Ordering::SeqCst);
     let again = verifier.find_missing(&ids()).await?;

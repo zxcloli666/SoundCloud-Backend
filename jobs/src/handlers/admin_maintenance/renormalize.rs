@@ -375,10 +375,10 @@ pub(super) async fn repoint_references(
     for query in [
         "queries/admin_maintenance/merge_repoint_track_artists_dedup.sql",
         "queries/admin_maintenance/merge_repoint_track_artists.sql",
-        "queries/admin_maintenance/merge_repoint_tracks.sql",
-        "queries/admin_maintenance/merge_repoint_albums_primary.sql",
         "queries/admin_maintenance/merge_repoint_album_artists_dedup.sql",
         "queries/admin_maintenance/merge_repoint_album_artists.sql",
+        "queries/admin_maintenance/merge_repoint_albums_primary.sql",
+        "queries/admin_maintenance/merge_repoint_tracks.sql",
     ] {
         run_repoint(&mut transaction, query, from, to).await?;
     }

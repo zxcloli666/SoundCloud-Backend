@@ -69,7 +69,10 @@ async fn any_other_error_is_returned_at_once(pool: PgPool) -> anyhow::Result<()>
     let (pool_ref, attempts_ref) = (&pool, &attempts);
     let failed = retry_conflicts(|| async move {
         attempts_ref.fetch_add(1, Ordering::Relaxed);
-        sqlx::query("SELECT 1 / 0").execute(pool_ref).await.map(|_| ())
+        sqlx::query("SELECT 1 / 0")
+            .execute(pool_ref)
+            .await
+            .map(|_| ())
     })
     .await;
     assert!(failed.is_err());

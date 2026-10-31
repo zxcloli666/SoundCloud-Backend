@@ -96,7 +96,10 @@ mod tests {
             sqlx::query_scalar("SELECT last_read_at FROM tracks WHERE sc_track_id = '7001'")
                 .fetch_one(&pool)
                 .await?;
-        assert!(track_stamp.is_none(), "a read no longer rewrites the track row");
+        assert!(
+            track_stamp.is_none(),
+            "a read no longer rewrites the track row"
+        );
         Ok(())
     }
 
