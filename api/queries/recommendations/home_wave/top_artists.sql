@@ -35,7 +35,7 @@ GROUP BY ta.artist_id
 SELECT COALESCE (la.artist_id, pa.artist_id) AS artist_id, (COALESCE (la.lc, 0) + 0.5 * COALESCE (pa.pc, 0)) AS score
 FROM like_art la FULL OUTER JOIN play_art pa
 ON pa.artist_id = la.artist_id
-ORDER BY score DESC
+ORDER BY score DESC, artist_id
     LIMIT $2
     )
 SELECT a.id AS "artist_id!", a.name AS "artist_name!", a.avatar_url

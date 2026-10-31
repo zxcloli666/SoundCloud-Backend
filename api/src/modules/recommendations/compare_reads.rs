@@ -19,6 +19,7 @@ const TOP_AFFINITY: usize = 300;
 const TOP_LIMIT: i64 = 16;
 const ADJACENT_LIMIT: i64 = 20;
 const FRONTIER: usize = 320;
+const TIE_EPS: f32 = 1e-6;
 const FRESH_LIMIT: i64 = 24;
 const SAMPLE_START_PERCENT: f32 = 0.02;
 const SAMPLE_MAX_PERCENT: f32 = 100.0;
@@ -141,6 +142,29 @@ fn ranked(affinity: &Affinity) -> Vec<(Uuid, f32)> {
     pairs
 }
 
+fn real_differences(old: &[(Uuid, f32)], new: &[(Uuid, f32)]) -> (usize, f64) {
+    let cut = |top: &[(Uuid, f32)]| {
+        if top.len() < TOP_AFFINITY {
+            0.0
+        } else {
+            top.last().map_or(0.0, |last| last.1)
+        }
+    };
+    let (old_cut, new_cut) = (cut(old), cut(new));
+    let old_ids: HashSet<Uuid> = old.iter().map(|x| x.0).collect();
+    let new_ids: HashSet<Uuid> = new.iter().map(|x| x.0).collect();
+    let missed = old
+        .iter()
+        .filter(|(artist, value)| !new_ids.contains(artist) && *value > new_cut + TIE_EPS)
+        .map(|(_, value)| f64::from(value - new_cut));
+    let extra = new
+        .iter()
+        .filter(|(artist, value)| !old_ids.contains(artist) && *value > old_cut + TIE_EPS)
+        .map(|(_, value)| f64::from(value - old_cut));
+    let all: Vec<f64> = missed.chain(extra).collect();
+    (all.len(), all.into_iter().fold(0.0, f64::max))
+}
+
 fn max_value_gap(old: &[(Uuid, f32)], new: &[(Uuid, f32)]) -> f64 {
     let new: HashMap<Uuid, f32> = new.iter().copied().collect();
     old.iter()
@@ -153,6 +177,8 @@ struct Sample {
     user: String,
     agreement: Agreement,
     value_gap: f64,
+    real: usize,
+    real_gap: f64,
 }
 
 #[derive(Default)]
@@ -314,12 +340,15 @@ async fn compare_user(
         let new = affinity_from(edges, pg, &variants, &disliked, &GraphSeed::User).await;
         let new_top = ranked(&new);
         let new_ids: Vec<Uuid> = new_top.iter().map(|(artist, _)| *artist).collect();
+        let (real, real_gap) = real_differences(&old_top, &new_top);
         affinity.push((
             index,
             Sample {
                 user: user.to_owned(),
                 agreement: agreement(&old_ids, &new_ids),
                 value_gap: max_value_gap(&old_top, &new_top),
+                real,
+                real_gap,
             },
             started.elapsed().as_secs_f64() * 1000.0,
         ));
@@ -365,11 +394,15 @@ async fn compare_user(
             user: user.to_owned(),
             agreement: agreement(&artists(&old_rows), &artists(&again)),
             value_gap: 0.0,
+            real: 0,
+            real_gap: 0.0,
         };
         let artist_sample = Sample {
             user: user.to_owned(),
             agreement: agreement(&artists(&old_rows), &artists(&new_rows)),
             value_gap: 0.0,
+            real: 0,
+            real_gap: 0.0,
         };
 
         let new_track: HashMap<Uuid, &String> = new_rows.iter().map(|(a, t)| (*a, t)).collect();
@@ -416,11 +449,15 @@ async fn compare_user(
             user: user.to_owned(),
             agreement: agreement(&old_fresh, &new_fresh),
             value_gap: 0.0,
+            real: 0,
+            real_gap: 0.0,
         },
         noise: Sample {
             user: user.to_owned(),
             agreement: agreement(&old_fresh, &again),
             value_gap: 0.0,
+            real: 0,
+            real_gap: 0.0,
         },
         old_ms,
         new_ms,
@@ -503,6 +540,12 @@ fn print_list(title: &str, list: &List, worst: usize, with_gap: bool) {
         list.new_ms / n as f64,
     );
     if with_gap {
+        println!(
+            "  real differences (artist strictly above the other side's 300th value): users={} total={} max gap={:.5}",
+            list.samples.iter().filter(|s| s.real > 0).count(),
+            list.samples.iter().map(|s| s.real).sum::<usize>(),
+            list.samples.iter().map(|s| s.real_gap).fold(0.0, f64::max)
+        );
         println!(
             "  value gap on common artists: mean max={:.5} worst={:.5}",
             mean(list.samples.iter().map(|s| s.value_gap)),
