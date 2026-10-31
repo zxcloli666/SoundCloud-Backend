@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 const READS_HISTORY_NOT_CANDIDATES: &[&str] = &[
+    "home_wave/adjacent_artists.sql",
+    "home_wave/top_artists.sql",
     "home_wave/quality_rows.sql",
     "home_wave/recent_artists.sql",
     "s3_verifier/select_verify_rows.sql",
