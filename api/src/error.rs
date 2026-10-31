@@ -6,6 +6,7 @@ use thiserror::Error;
 
 const SC_DEADLINE_RETRY_AFTER: i64 = 15;
 const UNAVAILABLE_RETRY_AFTER: i64 = 3;
+const LOAD_SHED_CODE: &str = "api_overloaded";
 const SC_BLOCKED_MESSAGE: &str = "SoundCloud blocked the upstream request, retry later";
 const SC_OPAQUE_BODY_MESSAGE: &str = "SoundCloud API request failed";
 
@@ -165,10 +166,20 @@ impl AppError {
     pub fn overloaded(retry_after_sec: i64) -> Self {
         Self::coded(
             StatusCode::SERVICE_UNAVAILABLE,
-            "api_overloaded",
+            LOAD_SHED_CODE,
             "Server is busy, retry shortly",
         )
         .with_retry_after(retry_after_sec)
+    }
+
+    fn is_load_shed(&self) -> bool {
+        matches!(
+            self,
+            Self::Coded {
+                code: LOAD_SHED_CODE,
+                ..
+            }
+        )
     }
 
     pub fn request_timed_out() -> Self {
@@ -262,7 +273,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status();
 
-        if status.is_server_error() {
+        if status.is_server_error() && !self.is_load_shed() {
             tracing::error!(error = %self, "request failed");
             telemetry::fail(&tracing::Span::current(), &self.to_string());
         } else {

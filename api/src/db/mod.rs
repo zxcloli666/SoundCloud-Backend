@@ -16,6 +16,7 @@ const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
 const LONG_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60);
+const IDLE_PING_AFTER: Duration = Duration::from_secs(5);
 const WARM_UP_BUDGET: Duration = Duration::from_secs(8);
 const WARM_UP_HOLD: Duration = Duration::from_millis(50);
 const HOT_SESSION_LOOKUP: &str = include_str!("../../queries/auth/service/get_session.sql");
@@ -92,7 +93,21 @@ fn pool_options(
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
         .test_before_acquire(false)
+        .before_acquire(|connection, meta| Box::pin(verify_idle(connection, meta.idle_for)))
         .after_release(move |connection, _| Box::pin(settle_released(connection, released_at)))
+}
+
+async fn verify_idle(
+    connection: &mut PgConnection,
+    idle_for: Duration,
+) -> Result<bool, sqlx::Error> {
+    if idle_for < IDLE_PING_AFTER {
+        return Ok(true);
+    }
+    Ok(matches!(
+        tokio::time::timeout(RELEASE_PING_TIMEOUT, connection.ping()).await,
+        Ok(Ok(()))
+    ))
 }
 
 async fn settle_released(
