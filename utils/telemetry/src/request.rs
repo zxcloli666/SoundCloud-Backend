@@ -7,6 +7,7 @@ use tracing::field::Empty;
 use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::dependency;
 use crate::init::HOST;
 use crate::traceparent;
 
@@ -31,9 +32,25 @@ pub fn root_span(req: &Request) -> Span {
         scd.debug = Empty,
         scd.host = host,
         scd.outcome = Empty,
+        scd.app_version = Empty,
+        scd.hop = Empty,
+        db.queries = Empty,
+        db.rows = Empty,
+        db.time_ms = Empty,
+        redis.calls = Empty,
+        redis.time_ms = Empty,
+        qdrant.calls = Empty,
+        qdrant.time_ms = Empty,
         error.message = Empty,
         request_id = Empty,
     );
+    dependency::attach(&span);
+    if let Some(version) = label(req.headers(), "x-scd-version", 16, version_char) {
+        span.record("scd.app_version", version);
+    }
+    if let Some(hop) = label(req.headers(), "x-scd-hop", 8, hop_char) {
+        span.record("scd.hop", hop);
+    }
     if let Some(incoming) = incoming(req.headers()) {
         if incoming.debug() {
             span.record("scd.debug", true);
@@ -45,7 +62,33 @@ pub fn root_span(req: &Request) -> Span {
 
 fn incoming(headers: &HeaderMap) -> Option<traceparent::Incoming> {
     let value = headers.get("traceparent")?.to_str().ok()?;
-    traceparent::parse(value)
+    let state = headers
+        .get("tracestate")
+        .and_then(|value| value.to_str().ok());
+    traceparent::parse(value).map(|incoming| incoming.with_state(state))
+}
+
+fn label<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+    longest: usize,
+    allowed: fn(char) -> bool,
+) -> Option<&'a str> {
+    let value = headers.get(name)?.to_str().ok()?.trim();
+    let first = value.chars().next()?;
+    let fits = value.len() <= longest && value.chars().all(allowed);
+    (fits && first.is_ascii_alphanumeric()).then_some(value)
+}
+
+fn version_char(character: char) -> bool {
+    character.is_ascii_digit()
+        || character == '.'
+        || character == '-'
+        || character.is_ascii_lowercase()
+}
+
+fn hop_char(character: char) -> bool {
+    character.is_ascii_digit() || character.is_ascii_lowercase()
 }
 
 pub fn trace_id(span: &Span, headers: &HeaderMap) -> Option<String> {
@@ -62,6 +105,7 @@ pub fn finish(span: &Span, status: u16) {
     if status >= 500 {
         span.record("otel.status_code", "ERROR");
     }
+    dependency::flush(span);
 }
 
 pub fn fail(span: &Span, message: &str) {

@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{Instrument, info, warn};
 use wreq::Client;
 
 use crate::AppState;
@@ -127,44 +127,48 @@ pub async fn transcode_upload(
     let task_urn = track_urn.clone();
     let task_head = head_url.clone();
     let task_filename = filename.clone();
-    tokio::spawn(async move {
-        let _permit = match FETCH_SEM.clone().acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        if head_ok(&task_state.http_client, &task_head).await {
-            return;
-        }
-        let (data, quality) = match fetch_track(&task_state, &task_urn).await {
-            Some(d) => d,
-            None => {
-                warn!("[internal/transcode-upload] {task_urn} no stream available");
+    let background = telemetry::detached("background transcode upload");
+    tokio::spawn(
+        async move {
+            let _permit = match FETCH_SEM.clone().acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            if head_ok(&task_state.http_client, &task_head).await {
                 return;
             }
-        };
-        let upload_base = task_state.config.storage_upload_url.trim_end_matches('/');
-        let expected_ms = lookup_expected_duration_ms(&task_state.pg, &task_urn).await;
-        match upload_to_storage(
-            &task_state.storage_http,
-            upload_base,
-            &task_state.config.storage_token,
-            &task_filename,
-            &data,
-            quality,
-            expected_ms,
-        )
-        .await
-        {
-            Ok(()) => info!(
-                "[internal/transcode-upload] {task_urn} uploaded {:.1}MB",
-                data.len() as f64 / 1024.0 / 1024.0
-            ),
-            Err(UploadError::Rejected { status, body }) => {
-                info!("[internal/transcode-upload] {task_urn} rejected ({status}): {body}");
+            let (data, quality) = match fetch_track(&task_state, &task_urn).await {
+                Some(d) => d,
+                None => {
+                    warn!("[internal/transcode-upload] {task_urn} no stream available");
+                    return;
+                }
+            };
+            let upload_base = task_state.config.storage_upload_url.trim_end_matches('/');
+            let expected_ms = lookup_expected_duration_ms(&task_state.pg, &task_urn).await;
+            match upload_to_storage(
+                &task_state.storage_http,
+                upload_base,
+                &task_state.config.storage_token,
+                &task_filename,
+                &data,
+                quality,
+                expected_ms,
+            )
+            .await
+            {
+                Ok(()) => info!(
+                    "[internal/transcode-upload] {task_urn} uploaded {:.1}MB",
+                    data.len() as f64 / 1024.0 / 1024.0
+                ),
+                Err(UploadError::Rejected { status, body }) => {
+                    info!("[internal/transcode-upload] {task_urn} rejected ({status}): {body}");
+                }
+                Err(e) => warn!("[internal/transcode-upload] upload {task_urn} failed: {e}"),
             }
-            Err(e) => warn!("[internal/transcode-upload] upload {task_urn} failed: {e}"),
         }
-    });
+        .instrument(background),
+    );
 
     Ok(Json(TranscodeUploadResponse {
         status: "accepted",

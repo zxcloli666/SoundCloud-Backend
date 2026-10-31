@@ -7,8 +7,8 @@ use hyper::client::conn::http1::{self, SendRequest};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 
-const ROUTES: [&str; 6] = [
-    "/fast/1", "/slow", "/spawned", "/nested", "/fast/2", "/broken",
+const ROUTES: [&str; 7] = [
+    "/fast/1", "/slow", "/spawned", "/nested", "/fast/2", "/broken", "/hop",
 ];
 
 #[derive(Default)]
@@ -16,6 +16,7 @@ pub struct Sent {
     pub requests: usize,
     pub nested: usize,
     pub debug: Vec<String>,
+    pub hops: Vec<String>,
 }
 
 impl Sent {
@@ -23,6 +24,7 @@ impl Sent {
         self.requests += other.requests;
         self.nested += other.nested;
         self.debug.extend(other.debug);
+        self.hops.extend(other.hops);
     }
 }
 
@@ -59,6 +61,9 @@ pub async fn connection(
         let span = format!("{:016x}", n + 1);
         if n % 64 == 0 && route != "/broken" {
             request = request.header("traceparent", format!("00-{trace}-{span}-01"));
+            if route == "/hop" {
+                sent.hops.push(trace.clone());
+            }
             sent.debug.push(trace);
         } else if n % 2 == 0 {
             request = request.header("traceparent", format!("00-{trace}-{span}-00"));
@@ -67,6 +72,9 @@ pub async fn connection(
         sent.requests += 1;
         if route == "/nested" {
             sent.nested += 1;
+        }
+        if route == "/hop" {
+            sent.nested += 2;
         }
         tokio::time::sleep(pause).await;
     }
@@ -86,4 +94,21 @@ pub async fn kept(jaeger: SocketAddr, traces: &[String]) -> usize {
         }
     }
     found
+}
+
+pub async fn spans_of(jaeger: SocketAddr, trace: &str) -> usize {
+    let mut sender = open(jaeger).await;
+    let request = hyper::Request::get(format!("/jaeger/api/traces/{trace}"))
+        .header("host", "jaeger")
+        .body(Empty::new())
+        .expect("request");
+    sender.ready().await.expect("ready");
+    let response = sender.send_request(request).await.expect("response");
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    String::from_utf8_lossy(&body).matches("\"spanID\"").count()
 }

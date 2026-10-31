@@ -121,6 +121,12 @@ pub fn record_dependency(
     outcome: Outcome,
     elapsed: Duration,
 ) {
+    telemetry::dependency_call(
+        dependency,
+        operation,
+        elapsed,
+        matches!(outcome, Outcome::Error | Outcome::Timeout),
+    );
     if HANDLE.get().is_none() {
         return;
     }

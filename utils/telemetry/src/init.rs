@@ -6,11 +6,12 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, SdkTracer, SdkTracerProvider};
 use tracing::{Level, Metadata, Subscriber};
-use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::filter::{LevelFilter, filter_fn};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, fmt, prelude::*};
 
+use crate::dependency::{self, Dependencies};
 use crate::scrub::Scrubbing;
 use crate::uncached::Uncached;
 
@@ -40,16 +41,20 @@ pub fn init(service: &'static str, default_filter: &str, own: &'static [&'static
     let otel = provider
         .as_ref()
         .map(|provider| otel_layer(provider.tracer(service), own));
+    let dependencies = provider
+        .as_ref()
+        .map(|provider| dependency_layer(provider.tracer(service), own));
 
     tracing_subscriber::registry()
         .with(otel)
+        .with(dependencies)
         .with(log_layer(filter, json, scrubbed_stdout))
         .init();
 
     Guard(provider)
 }
 
-fn otel_layer<S>(tracer: SdkTracer, own: &'static [&'static str]) -> impl Layer<S>
+pub(crate) fn otel_layer<S>(tracer: SdkTracer, own: &'static [&'static str]) -> impl Layer<S>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
@@ -60,6 +65,22 @@ where
         .with_target(false)
         .with_tracked_inactivity(false)
         .with_filter(Uncached(filter_fn(move |meta| ours(meta, own))))
+}
+
+pub(crate) fn dependency_layer<S>(tracer: SdkTracer, own: &'static [&'static str]) -> impl Layer<S>
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    Dependencies { tracer }.with_filter(Uncached(
+        filter_fn(move |meta| {
+            if meta.is_span() {
+                ours(meta, own)
+            } else {
+                matches!(meta.target(), dependency::SQLX | dependency::TARGET)
+            }
+        })
+        .with_max_level_hint(LevelFilter::DEBUG),
+    ))
 }
 
 fn log_layer<S, W>(filter: EnvFilter, json: bool, writer: W) -> Box<dyn Layer<S> + Send + Sync>
@@ -116,6 +137,9 @@ fn exporter_provider(service: &'static str) -> Option<SdkTracerProvider> {
 }
 
 fn ours(meta: &Metadata<'_>, own: &[&str]) -> bool {
+    if meta.is_event() && meta.target() == "scd_event" {
+        return *meta.level() <= Level::DEBUG;
+    }
     let target = meta.target().split("::").next().unwrap_or("");
     if !own.contains(&target) {
         return false;
@@ -134,7 +158,15 @@ mod tests {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
 
-    use super::{log_layer, otel_layer};
+    use axum::body::Body;
+    use axum::http::Request;
+    use opentelemetry::Value;
+    use opentelemetry::trace::SpanKind;
+    use opentelemetry_sdk::trace::Sampler;
+    use std::time::Duration;
+
+    use super::{dependency_layer, log_layer, otel_layer};
+    use crate::request::{finish, root_span};
 
     #[test]
     fn a_bare_log_level_check_does_not_hide_the_next_span() {
@@ -162,6 +194,105 @@ mod tests {
         });
 
         assert_eq!(exporter.get_finished_spans().expect("spans").len(), 10);
+    }
+
+    fn attribute(span: &opentelemetry_sdk::trace::SpanData, key: &str) -> Option<Value> {
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == key)
+            .map(|attribute| attribute.value.clone())
+    }
+
+    #[test]
+    fn queries_and_cache_calls_become_few_child_spans_and_counters_on_the_request() {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_sampler(Sampler::AlwaysOn)
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let own: &'static [&'static str] = &["telemetry"];
+        let subscriber = tracing_subscriber::registry()
+            .with(otel_layer(provider.tracer("test"), own))
+            .with(dependency_layer(provider.tracer("test"), own))
+            .with(log_layer(
+                EnvFilter::new("info,sqlx=warn"),
+                false,
+                std::io::sink,
+            ));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let request = Request::get("/tracks/1")
+                .body(Body::empty())
+                .expect("request");
+            let root = root_span(&request);
+            root.in_scope(|| {
+                for _ in 0..5 {
+                    tracing::debug!(
+                        target: "sqlx::query",
+                        summary = "SELECT id FROM tracks",
+                        db.statement = "\n\nSELECT id FROM tracks WHERE id = $1\n",
+                        rows_affected = 0u64,
+                        rows_returned = 1u64,
+                        elapsed_secs = 0.001f64,
+                    );
+                }
+                tracing::warn!(
+                    target: "sqlx::query",
+                    summary = "SELECT id FROM tracks",
+                    db.statement = "\n\nSELECT id FROM tracks WHERE id = $1\n",
+                    rows_affected = 0u64,
+                    rows_returned = 1u64,
+                    elapsed_secs = 0.05f64,
+                );
+                crate::dependency::call("redis", "get", Duration::from_millis(1), false);
+                crate::dependency::call("redis", "set", Duration::from_millis(40), true);
+            });
+            finish(&root, 200);
+        });
+
+        let spans = exporter.get_finished_spans().expect("spans");
+        let root = spans
+            .iter()
+            .find(|s| s.name == "GET unmatched")
+            .expect("root");
+        let children: Vec<_> = spans
+            .iter()
+            .filter(|s| s.parent_span_id == root.span_context.span_id())
+            .collect();
+        assert_eq!(
+            children.len(),
+            4,
+            "{:?}",
+            children
+                .iter()
+                .map(|s| s.name.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(children.iter().all(|s| s.span_kind == SpanKind::Client));
+        assert_eq!(
+            children
+                .iter()
+                .filter(|s| s.name == "SELECT tracks")
+                .count(),
+            3
+        );
+        let failed = children
+            .iter()
+            .find(|s| s.name == "redis set")
+            .expect("redis set");
+        assert!(matches!(
+            failed.status,
+            opentelemetry::trace::Status::Error { .. }
+        ));
+        assert_eq!(attribute(root, "db.queries"), Some(Value::I64(6)));
+        assert_eq!(attribute(root, "db.rows"), Some(Value::I64(6)));
+        assert_eq!(attribute(root, "redis.calls"), Some(Value::I64(2)));
+        for span in &children {
+            for attribute in &span.attributes {
+                let shown = attribute.value.to_string();
+                assert!(!shown.contains("WHERE") && !shown.contains("$1"), "{shown}");
+            }
+        }
     }
 
     #[derive(Clone, Default)]

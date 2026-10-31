@@ -13,6 +13,7 @@ pub(super) async fn s3<T>(
         "s3",
         otel.name = %format!("s3 {op}"),
         otel.kind = "client",
+        peer.service = "s3",
         otel.status_code = Empty,
         otel.status_description = Empty,
         scd.status = Empty,

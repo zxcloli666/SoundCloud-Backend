@@ -26,7 +26,7 @@ const DROPPED_KEYS: [&str; 16] = [
     "http.target",
 ];
 
-const PLAIN_KEYS: [&str; 1] = ["request_id"];
+const PLAIN_KEYS: [&str; 2] = ["request_id", "scd.origin_trace"];
 
 #[derive(Debug)]
 pub(crate) struct Scrubbing<P>(pub(crate) P);

@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use sqlx::PgPool;
-use tracing::debug;
+use tracing::{Instrument, debug};
 use wreq::Client;
 
 use crate::error::AppResult;
@@ -69,17 +69,24 @@ impl S3VerifierService {
             return Ok(missing);
         }
 
+        let call = telemetry::peer_call("storage", "HEAD", "/{object}");
+        let carrier = telemetry::headers(&call);
         let checks = stream::iter(to_check.iter().cloned())
             .map(|id| {
                 let this = self;
+                let carrier = &carrier;
                 async move {
-                    let found = this.probe(&id).await;
+                    let found = this.probe(&id, carrier).await;
                     (id, found)
                 }
             })
             .buffer_unordered(HEAD_CONCURRENCY)
             .collect::<Vec<_>>()
+            .instrument(call.clone())
             .await;
+        if checks.iter().any(|(_, found)| found.is_none()) {
+            telemetry::broke(&call, "some storage probes were inconclusive");
+        }
 
         let mut ok_ids: Vec<String> = Vec::new();
         let mut miss_ids: Vec<String> = Vec::new();
@@ -115,20 +122,24 @@ impl S3VerifierService {
         Ok(missing)
     }
 
-    async fn probe(&self, sc_track_id: &str) -> Option<bool> {
+    async fn probe(&self, sc_track_id: &str, carrier: &[(&'static str, String)]) -> Option<bool> {
         let key = catalog_ingest::track_object_key(sc_track_id)?;
         let url = format!("{}/{key}", self.storage_url);
-        match self.http.head(&url).timeout(HEAD_TIMEOUT).send().await {
+        let request = carrier.iter().fold(
+            self.http.head(&url).timeout(HEAD_TIMEOUT),
+            |request, (name, value)| request.header(*name, value.as_str()),
+        );
+        match request.send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let verdict = head_verdict(status);
                 if verdict.is_none() {
-                    debug!(url, status, "HEAD neither found nor gone");
+                    debug!(status, "HEAD neither found nor gone");
                 }
                 verdict
             }
             Err(e) => {
-                debug!(url, error = %e, "HEAD failed");
+                debug!(error = %e.without_uri(), "HEAD failed");
                 None
             }
         }

@@ -27,6 +27,20 @@ impl ScError {
         Self::Invalid(detail.into())
     }
 
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Api { status, .. } => match status {
+                429 => "rate_limited",
+                401 | 403 => "denied",
+                404 | 410 => "not_found",
+                500.. => "server_error",
+                _ => "client_error",
+            },
+            Self::Unreachable(_) => "unreachable",
+            Self::Invalid(_) => "invalid",
+        }
+    }
+
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Api { status, .. } => Some(*status),

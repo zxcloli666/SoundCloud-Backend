@@ -151,6 +151,11 @@ impl Apiv2Proxy {
         match self.get_json(&build(&cid)).await {
             Ok(value) => Ok(value),
             Err(error) if rejects_our_client_id(&error) => {
+                tracing::debug!(
+                    target: "scd_event",
+                    error_type = error.kind(),
+                    "client id rejected, rotating and retrying"
+                );
                 let cid = self.rotate_client_id(&cid).await?;
                 self.get_json(&build(&cid)).await
             }
