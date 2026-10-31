@@ -474,3 +474,53 @@ async fn a_page_resolves_the_same_artist_once(pool: PgPool) -> anyhow::Result<()
     assert_eq!(second, first);
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_genius_id_held_by_another_artist_is_not_taken_and_the_lookup_is_deferred(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let holder = seed_artist(&pool, "Nova Quill").await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '77' WHERE id = $1")
+        .bind(holder)
+        .execute(&pool)
+        .await?;
+    let asking = seed_artist(&pool, "Quill Nova").await?;
+
+    let attached = identity::attach(&pool, asking, 77, "Quill Nova", 3.0).await?;
+
+    assert!(!attached);
+    let (holder_id, asking_id, asking_deferred): (Option<String>, Option<String>, bool) =
+        sqlx::query_as(
+            "SELECT (SELECT genius_artist_id FROM artists WHERE id = $1),
+                    (SELECT genius_artist_id FROM artists WHERE id = $2),
+                    (SELECT genius_next_run_at > now() FROM artists WHERE id = $2)",
+        )
+        .bind(holder)
+        .bind(asking)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(holder_id.as_deref(), Some("77"));
+    assert_eq!(asking_id, None);
+    assert!(asking_deferred);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_artist_with_its_own_genius_id_stays_matched(pool: PgPool) -> anyhow::Result<()> {
+    let artist = seed_artist(&pool, "Nova Quill").await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '55' WHERE id = $1")
+        .bind(artist)
+        .execute(&pool)
+        .await?;
+
+    let attached = identity::attach(&pool, artist, 99, "Nova Quill", 3.0).await?;
+
+    assert!(attached);
+    let kept: Option<String> =
+        sqlx::query_scalar("SELECT genius_artist_id FROM artists WHERE id = $1")
+            .bind(artist)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(kept.as_deref(), Some("55"));
+    Ok(())
+}
