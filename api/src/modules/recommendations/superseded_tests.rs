@@ -14,6 +14,7 @@ const READS_HISTORY_NOT_CANDIDATES: &[&str] = &[
     "smart_wave/graph/load_track_seeds.sql",
     "smart_wave/graph/load_track_seeds_via_album.sql",
     "smart_wave/graph/load_user_seeds.sql",
+    "smart_wave/graph/load_user_seeds_legacy.sql",
     "smart_wave/mod/load_track_meta.sql",
     "similar_wave/load_primary_artist_id.sql",
 ];
