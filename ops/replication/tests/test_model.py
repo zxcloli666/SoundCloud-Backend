@@ -71,12 +71,17 @@ class Model(unittest.TestCase):
         sc["core"]["items"]["columns"][3] = col("last_read_at", "timestamptz", True)
         self.assertProblem("items: column last_read_at is NOT NULL without a default and not in scd_core_pub", sc=sc)
 
-    def test_optimistic_kind_cannot_touch_m(self):
+    def test_kinds_touch_c_p_and_m_only(self):
         s = support.spec()
         s["kinds"]["like.fix"] = {"touches": ["likes"]}
-        self.assertProblem("kind like.fix: touches likes of class M; optimistic kinds only touch C and P tables", s)
+        m = support.build(s)
+        self.assertEqual(m.problems(), [])
+        self.assertTrue(m.held(m.tables["likes"]))
         s["kinds"]["like.fix"]["optimistic"] = False
-        self.assertEqual(problems(s), [])
+        m = support.build(s)
+        self.assertFalse(m.held(m.tables["likes"]))
+        s["kinds"]["mark.fix"] = {"touches": ["marks"]}
+        self.assertProblem("kind mark.fix: touches marks of class A; kinds only touch C, P and M tables", s)
 
     def test_tombstone_without_version_needs_random_id(self):
         sc = support.schema()

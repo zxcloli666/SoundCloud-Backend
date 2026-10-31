@@ -37,8 +37,8 @@ fn process(
     core_down_for: Option<Duration>,
 ) -> anyhow::Result<Arc<AppTokenFallback>> {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
-    let redis = deadpool_redis::Config::from_url(url)
-        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    let redis =
+        deadpool_redis::Config::from_url(url).create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     let sc = ScClient::new(&sc_transport::ScConfig {
         proxy_url: "http://127.0.0.1:1".into(),
         proxy_fallback: false,
@@ -85,9 +85,20 @@ async fn racing_processes_issue_one_token_per_app(pool: PgPool) -> anyhow::Resul
         process(&pool, &auth_base, Some(CORE_DOWN_FOR))?,
     ];
 
-    join_all(processes.iter().cycle().take(40).map(|process| process.top_up())).await;
+    join_all(
+        processes
+            .iter()
+            .cycle()
+            .take(40)
+            .map(|process| process.top_up()),
+    )
+    .await;
     for process in &processes {
-        process.clock.lock().unwrap_or_else(|error| error.into_inner()).probed_at = None;
+        process
+            .clock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .probed_at = None;
     }
     join_all(processes.iter().map(|process| process.top_up())).await;
 
@@ -97,7 +108,11 @@ async fn racing_processes_issue_one_token_per_app(pool: PgPool) -> anyhow::Resul
     }
     let served = OAuthAppTokenService::new(pool.clone()).snapshot().await?;
     assert_eq!(served.len(), apps.len());
-    assert!(served.iter().all(|token| token.access_token.starts_with("fallback-")));
+    assert!(
+        served
+            .iter()
+            .all(|token| token.access_token.starts_with("fallback-"))
+    );
     Ok(())
 }
 

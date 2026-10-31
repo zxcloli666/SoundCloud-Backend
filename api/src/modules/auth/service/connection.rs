@@ -234,7 +234,11 @@ impl AuthService {
         let now = Utc::now();
         Ok((state.access_token == rejected_access_token
             && state.last_refresh_error_kind.as_deref() == Some("token_rejected"))
-        .then(|| state.retry_at_unix_ms.and_then(DateTime::from_timestamp_millis))
+        .then(|| {
+            state
+                .retry_at_unix_ms
+                .and_then(DateTime::from_timestamp_millis)
+        })
         .flatten()
         .filter(|retry_at| *retry_at > now)
         .map(|retry_at| seconds_until(retry_at, now)))
@@ -263,7 +267,7 @@ impl AuthService {
         if retry_pending(&connection) {
             return Ok(attempt(retry_outcome(&connection), connection));
         }
-        let reply = self
+        let reply = match self
             .core
             .refresh(&RefreshRequest {
                 connection_id: connection.id,
@@ -271,7 +275,13 @@ impl AuthService {
                 hold: false,
             })
             .await
-            .map_err(|_| AppError::soundcloud_temporarily_unavailable())?;
+        {
+            Ok(reply) => reply,
+            Err(_) if lease_active(&connection) => {
+                return Ok(attempt(RefreshOutcome::InProgress, connection));
+            }
+            Err(_) => return Err(AppError::soundcloud_temporarily_unavailable()),
+        };
         Ok(RefreshAttempt {
             outcome: reply.outcome,
             connection: Some(match reply.connection {
@@ -435,14 +445,18 @@ fn at(unix_ms: Option<i64>) -> Option<DateTime<Utc>> {
     unix_ms.and_then(DateTime::from_timestamp_millis)
 }
 
+fn lease_active(connection: &SoundCloudConnection) -> bool {
+    refresh_lease_active(
+        connection.refresh_lease_id,
+        connection.refresh_lease_expires_at,
+    )
+}
+
 fn retry_pending(connection: &SoundCloudConnection) -> bool {
     refresh_retry_pending(connection.retry_at)
 }
 
-fn refresh_lease_active(
-    lease_id: Option<Uuid>,
-    lease_expires_at: Option<DateTime<Utc>>,
-) -> bool {
+fn refresh_lease_active(lease_id: Option<Uuid>, lease_expires_at: Option<DateTime<Utc>>) -> bool {
     lease_id.is_some() && lease_expires_at.is_some_and(|expires_at| expires_at > Utc::now())
 }
 

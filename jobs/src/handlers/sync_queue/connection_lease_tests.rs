@@ -48,6 +48,44 @@ async fn claim(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<(Uuid, i64)>> {
     Ok(claimed.map(|generation| (lease, generation)))
 }
 
+async fn login(pool: &PgPool, id: Uuid, pair: &str, version: Option<i64>) -> anyhow::Result<bool> {
+    let mut transaction = pool.begin().await?;
+    let (next, app): (i64, Uuid) = sqlx::query_as(
+        "SELECT public.scd_hlc(token_v), oauth_app_id FROM soundcloud_connections WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let (access_token, refresh_token) = (format!("{pair}-access"), format!("{pair}-refresh"));
+    let installed = wt::call(
+        &mut transaction,
+        &wt::ConnectionLogin {
+            connection_id: id,
+            soundcloud_user_id: "42",
+            username: None,
+            oauth_app_id: app,
+            access_token: &access_token,
+            refresh_token: &refresh_token,
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            scope: "",
+            login_v: version.unwrap_or(next),
+            at: wt::now(),
+        },
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(installed)
+}
+
+async fn pair(pool: &PgPool, id: Uuid) -> anyhow::Result<(String, String, Option<Uuid>)> {
+    Ok(sqlx::query_as(
+        "SELECT access_token, refresh_token, refresh_lease_id FROM soundcloud_connections WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?)
+}
+
 async fn reject(pool: &PgPool, id: Uuid) -> anyhow::Result<(String, Option<DateTime<Utc>>)> {
     let (lease, generation) = claim(pool, id).await?.expect("claim succeeds");
     sqlx::query_file!(
@@ -149,16 +187,7 @@ async fn a_delayed_snapshot_cannot_rotate_a_newer_token(pool: PgPool) -> anyhow:
 async fn a_stale_failure_cannot_overwrite_a_new_login(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
     let (lease, generation) = claim(&pool, id).await?.expect("claim succeeds");
-    sqlx::query(
-        "UPDATE soundcloud_connections
-         SET access_token = 'login-access', refresh_token = 'login-refresh',
-             refresh_generation = refresh_generation + 1,
-             refresh_lease_id = NULL, refresh_lease_expires_at = NULL
-         WHERE id = $1",
-    )
-    .bind(id)
-    .execute(&pool)
-    .await?;
+    assert!(login(&pool, id, "login", None).await?);
 
     let failed = sqlx::query_file!(
         "queries/sync_queue/connection/fail_reauthorization.sql",
@@ -172,6 +201,69 @@ async fn a_stale_failure_cannot_overwrite_a_new_login(pool: PgPool) -> anyhow::R
 
     assert_eq!(failed.rows_affected(), 0);
     assert_eq!(state(&pool, id).await?.0, "");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_login_during_a_refresh_wins_over_the_refresh_result(pool: PgPool) -> anyhow::Result<()> {
+    let id = connection(&pool).await?;
+    let (lease, generation) = claim(&pool, id).await?.expect("claim succeeds");
+    assert!(login(&pool, id, "login", None).await?);
+
+    let stale = sqlx::query_file_scalar!(
+        "queries/sync_queue/connection/complete_refresh.sql",
+        id,
+        lease,
+        generation,
+        "stale-access",
+        "stale-refresh",
+        Utc::now() + chrono::Duration::hours(1),
+        ""
+    )
+    .fetch_optional(&pool)
+    .await?;
+
+    assert!(stale.is_none());
+    assert_eq!(
+        pair(&pool, id).await?,
+        ("login-access".to_owned(), "login-refresh".to_owned(), None)
+    );
+    let (lease, generation) = claim(&pool, id)
+        .await?
+        .expect("the login pair refreshes again");
+    let fresh = sqlx::query_file_scalar!(
+        "queries/sync_queue/connection/complete_refresh.sql",
+        id,
+        lease,
+        generation,
+        "next-access",
+        "next-refresh",
+        Utc::now() + chrono::Duration::hours(1),
+        ""
+    )
+    .fetch_optional(&pool)
+    .await?;
+    assert_eq!(fresh.as_deref(), Some("next-access"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_older_login_never_replaces_a_newer_one(pool: PgPool) -> anyhow::Result<()> {
+    let id = connection(&pool).await?;
+    let older: i64 = sqlx::query_scalar("SELECT public.scd_clock()")
+        .fetch_one(&pool)
+        .await?;
+    assert!(login(&pool, id, "newer", None).await?);
+    let version: (i64, i64) =
+        sqlx::query_as("SELECT login_v, token_v FROM soundcloud_connections WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+
+    assert!(!login(&pool, id, "older", Some(older)).await?);
+
+    assert_eq!(version.0, version.1);
+    assert_eq!(pair(&pool, id).await?.0, "newer-access");
     Ok(())
 }
 

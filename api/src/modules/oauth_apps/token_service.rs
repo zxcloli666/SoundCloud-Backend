@@ -52,6 +52,7 @@ pub struct OAuthAppTokenService {
 }
 
 impl OAuthAppTokenService {
+    #[cfg(test)]
     pub fn new(pg: PgPool) -> Arc<Self> {
         Self::build(pg, None)
     }

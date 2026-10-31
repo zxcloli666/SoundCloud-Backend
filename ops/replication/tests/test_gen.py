@@ -119,6 +119,17 @@ class Generated(unittest.TestCase):
         self.assertIn("created_at = CASE WHEN ((NEW.wanted_v & 15) <> public.scd_node_ord() OR NEW.wanted_v = o.wanted_v) THEN least(o.created_at, NEW.created_at)", body)
         self.assertIn("pg_catalog.set_config('scd.merging', 'on', true)", body)
 
+    def test_optimistic_m_kind_holds_core_images_and_keeps_its_version(self):
+        text = self.files["triggers.sql"]
+        merge = text[text.index("FUNCTION public.scd_merge_soundcloud_connections()"):text.index("TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.soundcloud_connections")]
+        hold = merge.index("    IF NOT core THEN\n        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'soundcloud_connections' AND p.pk = jsonb_build_object('id', NEW.id)) THEN\n            RETURN NULL;")
+        self.assertLess(hold, merge.index("pv := "))
+        self.assertNotIn("cmd_pending", text[text.index("FUNCTION public.scd_merge_user_likes_tracks()"):text.index("TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_tracks")])
+        self.assertRegex(text, r"zz_guard_result [^;]* ON public\.soundcloud_connections [^;]*scd_guard\('public\.scd_guard_result_soundcloud_connections', 'cmd', 'migration', 'repl'\)")
+        self.assertRegex(text, r"zz_guard_result [^;]* ON public\.user_likes_tracks [^;]*scd_guard\('public\.scd_guard_result_user_likes_tracks', 'migration', 'repl'\)")
+        ver = text[text.index("FUNCTION public.scd_ver_soundcloud_connections()"):text.index("TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.soundcloud_connections")]
+        self.assertIn("AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.token_v > greatest(OLD.token_v, ", ver)
+
     def test_replica_inserts_merge_inside_the_trigger(self):
         text = self.files["triggers.sql"]
         for fn in ("scd_merge_disliked_tracks", "scd_merge_user_likes_tracks", "scd_max_sc_track_counters",

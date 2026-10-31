@@ -38,9 +38,9 @@ async fn rejected_login(pool: &PgPool, user: &str) -> anyhow::Result<(Uuid, Uuid
     sqlx::query(
         "INSERT INTO soundcloud_connections (
              id, soundcloud_user_id, oauth_app_id, access_token, refresh_token, expires_at, scope,
-             last_refresh_error_kind, refresh_rejection_count, retry_at
+             last_refresh_error_kind, refresh_rejection_count, first_refresh_rejection_at, retry_at
          ) VALUES ($1, $2, $3, 'old-access', 'old-refresh', now() - interval '1 hour', '',
-                   'reauthorization_required', 3, now() + interval '1 hour')",
+                   'reauthorization_required', 3, now() - interval '1 hour', now() + interval '1 hour')",
     )
     .bind(connection)
     .bind(user)
@@ -101,43 +101,52 @@ async fn connection_of(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<Uu
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_new_login_gives_every_session_of_the_account_a_clean_connection(
+async fn a_relogin_renews_the_connection_every_session_of_the_account_uses(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (app, old) = rejected_login(&pool, "42").await?;
     let target = session(&pool, old).await?;
     let linked = session(&pool, old).await?;
+    let before: i64 =
+        sqlx::query_scalar("SELECT refresh_generation FROM soundcloud_connections WHERE id = $1")
+            .bind(old)
+            .fetch_one(&pool)
+            .await?;
 
     let stored = relogin(&pool, app, target, "42").await?;
 
-    let fresh = stored.connection;
-    assert_ne!(fresh.id, old);
-    assert_eq!(stored.orphan_candidate, Some(old));
-    assert!(fresh.last_refresh_error_kind.is_none());
-    assert!(fresh.retry_at.is_none());
-    assert_eq!(fresh.access_token, "new-access");
-    assert_eq!(connection_of(&pool, target).await?, Some(fresh.id));
-    assert_eq!(connection_of(&pool, linked).await?, Some(fresh.id));
-    let old_kind: Option<String> = sqlx::query_scalar(
-        "SELECT last_refresh_error_kind FROM soundcloud_connections WHERE id = $1",
+    let renewed = stored.connection;
+    assert_eq!(renewed.id, old);
+    assert_eq!(stored.orphan_candidate, None);
+    assert_eq!(renewed.access_token, "new-access");
+    assert!(renewed.last_refresh_error_kind.is_none());
+    assert!(renewed.retry_at.is_none());
+    assert_eq!(renewed.refresh_generation, before + 1);
+    assert_eq!(connection_of(&pool, target).await?, Some(old));
+    assert_eq!(connection_of(&pool, linked).await?, Some(old));
+    let (refresh_token, login_v, token_v, rows): (String, i64, i64, i64) = sqlx::query_as(
+        "SELECT refresh_token, login_v, token_v, (SELECT count(*) FROM soundcloud_connections)
+         FROM soundcloud_connections WHERE id = $1",
     )
     .bind(old)
     .fetch_one(&pool)
     .await?;
-    assert_eq!(old_kind.as_deref(), Some("reauthorization_required"));
+    assert_eq!(refresh_token, "new-refresh");
+    assert!(login_v > 0);
+    assert_eq!(login_v, token_v);
+    assert_eq!(rows, 1);
     Ok(())
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn a_login_as_another_account_leaves_linked_sessions_alone(
-    pool: PgPool,
-) -> anyhow::Result<()> {
+async fn a_login_as_another_account_gets_its_own_connection(pool: PgPool) -> anyhow::Result<()> {
     let (app, old) = rejected_login(&pool, "42").await?;
     let target = session(&pool, old).await?;
     let linked = session(&pool, old).await?;
 
     let stored = relogin(&pool, app, target, "77").await?;
 
+    assert_ne!(stored.connection.id, old);
     assert_eq!(stored.orphan_candidate, Some(old));
     assert_eq!(connection_of(&pool, linked).await?, Some(old));
     Ok(())

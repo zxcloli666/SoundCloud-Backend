@@ -53,7 +53,11 @@ impl AuthRpc {
         })
     }
 
-    pub async fn serve(self: Arc<Self>, bus: Bus, cancellation: CancellationToken) -> anyhow::Result<()> {
+    pub async fn serve(
+        self: Arc<Self>,
+        bus: Bus,
+        cancellation: CancellationToken,
+    ) -> anyhow::Result<()> {
         let refresh = self.clone();
         let app_token = self;
         tokio::try_join!(
@@ -84,7 +88,9 @@ impl AuthRpc {
     pub async fn refresh(&self, request: RefreshRequest) -> anyhow::Result<RefreshReply> {
         let turn = self.turns.of(request.connection_id);
         let Ok(_turn) = tokio::time::timeout(TURN_WAIT, turn.lock()).await else {
-            return self.reply(request.connection_id, RefreshOutcome::InProgress, None).await;
+            return self
+                .reply(request.connection_id, RefreshOutcome::InProgress, None)
+                .await;
         };
         let Some(connection) = self.connections.load_by_id(request.connection_id).await? else {
             return Ok(RefreshReply {
@@ -100,7 +106,11 @@ impl AuthRpc {
         if request.hold {
             if rejected {
                 self.connections
-                    .mark_rejected(&connection, &connection.access_token, REJECTED_TOKEN_RETRY_SECONDS)
+                    .mark_rejected(
+                        &connection,
+                        &connection.access_token,
+                        REJECTED_TOKEN_RETRY_SECONDS,
+                    )
                     .await?;
             }
             let outcome = self.settled(connection.id).await?;
@@ -118,10 +128,13 @@ impl AuthRpc {
             connection
         };
         if connection.token_is_usable() && !refresh_due(&connection) {
-            return self.reply(connection.id, RefreshOutcome::AlreadyFresh, None).await;
+            return self
+                .reply(connection.id, RefreshOutcome::AlreadyFresh, None)
+                .await;
         }
         let connection_id = connection.id;
-        let (outcome, retry_after) = match self.connections.refresh(&self.client, connection).await {
+        let (outcome, retry_after) = match self.connections.refresh(&self.client, connection).await
+        {
             Ok(_) => (RefreshOutcome::Refreshed, None),
             Err(ConnectionError::ReauthorizationRequired) => {
                 (RefreshOutcome::ReauthorizationRequired, None)
@@ -134,7 +147,10 @@ impl AuthRpc {
             }) => (RefreshOutcome::RateLimited, Some(retry_after_seconds)),
             Err(ConnectionError::TemporarilyUnavailable {
                 retry_after_seconds,
-            }) => (self.settled(connection_id).await?, Some(retry_after_seconds)),
+            }) => (
+                self.settled(connection_id).await?,
+                Some(retry_after_seconds),
+            ),
             Err(ConnectionError::Database(error)) => return Err(error.into()),
         };
         self.reply(connection_id, outcome, retry_after).await

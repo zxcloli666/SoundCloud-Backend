@@ -38,7 +38,6 @@ fn connection(expires_at: DateTime<Utc>) -> SoundCloudConnection {
         soundcloud_user_id: "42".to_owned(),
         oauth_app_id: Some(TEST_OAUTH_APP_ID),
         access_token: "access".to_owned(),
-        refresh_token: "refresh".to_owned(),
         expires_at,
         scope: String::new(),
         refresh_generation: 1,
@@ -212,7 +211,7 @@ fn a_new_login_asked_for_a_gone_app_names_the_app() {
     let attempt = RefreshAttempt {
         outcome: RefreshOutcome::ReauthorizationRequired,
         connection: Some(connection),
-       retry_after_sec: None,
+        retry_after_sec: None,
     };
 
     let response = attempt.response();
@@ -232,7 +231,7 @@ fn confirmed_rejection_disables_soundcloud_without_removing_the_session() {
     let attempt = RefreshAttempt {
         outcome: RefreshOutcome::ReauthorizationRequired,
         connection: Some(connection),
-       retry_after_sec: None,
+        retry_after_sec: None,
     };
 
     let response = attempt.response();

@@ -5,8 +5,8 @@ mod sqlx_pg;
 pub mod tokio_pg;
 
 pub use kinds::{
-    AlbumSlot, AppTokenReject, ColdRefreshClear, ConnectionDropOrphan, Enqueued, EnqueuedJob,
-    JobEnqueue, Kind, LyricsWake, LyricsWakeState, MatchAlbumTrack, MatchGeniusSong,
+    AlbumSlot, AppTokenReject, ColdRefreshClear, ConnectionDropOrphan, ConnectionLogin, Enqueued,
+    EnqueuedJob, JobEnqueue, Kind, LyricsWake, LyricsWakeState, MatchAlbumTrack, MatchGeniusSong,
     MatchScAccount, MatchWantedLink, Mode, ObserveClaim, ObservePlaylists, ObserveProfile,
     ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack, ObservedUser, SyncQueuePurge,
     SyncQueueRevive, TrackStorageLost,

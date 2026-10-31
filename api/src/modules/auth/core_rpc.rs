@@ -29,7 +29,10 @@ impl CoreRpc {
         Arc::new(Self { nats: None })
     }
 
-    pub async fn refresh(&self, request: &RefreshRequest) -> Result<RefreshReply, NatsRequestError> {
+    pub async fn refresh(
+        &self,
+        request: &RefreshRequest,
+    ) -> Result<RefreshReply, NatsRequestError> {
         self.request(AUTH_REFRESH_SUBJECT, request, REFRESH_TIMEOUT)
             .await
     }

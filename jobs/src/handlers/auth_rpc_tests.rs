@@ -44,10 +44,12 @@ async fn token(State(endpoint): State<TokenEndpoint>) -> Response {
 
 async fn rpc(pool: &PgPool, answer: Answer) -> anyhow::Result<(Arc<AuthRpc>, Arc<AtomicUsize>)> {
     let calls = Arc::new(AtomicUsize::new(0));
-    let app = Router::new().route("/token", post(token)).with_state(TokenEndpoint {
-        calls: calls.clone(),
-        answer,
-    });
+    let app = Router::new()
+        .route("/token", post(token))
+        .with_state(TokenEndpoint {
+            calls: calls.clone(),
+            answer,
+        });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     tokio::spawn(async move { axum::serve(listener, app).await });
@@ -127,7 +129,11 @@ async fn parallel_refreshes_spend_the_refresh_token_once(pool: PgPool) -> anyhow
         reply.outcome,
         RefreshOutcome::Refreshed | RefreshOutcome::AlreadyFresh
     )));
-    assert!(replies.iter().all(|reply| token_of(reply) == Some("new-access-1")));
+    assert!(
+        replies
+            .iter()
+            .all(|reply| token_of(reply) == Some("new-access-1"))
+    );
     let stored: String =
         sqlx::query_scalar("SELECT refresh_token FROM soundcloud_connections WHERE id = $1")
             .bind(connection_id)
@@ -145,7 +151,11 @@ async fn a_rejected_token_is_replaced_once(pool: PgPool) -> anyhow::Result<()> {
     let replies = many(&rpc, 20, request(connection_id, Some("old-access"), false)).await?;
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(replies.iter().all(|reply| token_of(reply) == Some("new-access-1")));
+    assert!(
+        replies
+            .iter()
+            .all(|reply| token_of(reply) == Some("new-access-1"))
+    );
     Ok(())
 }
 
@@ -174,7 +184,10 @@ async fn hold_marks_the_token_and_names_the_retry(pool: PgPool) -> anyhow::Resul
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(reply.outcome, RefreshOutcome::RetryLater);
     let state = reply.connection.expect("state comes back");
-    assert_eq!(state.last_refresh_error_kind.as_deref(), Some("token_rejected"));
+    assert_eq!(
+        state.last_refresh_error_kind.as_deref(),
+        Some("token_rejected")
+    );
     let retry_in = state.retry_at_unix_ms.expect("retry is set") - Utc::now().timestamp_millis();
     assert!((280_000..=301_000).contains(&retry_in));
     Ok(())

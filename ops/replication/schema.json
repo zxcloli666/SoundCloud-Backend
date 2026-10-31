@@ -1809,6 +1809,7 @@
     {"default": null, "generated": false, "name": "last_refresh_error", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "last_refresh_error_kind", "notnull": false, "type": "character varying(32)"},
     {"default": null, "generated": false, "name": "last_refresh_success_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": "0", "generated": false, "name": "login_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "oauth_app_id", "notnull": false, "type": "uuid"},
     {"default": "0", "generated": false, "name": "refresh_failure_count", "notnull": true, "type": "integer"},
     {"default": "1", "generated": false, "name": "refresh_generation", "notnull": true, "type": "bigint"},

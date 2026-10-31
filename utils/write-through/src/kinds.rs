@@ -19,7 +19,7 @@ pub use observe::{
     ObservedTrack, ObservedUser,
 };
 pub use storage::TrackStorageLost;
-pub use sync_queue::{ConnectionDropOrphan, SyncQueuePurge, SyncQueueRevive};
+pub use sync_queue::{ConnectionDropOrphan, ConnectionLogin, SyncQueuePurge, SyncQueueRevive};
 
 pub trait Kind: Serialize + Debug + Sync {
     const NAME: &'static str;

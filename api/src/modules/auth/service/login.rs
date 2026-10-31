@@ -16,10 +16,10 @@ use crate::modules::auth::model::{LoginRequest, SoundCloudConnection};
 use crate::sc::{ScMe, ScReadService, ScTokenResponse};
 
 use super::AuthService;
-use super::replica::Feed;
 use super::oauth::{
     access_token_expiry, access_token_subject, oauth_app_failure_cooldown, public_error_message,
 };
+use super::replica::Feed;
 
 pub(super) const LOGIN_REQUEST_TTL_SECS: i64 = 15 * 60;
 pub(super) const MAX_AUTH_RETRIES: i32 = 3;
@@ -406,6 +406,43 @@ impl AuthService {
         };
 
         let previous_connection_id = target.as_ref().and_then(|row| row.soundcloud_connection_id);
+        if let Some(previous) = previous_connection_id {
+            let locked =
+                sqlx::query_file!("queries/auth/service/lock_connection_user.sql", previous)
+                    .fetch_optional(&mut **transaction)
+                    .await?;
+            if let Some(locked) = locked.filter(|row| row.soundcloud_user_id == soundcloud_user_id)
+            {
+                wt::call(
+                    transaction,
+                    &wt::ConnectionLogin {
+                        connection_id: previous,
+                        soundcloud_user_id,
+                        username,
+                        oauth_app_id,
+                        access_token: &token.access_token,
+                        refresh_token: &token.refresh_token,
+                        expires_at,
+                        scope: &token.scope,
+                        login_v: locked.login_v,
+                        at: wt::now(),
+                    },
+                )
+                .await?;
+                let connection = sqlx::query_file_as!(
+                    SoundCloudConnection,
+                    "queries/auth/service/get_connection_by_id.sql",
+                    previous
+                )
+                .fetch_one(&mut **transaction)
+                .await?;
+                return Ok(StoredConnection {
+                    connection,
+                    orphan_candidate: None,
+                });
+            }
+        }
+
         let connection = sqlx::query_file_as!(
             SoundCloudConnection,
             "queries/auth/service/insert_connection.sql",
@@ -420,23 +457,6 @@ impl AuthService {
         )
         .fetch_one(&mut **transaction)
         .await?;
-        if let Some(previous) = previous_connection_id {
-            let previous_user = sqlx::query_file_scalar!(
-                "queries/auth/service/lock_connection_user.sql",
-                previous
-            )
-            .fetch_optional(&mut **transaction)
-            .await?;
-            if previous_user.as_deref() == Some(soundcloud_user_id) {
-                sqlx::query_file!(
-                    "queries/auth/service/move_connection_sessions.sql",
-                    previous,
-                    connection.id
-                )
-                .execute(&mut **transaction)
-                .await?;
-            }
-        }
         Ok(StoredConnection {
             connection,
             orphan_candidate: previous_connection_id,
@@ -639,7 +659,7 @@ fn normalize_login_profile(mut value: Value, user_id: &str) -> Option<Value> {
 }
 
 #[cfg(test)]
-#[path = "relogin_tests.rs"]
+#[path = "../relogin_tests.rs"]
 mod relogin_tests;
 
 #[cfg(test)]

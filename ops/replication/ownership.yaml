@@ -36,6 +36,7 @@ kinds:
   sync_queue.revive: {touches: [sync_queue], optimistic: false, from: "api sync_queue revive_dead, core only"}
   sync_queue.purge: {touches: [sync_queue], optimistic: false, from: "api admin sync_queue purge, core only"}
   connection.drop_orphan: {touches: [soundcloud_connections], optimistic: false, from: "api auth delete_orphan_connection, core only (B6)"}
+  connection.login: {touches: [soundcloud_connections], from: "api auth store_connection, re-login of the same account (B11)"}
 
 tables:
   admin_maintenance_runs: {class: C, note: "jobs writes, api admin reads"}
@@ -172,8 +173,8 @@ tables:
     delete: receipt
     groups:
       token: {owner: both, version: token_v, cols: [soundcloud_user_id, username, created_at, oauth_app_id, access_token, refresh_token, expires_at, scope]}
-      refresh: {owner: core, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at]}
-    note: "token writers: login (api, always a new row; sessions of the same account move to it) and refresh (core only, auth.refresh.v1, B11); orphan delete is a core kind"
+      refresh: {owner: core, cols: [refresh_generation, refresh_failure_count, refresh_lease_id, refresh_lease_expires_at, last_refresh_attempt_at, last_refresh_success_at, last_refresh_error_kind, last_refresh_error, retry_at, refresh_rejection_count, first_refresh_rejection_at, updated_at, login_v]}
+    note: "token writers: first login (api insert), re-login of the same account (connection.login, optimistic, the newest login_v wins on core) and refresh (core only, auth.refresh.v1, B11); orphan delete is a core kind"
 
   cdn_tracks:
     class: A

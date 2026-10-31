@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use uuid::Uuid;
 use write_through as wt;
-use wt::{ConnectionDropOrphan, SyncQueuePurge, SyncQueueRevive};
+use wt::{ConnectionDropOrphan, ConnectionLogin, SyncQueuePurge, SyncQueueRevive};
 
 use crate::harness::Pair;
 
@@ -21,6 +21,14 @@ const CONNECTIONS: &str = "INSERT INTO public.soundcloud_connections (id, soundc
     ('20000000-0000-4000-8000-000000000002', '32', 'kept', 'a2', 'r2', '2026-11-01 00:00:00+00', '');
     INSERT INTO public.sessions (id, soundcloud_connection_id) VALUES
     ('30000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000002')";
+
+const LOGINS: &str = "INSERT INTO public.oauth_apps (id, name, client_id, client_secret, redirect_uri) VALUES
+    ('40000000-0000-4000-8000-000000000001', 'app', 'client', 'secret', 'https://app.test/');
+    INSERT INTO public.soundcloud_connections (id, soundcloud_user_id, username, oauth_app_id, access_token, refresh_token,
+        expires_at, scope, refresh_lease_id, refresh_lease_expires_at, last_refresh_error_kind, refresh_rejection_count, first_refresh_rejection_at, retry_at) VALUES
+    ('20000000-0000-4000-8000-000000000003', '33', 'listener', '40000000-0000-4000-8000-000000000001', 'a3', 'r3',
+     '2026-10-30 00:00:00+00', '', 'aaaaaaaa-0000-4000-8000-000000000003', '2026-10-30 10:01:00+00',
+     'reauthorization_required', 3, '2026-10-30 09:00:00+00', '2026-10-30 11:00:00+00')";
 
 fn at(stamp: &str) -> DateTime<Utc> {
     stamp.parse().unwrap()
@@ -146,5 +154,57 @@ async fn an_orphan_connection_is_purged_on_core_and_a_used_one_stays() {
         .len(),
         2
     );
+    pair.finish().await;
+}
+
+fn login(version: i64, pair: &'static str) -> ConnectionLogin<'static> {
+    ConnectionLogin {
+        connection_id: "20000000-0000-4000-8000-000000000003".parse().unwrap(),
+        soundcloud_user_id: "33",
+        username: None,
+        oauth_app_id: "40000000-0000-4000-8000-000000000001".parse().unwrap(),
+        access_token: pair,
+        refresh_token: pair,
+        expires_at: at("2026-10-30T11:00:00Z"),
+        scope: "*",
+        login_v: version,
+        at: at("2026-10-30T10:00:00Z"),
+    }
+}
+
+async fn login_row(pool: &sqlx::PgPool) -> (String, i64, i64, Option<Uuid>, Option<String>) {
+    sqlx::query_as(
+        "SELECT access_token, login_v, token_v, refresh_lease_id, last_refresh_error_kind
+         FROM public.soundcloud_connections WHERE id = '20000000-0000-4000-8000-000000000003'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_relogin_lands_the_same_on_both_nodes_and_an_older_one_only_touches_the_row() {
+    let pair = Pair::new(LOGINS).await;
+    let older: i64 = sqlx::query_scalar("SELECT public.scd_clock()")
+        .fetch_one(&pair.api)
+        .await
+        .unwrap();
+    let newer: i64 = sqlx::query_scalar(
+        "SELECT public.scd_hlc(token_v) FROM public.soundcloud_connections WHERE id = '20000000-0000-4000-8000-000000000003'",
+    )
+    .fetch_one(&pair.api)
+    .await
+    .unwrap();
+
+    let run = pair.run(&login(newer, "fresh"), &[]).await;
+    assert_eq!(run.assert_same(), json!(true));
+    let landed = login_row(&pair.core).await;
+    assert_eq!(landed, ("fresh".to_owned(), newer, newer, None, None));
+    assert_eq!(login_row(&pair.api).await, landed);
+
+    let run = pair.run(&login(older, "late"), &[]).await;
+    assert_eq!(run.assert_same(), json!(false));
+    assert_eq!(login_row(&pair.core).await, landed);
+    assert_eq!(login_row(&pair.api).await, landed);
     pair.finish().await;
 }

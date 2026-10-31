@@ -185,6 +185,9 @@ class Model:
                 out.append(fk)
         return out
 
+    def held(self, t):
+        return t.cls == "M" and any(k.get("optimistic", True) and t.name in (k.get("touches") or []) for k in self.kinds.values())
+
     def children(self, parent):
         out = []
         for t in self.installed():
@@ -208,8 +211,6 @@ class Model:
                 t = self.tables.get(tname)
                 if not t:
                     out.append("kind %s: touches unknown table %s" % (kind, tname))
-                elif t.cls not in ("C", "P") and k.get("optimistic", True):
-                    out.append("kind %s: touches %s of class %s; optimistic kinds only touch C and P tables" % (kind, tname, t.cls))
                 elif t.cls not in ("C", "P", "M"):
                     out.append("kind %s: touches %s of class %s; kinds only touch C, P and M tables" % (kind, tname, t.cls))
         for pub, p in sorted(self.publications.items()):
