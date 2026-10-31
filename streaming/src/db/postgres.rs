@@ -43,6 +43,14 @@ impl PgPool {
 
 struct Timed(deadpool_postgres::Object);
 
+impl std::ops::Deref for Timed {
+    type Target = deadpool_postgres::Object;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 type Params<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
 
 impl Timed {
