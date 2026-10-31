@@ -2,14 +2,22 @@
 set -euo pipefail
 : "${PSQL:?PSQL required, e.g. PSQL='podman exec -i scd-planfixture-big psql -U soundcloud -d soundcloud_planfixture_big'}"
 PROD_LIKE='{"users":100000,"artists":1200000,"tracks":6600000,"track_artists":3400000,"sc_track_counters":1800000,"user_likes_tracks":1400000,"artist_colike":3000000,"user_events":130000000}'
-OVERRIDES="${OVERRIDES:-$PROD_LIKE}"
+SCANS_LIKE='{"users":100000,"tracks":6600000,"user_likes_tracks":1400000,"user_events":0,"lyrics_cache":1350000,"lyrics_lookup_state":2200000}'
+if [ -n "${SCANS:-}" ]; then
+  OVERRIDES="${OVERRIDES:-$SCANS_LIKE}"
+else
+  OVERRIDES="${OVERRIDES:-$PROD_LIKE}"
+fi
+MAINTENANCE_WORK_MEM="${MAINTENANCE_WORK_MEM:-1GB}"
+TASTE_USERS="${TASTE_USERS:-67000}"
 
 cd "$(git rev-parse --show-toplevel)"
 
 {
   printf "SET planfixture.overrides = %s;\n" "'$OVERRIDES'"
+  printf "SET maintenance_work_mem = %s;\n" "'$MAINTENANCE_WORK_MEM'"
+  printf "SET planfixture.taste_users = %s;\n" "'$TASTE_USERS'"
   cat <<'SQL'
-SET maintenance_work_mem = '1GB';
 SET synchronous_commit = off;
 BEGIN;
 CREATE TEMP TABLE planfixture_indexes AS
@@ -32,6 +40,9 @@ $$;
 COMMIT;
 SQL
   cat scripts/seed-plan-fixtures.sql
+  if [ -n "${SCANS:-}" ]; then
+    cat scripts/seed-plan-fixtures-scans.sql
+  fi
   cat <<'SQL'
 SELECT indexdef FROM planfixture_indexes ORDER BY tablename, indexname
 \gexec
