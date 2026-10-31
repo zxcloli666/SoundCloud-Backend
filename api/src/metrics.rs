@@ -16,6 +16,9 @@ const SC_FAILURES: &str = "api_sc_failures_total";
 const SC_RETRY_AFTER: &str = "api_sc_retry_after_seconds";
 const TASTE_VECTOR_READ_ERRORS: &str = "api_taste_vector_read_errors_total";
 const ARTIST_TRACKS_CACHE: &str = "api_artist_top_tracks_cache_total";
+const CACHE_LOOKUPS: &str = "api_cache_lookups_total";
+const CACHE_ENTRIES: &str = "api_cache_entries";
+const CACHE_WEIGHT: &str = "api_cache_weight";
 const PG_BACKENDS: &str = "api_pg_backends";
 const PG_TRANSACTIONS: &str = "api_pg_transactions_total";
 const PG_DEADLOCKS: &str = "api_pg_deadlocks_total";
@@ -176,6 +179,22 @@ pub fn record_artist_tracks_cache(hit: bool) {
     }
     let result = if hit { "hit" } else { "miss" };
     metrics::counter!(ARTIST_TRACKS_CACHE, "result" => result).increment(1);
+}
+
+pub fn record_cache(cache: &'static str, hit: bool) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    let result = if hit { "hit" } else { "miss" };
+    metrics::counter!(CACHE_LOOKUPS, "cache" => cache, "result" => result).increment(1);
+}
+
+pub fn set_cache_size(cache: &'static str, entries: u64, weight: u64) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::gauge!(CACHE_ENTRIES, "cache" => cache).set(entries as f64);
+    metrics::gauge!(CACHE_WEIGHT, "cache" => cache).set(weight as f64);
 }
 
 pub fn record_taste_vector_read_error() {
