@@ -60,26 +60,8 @@ impl PlaylistMutations {
         membership: Option<(MembershipRequest, Uuid)>,
     ) -> AppResult<PlaylistMutationOutcome> {
         let target = target_urn(target)?;
+        let observation = catalog_ingest::Observation::begin(&self.pg).await?;
         let mut tx = self.begin(&target).await?;
-        if let Some(metadata) = metadata {
-            self.queue
-                .enqueue_on(
-                    &mut tx,
-                    user,
-                    "playlist_update",
-                    &target,
-                    Some(metadata.body()),
-                )
-                .await?;
-            let pending = sqlx::query_file_scalar!(
-                "queries/playlists/service/pending_update.sql",
-                extract_sc_id(user),
-                &target
-            )
-            .fetch_one(&mut *tx)
-            .await?;
-            PlaylistUpdate::parse(&pending).map_err(AppError::bad_request)?;
-        }
         sqlx::query_file_scalar!("queries/playlists/service/lock_membership.sql", &target)
             .fetch_optional(&mut *tx)
             .await?;
@@ -109,17 +91,33 @@ impl PlaylistMutations {
             None => None,
         };
         if let Some(metadata) = metadata {
-            let changed = sqlx::query_file_scalar!(
-                "queries/playlists/service/apply_update.sql",
-                &target,
-                extract_sc_id(user),
-                metadata.desired()
-            )
-            .fetch_optional(&mut *tx)
-            .await?;
-            if changed.is_none() {
+            let edit = wt::PlaylistEdit {
+                urn: target.clone(),
+                owner: extract_sc_id(user).to_owned(),
+                desired: metadata.desired().clone(),
+                observation: observation.sequence(),
+                at: wt::now(),
+            };
+            if wt::call(&mut tx, &edit).await?.is_none() {
                 return Err(AppError::not_found("Playlist not found"));
             }
+            self.queue
+                .enqueue_on(
+                    &mut tx,
+                    user,
+                    "playlist_update",
+                    &target,
+                    Some(metadata.body()),
+                )
+                .await?;
+            let pending = sqlx::query_file_scalar!(
+                "queries/playlists/service/pending_update.sql",
+                extract_sc_id(user),
+                &target
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            PlaylistUpdate::parse(&pending).map_err(AppError::bad_request)?;
         }
         tx.commit().await?;
         Ok(PlaylistMutationOutcome {
@@ -135,7 +133,22 @@ impl PlaylistMutations {
 
     async fn delete_once(&self, user: &str, target: &str) -> AppResult<Value> {
         let target = target_urn(target)?;
+        let observation = catalog_ingest::Observation::begin(&self.pg).await?;
         let mut tx = self.begin(&target).await?;
+        let delete = wt::PlaylistDelete {
+            urn: target.clone(),
+            owner: extract_sc_id(user).to_owned(),
+            observation: observation.sequence(),
+            at: wt::now(),
+        };
+        if wt::call(&mut tx, &delete).await?.is_none() {
+            return Err(AppError::not_found("Playlist not found"));
+        }
+        let owned = wt::OwnedDelete::Playlist {
+            variants: crate::common::sc_ids::user_id_variants(user),
+            playlist_urn: target.clone(),
+        };
+        wt::call(&mut tx, &owned).await?;
         sqlx::query_file!(
             "queries/playlists/service/cancel_updates.sql",
             extract_sc_id(user),
@@ -146,29 +159,6 @@ impl PlaylistMutations {
         self.queue
             .enqueue_on(&mut tx, user, "playlist_delete", &target, None)
             .await?;
-        sqlx::query_file_scalar!("queries/playlists/service/lock_membership.sql", &target)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let changed = sqlx::query_file_scalar!(
-            "queries/playlists/service/apply_delete.sql",
-            &target,
-            extract_sc_id(user)
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-        if changed.is_none() {
-            return Err(AppError::not_found("Playlist not found"));
-        }
-        sqlx::query_file!("queries/playlists/service/retire_membership.sql", &target)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query_file!(
-            "queries/playlists/service/delete_owned.sql",
-            &crate::common::sc_ids::user_id_variants(user),
-            &target
-        )
-        .execute(&mut *tx)
-        .await?;
         tx.commit().await?;
         Ok(json!({"status": "queued", "actionType": "playlist_delete", "targetUrn": target}))
     }

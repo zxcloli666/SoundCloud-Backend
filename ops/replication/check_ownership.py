@@ -42,6 +42,17 @@ def code_violations(m, statements):
         for verb, name in o["ops"]:
             for t in tables_of(o, name, known):
                 out |= statement_rules(known[t], verb, o, where, api_side)
+        out |= key_moves(m, o.get("assigned", []), where, lambda name: tables_of(o, name, known))
+    return out
+
+
+def key_moves(m, assigned, where, resolve):
+    out = set()
+    for name, col in assigned:
+        for tname in resolve(name):
+            t = m.tables[tname]
+            if t.cls == "C" and m.held(t) and col in t.pk:
+                out.add(("c-key-update", where, tname))
     return out
 
 
@@ -102,6 +113,7 @@ def kind_violations(m, migrations):
         for flag, rule in (("skip_locked", "kind-skip-locked"), ("for_update", "kind-for-update"), ("limit", "kind-limit")):
             if a[flag]:
                 out.add((rule, where, kind))
+        out |= key_moves(m, a["assigned"], where, lambda name: [name] if name in m.tables else [])
         touches = set(m.kinds[kind].get("touches") or [])
         for t in a["writes"]:
             if t in m.tables and t not in touches and m.tables[t].cls not in ("L", "X"):
@@ -177,6 +189,7 @@ def explain(rule):
         "kind-for-update": "kinds are key-addressed, no FOR UPDATE",
         "kind-limit": "kinds are key-addressed, no LIMIT",
         "kind-touch": "kind writes a table missing from its touches list",
+        "c-key-update": "an UPDATE moves a C row an optimistic kind touches to another key; an api node that holds or lacks the old key loses the new one, write a delete and an insert",
     }[rule]
 
 

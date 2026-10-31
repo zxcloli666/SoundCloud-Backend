@@ -72,6 +72,20 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              progress boolean NOT NULL DEFAULT false,
              synced_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE TABLE tracks (
+             sc_track_id text PRIMARY KEY,
+             urn text NOT NULL,
+             sc_desired jsonb NOT NULL DEFAULT '{}',
+             deleted_at timestamptz
+         );
+         CREATE TABLE playlists (
+             urn text PRIMARY KEY,
+             sc_desired jsonb NOT NULL DEFAULT '{}',
+             deleted_at timestamptz
+         );
+         CREATE TABLE playlist_membership_state (
+             playlist_urn text PRIMARY KEY
          );",
     )
     .execute(pool)

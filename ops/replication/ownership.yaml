@@ -46,9 +46,9 @@ tables:
   artist_attribution_revalidation: {class: C, note: "singleton written by the artist flag trigger and the walker; trigger role-gated (R8)"}
   artist_colike: {class: C, hold: "replicated by scd_graph_pub until A6, then into scd_core_pub"}
   artist_coplay: {class: C}
-  artist_sc_accounts: {class: C, derived: {artist_sc_account_flag_trg: {writes: [artists.has_sc_account]}}}
+  artist_sc_accounts: {class: C, reassert: always, derived: {artist_sc_account_flag_trg: {writes: [artists.has_sc_account]}}}
   artist_socials: {class: C}
-  artists: {class: C}
+  artists: {class: C, reassert: always, note: "merges and external ids move unique values between artists"}
   background_job_failures: {class: C, note: "jobs writes, api status reads"}
   catalog_audience: {class: C}
   catalog_collection_sync: {class: C}
@@ -59,24 +59,28 @@ tables:
     columns: {kind: text, dedup_key: text, state: "text NOT NULL", available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
     note: "jobs writes on state change of the 3 kinds the api reads"
   lyrics_cache: {class: C, derived: {lyrics_cache_fts_trg: {writes: [lyrics_cache.fts]}}}
-  lyrics_lookup_state: {class: C, note: "rows come from the tracks derived trigger on core; api only through lyrics.wake"}
+  lyrics_lookup_state:
+    class: C
+    unique: {lyrics_lookup_state_sc_track_id_key: key}
+    note: "rows come from the tracks derived trigger on core; api only through lyrics.wake; track_id and sc_track_id are one tracks row"
   oauth_app_tokens: {class: C}
-  playlist_membership_operations: {class: C, note: "core assigns sequence and runs the acceptance check (was mixed)"}
+  playlist_membership_operations: {class: C, reassert: always, note: "core assigns sequence and runs the acceptance check (was mixed)"}
   playlist_membership_state: {class: C}
   playlist_remote_observations: {class: C}
   playlist_remote_snapshots: {class: C, note: "C, not P: the C tables playlist_remote_observations and playlist_legacy_membership_intents reference it (B2)"}
-  playlist_track_projection: {class: C}
+  playlist_track_projection: {class: C, reassert: always, note: "rows are rewritten per playlist, a track moves between positions"}
   playlist_legacy_membership_intents: {class: C}
-  playlists: {class: C, local: [last_read_at], note: "last_read_at moves to entity_reads (B5a)"}
+  playlists: {class: C, local: [last_read_at], unique: {playlists_sc_playlist_id_key: key}, note: "last_read_at moves to entity_reads (B5a)"}
   search_terms: {class: C}
   discover_tag_counts: {class: C}
   sync_queue_action_pauses: {class: C}
   taste_model_versions: {class: C}
   track_artists: {class: C, derived: {track_artists_block_guard_trg: {vetoes: [track_artists]}}}
-  track_comments: {class: C, note: "sc_comment_id filled by core"}
+  track_comments: {class: C, reassert: always, note: "sc_comment_id filled by core"}
   tracks:
     class: C
     id: {ns: tracks, from: [urn]}
+    unique: {tracks_sc_track_id_uq: key, tracks_urn_uq: key}
     local: [last_read_at]
     derived:
       tracks_lyrics_lookup_state_refresh: {rows: [lyrics_lookup_state]}
@@ -88,10 +92,10 @@ tables:
   user_profiles: {class: C}
   user_taste_vectors: {class: C}
   user_web_profiles: {class: C}
-  users: {class: C, local: [last_read_at], note: "last_read_at moves to entity_reads (B5a)"}
+  users: {class: C, local: [last_read_at], unique: {users_urn_key: key}, note: "last_read_at moves to entity_reads (B5a)"}
   wanted_track_albums: {class: C}
   wanted_track_artists: {class: C}
-  wanted_tracks: {class: C}
+  wanted_tracks: {class: C, reassert: always}
 
   ai_resolver_budget: {class: P}
   ai_resolver_cache: {class: P}
@@ -236,7 +240,7 @@ tables:
   track_artist_blocks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_auras: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}
   user_blocked_artists: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
-  user_events: {class: A, delete: none, insert_only: true}
+  user_events: {class: A, delete: none, insert_only: true, least: [created_at], note: "playlist adds carry the operation's id on every node"}
   user_like_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_superlike_ranks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_superlikes: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}

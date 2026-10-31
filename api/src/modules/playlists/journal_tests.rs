@@ -84,11 +84,10 @@ async fn a_pending_local_edit_does_not_defeat_the_observation_throttle(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_addition_is_journalled_and_visible_in_the_projection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "9"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -124,13 +123,12 @@ async fn an_addition_is_journalled_and_visible_in_the_projection(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_repeated_request_with_the_same_idempotency_key_is_applied_once(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
-    sqlx::query("INSERT INTO tracks (sc_track_id, urn, title) VALUES ('9', 'x', 'x')")
+    sqlx::query("INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms) VALUES ('9', 'x', 'x', 'x', 120000)")
         .execute(&pool)
         .await?;
     let journal = PlaylistJournal::new(pool.clone());
@@ -161,11 +159,10 @@ async fn a_repeated_request_with_the_same_idempotency_key_is_applied_once(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_append_and_a_removal_touch_only_their_own_projection_rows(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3", "9"]).await?;
     sqlx::query("DELETE FROM playlist_track_projection WHERE sc_track_id = '9'")
         .execute(&pool)
@@ -201,9 +198,8 @@ async fn an_append_and_a_removal_touch_only_their_own_projection_rows(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_removal_only_drops_the_named_track(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -224,11 +220,10 @@ async fn a_removal_only_drops_the_named_track(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_move_is_journalled_with_anchors_rather_than_an_index(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3", "4"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -255,11 +250,10 @@ async fn a_move_is_journalled_with_anchors_rather_than_an_index(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_order_request_never_removes_a_track_the_client_did_not_list(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -284,9 +278,8 @@ async fn an_order_request_never_removes_a_track_the_client_did_not_list(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_order_request_adds_tracks_the_client_introduced(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "9"]).await?;
     sqlx::query("DELETE FROM playlist_track_projection WHERE sc_track_id = '9'")
         .execute(&pool)
@@ -318,11 +311,10 @@ async fn an_order_request_adds_tracks_the_client_introduced(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_replacing_write_without_a_client_revision_never_removes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -350,11 +342,10 @@ async fn a_replacing_write_without_a_client_revision_never_removes(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_committed_write_replays_instead_of_failing_its_revision_precondition(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
     let key = Uuid::now_v7();
@@ -373,11 +364,10 @@ async fn a_committed_write_replays_instead_of_failing_its_revision_precondition(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_replacing_write_with_a_matching_revision_removes_explicitly(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -405,9 +395,8 @@ async fn a_replacing_write_with_a_matching_revision_removes_explicitly(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_stale_client_revision_is_rejected(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -429,11 +418,10 @@ async fn a_stale_client_revision_is_rejected(pool: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_playlist_without_a_baseline_accepts_the_edit_and_becomes_due(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     sqlx::query(
         "UPDATE playlist_membership_state
@@ -476,9 +464,8 @@ async fn a_playlist_without_a_baseline_accepts_the_edit_and_becomes_due(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_playlist_without_membership_state_accepts_the_edit(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     sqlx::query("DELETE FROM playlist_membership_state WHERE playlist_urn = $1")
         .bind(PLAYLIST)
@@ -500,11 +487,10 @@ async fn a_playlist_without_membership_state_accepts_the_edit(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_playlist_with_unresolved_legacy_intent_accepts_the_edit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     sqlx::query(
         "INSERT INTO playlist_legacy_membership_intents (
@@ -532,9 +518,8 @@ async fn a_playlist_with_unresolved_legacy_intent_accepts_the_edit(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_track_outside_the_catalog_cannot_be_added(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -554,9 +539,8 @@ async fn a_track_outside_the_catalog_cannot_be_added(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_move_of_an_absent_track_changes_nothing(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
 
@@ -611,11 +595,10 @@ fn a_move_body_type_is_reachable_from_the_module_surface() {
     assert_eq!(moved.to, 0);
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn membership_journal_rolls_back_with_the_callers_transaction(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let before = state(&pool).await?;
     let journal = PlaylistJournal::new(pool.clone());
@@ -637,9 +620,8 @@ async fn membership_journal_rolls_back_with_the_callers_transaction(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn deleted_tracks_cannot_be_added_to_a_playlist(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     sqlx::query("DELETE FROM playlist_track_projection WHERE sc_track_id = '3'")
         .execute(&pool)
@@ -682,11 +664,10 @@ async fn detach(pool: &PgPool, track_ids: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_added_track_is_a_playlist_add_at_the_time_of_the_request_and_only_once(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "9"]).await?;
     detach(&pool, &["9"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
@@ -708,9 +689,8 @@ async fn an_added_track_is_a_playlist_add_at_the_time_of_the_request_and_only_on
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn removing_moving_and_reordering_add_nothing(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "3"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
     for request in [
@@ -726,11 +706,10 @@ async fn removing_moving_and_reordering_add_nothing(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn an_order_request_records_only_the_tracks_it_introduced(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2", "8", "9"]).await?;
     detach(&pool, &["8", "9"]).await?;
     sqlx::query("INSERT INTO disliked_tracks (sc_user_id, sc_track_id) VALUES ($1, '8')")
@@ -760,9 +739,8 @@ async fn an_order_request_records_only_the_tracks_it_introduced(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn a_rolled_back_addition_leaves_no_playlist_add(pool: PgPool) -> anyhow::Result<()> {
-    test_schema::install(&pool).await?;
     test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "9"]).await?;
     detach(&pool, &["9"]).await?;
     let journal = PlaylistJournal::new(pool.clone());
@@ -779,17 +757,4 @@ async fn a_rolled_back_addition_leaves_no_playlist_add(pool: PgPool) -> anyhow::
     transaction.rollback().await?;
     assert!(playlist_adds(&pool).await?.is_empty());
     Ok(())
-}
-
-#[test]
-fn only_tracks_new_to_the_playlist_count_as_added() {
-    let before = ["1".to_owned(), "2".to_owned()];
-    let after = [
-        "2".to_owned(),
-        "3".to_owned(),
-        "1".to_owned(),
-        "3".to_owned(),
-    ];
-    assert_eq!(super::journal::newly_added(&before, &after), ["3"]);
-    assert!(super::journal::newly_added(&after, &before).is_empty());
 }

@@ -149,12 +149,43 @@ class Generated(unittest.TestCase):
         owner = owner[:owner.index("$f$;")]
         locked = owner.index("    FOR attempt IN 1..3 LOOP\n        PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;\n"
                              "        held := FOUND;\n        IF EXISTS (SELECT 1 FROM public.cmd_pending p")
-        self.assertEqual(owner.count("FROM public.cmd_pending p"), 2)
+        self.assertEqual(owner.count("FROM public.cmd_pending p"), 6)
         self.assertNotIn("IF FOUND", owner)
         self.assertLess(owner.index("        IF held THEN\n            UPDATE public.playlists t SET"), owner.index("ON CONFLICT DO NOTHING;"))
-        self.assertLess(owner.index("IF TG_OP = 'UPDATE' THEN\n        IF EXISTS (SELECT 1 FROM public.cmd_pending p"), locked)
+        self.assertLess(owner.index("IF TG_OP = 'UPDATE' THEN\n        IF NEW.urn IS DISTINCT FROM OLD.urn THEN"), locked)
         self.assertNotIn("last_read_at = NEW.last_read_at", owner)
         self.assertIn("NEW.last_read_at", owner)
+
+    def test_owner_holds_every_incoming_change_of_a_pending_key(self):
+        text = self.files["triggers.sql"]
+        owner = text[text.index("FUNCTION public.scd_owner_playlist_track_projection()"):]
+        owner = owner[:owner.index("$f$;")]
+        old = "p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn, 'position', OLD.\"position\")"
+        new = "p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW.\"position\")"
+        self.assertIn("IF TG_OP = 'DELETE' THEN\n        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE %s) THEN\n"
+                      "            RETURN NULL;" % old, owner)
+        self.assertIn("IF (NEW.playlist_urn, NEW.\"position\") IS DISTINCT FROM (OLD.playlist_urn, OLD.\"position\") THEN\n"
+                      "            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE %s) THEN\n"
+                      "                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE %s) THEN\n"
+                      "                    INSERT INTO public.playlist_track_projection (playlist_urn, \"position\", sc_track_id) VALUES (NEW.playlist_urn, NEW.\"position\", NEW.sc_track_id);\n"
+                      "                END IF;\n                RETURN NULL;\n            END IF;\n"
+                      "            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE %s) THEN\n"
+                      "                DELETE FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.\"position\") = (OLD.playlist_urn, OLD.\"position\");\n"
+                      "                RETURN NULL;" % (old, new, new), owner)
+        self.assertIn("CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_track_projection", text)
+        self.assertIn("SELECT $1 = ANY (ARRAY['artist_sc_accounts', 'artists', 'playlist_membership_operations', 'playlist_track_projection', "
+                      "'track_comments', 'wanted_tracks']::text[])", self.files["registry.sql"])
+
+    def test_insert_only_least_merges_down_only_on_a_key_conflict(self):
+        text = self.files["triggers.sql"]
+        skip = text[text.index("FUNCTION public.scd_skip_user_events()"):]
+        skip = skip[:skip.index("$f$;")]
+        self.assertEqual(skip.count("FROM public.user_events t WHERE t.id = NEW.id"), 1)
+        self.assertIn("IF TG_OP = 'UPDATE' THEN\n        NEW.created_at := least(OLD.created_at, NEW.created_at);\n        RETURN NEW;", skip)
+        self.assertIn("    IF FOUND THEN\n        IF NEW.created_at < o.created_at THEN\n", skip)
+        self.assertIn("UPDATE public.user_events t SET created_at = least(t.created_at, NEW.created_at) WHERE t.id = NEW.id;", skip)
+        self.assertIn("CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT OR UPDATE ON public.user_events", text)
+        self.assertIn("CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_events", text)
 
     def test_purged_m_rows_never_come_back(self):
         text = self.files["triggers.sql"]
@@ -242,7 +273,7 @@ class Generated(unittest.TestCase):
                       "WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split')", text)
         self.assertIn("NEW.has_sc_account := OLD.has_sc_account;", body("scd_core_col_artists"))
         owner = body("scd_owner_artists")
-        self.assertIn("IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN\n                NEW.account_walk_locked_at := OLD.account_walk_locked_at;", owner)
+        self.assertIn("IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN\n                    NEW.account_walk_locked_at := OLD.account_walk_locked_at;", owner)
         self.assertNotIn("NEW.has_sc_account := OLD.has_sc_account;", owner)
         self.assertIn("UPDATE public.artists t SET has_sc_account = NEW.has_sc_account WHERE t.id = NEW.id AND t.has_sc_account IS DISTINCT FROM NEW.has_sc_account;",
                       owner)

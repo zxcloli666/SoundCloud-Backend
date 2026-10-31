@@ -33,7 +33,18 @@ impl TrackMutations {
     async fn update_once(&self, user: &str, target: &str, body: &Value) -> AppResult<Value> {
         let target = target_urn(target)?;
         let update = TrackUpdate::parse(body).map_err(AppError::bad_request)?;
+        let observation = catalog_ingest::Observation::begin(&self.pg).await?;
         let mut tx = self.begin(&target).await?;
+        let edit = wt::TrackEdit {
+            sc_track_id: extract_sc_id(&target).to_owned(),
+            uploader: extract_sc_id(user).to_owned(),
+            desired: update.desired().clone(),
+            observation: observation.sequence(),
+            at: wt::now(),
+        };
+        if wt::call(&mut tx, &edit).await?.is_none() {
+            return Err(AppError::not_found("Track not found"));
+        }
         self.queue
             .enqueue_on(&mut tx, user, "track_update", &target, Some(update.body()))
             .await?;
@@ -45,17 +56,6 @@ impl TrackMutations {
         .fetch_one(&mut *tx)
         .await?;
         TrackUpdate::parse(&pending).map_err(AppError::bad_request)?;
-        let changed = sqlx::query_file_scalar!(
-            "queries/tracks/service/apply_update.sql",
-            extract_sc_id(&target),
-            extract_sc_id(user),
-            update.desired()
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-        if changed.is_none() {
-            return Err(AppError::not_found("Track not found"));
-        }
         tx.commit().await?;
         Ok(json!({"status": "queued", "actionType": "track_update", "targetUrn": target}))
     }
@@ -66,7 +66,22 @@ impl TrackMutations {
 
     async fn delete_once(&self, user: &str, target: &str) -> AppResult<Value> {
         let target = target_urn(target)?;
+        let observation = catalog_ingest::Observation::begin(&self.pg).await?;
         let mut tx = self.begin(&target).await?;
+        let delete = wt::TrackDelete {
+            sc_track_id: extract_sc_id(&target).to_owned(),
+            uploader: extract_sc_id(user).to_owned(),
+            observation: observation.sequence(),
+            at: wt::now(),
+        };
+        if wt::call(&mut tx, &delete).await?.is_none() {
+            return Err(AppError::not_found("Track not found"));
+        }
+        let owned = wt::OwnedDelete::Track {
+            variants: crate::common::sc_ids::user_id_variants(user),
+            sc_track_id: extract_sc_id(&target).to_owned(),
+        };
+        wt::call(&mut tx, &owned).await?;
         sqlx::query_file!(
             "queries/tracks/service/cancel_updates.sql",
             extract_sc_id(user),
@@ -77,23 +92,6 @@ impl TrackMutations {
         self.queue
             .enqueue_on(&mut tx, user, "track_delete", &target, None)
             .await?;
-        let changed = sqlx::query_file_scalar!(
-            "queries/tracks/service/apply_delete.sql",
-            extract_sc_id(&target),
-            extract_sc_id(user)
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-        if changed.is_none() {
-            return Err(AppError::not_found("Track not found"));
-        }
-        sqlx::query_file!(
-            "queries/tracks/service/delete_owned.sql",
-            &crate::common::sc_ids::user_id_variants(user),
-            extract_sc_id(&target)
-        )
-        .execute(&mut *tx)
-        .await?;
         tx.commit().await?;
         Ok(json!({"status": "queued", "actionType": "track_delete", "targetUrn": target}))
     }

@@ -7,6 +7,14 @@ use super::repository::SyncQueueRepository;
 async fn update(pool: &PgPool, body: &Value) -> anyhow::Result<()> {
     let patch = catalog_ingest::TrackUpdate::parse(body).map_err(anyhow::Error::msg)?;
     let mut tx = pool.begin().await?;
+    let edit = wt::TrackEdit {
+        sc_track_id: "42".to_owned(),
+        uploader: "17".to_owned(),
+        desired: patch.desired().clone(),
+        observation: catalog_ingest::Observation::begin(pool).await?.sequence(),
+        at: wt::now(),
+    };
+    anyhow::ensure!(wt::call(&mut tx, &edit).await?.is_some());
     sqlx::query_file!(
         "../api/queries/sync_queue/service/enqueue.sql",
         "17",
@@ -16,14 +24,6 @@ async fn update(pool: &PgPool, body: &Value) -> anyhow::Result<()> {
         false
     )
     .execute(&mut *tx)
-    .await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/tracks/service/apply_update.sql",
-        "42",
-        "17",
-        patch.desired()
-    )
-    .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
@@ -78,7 +78,7 @@ async fn newer_track_intent_fences_old_ack_and_confirmation_is_durable(
     assert!(repository.record_remote_attempt(&old).await?);
     assert!(
         repository
-            .record_remote_success(&old, &json!({"urn": "soundcloud:tracks:42"}))
+            .record_remote_success(&old, &json!({"desired": old.desired}))
             .await?
     );
     update(&pool, &json!({"track": {"sharing": "private"}})).await?;
@@ -99,7 +99,7 @@ async fn newer_track_intent_fences_old_ack_and_confirmation_is_durable(
     assert!(repository.record_remote_attempt(&current).await?);
     assert!(
         repository
-            .record_remote_success(&current, &json!({"urn": "soundcloud:tracks:42"}))
+            .record_remote_success(&current, &json!({"desired": current.desired}))
             .await?
     );
     repository.finalize(&current).await?;
@@ -138,7 +138,7 @@ async fn failed_confirmation_enqueue_preserves_the_stored_remote_result(
     assert!(repository.record_remote_attempt(&mutation).await?);
     assert!(
         repository
-            .record_remote_success(&mutation, &json!({"urn": "soundcloud:tracks:42"}))
+            .record_remote_success(&mutation, &json!({"desired": mutation.desired}))
             .await?
     );
     sqlx::query("ALTER TABLE background_jobs ADD CONSTRAINT no_confirmation CHECK (kind <> 'catalog.refresh')")
@@ -207,5 +207,121 @@ async fn a_like_of_a_missing_track_is_closed_and_heal_leaves_it_alone(
         .await?;
     assert!(!progress);
     assert_eq!(queued, 0);
+    Ok(())
+}
+
+async fn age_edit(pool: &PgPool, table: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(&format!(
+        "UPDATE {table} SET sc_mutation_observation = sc_mutation_observation - (3600000000::bigint << 4)"
+    ))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn heal(pool: &PgPool, table: &str) -> anyhow::Result<()> {
+    age_edit(pool, table).await?;
+    crate::handlers::maintenance::MaintenanceHandler::new(pool.clone())
+        .heal_sync_queue()
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_push_carries_every_merged_field_and_a_later_core_edit_is_healed_into_a_new_push(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    update(&pool, &json!({"track": {"sharing": "private"}})).await?;
+    repository.adopt().await?;
+    let pushed = repository
+        .claim(1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("track mutation was not claimed"))?;
+    let desired = pushed.desired.clone().unwrap_or_default();
+    assert_eq!(desired["title"], json!("First edit"));
+    assert_eq!(desired["sharing"], json!("private"));
+    assert!(repository.record_remote_attempt(&pushed).await?);
+    assert!(
+        repository
+            .record_remote_success(&pushed, &json!({"desired": desired}))
+            .await?
+    );
+    let late = catalog_ingest::TrackUpdate::parse(&json!({"track": {"description": "Late"}}))
+        .map_err(anyhow::Error::msg)?;
+    let edit = wt::TrackEdit {
+        sc_track_id: "42".to_owned(),
+        uploader: "17".to_owned(),
+        desired: late.desired().clone(),
+        observation: catalog_ingest::Observation::begin(&pool).await?.sequence(),
+        at: wt::now(),
+    };
+    anyhow::ensure!(
+        wt::call(&mut *pool.acquire().await?, &edit)
+            .await?
+            .is_some()
+    );
+    repository.finalize(&pushed).await?;
+    let confirmed: bool =
+        sqlx::query_scalar("SELECT sc_write_confirmed FROM tracks WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert!(!confirmed);
+    assert!(repository.claim(1).await?.is_empty());
+
+    heal(&pool, "tracks").await?;
+    let healed = repository
+        .claim(1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("healed track edit was not claimed"))?;
+    let desired = healed.desired.clone().unwrap_or_default();
+    assert_eq!(desired["description"], json!("Late"));
+    assert_eq!(desired["sharing"], json!("private"));
+    assert!(repository.record_remote_attempt(&healed).await?);
+    assert!(
+        repository
+            .record_remote_success(&healed, &json!({"desired": desired}))
+            .await?
+    );
+    repository.finalize(&healed).await?;
+    let confirmed: bool =
+        sqlx::query_scalar("SELECT sc_write_confirmed FROM tracks WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    assert!(confirmed);
+    heal(&pool, "tracks").await?;
+    assert!(repository.claim(1).await?.is_empty());
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_edit_whose_desired_state_was_already_observed_is_dropped_unsent(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let repository = setup(&pool).await?;
+    sqlx::query("UPDATE tracks SET sc_desired = '{}' WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+    let mutation = repository
+        .claim(1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("track mutation was not claimed"))?;
+    assert_eq!(mutation.desired, Some(json!({})));
+    assert!(repository.drop_superseded(&mutation).await?);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
     Ok(())
 }

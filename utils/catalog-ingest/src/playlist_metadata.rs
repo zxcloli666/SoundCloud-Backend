@@ -131,6 +131,34 @@ impl PlaylistUpdate {
         })
     }
 
+    pub fn from_desired(desired: &Value) -> Result<Self, &'static str> {
+        let desired = desired
+            .as_object()
+            .ok_or("desired playlist state is not an object")?;
+        let mut playlist = Map::new();
+        for key in COLUMNS.iter().copied().chain(["release_date"]) {
+            if let Some(value) = desired.get(key) {
+                playlist.insert(key.into(), crate::track_metadata::sent_string(value));
+            }
+        }
+        if let Some(kind) = desired.get("playlist_type") {
+            playlist.insert("set_type".into(), kind.clone());
+        }
+        if let Some(tags) = desired.get("tags").and_then(Value::as_array) {
+            let tags: Vec<&str> = tags.iter().filter_map(Value::as_str).collect();
+            playlist.insert("tag_list".into(), json!(tags.join(" ")));
+        }
+        for (key, value) in desired
+            .get("sc_metadata")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            playlist.insert(key.clone(), crate::track_metadata::sent_string(value));
+        }
+        Self::parse(&json!({ "playlist": playlist }))
+    }
+
     pub fn body(&self) -> &Value {
         &self.body
     }
@@ -182,6 +210,26 @@ mod tests {
         ] {
             assert!(PlaylistUpdate::parse(&body).is_err(), "{body}");
         }
+    }
+
+    #[test]
+    fn the_body_rebuilt_from_a_desired_state_parses_back_to_the_same_state()
+    -> Result<(), &'static str> {
+        for body in [
+            json!({"playlist": {
+                "title": "Updated playlist", "description": "", "release_date": "",
+                "set_type": "album", "sharing": "private", "purchase_title": "Buy",
+            }}),
+            json!({"playlist": {
+                "tag_list": "drive  night", "release_date": "2026-03-01", "label_name": " Label ",
+                "permalink": "drive-mix", "ean": "", "permalink_url": "https://soundcloud.com/a/sets/b",
+            }}),
+        ] {
+            let update = PlaylistUpdate::parse(&body)?;
+            let rebuilt = PlaylistUpdate::from_desired(update.desired())?;
+            assert_eq!(rebuilt.desired(), update.desired(), "{body}");
+        }
+        Ok(())
     }
 
     #[test]
