@@ -6,12 +6,18 @@ WITH doomed AS (SELECT credit.track_id,
                   AND track.enrich_locked_at IS NULL
                 ORDER BY credit.track_id
                 LIMIT $1),
+     credits AS MATERIALIZED (SELECT credit.track_id, credit.artist_id, credit.role
+                              FROM track_artists AS credit
+                              WHERE (credit.track_id, credit.artist_id) IN (SELECT track_id, artist_id FROM doomed)
+                                AND credit.source = 'walker'
+                              ORDER BY credit.track_id, credit.artist_id, credit.role
+                              FOR UPDATE OF credit),
      removed AS (
          DELETE FROM track_artists AS credit
-             USING doomed
-             WHERE credit.track_id = doomed.track_id
-                 AND credit.artist_id = doomed.artist_id
-                 AND credit.source = 'walker'
+             USING credits
+             WHERE credit.track_id = credits.track_id
+                 AND credit.artist_id = credits.artist_id
+                 AND credit.role = credits.role
              RETURNING credit.track_id, credit.artist_id),
      locked AS MATERIALIZED (SELECT track.id
                              FROM tracks AS track
