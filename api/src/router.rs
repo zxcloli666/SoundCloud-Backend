@@ -93,11 +93,7 @@ pub fn build(state: AppState) -> Router {
         .layer(CompressionLayer::new())
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
+                tracing::debug_span!("http_request", method = %request.method())
             }),
         )
         .layer(http_layer)

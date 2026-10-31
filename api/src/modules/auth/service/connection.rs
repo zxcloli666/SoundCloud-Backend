@@ -490,7 +490,7 @@ impl AuthService {
             .await?;
             RefreshOutcome::RetryLater
         };
-        warn!(connection = %connection.id, %error, ?outcome, "SoundCloud refresh failed");
+        warn!(%error, ?outcome, "SoundCloud refresh failed");
         self.refresh_race_outcome(connection.id).await
     }
 

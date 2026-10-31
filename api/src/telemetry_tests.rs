@@ -10,6 +10,27 @@ const NEVER_IN_A_LOG_LINE: [&str; 6] = [
     "session_id",
 ];
 
+const EXPORTED_MACROS: [&str; 6] = [
+    "warn!(",
+    "error!(",
+    "trace_span!(",
+    "debug_span!(",
+    "info_span!(",
+    "error_span!(",
+];
+
+const NEVER_AS_A_FIELD: [&str; 9] = [
+    "user",
+    "user_id",
+    "connection",
+    "uri",
+    "url",
+    "query",
+    "ip",
+    "addr",
+    "path",
+];
+
 const LOGGING_MACROS: [&str; 8] = [
     "trace!(",
     "debug!(",
@@ -114,4 +135,56 @@ fn the_scan_would_notice_a_leak_that_is_actually_there() {
             .any(|secret| arguments.contains(secret)),
         "the extraction must see the arguments of a logging macro, saw {arguments:?}"
     );
+}
+
+fn carries_field(arguments: &str, name: &str) -> bool {
+    let mut from = 0usize;
+    while let Some(found) = arguments[from..].find(name) {
+        let start = from + found;
+        let end = start + name.len();
+        let before = arguments[..start].chars().next_back();
+        let after = arguments[end..].trim_start().chars().next();
+        let boundary = before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '.'));
+        if boundary && matches!(after, Some('=')) {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+#[test]
+fn no_span_or_warning_carries_an_identifying_field_or_a_raw_address() {
+    let mut leaks: Vec<String> = Vec::new();
+    for (path, body) in &sources() {
+        for macro_name in EXPORTED_MACROS {
+            let mut from = 0usize;
+            while let Some(found) = body[from..].find(macro_name) {
+                let start = from + found + macro_name.len() - 1;
+                let arguments = arguments_after(body, start);
+                for field in NEVER_AS_A_FIELD {
+                    if carries_field(arguments, field) {
+                        leaks.push(format!("{}: {macro_name} carries {field}", path.display()));
+                    }
+                }
+                if arguments.contains(".uri()") || arguments.contains(".query()") {
+                    leaks.push(format!("{}: {macro_name} carries a request uri", path.display()));
+                }
+                from = start + 1;
+            }
+        }
+    }
+
+    assert!(
+        leaks.is_empty(),
+        "an exported span or warning would carry who or where: {leaks:#?}"
+    );
+}
+
+#[test]
+fn the_field_scan_sees_a_planted_user_id() {
+    assert!(carries_field("user = %id, %error, \"x\"", "user"));
+    assert!(carries_field("path = %request.uri().path()", "path"));
+    assert!(!carries_field("username = 1, other_user = 2", "user"));
+    assert!(!carries_field("%error, \"user is gone\"", "user"));
 }

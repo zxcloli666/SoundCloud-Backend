@@ -4,12 +4,13 @@ use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::trace::{Sampler, SdkTracer, SdkTracerProvider};
+use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, SdkTracer, SdkTracerProvider};
 use tracing::{Level, Metadata, Subscriber};
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, fmt, prelude::*};
 
+use crate::scrub::Scrubbing;
 use crate::uncached::Uncached;
 
 pub(crate) static HOST: OnceLock<String> = OnceLock::new();
@@ -104,7 +105,7 @@ fn exporter_provider(service: &'static str) -> Option<SdkTracerProvider> {
         SdkTracerProvider::builder()
             .with_sampler(Sampler::AlwaysOn)
             .with_resource(resource)
-            .with_batch_exporter(exporter)
+            .with_span_processor(Scrubbing(BatchSpanProcessor::builder(exporter).build()))
             .build(),
     )
 }
