@@ -41,6 +41,14 @@ pub fn skips_core(method: &Method, path: &str) -> bool {
         || path == "/admin/metrics"
         || path == "/tracks/upload"
         || path.starts_with("/.well-known/")
+        || is_room_poll(method, path)
+}
+
+fn is_room_poll(method: &Method, path: &str) -> bool {
+    method == Method::GET
+        && path
+            .strip_prefix("/rooms/")
+            .is_some_and(|code| !code.is_empty() && code != "public" && !code.contains('/'))
 }
 
 pub async fn shed(State(shed): State<Arc<Shed>>, req: Request, next: Next) -> Response {

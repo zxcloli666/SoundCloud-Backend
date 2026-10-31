@@ -117,3 +117,14 @@ fn only_cheap_routes_skip_the_core_limit() {
     assert!(!skips_core(&Method::GET, "/tracks/1"));
     assert!(!skips_core(&Method::GET, "/auth/refresh"));
 }
+
+#[test]
+fn the_room_long_poll_skips_the_core_limit_and_room_writes_do_not() {
+    assert!(skips_core(&Method::GET, "/rooms/AB12CD"));
+    assert!(!skips_core(&Method::GET, "/rooms/public"));
+    assert!(!skips_core(&Method::GET, "/rooms/"));
+    assert!(!skips_core(&Method::POST, "/rooms"));
+    assert!(!skips_core(&Method::PUT, "/rooms/AB12CD/playback"));
+    assert!(!skips_core(&Method::POST, "/rooms/AB12CD/members"));
+    assert!(!skips_core(&Method::GET, "/rooms/AB12CD/members"));
+}
