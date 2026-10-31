@@ -14,6 +14,7 @@ WORKDIR /build
 FROM scratch AS sources
 COPY scripts/cargo-skeleton.sh scripts/build-db.sh /scripts/
 COPY backend-contracts /backend-contracts
+COPY utils/admin-catalog /utils/admin-catalog
 COPY utils/call /utils/call
 COPY utils/catalog-ingest /utils/catalog-ingest
 COPY utils/catalog-match /utils/catalog-match

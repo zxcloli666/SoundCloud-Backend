@@ -70,7 +70,7 @@ jobs:
           esac
           RANGE="$BASE..HEAD"
           [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && RANGE="$BASE...HEAD"
-          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/catalog-ingest utils/catalog-match utils/repl-verify streaming/src/db streaming/src/hq_upgrade streaming/src/hq_upgrade.rs .github/workflows/migrations-guard.yml; then
+          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/catalog-ingest utils/catalog-match utils/admin-catalog utils/repl-verify streaming/src/db streaming/src/hq_upgrade streaming/src/hq_upgrade.rs .github/workflows/migrations-guard.yml; then
             echo run=false >> "$GITHUB_OUTPUT"
           else
             echo run=true >> "$GITHUB_OUTPUT"
@@ -100,6 +100,7 @@ jobs:
             utils/write-through -> target
             utils/catalog-ingest -> target
             utils/catalog-match -> target
+            utils/admin-catalog -> target
             utils/repl-verify -> target
             streaming -> target
           key: write-through
@@ -115,17 +116,18 @@ jobs:
           cargo fmt --manifest-path utils/write-through/Cargo.toml --check
           cargo clippy --manifest-path utils/write-through/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo test --manifest-path utils/write-through/Cargo.toml --all-features --locked
-      - name: catalog-ingest and catalog-match, legacy and split replay on real Postgres
+      - name: catalog-ingest, catalog-match and admin-catalog on real Postgres
         if: steps.changed.outputs.run == 'true'
         env:
           DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
         run: |
-          for crate in catalog-ingest catalog-match; do
+          for crate in catalog-ingest catalog-match admin-catalog; do
             cargo fmt --manifest-path utils/$crate/Cargo.toml --check
             cargo clippy --manifest-path utils/$crate/Cargo.toml --all-targets --all-features --locked -- -D warnings
           done
           cargo test --manifest-path utils/catalog-ingest/Cargo.toml --locked
           cargo test --manifest-path utils/catalog-match/Cargo.toml --locked
+          cargo test --manifest-path utils/admin-catalog/Cargo.toml --locked
       - name: resend sweeper and verify loop on real Postgres
         if: steps.changed.outputs.run == 'true'
         env:

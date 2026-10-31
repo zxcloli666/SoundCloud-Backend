@@ -96,7 +96,6 @@ dependencies = [
  "bytes",
  "call-relay",
  "catalog-ingest",
- "catalog-match",
  "catalog-normalize",
  "catalog-sources",
  "chrono",
@@ -796,18 +795,6 @@ dependencies = [
  "entity-ref",
  "serde_json",
  "sqlx",
- "uuid",
- "write-through",
-]
-
-[[package]]
-name = "catalog-match"
-version = "0.1.0"
-dependencies = [
- "catalog-normalize",
- "serde_json",
- "sqlx",
- "url",
  "uuid",
  "write-through",
 ]

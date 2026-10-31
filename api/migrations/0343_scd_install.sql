@@ -9,6 +9,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_lyrics_cache;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_playlists;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_catalog_requests;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_maintenance_runs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_budget;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_cache;
@@ -176,6 +177,7 @@ RETURNS text
 LANGUAGE sql STABLE
 AS $f$
 SELECT v.cls FROM (VALUES
+    ('admin_catalog_requests', 'P'),
     ('admin_maintenance_runs', 'C'),
     ('ai_resolver_budget', 'P'),
     ('ai_resolver_cache', 'P'),
@@ -677,6 +679,50 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'wanted_track_artists', ARRAY['artist_id', 'position', 'role', 'wanted_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'wanted_tracks', ARRAY['discovered_at', 'duration_ms', 'external_id', 'fetched_at', 'id', 'isrc', 'normalized_title', 'primary_artist_id', 'recording_key', 'release_year', 'resolve_attempts', 'resolve_error', 'resolve_locked_at', 'resolve_next_run_at', 'source', 'status', 'title', 'track_id', 'updated_at', 'work_key', 'work_normalizer_version', 'work_reconciled_at']::text[])
 $f$;
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_admin_catalog_requests(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.command, t.created_at, t.reply, t.request_id)::text) FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_admin_catalog_requests(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_purge_admin_catalog_requests(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.request_id INTO p FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid;
+END
+$f$;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_catalog_requests FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_catalog_requests', 'cmd', 'migration', 'repl');
 COMMIT;
 
 BEGIN;
@@ -11830,6 +11876,8 @@ LANGUAGE plpgsql STABLE
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'admin_catalog_requests' THEN
+            RETURN public.scd_row_hash_admin_catalog_requests(k);
         WHEN 'admin_maintenance_runs' THEN
             RETURN public.scd_row_hash_admin_maintenance_runs(k);
         WHEN 'ai_resolver_budget' THEN
@@ -12052,6 +12100,8 @@ LANGUAGE plpgsql STABLE
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'admin_catalog_requests' THEN
+            RETURN public.scd_row_json_admin_catalog_requests(k);
         WHEN 'admin_maintenance_runs' THEN
             RETURN public.scd_row_json_admin_maintenance_runs(k);
         WHEN 'ai_resolver_budget' THEN
@@ -12274,6 +12324,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'admin_catalog_requests' THEN
+            PERFORM public.scd_purge_admin_catalog_requests(k);
         WHEN 'admin_maintenance_runs' THEN
             PERFORM public.scd_purge_admin_maintenance_runs(k);
         WHEN 'ai_resolver_budget' THEN
@@ -12459,6 +12511,7 @@ FROM (VALUES
     ('core_col', 'artists', 'scd_core_col_artists'),
     ('core_col', 'lyrics_cache', 'scd_core_col_lyrics_cache'),
     ('core_col', 'playlists', 'scd_core_col_playlists'),
+    ('guard', 'admin_catalog_requests', 'scd_guard_admin_catalog_requests'),
     ('guard', 'admin_maintenance_runs', 'scd_guard_admin_maintenance_runs'),
     ('guard', 'ai_resolver_budget', 'scd_guard_ai_resolver_budget'),
     ('guard', 'ai_resolver_cache', 'scd_guard_ai_resolver_cache'),
@@ -12581,6 +12634,7 @@ BEGIN
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_core_col', 'zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
         EXCEPT VALUES
+            ('admin_catalog_requests', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_owner'),
             ('admin_maintenance_runs', 'zzz_suppress'),

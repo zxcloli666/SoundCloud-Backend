@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 use wt::MatchScAccount;
 
@@ -44,6 +44,30 @@ pub async fn upsert_account(
     source: &str,
     verified: bool,
 ) -> Result<(), sqlx::Error> {
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        upsert_account_in(
+            &mut transaction,
+            artist_id,
+            sc_user_id,
+            role,
+            source,
+            verified,
+        )
+        .await?;
+        transaction.commit().await
+    })
+    .await
+}
+
+pub async fn upsert_account_in(
+    connection: &mut PgConnection,
+    artist_id: Uuid,
+    sc_user_id: &str,
+    role: AccountRole,
+    source: &str,
+    verified: bool,
+) -> Result<(), sqlx::Error> {
     if sc_user_id.is_empty() {
         return Ok(());
     }
@@ -55,12 +79,8 @@ pub async fn upsert_account(
         verified,
         at: wt::now(),
     };
-    wt::retry(|| async {
-        let mut transaction = pool.begin().await?;
-        wt::call(&mut transaction, &upsert).await?;
-        transaction.commit().await
-    })
-    .await
+    wt::call(connection, &upsert).await?;
+    Ok(())
 }
 
 pub async fn delete_account(
@@ -68,17 +88,25 @@ pub async fn delete_account(
     artist_id: Uuid,
     sc_user_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let delete = MatchScAccount::Delete {
-        artist_id,
-        sc_user_id: sc_user_id.to_owned(),
-    };
     wt::retry(|| async {
         let mut transaction = pool.begin().await?;
-        let deleted = wt::call(&mut transaction, &delete).await?;
+        let deleted = delete_account_in(&mut transaction, artist_id, sc_user_id).await?;
         transaction.commit().await?;
         Ok(deleted)
     })
     .await
+}
+
+pub async fn delete_account_in(
+    connection: &mut PgConnection,
+    artist_id: Uuid,
+    sc_user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let delete = MatchScAccount::Delete {
+        artist_id,
+        sc_user_id: sc_user_id.to_owned(),
+    };
+    wt::call(connection, &delete).await
 }
 
 pub fn claims_another_artist(error: &sqlx::Error) -> bool {

@@ -1,3 +1,18 @@
+CREATE OR REPLACE FUNCTION public.scd_purge_admin_catalog_requests(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.request_id INTO p FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_admin_maintenance_runs(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -1141,6 +1156,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'admin_catalog_requests' THEN
+            PERFORM public.scd_purge_admin_catalog_requests(k);
         WHEN 'admin_maintenance_runs' THEN
             PERFORM public.scd_purge_admin_maintenance_runs(k);
         WHEN 'ai_resolver_budget' THEN

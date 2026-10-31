@@ -12,7 +12,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 
-catalog-match = { path = "../utils/catalog-match" }
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
 wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 

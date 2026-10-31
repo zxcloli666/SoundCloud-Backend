@@ -38,6 +38,7 @@ RETURNS text
 LANGUAGE sql STABLE
 AS $f$
 SELECT v.cls FROM (VALUES
+    ('admin_catalog_requests', 'P'),
     ('admin_maintenance_runs', 'C'),
     ('ai_resolver_budget', 'P'),
     ('ai_resolver_cache', 'P'),

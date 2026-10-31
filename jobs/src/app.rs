@@ -18,6 +18,7 @@ use crate::bus::advisory::AdvisoryReaper;
 use crate::bus::{Bus, BusConsumers};
 use crate::config::JobsConfig;
 use crate::db::Databases;
+use crate::handlers::admin_rpc::AdminCatalogRpc;
 use crate::handlers::auth_rpc::AuthRpc;
 use crate::handlers::taste::{TasteHandler, TasteResult};
 use crate::handlers::{
@@ -191,6 +192,11 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn(
         "auth RPC",
         Arc::new(AuthRpc::new(databases.main.fast.clone(), &config.oauth)?)
+            .serve(bus.clone(), cancellation.clone()),
+    );
+    supervisor.spawn(
+        "admin catalog RPC",
+        Arc::new(AdminCatalogRpc::new(databases.main.fast.clone()))
             .serve(bus.clone(), cancellation.clone()),
     );
     supervisor.spawn(

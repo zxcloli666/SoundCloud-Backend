@@ -67,6 +67,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   `x-admin-token` vs `config.admin.token`, fail-closed). There is **no** global auth layer in `router.rs` — a new admin
   handler MUST take `_: AdminAuth` as its **first** argument or the route is open to the world (this is how
   `/admin/collab/*` leaked). Body extractors (`Json`, `Option<Json<…>>`) are `FromRequest` and must stay **last**.
+- **Admin catalog writes run on core.** Edits of artists, credits, albums, wanted tracks, legacy playlist intents and enrich resets live in `utils/admin-catalog`, which only `jobs` links. The api admin handlers keep `_: AdminAuth` first, take a `RequestKey` (`Idempotency-Key` header or a fresh UUID) and `forward` an `AdminCommand` over `admin.catalog.v1` (10 s, core down is 503 with Retry-After). Admin reads stay local. A new admin write is a new variant in `backend-contracts/src/admin_catalog.rs` and a function in the crate, never SQL in the api.
 - **Комментариев в коде нет** — ни `//`, ни `///`, ни `//!`, ни в SQL, TOML, Dockerfile и CI. Смысл несут имена, типы и структура; объяснения идут в `docs/` и в чат.
 
 ## Gotchas (verified in prod)
