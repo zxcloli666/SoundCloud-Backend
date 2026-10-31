@@ -24,7 +24,7 @@ FROM wanted w
                              WHERE a_id = w.id
                                AND w > 0
                              ORDER BY w DESC
-                             LIMIT $2) e
+                             LIMIT $3::bigint) e
 UNION ALL
 SELECT e.b_id, e.a_id, e.w, 1::int2
 FROM wanted w
@@ -33,4 +33,4 @@ FROM wanted w
                              WHERE b_id = w.id
                                AND w > 0
                              ORDER BY w DESC
-                             LIMIT $2) e
+                             LIMIT $3::bigint) e
