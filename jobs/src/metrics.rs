@@ -31,8 +31,6 @@ const CMD_SUB_UP: &str = "scd_cmd_sub_up";
 const CMD_DEAD: &str = "scd_cmd_dead";
 const CMD_DEAD_OLDEST: &str = "scd_cmd_dead_oldest_seconds";
 const CMD_REPLAYED: &str = "scd_cmd_replayed_total";
-const RETENTION_DELETED: &str = "scd_repl_retention_deleted_total";
-const RETENTION_HELD: &str = "scd_repl_retention_held";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -76,7 +74,15 @@ static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mute
 static REPL_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 const SNAPSHOT_TTL: Duration = Duration::from_secs(60);
 const REPL_SNAPSHOT_TTL: Duration = Duration::from_secs(15);
-const RETENTION_TABLES: [&str; 4] = ["cmd_done", "cmd_dead", "repl_purges", "repl_tombstones"];
+const RETENTION_TABLES: [&str; 7] = [
+    "cmd_reassert",
+    "cmd_purge",
+    "cmd_done",
+    "cmd_dead",
+    "repl_purges",
+    "repl_tombstones",
+    "storage_event_repairs",
+];
 const REPLAY_RESULTS: [&str; 3] = ["ok", "missing", "failed"];
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
 
@@ -152,17 +158,20 @@ fn register_series_that_start_at_zero() {
     metrics::gauge!(WORKER_SLOT_RESTARTS_LAST_HOUR_MAX).set(0.0);
     metrics::gauge!(WORKER_SLOT_RESERVED_GAP_MAX).set(0.0);
     for table in RETENTION_TABLES {
-        metrics::counter!(RETENTION_DELETED, "table" => table).increment(0);
-        metrics::gauge!(RETENTION_HELD, "table" => table).set(0.0);
+        repl_verify::register_retention(table);
     }
     for result in REPLAY_RESULTS {
         metrics::counter!(CMD_REPLAYED, "result" => result).increment(0);
     }
 }
 
-pub fn record_repl_retention(table: &'static str, deleted: u64, held: bool) {
-    metrics::counter!(RETENTION_DELETED, "table" => table).increment(deleted);
-    metrics::gauge!(RETENTION_HELD, "table" => table).set(f64::from(u8::from(held)));
+pub fn record_repl_retention(
+    table: &'static str,
+    deleted: u64,
+    redacted: u64,
+    reason: Option<&str>,
+) {
+    repl_verify::record_retention(table, deleted, redacted, reason);
 }
 
 pub fn record_repl_replay(result: &'static str) {

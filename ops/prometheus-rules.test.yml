@@ -84,10 +84,16 @@ tests:
 
   - interval: 1m
     input_series:
-      - series: 'scd_repl_retention_held{table="repl_tombstones"}'
+      - series: 'scd_repl_retention_held{instance="core",table="repl_tombstones",reason="slot"}'
         values: '0+0x10 1+0x450'
-      - series: 'scd_repl_retention_held{table="cmd_done"}'
+      - series: 'scd_repl_retention_held{instance="core",table="repl_tombstones",reason="resend"}'
+        values: '0+0x450'
+      - series: 'scd_repl_retention_held{instance="core",table="cmd_done",reason="slot"}'
         values: '1+0x100 0+0x450'
+      - series: 'scd_repl_retention_held{instance="main",table="cmd_outbox",reason="pending"}'
+        values: '0+0x80 1+0x450'
+      - series: 'scd_repl_retention_held{instance="star",table="cmd_outbox",reason="pending"}'
+        values: '0+0x450'
       - series: 'scd_repl_resend_queued{instance="main"}'
         values: '0+0x10 5+0x60'
       - series: 'scd_repl_resend_queued{instance="star"}'
@@ -99,12 +105,35 @@ tests:
         alertname: ReplRetentionHeld
         exp_alerts:
           - exp_labels:
+              instance: core
               table: repl_tombstones
+              reason: slot
               severity: warning
               service: jobs
             exp_annotations:
-              summary: "Retention of repl_tombstones is held back for 6 hours"
-              description: "A slot or subscription of core is inactive or behind, or a node still has pending resends. The held tables only grow meanwhile. The reason is in the jobs log, line 'replication retention held back'."
+              summary: "Retention of repl_tombstones on core is held back for 6 hours (slot)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
+      - eval_time: 7h30m
+        alertname: ReplRetentionHeld
+        exp_alerts:
+          - exp_labels:
+              instance: core
+              table: repl_tombstones
+              reason: slot
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Retention of repl_tombstones on core is held back for 6 hours (slot)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
+          - exp_labels:
+              instance: main
+              table: cmd_outbox
+              reason: pending
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Retention of cmd_outbox on main is held back for 6 hours (pending)"
+              description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
       - eval_time: 60m
         alertname: ReplResendQueueStuck
         exp_alerts:
