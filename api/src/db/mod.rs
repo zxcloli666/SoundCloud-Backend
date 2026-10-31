@@ -7,12 +7,19 @@ use anyhow::{Context, ensure};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{ConnectOptions, Connection, PgConnection, PgPool};
 use tracing::log::LevelFilter;
+use tracing::{info, warn};
 
 use crate::config::{AppConfig, DatabaseCfg};
 
 const REQUIRED_CORE_SCHEMA_VERSION: i64 = 156;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
+const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
+const LONG_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60);
+const IDLE_PING_AFTER: Duration = Duration::from_secs(5);
+const WARM_UP_BUDGET: Duration = Duration::from_secs(8);
+const WARM_UP_HOLD: Duration = Duration::from_millis(50);
+const HOT_SESSION_LOOKUP: &str = include_str!("../../queries/auth/service/get_session.sql");
 
 static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
 static CORE_RELEASED_AT_MS: AtomicU64 = AtomicU64::new(0);
@@ -76,15 +83,31 @@ fn core_share(pool_max: u32) -> u32 {
 fn pool_options(
     cfg: &DatabaseCfg,
     max_connections: u32,
+    min_connections: u32,
     released_at: Option<&'static AtomicU64>,
 ) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(max_connections)
+        .min_connections(min_connections.min(max_connections))
         .acquire_timeout(cfg.acquire_timeout)
         .idle_timeout(Some(Duration::from_secs(600)))
         .max_lifetime(Some(Duration::from_secs(1800)))
-        .test_before_acquire(true)
+        .test_before_acquire(false)
+        .before_acquire(|connection, meta| Box::pin(verify_idle(connection, meta.idle_for)))
         .after_release(move |connection, _| Box::pin(settle_released(connection, released_at)))
+}
+
+async fn verify_idle(
+    connection: &mut PgConnection,
+    idle_for: Duration,
+) -> Result<bool, sqlx::Error> {
+    if idle_for < IDLE_PING_AFTER {
+        return Ok(true);
+    }
+    Ok(matches!(
+        tokio::time::timeout(RELEASE_PING_TIMEOUT, connection.ping()).await,
+        Ok(Ok(()))
+    ))
 }
 
 async fn settle_released(
@@ -109,12 +132,26 @@ async fn settle_released(
 async fn pool(
     cfg: &DatabaseCfg,
     max_connections: u32,
+    min_connections: u32,
     opts: PgConnectOptions,
     released_at: Option<&'static AtomicU64>,
 ) -> Result<PgPool, sqlx::Error> {
-    pool_options(cfg, max_connections, released_at)
+    pool_options(cfg, max_connections, min_connections, released_at)
         .connect_with(opts)
         .await
+}
+
+fn core_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(connect_opts(cfg)?.options([
+        (
+            "statement_timeout",
+            cfg.statement_timeout.as_millis().to_string(),
+        ),
+        (
+            "idle_in_transaction_session_timeout",
+            cfg.idle_in_transaction_timeout.as_millis().to_string(),
+        ),
+    ]))
 }
 
 pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
@@ -122,17 +159,74 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     pool(
         db,
         core_share(db.pool_max),
-        connect_opts(db)?,
+        db.min_connections,
+        core_opts(db)?,
         Some(&CORE_RELEASED_AT_MS),
     )
     .await
+}
+
+pub async fn begin_admin(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    begin_with_timeout(pool, ADMIN_STATEMENT_TIMEOUT).await
+}
+
+pub async fn begin_long(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    begin_with_timeout(pool, LONG_STATEMENT_TIMEOUT).await
+}
+
+async fn begin_with_timeout(
+    pool: &PgPool,
+    timeout: Duration,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(&format!(
+        "SET LOCAL statement_timeout = {}",
+        timeout.as_millis()
+    ))
+    .execute(&mut *tx)
+    .await?;
+    Ok(tx)
+}
+
+pub async fn warm_up(pool: &PgPool, connections: u32) {
+    let target = connections.min(pool.options().get_max_connections()) as usize;
+    let started = Instant::now();
+    let warmed = tokio::time::timeout(WARM_UP_BUDGET, async {
+        let held = futures::future::join_all((0..target).map(|_| warm_connection(pool))).await;
+        held.into_iter().flatten().count()
+    })
+    .await;
+    match warmed {
+        Ok(opened) => info!(
+            opened,
+            target,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "database pool warmed"
+        ),
+        Err(_) => warn!(target, "database pool warm-up hit its budget"),
+    }
+}
+
+async fn warm_connection(pool: &PgPool) -> Option<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+    let mut connection = pool.acquire().await.ok()?;
+    sqlx::query(HOT_SESSION_LOOKUP)
+        .bind(uuid::Uuid::nil())
+        .fetch_optional(&mut *connection)
+        .await
+        .ok()?;
+    tokio::time::sleep(WARM_UP_HOLD).await;
+    Some(connection)
 }
 
 pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let db = &cfg.database;
     let opts =
         connect_opts(db)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]);
-    pool(db, recommendations_share(db.pool_max), opts, None).await
+    pool(db, recommendations_share(db.pool_max), 0, opts, None).await
 }
 
 pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -183,6 +277,11 @@ mod tests {
             ssl,
             pool_max: 1,
             acquire_timeout: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(15),
+            idle_in_transaction_timeout: Duration::from_secs(15),
+            min_connections: 0,
+            shed_factor: 4,
+            shed_wait: Duration::from_millis(1500),
         }
     }
 
@@ -292,7 +391,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let mut single = cfg("postgres://u:p@h:5432/db", DbSslCfg::default());
         single.acquire_timeout = Duration::from_secs(60);
-        let pool = pool_options(&single, 1, None).connect_with(opts).await?;
+        let pool = pool_options(&single, 1, 0, None).connect_with(opts).await?;
 
         let mut tx = pool.begin().await?;
         let abandoned = tokio::time::timeout(
@@ -323,10 +422,11 @@ mod tests {
         let url = std::env::var("DATABASE_URL")?;
         let mut cfg = cfg(&url, DbSslCfg::default());
         cfg.acquire_timeout = Duration::from_secs(20);
-        let core = pool(&cfg, 1, connect_opts(&cfg)?, None).await?;
+        let core = pool(&cfg, 1, 0, core_opts(&cfg)?, None).await?;
         let recommendations = pool(
             &cfg,
             1,
+            0,
             connect_opts(&cfg)?.options([("statement_timeout", RECOMMENDATIONS_STATEMENT_TIMEOUT)]),
             None,
         )
@@ -336,6 +436,10 @@ mod tests {
         let core_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
             .fetch_one(&core)
             .await?;
+        let core_idle_in_transaction: String =
+            sqlx::query_scalar("SHOW idle_in_transaction_session_timeout")
+                .fetch_one(&core)
+                .await?;
         let recommendations_jit: String = sqlx::query_scalar("SHOW jit")
             .fetch_one(&recommendations)
             .await?;
@@ -344,9 +448,77 @@ mod tests {
             .await?;
 
         assert_eq!(core_jit, "off");
-        assert_ne!(core_timeout, "15s");
+        assert_eq!(core_timeout, "15s");
+        assert_eq!(core_idle_in_transaction, "15s");
         assert_eq!(recommendations_jit, "off");
         assert_eq!(recommendations_timeout, "15s");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_statement_over_the_timeout_is_cancelled_and_the_connection_returns()
+    -> anyhow::Result<()> {
+        let url = std::env::var("DATABASE_URL")?;
+        let mut cfg = cfg(&url, DbSslCfg::default());
+        cfg.acquire_timeout = Duration::from_secs(5);
+        cfg.statement_timeout = Duration::from_secs(1);
+        let core = pool(&cfg, 1, 0, core_opts(&cfg)?, None).await?;
+
+        let before: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&core)
+            .await?;
+        let started = Instant::now();
+        let error = sqlx::query("SELECT pg_sleep(30)")
+            .execute(&core)
+            .await
+            .expect_err("the statement timeout should cancel the query");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let code = error.as_database_error().and_then(|e| e.code());
+        assert_eq!(code.as_deref(), Some("57014"));
+
+        let after: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&core)
+            .await?;
+        assert_eq!(before, after);
+        assert_eq!(core.size(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_connection_killed_by_the_server_is_discarded_after_one_failure() -> anyhow::Result<()>
+    {
+        let url = std::env::var("DATABASE_URL")?;
+        let mut cfg = cfg(&url, DbSslCfg::default());
+        cfg.acquire_timeout = Duration::from_secs(5);
+        let core = pool(&cfg, 1, 0, core_opts(&cfg)?, None).await?;
+        let mut admin = PgConnection::connect_with(&connect_opts(&cfg)?).await?;
+
+        let victim: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&core)
+            .await?;
+        sqlx::query("SELECT pg_terminate_backend($1)")
+            .bind(victim)
+            .execute(&mut admin)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let mut failures = 0;
+        let mut survivor = None;
+        for _ in 0..3 {
+            match sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+                .fetch_one(&core)
+                .await
+            {
+                Ok(pid) => {
+                    survivor = Some(pid);
+                    break;
+                }
+                Err(_) => failures += 1,
+            }
+        }
+        assert!(failures <= 1, "{failures} failures after a server kill");
+        let survivor = survivor.expect("the pool recovered");
+        assert_ne!(survivor, victim);
         Ok(())
     }
 }

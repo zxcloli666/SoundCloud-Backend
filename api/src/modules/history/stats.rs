@@ -178,18 +178,19 @@ impl HistoryService {
         now: NaiveDateTime,
     ) -> AppResult<ListeningStats> {
         let variants = user_id_variants(sc_user_id);
+        let mut tx = crate::db::begin_long(&self.pg).await?;
         let first_played_at = match period {
             StatsPeriod::All => {
                 sqlx::query_file_scalar!("queries/history/stats/first_play.sql", &variants)
-                    .fetch_one(&self.pg)
+                    .fetch_one(&mut *tx)
                     .await?
             }
             _ => None,
         };
         let window = stats_window(period, now, utc_offset_min, first_played_at);
-        let totals = self.totals(&variants, window.from, window.to).await?;
+        let totals = Self::totals(&mut tx, &variants, window.from, window.to).await?;
         let previous = match window.previous_from {
-            Some(from) => Some(self.totals(&variants, from, window.from).await?),
+            Some(from) => Some(Self::totals(&mut tx, &variants, from, window.from).await?),
             None => None,
         };
         if totals.plays == 0 {
@@ -213,7 +214,7 @@ impl HistoryService {
             window.to,
             TOP_LIMIT
         )
-        .fetch_all(&self.pg)
+        .fetch_all(&mut *tx)
         .await?
         .into_iter()
         .map(|row| TopTrack {
@@ -235,7 +236,7 @@ impl HistoryService {
             window.to,
             TOP_LIMIT
         )
-        .fetch_all(&self.pg)
+        .fetch_all(&mut *tx)
         .await?;
         let timeline = sqlx::query_file!(
             "queries/history/stats/timeline.sql",
@@ -245,7 +246,7 @@ impl HistoryService {
             window.unit.as_sql(),
             utc_offset_min
         )
-        .fetch_all(&self.pg)
+        .fetch_all(&mut *tx)
         .await?
         .into_iter()
         .map(|row| TimelinePoint {
@@ -262,7 +263,7 @@ impl HistoryService {
             window.to,
             utc_offset_min
         )
-        .fetch_all(&self.pg)
+        .fetch_all(&mut *tx)
         .await?;
         Ok(ListeningStats {
             period,
@@ -279,7 +280,7 @@ impl HistoryService {
     }
 
     async fn totals(
-        &self,
+        tx: &mut sqlx::PgConnection,
         variants: &[String],
         from: NaiveDateTime,
         to: NaiveDateTime,
@@ -291,7 +292,7 @@ impl HistoryService {
             from,
             to
         )
-        .fetch_one(&self.pg)
+        .fetch_one(&mut *tx)
         .await?)
     }
 }

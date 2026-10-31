@@ -10,6 +10,8 @@ mod login_app_tests;
 pub mod model;
 pub mod service;
 #[cfg(test)]
+mod session_cache_tests;
+#[cfg(test)]
 mod source_tests;
 pub mod token_provider;
 

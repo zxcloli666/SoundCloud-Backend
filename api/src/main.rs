@@ -91,6 +91,7 @@ async fn main() {
         ],
     );
     metrics::init();
+    metrics::spawn_runtime_probe();
 
     let config = Arc::new(AppConfig::from_env());
     info!(port = config.port, "backend starting");
@@ -109,6 +110,7 @@ async fn main() {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before API");
+    db::warm_up(&pg, config.database.min_connections).await;
     let recommendations_pg = db::connect_recommendations(&config)
         .await
         .expect("Failed to connect to PostgreSQL for recommendations");

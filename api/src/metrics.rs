@@ -23,9 +23,21 @@ const PG_BLOCKS: &str = "api_pg_blocks_total";
 const PG_SESSIONS_WAITING: &str = "api_pg_sessions";
 const POOL_WAIT: &str = "api_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "api_pg_pool_wait_last_seconds";
+const SHED_TOTAL: &str = "api_load_shed_total";
+const SHED_IN_FLIGHT: &str = "api_load_shed_in_flight";
+const SESSION_CACHE: &str = "api_session_cache_total";
+const TICK_DELAY: &str = "api_runtime_tick_delay_seconds";
+const RUNTIME_BUSY: &str = "api_runtime_busy_ratio";
+const RUNTIME_QUEUE: &str = "api_runtime_queue_depth";
 
 const POOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
+const TICK: Duration = Duration::from_millis(100);
+const TICKS_PER_BUSY_SAMPLE: u32 = 10;
+
+const TICK_DELAY_BUCKETS: &[f64] = &[
+    0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+];
 
 const POOL_WAIT_BUCKETS: &[f64] = &[
     0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0,
@@ -57,6 +69,9 @@ pub fn init() {
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(Matcher::Full(POOL_WAIT.to_owned()), POOL_WAIT_BUCKETS)
+        })
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(Matcher::Full(TICK_DELAY.to_owned()), TICK_DELAY_BUCKETS)
         })
         .and_then(|builder| {
             builder.set_buckets_for_metric(
@@ -113,6 +128,61 @@ pub fn record_request(method: &'static str, route: String, status: u16, elapsed:
         "status" => status,
     )
     .increment(1);
+}
+
+pub fn spawn_runtime_probe() {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    let runtime = tokio::runtime::Handle::current().metrics();
+    tokio::spawn(async move {
+        let workers = runtime.num_workers().max(1);
+        let busy_total = || -> Duration {
+            (0..workers)
+                .map(|worker| runtime.worker_total_busy_duration(worker))
+                .sum()
+        };
+        let mut sampled_at = tokio::time::Instant::now();
+        let mut sampled_busy = busy_total();
+        let mut ticks = 0;
+        loop {
+            let due = tokio::time::Instant::now() + TICK;
+            tokio::time::sleep_until(due).await;
+            let late = tokio::time::Instant::now().saturating_duration_since(due);
+            metrics::histogram!(TICK_DELAY).record(late.as_secs_f64());
+            ticks += 1;
+            if ticks < TICKS_PER_BUSY_SAMPLE {
+                continue;
+            }
+            ticks = 0;
+            let now = tokio::time::Instant::now();
+            let busy = busy_total();
+            let wall = now.duration_since(sampled_at).as_secs_f64() * workers as f64;
+            let worked = busy.saturating_sub(sampled_busy).as_secs_f64();
+            metrics::gauge!(RUNTIME_BUSY).set((worked / wall.max(f64::EPSILON)).min(1.0));
+            metrics::gauge!(RUNTIME_QUEUE).set(runtime.global_queue_depth() as f64);
+            sampled_at = now;
+            sampled_busy = busy;
+        }
+    });
+}
+
+pub fn record_shed(route: &str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SHED_TOTAL, "route" => route.to_owned()).increment(1);
+}
+
+pub fn record_session_cache(outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SESSION_CACHE, "outcome" => outcome).increment(1);
+}
+
+pub fn set_shed_in_flight(in_flight: usize) {
+    metrics::gauge!(SHED_IN_FLIGHT).set(in_flight as f64);
 }
 
 pub fn record_dependency(

@@ -62,9 +62,10 @@ pub async fn list(
     let offset = (page - 1) * limit;
     let status = q.status.filter(|s| !s.is_empty());
 
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
     let total: i64 =
         sqlx::query_file_scalar!("queries/admin/wanted/count_total.sql", status.as_deref())
-            .fetch_one(&state.pg)
+            .fetch_one(&mut *tx)
             .await?;
 
     let items = sqlx::query_file!(
@@ -73,7 +74,7 @@ pub async fn list(
         limit,
         offset
     )
-    .fetch_all(&state.pg)
+    .fetch_all(&mut *tx)
     .await?
     .into_iter()
     .map(|r| WantedTrackRow {
@@ -95,7 +96,7 @@ pub async fn list(
     .collect();
 
     let by_status: Vec<StatusCount> = sqlx::query_file!("queries/admin/wanted/count_by_status.sql")
-        .fetch_all(&state.pg)
+        .fetch_all(&mut *tx)
         .await?
         .into_iter()
         .map(|r| StatusCount {

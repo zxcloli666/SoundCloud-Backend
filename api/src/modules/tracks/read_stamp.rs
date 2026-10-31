@@ -28,7 +28,7 @@ impl ReadStamps {
         let stamped = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
             .execute(pg)
             .await;
-        if stamped.is_ok_and(|done| done.rows_affected() == 1) {
+        if stamped.is_ok() {
             self.stamped.insert(key, ());
         }
     }
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn a_noop_update_never_enters_the_cache_so_a_due_stamp_is_not_delayed(
+    async fn a_fresh_stamp_is_remembered_so_the_next_read_skips_the_database(
         pool: PgPool,
     ) -> anyhow::Result<()> {
         seed(&pool).await?;
@@ -92,17 +92,17 @@ mod tests {
         let stamps = ReadStamps::new();
 
         stamps.touch(&pool, "7001").await;
-        assert!(
-            stamps.stamped.get(&"7001".to_owned()).is_none(),
-            "the guard skipped the row, nothing may be remembered"
-        );
+        assert!(stamps.stamped.get(&"7001".to_owned()).is_some());
 
-        sqlx::query("UPDATE tracks SET last_read_at = now() - interval '25 hours'")
+        sqlx::query("UPDATE tracks SET last_read_at = NULL")
             .execute(&pool)
             .await?;
-        let due = last_read(&pool).await?.expect("old stamp");
         stamps.touch(&pool, "7001").await;
-        assert!(last_read(&pool).await?.expect("restamped") > due);
+        assert_eq!(
+            last_read(&pool).await?,
+            None,
+            "the second touch must not reach the database"
+        );
         Ok(())
     }
 

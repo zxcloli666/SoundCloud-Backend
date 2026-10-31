@@ -140,7 +140,7 @@ async fn a_transient_failure_stays_a_5xx_the_old_client_quietly_retries() -> any
         (
             Err(AppError::Db(sqlx::Error::PoolTimedOut)),
             StatusCode::SERVICE_UNAVAILABLE,
-            None,
+            Some("3"),
         ),
     ];
     for (refreshed, expected_status, expected_retry_after) in cases {

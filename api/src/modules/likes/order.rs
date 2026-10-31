@@ -43,7 +43,7 @@ pub async fn apply(pg: &PgPool, sc_user_id: &str, request: LikesOrderRequest) ->
         id: extract_sc_id(sc_user_id).to_owned(),
         variants: user_id_variants(sc_user_id),
     };
-    let mut tx = pg.begin().await?;
+    let mut tx = crate::db::begin_long(pg).await?;
     sqlx::query_file_scalar!("queries/likes/order/lock.sql", &owner.id)
         .fetch_one(&mut *tx)
         .await?;

@@ -5,6 +5,8 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 const SC_DEADLINE_RETRY_AFTER: i64 = 15;
+const UNAVAILABLE_RETRY_AFTER: i64 = 3;
+const LOAD_SHED_CODE: &str = "api_overloaded";
 const SC_BLOCKED_MESSAGE: &str = "SoundCloud blocked the upstream request, retry later";
 const SC_OPAQUE_BODY_MESSAGE: &str = "SoundCloud API request failed";
 
@@ -161,6 +163,34 @@ impl AppError {
         }
     }
 
+    pub fn overloaded(retry_after_sec: i64) -> Self {
+        Self::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            LOAD_SHED_CODE,
+            "Server is busy, retry shortly",
+        )
+        .with_retry_after(retry_after_sec)
+    }
+
+    fn is_load_shed(&self) -> bool {
+        matches!(
+            self,
+            Self::Coded {
+                code: LOAD_SHED_CODE,
+                ..
+            }
+        )
+    }
+
+    pub fn request_timed_out() -> Self {
+        Self::coded(
+            StatusCode::GATEWAY_TIMEOUT,
+            "request_timed_out",
+            "Request took too long",
+        )
+        .with_retry_after(UNAVAILABLE_RETRY_AFTER)
+    }
+
     pub fn with_retry_after(mut self, seconds: i64) -> Self {
         if let Self::Coded {
             retry_after_sec, ..
@@ -243,7 +273,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status();
 
-        if status.is_server_error() {
+        if status.is_server_error() && !self.is_load_shed() {
             tracing::error!(error = %self, "request failed");
             telemetry::fail(&tracing::Span::current(), &self.to_string());
         } else {
@@ -356,6 +386,11 @@ impl AppError {
             | Self::SoundCloudTemporarilyUnavailable { retry_after_sec } => *retry_after_sec,
             Self::SoundCloudRefreshRateLimited { retry_after_sec } => Some(*retry_after_sec),
             Self::ScDeadlineExceeded => Some(SC_DEADLINE_RETRY_AFTER),
+            Self::ServiceUnavailable(_)
+            | Self::Db(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed)
+            | Self::RedisPool(
+                deadpool_redis::PoolError::Timeout(_) | deadpool_redis::PoolError::Closed,
+            ) => Some(UNAVAILABLE_RETRY_AFTER),
             _ => None,
         };
         seconds.map(|seconds| seconds.clamp(1, crate::sc::RETRY_AFTER_MAX_SECONDS))
@@ -432,6 +467,65 @@ mod tests {
             .expect("error response body should be readable");
         let body = serde_json::from_slice(&body).expect("error response body should be valid JSON");
         (status, body)
+    }
+
+    #[tokio::test]
+    async fn pool_exhaustion_is_a_json_503_with_retry_after() {
+        let response = AppError::Db(sqlx::Error::PoolTimedOut).into_response();
+        assert_json_unavailable(response, StatusCode::SERVICE_UNAVAILABLE, None).await;
+    }
+
+    #[tokio::test]
+    async fn overload_is_a_json_503_with_retry_after() {
+        let response = AppError::overloaded(4).into_response();
+        assert_eq!(
+            response.headers().get(axum::http::header::RETRY_AFTER),
+            Some(&axum::http::HeaderValue::from_static("4"))
+        );
+        assert_json_unavailable(
+            response,
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("api_overloaded"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_request_timeout_is_a_json_504_with_retry_after() {
+        let response = AppError::request_timed_out().into_response();
+        assert_json_unavailable(
+            response,
+            StatusCode::GATEWAY_TIMEOUT,
+            Some("request_timed_out"),
+        )
+        .await;
+    }
+
+    async fn assert_json_unavailable(response: Response, status: StatusCode, code: Option<&str>) {
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_TYPE),
+            Some(&axum::http::HeaderValue::from_static("application/json"))
+        );
+        let retry_after = response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .expect("Retry-After is present");
+        assert!(
+            retry_after.parse::<u64>().is_ok_and(|s| s >= 1),
+            "{retry_after}"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(!body.is_empty());
+        let body: Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(body["statusCode"], status.as_u16());
+        assert!(body["message"].is_string());
+        if let Some(code) = code {
+            assert_eq!(body["code"], code);
+        }
     }
 
     #[tokio::test]

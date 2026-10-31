@@ -57,6 +57,11 @@ pub struct DatabaseCfg {
     pub ssl: DbSslCfg,
     pub pool_max: u32,
     pub acquire_timeout: Duration,
+    pub statement_timeout: Duration,
+    pub idle_in_transaction_timeout: Duration,
+    pub min_connections: u32,
+    pub shed_factor: u32,
+    pub shed_wait: Duration,
 }
 
 impl std::fmt::Debug for DatabaseCfg {
@@ -66,6 +71,9 @@ impl std::fmt::Debug for DatabaseCfg {
             .field("ssl", &self.ssl)
             .field("pool_max", &self.pool_max)
             .field("acquire_timeout", &self.acquire_timeout)
+            .field("statement_timeout", &self.statement_timeout)
+            .field("min_connections", &self.min_connections)
+            .field("shed_factor", &self.shed_factor)
             .finish()
     }
 }
@@ -313,6 +321,14 @@ fn database_from_env(prefix: &str, default_host: Option<&str>) -> Option<Databas
         },
         pool_max: env_u32(&key("PG_POOL_MAX"), if prefix.is_empty() { 20 } else { 10 }),
         acquire_timeout: Duration::from_secs(env_u64(&key("PG_ACQUIRE_TIMEOUT_SECS"), 10)),
+        statement_timeout: Duration::from_secs(env_u64(&key("PG_STATEMENT_TIMEOUT_SECS"), 15)),
+        idle_in_transaction_timeout: Duration::from_secs(env_u64(
+            &key("PG_IDLE_IN_TRANSACTION_TIMEOUT_SECS"),
+            15,
+        )),
+        min_connections: env_u32(&key("PG_MIN_CONNECTIONS"), 7),
+        shed_factor: env_u32(&key("PG_SHED_FACTOR"), 4),
+        shed_wait: Duration::from_millis(env_u64(&key("PG_SHED_WAIT_MS"), 1500)),
     })
 }
 
@@ -501,6 +517,11 @@ mod tests {
             ssl: DbSslCfg::default(),
             pool_max: 1,
             acquire_timeout: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(15),
+            idle_in_transaction_timeout: Duration::from_secs(15),
+            min_connections: 0,
+            shed_factor: 4,
+            shed_wait: Duration::from_millis(1500),
         };
         let rendered = format!("{cfg:?}");
         assert!(!rendered.contains("s3cr3t"), "{rendered}");
