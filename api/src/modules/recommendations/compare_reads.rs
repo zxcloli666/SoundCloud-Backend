@@ -11,19 +11,22 @@ use super::home_artists::{HomeArtist, Shelf, load_artists};
 use super::service::util::user_id_variants;
 use super::smart_wave::artist_tracks::ArtistTopTracks;
 use super::smart_wave::graph::{
-    Affinity, GraphEdges, GraphSeed, affinity_from, load_disliked_artists,
+    Affinity, GraphEdges, GraphSeed, affinity_from, edge_rows, legacy_edge_rows,
+    load_disliked_artists,
 };
 
 const TOP_AFFINITY: usize = 300;
 const TOP_LIMIT: i64 = 16;
 const ADJACENT_LIMIT: i64 = 20;
+const FRONTIER: usize = 320;
 const SAMPLE_START_PERCENT: f32 = 0.02;
 const SAMPLE_MAX_PERCENT: f32 = 100.0;
 
 struct Args {
     database_url: String,
     users: usize,
-    ks: Vec<i64>,
+    k_coplay: Vec<i64>,
+    k_colike: Vec<Option<i64>>,
     concurrency: usize,
     timeout_secs: u64,
     worst: usize,
@@ -34,7 +37,8 @@ impl Args {
         let mut args = Args {
             database_url: std::env::var("DATABASE_URL").unwrap_or_default(),
             users: 500,
-            ks: vec![256],
+            k_coplay: vec![256],
+            k_colike: vec![None],
             concurrency: 1,
             timeout_secs: 30,
             worst: 5,
@@ -45,10 +49,19 @@ impl Args {
             match flag.as_str() {
                 "--database-url" => args.database_url = value,
                 "--users" => args.users = value.parse().map_err(|_| "bad --users")?,
-                "--k" => {
-                    args.ks = value
+                "--k-coplay" => {
+                    args.k_coplay = value
                         .split(',')
-                        .map(|k| k.trim().parse().map_err(|_| "bad --k"))
+                        .map(|k| k.trim().parse().map_err(|_| "bad --k-coplay"))
+                        .collect::<Result<_, _>>()?
+                }
+                "--k-colike" => {
+                    args.k_colike = value
+                        .split(',')
+                        .map(|k| match k.trim() {
+                            "none" => Ok(None),
+                            k => k.parse().map(Some).map_err(|_| "bad --k-colike"),
+                        })
                         .collect::<Result<_, _>>()?
                 }
                 "--concurrency" => {
@@ -152,6 +165,26 @@ struct List {
     track_diffs: usize,
 }
 
+#[derive(Clone, Copy)]
+struct Variant {
+    coplay: i64,
+    colike: Option<i64>,
+}
+
+impl Variant {
+    fn label(self) -> String {
+        match self.colike {
+            Some(k) => format!("coplay={} colike={k}", self.coplay),
+            None => format!("coplay={} colike=none", self.coplay),
+        }
+    }
+}
+
+struct Probe {
+    ms: f64,
+    rows: usize,
+}
+
 struct ShelfReport {
     name: &'static str,
     artists: Sample,
@@ -162,7 +195,8 @@ struct ShelfReport {
 }
 
 struct UserReport {
-    affinity: Vec<(i64, Sample, f64)>,
+    affinity: Vec<(usize, Sample, f64)>,
+    probes: Vec<Probe>,
     shelves: Vec<ShelfReport>,
 }
 
@@ -234,7 +268,7 @@ async fn new_shelf(
 async fn compare_user(
     pg: &PgPool,
     old_edges: &GraphEdges,
-    new_edges: &[(i64, GraphEdges)],
+    new_edges: &[(Variant, GraphEdges)],
     tops: &ArtistTopTracks,
     user: &str,
 ) -> Result<Option<UserReport>, sqlx::Error> {
@@ -247,13 +281,13 @@ async fn compare_user(
     let old_top = ranked(&old);
     let old_ids: Vec<Uuid> = old_top.iter().map(|(artist, _)| *artist).collect();
     let mut affinity = Vec::new();
-    for (k, edges) in new_edges {
+    for (index, (_, edges)) in new_edges.iter().enumerate() {
         let started = Instant::now();
         let new = affinity_from(edges, pg, &variants, &disliked, &GraphSeed::User).await;
         let new_top = ranked(&new);
         let new_ids: Vec<Uuid> = new_top.iter().map(|(artist, _)| *artist).collect();
         affinity.push((
-            *k,
+            index,
             Sample {
                 user: user.to_owned(),
                 agreement: agreement(&old_ids, &new_ids),
@@ -261,6 +295,28 @@ async fn compare_user(
             },
             started.elapsed().as_secs_f64() * 1000.0,
         ));
+    }
+
+    let frontier: Vec<Uuid> = old_ids.iter().copied().take(FRONTIER).collect();
+    let mut probes = Vec::new();
+    for _ in 0..2 {
+        probes.clear();
+        let started = Instant::now();
+        let rows = legacy_edge_rows(pg, &frontier).await.unwrap_or(0);
+        probes.push(Probe {
+            ms: started.elapsed().as_secs_f64() * 1000.0,
+            rows,
+        });
+        for (variant, _) in new_edges {
+            let started = Instant::now();
+            let rows = edge_rows(pg, &frontier, variant.coplay, variant.colike)
+                .await
+                .unwrap_or(0);
+            probes.push(Probe {
+                ms: started.elapsed().as_secs_f64() * 1000.0,
+                rows,
+            });
+        }
     }
 
     let mut shelves = Vec::new();
@@ -319,7 +375,11 @@ async fn compare_user(
             tracks: [pairs, differing.len(), ties],
         });
     }
-    Ok(Some(UserReport { affinity, shelves }))
+    Ok(Some(UserReport {
+        affinity,
+        probes,
+        shelves,
+    }))
 }
 
 async fn sample_users(pg: &PgPool, wanted: usize) -> Result<Vec<String>, sqlx::Error> {
@@ -339,6 +399,20 @@ async fn sample_users(pg: &PgPool, wanted: usize) -> Result<Vec<String>, sqlx::E
         }
         percent = (percent * 4.0).min(SAMPLE_MAX_PERCENT);
     }
+}
+
+fn percentiles(values: &mut [f64]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+    values.sort_by(f64::total_cmp);
+    let at = |q: f64| values[((values.len() - 1) as f64 * q).round() as usize];
+    format!(
+        "{:.0} {:.0} {:.0}",
+        at(0.5),
+        at(0.95),
+        values[values.len() - 1]
+    )
 }
 
 fn mean(values: impl Iterator<Item = f64>) -> f64 {
@@ -413,7 +487,7 @@ pub async fn run(raw: Vec<String>) -> i32 {
         Err(message) => {
             eprintln!("compare-reads: {message}");
             eprintln!(
-                "usage: api compare-reads [--database-url URL] [--users 500] [--k 256[,128,...]] [--concurrency 1|2] [--timeout-secs 30] [--worst 5]"
+                "usage: api compare-reads [--database-url URL] [--users 500] [--k-coplay 256[,...]] [--k-colike 1024,2048,4096,none] [--concurrency 1|2] [--timeout-secs 30] [--worst 5]"
             );
             return 2;
         }
@@ -459,18 +533,30 @@ async fn execute(args: Args) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     println!(
-        "candidates={} wanted={} k={:?} concurrency={}",
+        "candidates={} wanted={} k_coplay={:?} k_colike={:?} concurrency={}",
         candidates.len(),
         args.users,
-        args.ks,
+        args.k_coplay,
+        args.k_colike,
         args.concurrency
     );
 
-    let old_edges = GraphEdges::with_top_k(i64::MAX);
-    let new_edges: Vec<(i64, GraphEdges)> = args
-        .ks
+    let old_edges = GraphEdges::with_top_k(i64::MAX, None);
+    let new_edges: Vec<(Variant, GraphEdges)> = args
+        .k_coplay
         .iter()
-        .map(|k| (*k, GraphEdges::with_top_k(*k)))
+        .flat_map(|coplay| {
+            args.k_colike.iter().map(move |colike| Variant {
+                coplay: *coplay,
+                colike: *colike,
+            })
+        })
+        .map(|variant| {
+            (
+                variant,
+                GraphEdges::with_top_k(variant.coplay, variant.colike),
+            )
+        })
         .collect();
     let tops = ArtistTopTracks::for_home();
 
@@ -484,7 +570,8 @@ async fn execute(args: Args) -> Result<(), String> {
         })
         .buffer_unordered(args.concurrency);
 
-    let mut affinity: HashMap<i64, List> = HashMap::new();
+    let mut affinity: HashMap<usize, List> = HashMap::new();
+    let mut edge_probes: Vec<Vec<(f64, usize)>> = vec![Vec::new(); new_edges.len() + 1];
     let mut shelves: HashMap<&'static str, (List, List)> = HashMap::new();
     let (mut used, mut empty, mut failed) = (0usize, 0usize, 0usize);
     while let Some((user, report)) = stream.next().await {
@@ -494,8 +581,11 @@ async fn execute(args: Args) -> Result<(), String> {
         match report {
             Ok(Some(report)) => {
                 used += 1;
-                for (k, sample, ms) in report.affinity {
-                    let list = affinity.entry(k).or_default();
+                for (slot, probe) in report.probes.iter().enumerate() {
+                    edge_probes[slot].push((probe.ms, probe.rows));
+                }
+                for (index, sample, ms) in report.affinity {
+                    let list = affinity.entry(index).or_default();
                     list.new_ms += ms;
                     list.samples.push(sample);
                 }
@@ -519,10 +609,29 @@ async fn execute(args: Args) -> Result<(), String> {
     }
     println!("compared={used} without_signal={empty} failed={failed}");
     println!("affinity top {TOP_AFFINITY}: old = every edge, new = top K per artist and branch");
-    let mut ks: Vec<&i64> = affinity.keys().collect();
-    ks.sort();
-    for k in ks {
-        print_list(&format!("affinity K={k}"), &affinity[k], args.worst, true);
+    for (index, (variant, _)) in new_edges.iter().enumerate() {
+        if let Some(list) = affinity.get(&index) {
+            print_list(
+                &format!("affinity {}", variant.label()),
+                list,
+                args.worst,
+                true,
+            );
+        }
+    }
+    println!(
+        "edge query on the 320 heaviest artists of each user, warm, per user: ms and rows p50 p95 max"
+    );
+    let labels = std::iter::once("old".to_owned())
+        .chain(new_edges.iter().map(|(variant, _)| variant.label()));
+    for (label, probes) in labels.zip(&edge_probes) {
+        let mut ms: Vec<f64> = probes.iter().map(|p| p.0).collect();
+        let mut rows: Vec<f64> = probes.iter().map(|p| p.1 as f64).collect();
+        println!(
+            "  {label}: ms {} rows {}",
+            percentiles(&mut ms),
+            percentiles(&mut rows)
+        );
     }
     println!(
         "home shelves: old = legacy SQL, new = artist list + ArtistTopTracks; noise = old SQL against itself"

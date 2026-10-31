@@ -29,7 +29,8 @@ const ANTISPREAD_MU: f32 = 0.6;
 const CACHE_TTL_SECS: u64 = 600;
 const EDGES_TTL: Duration = Duration::from_secs(3600);
 const EDGES_KEPT: u64 = 4_000_000;
-const EDGES_TOP_K: i64 = 256;
+const EDGES_TOP_K_COPLAY: i64 = 256;
+const EDGES_TOP_K_COLIKE: Option<i64> = None;
 const EDGES_CACHE: &str = "graph_edges";
 
 pub enum GraphSeed {
@@ -45,7 +46,8 @@ type Adjacency = HashMap<Uuid, Arc<Neighbors>>;
 pub struct GraphEdges {
     by_artist: Cache<Uuid, Arc<Neighbors>>,
     loading: Mutex<HashMap<Uuid, Arc<Semaphore>>>,
-    top_k: i64,
+    top_k_coplay: i64,
+    top_k_colike: Option<i64>,
 }
 
 struct Loading<'a> {
@@ -69,10 +71,10 @@ impl Drop for Loading<'_> {
 
 impl GraphEdges {
     pub fn new() -> Self {
-        Self::with_top_k(EDGES_TOP_K)
+        Self::with_top_k(EDGES_TOP_K_COPLAY, EDGES_TOP_K_COLIKE)
     }
 
-    pub fn with_top_k(top_k: i64) -> Self {
+    pub fn with_top_k(top_k_coplay: i64, top_k_colike: Option<i64>) -> Self {
         Self {
             by_artist: Cache::builder()
                 .max_capacity(EDGES_KEPT)
@@ -80,7 +82,8 @@ impl GraphEdges {
                 .time_to_live(EDGES_TTL)
                 .build(),
             loading: Mutex::new(HashMap::new()),
-            top_k,
+            top_k_coplay,
+            top_k_colike,
         }
     }
 
@@ -164,7 +167,8 @@ impl GraphEdges {
         let edges = sqlx::query_file!(
             "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
             &artists,
-            self.top_k
+            self.top_k_coplay,
+            self.top_k_colike
         )
         .fetch_all(pg)
         .await
@@ -212,6 +216,35 @@ fn neighbors_by_artist(
 fn edge_count(neighbors: &Neighbors) -> u32 {
     let edges: usize = neighbors.values().map(Vec::len).sum();
     u32::try_from(edges).unwrap_or(u32::MAX).saturating_add(1)
+}
+
+pub async fn edge_rows(
+    pg: &PgPool,
+    artists: &[Uuid],
+    top_k_coplay: i64,
+    top_k_colike: Option<i64>,
+) -> Option<usize> {
+    sqlx::query_file!(
+        "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
+        artists,
+        top_k_coplay,
+        top_k_colike
+    )
+    .fetch_all(pg)
+    .await
+    .ok()
+    .map(|rows| rows.len())
+}
+
+pub async fn legacy_edge_rows(pg: &PgPool, artists: &[Uuid]) -> Option<usize> {
+    sqlx::query_file!(
+        "queries/recommendations/smart_wave/graph/load_graph_edges_legacy.sql",
+        artists
+    )
+    .fetch_all(pg)
+    .await
+    .ok()
+    .map(|rows| rows.len())
 }
 
 pub struct GraphResult {
@@ -584,7 +617,8 @@ mod tests {
         let edges = sqlx::query_file!(
             "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
             artists,
-            i64::MAX
+            i64::MAX,
+            None::<i64>
         )
         .fetch_all(pool)
         .await?;
@@ -782,11 +816,17 @@ mod tests {
         rows
     }
 
-    async fn new_edges(pool: &PgPool, artists: &[Uuid], k: i64) -> anyhow::Result<Vec<Edge>> {
+    async fn new_edges(
+        pool: &PgPool,
+        artists: &[Uuid],
+        k: i64,
+        colike: Option<i64>,
+    ) -> anyhow::Result<Vec<Edge>> {
         let rows = sqlx::query_file!(
             "queries/recommendations/smart_wave/graph/load_graph_edges.sql",
             artists,
-            k
+            k,
+            colike
         )
         .fetch_all(pool)
         .await?;
@@ -834,8 +874,8 @@ mod tests {
         let ids = hubs(&pool).await?;
         let old = flat(old_edges(&pool, &ids).await?);
         assert!(old.len() > 4 * NEIGHBORS as usize);
-        assert_eq!(new_edges(&pool, &ids, i64::MAX).await?, old);
-        assert_eq!(new_edges(&pool, &ids, 10_000).await?, old);
+        assert_eq!(new_edges(&pool, &ids, i64::MAX, None).await?, old);
+        assert_eq!(new_edges(&pool, &ids, 10_000, Some(10_000)).await?, old);
         Ok(())
     }
 
@@ -846,8 +886,30 @@ mod tests {
         let ids = hubs(&pool).await?;
         let old = old_edges(&pool, &ids).await?;
         for k in [1_usize, 7, 59, 60] {
-            let new = new_edges(&pool, &ids, k as i64).await?;
+            let new = new_edges(&pool, &ids, k as i64, Some(k as i64)).await?;
             assert_eq!(new, cut_to_top(&old, k), "k = {k}");
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn an_unlimited_colike_branch_returns_the_old_colike_rows_and_coplay_is_cut(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        let ids = hubs(&pool).await?;
+        let old = old_edges(&pool, &ids).await?;
+        let (colike, coplay): (Vec<_>, Vec<_>) = old.iter().cloned().partition(|r| r.3 == 1);
+        for k in [1_usize, 7, 59] {
+            let mut want = cut_to_top(&coplay, k);
+            want.extend(flat(colike.clone()));
+            want.sort();
+            let new = new_edges(&pool, &ids, k as i64, None).await?;
+            assert_eq!(new, want, "k = {k}");
+            assert_eq!(
+                new.iter().filter(|r| r.3 == 1).count(),
+                colike.len(),
+                "colike must not lose a row"
+            );
         }
         Ok(())
     }
@@ -858,8 +920,8 @@ mod tests {
     ) -> anyhow::Result<()> {
         hubs(&pool).await?;
         let hub = Uuid::from_u128(LOW_HUB);
-        let full = GraphEdges::with_top_k(i64::MAX);
-        let cut = GraphEdges::with_top_k(5);
+        let full = GraphEdges::with_top_k(i64::MAX, None);
+        let cut = GraphEdges::with_top_k(5, Some(5));
         let full = full.of(&pool, &[hub]).await;
         let cut = cut.of(&pool, &[hub]).await;
         let (full, cut) = (merge_normalized(&full[&hub]), merge_normalized(&cut[&hub]));
@@ -891,6 +953,7 @@ mod tests {
         ))
         .bind(&ids)
         .bind(50_i64)
+        .bind(Some(50_i64))
         .fetch_all(&mut *tx)
         .await?;
         let plan = plan.join("\n");
