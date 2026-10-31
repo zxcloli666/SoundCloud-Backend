@@ -298,6 +298,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0261_oauth_app_tokens_local.sql"
+    ))
+    .execute(pool)
+    .await?;
     sqlx::raw_sql(
         "CREATE TABLE oauth_apps (
              id uuid PRIMARY KEY,

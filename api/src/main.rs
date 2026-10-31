@@ -52,7 +52,7 @@ use crate::cache::CacheService;
 use crate::common::admission::PublicAdmission;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
-use crate::modules::auth::{AuthService, LinkService, TokenProvider};
+use crate::modules::auth::{AuthService, CoreRpc, LinkService, TokenProvider};
 use crate::modules::cold_refresh::ColdRefreshService;
 use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
@@ -64,7 +64,7 @@ use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
-use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
+use crate::modules::oauth_apps::{AppTokenFallback, OAuthAppTokenService, OAuthAppsService};
 use crate::modules::playlists::{PlaylistsDeps, PlaylistsService};
 use crate::modules::recommendations::{RecommendationsService, S3VerifierService};
 use crate::modules::search::SearchService;
@@ -172,10 +172,20 @@ async fn main() {
 
     let auth_health =
         crate::modules::auth::AuthHealthService::with_database(redis_pool.clone(), pg.clone());
-    let auth = AuthService::new(pg.clone(), sc.clone(), oauth_apps.clone(), auth_health);
+    let core = CoreRpc::new(nats.clone());
+    let auth = AuthService::new(
+        pg.clone(),
+        sc.clone(),
+        oauth_apps.clone(),
+        auth_health,
+        core.clone(),
+    );
     let link = LinkService::new(pg.clone(), auth.clone());
 
-    let oauth_app_tokens = OAuthAppTokenService::new(pg.clone());
+    let oauth_app_tokens = OAuthAppTokenService::with_fallback(
+        pg.clone(),
+        AppTokenFallback::new(pg.clone(), redis_pool.clone(), sc.clone(), core),
+    );
     let tokens = TokenProvider::new(auth.clone(), oauth_app_tokens.clone());
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 

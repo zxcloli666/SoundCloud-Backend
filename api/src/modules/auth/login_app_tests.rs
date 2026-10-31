@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::modules::auth::AuthService;
+use crate::modules::auth::CoreRpc;
 use crate::modules::auth::health::AuthHealthService;
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
@@ -24,6 +25,7 @@ fn auth(pool: &PgPool) -> anyhow::Result<(Arc<AuthService>, Arc<AuthHealthServic
         sc,
         OAuthAppsService::new(pool.clone()),
         health.clone(),
+        CoreRpc::unreachable(),
     );
     Ok((auth, health))
 }

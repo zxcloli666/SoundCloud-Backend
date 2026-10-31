@@ -52,7 +52,6 @@ pub struct SoundCloudConnection {
     pub soundcloud_user_id: String,
     pub oauth_app_id: Option<Uuid>,
     pub access_token: String,
-    pub refresh_token: String,
     pub expires_at: DateTime<Utc>,
     pub scope: String,
     pub refresh_generation: i64,

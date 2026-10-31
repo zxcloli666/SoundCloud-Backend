@@ -1,3 +1,4 @@
+mod fallback;
 mod snapshot;
 
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+pub use self::fallback::AppTokenFallback;
 use self::snapshot::TokenSnapshot;
 
 const MIN_FRESH: chrono::Duration = chrono::Duration::seconds(30);
@@ -46,18 +48,34 @@ pub struct OAuthAppTokenService {
     pg: PgPool,
     snapshot: TokenSnapshot,
     reload_lock: Mutex<()>,
+    fallback: Option<Arc<AppTokenFallback>>,
 }
 
 impl OAuthAppTokenService {
+    #[cfg(test)]
     pub fn new(pg: PgPool) -> Arc<Self> {
+        Self::build(pg, None)
+    }
+
+    pub fn with_fallback(pg: PgPool, fallback: Arc<AppTokenFallback>) -> Arc<Self> {
+        Self::build(pg, Some(fallback))
+    }
+
+    fn build(pg: PgPool, fallback: Option<Arc<AppTokenFallback>>) -> Arc<Self> {
         Arc::new(Self {
             pg,
             snapshot: TokenSnapshot::default(),
             reload_lock: Mutex::new(()),
+            fallback,
         })
     }
 
     pub(crate) async fn snapshot(&self) -> AppResult<Vec<PublicToken>> {
+        if let Some(fallback) = &self.fallback
+            && fallback.top_up().await
+        {
+            self.snapshot.invalidate();
+        }
         self.snapshot_with(|| self.load()).await
     }
 
@@ -86,7 +104,18 @@ impl OAuthAppTokenService {
         wt::retry(|| async {
             let mut transaction = self.pg.begin().await?;
             let rejected = wt::call(&mut transaction, &command).await?;
-            transaction.commit().await.map(|()| rejected)
+            let rejected_here = sqlx::query_file_scalar!(
+                "queries/oauth_apps/token_service/reject_local.sql",
+                token.oauth_app_id,
+                token.generation
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+            transaction
+                .commit()
+                .await
+                .map(|()| rejected || rejected_here)
         })
         .await
     }
