@@ -4,7 +4,7 @@ mod accounts;
 #[path = "persist_tests.rs"]
 mod tests;
 
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Acquire, PgConnection, PgPool, Postgres, Transaction};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -12,7 +12,7 @@ use self::accounts::{
     compute_upload_kind, maybe_attach_reupload_account, maybe_auto_attach_sc_account,
     without_foreign_namesakes,
 };
-use super::error::EnrichResult;
+use super::error::{EnrichError, EnrichResult};
 use super::resolver::{AlbumCandidate, ArtistCandidate, Credit, ResolveResult, ResolveSource};
 use crate::handlers::artist_names::{MIN_NAME_LENGTH, name_length};
 use catalog_normalize::{clean_artist_name, normalize_name, normalize_title};
@@ -43,10 +43,12 @@ pub async fn apply(
         )
         .await?
     };
-    let primary_ids = upsert_artists(&mut tx, &primaries, uploader_sc_user_id).await?;
-    let featured_ids = upsert_artists(&mut tx, &res.featured, uploader_sc_user_id).await?;
-    let producer_ids = upsert_artists(&mut tx, &res.producers, uploader_sc_user_id).await?;
-    let remixer_ids = upsert_artists(&mut tx, &res.remixers, uploader_sc_user_id).await?;
+    let [primary_ids, featured_ids, producer_ids, remixer_ids] = upsert_artists(
+        &mut tx,
+        [&primaries, &res.featured, &res.producers, &res.remixers],
+        uploader_sc_user_id,
+    )
+    .await?;
 
     let prior_count: i64 =
         sqlx::query_file_scalar!("queries/enrich/persist/count_track_artists.sql", track_id)
@@ -208,21 +210,30 @@ async fn calibrate_confidence(
 
 async fn upsert_artists(
     tx: &mut Transaction<'_, Postgres>,
-    candidates: &[ArtistCandidate],
+    groups: [&[ArtistCandidate]; 4],
     uploader_sc_user_id: Option<&str>,
-) -> EnrichResult<Vec<(Uuid, Credit)>> {
-    let mut credited: Vec<(Uuid, Credit)> = Vec::with_capacity(candidates.len());
-    for c in candidates {
-        let cleaned = clean_artist_name(&c.name);
-        if cleaned.is_empty() {
-            continue;
+) -> EnrichResult<[Vec<(Uuid, Credit)>; 4]> {
+    let mut ordered: Vec<(String, String, usize, usize)> = Vec::new();
+    for (group, candidates) in groups.iter().enumerate() {
+        for (position, c) in candidates.iter().enumerate() {
+            let cleaned = clean_artist_name(&c.name);
+            if cleaned.is_empty() {
+                continue;
+            }
+            let normalized = normalize_name(&cleaned);
+            if normalized.is_empty() {
+                continue;
+            }
+            ordered.push((normalized, cleaned, group, position));
         }
-        let normalized = normalize_name(&cleaned);
-        if normalized.is_empty() {
-            continue;
-        }
+    }
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut resolved: Vec<Vec<Option<Uuid>>> = groups.iter().map(|g| vec![None; g.len()]).collect();
+    for (normalized, cleaned, group, position) in ordered {
+        let c = &groups[group][position];
         let credit = c.credit();
-        let Some(id) = upsert_one_artist(
+        resolved[group][position] = upsert_one_artist(
             tx,
             &cleaned,
             &normalized,
@@ -231,20 +242,27 @@ async fn upsert_artists(
             credit.confidence,
             uploader_sc_user_id,
         )
-        .await?
-        else {
-            continue;
-        };
-        match credited.iter_mut().find(|(known, _)| *known == id) {
-            Some((_, held)) => {
-                if stronger(&credit, held) {
-                    *held = credit;
-                }
-            }
-            None => credited.push((id, credit)),
-        }
+        .await?;
     }
-    Ok(credited)
+
+    Ok(std::array::from_fn(|group| {
+        let mut credited: Vec<(Uuid, Credit)> = Vec::with_capacity(groups[group].len());
+        for (c, id) in groups[group].iter().zip(&resolved[group]) {
+            let Some(id) = *id else {
+                continue;
+            };
+            let credit = c.credit();
+            match credited.iter_mut().find(|(known, _)| *known == id) {
+                Some((_, held)) => {
+                    if stronger(&credit, held) {
+                        *held = credit;
+                    }
+                }
+                None => credited.push((id, credit)),
+            }
+        }
+        credited
+    }))
 }
 
 fn stronger(candidate: &Credit, held: &Credit) -> bool {
@@ -252,6 +270,11 @@ fn stronger(candidate: &Credit, held: &Credit) -> bool {
     let held_rank = held.source.priority();
     candidate_rank > held_rank
         || (candidate_rank == held_rank && candidate.confidence > held.confidence)
+}
+
+enum Attempt {
+    Settled(Option<Uuid>),
+    Conflict,
 }
 
 async fn upsert_one_artist(
@@ -263,6 +286,35 @@ async fn upsert_one_artist(
     confidence: f32,
     uploader_sc_user_id: Option<&str>,
 ) -> EnrichResult<Option<Uuid>> {
+    for _ in 0..3 {
+        let attempt = try_upsert_one_artist(
+            tx,
+            name,
+            normalized,
+            cand,
+            source,
+            confidence,
+            uploader_sc_user_id,
+        )
+        .await?;
+        if let Attempt::Settled(id) = attempt {
+            return Ok(id);
+        }
+    }
+    Err(EnrichError::rejected(format!(
+        "artist '{normalized}' kept conflicting on insert"
+    )))
+}
+
+async fn try_upsert_one_artist(
+    tx: &mut Transaction<'_, Postgres>,
+    name: &str,
+    normalized: &str,
+    cand: &ArtistCandidate,
+    source: ResolveSource,
+    confidence: f32,
+    uploader_sc_user_id: Option<&str>,
+) -> EnrichResult<Attempt> {
     if let Some(mb_id) = cand.mb_id.as_deref() {
         let existing: Option<Uuid> =
             sqlx::query_file_scalar!("queries/enrich/persist/artist_by_mb_id.sql", mb_id)
@@ -270,7 +322,9 @@ async fn upsert_one_artist(
                 .await?;
         if let Some(id) = existing {
             maybe_promote(tx, id, cand, source, confidence).await?;
-            return resolve_merged(tx, id).await.map(Some);
+            return resolve_merged(tx, id)
+                .await
+                .map(|id| Attempt::Settled(Some(id)));
         }
     }
 
@@ -281,7 +335,9 @@ async fn upsert_one_artist(
                 .await?;
         if let Some(id) = existing {
             maybe_promote(tx, id, cand, source, confidence).await?;
-            return resolve_merged(tx, id).await.map(Some);
+            return resolve_merged(tx, id)
+                .await
+                .map(|id| Attempt::Settled(Some(id)));
         }
     }
 
@@ -310,15 +366,18 @@ async fn upsert_one_artist(
                 uploader = ?uploader_sc_user_id,
                 "external artist kept off a same-named artist with its own identity"
             );
-            return Ok(None);
+            return Ok(Attempt::Settled(None));
         }
         maybe_promote(tx, id, cand, source, confidence).await?;
-        return resolve_merged(tx, id).await.map(Some);
+        return resolve_merged(tx, id)
+            .await
+            .map(|id| Attempt::Settled(Some(id)));
     }
 
-    let inserted: (Uuid,) = sqlx::query_as(
+    let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO artists (name, normalized_name, mb_artist_id, genius_artist_id, source, confidence)
          VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT DO NOTHING
          RETURNING id",
     )
     .bind(name)
@@ -327,9 +386,12 @@ async fn upsert_one_artist(
     .bind(cand.genius_id.as_deref())
     .bind(source.as_str())
     .bind(confidence)
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    Ok(Some(inserted.0))
+    Ok(match inserted {
+        Some(id) => Attempt::Settled(Some(id)),
+        None => Attempt::Conflict,
+    })
 }
 
 async fn maybe_promote(
@@ -351,21 +413,72 @@ async fn maybe_promote(
     let cur_priority = ResolveSource::priority_of(&cur_source);
     let stronger = new_priority > cur_priority
         || (new_priority == cur_priority && confidence > cur_conf + 0.05);
-    let mb_to_set = cand.mb_id.clone().or(cur_mb);
-    let genius_to_set = cand.genius_id.clone().or(cur_genius);
+    let mb_to_set = cand.mb_id.clone().or(cur_mb.clone());
+    let genius_to_set = cand.genius_id.clone().or(cur_genius.clone());
     if !stronger && mb_to_set.is_none() && genius_to_set.is_none() {
         return Ok(());
     }
+    let takes_new_id = (cand.mb_id.is_some() && cur_mb.is_none())
+        || (cand.genius_id.is_some() && cur_genius.is_none());
+    if takes_new_id {
+        let mut savepoint = tx.begin().await?;
+        let written = write_promotion(
+            &mut savepoint,
+            id,
+            mb_to_set.as_deref(),
+            genius_to_set.as_deref(),
+            stronger,
+            source,
+            confidence,
+        )
+        .await;
+        match written {
+            Ok(()) => return Ok(savepoint.commit().await?),
+            Err(error) if is_unique_violation(&error) => {
+                savepoint.rollback().await?;
+                debug!(artist = %id, "external id was taken by another artist, link kept without it");
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    write_promotion(
+        &mut **tx,
+        id,
+        cur_mb.as_deref(),
+        cur_genius.as_deref(),
+        stronger,
+        source,
+        confidence,
+    )
+    .await?;
+    Ok(())
+}
+
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|error| error.is_unique_violation())
+}
+
+async fn write_promotion(
+    conn: &mut PgConnection,
+    id: Uuid,
+    mb_artist_id: Option<&str>,
+    genius_artist_id: Option<&str>,
+    stronger: bool,
+    source: ResolveSource,
+    confidence: f32,
+) -> Result<(), sqlx::Error> {
     sqlx::query_file!(
         "queries/enrich/persist/promote_artist.sql",
         id,
-        mb_to_set.as_deref(),
-        genius_to_set.as_deref(),
+        mb_artist_id,
+        genius_artist_id,
         stronger,
         source.as_str(),
         confidence
     )
-    .execute(&mut **tx)
+    .execute(conn)
     .await?;
     Ok(())
 }
@@ -419,24 +532,8 @@ async fn upsert_album(
     confidence: f32,
     uploader_sc_user_id: Option<&str>,
 ) -> EnrichResult<Uuid> {
-    if let Some(mb_id) = album.mb_id.as_deref() {
-        let existing: Option<Uuid> =
-            sqlx::query_file_scalar!("queries/enrich/persist/album_by_mb_id.sql", mb_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-        if let Some(id) = existing {
-            if let Some(cover) = album.cover_url.as_deref() {
-                sqlx::query_file!(
-                    "queries/enrich/persist/album_fill_cover_mb.sql",
-                    id,
-                    cover,
-                    album.year
-                )
-                .execute(&mut **tx)
-                .await?;
-            }
-            return Ok(id);
-        }
+    if let Some(id) = existing_album_by_mb_id(tx, album).await? {
+        return Ok(id);
     }
     if let Some(g_id) = album.genius_id.as_deref() {
         let existing: Option<Uuid> =
@@ -484,9 +581,10 @@ async fn upsert_album(
         _ => "album",
     };
 
-    let inserted: (Uuid,) = sqlx::query_as(
+    let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO albums (title, normalized_title, primary_artist_id, type, release_year, mb_release_id, genius_album_id, cover_url, source, confidence)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT DO NOTHING
          RETURNING id",
     )
     .bind(album.title.trim())
@@ -499,19 +597,55 @@ async fn upsert_album(
     .bind(album.cover_url.as_deref())
     .bind(source.as_str())
     .bind(confidence)
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
+    let Some(album_id) = inserted else {
+        return match existing_album_by_mb_id(tx, album).await? {
+            Some(id) => Ok(id),
+            None => Err(EnrichError::rejected(format!(
+                "album '{}' kept conflicting on insert",
+                album.title
+            ))),
+        };
+    };
 
     if let Some(pa_id) = primary_artist_id {
         sqlx::query_file!(
             "queries/enrich/persist/insert_album_artist.sql",
-            inserted.0,
+            album_id,
             pa_id
         )
         .execute(&mut **tx)
         .await?;
     }
-    Ok(inserted.0)
+    Ok(album_id)
+}
+
+async fn existing_album_by_mb_id(
+    tx: &mut Transaction<'_, Postgres>,
+    album: &AlbumCandidate,
+) -> EnrichResult<Option<Uuid>> {
+    let Some(mb_id) = album.mb_id.as_deref() else {
+        return Ok(None);
+    };
+    let existing: Option<Uuid> =
+        sqlx::query_file_scalar!("queries/enrich/persist/album_by_mb_id.sql", mb_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(id) = existing else {
+        return Ok(None);
+    };
+    if let Some(cover) = album.cover_url.as_deref() {
+        sqlx::query_file!(
+            "queries/enrich/persist/album_fill_cover_mb.sql",
+            id,
+            cover,
+            album.year
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(Some(id))
 }
 
 async fn link_album_track(
