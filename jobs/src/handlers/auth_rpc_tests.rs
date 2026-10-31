@@ -21,6 +21,7 @@ struct TokenEndpoint {
 enum Answer {
     NewPair,
     InvalidGrant,
+    RateLimited,
 }
 
 async fn token(State(endpoint): State<TokenEndpoint>) -> Response {
@@ -37,6 +38,12 @@ async fn token(State(endpoint): State<TokenEndpoint>) -> Response {
         Answer::InvalidGrant => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "invalid_grant" })),
+        )
+            .into_response(),
+        Answer::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("retry-after", "120")],
+            Json(json!({})),
         )
             .into_response(),
     }
@@ -263,5 +270,54 @@ async fn the_app_token_is_cores_live_token(pool: PgPool) -> anyhow::Result<()> {
     let token = reply.token.expect("token comes back");
     assert_eq!(token.access_token, "app-access");
     assert_eq!(token.generation, Uuid::from_u128(7));
+    Ok(())
+}
+
+async fn app_of(pool: &PgPool, connection_id: Uuid) -> anyhow::Result<Uuid> {
+    Ok(
+        sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections WHERE id = $1")
+            .bind(connection_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn app_cooldown(pool: &PgPool, app_id: Uuid) -> anyhow::Result<Option<bool>> {
+    Ok(sqlx::query_scalar(
+        "SELECT retry_at > now() FROM oauth_app_request_cooldowns WHERE oauth_app_id = $1",
+    )
+    .bind(app_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_read_pause_does_not_hold_back_a_token_refresh(pool: PgPool) -> anyhow::Result<()> {
+    let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
+    let connection_id = connection(&pool, "old-access", "-1 minute").await?;
+    let app_id = app_of(&pool, connection_id).await?;
+    rpc.connections.pause_reads(app_id, 600);
+
+    let reply = rpc.refresh(request(connection_id, None, false)).await?;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(reply.outcome, RefreshOutcome::Refreshed);
+    assert_eq!(token_of(&reply), Some("new-access-1"));
+    assert_eq!(app_cooldown(&pool, app_id).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_rate_limited_refresh_pauses_the_app_in_the_database(pool: PgPool) -> anyhow::Result<()> {
+    let (rpc, calls) = rpc(&pool, Answer::RateLimited).await?;
+    let connection_id = connection(&pool, "old-access", "-1 minute").await?;
+    let app_id = app_of(&pool, connection_id).await?;
+
+    let reply = rpc.refresh(request(connection_id, None, false)).await?;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(reply.outcome, RefreshOutcome::RateLimited);
+    assert!(reply.retry_after_sec.is_some_and(|seconds| seconds >= 120));
+    assert_eq!(app_cooldown(&pool, app_id).await?, Some(true));
     Ok(())
 }

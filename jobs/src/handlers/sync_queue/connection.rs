@@ -1,3 +1,4 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::Engine;
@@ -9,6 +10,7 @@ use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 
 use super::client::{RefreshedToken, SoundCloudError, TokenRefreshClient};
 use super::model::Connection;
+use super::write_pause::WritePauses;
 
 const REFRESH_LEASE_SECONDS: i32 = 60;
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
@@ -18,6 +20,8 @@ const RATE_LIMIT_RETRY_SECONDS: i32 = 5 * 60;
 const APP_CREDENTIALS_RETRY_SECONDS: i64 = 30 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const APP_TOKEN_MIN_LIFETIME_SECONDS: i64 = 30;
+
+static READ_PAUSES: LazyLock<WritePauses<Uuid>> = LazyLock::new(WritePauses::default);
 
 #[derive(Clone, Debug)]
 pub struct AccessToken {
@@ -89,22 +93,19 @@ impl ConnectionManager {
         self.refresh(client, self.load(user_id).await?).await
     }
 
-    pub async fn penalize_app(
-        &self,
-        oauth_app_id: Uuid,
-        minimum_seconds: i64,
-    ) -> Result<i64, ConnectionError> {
-        Ok(self
-            .cooldowns
-            .penalize(oauth_app_id, minimum_seconds)
-            .await?)
+    pub fn pause_reads(&self, oauth_app_id: Uuid, seconds: i64) -> i64 {
+        READ_PAUSES.pause(oauth_app_id, seconds);
+        READ_PAUSES
+            .remaining_seconds(&oauth_app_id)
+            .unwrap_or(seconds)
     }
 
-    pub async fn app_retry_after_seconds(
+    pub async fn read_retry_after_seconds(
         &self,
         oauth_app_id: Uuid,
     ) -> Result<Option<i64>, ConnectionError> {
-        Ok(self.cooldowns.retry_after_seconds(oauth_app_id).await?)
+        let stored = self.cooldowns.retry_after_seconds(oauth_app_id).await?;
+        Ok(stored.max(READ_PAUSES.remaining_seconds(&oauth_app_id)))
     }
 
     pub async fn app_tokens(&self) -> Result<Vec<AppToken>, ConnectionError> {

@@ -58,7 +58,7 @@ impl CatalogRemote {
         for candidate in candidates.into_iter().take(8) {
             if let Some(seconds) = self
                 .connections
-                .app_retry_after_seconds(candidate.oauth_app_id)
+                .read_retry_after_seconds(candidate.oauth_app_id)
                 .await
                 .map_err(connection_error)?
             {
@@ -99,7 +99,7 @@ impl CatalogRemote {
         if let Some(app_id) = token.oauth_app_id
             && let Some(seconds) = self
                 .connections
-                .app_retry_after_seconds(app_id)
+                .read_retry_after_seconds(app_id)
                 .await
                 .map_err(connection_error)?
         {
@@ -152,10 +152,9 @@ impl CatalogRemote {
             _ => None,
         };
         if let (Some(app_id), Some(seconds)) = (app_id, app_pause) {
-            match self.connections.penalize_app(app_id, seconds).await {
-                Ok(_) if forbidden => {}
-                Ok(seconds) => return postpone(seconds, error),
-                Err(error) => return connection_error(error),
+            let seconds = self.connections.pause_reads(app_id, seconds);
+            if !forbidden {
+                return postpone(seconds, error);
             }
         }
         owner_error(error)

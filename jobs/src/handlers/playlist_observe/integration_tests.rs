@@ -13,8 +13,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config::{OAuthConfig, PlaylistReconcileConfig, SyncQueueConfig};
+use crate::handlers::catalog_remote::CatalogRemote;
+use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 use crate::handlers::star_priority::Turns;
-use crate::queue::JobRepository;
+use crate::queue::{JobError, JobRepository};
 
 use super::super::catalog_read::PublicCatalogReader;
 use super::client::PlaylistReadClient;
@@ -417,8 +419,8 @@ async fn seed_legacy_playlist(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<()> {
-    let oauth_app_id = Uuid::from_u128(1);
+async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<Uuid> {
+    let oauth_app_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO oauth_apps (id, client_id, client_secret)
          VALUES ($1, 'client-id', 'client-secret')",
@@ -437,7 +439,7 @@ async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<()> {
     .bind(oauth_app_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(oauth_app_id)
 }
 
 async fn single_connection_pool(source: &PgPool) -> anyhow::Result<PgPool> {
@@ -1527,11 +1529,11 @@ async fn observe_state(
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_rate_limited_read_defers_to_its_retry_after_and_cools_the_whole_app(
+async fn a_rate_limited_read_pauses_reads_and_leaves_token_requests_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
-    seed_playlist_and_connection(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
     let (api_url, methods, server) =
         scripted_soundcloud("429 Too Many Requests", "Retry-After: 900\r\n").await?;
     let handler = observe_handler(&pool, api_url)?;
@@ -1569,13 +1571,39 @@ async fn a_rate_limited_read_defers_to_its_retry_after_and_cools_the_whole_app(
         "a deferred playlist was still due: {claimed:?}"
     );
 
-    let cooldown = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
-        "SELECT retry_at FROM oauth_app_request_cooldowns WHERE oauth_app_id = $1",
-    )
-    .bind(Uuid::from_u128(1))
-    .fetch_one(&pool)
-    .await?;
-    assert!(cooldown > chrono::Utc::now());
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_app_request_cooldowns")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(rows, 0, "a read failure wrote an app-wide cooldown");
+    let token_requests = OAuthAppCooldowns::new(pool.clone());
+    assert_eq!(token_requests.retry_after_seconds(app).await?, None);
+    let paused = handler.connections.read_retry_after_seconds(app).await?;
+    assert!(paused.is_some_and(|seconds| seconds > 290));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_read_pause_set_by_playlist_observation_holds_catalog_reads(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
+    let (api_url, _, server) = scripted_soundcloud("200 OK", "").await?;
+    let handler = observe_handler(&pool, api_url)?;
+    let catalog = CatalogRemote::offline(pool.clone())?;
+    handler.connections.pause_reads(app, 600);
+
+    let error = catalog
+        .owner_get("42", "/me")
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("a paused app was read anyway"))?;
+    server.abort();
+
+    assert!(matches!(
+        error,
+        JobError::Postponed { delay, .. } if delay > Duration::from_secs(590)
+    ));
     Ok(())
 }
 
@@ -1584,12 +1612,12 @@ async fn a_cooling_application_is_not_asked_again_before_its_cooldown_expires(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
-    seed_playlist_and_connection(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
     sqlx::query(
         "INSERT INTO oauth_app_request_cooldowns (oauth_app_id, retry_at)
          VALUES ($1, now() + interval '20 minutes')",
     )
-    .bind(Uuid::from_u128(1))
+    .bind(app)
     .execute(&pool)
     .await?;
     let (api_url, methods, server) = scripted_soundcloud("200 OK", "").await?;
@@ -1619,7 +1647,7 @@ async fn a_cooling_application_is_not_asked_again_before_its_cooldown_expires(
     let failures = sqlx::query_scalar::<_, i32>(
         "SELECT failure_count FROM oauth_app_request_cooldowns WHERE oauth_app_id = $1",
     )
-    .bind(Uuid::from_u128(1))
+    .bind(app)
     .fetch_one(&pool)
     .await?;
     assert_eq!(
