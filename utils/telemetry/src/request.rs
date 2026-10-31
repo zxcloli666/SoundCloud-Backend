@@ -7,6 +7,7 @@ use tracing::field::Empty;
 use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::debug_cap;
 use crate::dependency;
 use crate::init::HOST;
 use crate::traceparent;
@@ -52,6 +53,11 @@ pub fn root_span(req: &Request) -> Span {
         span.record("scd.hop", hop);
     }
     if let Some(incoming) = incoming(req.headers()) {
+        let incoming = if incoming.debug() && !debug_cap::admit() {
+            incoming.demoted()
+        } else {
+            incoming
+        };
         if incoming.debug() {
             span.record("scd.debug", true);
         }

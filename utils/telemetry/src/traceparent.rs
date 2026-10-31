@@ -15,6 +15,11 @@ impl Incoming {
         self.state.unwrap_or(self.flags & 1 == 1)
     }
 
+    pub fn demoted(mut self) -> Self {
+        self.state = Some(false);
+        self
+    }
+
     pub fn with_state(mut self, header: Option<&str>) -> Self {
         self.state = header.and_then(debug_entry);
         self

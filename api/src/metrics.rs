@@ -23,6 +23,7 @@ const PG_BLOCKS: &str = "api_pg_blocks_total";
 const PG_SESSIONS_WAITING: &str = "api_pg_sessions";
 const POOL_WAIT: &str = "api_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "api_pg_pool_wait_last_seconds";
+const DEBUG_CAPPED: &str = "api_trace_debug_capped_total";
 
 const POOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
@@ -87,6 +88,7 @@ fn start_upkeep(handle: PrometheusHandle) {
         .spawn(move || {
             loop {
                 std::thread::sleep(UPKEEP_EVERY);
+                metrics::counter!(DEBUG_CAPPED).absolute(telemetry::debug_capped_total());
                 handle.run_upkeep();
             }
         });
