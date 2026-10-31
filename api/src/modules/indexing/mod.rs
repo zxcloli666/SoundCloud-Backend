@@ -6,3 +6,5 @@ pub use service::IndexingService;
 
 #[cfg(test)]
 mod held_tests;
+#[cfg(test)]
+mod ingest_tests;

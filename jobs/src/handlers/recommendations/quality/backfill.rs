@@ -93,13 +93,15 @@ pub(super) async fn persist(
     scores: &[f32],
     version: Option<i64>,
 ) -> JobResult {
-    sqlx::query_file!(
-        "queries/recommendations/quality/persist_scores.sql",
-        ids,
-        scores,
-        version
-    )
-    .execute(pool)
+    crate::db::retry_conflicts(|| {
+        sqlx::query_file!(
+            "queries/recommendations/quality/persist_scores.sql",
+            ids,
+            scores,
+            version
+        )
+        .execute(pool)
+    })
     .await
     .map_err(JobError::retryable)?;
     Ok(())

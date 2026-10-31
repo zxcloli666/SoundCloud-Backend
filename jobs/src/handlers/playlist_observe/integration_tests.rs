@@ -152,6 +152,10 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              last_read_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );
+         CREATE TABLE entity_reads (
+             entity_urn text PRIMARY KEY,
+             last_read_at timestamptz NOT NULL
+         );
          CREATE TABLE playlist_tracks (
              playlist_urn text NOT NULL,
              position integer NOT NULL,

@@ -153,8 +153,9 @@ class Generated(unittest.TestCase):
         self.assertNotIn("IF FOUND", owner)
         self.assertLess(owner.index("        IF held THEN\n            UPDATE public.playlists t SET"), owner.index("ON CONFLICT DO NOTHING;"))
         self.assertLess(owner.index("IF TG_OP = 'UPDATE' THEN\n        IF NEW.urn IS DISTINCT FROM OLD.urn THEN"), locked)
-        self.assertNotIn("last_read_at = NEW.last_read_at", owner)
-        self.assertIn("NEW.last_read_at", owner)
+        self.assertIn("            UPDATE public.playlists t SET last_read_at = NEW.last_read_at WHERE t.urn = NEW.urn AND t.last_read_at IS DISTINCT FROM NEW.last_read_at;\n"
+                      "            PERFORM pg_catalog.set_config('scd.merging', '', true);\n            RETURN NULL;", owner)
+        self.assertIn("                IF NEW.last_read_at IS DISTINCT FROM OLD.last_read_at THEN\n                    NEW.artwork_url := OLD.artwork_url;", owner)
 
     def test_owner_holds_every_incoming_change_of_a_pending_key(self):
         text = self.files["triggers.sql"]

@@ -2,12 +2,14 @@
 mod connection_discipline_tests;
 pub(crate) mod migrations;
 mod pool;
+mod retry;
 
 use sqlx::PgPool;
 
 use crate::config::JobsConfig;
 
 pub use pool::DatabaseError;
+pub use retry::retry_conflicts;
 
 #[derive(Clone)]
 pub struct Databases {

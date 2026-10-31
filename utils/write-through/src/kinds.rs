@@ -23,7 +23,7 @@ pub use observe::{
     Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers, ObservedPlaylist,
     ObservedTrack, ObservedUser,
 };
-pub use storage::TrackStorageLost;
+pub use storage::{TrackReleaseHeld, TrackS3State, TrackStorageLost, TrackTooLong};
 pub use sync_queue::{ConnectionDropOrphan, ConnectionLogin, SyncQueuePurge, SyncQueueRevive};
 
 pub trait Kind: Serialize + Debug + Sync {

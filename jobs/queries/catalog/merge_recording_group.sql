@@ -22,25 +22,35 @@ WITH members AS (SELECT track.id,
                   AND members.duration_ms IS NOT NULL
                   AND winner.duration_ms IS NOT NULL
                   AND abs(members.duration_ms - winner.duration_ms) <= 5000),
-     grouped AS (
-         UPDATE tracks
-             SET canonical_track_id = coalesce(
-                 (SELECT track.canonical_track_id
-                  FROM tracks AS track
-                  WHERE track.id IN (SELECT id FROM winner UNION ALL SELECT id FROM losers)
-                    AND track.canonical_track_id IS NOT NULL
-                  ORDER BY track.canonical_track_id
-                  LIMIT 1),
-                 $3)
-             WHERE id IN (SELECT id FROM winner UNION ALL SELECT id FROM losers)
-                 AND canonical_track_id IS NULL
-             RETURNING id),
-     superseded AS (
-         UPDATE tracks
-             SET superseded_by = (SELECT id FROM winner),
-                 updated_at = now()
-             FROM losers
-             WHERE tracks.id = losers.id
-             RETURNING tracks.id)
-SELECT (SELECT count(*) FROM superseded) AS "superseded!",
-       (SELECT count(*) FROM grouped)    AS "grouped!"
+     grouped AS (SELECT id FROM winner UNION ALL SELECT id FROM losers),
+     locked AS (SELECT array_agg(ordered.id) AS ids,
+                       count(*) FILTER (WHERE ordered.canonical_track_id IS NULL) AS ungrouped
+                FROM (SELECT track.id, track.canonical_track_id
+                      FROM tracks AS track
+                      WHERE track.id IN (SELECT id FROM grouped)
+                      ORDER BY track.sc_track_id
+                      FOR NO KEY UPDATE OF track) AS ordered),
+     canonical AS (SELECT coalesce(
+                                  (SELECT track.canonical_track_id
+                                   FROM tracks AS track
+                                   WHERE track.id = ANY ((SELECT ids FROM locked))
+                                     AND track.canonical_track_id IS NOT NULL
+                                   ORDER BY track.canonical_track_id
+                                   LIMIT 1),
+                                  $3) AS id),
+     merged AS (
+         UPDATE tracks AS track
+             SET canonical_track_id = coalesce(track.canonical_track_id, (SELECT id FROM canonical)),
+                 superseded_by = CASE
+                                     WHEN track.id IN (SELECT id FROM losers) THEN (SELECT id FROM winner)
+                                     ELSE track.superseded_by
+                     END,
+                 updated_at = CASE
+                                  WHEN track.id IN (SELECT id FROM losers) THEN now()
+                                  ELSE track.updated_at
+                     END
+             WHERE track.id = ANY ((SELECT ids FROM locked))
+                 AND (track.canonical_track_id IS NULL OR track.id IN (SELECT id FROM losers))
+             RETURNING track.id IN (SELECT id FROM losers) AS superseded)
+SELECT (SELECT count(*) FROM merged WHERE superseded) AS "superseded!",
+       (SELECT ungrouped FROM locked)                AS "grouped!"

@@ -319,3 +319,55 @@ async fn profile_write_failure_rolls_back_the_user_upsert(pool: PgPool) -> anyho
     assert_eq!(count, 0);
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_refreshed_track_over_the_duration_cap_is_marked_too_long(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (writer, job) = setup(&pool).await?;
+    let track = CatalogRefreshPayload {
+        entity: CatalogEntity::Track,
+        sc_id: "31".into(),
+        owner_id: None,
+    };
+    let long_mix = json!({
+        "kind": "track",
+        "id": 31,
+        "urn": "soundcloud:tracks:31",
+        "title": "Long mix",
+        "duration": 3_600_000,
+        "full_duration": 3_600_000,
+        "access": "playable",
+        "policy": "ALLOW",
+        "user": {"kind": "user", "id": 77, "urn": "soundcloud:users:77", "username": "dj"}
+    });
+    writer
+        .persist(
+            &job,
+            &track,
+            &long_mix,
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    let states: (String, String, Option<String>, bool) = sqlx::query_as(
+        "SELECT storage_state, index_state, transcribe_state, hq_upgrade_pending
+         FROM tracks WHERE sc_track_id = '31'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        states,
+        (
+            "too_long".to_owned(),
+            "too_long".to_owned(),
+            Some("disabled".to_owned()),
+            false
+        )
+    );
+    let downstream: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE kind = 'indexing.track'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(downstream, 0, "a too long track is never indexed");
+    Ok(())
+}

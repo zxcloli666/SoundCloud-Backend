@@ -117,7 +117,7 @@ impl TracksService {
                     .is_some_and(|owner| extract_sc_id(owner) == extract_sc_id(sc_user_id))
         });
         let verified_secret = if let Some(row) = local {
-            self.read_stamps.touch(&self.pg, sc_track_id).await;
+            self.read_stamps.touch(&self.pg, &row.urn).await;
             self.opened(sc_track_id).await;
             if self.cold_refresh.is_track_stale(Some(row.sc_synced_at))
                 && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(

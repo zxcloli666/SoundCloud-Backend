@@ -12,6 +12,12 @@ WITH doomed AS (SELECT track.id
              WHERE credit.track_id = doomed.id
                  AND credit.artist_id = $1
              RETURNING credit.track_id),
+     locked AS (SELECT array_agg(ordered.id) AS ids
+                FROM (SELECT track.id
+                      FROM tracks AS track
+                      WHERE track.id IN (SELECT id FROM doomed)
+                      ORDER BY track.sc_track_id
+                      FOR NO KEY UPDATE OF track) AS ordered),
      reset AS (
          UPDATE tracks AS track
              SET primary_artist_id = NULL,
@@ -22,8 +28,7 @@ WITH doomed AS (SELECT track.id
                  enrich_attempts = 0,
                  enrich_next_run_at = now() + random() * interval '30 minutes',
                  updated_at = now()
-             FROM doomed
-             WHERE track.id = doomed.id
+             WHERE track.id = ANY ((SELECT ids FROM locked))
              RETURNING track.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

@@ -551,7 +551,8 @@ async fn resolve_canonical_for_isrc(
             sqlx::query_file!(
                 "queries/enrich/persist/assign_canonical_for_isrc.sql",
                 new_id,
-                isrc
+                isrc,
+                track_id
             )
             .execute(&mut **tx)
             .await?;

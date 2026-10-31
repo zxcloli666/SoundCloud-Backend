@@ -15,10 +15,10 @@ kinds:
   observe.profile: {touches: [user_profiles], from: "utils/catalog-ingest upsert_profile (login)"}
   track.edit: {touches: [tracks], from: "api tracks apply_update"}
   track.delete: {touches: [tracks], from: "api tracks apply_delete"}
-  track.too_long: {touches: [tracks], from: "api tracks mark_too_long"}
-  track.release_held: {touches: [tracks], from: "api indexing release_held"}
+  track.too_long: {touches: [tracks], from: "api indexing ingest and release_held, jobs catalog_refresh_writer"}
+  track.release_held: {touches: [tracks], from: "api indexing release_held, only when the local row is held"}
   track.storage_lost: {touches: [tracks], from: "streaming mark_storage_lost"}
-  track.s3_state: {touches: [tracks], from: "api s3_verifier mark_ok, mark_missing (API_BACKGROUND node)"}
+  track.s3_state: {touches: [tracks], from: "api s3_verifier remember, only where API_BACKGROUND=on"}
   match.wanted_link: {touches: [wanted_tracks], from: "utils/catalog-match link_to_indexed"}
   match.album_track: {touches: [album_tracks, tracks], from: "utils/catalog-match insert_album_track, inherit_track_album"}
   match.sc_account: {touches: [artist_sc_accounts, artists], from: "utils/catalog-match upsert_account, delete_account, backfill_artist_sc_user_id"}
@@ -30,7 +30,7 @@ kinds:
   comment.post: {touches: [track_comments], from: "api tracks comments insert_pending"}
   cold_refresh.clear: {touches: [catalog_audience, track_comments, catalog_collection_sync], from: "api cold_refresh audience_clear, comments_clear"}
   job.enqueue: {touches: [background_jobs, job_status, playlist_membership_state], optimistic: false, from: "api cold_refresh enqueue_entity, me enqueue_followed_uploads, featured create/update, playlist observe after the Redis claim"}
-  owned.insert: {touches: [user_owned_tracks], from: "api tracks insert_owned"}
+  owned.insert: {touches: [user_owned_tracks], from: "api tracks insert_owned, upload ingest (after observe.tracks in one transaction)"}
   owned.delete: {touches: [user_owned_tracks, user_owned_playlists], from: "api tracks and playlists delete_owned"}
   app_token.reject: {touches: [oauth_app_tokens], from: "api oauth_apps token_service reject_generation"}
   sync_queue.revive: {touches: [sync_queue], optimistic: false, from: "api sync_queue revive_dead, core only"}
@@ -70,7 +70,7 @@ tables:
   playlist_remote_snapshots: {class: C, note: "C, not P: the C tables playlist_remote_observations and playlist_legacy_membership_intents reference it (B2)"}
   playlist_track_projection: {class: C, reassert: always, note: "rows are rewritten per playlist, a track moves between positions"}
   playlist_legacy_membership_intents: {class: C}
-  playlists: {class: C, local: [last_read_at], unique: {playlists_sc_playlist_id_key: key}, note: "last_read_at moves to entity_reads (B5a)"}
+  playlists: {class: C, unique: {playlists_sc_playlist_id_key: key}, note: "last_read_at is the 6 h read stamp, a core column written only by entity_reads_playlist_wake (B5a); api nodes read it to send a due read at once"}
   search_terms: {class: C}
   discover_tag_counts: {class: C}
   sync_queue_action_pauses: {class: C}
@@ -85,14 +85,14 @@ tables:
     derived:
       tracks_lyrics_lookup_state_refresh: {rows: [lyrics_lookup_state]}
       tracks_primary_block_guard_trg: {vetoes: [tracks.primary_artist_id]}
-    note: "last_read_at moves to entity_reads (B5a); jobs-private columns go to narrow P tables in A7"
+    note: "last_read_at has no writer since B5a, reads go to entity_reads; jobs-private columns go to narrow P tables in A7"
   user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_tracks: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_profiles: {class: C}
   user_taste_vectors: {class: C}
   user_web_profiles: {class: C}
-  users: {class: C, local: [last_read_at], unique: {users_urn_key: key}, note: "last_read_at moves to entity_reads (B5a)"}
+  users: {class: C, local: [last_read_at], unique: {users_urn_key: key}, note: "last_read_at has no writer since B5a, reads go to entity_reads"}
   wanted_track_albums: {class: C}
   wanted_track_artists: {class: C}
   wanted_tracks: {class: C, reassert: always}
@@ -251,6 +251,9 @@ tables:
     pk: [entity_urn]
     columns: {entity_urn: text, last_read_at: "timestamptz NOT NULL"}
     register: last_read_at
+    derived:
+      entity_reads_playlist_wake: {writes: [playlists.last_read_at], rows: [playlist_membership_state]}
+    note: "api read stamps of tracks, users and playlists, at most one write per entity and node per hour (a playlist whose stamp is 6 h old: per minute); entity_reads_playlist_wake (core in split, the writing node in legacy) wakes auth_required public playlists, state row before the playlist, and moves the playlist stamp (B5a)"
   repl_checksums:
     class: K
     planned: B2

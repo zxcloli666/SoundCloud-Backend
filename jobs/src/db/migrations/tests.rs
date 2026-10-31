@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 323;
+const LATEST_SCHEMA_VERSION: i64 = 343;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(
@@ -817,5 +817,52 @@ async fn scd_uuid_equals_rust_uuid_v5_of_the_same_name(pool: PgPool) -> anyhow::
             .await?;
         assert_eq!(stored, Uuid::new_v5(&namespace, name.as_bytes()), "{name}");
     }
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn merged_losers_take_the_canonical_of_their_winner(pool: PgPool) -> anyhow::Result<()> {
+    core_through(341).run(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO tracks (
+             id, sc_track_id, urn, title, title_normalized, duration_ms,
+             superseded_by, canonical_track_id
+         ) VALUES
+             ('00000000-0000-4000-8000-000000000001', '1', 'soundcloud:tracks:1', 'w', 'w', 1000,
+              NULL, '00000000-0000-4000-8000-0000000000a1'),
+             ('00000000-0000-4000-8000-000000000002', '2', 'soundcloud:tracks:2', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000001', NULL),
+             ('00000000-0000-4000-8000-000000000003', '3', 'soundcloud:tracks:3', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a3'),
+             ('00000000-0000-4000-8000-000000000004', '4', 'soundcloud:tracks:4', 'w', 'w', 1000,
+              NULL, NULL),
+             ('00000000-0000-4000-8000-000000000005', '5', 'soundcloud:tracks:5', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000004', NULL),
+             ('00000000-0000-4000-8000-000000000006', '6', 'soundcloud:tracks:6', 'n', 'n', 1000,
+              NULL, NULL)",
+    )
+    .execute(&pool)
+    .await?;
+
+    core_through(342).run(&pool).await?;
+
+    let canonical = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT sc_track_id, canonical_track_id FROM tracks ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let group = Uuid::parse_str("00000000-0000-4000-8000-0000000000a1")?;
+    let own = Uuid::parse_str("00000000-0000-4000-8000-0000000000a3")?;
+    assert_eq!(
+        canonical,
+        vec![
+            ("1".to_owned(), Some(group)),
+            ("2".to_owned(), Some(group)),
+            ("3".to_owned(), Some(own)),
+            ("4".to_owned(), None),
+            ("5".to_owned(), None),
+            ("6".to_owned(), None),
+        ]
+    );
     Ok(())
 }

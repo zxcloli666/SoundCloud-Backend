@@ -163,7 +163,8 @@ LANGUAGE sql STABLE
 AS $f$
 VALUES
     ('artists', 'has_sc_account'),
-    ('lyrics_cache', 'fts')
+    ('lyrics_cache', 'fts'),
+    ('playlists', 'last_read_at')
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_reassert_always(tbl text)

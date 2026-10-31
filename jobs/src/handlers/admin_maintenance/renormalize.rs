@@ -375,8 +375,7 @@ pub(super) async fn repoint_references(
     for query in [
         "queries/admin_maintenance/merge_repoint_track_artists_dedup.sql",
         "queries/admin_maintenance/merge_repoint_track_artists.sql",
-        "queries/admin_maintenance/merge_repoint_tracks_primary.sql",
-        "queries/admin_maintenance/merge_repoint_tracks_cover.sql",
+        "queries/admin_maintenance/merge_repoint_tracks.sql",
         "queries/admin_maintenance/merge_repoint_albums_primary.sql",
         "queries/admin_maintenance/merge_repoint_album_artists_dedup.sql",
         "queries/admin_maintenance/merge_repoint_album_artists.sql",
@@ -412,18 +411,9 @@ async fn run_repoint(
             .execute(&mut **transaction)
             .await
         }
-        "queries/admin_maintenance/merge_repoint_tracks_primary.sql" => {
+        "queries/admin_maintenance/merge_repoint_tracks.sql" => {
             sqlx::query_file!(
-                "queries/admin_maintenance/merge_repoint_tracks_primary.sql",
-                from,
-                to
-            )
-            .execute(&mut **transaction)
-            .await
-        }
-        "queries/admin_maintenance/merge_repoint_tracks_cover.sql" => {
-            sqlx::query_file!(
-                "queries/admin_maintenance/merge_repoint_tracks_cover.sql",
+                "queries/admin_maintenance/merge_repoint_tracks.sql",
                 from,
                 to
             )

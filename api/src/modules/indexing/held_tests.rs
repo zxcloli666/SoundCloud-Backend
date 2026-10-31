@@ -30,6 +30,23 @@ async fn held(pool: &PgPool, id: &str) -> anyhow::Result<bool> {
     )
 }
 
+async fn is_held(pool: &PgPool, id: &str) -> anyhow::Result<bool> {
+    Ok(
+        sqlx::query_file_scalar!("queries/indexing/service/is_held.sql", id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn release(pool: &PgPool, id: &str) -> anyhow::Result<Option<i32>> {
+    let release = wt::TrackReleaseHeld {
+        sc_track_id: id.to_owned(),
+        at: wt::now(),
+    };
+    let mut connection = pool.acquire().await?;
+    Ok(wt::call(&mut connection, &release).await?)
+}
+
 async fn lyrics_state(pool: &PgPool, id: &str) -> anyhow::Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM lyrics_lookup_state WHERE sc_track_id = $1)",
@@ -105,18 +122,12 @@ async fn opening_or_a_full_ingest_releases_a_held_track(pool: PgPool) -> anyhow:
     )
     .await?;
 
-    let released: Option<i32> =
-        sqlx::query_file_scalar!("queries/indexing/service/release_held.sql", "6")
-            .fetch_optional(&pool)
-            .await?;
-    assert_eq!(released, Some(200000));
+    assert!(is_held(&pool, "6").await?);
+    assert_eq!(release(&pool, "6").await?, Some(200000));
     assert!(!held(&pool, "6").await?);
+    assert!(!is_held(&pool, "6").await?);
     assert!(lyrics_state(&pool, "6").await?);
-    let again: Option<i32> =
-        sqlx::query_file_scalar!("queries/indexing/service/release_held.sql", "6")
-            .fetch_optional(&pool)
-            .await?;
-    assert_eq!(again, None, "a released track is kicked once");
+    assert_eq!(release(&pool, "6").await?, None, "a released track is kicked once");
 
     let fields = catalog_ingest::ScTrackFields::from_sc(&seen(7, "Other", 77)).unwrap();
     let observation = catalog_ingest::Observation::begin(&pool).await?;

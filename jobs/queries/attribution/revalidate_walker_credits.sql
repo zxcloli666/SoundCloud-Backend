@@ -13,6 +13,15 @@ WITH doomed AS (SELECT credit.track_id,
                  AND credit.artist_id = doomed.artist_id
                  AND credit.source = 'walker'
              RETURNING credit.track_id, credit.artist_id),
+     locked AS (SELECT array_agg(ordered.id) AS ids
+                FROM (SELECT track.id
+                      FROM tracks AS track
+                      WHERE EXISTS (SELECT 1
+                                    FROM removed
+                                    WHERE removed.track_id = track.id
+                                      AND removed.artist_id = track.primary_artist_id)
+                      ORDER BY track.sc_track_id
+                      FOR NO KEY UPDATE OF track) AS ordered),
      reset AS (
          UPDATE tracks AS track
              SET primary_artist_id = NULL,
@@ -26,6 +35,7 @@ WITH doomed AS (SELECT credit.track_id,
              FROM removed
              WHERE track.id = removed.track_id
                  AND track.primary_artist_id = removed.artist_id
+                 AND track.id = ANY ((SELECT ids FROM locked))
              RETURNING track.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

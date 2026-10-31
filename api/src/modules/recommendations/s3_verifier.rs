@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
+use mini_moka::sync::Cache;
 use sqlx::PgPool;
 use tracing::debug;
 use wreq::Client;
@@ -12,20 +13,29 @@ use crate::error::AppResult;
 
 const HEAD_CONCURRENCY: usize = 16;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(3);
+const FOUND_KEPT: Duration = Duration::from_secs(7 * 24 * 3600);
+const GONE_KEPT: Duration = Duration::from_secs(24 * 3600);
+const REMEMBERED: u64 = 200_000;
 
 pub struct S3VerifierService {
     http: Client,
     storage_url: String,
     pg: PgPool,
+    writes_verdicts: bool,
+    found: Cache<String, ()>,
+    gone: Cache<String, ()>,
 }
 
 impl S3VerifierService {
-    pub fn new(http: Client, storage_url: String, pg: PgPool) -> Arc<Self> {
+    pub fn new(http: Client, storage_url: String, pg: PgPool, writes_verdicts: bool) -> Arc<Self> {
         let trimmed = storage_url.trim_end_matches('/').to_string();
         Arc::new(Self {
             http,
             storage_url: trimmed,
             pg,
+            writes_verdicts,
+            found: kept_for(FOUND_KEPT),
+            gone: kept_for(GONE_KEPT),
         })
     }
 
@@ -62,6 +72,10 @@ impl S3VerifierService {
                 Some((_, Some(miss))) if *miss > ttl_cutoff => {
                     missing.insert(id.clone());
                 }
+                _ if self.gone.contains_key(id) => {
+                    missing.insert(id.clone());
+                }
+                _ if self.found.contains_key(id) => {}
                 _ => to_check.push(id.clone()),
             }
         }
@@ -94,25 +108,42 @@ impl S3VerifierService {
             }
         }
 
-        if !ok_ids.is_empty() {
-            sqlx::query_file!("queries/recommendations/s3_verifier/mark_ok.sql", &ok_ids)
-                .execute(&self.pg)
-                .await?;
-        }
         if !miss_ids.is_empty() {
-            sqlx::query_file!(
-                "queries/recommendations/s3_verifier/mark_missing.sql",
-                &miss_ids
-            )
-            .execute(&self.pg)
-            .await?;
             debug!(
                 misses = miss_ids.len(),
                 oks = ok_ids.len(),
                 "S3 verify result"
             );
         }
+        self.remember(ok_ids, miss_ids).await?;
         Ok(missing)
+    }
+
+    async fn remember(&self, ok: Vec<String>, missing: Vec<String>) -> AppResult<()> {
+        if ok.is_empty() && missing.is_empty() {
+            return Ok(());
+        }
+        if !self.writes_verdicts {
+            for id in ok {
+                self.found.insert(id, ());
+            }
+            for id in missing {
+                self.gone.insert(id, ());
+            }
+            return Ok(());
+        }
+        let verdicts = wt::TrackS3State {
+            ok,
+            missing,
+            at: wt::now(),
+        };
+        wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            wt::call(&mut transaction, &verdicts).await?;
+            transaction.commit().await
+        })
+        .await?;
+        Ok(())
     }
 
     async fn probe(&self, sc_track_id: &str) -> Option<bool> {
@@ -135,6 +166,13 @@ impl S3VerifierService {
     }
 }
 
+fn kept_for(ttl: Duration) -> Cache<String, ()> {
+    Cache::builder()
+        .max_capacity(REMEMBERED)
+        .time_to_live(ttl)
+        .build()
+}
+
 fn head_verdict(status: u16) -> Option<bool> {
     match status {
         200..=299 => Some(true),
@@ -142,6 +180,10 @@ fn head_verdict(status: u16) -> Option<bool> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "s3_verifier_tests.rs"]
+mod stored_tests;
 
 #[cfg(test)]
 mod tests {

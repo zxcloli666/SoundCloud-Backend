@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub max_track_duration_ms: i32,
     pub premium_reserve: bool,
     pub reserve_backend: bool,
+    pub api_background: bool,
 }
 
 impl AppConfig {
@@ -418,6 +419,7 @@ impl AppConfig {
             max_track_duration_ms: (env_u64("MAX_TRACK_DURATION_SEC", 420) * 1000) as i32,
             premium_reserve: env_str("PREMIUM_RESERVE", "false") == "true",
             reserve_backend: env_str("RESERVE_BACKEND", "false") == "true",
+            api_background: env_str("API_BACKGROUND", "on") != "off",
         }
     }
 }
