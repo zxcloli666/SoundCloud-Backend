@@ -23,19 +23,16 @@ WITH members AS (SELECT track.id,
                   AND winner.duration_ms IS NOT NULL
                   AND abs(members.duration_ms - winner.duration_ms) <= 5000),
      grouped AS (SELECT id FROM winner UNION ALL SELECT id FROM losers),
-     locked AS (SELECT array_agg(ordered.id) AS ids,
-                       count(*) FILTER (WHERE ordered.canonical_track_id IS NULL) AS ungrouped
-                FROM (SELECT track.id, track.canonical_track_id
-                      FROM tracks AS track
-                      WHERE track.id IN (SELECT id FROM grouped)
-                      ORDER BY track.sc_track_id
-                      FOR NO KEY UPDATE OF track) AS ordered),
+     locked AS MATERIALIZED (SELECT track.id, track.canonical_track_id
+                             FROM tracks AS track
+                             WHERE track.id IN (SELECT id FROM grouped)
+                             ORDER BY track.sc_track_id
+                             FOR NO KEY UPDATE OF track),
      canonical AS (SELECT coalesce(
-                                  (SELECT track.canonical_track_id
-                                   FROM tracks AS track
-                                   WHERE track.id = ANY ((SELECT ids FROM locked)::uuid[])
-                                     AND track.canonical_track_id IS NOT NULL
-                                   ORDER BY track.canonical_track_id
+                                  (SELECT locked.canonical_track_id
+                                   FROM locked
+                                   WHERE locked.canonical_track_id IS NOT NULL
+                                   ORDER BY locked.canonical_track_id
                                    LIMIT 1),
                                   $3) AS id),
      merged AS (
@@ -49,8 +46,9 @@ WITH members AS (SELECT track.id,
                                   WHEN track.id IN (SELECT id FROM losers) THEN now()
                                   ELSE track.updated_at
                      END
-             WHERE track.id = ANY ((SELECT ids FROM locked)::uuid[])
+             FROM locked
+             WHERE track.id = locked.id
                  AND (track.canonical_track_id IS NULL OR track.id IN (SELECT id FROM losers))
              RETURNING track.id IN (SELECT id FROM losers) AS superseded)
-SELECT (SELECT count(*) FROM merged WHERE superseded) AS "superseded!",
-       (SELECT ungrouped FROM locked)                AS "grouped!"
+SELECT (SELECT count(*) FROM merged WHERE superseded)                     AS "superseded!",
+       (SELECT count(*) FROM locked WHERE locked.canonical_track_id IS NULL) AS "grouped!"

@@ -68,6 +68,15 @@ impl FingerprintLocks {
             .as_ref()
             .is_some_and(|neighbour| !neighbour.unchanged)
     }
+
+    fn neighbour_written_first(&self) -> Option<Uuid> {
+        self.neighbour
+            .as_ref()
+            .filter(|neighbour| {
+                neighbour.unchanged && neighbour.first && neighbour.canonical.is_none()
+            })
+            .map(|neighbour| neighbour.id)
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -82,6 +91,7 @@ struct Neighbour {
     id: Uuid,
     canonical: Option<Uuid>,
     unchanged: bool,
+    first: bool,
 }
 
 struct AudioOutcome {
@@ -254,6 +264,18 @@ impl AudioIndexResultHandler {
                 transaction.rollback().await.map_err(JobError::retryable)?;
                 continue;
             }
+            if let Some(neighbour) = locks
+                .as_ref()
+                .and_then(FingerprintLocks::neighbour_written_first)
+            {
+                sqlx::query(include_str!(
+                    "../../../queries/indexing/result/write_neighbour_first.sql"
+                ))
+                .bind(neighbour)
+                .execute(&mut *transaction)
+                .await
+                .map_err(JobError::retryable)?;
+            }
             let outcome = sqlx::query_file!(
                 "queries/indexing/result/commit.sql",
                 &delivery.consumer,
@@ -388,6 +410,7 @@ async fn lock_fingerprint_rows(
                 && row.canonical_track_id == canonical
                 && row.prefix.as_deref() == Some(prefix)
         }),
+        first: locked.first().is_some_and(|row| row.id == id),
     });
     Ok(Some(FingerprintLocks {
         track_id: track.id,

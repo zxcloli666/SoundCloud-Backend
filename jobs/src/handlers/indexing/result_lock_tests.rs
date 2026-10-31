@@ -218,3 +218,75 @@ async fn a_neighbour_that_stops_matching_before_its_lock_is_not_linked(
     assert_eq!(rows[1].2.as_deref(), Some(FINGERPRINT));
     Ok(())
 }
+
+async fn record_track_writes(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "CREATE TABLE track_writes (n bigserial PRIMARY KEY, sc_track_id text NOT NULL);
+         CREATE FUNCTION track_write() RETURNS trigger LANGUAGE plpgsql AS $f$
+         BEGIN
+             INSERT INTO track_writes (sc_track_id) VALUES (NEW.sc_track_id);
+             RETURN NULL;
+         END
+         $f$;
+         CREATE TRIGGER track_write AFTER UPDATE ON tracks
+             FOR EACH ROW EXECUTE FUNCTION track_write();",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn tracks_written_by_commit(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    let handler = handler(pool)?;
+    let index = indexed()?;
+    let delivery = delivery();
+    let ResultClaim::Owned { lease_id } = handler.claim(&index, 1, &delivery).await? else {
+        anyhow::bail!("the indexing result did not own its claim");
+    };
+    let start: i64 = sqlx::query_scalar("SELECT coalesce(max(n), 0) FROM track_writes")
+        .fetch_one(pool)
+        .await?;
+    let committed = handler.commit(&index, 1, &delivery, lease_id).await?;
+    anyhow::ensure!(committed.committed, "the indexing result did not commit");
+    Ok(
+        sqlx::query_scalar("SELECT sc_track_id FROM track_writes WHERE n > $1 ORDER BY n")
+            .bind(start)
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_neighbour_the_link_changes_is_written_first_when_it_sorts_first(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool, None).await?;
+    record_track_writes(&pool).await?;
+
+    let writes = tracks_written_by_commit(&pool).await?;
+
+    assert_eq!(
+        writes.first().map(String::as_str),
+        Some(NEIGHBOUR),
+        "{writes:?}"
+    );
+    let rows = rows(&pool).await?;
+    assert!(rows[0].1.is_some());
+    assert_eq!(rows[0].1, rows[1].1);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_neighbour_already_in_the_group_is_never_written(pool: PgPool) -> anyhow::Result<()> {
+    let group = Uuid::now_v7();
+    seed(&pool, Some(group)).await?;
+    record_track_writes(&pool).await?;
+
+    let writes = tracks_written_by_commit(&pool).await?;
+
+    assert!(!writes.is_empty());
+    assert!(writes.iter().all(|track| track == CURRENT), "{writes:?}");
+    let rows = rows(&pool).await?;
+    assert_eq!((rows[0].1, rows[1].1), (Some(group), Some(group)));
+    Ok(())
+}

@@ -72,7 +72,8 @@ WITH active_users AS MATERIALIZED (
     ORDER BY track.sc_track_id
     FOR NO KEY UPDATE OF track
 )
-UPDATE tracks
+UPDATE tracks AS track
 SET storage_priority = 0,
     index_priority = 0
-WHERE id IN (SELECT id FROM locked)
+FROM locked
+WHERE track.id = locked.id
