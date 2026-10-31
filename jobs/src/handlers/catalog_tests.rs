@@ -8,6 +8,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          );
          CREATE TABLE tracks (
              id uuid PRIMARY KEY,
+             sc_track_id text NOT NULL UNIQUE DEFAULT gen_random_uuid()::text,
              title text NOT NULL,
              duration_ms integer,
              primary_artist_id uuid REFERENCES artists(id) ON DELETE SET NULL,
@@ -293,14 +294,16 @@ async fn the_playable_upload_wins_over_the_silent_duplicate(pool: PgPool) -> any
 
     assert_eq!(superseded_by(&pool, broken).await?, Some(playable));
     assert_eq!(superseded_by(&pool, playable).await?, None);
-    let group = sqlx::query_scalar::<_, i64>(
-        "SELECT count(DISTINCT canonical_track_id) FROM tracks WHERE id IN ($1, $2)",
+    let group = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT canonical_track_id FROM tracks WHERE id IN ($1, $2)",
     )
     .bind(broken)
     .bind(playable)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await?;
-    assert_eq!(group, 1);
+    assert_eq!(group.len(), 2);
+    assert!(group[0].is_some());
+    assert_eq!(group[0], group[1]);
     Ok(())
 }
 

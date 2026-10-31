@@ -326,7 +326,7 @@ pairs artist_sc_accounts "artist_id = '00000000-0000-0000-0000-0000000000a9'" "a
 say "C: core columns reach main and star as core writes (artists.has_sc_account above, lyrics_cache.fts from core and from an api kind)"
 published="$(val scd_b1_core "SELECT string_agg(l.tbl || '.' || c.col || '=' || coalesce(c.col = ANY (l.cols), true)::text, ',' ORDER BY l.tbl)
   FROM public.scd_core_columns() c JOIN public.scd_publication_lists() l ON l.tbl = c.tbl AND l.pubname = 'scd_core_pub'")"
-[ "$published" = "artists.has_sc_account=true,lyrics_cache.fts=true" ] && echo "ok core columns are published to main and star: $published" \
+[ "$published" = "artists.has_sc_account=true,lyrics_cache.fts=true,playlists.last_read_at=true" ] && echo "ok core columns are published to main and star: $published" \
   || { echo "FAIL core columns not all published: $published"; exit 1; }
 lyrics_sql="CREATE OR REPLACE FUNCTION public.scd_cmd_match_sc_account(args jsonb) RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_catalog AS \$f\$
 BEGIN

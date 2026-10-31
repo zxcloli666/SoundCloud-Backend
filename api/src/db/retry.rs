@@ -29,11 +29,7 @@ fn conflicted(error: &AppError) -> bool {
     let AppError::Db(error) = error else {
         return false;
     };
-    wt::Raced::raced(error)
-        || error
-            .as_database_error()
-            .and_then(|error| error.code())
-            .is_some_and(|code| code == "40P01" || code == "40001")
+    wt::Raced::raced(error) || wt::conflicted(error)
 }
 
 #[cfg(test)]

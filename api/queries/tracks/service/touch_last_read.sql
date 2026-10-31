@@ -1,5 +1,11 @@
-UPDATE tracks
-SET last_read_at = now()
-WHERE sc_track_id = $1
-  AND (last_read_at IS NULL
-    OR last_read_at < now() - INTERVAL '1 day')
+INSERT INTO entity_reads (entity_urn, last_read_at)
+SELECT $1::text, now()
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM entity_reads
+    WHERE entity_urn = $1::text
+      AND last_read_at >= now() - INTERVAL '1 hour'
+)
+ON CONFLICT (entity_urn) DO UPDATE
+SET last_read_at = EXCLUDED.last_read_at
+WHERE entity_reads.last_read_at < EXCLUDED.last_read_at - INTERVAL '1 hour'

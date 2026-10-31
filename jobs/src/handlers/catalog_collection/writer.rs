@@ -54,6 +54,7 @@ impl CollectionWriter {
             | CatalogCollection::TrackComments => TrackPriority::Discovery,
         };
         let comments = payload.collection.item() == CollectionItem::Comment;
+        let mut entities = Vec::with_capacity(page.items.len());
         for item in &page.items {
             let entity_json = if comments {
                 item.get("user").ok_or_else(|| {
@@ -73,9 +74,6 @@ impl CollectionWriter {
                 sc_id: catalog_ingest::extract_sc_id(urn).to_owned(),
                 owner_id: payload.owner.then(|| payload.subject_id.clone()),
             };
-            self.entities
-                .persist_in(&mut tx, &entity, entity_json, priority, observation)
-                .await?;
             let key = if comments {
                 item.get("id")
                     .and_then(serde_json::Value::as_str)
@@ -87,13 +85,20 @@ impl CollectionWriter {
                 payload.collection,
                 CatalogCollection::LikedTracks | CatalogCollection::OwnedTracks
             ) {
-                entity.sc_id
+                entity.sc_id.clone()
             } else {
                 urn.to_owned()
             };
             if !keys.contains(&key) {
                 keys.push(key);
             }
+            entities.push((entity, entity_json));
+        }
+        entities.sort_by(|(a, _), (b, _)| a.sc_id.cmp(&b.sc_id));
+        for (entity, entity_json) in &entities {
+            self.entities
+                .persist_in(&mut tx, entity, entity_json, priority, observation)
+                .await?;
         }
         if comments {
             mirror::persist_comments(&mut tx, payload, snapshot, &page.items).await?;

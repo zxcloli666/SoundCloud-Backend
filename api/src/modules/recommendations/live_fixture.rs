@@ -76,7 +76,7 @@ pub async fn service(pg: PgPool) -> anyhow::Result<Arc<RecommendationsService>> 
     let nats = NatsService::connect(&nats_url(), CancellationToken::new()).await?;
     let cache = CacheService::new(redis.clone());
     let worker = WorkerClient::new(nats.clone(), cache, qdrant.clone());
-    let s3 = S3VerifierService::new(wreq::Client::new(), String::new(), pg.clone());
+    let s3 = S3VerifierService::new(wreq::Client::new(), String::new(), pg.clone(), true);
     let collab = CollabVectorService::new(qdrant.clone());
     Ok(RecommendationsService::new(
         qdrant,

@@ -905,6 +905,7 @@
    "fks": [
    ],
    "triggers": [
+    {"before": false, "enabled": "A", "function": "playlist_read_wake", "gated": true, "name": "entity_reads_playlist_wake", "pinned": true, "source": "\nBEGIN\n    UPDATE public.playlist_membership_state AS state\n    SET sync_status = 'retry_wait',\n        next_reconcile_at = clock_timestamp(),\n        reconcile_failure_streak = 0,\n        updated_at = clock_timestamp()\n    FROM public.playlists AS playlist\n    WHERE state.playlist_urn = NEW.entity_urn\n      AND playlist.urn = state.playlist_urn\n      AND playlist.sharing = 'public'\n      AND state.sync_status = 'auth_required'\n      AND (playlist.last_read_at IS NULL OR playlist.last_read_at < NEW.last_read_at - INTERVAL '6 hours');\n    UPDATE public.playlists AS playlist\n    SET last_read_at = NEW.last_read_at\n    WHERE playlist.urn = NEW.entity_urn\n      AND (playlist.last_read_at IS NULL OR playlist.last_read_at < NEW.last_read_at - INTERVAL '6 hours');\n    RETURN NULL;\nEND\n"},
     {"enabled": "R", "function": "scd_max_entity_reads", "gated": false, "name": "zz_max", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
@@ -1607,6 +1608,7 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "O", "function": "scd_core_col_playlists", "gated": false, "name": "zz_core_col", "pinned": false},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_playlists", "gated": false, "name": "zz_owner", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}

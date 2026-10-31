@@ -221,6 +221,22 @@ class Model(unittest.TestCase):
                          ["kind item.edit: touches items and item_tags, whose rows the derived trigger items_touch writes on core only"])
         self.assertEqual(support.build(s, sc).tables["items"].core_cols, [])
 
+    def test_derived_trigger_on_a_register_table(self):
+        s = support.spec()
+        del s["tables"]["items"]["local"]
+        s["tables"]["reads"]["derived"] = {"reads_wake": {"writes": ["items.last_read_at"], "rows": ["item_tags"]}}
+        sc = support.schema()
+        source = ("BEGIN UPDATE public.item_tags AS tag SET tag = 'woken' FROM public.items AS item WHERE tag.item_id = item.id AND item.urn = NEW.urn; "
+                  "UPDATE public.items AS item SET last_read_at = NEW.at WHERE item.urn = NEW.urn; RETURN NULL; END")
+        sc["core"]["reads"]["triggers"].append({"name": "reads_wake", "function": "wake", "enabled": "A", "gated": True, "pinned": True,
+                                                "before": False, "source": source})
+        self.assertEqual(problems(s, sc), [])
+        self.assertEqual(support.build(s, sc).tables["items"].core_cols, ["last_read_at"])
+        s["tables"]["reads"]["derived"]["reads_wake"]["rows"] = ["item_tags", "likes"]
+        self.assertEqual(problems(s, sc), ["reads: derived trigger reads_wake does not write rows of likes; drop it from rows"])
+        s["tables"]["jobs_q"]["derived"] = {"reads_wake": {}}
+        self.assertIn("jobs_q: derived triggers only on C and K tables", problems(s, sc))
+
     def test_fk_parents_and_orphan_fks(self):
         sc = support.schema()
         sc["core"]["marks"]["fks"].append(fk("marks_like_fkey", ["user_id", "item_id"], "likes", ["user_id", "item_id"], "c"))

@@ -8,12 +8,17 @@ WITH hidden AS (SELECT loser.id
                     OR loser.duration_ms IS NULL
                     OR winner.duration_ms IS NULL)
                 LIMIT $1),
+     locked AS MATERIALIZED (SELECT track.id
+                             FROM tracks AS track
+                             WHERE track.id IN (SELECT id FROM hidden)
+                             ORDER BY track.sc_track_id
+                             FOR NO KEY UPDATE OF track),
      released AS (
          UPDATE tracks
              SET superseded_by = NULL,
                  updated_at = now()
-             FROM hidden
-             WHERE tracks.id = hidden.id
+             FROM locked
+             WHERE tracks.id = locked.id
              RETURNING tracks.id)
 SELECT count(*) AS "released!"
 FROM released
