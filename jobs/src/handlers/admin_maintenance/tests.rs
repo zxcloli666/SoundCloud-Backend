@@ -22,6 +22,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              ON artists (normalized_name) WHERE merged_into IS NULL;
          CREATE TABLE tracks (
              id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+             sc_track_id text NOT NULL UNIQUE,
              title text NOT NULL,
              title_normalized text NOT NULL,
              metadata_artist text,
@@ -267,8 +268,8 @@ async fn merged_artist_references_are_repointed_to_the_root(pool: PgPool) -> any
     .fetch_one(&pool)
     .await?;
     let track: Uuid = sqlx::query_scalar(
-        "INSERT INTO tracks (title, title_normalized, primary_artist_id)
-         VALUES ('song', 'song', $1) RETURNING id",
+        "INSERT INTO tracks (sc_track_id, title, title_normalized, primary_artist_id)
+         VALUES ('1', 'song', 'song', $1) RETURNING id",
     )
     .bind(alias)
     .fetch_one(&pool)
