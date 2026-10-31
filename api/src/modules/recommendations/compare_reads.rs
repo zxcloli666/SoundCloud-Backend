@@ -19,6 +19,7 @@ const TOP_AFFINITY: usize = 300;
 const TOP_LIMIT: i64 = 16;
 const ADJACENT_LIMIT: i64 = 20;
 const FRONTIER: usize = 320;
+const FRESH_LIMIT: i64 = 24;
 const SAMPLE_START_PERCENT: f32 = 0.02;
 const SAMPLE_MAX_PERCENT: f32 = 100.0;
 
@@ -91,9 +92,9 @@ struct Agreement {
     identical: bool,
 }
 
-fn agreement<T: Eq + std::hash::Hash + Copy>(old: &[T], new: &[T]) -> Agreement {
-    let old_set: HashSet<T> = old.iter().copied().collect();
-    let new_set: HashSet<T> = new.iter().copied().collect();
+fn agreement<T: Eq + std::hash::Hash + Clone>(old: &[T], new: &[T]) -> Agreement {
+    let old_set: HashSet<T> = old.iter().cloned().collect();
+    let new_set: HashSet<T> = new.iter().cloned().collect();
     let common = old_set.intersection(&new_set).count();
     let union = old_set.union(&new_set).count();
     let jaccard = if union == 0 {
@@ -103,12 +104,12 @@ fn agreement<T: Eq + std::hash::Hash + Copy>(old: &[T], new: &[T]) -> Agreement 
     };
     let old_common: Vec<T> = old
         .iter()
-        .copied()
+        .cloned()
         .filter(|x| new_set.contains(x))
         .collect();
     let new_rank: HashMap<T, usize> = new
         .iter()
-        .copied()
+        .cloned()
         .filter(|x| old_set.contains(x))
         .enumerate()
         .map(|(rank, x)| (x, rank))
@@ -230,6 +231,34 @@ async fn legacy_shelf(
         .into_iter()
         .map(|row| (row.artist_id, row.sc_track_id))
         .collect()),
+    }
+}
+
+async fn fresh_rows(
+    pg: &PgPool,
+    legacy: bool,
+    variants: &[String],
+    limit: i64,
+    exclude: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    if legacy {
+        sqlx::query_file_scalar!(
+            "queries/recommendations/home_wave/fresh_drops_legacy.sql",
+            variants,
+            exclude,
+            limit
+        )
+        .fetch_all(pg)
+        .await
+    } else {
+        sqlx::query_file_scalar!(
+            "queries/recommendations/home_wave/fresh_drops.sql",
+            variants,
+            exclude,
+            limit
+        )
+        .fetch_all(pg)
+        .await
     }
 }
 
@@ -375,6 +404,30 @@ async fn compare_user(
             tracks: [pairs, differing.len(), ties],
         });
     }
+    let started = Instant::now();
+    let old_fresh = fresh_rows(pg, true, &variants, FRESH_LIMIT, &[]).await?;
+    let old_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let again = fresh_rows(pg, true, &variants, FRESH_LIMIT, &[]).await?;
+    let started = Instant::now();
+    let new_fresh = fresh_rows(pg, false, &variants, FRESH_LIMIT, &[]).await?;
+    let new_ms = started.elapsed().as_secs_f64() * 1000.0;
+    shelves.push(ShelfReport {
+        name: "home fresh_drops",
+        artists: Sample {
+            user: user.to_owned(),
+            agreement: agreement(&old_fresh, &new_fresh),
+            value_gap: 0.0,
+        },
+        noise: Sample {
+            user: user.to_owned(),
+            agreement: agreement(&old_fresh, &again),
+            value_gap: 0.0,
+        },
+        old_ms,
+        new_ms,
+        tracks: [0, 0, 0],
+    });
+
     Ok(Some(UserReport {
         affinity,
         probes,
@@ -770,6 +823,119 @@ mod tests {
         let plan = plan.join("\n");
         assert!(plan.contains("artist_coplay_a_edges_idx"), "{plan}");
         assert!(plan.contains("artist_coplay_b_edges_idx"), "{plan}");
+        Ok(())
+    }
+
+    const OLD_FRESH_LIKES: &str =
+        "SELECT sc_track_id AS id, (EXTRACT(EPOCH FROM created_at) * 1000000)::int8 AS at
+        FROM user_likes_tracks WHERE user_id = ANY ($1) AND wanted_state = true
+        AND created_at > NOW() - INTERVAL '365 days'
+        ORDER BY created_at DESC, ctid DESC LIMIT $2";
+
+    fn like_variants() -> Vec<String> {
+        vec!["v1".to_owned(), "soundcloud:users:v1".to_owned()]
+    }
+
+    async fn many_likes(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at)
+             SELECT CASE WHEN n % 2 = 0 THEN 'v1' ELSE 'soundcloud:users:v1' END,
+                    (5000 + n)::text,
+                    n % 7 <> 0,
+                    now() - make_interval(secs => (CASE WHEN n = 41 THEN 40 ELSE n END) * 60)
+             FROM generate_series(1, 600) AS n",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at)
+             SELECT 'v1', (9000 + n)::text, true, now() - interval '400 days'
+             FROM generate_series(1, 50) AS n",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn fresh_likes_return_the_same_set_as_the_ctid_ordered_query(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        many_likes(&pool).await?;
+        let variants = like_variants();
+        for limit in [80_i64, 300] {
+            let old: Vec<(String, i64)> = sqlx::query_as(OLD_FRESH_LIKES)
+                .bind(&variants)
+                .bind(limit)
+                .fetch_all(&pool)
+                .await?;
+            let new: Vec<(String, i64)> = sqlx::query_file!(
+                "queries/recommendations/smart_wave/signals/fresh_likes.sql",
+                &variants,
+                limit
+            )
+            .fetch_all(&pool)
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row.at))
+            .collect();
+            assert_eq!(new.len(), limit as usize);
+            let set = |rows: &[(String, i64)]| rows.iter().cloned().collect::<HashSet<_>>();
+            assert_eq!(set(&new), set(&old), "limit {limit}");
+            let times = |rows: &[(String, i64)]| rows.iter().map(|r| r.1).collect::<Vec<_>>();
+            assert_eq!(times(&new), times(&old), "limit {limit}");
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn fresh_likes_walk_the_user_created_index_without_sorting_every_like(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        many_likes(&pool).await?;
+        sqlx::query("ANALYZE user_likes_tracks")
+            .execute(&pool)
+            .await?;
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await?;
+        let plan: Vec<String> = sqlx::query_scalar(&format!(
+            "EXPLAIN (COSTS OFF) {}",
+            include_str!("../../../queries/recommendations/smart_wave/signals/fresh_likes.sql")
+        ))
+        .bind(like_variants())
+        .bind(80_i64)
+        .fetch_all(&mut *tx)
+        .await?;
+        let plan = plan.join("\n");
+        assert!(
+            plan.contains("user_likes_tracks_user_created_key_idx"),
+            "{plan}"
+        );
+        assert!(plan.matches("Sort Key").count() <= 1, "{plan}");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn fresh_drops_return_what_the_legacy_query_returned(pool: PgPool) -> anyhow::Result<()> {
+        fixture(&pool).await?;
+        sqlx::query(
+            "UPDATE tracks SET sc_synced_at = now() - (sc_track_id::int % 1000) * interval '1 minute'",
+        )
+        .execute(&pool)
+        .await?;
+        let variants = vec!["u1".to_owned()];
+        for (limit, exclude) in [
+            (24, Vec::new()),
+            (5, Vec::new()),
+            (24, vec!["1301".to_owned(), "1402".to_owned()]),
+        ] {
+            let old = fresh_rows(&pool, true, &variants, limit, &exclude).await?;
+            let new = fresh_rows(&pool, false, &variants, limit, &exclude).await?;
+            assert!(!old.is_empty());
+            assert_eq!(new, old, "{limit} {}", exclude.len());
+        }
         Ok(())
     }
 

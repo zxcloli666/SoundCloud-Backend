@@ -968,6 +968,45 @@ mod tests {
         Ok(())
     }
 
+    const LEGACY_SEEDS: &str = include_str!(
+        "../../../../queries/recommendations/smart_wave/graph/load_user_seeds_legacy.sql"
+    );
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn lateral_recent_likes_seed_the_same_artists(pool: PgPool) -> anyhow::Result<()> {
+        for track in 1..=250_i32 {
+            liked_artist(&pool, &track.to_string(), track).await?;
+        }
+        let variants = vec!["17".to_owned(), "soundcloud:users:17".to_owned()];
+        sqlx::query(
+            "UPDATE user_likes_tracks SET user_id = 'soundcloud:users:17'
+             WHERE sc_track_id::int % 2 = 0",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "UPDATE user_likes_tracks SET wanted_state = false WHERE sc_track_id::int % 9 = 0",
+        )
+        .execute(&pool)
+        .await?;
+        let old: Vec<(Uuid, f32)> = sqlx::query_as(LEGACY_SEEDS)
+            .bind(&variants)
+            .bind(LIKES_WINDOW_DAYS)
+            .bind(PLAYS_WINDOW_DAYS)
+            .bind(PLAY_BOOST)
+            .bind(SEED_LIMIT)
+            .bind(crate::modules::superlikes::SUPERLIKE_WEIGHT)
+            .fetch_all(&pool)
+            .await?;
+        let new = load_user_seeds(&pool, &variants).await;
+        assert_eq!(new.len(), old.len());
+        assert!(old.len() > 10);
+        for (artist, weight) in old {
+            assert!((new[&artist] - weight).abs() < 1e-4, "{artist}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn decay_fold_tz_case() {
         let v = decay_fold(vec![0.05, 0.45]);
