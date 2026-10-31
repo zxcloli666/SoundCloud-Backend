@@ -227,9 +227,10 @@ mod tests {
 
     #[test]
     fn urls_keep_host_and_path_but_never_the_query_or_userinfo() {
-        let cleaned = text(&format!(
+        let message = format!(
             "GET https://user:pass@api.soundcloud.com/playlists/9?secret_token=s-AbC12&client_id={CLIENT_ID} failed"
-        ));
+        );
+        let cleaned = text(&message);
 
         assert_eq!(cleaned, "GET https://api.soundcloud.com/playlists/9 failed");
     }
