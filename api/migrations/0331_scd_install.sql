@@ -305,6 +305,13 @@ VALUES
     ('lyrics_cache', 'fts')
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_reassert_always(tbl text)
+RETURNS boolean
+LANGUAGE sql STABLE
+AS $f$
+SELECT $1 = ANY (ARRAY['artist_sc_accounts', 'artists', 'playlist_membership_operations', 'playlist_track_projection', 'track_comments', 'wanted_tracks']::text[])
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_resend(tbl text)
 RETURNS void
 LANGUAGE plpgsql
@@ -769,11 +776,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', OLD.kind)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.kind IS DISTINCT FROM OLD.kind THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', OLD.kind)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+                    INSERT INTO public.admin_maintenance_runs (changed, completed_at, cursor_text, cursor_uuid, kind, merged, phase, run_id, scanned, skipped, started_at, status, updated_at) VALUES (NEW.changed, NEW.completed_at, NEW.cursor_text, NEW.cursor_uuid, NEW.kind, NEW.merged, NEW.phase, NEW.run_id, NEW.scanned, NEW.skipped, NEW.started_at, NEW.status, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+                DELETE FROM public.admin_maintenance_runs t WHERE t.kind = OLD.kind;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'admin_maintenance_runs' AND p.pk = jsonb_build_object('kind', NEW.kind)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -800,7 +829,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.admin_maintenance_runs still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();
 ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -948,11 +977,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.album_id, NEW.artist_id, NEW.role) IS DISTINCT FROM (OLD.album_id, OLD.artist_id, OLD.role) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                    INSERT INTO public.album_artists (album_id, artist_id, role) VALUES (NEW.album_id, NEW.artist_id, NEW.role);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                DELETE FROM public.album_artists t WHERE (t.album_id, t.artist_id, t.role) = (OLD.album_id, OLD.artist_id, OLD.role);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_artists' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -978,7 +1029,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.album_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();
 ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1038,11 +1089,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'track_id', OLD.track_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.album_id, NEW.track_id) IS DISTINCT FROM (OLD.album_id, OLD.track_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', OLD.album_id, 'track_id', OLD.track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+                    INSERT INTO public.album_tracks (album_id, disc_number, "position", track_id) VALUES (NEW.album_id, NEW.disc_number, NEW."position", NEW.track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+                DELETE FROM public.album_tracks t WHERE (t.album_id, t.track_id) = (OLD.album_id, OLD.track_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'album_tracks' AND p.pk = jsonb_build_object('album_id', NEW.album_id, 'track_id', NEW.track_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -1069,7 +1142,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.album_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();
 ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1135,11 +1208,33 @@ DECLARE
     k1 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.albums (aggregates_updated_at, confidence, cover_url, created_at, genius_album_id, id, is_star_artist, mb_release_id, normalized_title, popularity_score, primary_artist_id, release_date, release_year, source, spotify_album_id, title, total_duration_ms, track_count, type, updated_at) VALUES (NEW.aggregates_updated_at, NEW.confidence, NEW.cover_url, NEW.created_at, NEW.genius_album_id, NEW.id, NEW.is_star_artist, NEW.mb_release_id, NEW.normalized_title, NEW.popularity_score, NEW.primary_artist_id, NEW.release_date, NEW.release_year, NEW.source, NEW.spotify_album_id, NEW.title, NEW.total_duration_ms, NEW.track_count, NEW.type, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.albums t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.mb_release_id, ((NEW.mb_release_id IS NOT NULL))) IS DISTINCT FROM (OLD.mb_release_id, ((OLD.mb_release_id IS NOT NULL)));
         k1 := (NEW.spotify_album_id, ((NEW.spotify_album_id IS NOT NULL))) IS DISTINCT FROM (OLD.spotify_album_id, ((OLD.spotify_album_id IS NOT NULL)));
@@ -1188,7 +1283,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.albums still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();
 ALTER TABLE public.albums ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1248,11 +1343,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', OLD.singleton)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.singleton IS DISTINCT FROM OLD.singleton THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', OLD.singleton)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+                    INSERT INTO public.artist_attribution_revalidation (credits_removed, identity_completed_at, identity_cursor_account, identity_cursor_artist, singleton, tracks_reset, updated_at, walker_completed_at) VALUES (NEW.credits_removed, NEW.identity_completed_at, NEW.identity_cursor_account, NEW.identity_cursor_artist, NEW.singleton, NEW.tracks_reset, NEW.updated_at, NEW.walker_completed_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+                DELETE FROM public.artist_attribution_revalidation t WHERE t.singleton = OLD.singleton;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_attribution_revalidation' AND p.pk = jsonb_build_object('singleton', NEW.singleton)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -1279,7 +1396,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_attribution_revalidation still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();
 ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1339,11 +1456,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.a_id, NEW.b_id) IS DISTINCT FROM (OLD.a_id, OLD.b_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                    INSERT INTO public.artist_colike (a_id, b_id, co, updated_at, w) VALUES (NEW.a_id, NEW.b_id, NEW.co, NEW.updated_at, NEW.w);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                DELETE FROM public.artist_colike t WHERE (t.a_id, t.b_id) = (OLD.a_id, OLD.b_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_colike' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -1370,7 +1509,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_colike still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();
 ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1430,11 +1569,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.a_id, NEW.b_id) IS DISTINCT FROM (OLD.a_id, OLD.b_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', OLD.a_id, 'b_id', OLD.b_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                    INSERT INTO public.artist_coplay (a_id, b_id, last_seen, weight) VALUES (NEW.a_id, NEW.b_id, NEW.last_seen, NEW.weight);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                DELETE FROM public.artist_coplay t WHERE (t.a_id, t.b_id) = (OLD.a_id, OLD.b_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_coplay' AND p.pk = jsonb_build_object('a_id', NEW.a_id, 'b_id', NEW.b_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -1461,7 +1622,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_coplay still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();
 ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1522,11 +1683,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'sc_user_id', OLD.sc_user_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.artist_id, NEW.sc_user_id) IS DISTINCT FROM (OLD.artist_id, OLD.sc_user_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'sc_user_id', OLD.sc_user_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+                    INSERT INTO public.artist_sc_accounts (artist_id, created_at, notes, role, sc_user_id, source, updated_at, verified) VALUES (NEW.artist_id, NEW.created_at, NEW.notes, NEW.role, NEW.sc_user_id, NEW.source, NEW.updated_at, NEW.verified);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+                DELETE FROM public.artist_sc_accounts t WHERE (t.artist_id, t.sc_user_id) = (OLD.artist_id, OLD.sc_user_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.sc_user_id, (NEW.verified)) IS DISTINCT FROM (OLD.sc_user_id, (OLD.verified));
         IF k0 AND (NEW.verified) THEN
@@ -1564,7 +1747,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_sc_accounts still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();
 ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1624,11 +1807,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'url', OLD.url)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.artist_id, NEW.url) IS DISTINCT FROM (OLD.artist_id, OLD.url) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', OLD.artist_id, 'url', OLD.url)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+                    INSERT INTO public.artist_socials (artist_id, created_at, kind, source, updated_at, url, verified) VALUES (NEW.artist_id, NEW.created_at, NEW.kind, NEW.source, NEW.updated_at, NEW.url, NEW.verified);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+                DELETE FROM public.artist_socials t WHERE (t.artist_id, t.url) = (OLD.artist_id, OLD.url);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_socials' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'url', NEW.url)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -1655,7 +1860,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_socials still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();
 ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -1748,55 +1953,77 @@ DECLARE
     k3 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
-            IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN
-                NEW.account_walk_locked_at := OLD.account_walk_locked_at;
-                NEW.aggregates_updated_at := OLD.aggregates_updated_at;
-                NEW.album_count_denorm := OLD.album_count_denorm;
-                NEW.avatar_url := OLD.avatar_url;
-                NEW.bio := OLD.bio;
-                NEW.confidence := OLD.confidence;
-                NEW.country := OLD.country;
-                NEW.crawl_attempts := OLD.crawl_attempts;
-                NEW.crawl_dead := OLD.crawl_dead;
-                NEW.crawl_fail_count := OLD.crawl_fail_count;
-                NEW.created_at := OLD.created_at;
-                NEW.genius_artist_id := OLD.genius_artist_id;
-                NEW.genius_crawl_offset := OLD.genius_crawl_offset;
-                NEW.genius_crawled_at := OLD.genius_crawled_at;
-                NEW.genius_locked_at := OLD.genius_locked_at;
-                NEW.genius_next_run_at := OLD.genius_next_run_at;
-                NEW.interest_score := OLD.interest_score;
-                NEW.is_star := OLD.is_star;
-                NEW.isni := OLD.isni;
-                NEW.last_account_walk_at := OLD.last_account_walk_at;
-                NEW.last_crawled_at := OLD.last_crawled_at;
-                NEW.mb_artist_id := OLD.mb_artist_id;
-                NEW.mb_crawl_offset := OLD.mb_crawl_offset;
-                NEW.mb_crawled_at := OLD.mb_crawled_at;
-                NEW.mb_locked_at := OLD.mb_locked_at;
-                NEW.mb_next_run_at := OLD.mb_next_run_at;
-                NEW.merged_into := OLD.merged_into;
-                NEW.monthly_listeners := OLD.monthly_listeners;
-                NEW.name := OLD.name;
-                NEW.normalized_name := OLD.normalized_name;
-                NEW.popularity_score := OLD.popularity_score;
-                NEW.sc_user_id := OLD.sc_user_id;
-                NEW.source := OLD.source;
-                NEW.spotify_artist_id := OLD.spotify_artist_id;
-                NEW.star_aura_id := OLD.star_aura_id;
-                NEW.star_custom_hex := OLD.star_custom_hex;
-                NEW.tags := OLD.tags;
-                NEW.track_count_featured := OLD.track_count_featured;
-                NEW.track_count_primary := OLD.track_count_primary;
-                NEW.trending_score := OLD.trending_score;
-                NEW.updated_at := OLD.updated_at;
-                RETURN NEW;
-            END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.artists (account_walk_locked_at, aggregates_updated_at, album_count_denorm, avatar_url, bio, confidence, country, crawl_attempts, crawl_dead, crawl_fail_count, created_at, genius_artist_id, genius_crawl_offset, genius_crawled_at, genius_locked_at, genius_next_run_at, has_sc_account, id, interest_score, is_star, isni, last_account_walk_at, last_crawled_at, mb_artist_id, mb_crawl_offset, mb_crawled_at, mb_locked_at, mb_next_run_at, merged_into, monthly_listeners, name, normalized_name, popularity_score, sc_user_id, source, spotify_artist_id, star_aura_id, star_custom_hex, tags, track_count_featured, track_count_primary, trending_score, updated_at) VALUES (NEW.account_walk_locked_at, NEW.aggregates_updated_at, NEW.album_count_denorm, NEW.avatar_url, NEW.bio, NEW.confidence, NEW.country, NEW.crawl_attempts, NEW.crawl_dead, NEW.crawl_fail_count, NEW.created_at, NEW.genius_artist_id, NEW.genius_crawl_offset, NEW.genius_crawled_at, NEW.genius_locked_at, NEW.genius_next_run_at, NEW.has_sc_account, NEW.id, NEW.interest_score, NEW.is_star, NEW.isni, NEW.last_account_walk_at, NEW.last_crawled_at, NEW.mb_artist_id, NEW.mb_crawl_offset, NEW.mb_crawled_at, NEW.mb_locked_at, NEW.mb_next_run_at, NEW.merged_into, NEW.monthly_listeners, NEW.name, NEW.normalized_name, NEW.popularity_score, NEW.sc_user_id, NEW.source, NEW.spotify_artist_id, NEW.star_aura_id, NEW.star_custom_hex, NEW.tags, NEW.track_count_featured, NEW.track_count_primary, NEW.trending_score, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.artists t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                IF NEW.has_sc_account IS DISTINCT FROM OLD.has_sc_account THEN
+                    NEW.account_walk_locked_at := OLD.account_walk_locked_at;
+                    NEW.aggregates_updated_at := OLD.aggregates_updated_at;
+                    NEW.album_count_denorm := OLD.album_count_denorm;
+                    NEW.avatar_url := OLD.avatar_url;
+                    NEW.bio := OLD.bio;
+                    NEW.confidence := OLD.confidence;
+                    NEW.country := OLD.country;
+                    NEW.crawl_attempts := OLD.crawl_attempts;
+                    NEW.crawl_dead := OLD.crawl_dead;
+                    NEW.crawl_fail_count := OLD.crawl_fail_count;
+                    NEW.created_at := OLD.created_at;
+                    NEW.genius_artist_id := OLD.genius_artist_id;
+                    NEW.genius_crawl_offset := OLD.genius_crawl_offset;
+                    NEW.genius_crawled_at := OLD.genius_crawled_at;
+                    NEW.genius_locked_at := OLD.genius_locked_at;
+                    NEW.genius_next_run_at := OLD.genius_next_run_at;
+                    NEW.interest_score := OLD.interest_score;
+                    NEW.is_star := OLD.is_star;
+                    NEW.isni := OLD.isni;
+                    NEW.last_account_walk_at := OLD.last_account_walk_at;
+                    NEW.last_crawled_at := OLD.last_crawled_at;
+                    NEW.mb_artist_id := OLD.mb_artist_id;
+                    NEW.mb_crawl_offset := OLD.mb_crawl_offset;
+                    NEW.mb_crawled_at := OLD.mb_crawled_at;
+                    NEW.mb_locked_at := OLD.mb_locked_at;
+                    NEW.mb_next_run_at := OLD.mb_next_run_at;
+                    NEW.merged_into := OLD.merged_into;
+                    NEW.monthly_listeners := OLD.monthly_listeners;
+                    NEW.name := OLD.name;
+                    NEW.normalized_name := OLD.normalized_name;
+                    NEW.popularity_score := OLD.popularity_score;
+                    NEW.sc_user_id := OLD.sc_user_id;
+                    NEW.source := OLD.source;
+                    NEW.spotify_artist_id := OLD.spotify_artist_id;
+                    NEW.star_aura_id := OLD.star_aura_id;
+                    NEW.star_custom_hex := OLD.star_custom_hex;
+                    NEW.tags := OLD.tags;
+                    NEW.track_count_featured := OLD.track_count_featured;
+                    NEW.track_count_primary := OLD.track_count_primary;
+                    NEW.trending_score := OLD.trending_score;
+                    NEW.updated_at := OLD.updated_at;
+                    RETURN NEW;
+                END IF;
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.genius_artist_id, ((NEW.genius_artist_id IS NOT NULL))) IS DISTINCT FROM (OLD.genius_artist_id, ((OLD.genius_artist_id IS NOT NULL)));
         k1 := (NEW.mb_artist_id, ((NEW.mb_artist_id IS NOT NULL))) IS DISTINCT FROM (OLD.mb_artist_id, ((OLD.mb_artist_id IS NOT NULL)));
@@ -1870,7 +2097,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();
 ALTER TABLE public.artists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -2018,11 +2245,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', OLD.id, 'generation', OLD.generation)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.id, NEW.generation) IS DISTINCT FROM (OLD.id, OLD.generation) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', OLD.id, 'generation', OLD.generation)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+                    INSERT INTO public.background_job_failures (attempts, created_at, dedup_key, failed_at, generation, id, kind, lane, last_error, max_attempts, payload, priority) VALUES (NEW.attempts, NEW.created_at, NEW.dedup_key, NEW.failed_at, NEW.generation, NEW.id, NEW.kind, NEW.lane, NEW.last_error, NEW.max_attempts, NEW.payload, NEW.priority);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+                DELETE FROM public.background_job_failures t WHERE (t.id, t.generation) = (OLD.id, OLD.generation);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'background_job_failures' AND p.pk = jsonb_build_object('id', NEW.id, 'generation', NEW.generation)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -2049,7 +2298,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.background_job_failures still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();
 ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -2197,11 +2446,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', OLD.subject_urn, 'relation', OLD.relation, 'user_urn', OLD.user_urn)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.subject_urn, NEW.relation, NEW.user_urn) IS DISTINCT FROM (OLD.subject_urn, OLD.relation, OLD.user_urn) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', OLD.subject_urn, 'relation', OLD.relation, 'user_urn', OLD.user_urn)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+                    INSERT INTO public.catalog_audience (created_at, relation, subject_urn, synced_at, user_urn) VALUES (NEW.created_at, NEW.relation, NEW.subject_urn, NEW.synced_at, NEW.user_urn);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+                DELETE FROM public.catalog_audience t WHERE (t.subject_urn, t.relation, t.user_urn) = (OLD.subject_urn, OLD.relation, OLD.user_urn);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_audience' AND p.pk = jsonb_build_object('subject_urn', NEW.subject_urn, 'relation', NEW.relation, 'user_urn', NEW.user_urn)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -2228,7 +2499,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.catalog_audience still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
 ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -2378,11 +2649,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'collection', OLD.collection, 'scope', OLD.scope)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.subject_id, NEW.collection, NEW.scope) IS DISTINCT FROM (OLD.subject_id, OLD.collection, OLD.scope) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', OLD.subject_id, 'collection', OLD.collection, 'scope', OLD.scope)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+                    INSERT INTO public.catalog_collection_sync (collection, complete, generation, item_count, job_id, next_cursor, page_count, scope, snapshot_id, started_at, subject_id, synced_at, updated_at, verified_at) VALUES (NEW.collection, NEW.complete, NEW.generation, NEW.item_count, NEW.job_id, NEW.next_cursor, NEW.page_count, NEW.scope, NEW.snapshot_id, NEW.started_at, NEW.subject_id, NEW.synced_at, NEW.updated_at, NEW.verified_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+                DELETE FROM public.catalog_collection_sync t WHERE (t.subject_id, t.collection, t.scope) = (OLD.subject_id, OLD.collection, OLD.scope);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'catalog_collection_sync' AND p.pk = jsonb_build_object('subject_id', NEW.subject_id, 'collection', NEW.collection, 'scope', NEW.scope)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -2409,7 +2702,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.catalog_collection_sync still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();
 ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -3322,11 +3615,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', OLD.tag)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.tag IS DISTINCT FROM OLD.tag THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', OLD.tag)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+                    INSERT INTO public.discover_tag_counts (artist_count, refreshed_at, tag) VALUES (NEW.artist_count, NEW.refreshed_at, NEW.tag);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+                DELETE FROM public.discover_tag_counts t WHERE t.tag = OLD.tag;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'discover_tag_counts' AND p.pk = jsonb_build_object('tag', NEW.tag)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -3353,7 +3668,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.discover_tag_counts still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();
 ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -3882,11 +4197,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', OLD.kind, 'dedup_key', OLD.dedup_key)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.kind, NEW.dedup_key) IS DISTINCT FROM (OLD.kind, OLD.dedup_key) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', OLD.kind, 'dedup_key', OLD.dedup_key)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+                    INSERT INTO public.job_status (available_at, dedup_key, kind, state, updated_at) VALUES (NEW.available_at, NEW.dedup_key, NEW.kind, NEW.state, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+                DELETE FROM public.job_status t WHERE (t.kind, t.dedup_key) = (OLD.kind, OLD.dedup_key);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'job_status' AND p.pk = jsonb_build_object('kind', NEW.kind, 'dedup_key', NEW.dedup_key)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -3913,7 +4250,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.job_status still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();
 ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -4415,29 +4752,51 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
-            IF NEW.fts IS DISTINCT FROM OLD.fts THEN
-                NEW.content_generation := OLD.content_generation;
-                NEW.content_hash := OLD.content_hash;
-                NEW.created_at := OLD.created_at;
-                NEW.embedded_at := OLD.embedded_at;
-                NEW.embedding_state := OLD.embedding_state;
-                NEW.language := OLD.language;
-                NEW.language_confidence := OLD.language_confidence;
-                NEW.plain_source := OLD.plain_source;
-                NEW.plain_text := OLD.plain_text;
-                NEW.source := OLD.source;
-                NEW.synced_lrc := OLD.synced_lrc;
-                NEW.synced_source := OLD.synced_source;
-                NEW.synced_version := OLD.synced_version;
-                NEW.track_id := OLD.track_id;
-                NEW.updated_at := OLD.updated_at;
-                RETURN NEW;
-            END IF;
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+                    INSERT INTO public.lyrics_cache (content_generation, content_hash, created_at, embedded_at, embedding_state, fts, language, language_confidence, plain_source, plain_text, sc_track_id, source, synced_lrc, synced_source, synced_version, track_id, updated_at) VALUES (NEW.content_generation, NEW.content_hash, NEW.created_at, NEW.embedded_at, NEW.embedding_state, NEW.fts, NEW.language, NEW.language_confidence, NEW.plain_source, NEW.plain_text, NEW.sc_track_id, NEW.source, NEW.synced_lrc, NEW.synced_source, NEW.synced_version, NEW.track_id, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+                DELETE FROM public.lyrics_cache t WHERE t.sc_track_id = OLD.sc_track_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
+                IF NEW.fts IS DISTINCT FROM OLD.fts THEN
+                    NEW.content_generation := OLD.content_generation;
+                    NEW.content_hash := OLD.content_hash;
+                    NEW.created_at := OLD.created_at;
+                    NEW.embedded_at := OLD.embedded_at;
+                    NEW.embedding_state := OLD.embedding_state;
+                    NEW.language := OLD.language;
+                    NEW.language_confidence := OLD.language_confidence;
+                    NEW.plain_source := OLD.plain_source;
+                    NEW.plain_text := OLD.plain_text;
+                    NEW.source := OLD.source;
+                    NEW.synced_lrc := OLD.synced_lrc;
+                    NEW.synced_source := OLD.synced_source;
+                    NEW.synced_version := OLD.synced_version;
+                    NEW.track_id := OLD.track_id;
+                    NEW.updated_at := OLD.updated_at;
+                    RETURN NEW;
+                END IF;
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -4467,7 +4826,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.lyrics_cache still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();
 ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -4616,11 +4975,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.track_id IS DISTINCT FROM OLD.track_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', OLD.track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                    INSERT INTO public.lyrics_lookup_state (algorithm_version, attempts, claim_expires_at, claim_job_generation, claim_job_id, claim_job_lease_id, claim_state_generation, created_at, failure_streak, generation, input_artist, input_duration_ms, input_genius_song_id, input_genius_url, input_release_date, input_sc_created_at, input_title, last_attempt_at, last_error, last_outcome, miss_streak, next_run_at, priority, retry_after_at, sc_track_id, source_set_version, status, track_id, updated_at, wake_durable_at, wake_generation, wake_message_id) VALUES (NEW.algorithm_version, NEW.attempts, NEW.claim_expires_at, NEW.claim_job_generation, NEW.claim_job_id, NEW.claim_job_lease_id, NEW.claim_state_generation, NEW.created_at, NEW.failure_streak, NEW.generation, NEW.input_artist, NEW.input_duration_ms, NEW.input_genius_song_id, NEW.input_genius_url, NEW.input_release_date, NEW.input_sc_created_at, NEW.input_title, NEW.last_attempt_at, NEW.last_error, NEW.last_outcome, NEW.miss_streak, NEW.next_run_at, NEW.priority, NEW.retry_after_at, NEW.sc_track_id, NEW.source_set_version, NEW.status, NEW.track_id, NEW.updated_at, NEW.wake_durable_at, NEW.wake_generation, NEW.wake_message_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                DELETE FROM public.lyrics_lookup_state t WHERE t.track_id = OLD.track_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id;
         IF k0 THEN
@@ -4656,7 +5037,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.lyrics_lookup_state still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();
 ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -4923,11 +5304,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.oauth_app_id IS DISTINCT FROM OLD.oauth_app_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+                    INSERT INTO public.oauth_app_tokens (access_token, expires_at, generation, last_refresh_error, last_used_at, oauth_app_id, refresh_attempts, refresh_token, refreshed_at, scope) VALUES (NEW.access_token, NEW.expires_at, NEW.generation, NEW.last_refresh_error, NEW.last_used_at, NEW.oauth_app_id, NEW.refresh_attempts, NEW.refresh_token, NEW.refreshed_at, NEW.scope);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+                DELETE FROM public.oauth_app_tokens t WHERE t.oauth_app_id = OLD.oauth_app_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'oauth_app_tokens' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -4954,7 +5357,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.oauth_app_tokens still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();
 ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5216,11 +5619,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', OLD.archive_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.archive_id IS DISTINCT FROM OLD.archive_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', OLD.archive_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+                    INSERT INTO public.playlist_legacy_membership_intents (archive_id, archived_at, classification, legacy_desired_revision, legacy_synced_revision, legacy_user_id, local_snapshot_id, playlist_urn, prior_classification, queue_created_at, queue_failed_at, queue_generation, queue_id, queue_last_error, queue_next_run_at, queue_payload, queue_retry_count, remote_attempted_generation, remote_completed_generation, remote_result, resolved_at, source) VALUES (NEW.archive_id, NEW.archived_at, NEW.classification, NEW.legacy_desired_revision, NEW.legacy_synced_revision, NEW.legacy_user_id, NEW.local_snapshot_id, NEW.playlist_urn, NEW.prior_classification, NEW.queue_created_at, NEW.queue_failed_at, NEW.queue_generation, NEW.queue_id, NEW.queue_last_error, NEW.queue_next_run_at, NEW.queue_payload, NEW.queue_retry_count, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.resolved_at, NEW.source);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+                DELETE FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = OLD.archive_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.queue_id IS DISTINCT FROM OLD.queue_id;
         IF k0 THEN
@@ -5256,7 +5681,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_legacy_membership_intents still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();
 ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5318,11 +5743,33 @@ DECLARE
     k1 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', OLD.operation_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.operation_id IS DISTINCT FROM OLD.operation_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', OLD.operation_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+                    INSERT INTO public.playlist_membership_operations (accepted_projection_revision, actor_sc_user_id, base_baseline_generation, base_observation_id, boundary, conflict_code, created_at, expected_projection_revision, idempotency_key, kind, left_anchor_track_id, operation_id, ordered_track_ids, outcome, playlist_urn, request_fingerprint, resolved_at, right_anchor_track_id, sequence, track_id) VALUES (NEW.accepted_projection_revision, NEW.actor_sc_user_id, NEW.base_baseline_generation, NEW.base_observation_id, NEW.boundary, NEW.conflict_code, NEW.created_at, NEW.expected_projection_revision, NEW.idempotency_key, NEW.kind, NEW.left_anchor_track_id, NEW.operation_id, NEW.ordered_track_ids, NEW.outcome, NEW.playlist_urn, NEW.request_fingerprint, NEW.resolved_at, NEW.right_anchor_track_id, NEW.sequence, NEW.track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+                DELETE FROM public.playlist_membership_operations t WHERE t.operation_id = OLD.operation_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.playlist_urn, NEW.idempotency_key) IS DISTINCT FROM (OLD.playlist_urn, OLD.idempotency_key);
         k1 := (NEW.playlist_urn, NEW.sequence) IS DISTINCT FROM (OLD.playlist_urn, OLD.sequence);
@@ -5367,7 +5814,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_membership_operations still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();
 ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5429,11 +5876,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.playlist_urn IS DISTINCT FROM OLD.playlist_urn THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+                    INSERT INTO public.playlist_membership_state (baseline_generation, baseline_observation_id, candidate_fingerprint, committed_operation_sequence, conflict_code, last_error, last_operation_sequence, latest_observation_id, next_reconcile_at, owner_sc_user_id, playlist_urn, projection_revision, projection_track_count, reconcile_failure_streak, reconcile_generation, remote_applied_at, remote_apply_fingerprint, remote_apply_generation, sync_status, updated_at) VALUES (NEW.baseline_generation, NEW.baseline_observation_id, NEW.candidate_fingerprint, NEW.committed_operation_sequence, NEW.conflict_code, NEW.last_error, NEW.last_operation_sequence, NEW.latest_observation_id, NEW.next_reconcile_at, NEW.owner_sc_user_id, NEW.playlist_urn, NEW.projection_revision, NEW.projection_track_count, NEW.reconcile_failure_streak, NEW.reconcile_generation, NEW.remote_applied_at, NEW.remote_apply_fingerprint, NEW.remote_apply_generation, NEW.sync_status, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+                DELETE FROM public.playlist_membership_state t WHERE t.playlist_urn = OLD.playlist_urn;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_state' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -5460,7 +5929,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_membership_state still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();
 ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5569,11 +6038,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.playlist_remote_observations (all_items_identified, authority, declared_track_count, error_kind, id, observed_at, observed_track_count, outcome, pagination_complete, playlist_urn, retry_at, sc_last_modified, snapshot_id) VALUES (NEW.all_items_identified, NEW.authority, NEW.declared_track_count, NEW.error_kind, NEW.id, NEW.observed_at, NEW.observed_track_count, NEW.outcome, NEW.pagination_complete, NEW.playlist_urn, NEW.retry_at, NEW.sc_last_modified, NEW.snapshot_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.playlist_remote_observations t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (OLD.playlist_urn, OLD.id);
         IF k0 THEN
@@ -5609,7 +6100,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_remote_observations still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();
 ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5718,11 +6209,33 @@ DECLARE
     k1 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.playlist_remote_snapshots (content_fingerprint, created_at, id, playlist_urn, track_count) VALUES (NEW.content_fingerprint, NEW.created_at, NEW.id, NEW.playlist_urn, NEW.track_count);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.playlist_remote_snapshots t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.playlist_urn, NEW.content_fingerprint) IS DISTINCT FROM (OLD.playlist_urn, OLD.content_fingerprint);
         k1 := (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (OLD.playlist_urn, OLD.id);
@@ -5767,7 +6280,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_remote_snapshots still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();
 ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5872,11 +6385,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn, 'position', OLD."position")) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.playlist_urn, NEW."position") IS DISTINCT FROM (OLD.playlist_urn, OLD."position") THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', OLD.playlist_urn, 'position', OLD."position")) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+                    INSERT INTO public.playlist_track_projection (playlist_urn, "position", sc_track_id) VALUES (NEW.playlist_urn, NEW."position", NEW.sc_track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+                DELETE FROM public.playlist_track_projection t WHERE (t.playlist_urn, t."position") = (OLD.playlist_urn, OLD."position");
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.playlist_urn, NEW.sc_track_id) IS DISTINCT FROM (OLD.playlist_urn, OLD.sc_track_id);
         IF k0 THEN
@@ -5912,7 +6447,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_track_projection still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -5984,11 +6519,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', OLD.urn)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.urn IS DISTINCT FROM OLD.urn THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', OLD.urn)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+                    INSERT INTO public.playlists (artwork_url, created_at, deleted_at, description, duration_ms, genre, kind, label_name, last_read_at, likes_count_sc, owner_sc_user_id, owner_urn, owner_username, permalink_url, playlist_type, release_date, release_year, reposts_count_sc, sc_created_at, sc_desired, sc_last_modified, sc_metadata, sc_mutation_observation, sc_observation, sc_playlist_id, sc_synced_at, sc_write_confirmed, sharing, tags, title, title_normalized, track_count, updated_at, urn) VALUES (NEW.artwork_url, NEW.created_at, NEW.deleted_at, NEW.description, NEW.duration_ms, NEW.genre, NEW.kind, NEW.label_name, NEW.last_read_at, NEW.likes_count_sc, NEW.owner_sc_user_id, NEW.owner_urn, NEW.owner_username, NEW.permalink_url, NEW.playlist_type, NEW.release_date, NEW.release_year, NEW.reposts_count_sc, NEW.sc_created_at, NEW.sc_desired, NEW.sc_last_modified, NEW.sc_metadata, NEW.sc_mutation_observation, NEW.sc_observation, NEW.sc_playlist_id, NEW.sc_synced_at, NEW.sc_write_confirmed, NEW.sharing, NEW.tags, NEW.title, NEW.title_normalized, NEW.track_count, NEW.updated_at, NEW.urn);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+                DELETE FROM public.playlists t WHERE t.urn = OLD.urn;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.sc_playlist_id IS DISTINCT FROM OLD.sc_playlist_id;
         IF k0 THEN
@@ -6024,7 +6581,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();
 ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -6591,11 +7148,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', OLD.word)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.word IS DISTINCT FROM OLD.word THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', OLD.word)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+                    INSERT INTO public.search_terms (latin, ndoc, word) VALUES (NEW.latin, NEW.ndoc, NEW.word);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+                DELETE FROM public.search_terms t WHERE t.word = OLD.word;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'search_terms' AND p.pk = jsonb_build_object('word', NEW.word)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -6622,7 +7201,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.search_terms still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();
 ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -7648,11 +8227,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id, 'action_type', OLD.action_type)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.oauth_app_id, NEW.action_type) IS DISTINCT FROM (OLD.oauth_app_id, OLD.action_type) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', OLD.oauth_app_id, 'action_type', OLD.action_type)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+                    INSERT INTO public.sync_queue_action_pauses (action_type, oauth_app_id, paused_until, reason, strikes, updated_at) VALUES (NEW.action_type, NEW.oauth_app_id, NEW.paused_until, NEW.reason, NEW.strikes, NEW.updated_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+                DELETE FROM public.sync_queue_action_pauses t WHERE (t.oauth_app_id, t.action_type) = (OLD.oauth_app_id, OLD.action_type);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'sync_queue_action_pauses' AND p.pk = jsonb_build_object('oauth_app_id', NEW.oauth_app_id, 'action_type', NEW.action_type)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -7679,7 +8280,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.sync_queue_action_pauses still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();
 ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -7743,11 +8344,33 @@ DECLARE
     k2 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', OLD.version)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.version IS DISTINCT FROM OLD.version THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', OLD.version)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+                    INSERT INTO public.taste_model_versions (active, applied_at, collection, created_at, dim, input_object, items_count, metrics, pooling, refreshed_through, trained_at, users_count, version) VALUES (NEW.active, NEW.applied_at, NEW.collection, NEW.created_at, NEW.dim, NEW.input_object, NEW.items_count, NEW.metrics, NEW.pooling, NEW.refreshed_through, NEW.trained_at, NEW.users_count, NEW.version);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+                DELETE FROM public.taste_model_versions t WHERE t.version = OLD.version;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.collection IS DISTINCT FROM OLD.collection;
         k1 := NEW.input_object IS DISTINCT FROM OLD.input_object;
@@ -7803,7 +8426,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.taste_model_versions still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();
 ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -8101,11 +8724,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.track_id, NEW.artist_id, NEW.role) IS DISTINCT FROM (OLD.track_id, OLD.artist_id, OLD.role) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', OLD.track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                    INSERT INTO public.track_artists (artist_id, confidence, evidence, "position", role, source, track_id) VALUES (NEW.artist_id, NEW.confidence, NEW.evidence, NEW."position", NEW.role, NEW.source, NEW.track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                DELETE FROM public.track_artists t WHERE (t.track_id, t.artist_id, t.role) = (OLD.track_id, OLD.artist_id, OLD.role);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_artists' AND p.pk = jsonb_build_object('track_id', NEW.track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -8132,7 +8777,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.track_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();
 ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -8193,11 +8838,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.track_comments (body, created_at, id, sc_comment_id, sc_created_at, sc_track_id, synced_at, track_position_ms, user_urn) VALUES (NEW.body, NEW.created_at, NEW.id, NEW.sc_comment_id, NEW.sc_created_at, NEW.sc_track_id, NEW.synced_at, NEW.track_position_ms, NEW.user_urn);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.track_comments t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.sc_comment_id IS DISTINCT FROM OLD.sc_comment_id;
         IF k0 THEN
@@ -8233,7 +8900,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.track_comments still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();
 ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -8350,11 +9017,33 @@ DECLARE
     k1 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.tracks (album_id, album_position, artwork_url, audio_fingerprint, canonical_track_id, comments_count_sc, cover_of_artist_id, created_at, deleted_at, description, duration_ms, duration_resolve_attempts, duration_resolve_retry_at, enrich_attempts, enrich_confidence, enrich_error, enrich_locked_at, enrich_next_run_at, enrich_source, enrich_state, enriched_at, genius_song_id, genius_url, genre, hq_upgrade_attempts, hq_upgrade_last_at, hq_upgrade_pending, id, index_attempts, index_priority, index_state, indexed_at, is_cover, isrc, language, language_confidence, last_read_at, likes_count_sc, metadata_artist, needs_duration_resolve, permalink_url, pipeline_held, play_count_sc, primary_artist_id, quality_model_version, quality_score, recording_key, release_date, release_year, reposts_count_sc, s3_missing_at, s3_verified_at, sc_created_at, sc_desired, sc_last_modified, sc_metadata, sc_mutation_observation, sc_observation, sc_synced_at, sc_track_id, sc_write_confirmed, sharing, storage_attempts, storage_priority, storage_quality, storage_state, superseded_by, tags, title, title_normalized, transcribe_at, transcribe_state, updated_at, upload_kind, uploader_avatar_url, uploader_sc_user_id, uploader_urn, uploader_username, urn, waveform_url, work_key, work_normalizer_version) VALUES (NEW.album_id, NEW.album_position, NEW.artwork_url, NEW.audio_fingerprint, NEW.canonical_track_id, NEW.comments_count_sc, NEW.cover_of_artist_id, NEW.created_at, NEW.deleted_at, NEW.description, NEW.duration_ms, NEW.duration_resolve_attempts, NEW.duration_resolve_retry_at, NEW.enrich_attempts, NEW.enrich_confidence, NEW.enrich_error, NEW.enrich_locked_at, NEW.enrich_next_run_at, NEW.enrich_source, NEW.enrich_state, NEW.enriched_at, NEW.genius_song_id, NEW.genius_url, NEW.genre, NEW.hq_upgrade_attempts, NEW.hq_upgrade_last_at, NEW.hq_upgrade_pending, NEW.id, NEW.index_attempts, NEW.index_priority, NEW.index_state, NEW.indexed_at, NEW.is_cover, NEW.isrc, NEW.language, NEW.language_confidence, NEW.last_read_at, NEW.likes_count_sc, NEW.metadata_artist, NEW.needs_duration_resolve, NEW.permalink_url, NEW.pipeline_held, NEW.play_count_sc, NEW.primary_artist_id, NEW.quality_model_version, NEW.quality_score, NEW.recording_key, NEW.release_date, NEW.release_year, NEW.reposts_count_sc, NEW.s3_missing_at, NEW.s3_verified_at, NEW.sc_created_at, NEW.sc_desired, NEW.sc_last_modified, NEW.sc_metadata, NEW.sc_mutation_observation, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_track_id, NEW.sc_write_confirmed, NEW.sharing, NEW.storage_attempts, NEW.storage_priority, NEW.storage_quality, NEW.storage_state, NEW.superseded_by, NEW.tags, NEW.title, NEW.title_normalized, NEW.transcribe_at, NEW.transcribe_state, NEW.updated_at, NEW.upload_kind, NEW.uploader_avatar_url, NEW.uploader_sc_user_id, NEW.uploader_urn, NEW.uploader_username, NEW.urn, NEW.waveform_url, NEW.work_key, NEW.work_normalizer_version);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.tracks t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id;
         k1 := NEW.urn IS DISTINCT FROM OLD.urn;
@@ -8399,7 +9088,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();
 ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -8854,12 +9543,23 @@ CREATE OR REPLACE FUNCTION public.scd_skip_user_events()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $f$
+DECLARE
+    o record;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
     END IF;
-    PERFORM 1 FROM public.user_events t WHERE t.id = NEW.id;
+    IF TG_OP = 'UPDATE' THEN
+        NEW.created_at := least(OLD.created_at, NEW.created_at);
+        RETURN NEW;
+    END IF;
+    SELECT t.created_at INTO o FROM public.user_events t WHERE t.id = NEW.id;
     IF FOUND THEN
+        IF NEW.created_at < o.created_at THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.user_events t SET created_at = least(t.created_at, NEW.created_at) WHERE t.id = NEW.id;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+        END IF;
         RETURN NULL;
     END IF;
     PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -8870,7 +9570,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_user_events();
+CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT OR UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_user_events();
 ALTER TABLE public.user_events ENABLE REPLICA TRIGGER zz_skip;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -8930,11 +9630,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'target_user_urn', OLD.target_user_urn)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.user_id, NEW.target_user_urn) IS DISTINCT FROM (OLD.user_id, OLD.target_user_urn) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'target_user_urn', OLD.target_user_urn)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+                    INSERT INTO public.user_followers (created_at, last_read_at, progress, synced_at, target_user_urn, user_id) VALUES (NEW.created_at, NEW.last_read_at, NEW.progress, NEW.synced_at, NEW.target_user_urn, NEW.user_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+                DELETE FROM public.user_followers t WHERE (t.user_id, t.target_user_urn) = (OLD.user_id, OLD.target_user_urn);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_followers' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'target_user_urn', NEW.target_user_urn)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -8961,7 +9683,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_followers still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();
 ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -9692,11 +10414,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'playlist_urn', OLD.playlist_urn)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.user_id, NEW.playlist_urn) IS DISTINCT FROM (OLD.user_id, OLD.playlist_urn) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'playlist_urn', OLD.playlist_urn)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+                    INSERT INTO public.user_owned_playlists (created_at, last_read_at, playlist_urn, progress, synced_at, user_id) VALUES (NEW.created_at, NEW.last_read_at, NEW.playlist_urn, NEW.progress, NEW.synced_at, NEW.user_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+                DELETE FROM public.user_owned_playlists t WHERE (t.user_id, t.playlist_urn) = (OLD.user_id, OLD.playlist_urn);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_playlists' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'playlist_urn', NEW.playlist_urn)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -9723,7 +10467,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_owned_playlists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();
 ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -9783,11 +10527,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.user_id, NEW.sc_track_id) IS DISTINCT FROM (OLD.user_id, OLD.sc_track_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', OLD.user_id, 'sc_track_id', OLD.sc_track_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+                    INSERT INTO public.user_owned_tracks (created_at, last_read_at, progress, sc_track_id, synced_at, user_id) VALUES (NEW.created_at, NEW.last_read_at, NEW.progress, NEW.sc_track_id, NEW.synced_at, NEW.user_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+                DELETE FROM public.user_owned_tracks t WHERE (t.user_id, t.sc_track_id) = (OLD.user_id, OLD.sc_track_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_owned_tracks' AND p.pk = jsonb_build_object('user_id', NEW.user_id, 'sc_track_id', NEW.sc_track_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -9814,7 +10580,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_owned_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();
 ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -9874,11 +10640,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.soundcloud_user_id IS DISTINCT FROM OLD.soundcloud_user_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', OLD.soundcloud_user_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+                    INSERT INTO public.user_profiles (profile_json, sc_observation, soundcloud_user_id, synced_at) VALUES (NEW.profile_json, NEW.sc_observation, NEW.soundcloud_user_id, NEW.synced_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+                DELETE FROM public.user_profiles t WHERE t.soundcloud_user_id = OLD.soundcloud_user_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_profiles' AND p.pk = jsonb_build_object('soundcloud_user_id', NEW.soundcloud_user_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -9905,7 +10693,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_profiles still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();
 ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10319,11 +11107,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id, 'version', OLD.version)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.sc_user_id, NEW.version) IS DISTINCT FROM (OLD.sc_user_id, OLD.version) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id, 'version', OLD.version)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+                    INSERT INTO public.user_taste_vectors (sc_user_id, updated_at, vec, version) VALUES (NEW.sc_user_id, NEW.updated_at, NEW.vec, NEW.version);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+                DELETE FROM public.user_taste_vectors t WHERE (t.sc_user_id, t.version) = (OLD.sc_user_id, OLD.version);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_taste_vectors' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id, 'version', NEW.version)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -10350,7 +11160,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_taste_vectors still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();
 ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10410,11 +11220,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.sc_user_id IS DISTINCT FROM OLD.sc_user_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                    INSERT INTO public.user_web_profiles (profiles, sc_observation, sc_user_id, synced_at) VALUES (NEW.profiles, NEW.sc_observation, NEW.sc_user_id, NEW.synced_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                DELETE FROM public.user_web_profiles t WHERE t.sc_user_id = OLD.sc_user_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'user_web_profiles' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -10441,7 +11273,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_web_profiles still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();
 ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10502,11 +11334,33 @@ DECLARE
     k0 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.sc_user_id IS DISTINCT FROM OLD.sc_user_id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                    INSERT INTO public.users (avatar_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified) VALUES (NEW.avatar_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                DELETE FROM public.users t WHERE t.sc_user_id = OLD.sc_user_id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := NEW.urn IS DISTINCT FROM OLD.urn;
         IF k0 THEN
@@ -10542,7 +11396,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.users still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();
 ALTER TABLE public.users ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10602,11 +11456,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'album_id', OLD.album_id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.wanted_track_id, NEW.album_id) IS DISTINCT FROM (OLD.wanted_track_id, OLD.album_id) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'album_id', OLD.album_id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+                    INSERT INTO public.wanted_track_albums (album_id, "position", wanted_track_id) VALUES (NEW.album_id, NEW."position", NEW.wanted_track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+                DELETE FROM public.wanted_track_albums t WHERE (t.wanted_track_id, t.album_id) = (OLD.wanted_track_id, OLD.album_id);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_albums' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'album_id', NEW.album_id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -10633,7 +11509,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_track_albums still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();
 ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10693,11 +11569,33 @@ DECLARE
     held boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.wanted_track_id, NEW.artist_id, NEW.role) IS DISTINCT FROM (OLD.wanted_track_id, OLD.artist_id, OLD.role) THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', OLD.wanted_track_id, 'artist_id', OLD.artist_id, 'role', OLD.role)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                    INSERT INTO public.wanted_track_artists (artist_id, "position", role, wanted_track_id) VALUES (NEW.artist_id, NEW."position", NEW.role, NEW.wanted_track_id);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                DELETE FROM public.wanted_track_artists t WHERE (t.wanted_track_id, t.artist_id, t.role) = (OLD.wanted_track_id, OLD.artist_id, OLD.role);
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_track_artists' AND p.pk = jsonb_build_object('wanted_track_id', NEW.wanted_track_id, 'artist_id', NEW.artist_id, 'role', NEW.role)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
@@ -10724,7 +11622,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_track_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();
 ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
@@ -10834,11 +11732,33 @@ DECLARE
     k1 boolean;
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+    IF TG_OP = 'DELETE' THEN
+        IF pg_catalog.pg_trigger_depth() = 1 AND EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
             RETURN NULL;
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id THEN
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', OLD.id)) THEN
+                IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                    INSERT INTO public.wanted_tracks (discovered_at, duration_ms, external_id, fetched_at, id, isrc, normalized_title, primary_artist_id, recording_key, release_year, resolve_attempts, resolve_error, resolve_locked_at, resolve_next_run_at, source, status, title, track_id, updated_at, work_key, work_normalizer_version, work_reconciled_at) VALUES (NEW.discovered_at, NEW.duration_ms, NEW.external_id, NEW.fetched_at, NEW.id, NEW.isrc, NEW.normalized_title, NEW.primary_artist_id, NEW.recording_key, NEW.release_year, NEW.resolve_attempts, NEW.resolve_error, NEW.resolve_locked_at, NEW.resolve_next_run_at, NEW.source, NEW.status, NEW.title, NEW.track_id, NEW.updated_at, NEW.work_key, NEW.work_normalizer_version, NEW.work_reconciled_at);
+                END IF;
+                RETURN NULL;
+            END IF;
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                DELETE FROM public.wanted_tracks t WHERE t.id = OLD.id;
+                RETURN NULL;
+            END IF;
+        ELSE
+            IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+                RETURN NULL;
+            END IF;
         END IF;
         k0 := (NEW.source, NEW.external_id, ((NEW.external_id IS NOT NULL))) IS DISTINCT FROM (OLD.source, OLD.external_id, ((OLD.external_id IS NOT NULL)));
         k1 := (NEW.isrc, ((NEW.isrc IS NOT NULL))) IS DISTINCT FROM (OLD.isrc, ((OLD.isrc IS NOT NULL)));
@@ -10887,7 +11807,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();
+CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();
 ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zz_owner;
 
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
