@@ -530,6 +530,44 @@ async fn failed_page_rolls_back_catalog_mirror_cursor_and_downstream_work(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_page_of_new_tracks_delivers_one_lyrics_wake_per_track(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let (job, payload, writer) = setup(&pool).await?;
+    let snapshot = state::begin(&pool, &job, &payload)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    writer
+        .persist(
+            &job,
+            &payload,
+            &snapshot,
+            page(&[3, 1, 2], None),
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    let wakes: Vec<(String, bool, bool)> = sqlx::query_as(
+        "SELECT state.sc_track_id, job.id IS NOT NULL, state.wake_durable_at IS NOT NULL
+         FROM lyrics_lookup_state AS state
+         LEFT JOIN background_jobs AS job
+           ON job.id = state.wake_message_id AND job.kind = $1 AND job.dedup_key = state.sc_track_id
+         ORDER BY state.sc_track_id",
+    )
+    .bind(JobKind::LyricsLookup.as_str())
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        wakes,
+        [
+            ("1".to_owned(), true, true),
+            ("2".to_owned(), true, true),
+            ("3".to_owned(), true, true),
+        ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn repeated_cursor_and_lost_generation_cannot_commit_a_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
