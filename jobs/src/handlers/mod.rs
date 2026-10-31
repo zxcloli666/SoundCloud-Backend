@@ -4,6 +4,7 @@ mod ai_store;
 mod apiv1_pace;
 mod artist_names;
 mod attribution;
+pub(crate) mod auth_rpc;
 mod catalog;
 mod catalog_collection;
 mod catalog_credits;

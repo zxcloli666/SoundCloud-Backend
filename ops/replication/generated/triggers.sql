@@ -3665,7 +3665,7 @@ $f$;
 CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_soundcloud_connections();
 ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_fk;
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'migration', 'repl');
+CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, login_v, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_merge_soundcloud_connections()
 RETURNS trigger
@@ -3679,6 +3679,11 @@ DECLARE
 BEGIN
     IF current_setting('scd.merging', true) = 'on' THEN
         RETURN NEW;
+    END IF;
+    IF NOT core THEN
+        IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'soundcloud_connections' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
+            RETURN NULL;
+        END IF;
     END IF;
     pv := (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id));
     IF pv IS NOT NULL AND NEW.token_v <= pv THEN
@@ -3710,13 +3715,14 @@ BEGIN
             NEW.refresh_rejection_count := OLD.refresh_rejection_count;
             NEW.first_refresh_rejection_at := OLD.first_refresh_rejection_at;
             NEW.updated_at := OLD.updated_at;
+            NEW.login_v := OLD.login_v;
         END IF;
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.soundcloud_connections t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF (NOT core AND (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at) IS DISTINCT FROM (o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.refresh_rejection_count, o.first_refresh_rejection_at, o.updated_at)) OR NEW.token_v > o.token_v OR (((NEW.token_v & 15) <> public.scd_node_ord() OR NEW.token_v = o.token_v) AND NEW.created_at < o.created_at) THEN
+            IF (NOT core AND (NEW.refresh_generation, NEW.refresh_failure_count, NEW.refresh_lease_id, NEW.refresh_lease_expires_at, NEW.last_refresh_attempt_at, NEW.last_refresh_success_at, NEW.last_refresh_error_kind, NEW.last_refresh_error, NEW.retry_at, NEW.refresh_rejection_count, NEW.first_refresh_rejection_at, NEW.updated_at, NEW.login_v) IS DISTINCT FROM (o.refresh_generation, o.refresh_failure_count, o.refresh_lease_id, o.refresh_lease_expires_at, o.last_refresh_attempt_at, o.last_refresh_success_at, o.last_refresh_error_kind, o.last_refresh_error, o.retry_at, o.refresh_rejection_count, o.first_refresh_rejection_at, o.updated_at, o.login_v)) OR NEW.token_v > o.token_v OR (((NEW.token_v & 15) <> public.scd_node_ord() OR NEW.token_v = o.token_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.soundcloud_connections t SET
                     refresh_generation = CASE WHEN core THEN o.refresh_generation ELSE NEW.refresh_generation END,
@@ -3731,6 +3737,7 @@ BEGIN
                     refresh_rejection_count = CASE WHEN core THEN o.refresh_rejection_count ELSE NEW.refresh_rejection_count END,
                     first_refresh_rejection_at = CASE WHEN core THEN o.first_refresh_rejection_at ELSE NEW.first_refresh_rejection_at END,
                     updated_at = CASE WHEN core THEN o.updated_at ELSE NEW.updated_at END,
+                    login_v = CASE WHEN core THEN o.login_v ELSE NEW.login_v END,
                     soundcloud_user_id = CASE WHEN NEW.token_v > o.token_v THEN NEW.soundcloud_user_id ELSE o.soundcloud_user_id END,
                     username = CASE WHEN NEW.token_v > o.token_v THEN NEW.username ELSE o.username END,
                     created_at = CASE WHEN ((NEW.token_v & 15) <> public.scd_node_ord() OR NEW.token_v = o.token_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.token_v > o.token_v THEN NEW.created_at ELSE o.created_at END,
@@ -3750,8 +3757,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.soundcloud_connections (access_token, created_at, expires_at, first_refresh_rejection_at, id, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, oauth_app_id, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, refresh_token, retry_at, scope, soundcloud_user_id, token_v, updated_at, username)
-        VALUES (NEW.access_token, NEW.created_at, NEW.expires_at, NEW.first_refresh_rejection_at, NEW.id, NEW.last_refresh_attempt_at, NEW.last_refresh_error, NEW.last_refresh_error_kind, NEW.last_refresh_success_at, NEW.oauth_app_id, NEW.refresh_failure_count, NEW.refresh_generation, NEW.refresh_lease_expires_at, NEW.refresh_lease_id, NEW.refresh_rejection_count, NEW.refresh_token, NEW.retry_at, NEW.scope, NEW.soundcloud_user_id, NEW.token_v, NEW.updated_at, NEW.username)
+        INSERT INTO public.soundcloud_connections (access_token, created_at, expires_at, first_refresh_rejection_at, id, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, login_v, oauth_app_id, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, refresh_token, retry_at, scope, soundcloud_user_id, token_v, updated_at, username)
+        VALUES (NEW.access_token, NEW.created_at, NEW.expires_at, NEW.first_refresh_rejection_at, NEW.id, NEW.last_refresh_attempt_at, NEW.last_refresh_error, NEW.last_refresh_error_kind, NEW.last_refresh_success_at, NEW.login_v, NEW.oauth_app_id, NEW.refresh_failure_count, NEW.refresh_generation, NEW.refresh_lease_expires_at, NEW.refresh_lease_id, NEW.refresh_rejection_count, NEW.refresh_token, NEW.retry_at, NEW.scope, NEW.soundcloud_user_id, NEW.token_v, NEW.updated_at, NEW.username)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -3807,7 +3814,7 @@ BEGIN
         NEW.token_v := public.scd_hlc(greatest(NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id))));
         RETURN NEW;
     END IF;
-    IF (NEW.soundcloud_user_id, NEW.username, NEW.created_at, NEW.oauth_app_id, NEW.access_token, NEW.refresh_token, NEW.expires_at, NEW.scope) IS DISTINCT FROM (OLD.soundcloud_user_id, OLD.username, OLD.created_at, OLD.oauth_app_id, OLD.access_token, OLD.refresh_token, OLD.expires_at, OLD.scope) THEN
+    IF (NEW.soundcloud_user_id, NEW.username, NEW.created_at, NEW.oauth_app_id, NEW.access_token, NEW.refresh_token, NEW.expires_at, NEW.scope) IS DISTINCT FROM (OLD.soundcloud_user_id, OLD.username, OLD.created_at, OLD.oauth_app_id, OLD.access_token, OLD.refresh_token, OLD.expires_at, OLD.scope) AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.token_v > greatest(OLD.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id)))) THEN
         NEW.token_v := public.scd_hlc(greatest(OLD.token_v, NEW.token_v, (SELECT max(x.purged_v) FROM public.repl_purges x WHERE x.tbl = 'soundcloud_connections' AND x.pk = jsonb_build_object('id', NEW.id))));
     ELSE
         NEW.token_v := greatest(OLD.token_v, NEW.token_v);

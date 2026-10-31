@@ -82,7 +82,6 @@ impl NatsService {
         }))
     }
 
-    #[allow(dead_code)]
     pub async fn request<P, R>(
         &self,
         subject: &str,

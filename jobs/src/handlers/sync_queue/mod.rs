@@ -37,6 +37,7 @@ use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
 
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
+pub(super) use self::model::Connection;
 
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;

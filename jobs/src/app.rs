@@ -18,6 +18,7 @@ use crate::bus::advisory::AdvisoryReaper;
 use crate::bus::{Bus, BusConsumers};
 use crate::config::JobsConfig;
 use crate::db::Databases;
+use crate::handlers::auth_rpc::AuthRpc;
 use crate::handlers::taste::{TasteHandler, TasteResult};
 use crate::handlers::{
     CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
@@ -186,6 +187,11 @@ pub async fn run() -> anyhow::Result<()> {
     supervisor.spawn(
         "worker lost reaper",
         AdvisoryReaper::new(bus.clone(), handlers.clone()).run(cancellation.clone()),
+    );
+    supervisor.spawn(
+        "auth RPC",
+        Arc::new(AuthRpc::new(databases.main.fast.clone(), &config.oauth)?)
+            .serve(bus.clone(), cancellation.clone()),
     );
     supervisor.spawn(
         "dependency health monitor",

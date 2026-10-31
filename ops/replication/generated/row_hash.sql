@@ -811,7 +811,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.access_token, t.created_at, t.expires_at, t.first_refresh_rejection_at, t.id, t.last_refresh_attempt_at, t.last_refresh_error, t.last_refresh_error_kind, t.last_refresh_success_at, t.oauth_app_id, t.refresh_failure_count, t.refresh_generation, t.refresh_lease_expires_at, t.refresh_lease_id, t.refresh_rejection_count, t.refresh_token, t.retry_at, t.scope, t.soundcloud_user_id, t.token_v, t.updated_at, t.username)::text) FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.access_token, t.created_at, t.expires_at, t.first_refresh_rejection_at, t.id, t.last_refresh_attempt_at, t.last_refresh_error, t.last_refresh_error_kind, t.last_refresh_success_at, t.login_v, t.oauth_app_id, t.refresh_failure_count, t.refresh_generation, t.refresh_lease_expires_at, t.refresh_lease_id, t.refresh_rejection_count, t.refresh_token, t.retry_at, t.scope, t.soundcloud_user_id, t.token_v, t.updated_at, t.username)::text) FROM public.soundcloud_connections t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_star_track_tiers(k jsonb)

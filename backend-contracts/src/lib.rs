@@ -1,3 +1,4 @@
+pub mod auth;
 mod catalog_collection;
 mod catalog_refresh;
 pub mod diag;

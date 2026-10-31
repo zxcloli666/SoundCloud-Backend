@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::{TracksService, TracksServiceDependencies};
 use crate::config::ColdCfg;
-use crate::modules::auth::{AuthHealthService, AuthService, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, TokenProvider};
 use crate::modules::cold_refresh::ColdRefreshService;
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::modules::sync_queue::SyncQueueService;
@@ -286,6 +286,7 @@ async fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies
         sc.clone(),
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis.clone(), pool.clone()),
+        CoreRpc::unreachable(),
     );
     let tokens = TokenProvider::new(auth, OAuthAppTokenService::new(pool.clone()));
     Ok(TracksServiceDependencies {

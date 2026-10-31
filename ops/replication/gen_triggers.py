@@ -54,12 +54,13 @@ def table_triggers(model, t):
             out.append(guard(t, "zz_guard_intent", "BEFORE INSERT OR UPDATE OF " + ", ".join(q(c) for c in intent), CORE,
                              "scd_guard_intent_" + t.name, ["mirror", "migration", "repl", "api"], "guard_intent"))
         if result:
+            writers = ["cmd", "migration", "repl"] if model.held(t) else ["migration", "repl"]
             out.append(guard(t, "zz_guard_result", "BEFORE UPDATE OF " + ", ".join(q(c) for c in result), API,
-                             "scd_guard_result_" + t.name, ["migration", "repl"], "guard_result"))
+                             "scd_guard_result_" + t.name, writers, "guard_result"))
         out.append(purge_guard(t))
     if t.cls in ("M", "A") and t.versioned:
-        out.append(ver(t))
-        out.append(merge(t))
+        out.append(ver(t, model.held(t)))
+        out.append(merge(t, model.held(t)))
     if t.name == "repl_tombstones":
         out += [stamp(t), erase(model, t)]
     elif t.cls == "A" and t.insert_only:
@@ -120,7 +121,7 @@ def guard(t, name, events, when, seq, writers, counter):
     return name, trigger(t, name, events, "public.scd_guard(%s)" % args, when, row=False), [(counter, t.name, seq)]
 
 
-def ver(t):
+def ver(t, held=False):
     groups = t.versioned_groups()
     lines = ["BEGIN", "    IF TG_OP = 'INSERT' THEN"]
     for gname, g in groups:
@@ -139,8 +140,11 @@ def ver(t):
     for gname, g in groups:
         v = q(g["version"])
         floor = ", " + newest_purge(lit(t.name), pk_json("NEW", t.pk)) if purge_floored(t, g) else ""
+        changed = "%s IS DISTINCT FROM %s" % (tup("NEW", g["cols"]), tup("OLD", g["cols"]))
+        if held:
+            changed += " AND NOT (coalesce(current_setting('scd.cmd', true), '') <> '' AND NEW.%s > greatest(OLD.%s%s))" % (v, v, floor)
         lines += [
-            "    IF %s IS DISTINCT FROM %s THEN" % (tup("NEW", g["cols"]), tup("OLD", g["cols"])),
+            "    IF %s THEN" % changed,
             "        NEW.%s := public.scd_hlc(greatest(OLD.%s, NEW.%s%s));" % (v, v, v, floor),
             "    ELSE",
             "        NEW.%s := greatest(OLD.%s, NEW.%s);" % (v, v, v),
@@ -188,7 +192,7 @@ def owns(owner):
     return None
 
 
-def merge(t):
+def merge(t, held=False):
     groups = sorted(t.groups.items())
     core_cols = [c for _, g in groups if not g["version"] for c in g["cols"]]
     tombs = t.cls == "A" and t.delete == "tombstone"
@@ -199,6 +203,8 @@ def merge(t):
         lines.append("    pv bigint;")
     lines += ["BEGIN"]
     lines += ["    IF current_setting('scd.merging', true) = 'on' THEN", "        RETURN NEW;", "    END IF;"]
+    if held:
+        lines += ["    IF NOT core THEN"] + indent(pending(t, []), 2) + ["    END IF;"]
     seqs = []
     if purgeable(t):
         blocked, seqs = purge_block(t)
