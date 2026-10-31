@@ -466,7 +466,7 @@ async fn every_mark_trigger_also_fires_on_replication_apply(pool: PgPool) -> any
         "SELECT tgrelid::regclass::text, tgname::text, tgenabled::text
          FROM pg_trigger
          WHERE tgname IN ('star_due_mark_update', 'star_due_mark_row')
-         ORDER BY 1 COLLATE \"C\", 2 COLLATE \"C\"",
+         ORDER BY tgrelid::regclass::text COLLATE \"C\", tgname::text COLLATE \"C\"",
     )
     .fetch_all(&pool)
     .await?;

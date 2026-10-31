@@ -55,7 +55,10 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
          FROM generate_series(1, 340) AS k;
          INSERT INTO user_likes_tracks (user_id, sc_track_id, wanted_state, created_at, liked_at)
          SELECT CASE WHEN n % 2 = 0 THEN 'soundcloud:users:' ELSE '' END || u,
-                (1 + (u * 97 + n * 13) % 9000)::text,
+                CASE
+                    WHEN u % 7 = 0 THEN 10000 + 4 * ((u * 31 + n) % 2000)
+                    ELSE 1 + (u * 97 + n * 13) % 9000
+                END::text,
                 n % 5 <> 0,
                 now() - n * interval '1 day',
                 CASE WHEN n % 3 = 0 THEN NULL ELSE now() - n * interval '2 days' END
