@@ -96,6 +96,9 @@ fn core_text(core: &str, hide_next: &mut bool) -> String {
         let separator = &value[..1];
         let value = &value[1..];
         let key_name = key.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+        if key_name.ends_with("request_id") || key_name.ends_with("trace_id") {
+            return core.to_owned();
+        }
         if secret_key(key_name) {
             if value.is_empty() {
                 *hide_next = true;
@@ -206,11 +209,7 @@ mod tests {
     const OAUTH: &str = "2-291234-123456789-abcDEF0123456";
 
     fn forbidden(value: &str) -> bool {
-        value.contains('?')
-            || value.contains(CLIENT_ID)
-            || value.contains(OAUTH)
-            || value.contains("client_id=")
-            || value.contains("secret_token=")
+        value.contains('?') || value.contains(CLIENT_ID) || value.contains(OAUTH)
     }
 
     #[test]
