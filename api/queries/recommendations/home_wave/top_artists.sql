@@ -1,10 +1,14 @@
-WITH liked AS (SELECT sc_track_id
-               FROM user_likes_tracks
-               WHERE user_id = ANY ($1)
-                 AND wanted_state = true
-                 AND created_at > NOW() - INTERVAL '180 days'
-ORDER BY created_at DESC, ctid DESC
-    LIMIT 300
+WITH liked AS (SELECT l.sc_track_id
+               FROM unnest($1::text[]) AS u(id)
+                        CROSS JOIN LATERAL (SELECT sc_track_id, created_at
+                                            FROM user_likes_tracks
+                                            WHERE user_id = u.id
+                                              AND wanted_state = true
+                                              AND created_at > NOW() - INTERVAL '180 days'
+                                            ORDER BY created_at DESC, sc_track_id DESC
+                                            LIMIT 300) l
+               ORDER BY l.created_at DESC, l.sc_track_id DESC
+               LIMIT 300
     ),
     like_art AS (
 SELECT ta.artist_id, COUNT (*):: real AS lc
