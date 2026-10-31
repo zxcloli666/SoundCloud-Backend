@@ -91,6 +91,7 @@ async fn main() {
         ],
     );
     metrics::init();
+    metrics::spawn_runtime_probe();
 
     let config = Arc::new(AppConfig::from_env());
     info!(port = config.port, "backend starting");

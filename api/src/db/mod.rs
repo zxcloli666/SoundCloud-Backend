@@ -181,18 +181,8 @@ pub async fn warm_up(pool: &PgPool, connections: u32) {
     let target = connections.min(pool.options().get_max_connections()) as usize;
     let started = Instant::now();
     let warmed = tokio::time::timeout(WARM_UP_BUDGET, async {
-        let mut tasks = tokio::task::JoinSet::new();
-        for _ in 0..target {
-            let pool = pool.clone();
-            tasks.spawn(async move { warm_connection(&pool).await });
-        }
-        let mut held = Vec::with_capacity(target);
-        while let Some(done) = tasks.join_next().await {
-            if let Ok(Some(connection)) = done {
-                held.push(connection);
-            }
-        }
-        held.len()
+        let held = futures::future::join_all((0..target).map(|_| warm_connection(pool))).await;
+        held.into_iter().flatten().count()
     })
     .await;
     match warmed {
