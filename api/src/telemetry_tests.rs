@@ -168,7 +168,10 @@ fn no_span_or_warning_carries_an_identifying_field_or_a_raw_address() {
                     }
                 }
                 if arguments.contains(".uri()") || arguments.contains(".query()") {
-                    leaks.push(format!("{}: {macro_name} carries a request uri", path.display()));
+                    leaks.push(format!(
+                        "{}: {macro_name} carries a request uri",
+                        path.display()
+                    ));
                 }
                 from = start + 1;
             }
