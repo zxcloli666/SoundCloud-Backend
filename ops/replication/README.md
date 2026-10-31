@@ -88,7 +88,7 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 21. `0222_scd_install`: the generated SQL again: a `least` column also merges down on an incoming row of the same version, so a resent image fixes a row this node re-inserted while it missed the first insert (lab T18).
 22. `0314_scd_install`: the generated SQL again: zz_owner holds deletes and key moves of a pending key (Hold), `scd_reassert_always(tbl)`, `least` on insert-only tables (`user_events.created_at`).
 23. `0315_scd_dispatch_reassert_always`: `scd_dispatch` reasserts every touched key of a `reassert: always` table that core has, equal hash or not.
-24. `0340_kinds_catalog_misc`: kinds `track.too_long`, `track.release_held`, `track.s3_state` (ok before missing per track, in `sc_track_id` order, each key touched once).
+24. `0340_kinds_catalog_misc`: kinds `track.too_long`, `track.release_held`, `track.s3_state` (ok before missing per track, in `sc_track_id` order, each key touched once; non-optimistic, so an api node in split only ships it and never locks the tracks rows core's batches write).
 25. `0341_entity_reads_wake`: entity_reads_playlist_wake on `entity_reads` (below); api read stamps of tracks, users and playlists go to `entity_reads` instead of the catalog rows.
 26. `0343_scd_install`: the generated SQL again: `playlists.last_read_at` is a core column (written only by entity_reads_playlist_wake), published by core and kept out of the hash; derived triggers may sit on K tables.
 
