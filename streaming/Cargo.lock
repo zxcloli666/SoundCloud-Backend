@@ -2157,6 +2157,8 @@ dependencies = [
  "chrono",
  "fallible-iterator",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
  "uuid",
 ]
 
@@ -2851,6 +2853,7 @@ dependencies = [
  "url",
  "uuid",
  "wreq",
+ "write-through",
 ]
 
 [[package]]
@@ -4046,6 +4049,14 @@ dependencies = [
  "typed-builder",
  "wreq",
  "zstd",
+]
+
+[[package]]
+name = "write-through"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tokio-postgres",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ COPY utils/sc-transport /utils/sc-transport
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
+COPY utils/write-through /utils/write-through
 COPY api/Cargo.toml api/Cargo.lock /api/
 COPY api/src /api/src
 COPY api/queries /api/queries

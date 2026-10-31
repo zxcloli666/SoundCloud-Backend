@@ -14,6 +14,7 @@ COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
+COPY utils/write-through /utils/write-through
 COPY streaming/Cargo.toml streaming/Cargo.lock /streaming/
 COPY streaming/src /streaming/src
 COPY streaming/sc_methods /streaming/sc_methods
