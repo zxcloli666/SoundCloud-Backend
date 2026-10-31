@@ -4,6 +4,8 @@ pub mod handlers;
 pub mod health;
 #[cfg(test)]
 mod lease_wait_tests;
+#[cfg(test)]
+mod session_cache_tests;
 pub mod link_service;
 #[cfg(test)]
 mod login_app_tests;

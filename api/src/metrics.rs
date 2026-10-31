@@ -23,6 +23,9 @@ const PG_BLOCKS: &str = "api_pg_blocks_total";
 const PG_SESSIONS_WAITING: &str = "api_pg_sessions";
 const POOL_WAIT: &str = "api_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "api_pg_pool_wait_last_seconds";
+const SHED_TOTAL: &str = "api_load_shed_total";
+const SHED_IN_FLIGHT: &str = "api_load_shed_in_flight";
+const SESSION_CACHE: &str = "api_session_cache_total";
 
 const POOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
@@ -113,6 +116,24 @@ pub fn record_request(method: &'static str, route: String, status: u16, elapsed:
         "status" => status,
     )
     .increment(1);
+}
+
+pub fn record_shed(route: &str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SHED_TOTAL, "route" => route.to_owned()).increment(1);
+}
+
+pub fn record_session_cache(outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SESSION_CACHE, "outcome" => outcome).increment(1);
+}
+
+pub fn set_shed_in_flight(in_flight: usize) {
+    metrics::gauge!(SHED_IN_FLIGHT).set(in_flight as f64);
 }
 
 pub fn record_dependency(

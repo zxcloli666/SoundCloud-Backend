@@ -3,12 +3,11 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::header::{CACHE_CONTROL, PRAGMA, REFERRER_POLICY, VARY};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Instrument;
 
@@ -43,6 +42,13 @@ pub fn build(state: AppState) -> Router {
         .max_age(Duration::from_secs(3600));
 
     let http_layer = from_fn_with_state(state.clone(), track_http);
+    let database = &state.config.database;
+    let shed = crate::common::shed::Shed::new(
+        state.pg.options().get_max_connections(),
+        database.shed_factor,
+        database.shed_wait,
+    );
+    let shed_layer = from_fn_with_state(shed, crate::common::shed::shed);
     let premium_layer =
         from_fn_with_state(state.clone(), crate::common::premium_gate::premium_gate);
 
@@ -83,10 +89,7 @@ pub fn build(state: AppState) -> Router {
     let router = router.merge(crate::profiling::router());
 
     router
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::GATEWAY_TIMEOUT,
-            Duration::from_secs(60),
-        ))
+        .layer(axum::middleware::from_fn(crate::common::shed::deadline))
         .merge(modules::tracks::upload_router())
         .with_state(state)
         .layer(body_limit())
@@ -96,6 +99,7 @@ pub fn build(state: AppState) -> Router {
         ))
         .layer(http_layer)
         .layer(premium_layer)
+        .layer(shed_layer)
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
 }

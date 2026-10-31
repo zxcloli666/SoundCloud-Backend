@@ -3,7 +3,9 @@ pub(crate) mod login;
 mod oauth;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use mini_moka::sync::Cache;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -13,6 +15,9 @@ use crate::modules::auth::model::{AuthSession, Session, SoundCloudConnection};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
 
+const SESSION_CACHE_TTL: Duration = Duration::from_secs(5);
+const SESSION_CACHE_CAPACITY: u64 = 20_000;
+
 pub use connection::{RefreshAttempt, RefreshOutcome};
 
 #[derive(Clone)]
@@ -21,6 +26,7 @@ pub struct AuthService {
     sc: ScClient,
     oauth_apps: Arc<OAuthAppsService>,
     health: Arc<AuthHealthService>,
+    sessions: Cache<Uuid, Session>,
 }
 
 impl AuthService {
@@ -35,6 +41,10 @@ impl AuthService {
             sc,
             oauth_apps,
             health,
+            sessions: Cache::builder()
+                .max_capacity(SESSION_CACHE_CAPACITY)
+                .time_to_live(SESSION_CACHE_TTL)
+                .build(),
         })
     }
 
@@ -44,6 +54,23 @@ impl AuthService {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(session)
+    }
+
+    pub async fn get_session_cached(&self, session_id: Uuid) -> AppResult<Option<Session>> {
+        if let Some(session) = self.sessions.get(&session_id) {
+            crate::metrics::record_session_cache("hit");
+            return Ok(Some(session));
+        }
+        crate::metrics::record_session_cache("miss");
+        let session = self.get_session(session_id).await?;
+        if let Some(session) = &session {
+            self.sessions.insert(session_id, session.clone());
+        }
+        Ok(session)
+    }
+
+    pub fn forget_session(&self, session_id: Uuid) {
+        self.sessions.invalidate(&session_id);
     }
 
     pub async fn get_auth_session(&self, session_id: Uuid) -> AppResult<Option<AuthSession>> {
@@ -99,6 +126,7 @@ impl AuthService {
             .await?;
         }
         transaction.commit().await?;
+        self.forget_session(session_id);
         Ok(())
     }
 }
