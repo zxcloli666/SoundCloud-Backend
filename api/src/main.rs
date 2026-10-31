@@ -79,6 +79,11 @@ use crate::state::AppState;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     tls_common::init_crypto();
+    if std::env::args().nth(1).as_deref() == Some("compare-reads") {
+        let code =
+            modules::recommendations::compare_reads::run(std::env::args().skip(2).collect()).await;
+        std::process::exit(code);
+    }
     let _telemetry = telemetry::init(
         "api",
         "info,api=debug,tower_http=info,sqlx=warn",

@@ -38,6 +38,7 @@ pub struct RecommendationsService {
     pub(crate) cluster_flights: KeyedCoalesce<String>,
     pub(crate) graph_edges: GraphEdges,
     pub(crate) artist_tracks: ArtistTopTracks,
+    pub(crate) home_tracks: ArtistTopTracks,
 }
 
 impl RecommendationsService {
@@ -64,6 +65,7 @@ impl RecommendationsService {
             cluster_flights: KeyedCoalesce::new(),
             graph_edges: GraphEdges::new(),
             artist_tracks: ArtistTopTracks::new(),
+            home_tracks: ArtistTopTracks::for_home(),
         })
     }
 }

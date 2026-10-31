@@ -10,8 +10,11 @@ use uuid::Uuid;
 use super::graph;
 use crate::cache::KeyedCoalesce;
 
-const TTL: Duration = Duration::from_secs(600);
-const KEPT: u64 = 20_000;
+const WAVE_TTL: Duration = Duration::from_secs(3600);
+const HOME_TTL: Duration = Duration::from_secs(600);
+const KEPT: u64 = 50_000;
+const VISIBILITY_TTL: Duration = Duration::from_secs(60);
+const VISIBILITY_KEPT: u64 = 200_000;
 const TRACKS_KEPT: i64 = 64;
 const RECHECK_SLACK: usize = 6;
 
@@ -22,22 +25,75 @@ pub struct Top {
 
 type Tops = Arc<HashMap<Uuid, Arc<Top>>>;
 
+#[derive(Clone, Copy)]
+enum Rule {
+    Wave,
+    Home,
+}
+
 pub struct ArtistTopTracks {
+    rule: Rule,
+    name: &'static str,
     by_artist: Cache<Uuid, Arc<Top>>,
+    visibility: Cache<u64, bool>,
     flights: KeyedCoalesce<Tops>,
     loads: AtomicU64,
 }
 
 impl ArtistTopTracks {
     pub fn new() -> Self {
+        Self::build(Rule::Wave, "wave_top_tracks", WAVE_TTL)
+    }
+
+    pub fn for_home() -> Self {
+        Self::build(Rule::Home, "home_top_tracks", HOME_TTL)
+    }
+
+    fn build(rule: Rule, name: &'static str, ttl: Duration) -> Self {
         Self {
+            rule,
+            name,
             by_artist: Cache::builder()
                 .max_capacity(KEPT)
-                .time_to_live(TTL)
+                .time_to_live(ttl)
+                .build(),
+            visibility: Cache::builder()
+                .max_capacity(VISIBILITY_KEPT)
+                .time_to_live(VISIBILITY_TTL)
                 .build(),
             flights: KeyedCoalesce::new(),
             loads: AtomicU64::new(0),
         }
+    }
+
+    pub async fn best_track(
+        &self,
+        pg: &PgPool,
+        artists: &[Uuid],
+        taken: &HashSet<String>,
+    ) -> HashMap<Uuid, u64> {
+        if artists.is_empty() {
+            return HashMap::new();
+        }
+        let Some(tops) = self.tops(pg, artists).await else {
+            return HashMap::new();
+        };
+        tops.into_iter()
+            .filter_map(|(artist, top)| {
+                let free = top
+                    .tracks
+                    .iter()
+                    .find(|(id, _)| !taken.contains(&id.to_string()));
+                let best = free.or_else(|| top.tracks.first().filter(|_| top.complete));
+                best.map(|(id, _)| (artist, *id))
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn forget_all(&self) {
+        self.by_artist.invalidate_all();
+        self.visibility.invalidate_all();
     }
 
     #[cfg(test)]
@@ -74,12 +130,12 @@ impl ArtistTopTracks {
                 .collect();
             open.insert(*artist, ids);
         }
-        let checked: Vec<String> = open
+        let checked: Vec<u64> = open
             .values()
             .flat_map(|ids| ids.iter().take(per_artist + RECHECK_SLACK))
-            .map(u64::to_string)
+            .copied()
             .collect();
-        let Some(visible) = visible_now(pg, &checked).await else {
+        let Some(visible) = self.visible_now(pg, &checked).await else {
             return Vec::new();
         };
 
@@ -91,7 +147,7 @@ impl ArtistTopTracks {
             let found: Vec<u64> = ids[..examined]
                 .iter()
                 .copied()
-                .filter(|id| visible.contains(&id.to_string()))
+                .filter(|id| visible.contains(id))
                 .take(per_artist)
                 .collect();
             let unseen = ids.len() > examined || !tops[artist].complete;
@@ -126,10 +182,12 @@ impl ArtistTopTracks {
             match self.by_artist.get(artist) {
                 Some(top) => {
                     crate::metrics::record_artist_tracks_cache(true);
+                    crate::metrics::record_cache(self.name, true);
                     found.insert(*artist, top);
                 }
                 None => {
                     crate::metrics::record_artist_tracks_cache(false);
+                    crate::metrics::record_cache(self.name, false);
                     missing.push(*artist);
                 }
             }
@@ -171,24 +229,53 @@ impl ArtistTopTracks {
         pg: &PgPool,
         artists: &[Uuid],
     ) -> Result<HashMap<Uuid, Arc<Top>>, sqlx::Error> {
-        let rows = sqlx::query_file!(
-            "queries/recommendations/smart_wave/graph/load_artist_top_tracks.sql",
-            artists,
-            TRACKS_KEPT
-        )
-        .fetch_all(pg)
-        .await?;
+        let rows: Vec<(Uuid, String, i64, bool)> = match self.rule {
+            Rule::Wave => sqlx::query_file!(
+                "queries/recommendations/smart_wave/graph/load_artist_top_tracks.sql",
+                artists,
+                TRACKS_KEPT
+            )
+            .fetch_all(pg)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.artist_id,
+                    row.sc_track_id,
+                    row.play_count,
+                    row.truncated,
+                )
+            })
+            .collect(),
+            Rule::Home => sqlx::query_file!(
+                "queries/recommendations/home_wave/load_artist_top_tracks.sql",
+                artists,
+                TRACKS_KEPT
+            )
+            .fetch_all(pg)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.artist_id,
+                    row.sc_track_id,
+                    row.play_count,
+                    row.truncated,
+                )
+            })
+            .collect(),
+        };
         let mut grouped: HashMap<Uuid, (Vec<(u64, i64)>, bool)> = artists
             .iter()
             .map(|artist| (*artist, (Vec::new(), false)))
             .collect();
-        for row in rows {
-            let Ok(id) = row.sc_track_id.parse::<u64>() else {
+        for (artist_id, sc_track_id, play_count, truncated) in rows {
+            let Ok(id) = sc_track_id.parse::<u64>() else {
                 continue;
             };
-            let entry = grouped.entry(row.artist_id).or_default();
-            entry.0.push((id, row.play_count));
-            entry.1 |= row.truncated;
+            let entry = grouped.entry(artist_id).or_default();
+            entry.0.push((id, play_count));
+            entry.1 |= truncated;
         }
         let tops: HashMap<Uuid, Arc<Top>> = grouped
             .into_iter()
@@ -203,7 +290,59 @@ impl ArtistTopTracks {
         for (artist, top) in &tops {
             self.by_artist.insert(*artist, top.clone());
         }
+        crate::metrics::set_cache_size(
+            self.name,
+            self.by_artist.entry_count(),
+            self.by_artist.weighted_size(),
+        );
         Ok(tops)
+    }
+
+    async fn visible_now(&self, pg: &PgPool, ids: &[u64]) -> Option<HashSet<u64>> {
+        let mut visible = HashSet::new();
+        let mut unchecked = Vec::new();
+        for id in ids {
+            match self.visibility.get(id) {
+                Some(answer) => {
+                    crate::metrics::record_cache("track_visibility", true);
+                    if answer {
+                        visible.insert(*id);
+                    }
+                }
+                None => {
+                    crate::metrics::record_cache("track_visibility", false);
+                    unchecked.push(*id);
+                }
+            }
+        }
+        if unchecked.is_empty() {
+            return Some(visible);
+        }
+        unchecked.sort_unstable();
+        unchecked.dedup();
+        let asked: Vec<String> = unchecked.iter().map(u64::to_string).collect();
+        let found: HashSet<String> = sqlx::query_file_scalar!(
+            "queries/recommendations/smart_wave/graph/visible_tracks.sql",
+            &asked
+        )
+        .fetch_all(pg)
+        .await
+        .ok()?
+        .into_iter()
+        .collect();
+        for id in unchecked {
+            let answer = found.contains(&id.to_string());
+            self.visibility.insert(id, answer);
+            if answer {
+                visible.insert(id);
+            }
+        }
+        crate::metrics::set_cache_size(
+            "track_visibility",
+            self.visibility.entry_count(),
+            self.visibility.weighted_size(),
+        );
+        Some(visible)
     }
 }
 
@@ -211,20 +350,6 @@ impl Default for ArtistTopTracks {
     fn default() -> Self {
         Self::new()
     }
-}
-
-async fn visible_now(pg: &PgPool, ids: &[String]) -> Option<HashSet<String>> {
-    if ids.is_empty() {
-        return Some(HashSet::new());
-    }
-    sqlx::query_file_scalar!(
-        "queries/recommendations/smart_wave/graph/visible_tracks.sql",
-        ids
-    )
-    .fetch_all(pg)
-    .await
-    .ok()
-    .map(|rows| rows.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -373,6 +498,9 @@ mod tests {
             .bind(top.to_string())
             .execute(&pool)
             .await?;
+        let within_ttl = cache.collect(&pool, &artists, &[], 6, 800).await;
+        assert!(within_ttl.iter().any(|(id, _)| *id == top));
+        cache.visibility.invalidate_all();
         let second = cache.collect(&pool, &artists, &[], 6, 800).await;
         assert_eq!(cache.loads(), 1);
         assert!(!second.iter().any(|(id, _)| *id == top));
@@ -384,7 +512,37 @@ mod tests {
         sqlx::query("UPDATE tracks SET storage_state = 'pending'")
             .execute(&pool)
             .await?;
+        cache.visibility.invalidate_all();
         assert!(cache.collect(&pool, &artists, &[], 6, 800).await.is_empty());
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn warm_caches_answer_without_touching_the_tracks_table(
+        small: PgPool,
+    ) -> anyhow::Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .connect_with((*small.connect_options()).clone())
+            .await?;
+        seed(&pool).await?;
+        let cache = ArtistTopTracks::new();
+        let artists = [BIG, SMALL, EMPTY];
+        let warm = cache.collect(&pool, &artists, &[], 6, 800).await;
+        assert!(!warm.is_empty());
+
+        let mut blocker = pool.begin().await?;
+        sqlx::query("LOCK TABLE tracks IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        let again = tokio::time::timeout(
+            Duration::from_secs(2),
+            cache.collect(&pool, &artists, &[], 6, 800),
+        )
+        .await
+        .expect("a warm cache must not wait for the tracks table");
+        blocker.rollback().await?;
+        assert_eq!(again, warm);
         Ok(())
     }
 }
