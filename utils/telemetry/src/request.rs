@@ -49,9 +49,7 @@ pub fn root_span(req: &Request) -> Span {
     if let Some(version) = label(req.headers(), "x-scd-version", 16, version_char) {
         span.record("scd.app_version", version);
     }
-    if let Some(hop) = label(req.headers(), "x-scd-hop", 8, hop_char) {
-        span.record("scd.hop", hop);
-    }
+    span.record("scd.hop", hop(req.headers()));
     if let Some(incoming) = incoming(req.headers()) {
         let incoming = if incoming.debug() && !debug_cap::admit() {
             incoming.demoted()
@@ -84,6 +82,13 @@ fn label<'a>(
     let first = value.chars().next()?;
     let fits = value.len() <= longest && value.chars().all(allowed);
     (fits && first.is_ascii_alphanumeric()).then_some(value)
+}
+
+fn hop(headers: &HeaderMap) -> &str {
+    match headers.get("x-scd-hop") {
+        None => "direct",
+        Some(_) => label(headers, "x-scd-hop", 8, hop_char).unwrap_or("other"),
+    }
 }
 
 fn version_char(character: char) -> bool {
@@ -242,5 +247,20 @@ mod tests {
         assert!(has("scd.debug"));
         assert!(has("http.response.status_code"));
         assert!(has("error.message"));
+    }
+
+    #[test]
+    fn the_hop_label_accepts_the_edge_names_and_calls_a_missing_header_direct() {
+        for edge in ["r1", "r2", "call1", "legacy", "landing"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-hop", edge.parse().expect("header"));
+            assert_eq!(hop(&headers), edge);
+        }
+        assert_eq!(hop(&HeaderMap::new()), "direct");
+        for forged in ["R1", "r1;drop", "a-very-long-hop", "", "r 1"] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-hop", forged.parse().expect("header"));
+            assert_eq!(hop(&headers), "other", "{forged}");
+        }
     }
 }
