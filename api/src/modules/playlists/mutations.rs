@@ -34,7 +34,7 @@ impl PlaylistMutations {
     }
 
     async fn begin(&self, target: &str) -> AppResult<Transaction<'_, Postgres>> {
-        let mut tx = self.pg.begin().await?;
+        let mut tx = crate::db::begin_long(&self.pg).await?;
         sqlx::query_file_scalar!("queries/playlists/service/lock_mutation.sql", target)
             .fetch_one(&mut *tx)
             .await?;

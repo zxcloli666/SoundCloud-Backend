@@ -925,7 +925,7 @@ pub async fn sc_account_detach_tracks(
     Path((artist_id, sc_user_id)): Path<(Uuid, String)>,
     Json(body): Json<DetachAccountTracks>,
 ) -> AppResult<Json<DetachAccountTracksResult>> {
-    let mut tx = st.pg.begin().await?;
+    let mut tx = crate::db::begin_admin(&st.pg).await?;
 
     let detached: i64 = sqlx::query_file_scalar!(
         "queries/admin/catalog/sc_account_detach_count.sql",

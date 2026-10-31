@@ -15,6 +15,7 @@ const REQUIRED_CORE_SCHEMA_VERSION: i64 = 156;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
+const LONG_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60);
 const WARM_UP_BUDGET: Duration = Duration::from_secs(8);
 const WARM_UP_HOLD: Duration = Duration::from_millis(50);
 const HOT_SESSION_LOOKUP: &str = include_str!("../../queries/auth/service/get_session.sql");
@@ -153,10 +154,23 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
 pub async fn begin_admin(
     pool: &PgPool,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    begin_with_timeout(pool, ADMIN_STATEMENT_TIMEOUT).await
+}
+
+pub async fn begin_long(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    begin_with_timeout(pool, LONG_STATEMENT_TIMEOUT).await
+}
+
+async fn begin_with_timeout(
+    pool: &PgPool,
+    timeout: Duration,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query(&format!(
         "SET LOCAL statement_timeout = {}",
-        ADMIN_STATEMENT_TIMEOUT.as_millis()
+        timeout.as_millis()
     ))
     .execute(&mut *tx)
     .await?;
