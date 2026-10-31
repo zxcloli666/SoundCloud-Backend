@@ -1,12 +1,13 @@
-WITH active_users AS MATERIALIZED (
-    SELECT DISTINCT regexp_replace(sc_user_id, '^soundcloud:users:', '') AS user_id
+WITH recent_users AS MATERIALIZED (
+    SELECT DISTINCT sc_user_id
     FROM user_events
     WHERE created_at > now() - interval '14 days'
-      AND (
-          $1::bigint = 1
-          OR ((hashtextextended(regexp_replace(sc_user_id, '^soundcloud:users:', ''), 0) % $1::bigint)
-              + $1::bigint) % $1::bigint = $2::bigint
-      )
+), active_users AS MATERIALIZED (
+    SELECT DISTINCT regexp_replace(sc_user_id, '^soundcloud:users:', '') AS user_id
+    FROM recent_users
+    WHERE $1::bigint = 1
+       OR ((hashtextextended(regexp_replace(sc_user_id, '^soundcloud:users:', ''), 0) % $1::bigint)
+           + $1::bigint) % $1::bigint = $2::bigint
 ), seed AS (
     SELECT active.user_id,
            track_artist.artist_id,
