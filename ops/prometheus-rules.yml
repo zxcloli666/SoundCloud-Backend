@@ -91,6 +91,26 @@ groups:
           summary: "The pool cannot hand out a connection"
           description: "Outcome error or timeout on the probe taken at every scrape. The probe pays exactly what a request would pay."
 
+      - alert: ApiPoolExhausted
+        expr: max by (instance) (max_over_time(api_pg_pool_wait_last_seconds[1m])) > 0.5
+        for: 30s
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "api on {{ $labels.instance }} waits over 0.5s for a PostgreSQL connection"
+          description: "The scrape probe waits like a request does. Normal max is 0.033s (2h before 2026-10-31 08:40). At 08:41 a cold api on main waited 2.6s and 1.2s, the core pool was 18 of 18 busy and requests got PoolTimedOut. Look at host CPU and what restarted, see backend-ops.md."
+
+      - alert: ApiHostUnavailable
+        expr: sum by (instance) (rate(api_http_requests_total{status="503"}[2m])) / sum by (instance) (rate(api_http_requests_total[2m])) > 0.05
+        for: 30s
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of api requests on {{ $labels.instance }} answer 503"
+          description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it."
+
       - alert: ApiSoundCloudBreakerOpen
         expr: api_sc_relay_breaker_open == 1
         for: 5m
