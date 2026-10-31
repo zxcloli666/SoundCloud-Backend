@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 343;
+const LATEST_SCHEMA_VERSION: i64 = 267;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(
@@ -822,7 +822,7 @@ async fn scd_uuid_equals_rust_uuid_v5_of_the_same_name(pool: PgPool) -> anyhow::
 
 #[sqlx::test(migrations = false)]
 async fn merged_losers_take_the_canonical_of_their_winner(pool: PgPool) -> anyhow::Result<()> {
-    core_through(341).run(&pool).await?;
+    core_through(265).run(&pool).await?;
     sqlx::raw_sql(
         "INSERT INTO tracks (
              id, sc_track_id, urn, title, title_normalized, duration_ms,
@@ -844,7 +844,7 @@ async fn merged_losers_take_the_canonical_of_their_winner(pool: PgPool) -> anyho
     .execute(&pool)
     .await?;
 
-    core_through(342).run(&pool).await?;
+    core_through(266).run(&pool).await?;
 
     let canonical = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT sc_track_id, canonical_track_id FROM tracks ORDER BY sc_track_id",

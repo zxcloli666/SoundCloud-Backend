@@ -16,7 +16,7 @@ want "core takes the intent with its own columns at their defaults" \
   "f f t t 0"
 pairs user_likes_tracks "user_id = 'ri'" "the repaired M row is equal on all nodes"
 
-say "S1 lock order: core's drain and verify repair take the mirrors right before sync_queue, like the api tap (0292)"
+say "S1 lock order: core's drain and verify repair take the mirrors right before sync_queue, like the api tap (0245)"
 fresh scd_b1_order scd_b1_tpl
 only order "SELECT count(*) FROM public.scd_configure('core', 'core', 'split')" > /dev/null
 sql -d scd_b1_order > /dev/null <<'SQL'
@@ -61,7 +61,7 @@ want "verify repair settles the answers in the same order" \
   "artists user_followings user_likes_tracks sync_queue track_comments"
 sql -d postgres -c "DROP DATABASE scd_b1_order WITH (FORCE)" > /dev/null
 
-say "S1 legacy job_status: each legacy node keeps job_status from its own and from replicated queue writes (0294); the hub subscriptions pause to free apply worker slots"
+say "S1 legacy job_status: each legacy node keeps job_status from its own and from replicated queue writes (0247); the hub subscriptions pause to free apply worker slots"
 hub_subs="core:core_from_main core:core_from_star main:main_from_core star:star_from_core"
 for s in $hub_subs; do pause "${s%%:*}" "${s##*:}"; done
 fresh scd_b1_legacy_main scd_b1_tpl
