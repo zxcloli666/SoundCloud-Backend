@@ -21,6 +21,19 @@ pub async fn link_wanted_to_sc(
     .await
 }
 
+pub async fn link_wanted_to_sc_in(
+    connection: &mut PgConnection,
+    wanted_id: Uuid,
+    sc_track_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let link = MatchWantedLink {
+        wanted_id,
+        sc_track_id: sc_track_id.to_owned(),
+        at: wt::now(),
+    };
+    link_in(connection, &link).await
+}
+
 async fn link_in(
     connection: &mut PgConnection,
     link: &MatchWantedLink,

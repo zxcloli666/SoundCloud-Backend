@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use backend_contracts::admin_catalog::{
+    ADMIN_CATALOG_SUBJECT, AdminCatalogReply, AdminCatalogRequest,
+};
 use backend_contracts::auth::{
     AUTH_APP_TOKEN_SUBJECT, AUTH_REFRESH_SUBJECT, AppTokenReply, AppTokenRequest, RefreshReply,
     RefreshRequest,
@@ -14,6 +17,7 @@ use crate::bus::nats::{NatsRequestError, NatsService};
 
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_TOKEN_TIMEOUT: Duration = Duration::from_secs(2);
+const ADMIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct CoreRpc {
     nats: Option<Arc<NatsService>>,
@@ -44,6 +48,14 @@ impl CoreRpc {
             APP_TOKEN_TIMEOUT,
         )
         .await
+    }
+
+    pub async fn admin_catalog(
+        &self,
+        request: &AdminCatalogRequest,
+    ) -> Result<AdminCatalogReply, NatsRequestError> {
+        self.request(ADMIN_CATALOG_SUBJECT, request, ADMIN_CATALOG_TIMEOUT)
+            .await
     }
 
     async fn request<P: Serialize, R: DeserializeOwned>(

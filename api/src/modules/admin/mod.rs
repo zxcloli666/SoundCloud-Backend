@@ -1,6 +1,7 @@
 pub mod auth_overview;
 pub mod catalog;
 pub mod credits;
+pub mod forward;
 pub mod hydrate;
 pub mod infra;
 pub mod maintenance;

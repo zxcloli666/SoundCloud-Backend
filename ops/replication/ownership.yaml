@@ -93,6 +93,7 @@ tables:
   wanted_track_artists: {class: C}
   wanted_tracks: {class: C}
 
+  admin_catalog_requests: {class: P, note: "admin.catalog.v1 replay ledger, written by jobs on core in the edit transaction (B5c)"}
   ai_resolver_budget: {class: P}
   ai_resolver_cache: {class: P}
   audio_index_wire_state: {class: P}

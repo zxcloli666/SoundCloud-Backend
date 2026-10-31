@@ -244,6 +244,7 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
+        core: CoreRpc::unreachable(),
         diag: crate::modules::diag::DiagService::new(pg.clone(), &config.diag),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),

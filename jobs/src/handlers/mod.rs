@@ -1,5 +1,6 @@
 mod account_walk;
 mod admin_maintenance;
+pub(crate) mod admin_rpc;
 mod ai_store;
 mod apiv1_pace;
 mod artist_names;

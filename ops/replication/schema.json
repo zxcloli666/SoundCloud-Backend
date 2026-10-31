@@ -1,5 +1,21 @@
 {
  "core": {
+  "admin_catalog_requests": {
+   "columns": [
+    {"default": null, "generated": false, "name": "command", "notnull": true, "type": "jsonb"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "reply", "notnull": true, "type": "jsonb"},
+    {"default": null, "generated": false, "name": "request_id", "notnull": true, "type": "uuid"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["request_id"], "expr": false, "keys": ["request_id"], "name": "admin_catalog_requests_pkey", "primary": true, "where": null}
+   ]
+  },
   "admin_maintenance_runs": {
    "columns": [
     {"default": "0", "generated": false, "name": "changed", "notnull": true, "type": "bigint"},
