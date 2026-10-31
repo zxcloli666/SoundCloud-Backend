@@ -1,5 +1,6 @@
 use super::{mirror, page, state};
 use crate::handlers::catalog_refresh_writer::CatalogWriter;
+use crate::handlers::lyrics::wake;
 use crate::queue::{JobError, JobResult, LeasedJob};
 use backend_contracts::{
     CatalogCollection, CatalogCollectionPayload, CatalogRefreshPayload, CollectionItem,
@@ -95,11 +96,15 @@ impl CollectionWriter {
             entities.push((entity, entity_json));
         }
         entities.sort_by(|(a, _), (b, _)| a.sc_id.cmp(&b.sc_id));
+        let mut woken = Vec::new();
         for (entity, entity_json) in &entities {
-            self.entities
-                .persist_in(&mut tx, entity, entity_json, priority, observation)
-                .await?;
+            woken.extend(
+                self.entities
+                    .persist_in(&mut tx, entity, entity_json, priority, observation)
+                    .await?,
+            );
         }
+        wake::enqueue_all_in(&mut tx, &woken).await?;
         if comments {
             mirror::persist_comments(&mut tx, payload, snapshot, &page.items).await?;
         } else {

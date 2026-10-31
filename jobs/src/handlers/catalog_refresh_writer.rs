@@ -1,3 +1,4 @@
+use super::lyrics::wake;
 use super::star_priority;
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob};
 use backend_contracts::{
@@ -67,14 +68,16 @@ impl CatalogWriter {
         if fence.is_none() {
             return Ok(());
         }
-        self.persist_in(
-            &mut transaction,
-            payload,
-            value,
-            TrackPriority::Discovery,
-            observation,
-        )
-        .await?;
+        let woken = self
+            .persist_in(
+                &mut transaction,
+                payload,
+                value,
+                TrackPriority::Discovery,
+                observation,
+            )
+            .await?;
+        wake::enqueue_all_in(&mut transaction, woken.as_slice()).await?;
         transaction.commit().await.map_err(JobError::retryable)
     }
 
@@ -85,7 +88,7 @@ impl CatalogWriter {
         value: &Value,
         priority: TrackPriority,
         observation: catalog_ingest::Observation,
-    ) -> JobResult {
+    ) -> JobResult<Option<String>> {
         match payload.entity {
             CatalogEntity::Track => {
                 let fields = ScTrackFields::from_sc(value).ok_or_else(|| {
@@ -128,8 +131,7 @@ impl CatalogWriter {
                         .enqueue_in_if_absent(connection, &downstream)
                         .await
                         .map_err(JobError::retryable)?;
-                    super::lyrics::wake::enqueue_in(&self.queue, connection, &fields.sc_track_id)
-                        .await?;
+                    return Ok(Some(fields.sc_track_id));
                 }
             }
             CatalogEntity::Playlist => {
@@ -160,7 +162,7 @@ impl CatalogWriter {
                 .map_err(JobError::retryable)?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 
