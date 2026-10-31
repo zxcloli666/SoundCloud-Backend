@@ -1246,23 +1246,20 @@ async fn deleting_a_playlist_finishes_inflight_observation_without_rescheduling(
     let observation = catalog_ingest::Observation::begin(&pool).await?;
 
     let mut transaction = pool.begin().await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/lock_membership.sql",
-        RECONCILABLE
+    sqlx::query(
+        "UPDATE playlist_membership_state
+         SET next_reconcile_at = NULL, reconcile_generation = reconcile_generation + 1
+         WHERE playlist_urn = $1",
     )
-    .fetch_one(&mut *transaction)
+    .bind(RECONCILABLE)
+    .execute(&mut *transaction)
     .await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/apply_delete.sql",
-        RECONCILABLE,
-        RECONCILABLE_OWNER
+    sqlx::query(
+        "UPDATE playlists SET sharing = 'private', sc_desired = '{}', deleted_at = clock_timestamp()
+         WHERE urn = $1 AND owner_sc_user_id = $2",
     )
-    .fetch_one(&mut *transaction)
-    .await?;
-    sqlx::query_file!(
-        "../api/queries/playlists/service/retire_membership.sql",
-        RECONCILABLE
-    )
+    .bind(RECONCILABLE)
+    .bind(RECONCILABLE_OWNER)
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;

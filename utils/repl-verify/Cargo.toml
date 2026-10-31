@@ -3,7 +3,7 @@ name = "repl-verify"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "scd resend sweeper on every node and the core-side replication verify and repair loop"
+description = "scd resend sweeper and node retention on every node, and the core-side replication verify and repair loop"
 
 [features]
 cli = ["dep:tracing-subscriber"]

@@ -53,6 +53,20 @@ WITH superseded AS MATERIALIZED (
                 )
                 AND receipt.purged_v >= queued.generation
           ))
+          WHEN queued.action_type = 'track_update' THEN NOT EXISTS (
+              SELECT 1
+              FROM tracks AS track
+              WHERE track.urn = queued.target_urn
+                AND track.deleted_at IS NULL
+                AND track.sc_desired <> '{}'::jsonb
+          )
+          WHEN queued.action_type = 'playlist_update' THEN NOT EXISTS (
+              SELECT 1
+              FROM playlists AS playlist
+              WHERE playlist.urn = queued.target_urn
+                AND playlist.deleted_at IS NULL
+                AND playlist.sc_desired <> '{}'::jsonb
+          )
           ELSE false
       END
     FOR UPDATE OF queued

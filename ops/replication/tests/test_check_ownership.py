@@ -82,6 +82,13 @@ class CodeRules(unittest.TestCase):
         self.assertEqual(rules([stmt("api", "SELECT public.scd_wt('track.edit', $1)")]), [])
         self.assertEqual(rules([stmt("api", "SELECT public.scd_wt('track.nope', $1)")]), ["unknown-kind"])
 
+    def test_key_move_of_a_held_c_table(self):
+        self.assertEqual(rules([stmt("jobs", "UPDATE items SET id = $1 WHERE id = $2", "jobs/queries/x.sql")], support.build()), ["c-key-update"])
+        upsert = "INSERT INTO items AS i (id, urn) VALUES ($1, $2) ON CONFLICT (urn) DO UPDATE SET id = EXCLUDED.id, title = 'x'"
+        self.assertEqual(rules([stmt("jobs", upsert, "jobs/queries/x.sql")], support.build()), ["c-key-update"])
+        self.assertEqual(rules([stmt("jobs", "UPDATE items SET urn = $1, title = coalesce($2, title) WHERE id = $3", "jobs/queries/x.sql")], support.build()), [])
+        self.assertEqual(rules([stmt("jobs", "UPDATE item_tags SET tag = $1 WHERE item_id = $2", "jobs/queries/x.sql")], support.build()), [])
+
     def test_dynamic_table_resolves_through_file_literals(self):
         o = stmt("api", "UPDATE ⟦table⟧ SET x = 1", "api/src/a.rs", file_tables=["tracks", "not_a_table"])
         self.assertEqual(rules([o]), ["api-write-c"])
@@ -105,6 +112,10 @@ class KindRules(unittest.TestCase):
 
     def test_limit(self):
         self.assertEqual(self.kinds("PERFORM 1 FROM public.tracks LIMIT 10;"), ["kind-limit"])
+
+    def test_key_move_inside_a_kind(self):
+        self.assertEqual(self.kinds("UPDATE public.playlist_track_projection SET position = position + 1 WHERE playlist_urn = args->>'urn';",
+                                    "playlist_membership_op"), ["c-key-update"])
 
     def test_touch_outside_the_list(self):
         self.assertEqual(self.kinds("UPDATE public.users SET username = 'x';"), ["kind-touch"])

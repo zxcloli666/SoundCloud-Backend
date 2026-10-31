@@ -56,6 +56,8 @@ def registry(model):
         function("public.scd_table_class", "SELECT v.cls FROM (VALUES\n%s\n) AS v (tbl, cls) WHERE v.tbl = $1" % classes,
                  "text", "sql", "tbl text", " STABLE"),
         function("public.scd_core_columns", "VALUES\n" + cores, "TABLE (tbl text, col text)", "sql", "", " STABLE"),
+        function("public.scd_reassert_always", "SELECT $1 = ANY (ARRAY[%s]::text[])" % ", ".join(
+            lit(t.name) for t in model.installed() if t.reassert == "always"), "boolean", "sql", "tbl text", " STABLE"),
         resend(model),
     ])
 

@@ -50,6 +50,19 @@ async fn observe_track(
     .await?)
 }
 
+async fn edit_track_sharing(pool: &PgPool) -> anyhow::Result<()> {
+    let edit = wt::TrackEdit {
+        sc_track_id: "42".to_owned(),
+        uploader: "17".to_owned(),
+        desired: json!({"sharing": "private"}),
+        observation: catalog_ingest::Observation::begin(pool).await?.sequence(),
+        at: wt::now(),
+    };
+    let edited = wt::call(&mut *pool.acquire().await?, &edit).await?;
+    anyhow::ensure!(edited.is_some());
+    Ok(())
+}
+
 #[sqlx::test(migrations = false)]
 async fn catalog_metadata_confirmation_does_not_admit_an_older_response(
     pool: PgPool,
@@ -58,14 +71,7 @@ async fn catalog_metadata_confirmation_does_not_admit_an_older_response(
     crate::db::migrations::run_core(&pool, None).await?;
     ingest_track(&pool, &track("public")).await?;
     let before_mutation = Observation::begin(&pool).await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/tracks/service/apply_update.sql",
-        "42",
-        "17",
-        &json!({"sharing": "private"})
-    )
-    .fetch_one(&pool)
-    .await?;
+    edit_track_sharing(&pool).await?;
     let before_ack = Observation::begin(&pool).await?;
     sqlx::query_file!(
         "queries/sync_queue/actions/confirm_track_update.sql",
@@ -194,14 +200,7 @@ async fn catalog_metadata_newer_source_versions_win_without_crossing_local_mutat
             .metadata_applied
     );
     let before_mutation = Observation::begin(&pool).await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/tracks/service/apply_update.sql",
-        "42",
-        "17",
-        &json!({"sharing": "private"})
-    )
-    .fetch_one(&pool)
-    .await?;
+    edit_track_sharing(&pool).await?;
     sqlx::query_file!(
         "queries/sync_queue/actions/confirm_track_update.sql",
         "42",
@@ -232,14 +231,7 @@ async fn catalog_metadata_refresh_cannot_publish_pending_local_private_tracks(
 ) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
     ingest_track(&pool, &track("public")).await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/tracks/service/apply_update.sql",
-        "42",
-        "17",
-        &json!({"sharing": "private"})
-    )
-    .fetch_one(&pool)
-    .await?;
+    edit_track_sharing(&pool).await?;
     ingest_track(&pool, &track("public")).await?;
     let sharing: String = sqlx::query_scalar("SELECT sharing FROM tracks WHERE sc_track_id = '42'")
         .fetch_one(&pool)
@@ -259,14 +251,15 @@ async fn catalog_metadata_refresh_cannot_publish_acknowledged_local_private_play
         catalog_ingest::Observation::begin(&pool).await?,
     )
     .await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/apply_update.sql",
-        "soundcloud:playlists:42",
-        "17",
-        &json!({"sharing": "private"})
-    )
-    .fetch_one(&pool)
-    .await?;
+    let edit = wt::PlaylistEdit {
+        urn: "soundcloud:playlists:42".to_owned(),
+        owner: "17".to_owned(),
+        desired: json!({"sharing": "private"}),
+        observation: catalog_ingest::Observation::begin(&pool).await?.sequence(),
+        at: wt::now(),
+    };
+    let edited = wt::call(&mut *pool.acquire().await?, &edit).await?;
+    anyhow::ensure!(edited.is_some());
     sqlx::query_file!(
         "queries/sync_queue/actions/confirm_playlist_update.sql",
         "soundcloud:playlists:42",

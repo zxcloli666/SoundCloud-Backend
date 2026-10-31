@@ -167,6 +167,13 @@ VALUES
     ('lyrics_cache', 'fts')
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_reassert_always(tbl text)
+RETURNS boolean
+LANGUAGE sql STABLE
+AS $f$
+SELECT $1 = ANY (ARRAY['artist_sc_accounts', 'artists', 'playlist_membership_operations', 'playlist_track_projection', 'track_comments', 'wanted_tracks']::text[])
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_resend(tbl text)
 RETURNS void
 LANGUAGE plpgsql

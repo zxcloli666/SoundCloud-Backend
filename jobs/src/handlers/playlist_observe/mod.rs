@@ -780,3 +780,7 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+#[path = "lock_order_tests.rs"]
+mod lock_order_tests;

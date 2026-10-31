@@ -5,6 +5,8 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::Retainer;
+
 const BATCH: i32 = 500;
 const PACE: Duration = Duration::from_secs(2);
 const LEGACY_PACE: Duration = Duration::from_secs(60);
@@ -55,6 +57,12 @@ impl Sweeper {
     }
 
     pub async fn run(self, stop: CancellationToken) -> Result<(), Infallible> {
+        let retainer = Retainer::new(self.pool.clone());
+        let (swept, retained) = tokio::join!(self.sweep(stop.clone()), retainer.run(stop));
+        swept.and(retained)
+    }
+
+    async fn sweep(self, stop: CancellationToken) -> Result<(), Infallible> {
         let mut backoff = self.pace;
         loop {
             let wait = match sweep_once(&self.pool, self.batch).await {

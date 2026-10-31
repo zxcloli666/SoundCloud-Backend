@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use repl_verify::{Mode, Sweeper, Verifier, probe_once, repair_once, sweep_once};
+use repl_verify::{Mode, Sweeper, Verifier, probe_once, repair_once, retain_once, sweep_once};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Connection, PgConnection, PgPool};
 use tokio::sync::OnceCell;
@@ -241,4 +241,91 @@ fn mode_parses_the_env_values() {
     assert_eq!("dry".parse::<Mode>(), Ok(Mode::Dry));
     assert_eq!("repair".parse::<Mode>(), Ok(Mode::Repair));
     assert!("on".parse::<Mode>().is_err());
+}
+
+const OUTBOX: &str = "INSERT INTO public.cmd_outbox (node, id, kind, args, created_at, done_at) VALUES
+    ('main', '00000000-0000-4000-8000-0000000000c1', 'track.edit', '{}', now() - interval '3 days', now() - interval '3 days'),
+    ('main', '00000000-0000-4000-8000-0000000000c2', 'track.edit', '{}', now() - interval '3 days', now() - interval '1 day'),
+    ('main', '00000000-0000-4000-8000-0000000000c3', 'track.edit', '{}', now() - interval '30 days', NULL),
+    ('main', '00000000-0000-4000-8000-0000000000c4', 'connection.login', '{\"access_token\": \"a\", \"refresh_token\": \"r\", \"login_v\": 1}', now() - interval '3 hours', now() - interval '2 hours'),
+    ('main', '00000000-0000-4000-8000-0000000000c5', 'connection.login', '{\"access_token\": \"a\", \"refresh_token\": \"r\", \"login_v\": 2}', now() - interval '20 minutes', now() - interval '10 minutes'),
+    ('main', '00000000-0000-4000-8000-0000000000c6', 'connection.login', '{\"access_token\": \"a\", \"refresh_token\": \"r\", \"login_v\": 3}', now() - interval '1 day', NULL),
+    ('main', '00000000-0000-4000-8000-0000000000c7', 'connection.login', '{\"access_token\": \"a\", \"refresh_token\": \"r\", \"login_v\": 4}', now() - interval '8 days', NULL);
+    INSERT INTO public.oauth_app_tokens_local (oauth_app_id, access_token, expires_at) VALUES
+    ('40000000-0000-4000-8000-0000000000d1', 'gone', now() - interval '2 hours'),
+    ('40000000-0000-4000-8000-0000000000d2', 'fresh-expired', now() - interval '10 minutes'),
+    ('40000000-0000-4000-8000-0000000000d3', 'valid', now() + interval '1 hour')";
+
+async fn outbox(pool: &PgPool) -> Vec<(String, bool)> {
+    sqlx::query_as(
+        "SELECT right(id::text, 2), args ?| ARRAY['access_token', 'refresh_token'] FROM public.cmd_outbox ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn node_retention_drops_old_acked_commands_and_redacts_logins_but_keeps_pending_ones() {
+    let pool = node("retain", None).await;
+    sqlx::raw_sql(OUTBOX).execute(&pool).await.unwrap();
+
+    let first = retain_once(&pool, "cmd_outbox", 1000).await.unwrap();
+    assert_eq!((first.deleted, first.redacted), (1, 2), "{first:?}");
+    assert_eq!(
+        first.held.as_deref(),
+        Some("2 commands wait for core longer than 2 days")
+    );
+    assert_eq!(first.reason.as_deref(), Some("pending"));
+    let left = outbox(&pool).await;
+    let expected = [
+        ("c2", false),
+        ("c3", false),
+        ("c4", false),
+        ("c5", true),
+        ("c6", true),
+        ("c7", false),
+    ];
+    assert_eq!(
+        left,
+        expected
+            .map(|(id, tokens)| (id.to_owned(), tokens))
+            .to_vec()
+    );
+    let again = retain_once(&pool, "cmd_outbox", 1000).await.unwrap();
+    assert_eq!((again.deleted, again.redacted), (0, 0), "{again:?}");
+
+    let tokens = retain_once(&pool, "oauth_app_tokens_local", 1000)
+        .await
+        .unwrap();
+    assert_eq!((tokens.deleted, tokens.held), (1, None));
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM public.oauth_app_tokens_local").await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn an_api_node_without_its_core_stream_holds_node_retention() {
+    let pool = node("retain_api", Some(("main", "api"))).await;
+    sqlx::raw_sql(OUTBOX).execute(&pool).await.unwrap();
+
+    let held = retain_once(&pool, "cmd_outbox", 1000).await.unwrap();
+    assert_eq!((held.deleted, held.redacted), (0, 0), "{held:?}");
+    assert_eq!(
+        held.held.as_deref(),
+        Some("slots: no slot for core; subscriptions: no subscription from core")
+    );
+    assert_eq!(held.reason.as_deref(), Some("subscription"));
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM public.cmd_outbox").await,
+        7
+    );
+    let tokens = retain_once(&pool, "oauth_app_tokens_local", 1000)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokens.deleted, 1,
+        "expired tokens are not replicated and go anyway"
+    );
 }

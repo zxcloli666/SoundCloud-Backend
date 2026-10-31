@@ -732,7 +732,7 @@
       "id": 26,
       "type": "timeseries",
       "title": "Retention",
-      "description": "Rows deleted per hour by table, and 1 while the guard holds the table back (inactive slot or subscription, lag, or pending resends).",
+      "description": "Rows deleted and token pairs redacted per hour by table, and 1 per node and reason while a table is held back (inactive slot or subscription, lag, pending resends, or api commands core never answered).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -757,8 +757,13 @@
         },
         {
           "refId": "B",
-          "expr": "max by (table) (scd_repl_retention_held)",
-          "legendFormat": "held {{table}}"
+          "expr": "max by (instance, table, reason) (scd_repl_retention_held) == 1",
+          "legendFormat": "held {{instance}} {{table}} {{reason}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (table) (increase(scd_repl_retention_redacted_total[1h]))",
+          "legendFormat": "redacted/h {{table}}"
         }
       ]
     },

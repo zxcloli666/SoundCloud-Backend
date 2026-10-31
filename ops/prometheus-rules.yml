@@ -461,14 +461,14 @@ groups:
           description: "Apply does not keep up with the api node. Command latency for its users grows with this."
 
       - alert: ReplRetentionHeld
-        expr: max by (table) (scd_repl_retention_held) == 1
+        expr: max by (instance, table, reason) (scd_repl_retention_held) == 1
         for: 6h
         labels:
           severity: warning
           service: jobs
         annotations:
-          summary: "Retention of {{ $labels.table }} is held back for 6 hours"
-          description: "A slot or subscription of core is inactive or behind, or a node still has pending resends. The held tables only grow meanwhile. The reason is in the jobs log, line 'replication retention held back'."
+          summary: "Retention of {{ $labels.table }} on {{ $labels.instance }} is held back for 6 hours ({{ $labels.reason }})"
+          description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
 
       - alert: ReplResendQueueStuck
         expr: min_over_time(scd_repl_resend_queued[30m]) > 0

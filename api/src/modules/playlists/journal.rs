@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use axum::http::StatusCode;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -9,14 +7,11 @@ use crate::modules::playlists::edit::{self, MembershipRequest, Operation, TrackE
 
 pub const REVISION_CONFLICT: &str = "playlist_revision_conflict";
 pub const UNKNOWN_TRACK: &str = "playlist_track_not_in_catalog";
+const NOT_FOUND: &str = "playlist_not_found";
 
-const RECONCILE_DEBOUNCE_SECONDS: i64 = 30;
-
-struct MembershipStateRow {
-    baseline_generation: i64,
-    baseline_observation_id: Option<Uuid>,
-    projection_revision: i64,
-    last_operation_sequence: i64,
+struct ReplayedOperation {
+    outcome: String,
+    conflict_code: Option<String>,
 }
 
 #[derive(Debug)]
@@ -41,20 +36,21 @@ impl PlaylistJournal {
         request: MembershipRequest,
         idempotency_key: Uuid,
     ) -> AppResult<JournalOutcome> {
-        let mut transaction = self.pool.begin().await?;
-        let result = self
-            .append_in(
-                &mut transaction,
-                playlist_urn,
-                actor_sc_user_id,
-                request,
-                idempotency_key,
-            )
-            .await;
-        if result.is_ok() {
+        crate::db::retry_conflicts(|| async {
+            let mut transaction = self.pool.begin().await?;
+            let outcome = self
+                .append_in(
+                    &mut transaction,
+                    playlist_urn,
+                    actor_sc_user_id,
+                    request.clone(),
+                    idempotency_key,
+                )
+                .await?;
             transaction.commit().await?;
-        }
-        result
+            Ok(outcome)
+        })
+        .await
     }
 
     pub(super) async fn append_in(
@@ -65,20 +61,11 @@ impl PlaylistJournal {
         request: MembershipRequest,
         idempotency_key: Uuid,
     ) -> AppResult<JournalOutcome> {
-        sqlx::query_file!(
-            "queries/playlists/ensure_membership_tracked.sql",
-            playlist_urn
-        )
-        .execute(&mut **transaction)
-        .await?;
-        let state = sqlx::query_file_as!(
-            MembershipStateRow,
-            "queries/playlists/lock_membership_state.sql",
-            playlist_urn
-        )
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or_else(|| AppError::not_found("Playlist not found"))?;
+        let projection_revision =
+            sqlx::query_file_scalar!("queries/playlists/lock_membership_state.sql", playlist_urn)
+                .fetch_optional(&mut **transaction)
+                .await?
+                .unwrap_or(0);
         let owns = sqlx::query_file_scalar!(
             "queries/playlists/assert_owner.sql",
             actor_sc_user_id,
@@ -90,27 +77,29 @@ impl PlaylistJournal {
         if !owns {
             return Err(AppError::not_found("Playlist not found"));
         }
-        let replayed = sqlx::query_file_scalar!(
-            "queries/playlists/count_replayed_operations.sql",
+        let replayed = sqlx::query_file_as!(
+            ReplayedOperation,
+            "queries/playlists/replayed_operation.sql",
             playlist_urn,
-            &[operation_key(idempotency_key, 0)]
+            operation_key(idempotency_key, 0)
         )
-        .fetch_one(&mut **transaction)
+        .fetch_optional(&mut **transaction)
         .await?;
-        if replayed > 0 {
+        if let Some(replayed) = replayed {
+            if replayed.outcome == "conflict"
+                && let Some(refusal) = replayed.conflict_code.as_deref().and_then(refused)
+            {
+                return Err(refusal);
+            }
             return Ok(JournalOutcome {
                 appended: 0,
-                projection_revision: state.projection_revision,
+                projection_revision,
             });
         }
         if let Some(expected) = request.expected_projection_revision
-            && expected != state.projection_revision
+            && expected != projection_revision
         {
-            return Err(AppError::coded(
-                StatusCode::CONFLICT,
-                REVISION_CONFLICT,
-                "playlist membership changed since the submitted revision",
-            ));
+            return Err(revision_conflict());
         }
         let edit = match request.edit {
             TrackEdit::Replace { track_ids } if request.expected_projection_revision.is_none() => {
@@ -119,163 +108,102 @@ impl PlaylistJournal {
             edit => edit,
         };
 
-        let before =
+        let projection =
             sqlx::query_file_scalar!("queries/playlists/load_projection.sql", playlist_urn)
                 .fetch_all(&mut **transaction)
                 .await?;
-        let mut projection = before.clone();
         let operations = edit::derive(&edit, &projection)?;
         if operations.is_empty() {
             return Ok(JournalOutcome {
                 appended: 0,
-                projection_revision: state.projection_revision,
+                projection_revision,
             });
         }
-
-        let keys = operation_keys(idempotency_key, operations.len());
         assert_added_tracks_exist(transaction, &operations).await?;
 
-        for (index, operation) in operations.iter().enumerate() {
-            let sequence = state.last_operation_sequence + index as i64 + 1;
-            let expected_revision = state.projection_revision + index as i64;
-            sqlx::query_file!(
-                "queries/playlists/append_operation.sql",
-                Uuid::now_v7(),
-                playlist_urn,
-                sequence,
-                actor_sc_user_id,
-                keys[index],
-                &operation.fingerprint(),
-                state.baseline_generation,
-                state.baseline_observation_id,
-                expected_revision,
-                operation.kind(),
-                operation.track_id(),
-                operation.left_anchor(),
-                operation.right_anchor(),
-                operation.boundary(),
-                operation.ordered_track_ids()
-            )
-            .execute(&mut **transaction)
-            .await?;
-            operation.apply(&mut projection);
-        }
-
-        let projection_track_count = i32::try_from(projection.len())
-            .map_err(|_| AppError::internal("playlist projection is too large"))?;
-        write_projection(transaction, playlist_urn, &before, &projection).await?;
-        record_playlist_adds(
-            transaction,
-            actor_sc_user_id,
-            idempotency_key,
-            &newly_added(&before, &projection),
-        )
-        .await?;
-
-        let last_operation_sequence = state.last_operation_sequence + operations.len() as i64;
-        let projection_revision = state.projection_revision + operations.len() as i64;
-        sqlx::query_file!(
-            "queries/playlists/advance_membership_state.sql",
-            playlist_urn,
-            last_operation_sequence,
-            projection_revision,
-            projection_track_count,
-            RECONCILE_DEBOUNCE_SECONDS as f64
-        )
-        .execute(&mut **transaction)
-        .await?;
-
-        Ok(JournalOutcome {
-            appended: operations.len(),
-            projection_revision,
-        })
-    }
-}
-
-enum ProjectionWrite {
-    Appended(Vec<String>),
-    Removed(Vec<String>),
-    Rewritten,
-}
-
-fn projection_write(before: &[String], after: &[String]) -> ProjectionWrite {
-    if after.len() > before.len() && after.starts_with(before) {
-        return ProjectionWrite::Appended(after[before.len()..].to_vec());
-    }
-    if after.len() < before.len() {
-        let kept: HashSet<&str> = after.iter().map(String::as_str).collect();
-        let surviving: Vec<&String> = before
-            .iter()
-            .filter(|track_id| kept.contains(track_id.as_str()))
-            .collect();
-        if surviving.len() == after.len()
-            && surviving
+        let command = wt::MembershipOp {
+            playlist_urn: playlist_urn.to_owned(),
+            actor: actor_sc_user_id.to_owned(),
+            variants: crate::common::sc_ids::user_id_variants(actor_sc_user_id),
+            expected_projection_revision: request.expected_projection_revision,
+            operations: operations
                 .iter()
-                .zip(after)
-                .all(|(survivor, expected)| *survivor == expected)
-        {
-            return ProjectionWrite::Removed(
-                before
-                    .iter()
-                    .filter(|track_id| !kept.contains(track_id.as_str()))
-                    .cloned()
-                    .collect(),
-            );
-        }
-    }
-    ProjectionWrite::Rewritten
-}
-
-async fn write_projection(
-    transaction: &mut Transaction<'_, Postgres>,
-    playlist_urn: &str,
-    before: &[String],
-    after: &[String],
-) -> AppResult<()> {
-    match projection_write(before, after) {
-        ProjectionWrite::Appended(added) => {
-            sqlx::query_file!(
-                "queries/playlists/append_projection_tracks.sql",
-                playlist_urn,
-                &added
-            )
-            .execute(&mut **transaction)
-            .await?;
-        }
-        ProjectionWrite::Removed(dropped) => {
-            sqlx::query_file!(
-                "queries/playlists/delete_projection_tracks.sql",
-                playlist_urn,
-                &dropped
-            )
-            .execute(&mut **transaction)
-            .await?;
-        }
-        ProjectionWrite::Rewritten => {
-            sqlx::query_file!("queries/playlists/delete_projection.sql", playlist_urn)
-                .execute(&mut **transaction)
+                .enumerate()
+                .map(|(index, operation)| journal_entry(idempotency_key, index, operation))
+                .collect(),
+            at: wt::now(),
+        };
+        let outcome = wt::call(transaction, &command).await?;
+        match outcome.status.as_str() {
+            "applied" => {
+                record_playlist_adds(
+                    transaction,
+                    actor_sc_user_id,
+                    idempotency_key,
+                    &outcome.added,
+                )
                 .await?;
-            sqlx::query_file!(
-                "queries/playlists/insert_projection.sql",
-                playlist_urn,
-                after
-            )
-            .execute(&mut **transaction)
-            .await?;
+                Ok(JournalOutcome {
+                    appended: usize::try_from(outcome.appended).map_err(|_| {
+                        AppError::internal("playlist journal appended a negative count")
+                    })?,
+                    projection_revision: outcome.projection_revision,
+                })
+            }
+            "replayed" => Ok(JournalOutcome {
+                appended: 0,
+                projection_revision: outcome.projection_revision,
+            }),
+            _ => Err(outcome
+                .code
+                .as_deref()
+                .and_then(refused)
+                .unwrap_or_else(|| AppError::internal("playlist journal refused the edit"))),
         }
     }
-    Ok(())
 }
 
-pub(super) fn newly_added(before: &[String], after: &[String]) -> Vec<String> {
-    let members: HashSet<&str> = before.iter().map(String::as_str).collect();
-    let mut added: Vec<String> = Vec::new();
-    for track_id in after {
-        if !members.contains(track_id.as_str()) && !added.contains(track_id) {
-            added.push(track_id.clone());
-        }
+fn journal_entry(
+    idempotency_key: Uuid,
+    index: usize,
+    operation: &Operation,
+) -> wt::MembershipOperation {
+    wt::MembershipOperation {
+        operation_id: Uuid::now_v7(),
+        idempotency_key: operation_key(idempotency_key, index),
+        fingerprint: hex::encode(operation.fingerprint()),
+        kind: operation.kind().to_owned(),
+        track_id: operation.track_id().map(str::to_owned),
+        left_anchor_track_id: operation.left_anchor().map(str::to_owned),
+        right_anchor_track_id: operation.right_anchor().map(str::to_owned),
+        boundary: operation.boundary().map(str::to_owned),
+        ordered_track_ids: operation.ordered_track_ids().map(<[String]>::to_vec),
     }
-    added
+}
+
+fn refused(code: &str) -> Option<AppError> {
+    match code {
+        REVISION_CONFLICT => Some(revision_conflict()),
+        UNKNOWN_TRACK => Some(unknown_track()),
+        NOT_FOUND => Some(AppError::not_found("Playlist not found")),
+        _ => None,
+    }
+}
+
+fn revision_conflict() -> AppError {
+    AppError::coded(
+        StatusCode::CONFLICT,
+        REVISION_CONFLICT,
+        "playlist membership changed since the submitted revision",
+    )
+}
+
+fn unknown_track() -> AppError {
+    AppError::coded(
+        StatusCode::NOT_FOUND,
+        UNKNOWN_TRACK,
+        "a submitted track is not in the catalog yet",
+    )
 }
 
 async fn record_playlist_adds(
@@ -319,19 +247,9 @@ async fn assert_added_tracks_exist(
         .fetch_one(&mut **transaction)
         .await?;
     if usize::try_from(known).ok() != Some(added.len()) {
-        return Err(AppError::coded(
-            StatusCode::NOT_FOUND,
-            UNKNOWN_TRACK,
-            "a submitted track is not in the catalog yet",
-        ));
+        return Err(unknown_track());
     }
     Ok(())
-}
-
-fn operation_keys(idempotency_key: Uuid, count: usize) -> Vec<Uuid> {
-    (0..count)
-        .map(|index| operation_key(idempotency_key, index))
-        .collect()
 }
 
 fn operation_key(idempotency_key: Uuid, index: usize) -> Uuid {

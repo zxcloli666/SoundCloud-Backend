@@ -12,6 +12,7 @@ DELETES = {"M": ("receipt",), "A": ("none", "tombstone", "core")}
 TABLE_KEYS = {
     "class", "db", "note", "planned", "prod_only", "pk", "columns", "planned_cols", "groups", "local", "private",
     "delete", "insert_only", "register", "id", "unique", "publish", "hold", "derived", "unpublished_fks", "least",
+    "reassert",
 }
 FK_ACTIONS = {"a": "no action", "r": "restrict", "c": "cascade", "n": "set null", "d": "set default"}
 
@@ -34,6 +35,7 @@ class Table:
         self.id = spec.get("id")
         self.unique_decl = dict(spec.get("unique") or {})
         self.hold = spec.get("hold")
+        self.reassert = spec.get("reassert")
         self.derived = dict(spec.get("derived") or {})
         self.core_cols = []
         self.unpublished_fks = list(spec.get("unpublished_fks") or [])
@@ -186,7 +188,7 @@ class Model:
         return out
 
     def held(self, t):
-        return t.cls == "M" and any(k.get("optimistic", True) and t.name in (k.get("touches") or []) for k in self.kinds.values())
+        return t.cls in ("C", "M") and any(k.get("optimistic", True) and t.name in (k.get("touches") or []) for k in self.kinds.values())
 
     def children(self, parent):
         out = []
@@ -248,6 +250,7 @@ def table_problems(model, t):
         out.append("%s: groups only on M and A tables" % n)
     if t.spec.get("least") is not None and t.cls not in ("M", "A"):
         out.append("%s: least only on M and A tables" % n)
+    out += reassert_problems(model, t)
     if t.cls in DELETES and t.delete not in DELETES[t.cls]:
         out.append("%s: delete must be one of %s" % (n, "/".join(DELETES[t.cls])))
     if t.cls not in DELETES and t.spec.get("delete"):
@@ -279,6 +282,9 @@ def group_problems(t):
     if t.insert_only:
         if t.groups:
             out.append("%s: insert_only tables are not versioned" % n)
+        for c in t.least:
+            if c not in t.types or c in t.pk:
+                out.append("%s: least column %s must be a non-key column" % (n, c))
         return out
     if not t.groups:
         return ["%s: %s table needs version groups" % (n, t.cls)]
@@ -336,8 +342,15 @@ def unique_problems(t):
                     keys = [c for c in frm if any(c in k for k in u["keys"])]
                 if sorted(keys) != sorted(frm):
                     out.append("%s: id from %s does not match unique index %s" % (n, frm, name))
+    elif t.cls == "C":
+        names = {u["name"] for u in t.uniques}
+        for name, how in sorted(t.unique_decl.items()):
+            if how != "key":
+                out.append("%s: unique %s on a C table must be key" % (n, name))
+            if name not in names and t.exists:
+                out.append("%s: declared unique index %s does not exist" % (n, name))
     elif t.unique_decl:
-        out.append("%s: unique declarations only on M, A and K tables" % n)
+        out.append("%s: unique declarations only on C, M, A and K tables" % n)
     if t.id:
         if not t.id.get("ns") or not t.id.get("from"):
             out.append("%s: id needs ns and from" % n)
@@ -345,6 +358,24 @@ def unique_problems(t):
             if c not in t.types:
                 out.append("%s: id column %s does not exist" % (n, c))
     return out
+
+
+def reassert_problems(model, t):
+    n = t.name
+    if t.reassert is not None:
+        if t.cls != "C":
+            return ["%s: reassert only on C tables" % n]
+        if t.reassert != "always":
+            return ["%s: reassert must be always" % n]
+        if not model.held(t):
+            return ["%s: reassert: always on a table no optimistic kind touches" % n]
+        if t.unique_decl:
+            return ["%s: reassert: always already covers every unique; drop the key declarations" % n]
+        return []
+    if t.cls != "C" or not model.held(t):
+        return []
+    return ["%s: unique index %s of a C table an optimistic kind touches needs key (its value belongs to one primary key for good) or reassert: always on the table" % (n, u["name"])
+            for u in t.uniques if t.unique_decl.get(u["name"]) != "key"]
 
 
 def trigger_problems(t):

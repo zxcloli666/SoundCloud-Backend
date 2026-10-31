@@ -225,6 +225,13 @@ impl SyncQueueRepository {
         )
         .fetch_one(&mut *transaction)
         .await?;
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/lock_catalog_target.sql",
+            mutation.action_type,
+            mutation.target_urn
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
         let locked = sqlx::query_file_as!(
             LockedMutation,
             "queries/sync_queue/lock_for_finalize.sql",
