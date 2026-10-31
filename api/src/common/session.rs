@@ -41,7 +41,7 @@ impl FromRequestParts<AppState> for SessionCtx {
 
         let session = state
             .auth
-            .find_session(session_id)
+            .find_session_cached(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
 
@@ -74,7 +74,7 @@ impl FromRequestParts<AppState> for OptionalSession {
         let Some(session_id) = parse_uuid(&raw) else {
             return Ok(OptionalSession(None));
         };
-        let Ok(Some(session)) = state.auth.get_session(session_id).await else {
+        let Ok(Some(session)) = state.auth.get_session_cached(session_id).await else {
             return Ok(OptionalSession(None));
         };
         let Some(raw) = session.soundcloud_user_id else {

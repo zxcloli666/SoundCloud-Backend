@@ -3,12 +3,12 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::header::{CACHE_CONTROL, PRAGMA, REFERRER_POLICY, VARY};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
+use tower_http::CompressionLevel;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Instrument;
 
@@ -16,6 +16,7 @@ use crate::modules;
 use crate::state::AppState;
 
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
+const COMPRESSION_QUALITY: i32 = 4;
 
 pub fn body_limit() -> axum::extract::DefaultBodyLimit {
     axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES)
@@ -43,6 +44,13 @@ pub fn build(state: AppState) -> Router {
         .max_age(Duration::from_secs(3600));
 
     let http_layer = from_fn_with_state(state.clone(), track_http);
+    let database = &state.config.database;
+    let shed = crate::common::shed::Shed::new(
+        state.pg.options().get_max_connections(),
+        database.shed_factor,
+        database.shed_wait,
+    );
+    let shed_layer = from_fn_with_state(shed, crate::common::shed::shed);
     let premium_layer =
         from_fn_with_state(state.clone(), crate::common::premium_gate::premium_gate);
 
@@ -83,25 +91,17 @@ pub fn build(state: AppState) -> Router {
     let router = router.merge(crate::profiling::router());
 
     router
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::GATEWAY_TIMEOUT,
-            Duration::from_secs(60),
-        ))
+        .layer(axum::middleware::from_fn(crate::common::shed::deadline))
         .merge(modules::tracks::upload_router())
         .with_state(state)
         .layer(body_limit())
-        .layer(CompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
-            }),
-        )
+        .layer(CompressionLayer::new().quality(CompressionLevel::Precise(COMPRESSION_QUALITY)))
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &Request| tracing::debug_span!("http_request", method = %request.method()),
+        ))
         .layer(http_layer)
         .layer(premium_layer)
+        .layer(shed_layer)
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
 }

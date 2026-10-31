@@ -26,6 +26,11 @@ impl AuthService {
         self.replicated(|| self.get_session(session_id)).await
     }
 
+    pub async fn find_session_cached(&self, session_id: Uuid) -> AppResult<Option<Session>> {
+        self.replicated(|| self.get_session_cached(session_id))
+            .await
+    }
+
     pub async fn find_auth_session(&self, session_id: Uuid) -> AppResult<Option<AuthSession>> {
         self.replicated(|| self.get_auth_session(session_id)).await
     }

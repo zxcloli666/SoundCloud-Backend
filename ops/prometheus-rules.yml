@@ -91,6 +91,26 @@ groups:
           summary: "The pool cannot hand out a connection"
           description: "Outcome error or timeout on the probe taken at every scrape. The probe pays exactly what a request would pay."
 
+      - alert: ApiPoolExhausted
+        expr: max by (instance) (max_over_time(api_pg_pool_wait_last_seconds[1m])) > 0.5
+        for: 30s
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "api on {{ $labels.instance }} waits over 0.5s for a PostgreSQL connection"
+          description: "The scrape probe waits like a request does. Normal max is 0.033s (2h before 2026-10-31 08:40). At 08:41 a cold api on main waited 2.6s and 1.2s, the core pool was 18 of 18 busy and requests got PoolTimedOut. Look at host CPU and what restarted, see backend-ops.md."
+
+      - alert: ApiHostUnavailable
+        expr: sum by (instance) (rate(api_http_requests_total{status="503"}[2m])) / sum by (instance) (rate(api_http_requests_total[2m])) > 0.05
+        for: 30s
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of api requests on {{ $labels.instance }} answer 503"
+          description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it."
+
       - alert: ApiSoundCloudBreakerOpen
         expr: api_sc_relay_breaker_open == 1
         for: 5m
@@ -318,14 +338,16 @@ groups:
           description: "Counted over every node with a fresh status, public ones included. The per-node lane state series show which node dropped it; a worker marks a required lane degraded itself after lanes.required_grace_s."
 
       - alert: WorkerQueueStalling
-        expr: delta(jobs_worker_consumer_pending[30m]) > 0 and jobs_worker_consumer_waiting == 0
+        expr: |
+          delta(jobs_worker_consumer_pending[30m]) > 0 and jobs_worker_consumer_waiting == 0
+            unless on (durable) sum by (durable) (label_replace(increase(jobs_worker_lane_done_total[30m]), "durable", "$1-workers", "lane", "(.+)")) > 0
         for: 30m
         labels:
           severity: warning
           service: worker
         annotations:
           summary: "Tasks pile up on {{ $labels.durable }} and nobody is pulling"
-          description: "num_pending grows while num_waiting is zero: no worker has an open pull request on the durable. Sampled from consumer_info every 30s."
+          description: "num_pending grows, num_waiting is zero and the lane finished nothing in 30 min: no worker pulls from the durable. A busy worker with every slot taken finishes work, so it does not fire this. Sampled from consumer_info every 30s."
 
       - alert: WorkerSlotFlapping
         expr: jobs_worker_slot_restarts_last_hour_max > 3
@@ -489,3 +511,15 @@ groups:
         annotations:
           summary: "Verify cannot repair {{ $labels.tbl }} on {{ $labels.peer }}"
           description: "A key still differs after three repair attempts, for example two ids for one natural key."
+
+  - name: scd-pg
+    rules:
+      - alert: PgIndexBloated
+        expr: (pg_index_size_bytes > 50 * 1024 * 1024) / on (host, table) group_left pg_table_heap_bytes > 20
+        for: 6h
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "Index {{ $labels.index }} on {{ $labels.host }} is {{ $value | humanize }}x its table heap and over 50 MB"
+          description: "Table {{ $labels.table }}. The index is probably bloated; REINDEX INDEX CONCURRENTLY brings it back."

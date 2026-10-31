@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::modules::centroids::cosine;
 use crate::qdrant::collections;
 
-use super::mmr::{greedy_pick, max_cosine_to_selected};
+use super::mmr::{greedy_pick_off_thread, max_cosine_to_selected};
 use super::service::util::value_to_u64;
 use super::service::{RecommendResult, RecommendationsService};
 
@@ -100,17 +100,18 @@ impl RecommendationsService {
             serendipity: opts.serendipity,
         };
 
-        let picks = greedy_pick(&pool_vecs, opts.limit, |cand, selected, pool_vecs| {
+        let picks = greedy_pick_off_thread(pool_vecs, opts.limit, move |cand, selected, vecs| {
             rerank_score(
                 cand,
                 selected,
-                pool_vecs,
+                vecs,
                 &relevances,
                 &novelty_flags,
                 user_centroid.as_deref(),
                 &weights,
             )
-        });
+        })
+        .await;
 
         let mut taken = vec![false; pool.len()];
         let mut selected: Vec<RecommendResult> = Vec::with_capacity(picks.len());

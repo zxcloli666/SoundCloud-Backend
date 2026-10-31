@@ -49,6 +49,11 @@ fn config(redis: &str) -> AppConfig {
             },
             pool_max: 4,
             acquire_timeout: Duration::from_secs(5),
+            statement_timeout: Duration::from_secs(15),
+            idle_in_transaction_timeout: Duration::from_secs(15),
+            min_connections: 0,
+            shed_factor: 4,
+            shed_wait: Duration::from_millis(1500),
         },
         streaming: StreamingCfg {
             service_url: url::Url::parse("http://127.0.0.1:1").expect("a streaming url"),

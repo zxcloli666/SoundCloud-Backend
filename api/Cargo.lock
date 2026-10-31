@@ -4481,6 +4481,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "redact",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '**/Dockerfile'
+      - '**/Cargo.toml'
       - '.dockerignore'
       - 'scripts/cargo-skeleton.sh'
       - '.github/workflows/images.yml'
@@ -11,6 +12,7 @@ on:
     branches: [main]
     paths:
       - '**/Dockerfile'
+      - '**/Cargo.toml'
       - '.dockerignore'
       - 'scripts/cargo-skeleton.sh'
       - '.github/workflows/images.yml'

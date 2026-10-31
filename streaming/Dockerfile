@@ -10,6 +10,7 @@ COPY utils/call /utils/call
 COPY utils/decrypt /utils/decrypt
 COPY utils/decrypt-client /utils/decrypt-client
 COPY utils/entity-ref /utils/entity-ref
+COPY utils/redact /utils/redact
 COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry

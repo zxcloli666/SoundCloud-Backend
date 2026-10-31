@@ -328,7 +328,7 @@ pub(crate) async fn upload_to_storage(
     let file_part = wreq::multipart::Part::stream_with_length(data.clone(), data.len() as u64)
         .file_name("audio")
         .mime_str("audio/mpeg")
-        .map_err(|e| UploadError::Transport(e.into()))?;
+        .map_err(|e| UploadError::Transport(e.without_uri().into()))?;
 
     let mut form = wreq::multipart::Form::new()
         .text("filename", filename.to_string())
@@ -345,7 +345,7 @@ pub(crate) async fn upload_to_storage(
         .timeout(UPLOAD_BUDGET)
         .send()
         .await
-        .map_err(|e| UploadError::Transport(e.into()))?;
+        .map_err(|e| UploadError::Transport(e.without_uri().into()))?;
 
     let status = resp.status();
     if status.is_success() {

@@ -375,6 +375,7 @@ impl AuthService {
             ));
         }
         transaction.commit().await?;
+        self.forget_session(session_id);
 
         let _ = self.health.record_app_success(&app_key).await;
         info!("Login completed");

@@ -37,6 +37,10 @@ CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
 COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan"})
 COOPERATIVE_GRACE_S = 15.0
+COOPERATIVE_STUCK_S = 60.0
+LATE_SLOTS = COOPERATIVE_SLOTS | {"asr", "align", "mms"}
+LATE_LIMIT_S = 300.0
+CPU_FIELDS = (14, 15)
 MESSAGE_IDS = count(1)
 
 
@@ -381,11 +385,29 @@ class EngineClient:
     async def _watch(self, call: Call) -> None:
         grace = COOPERATIVE_GRACE_S if call.slot in COOPERATIVE_SLOTS else 0.0
         await self._clock.sleep(max(0.0, call.deadline_at + grace - self._clock.now()))
+        while call.id in self._pending and self._may_run_late(call) and await self._computing():
+            self._log.info("engine_call_late_but_computing", call=call.id, slot=call.slot)
         if call.id in self._pending:
             self._log.warning(
                 "engine_call_deadline", call=call.id, slot=call.slot, method=call.method
             )
             await self.kill(CAUSE_DEADLINE)
+
+    def _may_run_late(self, call: Call) -> bool:
+        return call.slot in LATE_SLOTS and self._clock.now() < call.deadline_at + LATE_LIMIT_S
+
+    async def _computing(self) -> bool:
+        before = self._cpu_ticks()
+        await self._clock.sleep(COOPERATIVE_STUCK_S)
+        return self._cpu_ticks() > before
+
+    def _cpu_ticks(self) -> int:
+        try:
+            with open(f"/proc/{self.pid}/stat", encoding="ascii") as stat:
+                fields = stat.read().rpartition(")")[2].split()
+        except OSError:
+            return 0
+        return sum(int(fields[index - 3]) for index in CPU_FIELDS)
 
     async def _reap(self) -> None:
         if self._process is None:
