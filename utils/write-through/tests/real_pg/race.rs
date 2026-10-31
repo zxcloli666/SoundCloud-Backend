@@ -230,7 +230,7 @@ async fn a_row_that_existed_before_is_a_real_violation_and_is_not_retried() {
 }
 
 #[tokio::test]
-async fn a_concurrent_local_insert_is_not_retried() {
+async fn a_concurrent_local_insert_of_the_same_key_is_retried_once() {
     let pair = Pair::new("").await;
     let attempts = Arc::new(AtomicUsize::new(0));
     let result = race(
@@ -242,8 +242,9 @@ async fn a_concurrent_local_insert_is_not_retried() {
         held_call(pair.api.clone(), attempts.clone()),
     )
     .await;
-    assert_eq!(error(&result), ("23505".to_owned(), None));
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(result.unwrap(), json!({"was_new": false}));
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(rows(&pair.api).await, json!([{"id": ID, "note": "kind"}]));
     pair.finish().await;
 }
 

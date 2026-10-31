@@ -59,22 +59,6 @@ EXCEPTION WHEN OTHERS THEN
 END
 $f$;
 
-CREATE OR REPLACE FUNCTION public.scd_xact_origin(x xid)
-RETURNS oid
-LANGUAGE plpgsql
-STRICT
-SET search_path = public, pg_catalog
-AS $f$
-BEGIN
-    IF NOT current_setting('track_commit_timestamp')::boolean THEN
-        RETURN NULL;
-    END IF;
-    RETURN (pg_xact_commit_timestamp_origin(x)).roident;
-EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-END
-$f$;
-
 DROP FUNCTION IF EXISTS public.scd_wt(text, jsonb);
 
 CREATE FUNCTION public.scd_wt(kind text, args jsonb, OUT id uuid, OUT output jsonb)
@@ -107,9 +91,9 @@ BEGIN
             EXECUTE format('SELECT public.%I($1)', public.scd_kind_function(scd_wt.kind)) INTO res USING args;
         EXCEPTION WHEN unique_violation THEN
             GET STACKED DIAGNOSTICS nsp = SCHEMA_NAME, rel = TABLE_NAME, con = CONSTRAINT_NAME, msg = MESSAGE_TEXT, det = PG_EXCEPTION_DETAIL;
-            IF public.scd_xact_origin(public.scd_unique_race(nsp, rel, con, det, snap)) <> 0 THEN
+            IF public.scd_unique_race(nsp, rel, con, det, snap) IS NOT NULL THEN
                 RAISE EXCEPTION USING ERRCODE = 'unique_violation', MESSAGE = msg, DETAIL = det,
-                    HINT = 'scd_wt: retry the transaction, a concurrent apply inserted this key',
+                    HINT = 'scd_wt: retry the transaction, a concurrent transaction inserted this key',
                     SCHEMA = nsp, TABLE = rel, CONSTRAINT = con;
             END IF;
             RAISE;

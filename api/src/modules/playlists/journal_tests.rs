@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 use super::edit::{EditBody, MembershipRequest, MoveBody, TrackEdit};
@@ -757,4 +758,71 @@ async fn a_rolled_back_addition_leaves_no_playlist_add(pool: PgPool) -> anyhow::
     transaction.rollback().await?;
     assert!(playlist_adds(&pool).await?.is_empty());
     Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn first_appends_racing_on_a_playlist_without_membership_state_each_get_their_own_sequence(
+    small: PgPool,
+) -> anyhow::Result<()> {
+    let pool = PgPoolOptions::new()
+        .max_connections(16)
+        .connect_with((*small.connect_options()).clone())
+        .await?;
+    let tracks = ["1", "2", "3", "4", "5", "6"];
+    test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &tracks).await?;
+    detach(&pool, &tracks).await?;
+    sqlx::query("DELETE FROM playlist_membership_state WHERE playlist_urn = $1")
+        .bind(PLAYLIST)
+        .execute(&pool)
+        .await?;
+    let mut gate = pool.begin().await?;
+    sqlx::query("INSERT INTO playlist_membership_state (playlist_urn) VALUES ($1)")
+        .bind(PLAYLIST)
+        .execute(&mut *gate)
+        .await?;
+    let journal = PlaylistJournal::new(pool.clone());
+
+    let appends = futures::future::join_all(tracks.iter().map(|track| {
+        journal.append(
+            PLAYLIST,
+            OWNER,
+            body(serde_json::json!({ "add": format!("soundcloud:tracks:{track}") })),
+            Uuid::now_v7(),
+        )
+    }));
+    let released = async {
+        wait_for_lock_waiters(&pool, 6).await?;
+        Ok::<_, anyhow::Error>(gate.rollback().await?)
+    };
+    let (outcomes, released) = tokio::join!(appends, released);
+    released?;
+
+    for outcome in outcomes {
+        assert_eq!(outcome?.appended, 1);
+    }
+    let sequences: Vec<i64> = journalled(&pool)
+        .await?
+        .into_iter()
+        .map(|row| row.0)
+        .collect();
+    assert_eq!(sequences, (1..=6).collect::<Vec<i64>>());
+    assert_eq!(state(&pool).await?.0, 6);
+    assert_eq!(projection(&pool).await?.len(), 6);
+    Ok(())
+}
+
+async fn wait_for_lock_waiters(pool: &PgPool, waiting: i64) -> anyhow::Result<()> {
+    for _ in 0..500 {
+        let blocked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if blocked >= waiting {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    anyhow::bail!("the appends never queued behind the gate")
 }

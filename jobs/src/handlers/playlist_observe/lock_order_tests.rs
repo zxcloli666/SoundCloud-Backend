@@ -243,14 +243,19 @@ fn add(track: usize) -> wt::MembershipOp {
     }
 }
 
-async fn dispatch_from_main(core: &PgPool, command: &wt::MembershipOp) -> anyhow::Result<()> {
+async fn dispatch_from(
+    core: &PgPool,
+    node: &str,
+    command: &wt::MembershipOp,
+) -> anyhow::Result<()> {
     let mut transaction = core.begin().await?;
     sqlx::query("SET LOCAL session_replication_role = replica")
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "INSERT INTO cmd_outbox (node, id, kind, args, touched) VALUES ('main', $1, $2, $3, '[]'::jsonb)",
+        "INSERT INTO cmd_outbox (node, id, kind, args, touched) VALUES ($1, $2, $3, $4, '[]'::jsonb)",
     )
+    .bind(node)
     .bind(Uuid::new_v4())
     .bind(wt::MembershipOp::NAME)
     .bind(serde_json::to_value(command)?)
@@ -290,7 +295,7 @@ async fn membership_ops_dispatched_on_core_and_concurrent_persists_never_deadloc
     let dispatched = async {
         let mut failed = Vec::new();
         for round in 0..ROUNDS {
-            if let Err(error) = dispatch_from_main(&core, &add(round + 3)).await {
+            if let Err(error) = dispatch_from(&core, "main", &add(round + 3)).await {
                 failed.push(format!("dispatch {round}: {error}"));
             }
         }
@@ -328,5 +333,147 @@ async fn membership_ops_dispatched_on_core_and_concurrent_persists_never_deadloc
     assert_eq!(journal, (rounds, rounds, 0, rounds));
     let expected: Vec<String> = (1..=ROUNDS + 2).map(|track| track.to_string()).collect();
     assert_eq!(projection(&core).await?, expected);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn first_membership_ops_from_both_nodes_and_core_on_a_playlist_without_state_take_distinct_sequences(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool, 9).await?;
+    let core = split_core(&pool).await?;
+    sqlx::query("DELETE FROM playlist_membership_state WHERE playlist_urn = $1")
+        .bind(PLAYLIST)
+        .execute(&core)
+        .await?;
+    let mut gate = core.begin().await?;
+    sqlx::query("INSERT INTO playlist_membership_state (playlist_urn) VALUES ($1)")
+        .bind(PLAYLIST)
+        .execute(&mut *gate)
+        .await?;
+
+    let racing = futures::future::join_all((3..=8).map(|track| {
+        let core = core.clone();
+        async move {
+            let command = add(track);
+            match track % 3 {
+                0 => dispatch_from(&core, "main", &command).await,
+                1 => dispatch_from(&core, "star", &command).await,
+                _ => {
+                    let mut transaction = core.begin().await?;
+                    wt::call(&mut transaction, &command).await?;
+                    transaction.commit().await?;
+                    Ok(())
+                }
+            }
+        }
+    }));
+    let released = async {
+        wait_for_lock_waiters(&core, 6).await?;
+        Ok::<_, anyhow::Error>(gate.rollback().await?)
+    };
+    let (results, released) = tokio::join!(racing, released);
+    released?;
+    for result in results {
+        result?;
+    }
+
+    let dead: i64 = sqlx::query_scalar("SELECT count(*) FROM cmd_dead")
+        .fetch_one(&core)
+        .await?;
+    assert_eq!(dead, 0);
+    let sequences: Vec<i64> = sqlx::query_scalar(
+        "SELECT sequence FROM playlist_membership_operations WHERE playlist_urn = $1 ORDER BY sequence",
+    )
+    .bind(PLAYLIST)
+    .fetch_all(&core)
+    .await?;
+    assert_eq!(sequences, (1..=6).collect::<Vec<i64>>());
+    let mut members = projection(&core).await?;
+    members.sort();
+    assert_eq!(members, ["1", "2", "3", "4", "5", "6", "7", "8"]);
+    Ok(())
+}
+
+async fn wait_for_lock_waiters(pool: &PgPool, waiting: i64) -> anyhow::Result<()> {
+    for _ in 0..500 {
+        let blocked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if blocked >= waiting {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    anyhow::bail!("the racers never queued behind the gate")
+}
+
+fn hydrated(sc_track_ids: &[String]) -> serde_json::Value {
+    serde_json::Value::Array(
+        sc_track_ids
+            .iter()
+            .map(|id| {
+                json!({
+                    "sc_track_id": id,
+                    "urn": format!("soundcloud:tracks:{id}"),
+                    "title": "Raced",
+                    "title_normalized": "raced",
+                    "tags": [],
+                    "duration_ms": 120000,
+                    "sharing": "public",
+                    "needs_duration_resolve": false
+                })
+            })
+            .collect(),
+    )
+}
+
+#[sqlx::test(migrations = false)]
+async fn hydrated_batches_racing_on_one_new_track_retry_and_keep_their_other_rows(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let core = split_core(&pool).await?;
+    let mut gate = core.begin().await?;
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+         VALUES ('900', 'soundcloud:tracks:900', 'Gate', 'gate', 1000)",
+    )
+    .execute(&mut *gate)
+    .await?;
+
+    let batches: Vec<Vec<String>> = (1..=6)
+        .map(|n| vec!["900".to_owned(), format!("90{n}")])
+        .collect();
+    let racing = futures::future::join_all(batches.iter().map(|ids| {
+        let core = core.clone();
+        async move {
+            let mut transaction = core.begin().await?;
+            super::repository::upsert_hydrated_tracks(&mut transaction, &hydrated(ids), 1).await?;
+            transaction.commit().await?;
+            anyhow::Ok(())
+        }
+    }));
+    let released = async {
+        wait_for_lock_waiters(&core, 6).await?;
+        Ok::<_, anyhow::Error>(gate.rollback().await?)
+    };
+    let (results, released) = tokio::join!(racing, released);
+    released?;
+    for result in results {
+        result?;
+    }
+
+    let stored: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT sc_track_id, id = public.scd_uuid('tracks', urn)
+         FROM tracks WHERE sc_track_id LIKE '90_' ORDER BY sc_track_id",
+    )
+    .fetch_all(&core)
+    .await?;
+    let expected: Vec<(String, bool)> = (0..=6).map(|n| (format!("90{n}"), true)).collect();
+    assert_eq!(stored, expected);
     Ok(())
 }

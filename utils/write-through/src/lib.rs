@@ -20,7 +20,8 @@ pub fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6)
 }
 
-pub const RACE_HINT: &str = "scd_wt: retry the transaction, a concurrent apply inserted this key";
+pub const RACE_HINT: &str =
+    "scd_wt: retry the transaction, a concurrent transaction inserted this key";
 
 pub trait Raced {
     fn raced(&self) -> bool;
