@@ -373,7 +373,7 @@ def scan(root):
     def unresolved(src, pos, argtxt, test, fn, cs):
         o = base_stmt(src.path, src.line(pos), "unresolved:" + argtxt[:60], True, test, fn)
         o.update({"kinds": [], "writes": [], "ops": [], "reads": [], "upsert_do_update": False, "for_update": False,
-                  "skip_locked": False, "limit": False, "clock": False})
+                  "skip_locked": False, "limit": False, "clock": False, "assigned": []})
         o["callsites"].append(cs)
         statements.append(o)
 
@@ -507,6 +507,7 @@ def scan(root):
                             for k in ("writes", "reads", "kinds"):
                                 o[k] += [t for t in an[k] if t not in o[k]]
                             o["ops"] = sorted(set(o["ops"]) | set(an["ops"]))
+                            o["assigned"] = sorted(set(o["assigned"]) | set(an["assigned"]))
                             for k in ("for_update", "skip_locked", "limit", "clock", "upsert_do_update"):
                                 o[k] = o[k] or an[k]
                     continue

@@ -294,7 +294,7 @@ errs_after="$(val scd_b1_core "$errs")"
   || { echo "FAIL core apply errors went from $errs_before to $errs_after (deadlock between repair batches)"; failed=$((failed + 1)); }
 expect "both rows live on every node above their tombstones" "SELECT count(*) FROM public.disliked_tracks WHERE id IN ('$ka', '$kb')" 2
 
-say "C: a kind on an api node touches artists, core's derived has_sc_account comes back as a core write, no reassert"
+say "C: a kind on an api node touches artists, core's derived has_sc_account comes back as a core write and stays out of the hash"
 kind_sql="CREATE OR REPLACE FUNCTION public.scd_cmd_match_sc_account(args jsonb) RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_catalog AS \$f\$
 BEGIN
     INSERT INTO public.artist_sc_accounts (artist_id, sc_user_id, role, source, verified, created_at, updated_at)
@@ -312,8 +312,11 @@ calm
 cid="$(val scd_b1_main "SELECT id FROM public.scd_wt('match.sc_account', jsonb_build_object('artist_id', '00000000-0000-0000-0000-0000000000a9', 'sc_user_id', 'scu-9', 'at', '2026-10-30 00:00:00+00'))")"
 wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.cmd_outbox WHERE id = '$cid' AND done_at IS NOT NULL)" "core ran main's command"
 calm
+touched="$(val scd_b1_main "SELECT touched FROM public.cmd_outbox WHERE id = '$cid'")"
+equal="$(val scd_b1_core "SELECT count(*) FILTER (WHERE public.scd_row_hash(k ->> 'tbl', k -> 'pk') = k ->> 'hash') || '/' || count(*) FROM jsonb_array_elements('$touched'::jsonb) k")"
+[ "$equal" = 2/2 ] && echo "ok core's rows hash like main's kind-time rows" || { echo "FAIL core's hashes differ from main's kind-time hashes: $equal equal"; failed=$((failed + 1)); }
 reasserted="$(val scd_b1_core "SELECT count(*) FROM public.cmd_reassert WHERE id = '$cid'")"
-[ "$reasserted" = 0 ] && echo "ok core reasserted nothing for main's command" || { echo "FAIL core reasserted $reasserted row(s) for main's command"; failed=$((failed + 1)); }
+[ "$reasserted" = 2 ] && echo "ok core reasserts both keys only because both tables are reassert: always" || { echo "FAIL core reasserted $reasserted row(s) for main's command"; failed=$((failed + 1)); }
 [ "$(val scd_b1_core "SELECT count(*) FROM public.cmd_dead WHERE id = '$cid'")" = 0 ] || { echo "FAIL main's command died on core"; exit 1; }
 expect "the artist row is equal on every node with core's derived flag" \
   "SELECT sc_user_id || ' ' || has_sc_account FROM public.artists WHERE id = '00000000-0000-0000-0000-0000000000a9'" "scu-9 true"

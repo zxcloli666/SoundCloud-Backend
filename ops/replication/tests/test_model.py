@@ -143,6 +143,38 @@ class Model(unittest.TestCase):
         s["tables"]["likes"]["least"] = []
         self.assertEqual(problems(s), [])
 
+    def test_held_c_unique_needs_key_or_reassert(self):
+        s = support.spec()
+        del s["tables"]["items"]["unique"]
+        self.assertProblem("items: unique index items_urn_uq of a C table an optimistic kind touches needs key", s)
+        s["tables"]["items"]["reassert"] = "always"
+        self.assertEqual(problems(s), [])
+        s["tables"]["items"]["unique"] = {"items_urn_uq": "key"}
+        self.assertProblem("items: reassert: always already covers every unique", s)
+        s["tables"]["items"]["unique"] = {"items_urn_uq": "id"}
+        del s["tables"]["items"]["reassert"]
+        self.assertProblem("items: unique items_urn_uq on a C table must be key", s)
+        s = support.spec()
+        s["kinds"] = {}
+        del s["tables"]["items"]["unique"]
+        self.assertEqual(problems(s), [])
+        s["tables"]["items"]["reassert"] = "always"
+        self.assertProblem("items: reassert: always on a table no optimistic kind touches", s)
+        s["tables"]["items"]["reassert"] = "sometimes"
+        self.assertProblem("items: reassert must be always", s)
+        s = support.spec()
+        s["tables"]["likes"]["reassert"] = "always"
+        self.assertProblem("likes: reassert only on C tables", s)
+
+    def test_insert_only_least_is_a_non_key_column(self):
+        s = support.spec()
+        s["tables"]["events"]["least"] = ["body"]
+        self.assertEqual(problems(s), [])
+        s["tables"]["events"]["least"] = ["id"]
+        self.assertProblem("events: least column id must be a non-key column", s)
+        s["tables"]["events"]["least"] = ["nope"]
+        self.assertProblem("events: least column nope must be a non-key column", s)
+
     def test_derived_trigger_must_be_always_gated_and_pinned(self):
         s = support.spec()
         s["tables"]["items"]["derived"] = {"items_touch": {}}

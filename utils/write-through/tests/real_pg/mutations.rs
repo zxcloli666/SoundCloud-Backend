@@ -423,7 +423,7 @@ async fn the_same_idempotency_key_from_two_nodes_is_applied_once() {
         .run_on_star(&membership(None, add(key, "503"), "2026-10-30T10:00:01Z"))
         .await;
     assert_eq!(output["status"], json!("applied"));
-    assert_eq!(star, verdict(1, 1));
+    assert_eq!(star, verdict(2, 1));
     assert_eq!(
         journal(&pair.core).await,
         json!([{"sequence": 1, "track_id": "503", "outcome": "pending", "conflict_code": null}])

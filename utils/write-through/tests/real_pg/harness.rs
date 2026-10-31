@@ -179,6 +179,7 @@ impl Pair {
         let core_local = hashes(&mut *local).await;
         local.rollback().await.unwrap();
         let verdict = command.dispatch(&self.core, "main").await;
+        let unconditional = command.unconditional(&self.core, "main").await;
         command
             .ack(
                 &self.api,
@@ -225,6 +226,10 @@ impl Pair {
             reasserted: 0,
             purged: 0,
             dead: 0,
+        };
+        let verdict = Verdict {
+            reasserted: verdict.reasserted - unconditional,
+            ..verdict
         };
         if verdict != clean {
             diverged.push(format!("dispatch on core: {verdict:?}"));
@@ -355,6 +360,17 @@ impl Command {
             purged,
             dead,
         }
+    }
+
+    async fn unconditional(&self, core: &PgPool, node: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM public.cmd_reassert WHERE node = $1 AND id = $2::uuid AND public.scd_reassert_always(tbl)",
+        )
+        .bind(node)
+        .bind(&self.id)
+        .fetch_one(core)
+        .await
+        .unwrap()
     }
 
     async fn ack(&self, api: &PgPool, node: &str, status: &str) {
