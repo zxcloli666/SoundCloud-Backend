@@ -819,7 +819,7 @@ mod tests {
                     own.iter()
                         .filter(move |r| (source < r.1) == low_side)
                         .take(k)
-                        .map(|r| (**r).clone())
+                        .map(|r| **r)
                         .collect::<Vec<_>>()
                 };
                 kept.extend(by_side(true));
