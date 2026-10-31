@@ -5,6 +5,7 @@ mod db_tests;
 mod tiered;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use backend_contracts::{JobKind, LyricsLookupPayload, StoredAudioDispatchPayload, Versioned};
@@ -50,6 +51,7 @@ pub struct LyricsLookupHandler {
     sources: Arc<LyricsSources>,
     config: LyricsConfig,
     turns: Turns,
+    backfilled: AtomicBool,
 }
 
 impl LyricsLookupHandler {
@@ -60,6 +62,7 @@ impl LyricsLookupHandler {
             sources,
             config,
             turns: Turns::default(),
+            backfilled: AtomicBool::new(false),
         }
     }
 
@@ -101,13 +104,7 @@ impl LyricsLookupHandler {
         .execute(&self.pool)
         .await
         .map_err(JobError::retryable)?;
-        sqlx::query_file_scalar!(
-            "queries/lyrics/lookup_backfill.sql",
-            self.config.backfill_batch
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        self.backfill().await?;
 
         let claims = tiered::claim(
             &self.pool,
@@ -119,6 +116,23 @@ impl LyricsLookupHandler {
         .await
         .map_err(JobError::retryable)?;
         self.process_batch(job, claims).await
+    }
+
+    async fn backfill(&self) -> JobResult {
+        if self.backfilled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let completed = sqlx::query_file_scalar!(
+            "queries/lyrics/lookup_backfill.sql",
+            self.config.backfill_batch
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(JobError::retryable)?;
+        if completed {
+            self.backfilled.store(true, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     async fn process_batch(&self, job: &LeasedJob, claims: Vec<LookupClaim>) -> JobResult {

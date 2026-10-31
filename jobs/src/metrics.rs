@@ -23,6 +23,9 @@ const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
 const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "jobs_star_priority_waiting_seconds";
 const STAR_PRIORITY_QUEUED_WAITING: &str = "jobs_star_priority_queued_waiting_seconds";
+const STAR_DUE_RECHECKED: &str = "jobs_star_due_rechecked_total";
+const STAR_DUE_CHANGED: &str = "jobs_star_due_changed_total";
+const STAR_DUE_SWEEP_MISSED: &str = "jobs_star_due_sweep_missed_total";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -136,6 +139,11 @@ fn register_series_that_start_at_zero() {
     }
     metrics::gauge!(WORKER_SLOT_RESTARTS_LAST_HOUR_MAX).set(0.0);
     metrics::gauge!(WORKER_SLOT_RESERVED_GAP_MAX).set(0.0);
+    for path in StarDuePath::ALL {
+        metrics::counter!(STAR_DUE_RECHECKED, "path" => path.as_str()).increment(0);
+        metrics::counter!(STAR_DUE_CHANGED, "path" => path.as_str()).increment(0);
+    }
+    metrics::counter!(STAR_DUE_SWEEP_MISSED).increment(0);
 }
 
 pub fn record_execution(kind: &'static str, outcome: Outcome, elapsed: Duration) {
@@ -236,6 +244,31 @@ pub fn record_star_priority_round(
 pub fn record_star_priority_queued(kind: &'static str, tier: &'static str, waiting_seconds: f64) {
     metrics::gauge!(STAR_PRIORITY_QUEUED_WAITING, "kind" => kind, "tier" => tier)
         .set(waiting_seconds);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StarDuePath {
+    Sweep,
+    Dirty,
+}
+
+impl StarDuePath {
+    pub const ALL: [Self; 2] = [Self::Sweep, Self::Dirty];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sweep => "sweep",
+            Self::Dirty => "dirty",
+        }
+    }
+}
+
+pub fn record_star_due(path: StarDuePath, rechecked: i64, changed: i64, missed: i64) {
+    metrics::counter!(STAR_DUE_RECHECKED, "path" => path.as_str())
+        .increment(u64::try_from(rechecked).unwrap_or(0));
+    metrics::counter!(STAR_DUE_CHANGED, "path" => path.as_str())
+        .increment(u64::try_from(changed).unwrap_or(0));
+    metrics::counter!(STAR_DUE_SWEEP_MISSED).increment(u64::try_from(missed).unwrap_or(0));
 }
 
 pub fn record_worker_lost(lane: WorkerLane, outcome: WorkerLostOutcome) {

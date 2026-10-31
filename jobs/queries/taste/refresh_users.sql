@@ -3,6 +3,7 @@ WITH users AS (
     FROM user_events
     WHERE created_at > $1
       AND created_at <= $2
+      AND event_type IN ('like', 'playlist_add', 'full_play', 'skip', 'dislike')
 )
 SELECT users.user_id AS "user_id!",
        EXISTS (
