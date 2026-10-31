@@ -134,36 +134,38 @@ BEGIN
     DELETE FROM public.cmd_done d WHERE d.node = NEW.node AND d.id = NEW.id RETURNING d.status, d.at INTO st, acked;
     IF FOUND THEN
         INSERT INTO public.cmd_done (node, id, status, at) VALUES (NEW.node, NEW.id, st, acked);
-        RETURN NULL;
+        DELETE FROM public.cmd_reassert x WHERE x.node = NEW.node AND x.id = NEW.id;
+        DELETE FROM public.cmd_purge x WHERE x.node = NEW.node AND x.id = NEW.id;
+    ELSE
+        INSERT INTO public.cmd_done (node, id, status) VALUES (NEW.node, NEW.id, 'ok');
+        PERFORM set_config('scd.cmd', NEW.id::text, true);
+        snap := pg_current_snapshot();
+        BEGIN
+            PERFORM 1 FROM public.scd_kinds() x WHERE x.kind = NEW.kind;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'scd dispatch: unknown kind %', NEW.kind USING ERRCODE = 'invalid_parameter_value';
+            END IF;
+            IF NEW.created_at < now() - public.scd_dedup_window() + interval '1 hour' THEN
+                RAISE EXCEPTION 'scd dispatch: command % of % is older than the dedup window, replay it only if core never ran it', NEW.id, NEW.node
+                    USING ERRCODE = 'invalid_parameter_value';
+            END IF;
+            EXECUTE format('SELECT public.%I($1)', public.scd_kind_function(NEW.kind)) INTO out USING NEW.args;
+        EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT,
+                nsp = SCHEMA_NAME, rel = TABLE_NAME, con = CONSTRAINT_NAME, det = PG_EXCEPTION_DETAIL;
+            IF public.scd_transient(st) THEN
+                RAISE;
+            END IF;
+            IF st = '23505' AND public.scd_unique_race(nsp, rel, con, det, snap) IS NOT NULL THEN
+                RAISE;
+            END IF;
+            INSERT INTO public.cmd_dead (node, id, kind, args, sqlstate, message)
+            VALUES (NEW.node, NEW.id, NEW.kind, NEW.args, st, msg)
+            ON CONFLICT DO NOTHING;
+            UPDATE public.cmd_done d SET status = 'dead' WHERE d.node = NEW.node AND d.id = NEW.id;
+        END;
+        PERFORM set_config('scd.cmd', '', true);
     END IF;
-    INSERT INTO public.cmd_done (node, id, status) VALUES (NEW.node, NEW.id, 'ok');
-    PERFORM set_config('scd.cmd', NEW.id::text, true);
-    snap := pg_current_snapshot();
-    BEGIN
-        PERFORM 1 FROM public.scd_kinds() x WHERE x.kind = NEW.kind;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'scd dispatch: unknown kind %', NEW.kind USING ERRCODE = 'invalid_parameter_value';
-        END IF;
-        IF NEW.created_at < now() - public.scd_dedup_window() + interval '1 hour' THEN
-            RAISE EXCEPTION 'scd dispatch: command % of % is older than the dedup window, replay it only if core never ran it', NEW.id, NEW.node
-                USING ERRCODE = 'invalid_parameter_value';
-        END IF;
-        EXECUTE format('SELECT public.%I($1)', public.scd_kind_function(NEW.kind)) INTO out USING NEW.args;
-    EXCEPTION WHEN OTHERS THEN
-        GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT,
-            nsp = SCHEMA_NAME, rel = TABLE_NAME, con = CONSTRAINT_NAME, det = PG_EXCEPTION_DETAIL;
-        IF public.scd_transient(st) THEN
-            RAISE;
-        END IF;
-        IF st = '23505' AND public.scd_unique_race(nsp, rel, con, det, snap) IS NOT NULL THEN
-            RAISE;
-        END IF;
-        INSERT INTO public.cmd_dead (node, id, kind, args, sqlstate, message)
-        VALUES (NEW.node, NEW.id, NEW.kind, NEW.args, st, msg)
-        ON CONFLICT DO NOTHING;
-        UPDATE public.cmd_done d SET status = 'dead' WHERE d.node = NEW.node AND d.id = NEW.id;
-    END;
-    PERFORM set_config('scd.cmd', '', true);
     BEGIN
         FOR k IN SELECT e.value FROM jsonb_array_elements(coalesce(NEW.touched, '[]')) AS e LOOP
             CONTINUE WHEN public.scd_table_class(k ->> 'tbl') IS DISTINCT FROM 'C';
@@ -172,7 +174,7 @@ BEGIN
                 INSERT INTO public.cmd_purge (node, id, tbl, pk)
                 VALUES (NEW.node, NEW.id, k ->> 'tbl', k -> 'pk')
                 ON CONFLICT DO NOTHING;
-            ELSIF h IS NOT NULL AND h IS DISTINCT FROM k ->> 'hash' THEN
+            ELSIF h IS NOT NULL AND (public.scd_reassert_always(k ->> 'tbl') OR h IS DISTINCT FROM k ->> 'hash') THEN
                 INSERT INTO public.cmd_reassert (node, id, tbl, pk, "row")
                 VALUES (NEW.node, NEW.id, k ->> 'tbl', k -> 'pk', public.scd_row_json(k ->> 'tbl', k -> 'pk'))
                 ON CONFLICT DO NOTHING;

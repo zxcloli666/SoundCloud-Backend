@@ -265,9 +265,9 @@ only core "DELETE FROM public.cmd_dead WHERE node = 'r1x'" > /dev/null
 settle ee54 ee55 ee56
 pairs soundcloud_connections "username = 'r1'" "r1 connections equal on all nodes after the replay"
 
-say "R1 lost core->api slot: acks of the gap are lost, a re-push gets them again"
+say "R1 lost core->api slot: acks and reasserts of the gap are lost, a re-push gets them again"
 pause main main_from_core
-gap="$(only main "SELECT string_agg(quote_literal(w.id::text), ', ') FROM generate_series(1, 10) n, LATERAL public.scd_wt('track.edit', jsonb_build_object('r1', true, 'urn', 'urn:t:r1:' || n, 'title', 'R1 gap ' || n)) w")"
+gap="$(only main "SELECT string_agg(quote_literal(w.id::text), ', ') FROM generate_series(1, 10) n, LATERAL public.scd_wt('track.edit', jsonb_build_object('r1', true, 'urn', 'urn:t:r1:' || n, 'title', 'R1 gap ' || n, 'fail_on', CASE WHEN n = 10 THEN 'core' END)) w")"
 wait_for scd_b1_core "SELECT count(*) = 10 FROM public.cmd_done WHERE node = 'main' AND id IN ($gap)" "core ran the 10 gap commands"
 sql -d scd_b1_main -c "ALTER SUBSCRIPTION main_from_core SET (slot_name = NONE)" -c "DROP SUBSCRIPTION main_from_core" > /dev/null
 val scd_b1_core "SELECT pg_catalog.pg_drop_replication_slot('scd_b1_main_from_core')" > /dev/null
@@ -278,7 +278,10 @@ swept
 want "the gap commands stay pending on main and hold their keys" "$(r1_rows main "id IN ($gap) AND done_at IS NULL")/$(only main "SELECT count(*) FROM public.cmd_pending WHERE id IN ($gap)")" 10/10
 repush main "id IN ($gap)"
 wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.cmd_pending WHERE id IN ($gap)) AND NOT EXISTS (SELECT 1 FROM public.cmd_outbox WHERE id IN ($gap) AND done_at IS NULL)" "core acks the re-pushed commands again and main releases the keys"
-want "core ran each gap command once" "$(only core "SELECT count(*) || '/' || count(DISTINCT id) FROM r1.applied WHERE id IN ($gap)")" 10/10
+want "core ran each gap command once, the refused one never" "$(only core "SELECT count(*) || '/' || count(DISTINCT id) FROM r1.applied WHERE id IN ($gap)")" 9/9
+refused="$(only core "SELECT title FROM public.tracks WHERE urn = 'urn:t:r1:10'")"
+want "core kept its title of the refused gap edit" "$([ "$refused" != 'R1 gap 10' ] && echo kept)" kept
+wait_for scd_b1_main "SELECT title = '$refused' FROM public.tracks WHERE urn = 'urn:t:r1:10'" "the re-ack carries the lost reassert, main takes core's title back"
 sql -d scd_b1_core -c "UPDATE public.tracks SET title = 'R1 core after gap', title_normalized = 'r1 core after gap' WHERE urn = 'urn:t:r1:1'" > /dev/null
 wait_for scd_b1_main "SELECT title = 'R1 core after gap' FROM public.tracks WHERE urn = 'urn:t:r1:1'" "a later core write of a released key reaches main"
 
