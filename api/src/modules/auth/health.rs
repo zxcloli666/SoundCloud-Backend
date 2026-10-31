@@ -48,17 +48,6 @@ impl AuthHealthService {
         Arc::new(Self { redis, database })
     }
 
-    pub async fn run_oauth_request<T, E, F>(&self, oauth_app_id: Uuid, operation: F) -> AppResult<T>
-    where
-        E: Into<AppError>,
-        F: Future<Output = Result<T, E>>,
-    {
-        if let Some(retry_after) = self.app_penalty_fail_open(oauth_app_id).await {
-            return Err(AppError::soundcloud_refresh_rate_limited(retry_after));
-        }
-        operation.await.map_err(Into::into)
-    }
-
     pub async fn record_app_success(&self, app_id: &str) -> AppResult<()> {
         let key = format!("auth:app:{app_id}:success");
         self.bounded_redis_operation(
@@ -152,13 +141,6 @@ impl AuthHealthService {
             .arg(ttl_milliseconds)
             .invoke_async(&mut connection)
             .await?)
-    }
-
-    async fn app_penalty_fail_open(&self, oauth_app_id: Uuid) -> Option<i64> {
-        self.app_penalties_for_apps_fail_open(&[oauth_app_id])
-            .await
-            .get(&oauth_app_id)
-            .copied()
     }
 
     async fn database_penalties_fail_open(&self, apps: &[Uuid]) -> HashMap<Uuid, i64> {
@@ -373,19 +355,19 @@ mod tests {
         let oauth_app_id = seed_app(&pool).await?;
 
         let hang_guard = Duration::from_secs(5);
-        let result = tokio::time::timeout(
+        let penalties = tokio::time::timeout(
             hang_guard,
-            health.run_oauth_request(oauth_app_id, async { Ok::<_, AppError>(42) }),
+            health.app_penalties_for_apps_fail_open(&[oauth_app_id]),
         )
-        .await??;
+        .await?;
         let penalty =
             tokio::time::timeout(hang_guard, health.penalize_app_at_least(oauth_app_id, 60))
                 .await?;
         stalled_server.abort();
 
-        assert_eq!(
-            result, 42,
-            "a stalled Redis must not refuse an OAuth request"
+        assert!(
+            penalties.is_empty(),
+            "a stalled Redis must not hold back the OAuth app picker"
         );
         assert!(
             penalty.is_ok_and(|seconds| seconds >= 60),

@@ -224,13 +224,10 @@ impl AuthService {
             .await?;
         let app_key = crate::modules::auth::health::oauth_app_key(&credentials.client_id);
         let token = match self
-            .health
-            .run_oauth_request(
-                oauth_app_id,
-                self.sc
-                    .exchange_code_for_token(&code, &login_request.code_verifier, &credentials),
-            )
+            .sc
+            .exchange_code_for_token(&code, &login_request.code_verifier, &credentials)
             .await
+            .map_err(AppError::from)
         {
             Ok(token) => token,
             Err(error) => {
@@ -716,6 +713,13 @@ mod tests {
             oauth_app_failure_cooldown(&AppError::ScUnreachable("offline".to_owned())),
             Some(30)
         );
+    }
+
+    #[test]
+    fn a_local_refusal_is_not_a_soundcloud_failure() {
+        let refusal = AppError::soundcloud_refresh_rate_limited(120);
+
+        assert_eq!(oauth_app_failure_cooldown(&refusal), None);
     }
 
     #[test]
