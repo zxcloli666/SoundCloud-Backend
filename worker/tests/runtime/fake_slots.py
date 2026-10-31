@@ -54,6 +54,10 @@ class Fake:
             for _ in range(int(str(args.get("layers", 100)))):
                 CALL_GUARD.check()
                 time.sleep(0.02)
+        if method == "windows":
+            for _ in range(int(str(args.get("windows", 3)))):
+                CALL_GUARD.check()
+                time.sleep(float(str(args.get("window_s", 1.0))))
         if method == "threads":
             import torch
 

@@ -22,6 +22,7 @@ from worker.runtime.protocol import (
     CommandKind,
     ErrorKind,
     Pong,
+    Progress,
     Reply,
     SlotSpec,
     SlotState,
@@ -37,6 +38,7 @@ CAUSE_STOP = "stop"
 CAUSE_LOAD_TIMEOUT = "load-timeout"
 COOPERATIVE_SLOTS = frozenset({"text", "muq", "mulan"})
 COOPERATIVE_GRACE_S = 15.0
+COOPERATIVE_STUCK_S = 180.0
 MESSAGE_IDS = count(1)
 
 
@@ -143,6 +145,7 @@ class EngineClient:
         self._pending: dict[int, asyncio.Future[object]] = {}
         self._call_slots: dict[int, str] = {}
         self._watchers: dict[int, asyncio.Task[None]] = {}
+        self._progress_at: dict[int, float] = {}
         self._reaper: asyncio.Task[None] | None = None
         self._exit: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         self._gone: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -357,11 +360,15 @@ class EngineClient:
             self._running = message.id
             self._signal_running()
             return
+        if isinstance(message, Progress):
+            self._progress_at[message.id] = self._clock.now()
+            return
         if isinstance(message, Pong):
             for state in message.slots:
                 self._states[state.slot] = state
         elif isinstance(message, Reply):
             self._record_reply(message)
+        self._progress_at.pop(message_id, None)
         future = self._pending.pop(message_id, None)
         watcher = self._watchers.pop(message_id, None)
         if watcher is not None:
@@ -381,11 +388,19 @@ class EngineClient:
     async def _watch(self, call: Call) -> None:
         grace = COOPERATIVE_GRACE_S if call.slot in COOPERATIVE_SLOTS else 0.0
         await self._clock.sleep(max(0.0, call.deadline_at + grace - self._clock.now()))
+        while call.id in self._pending and self._working(call):
+            await self._clock.sleep(
+                self._progress_at[call.id] + COOPERATIVE_STUCK_S - self._clock.now()
+            )
         if call.id in self._pending:
             self._log.warning(
                 "engine_call_deadline", call=call.id, slot=call.slot, method=call.method
             )
             await self.kill(CAUSE_DEADLINE)
+
+    def _working(self, call: Call) -> bool:
+        seen = self._progress_at.get(call.id)
+        return seen is not None and self._clock.now() - seen < COOPERATIVE_STUCK_S
 
     async def _reap(self) -> None:
         if self._process is None:
@@ -433,6 +448,7 @@ class EngineClient:
                 future.set_exception(error)
         self._pending.clear()
         self._call_slots.clear()
+        self._progress_at.clear()
         self._preemptible.clear()
         self._running = 0
         for watcher in self._watchers.values():
