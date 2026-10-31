@@ -48,6 +48,14 @@ pub(super) async fn process_job(
         }
         Err(error) => {
             let retryable = error.is_retryable();
+            tracing::warn!(
+                job_id = %job.id,
+                kind = %job.kind,
+                attempt = job.attempts,
+                retryable,
+                sqlstate = sqlstate(&error).as_deref().unwrap_or("none"),
+                "background job failed"
+            );
             let completion = repository.fail(&job, &error.to_string(), retryable).await?;
             log_completion(&job, completion, false);
         }
@@ -66,18 +74,22 @@ fn outcome(result: &JobResult) -> crate::metrics::Outcome {
     }
 }
 
-fn cancelled_by_timeout(error: &JobError) -> bool {
+fn sqlstate(error: &JobError) -> Option<String> {
     let source = match error {
         JobError::Retryable(error) | JobError::Permanent(error) => error,
         JobError::Postponed { error, .. } => error,
     };
-    source.chain().any(|cause| {
+    source.chain().find_map(|cause| {
         cause
             .downcast_ref::<sqlx::Error>()
             .and_then(|error| error.as_database_error())
             .and_then(|error| error.code())
-            .is_some_and(|code| code == "57014")
+            .map(|code| code.into_owned())
     })
+}
+
+fn cancelled_by_timeout(error: &JobError) -> bool {
+    sqlstate(error).is_some_and(|code| code == "57014")
 }
 
 async fn execute_with_heartbeat(
