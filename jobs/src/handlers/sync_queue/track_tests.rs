@@ -238,6 +238,7 @@ async fn a_push_carries_every_merged_field_and_a_later_core_edit_is_healed_into_
 ) -> anyhow::Result<()> {
     let repository = setup(&pool).await?;
     update(&pool, &json!({"track": {"sharing": "private"}})).await?;
+    repository.adopt().await?;
     let pushed = repository
         .claim(1)
         .await?

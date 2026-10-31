@@ -133,7 +133,7 @@ impl PlaylistJournal {
                 .collect(),
             at: wt::now(),
         };
-        let outcome = wt::call(&mut **transaction, &command).await?;
+        let outcome = wt::call(transaction, &command).await?;
         match outcome.status.as_str() {
             "applied" => {
                 record_playlist_adds(

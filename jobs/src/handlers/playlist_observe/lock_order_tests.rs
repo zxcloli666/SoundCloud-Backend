@@ -231,7 +231,7 @@ fn add(track: usize) -> wt::MembershipOp {
         operations: vec![wt::MembershipOperation {
             operation_id: Uuid::new_v4(),
             idempotency_key: key,
-            fingerprint: key.simple().to_string(),
+            fingerprint: format!("{0}{0}", key.simple()),
             kind: "add".to_owned(),
             track_id: Some(track.to_string()),
             left_anchor_track_id: None,
