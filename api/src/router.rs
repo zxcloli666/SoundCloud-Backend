@@ -91,15 +91,9 @@ pub fn build(state: AppState) -> Router {
         .with_state(state)
         .layer(body_limit())
         .layer(CompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
-            }),
-        )
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &Request| tracing::debug_span!("http_request", method = %request.method()),
+        ))
         .layer(http_layer)
         .layer(premium_layer)
         .layer(cors)

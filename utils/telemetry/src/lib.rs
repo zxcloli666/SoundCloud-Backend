@@ -1,5 +1,6 @@
 mod init;
 mod request;
+mod scrub;
 mod traceparent;
 mod uncached;
 

@@ -70,11 +70,19 @@ pub enum AppError {
     #[error("redis pool error: {0}")]
     RedisPool(#[from] deadpool_redis::PoolError),
 
-    #[error("http client error: {0}")]
+    #[error("http client error: {}", without_uri(.0))]
     Http(#[from] wreq::Error),
 
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+fn without_uri(error: &wreq::Error) -> String {
+    let text = error.to_string();
+    match text.find(" for uri (") {
+        Some(at) => text[..at].to_owned(),
+        None => text,
+    }
 }
 
 impl From<sc_transport::ScError> for AppError {

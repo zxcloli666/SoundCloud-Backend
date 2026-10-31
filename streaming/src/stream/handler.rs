@@ -59,7 +59,7 @@ pub async fn resolve_track(
     match state.anon.resolve_url(&query.url).await {
         Ok(track) => Ok(Json(track)),
         Err(error) => {
-            warn!("[resolve] {} failed: {error}", query.url);
+            warn!("[resolve] failed: {error}");
             Err(AppError::NotFound)
         }
     }

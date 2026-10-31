@@ -2388,6 +2388,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "redact"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2931,6 +2938,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "redact",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

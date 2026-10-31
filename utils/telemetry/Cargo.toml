@@ -8,6 +8,7 @@ description = "Tracing subscriber setup, OTLP export and the W3C request root sp
 [dependencies]
 axum = "0.8"
 tracing = "0.1"
+redact = { version = "0.1.0", path = "../redact" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-opentelemetry = { version = "0.34", default-features = false }
 opentelemetry = "0.33"

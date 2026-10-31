@@ -7,6 +7,7 @@ pub fn init() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> 
     };
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_writer(|| redact::Scrubbing::new(std::io::stdout()))
         .json()
         .try_init()
 }

@@ -1,5 +1,9 @@
 use std::fmt;
 
+mod scrub;
+
+pub use scrub::{Scrubbing, secret_key, text};
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const MASK: &str = "[redacted]";

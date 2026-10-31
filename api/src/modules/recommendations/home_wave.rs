@@ -299,7 +299,7 @@ impl RecommendationsService {
         if !counts.is_empty()
             && let Err(error) = bandits::record_shows(&self.pg, &sc_user_id, &counts).await
         {
-            tracing::warn!(user = %sc_user_id, %error, "bandit show counts were not recorded");
+            tracing::warn!(%error, "bandit show counts were not recorded");
         }
 
         self.record_impressions(&sc_user_id, ImpressionSource::Home, &response)
