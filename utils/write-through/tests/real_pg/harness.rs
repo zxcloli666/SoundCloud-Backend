@@ -16,8 +16,10 @@ static CASES: AtomicUsize = AtomicUsize::new(0);
 pub struct Pair {
     pub api: PgPool,
     pub core: PgPool,
+    pub star: Option<PgPool>,
     pub api_db: String,
     pub core_db: String,
+    star_db: Option<String>,
     _slot: SemaphorePermit<'static>,
 }
 
@@ -46,15 +48,23 @@ struct Command {
 }
 
 #[derive(Debug, PartialEq)]
-struct Verdict {
-    status: Option<String>,
-    reasserted: i64,
-    purged: i64,
-    dead: i64,
+pub struct Verdict {
+    pub status: Option<String>,
+    pub reasserted: i64,
+    pub purged: i64,
+    pub dead: i64,
 }
 
 impl Pair {
     pub async fn new(fixture: &str) -> Pair {
+        Pair::build(fixture, false).await
+    }
+
+    pub async fn with_star(fixture: &str) -> Pair {
+        Pair::build(fixture, true).await
+    }
+
+    async fn build(fixture: &str, with_star: bool) -> Pair {
         let slot = SLOTS.acquire().await.unwrap();
         let template = db::template().await;
         let case = format!(
@@ -90,12 +100,33 @@ impl Pair {
         )
         .await;
         api.close().await.unwrap();
+        let star_db = with_star.then(|| format!("{case}_star"));
+        if let Some(star_db) = &star_db {
+            db::execute(
+                &mut admin,
+                &format!("CREATE DATABASE {star_db} TEMPLATE {core_db}"),
+            )
+            .await;
+            let mut star = db::connect(star_db).await;
+            db::execute(
+                &mut star,
+                "SELECT count(*) FROM public.scd_configure('star', 'api', 'split')",
+            )
+            .await;
+            star.close().await.unwrap();
+        }
         admin.close().await.unwrap();
+        let star = match &star_db {
+            Some(star_db) => Some(db::pool(star_db).await),
+            None => None,
+        };
         Pair {
             api: db::pool(&api_db).await,
             core: db::pool(&core_db).await,
+            star,
             api_db,
             core_db,
+            star_db,
             _slot: slot,
         }
     }
@@ -103,8 +134,18 @@ impl Pair {
     pub async fn finish(self) {
         self.api.close().await;
         self.core.close().await;
+        if let Some(star) = &self.star {
+            star.close().await;
+        }
         let mut admin = db::admin().await;
-        for name in [&self.api_db, &self.core_db] {
+        for name in [
+            Some(&self.api_db),
+            Some(&self.core_db),
+            self.star_db.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             db::execute(
                 &mut admin,
                 &format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
@@ -137,9 +178,13 @@ impl Pair {
             .unwrap_or_else(|e| panic!("{} on core: {e}", K::NAME));
         let core_local = hashes(&mut *local).await;
         local.rollback().await.unwrap();
-        let verdict = command.dispatch(&self.core).await;
+        let verdict = command.dispatch(&self.core, "main").await;
         command
-            .ack(&self.api, verdict.status.as_deref().unwrap_or("dead"))
+            .ack(
+                &self.api,
+                "main",
+                verdict.status.as_deref().unwrap_or("dead"),
+            )
             .await;
         let api_after = hashes(&self.api).await;
         let core_after = hashes(&self.core).await;
@@ -209,7 +254,7 @@ impl Pair {
             pending: 0,
         };
         let before = hashes(&self.core).await;
-        let verdict = command.dispatch(&self.core).await;
+        let verdict = command.dispatch(&self.core, "main").await;
         let done: i64 =
             sqlx::query_scalar("SELECT count(*) FROM public.cmd_done WHERE id = $1::uuid")
                 .bind(&command.id)
@@ -217,6 +262,24 @@ impl Pair {
                 .await
                 .unwrap();
         before == hashes(&self.core).await && verdict.status.as_deref() == Some("ok") && done == 1
+    }
+
+    pub async fn run_on_star<K: Kind>(&self, args: &K) -> (Value, Verdict) {
+        let star = self.star.as_ref().expect("a pair built with a star node");
+        let raw = Raw(args);
+        let output = wt::retry(|| async {
+            let mut tx = star.begin().await?;
+            let output = wt::call(&mut tx, &raw).await?;
+            tx.commit().await.map(|()| output)
+        })
+        .await
+        .unwrap_or_else(|e| panic!("{} on the star node: {e}", K::NAME));
+        let command = Command::undelivered(star).await;
+        let verdict = command.dispatch(&self.core, "star").await;
+        command
+            .ack(star, "star", verdict.status.as_deref().unwrap_or("dead"))
+            .await;
+        (output, verdict)
     }
 }
 
@@ -258,13 +321,14 @@ impl Command {
         }
     }
 
-    async fn dispatch(&self, core: &PgPool) -> Verdict {
+    async fn dispatch(&self, core: &PgPool, node: &str) -> Verdict {
         let mut tx = core.begin().await.unwrap();
         sqlx::query("SET LOCAL session_replication_role = replica")
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO public.cmd_outbox (node, id, kind, args, touched) VALUES ('main', $1::uuid, $2, $3, $4)")
+        sqlx::query("INSERT INTO public.cmd_outbox (node, id, kind, args, touched) VALUES ($1, $2::uuid, $3, $4, $5)")
+            .bind(node)
             .bind(&self.id)
             .bind(&self.kind)
             .bind(&self.args)
@@ -273,16 +337,18 @@ impl Command {
             .await
             .unwrap_or_else(|e| panic!("dispatch of {} on core: {e}", self.kind));
         tx.commit().await.unwrap();
-        let (status, reasserted, purged, dead) = sqlx::query_as::<_, (Option<String>, i64, i64, i64)>(
-            "SELECT (SELECT status FROM public.cmd_done WHERE node = 'main' AND id = $1::uuid),
-                    (SELECT count(*) FROM public.cmd_reassert WHERE node = 'main' AND id = $1::uuid),
-                    (SELECT count(*) FROM public.cmd_purge WHERE node = 'main' AND id = $1::uuid),
-                    (SELECT count(*) FROM public.cmd_dead WHERE node = 'main' AND id = $1::uuid)",
-        )
-        .bind(&self.id)
-        .fetch_one(core)
-        .await
-        .unwrap();
+        let (status, reasserted, purged, dead) =
+            sqlx::query_as::<_, (Option<String>, i64, i64, i64)>(
+                "SELECT (SELECT status FROM public.cmd_done WHERE node = $1 AND id = $2::uuid),
+                    (SELECT count(*) FROM public.cmd_reassert WHERE node = $1 AND id = $2::uuid),
+                    (SELECT count(*) FROM public.cmd_purge WHERE node = $1 AND id = $2::uuid),
+                    (SELECT count(*) FROM public.cmd_dead WHERE node = $1 AND id = $2::uuid)",
+            )
+            .bind(node)
+            .bind(&self.id)
+            .fetch_one(core)
+            .await
+            .unwrap();
         Verdict {
             status,
             reasserted,
@@ -291,13 +357,14 @@ impl Command {
         }
     }
 
-    async fn ack(&self, api: &PgPool, status: &str) {
+    async fn ack(&self, api: &PgPool, node: &str, status: &str) {
         let mut tx = api.begin().await.unwrap();
         sqlx::query("SET LOCAL session_replication_role = replica")
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO public.cmd_done (node, id, status) VALUES ('main', $1::uuid, $2)")
+        sqlx::query("INSERT INTO public.cmd_done (node, id, status) VALUES ($1, $2::uuid, $3)")
+            .bind(node)
             .bind(&self.id)
             .bind(status)
             .execute(&mut *tx)

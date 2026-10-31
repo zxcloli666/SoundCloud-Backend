@@ -1,5 +1,6 @@
 mod jobs;
 mod matching;
+mod mutations;
 mod observe;
 mod storage;
 mod sync_queue;
@@ -14,6 +15,10 @@ pub use jobs::{
     LyricsWakeState, ObserveClaim,
 };
 pub use matching::{AlbumSlot, MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWantedLink};
+pub use mutations::{
+    CommentPost, MembershipOp, MembershipOperation, MembershipOutcome, OwnedDelete, OwnedInsert,
+    PlaylistDelete, PlaylistEdit, TrackDelete, TrackEdit,
+};
 pub use observe::{
     Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers, ObservedPlaylist,
     ObservedTrack, ObservedUser,

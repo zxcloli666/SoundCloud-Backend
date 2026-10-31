@@ -138,6 +138,14 @@ impl MaintenanceHandler {
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_track_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_playlist_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
         transaction.commit().await.map_err(JobError::retryable)?;
         self.purge_served_unwanted()
             .await

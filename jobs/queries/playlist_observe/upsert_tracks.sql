@@ -69,6 +69,7 @@ SELECT public.scd_uuid('tracks', track->>'urn'),
        clock_timestamp(),
        $2
 FROM payload
+ORDER BY track->>'sc_track_id'
 ON CONFLICT (sc_track_id) DO UPDATE SET
    urn = EXCLUDED.urn,
    title = EXCLUDED.title,

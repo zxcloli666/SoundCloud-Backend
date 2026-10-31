@@ -1,109 +1,6 @@
 use serde_json::json;
 use sqlx::PgPool;
 
-pub async fn install(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(
-        "CREATE TABLE playlists (
-             urn text PRIMARY KEY,
-             sc_playlist_id text NOT NULL DEFAULT '',
-             owner_sc_user_id text,
-             track_count integer NOT NULL DEFAULT 0,
-             sharing text NOT NULL DEFAULT 'public',
-             deleted_at timestamptz,
-             desired_rev bigint NOT NULL DEFAULT 0,
-             synced_rev bigint NOT NULL DEFAULT 0,
-             tracks_synced_at timestamptz
-         );
-         CREATE TABLE playlist_tracks (
-             playlist_urn text NOT NULL,
-             position integer NOT NULL,
-             sc_track_id text NOT NULL,
-             CONSTRAINT playlist_tracks_pkey PRIMARY KEY (playlist_urn, position)
-         );
-         CREATE TABLE user_owned_playlists (
-             user_id text NOT NULL,
-             playlist_urn text NOT NULL,
-             progress boolean NOT NULL DEFAULT false,
-             synced_at timestamptz,
-             created_at timestamptz NOT NULL DEFAULT now(),
-             PRIMARY KEY (user_id, playlist_urn)
-         );
-         CREATE TABLE tracks (
-             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-             sc_track_id text NOT NULL UNIQUE,
-             urn text NOT NULL DEFAULT '',
-             title text NOT NULL DEFAULT '',
-             deleted_at timestamptz
-         );
-         CREATE TABLE sync_queue (
-             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-             action_type text NOT NULL,
-             target_urn text NOT NULL,
-             user_id text,
-             generation bigint NOT NULL DEFAULT 0,
-             retry_count integer NOT NULL DEFAULT 0,
-             payload jsonb,
-             last_error text,
-             next_run_at timestamptz,
-             failed_at timestamptz,
-             created_at timestamptz NOT NULL DEFAULT now(),
-             remote_attempted_generation bigint,
-             remote_completed_generation bigint,
-             remote_result jsonb
-         );
-         CREATE TABLE user_events (
-             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-             sc_user_id text NOT NULL,
-             sc_track_id text NOT NULL,
-             event_type text NOT NULL,
-             weight double precision NOT NULL,
-             created_at timestamp NOT NULL DEFAULT now()
-         );
-         CREATE TABLE job_status (
-             kind text NOT NULL, dedup_key text NOT NULL, state text NOT NULL,
-             available_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now(),
-             PRIMARY KEY (kind, dedup_key)
-         );
-         CREATE TABLE disliked_tracks (
-             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-             sc_user_id text NOT NULL,
-             sc_track_id text NOT NULL,
-             created_at timestamp NOT NULL DEFAULT now()
-         );",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!("../../../migrations/0057_background_jobs.sql"))
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0077_playlist_membership_shadow.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0084_playlist_reconcile_due_index.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0085_playlist_reconcile_backoff.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0086_playlist_legacy_drain.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0139_playlist_operations_without_baseline.sql"
-    ))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 pub async fn seed_playlist(
     pool: &PgPool,
     playlist_urn: &str,
@@ -111,8 +8,8 @@ pub async fn seed_playlist(
     track_ids: &[&str],
 ) -> anyhow::Result<uuid::Uuid> {
     sqlx::query(
-        "INSERT INTO playlists (urn, owner_sc_user_id, track_count)
-         VALUES ($1, $2, $3)",
+        "INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, track_count)
+         VALUES ($1, $1, 'Mix', 'mix', $2, $3)",
     )
     .bind(playlist_urn)
     .bind(owner)
@@ -132,12 +29,15 @@ pub async fn seed_playlist(
     .execute(pool)
     .await?;
     for sc_track_id in track_ids {
-        sqlx::query("INSERT INTO tracks (sc_track_id, urn, title) VALUES ($1, $2, $3)")
-            .bind(sc_track_id)
-            .bind(format!("soundcloud:tracks:{sc_track_id}"))
-            .bind(format!("track {sc_track_id}"))
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+             VALUES ($1, $2, $3, $3, 120000)",
+        )
+        .bind(sc_track_id)
+        .bind(format!("soundcloud:tracks:{sc_track_id}"))
+        .bind(format!("track {sc_track_id}"))
+        .execute(pool)
+        .await?;
     }
     baseline(pool, playlist_urn, track_ids).await
 }

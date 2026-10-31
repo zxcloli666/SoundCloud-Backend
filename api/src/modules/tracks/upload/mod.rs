@@ -59,13 +59,17 @@ async fn remember_upload(st: &AppState, sc_user_id: &str, track: &Value) {
         st.indexing
             .ingest_track_from_sc(track, TrackPriority::FreshDrop, observation)
             .await?;
-        sqlx::query_file!(
-            "queries/tracks/service/insert_owned.sql",
-            extract_sc_id(sc_user_id),
-            &sc_track_id,
-            &user_id_variants(sc_user_id)
-        )
-        .execute(&st.pg)
+        let owned = wt::OwnedInsert {
+            user_id: extract_sc_id(sc_user_id).to_owned(),
+            sc_track_id: sc_track_id.clone(),
+            variants: user_id_variants(sc_user_id),
+            at: wt::now(),
+        };
+        wt::retry(|| async {
+            let mut transaction = st.pg.begin().await?;
+            wt::call(&mut transaction, &owned).await?;
+            transaction.commit().await
+        })
         .await?;
         AppResult::Ok(())
     };

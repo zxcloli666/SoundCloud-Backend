@@ -392,6 +392,14 @@ impl PlaylistObserveRepository {
             return Ok(PersistResult::Superseded);
         }
 
+        sqlx::query_file!(
+            "queries/playlist_observe/update_playlist_metadata.sql",
+            &capture.playlist_urn,
+            snapshot.track_count
+        )
+        .execute(&mut *transaction)
+        .await?;
+
         let catalog_complete =
             hydrate_catalog(&mut transaction, snapshot, metadata_observation).await?;
 
@@ -465,13 +473,6 @@ impl PlaylistObserveRepository {
             .execute(&mut *transaction)
             .await?;
         }
-        sqlx::query_file!(
-            "queries/playlist_observe/update_playlist_metadata.sql",
-            &capture.playlist_urn,
-            snapshot.track_count
-        )
-        .execute(&mut *transaction)
-        .await?;
         let projection_length = match outcome.projection.as_ref() {
             Some(target) if projection_changed => target.len(),
             _ => local_track_ids.len(),
