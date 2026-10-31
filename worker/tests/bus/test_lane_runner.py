@@ -540,6 +540,25 @@ async def test_deadline_is_fetch_time_plus_lane_deadline(harness: Harness) -> No
     assert seen == [harness.lane.deadline_s]
 
 
+async def test_a_deadline_expiry_stretches_the_next_deadline_of_the_lane(
+    harness: Harness,
+) -> None:
+    seen: list[float] = []
+
+    async def slow(request: Mapping[str, object], deadline: Deadline) -> Outcome:
+        seen.append(deadline.remaining())
+        harness.clock.advance(deadline.remaining())
+        raise TransientFailure(Reason.DEADLINE_EXCEEDED, "scripted")
+
+    harness.processor.behaviour = slow
+    for number in (1, 2):
+        harness.enqueue(AUDIO_TASK, msg_id=f"task:{number}")
+        [msg] = await harness.fetch()
+        await harness.handle(msg)
+    assert seen[0] == harness.lane.deadline_s
+    assert seen[1] > seen[0]
+
+
 async def test_runner_fetches_up_to_free_capacity_and_drains_lingering(
     harness: Harness,
 ) -> None:

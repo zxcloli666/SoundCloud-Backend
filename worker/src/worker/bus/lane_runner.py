@@ -356,8 +356,14 @@ class QueueHandler:
         stop.cancel()
         await asyncio.gather(stop, return_exceptions=True)
         if work in done:
-            outcome = work.result()
-            self._learn_pace(outcome, self._clock.now() - started)
+            seconds = self._clock.now() - started
+            try:
+                outcome = work.result()
+            except TransientFailure as failure:
+                if failure.reason is Reason.DEADLINE_EXCEEDED:
+                    self._leases.pace.expired(seconds)
+                raise
+            self._learn_pace(outcome, seconds)
             return outcome
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
