@@ -371,16 +371,16 @@ impl Dependencies {
                 i64::try_from(call.rows).unwrap_or(i64::MAX),
             ));
         }
-        let mut builder = self
+        let builder = self
             .tracer
             .span_builder(call.name.clone())
             .with_kind(SpanKind::Client)
             .with_start_time(started)
             .with_attributes(attributes);
-        if call.failed {
-            builder = builder.with_status(Status::error("dependency call failed"));
-        }
         let mut span = self.tracer.build_with_context(builder, parent);
+        if call.failed {
+            span.set_status(Status::error("dependency call failed"));
+        }
         span.end_with_timestamp(now);
     }
 }
