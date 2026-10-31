@@ -328,14 +328,16 @@ groups:
           description: "Counted over every node with a fresh status, public ones included. The per-node lane state series show which node dropped it; a worker marks a required lane degraded itself after lanes.required_grace_s."
 
       - alert: WorkerQueueStalling
-        expr: delta(jobs_worker_consumer_pending[30m]) > 0 and jobs_worker_consumer_waiting == 0
+        expr: |
+          delta(jobs_worker_consumer_pending[30m]) > 0 and jobs_worker_consumer_waiting == 0
+            unless on (durable) sum by (durable) (label_replace(increase(jobs_worker_lane_done_total[30m]), "durable", "$1-workers", "lane", "(.+)")) > 0
         for: 30m
         labels:
           severity: warning
           service: worker
         annotations:
           summary: "Tasks pile up on {{ $labels.durable }} and nobody is pulling"
-          description: "num_pending grows while num_waiting is zero: no worker has an open pull request on the durable. Sampled from consumer_info every 30s."
+          description: "num_pending grows, num_waiting is zero and the lane finished nothing in 30 min: no worker pulls from the durable. A busy worker with every slot taken finishes work, so it does not fire this. Sampled from consumer_info every 30s."
 
       - alert: WorkerSlotFlapping
         expr: jobs_worker_slot_restarts_last_hour_max > 3
