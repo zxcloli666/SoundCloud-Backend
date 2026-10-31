@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import signal
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
@@ -29,19 +29,13 @@ PREEMPT_SIGNAL = signal.SIGUSR1
 EXPIRY_MARGIN_S = 1.0
 
 
-def no_beat() -> None:
-    return None
-
-
 class CallGuard:
     def __init__(self) -> None:
         self.armed = False
         self.requested = False
         self.expires_at = math.inf
-        self.beat: Callable[[], None] = no_beat
 
     def check(self) -> None:
-        self.beat()
         if self.armed and self.requested:
             raise Preempted("a priority call is waiting")
         if time.monotonic() >= self.expires_at:
@@ -120,11 +114,6 @@ class Reply:
 
 @dataclass(frozen=True)
 class Started:
-    id: int
-
-
-@dataclass(frozen=True)
-class Progress:
     id: int
 
 

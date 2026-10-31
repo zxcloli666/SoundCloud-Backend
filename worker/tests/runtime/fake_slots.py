@@ -57,7 +57,7 @@ class Fake:
         if method == "windows":
             for _ in range(int(str(args.get("windows", 3)))):
                 CALL_GUARD.check()
-                time.sleep(float(str(args.get("window_s", 1.0))))
+                burn(float(str(args.get("window_s", 1.0))))
         if method == "threads":
             import torch
 
@@ -81,6 +81,12 @@ class Fake:
             os._exit(9)
         pause(options.get("unload_delay_s"))
         self.loaded = False
+
+
+def burn(seconds: float) -> None:
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        pass
 
 
 def pause(seconds: object) -> None:

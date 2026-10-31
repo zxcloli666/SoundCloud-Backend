@@ -8,7 +8,6 @@ import os
 import signal
 import sys
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from multiprocessing.connection import Connection
 
@@ -27,17 +26,14 @@ from worker.runtime.protocol import (
     ModelSlot,
     Pong,
     Preempted,
-    Progress,
     Reply,
     SlotSpec,
     SlotState,
     Started,
-    no_beat,
 )
 
 EXIT_LOAD_FAILED = 3
 EXIT_ORPHANED = 4
-PROGRESS_EVERY_S = 1.0
 PR_SET_PDEATHSIG = 1
 
 
@@ -104,19 +100,6 @@ def set_oom_score_adj(value: int, log: JsonLog) -> None:
 
 def request_preemption(signum: int, frame: object) -> None:
     CALL_GUARD.requested = True
-
-
-def progress_beat(conn: Connection, call_id: int) -> Callable[[], None]:
-    last = 0.0
-
-    def beat() -> None:
-        nonlocal last
-        now = time.monotonic()
-        if now - last >= PROGRESS_EVERY_S:
-            last = now
-            conn.send(Progress(call_id))
-
-    return beat
 
 
 def set_nice(value: int, log: JsonLog) -> None:
@@ -290,7 +273,6 @@ class Engine:
         CALL_GUARD.requested = False
         CALL_GUARD.armed = call.preemptible
         CALL_GUARD.expires_at = call.deadline_at - EXPIRY_MARGIN_S
-        CALL_GUARD.beat = progress_beat(conn, call.id)
         if call.preemptible:
             conn.send(Started(call.id))
         try:
@@ -321,7 +303,6 @@ class Engine:
         finally:
             CALL_GUARD.armed = False
             CALL_GUARD.expires_at = math.inf
-            CALL_GUARD.beat = no_beat
             slot.calls += 1
             if oom or self._options.release_after_call:
                 self._release()
