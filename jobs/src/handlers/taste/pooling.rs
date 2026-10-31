@@ -83,6 +83,26 @@ impl Pooling {
         positives.total >= self.min_positives
     }
 
+    pub(crate) fn window(&self) -> usize {
+        self.window
+    }
+
+    pub(crate) fn holds_window_after<'a>(
+        &self,
+        events: &[TasteEvent],
+        item: impl Fn(u64) -> Option<&'a [f32]>,
+        after_unix_s: i64,
+        dimensions: usize,
+    ) -> bool {
+        events
+            .iter()
+            .rev()
+            .take_while(|event| event.unix_s.is_some_and(|unix_s| unix_s > after_unix_s))
+            .filter(|event| item(event.track).is_some_and(|vector| vector.len() == dimensions))
+            .nth(self.window.saturating_sub(1))
+            .is_some()
+    }
+
     pub(crate) fn user_vector<'a>(
         &self,
         events: &[TasteEvent],
@@ -272,6 +292,25 @@ mod tests {
             unix_s: Some(DAY),
             weight,
         }
+    }
+
+    #[test]
+    fn the_window_is_whole_only_when_enough_known_events_are_newer_than_the_cut() {
+        let items = items();
+        let item = |id: u64| items.get(&id).map(Vec::as_slice);
+        let events = vec![
+            event(1, EventKind::LikeImport, None),
+            event(1, EventKind::Like, Some(10)),
+            event(9, EventKind::Like, Some(20)),
+            event(2, EventKind::Like, Some(30)),
+            event(3, EventKind::Skip, Some(40)),
+        ];
+
+        assert!(pooling(2).holds_window_after(&events, item, 20, 2));
+        assert!(!pooling(3).holds_window_after(&events, item, 20, 2));
+        assert!(pooling(3).holds_window_after(&events, item, 9, 2));
+        assert!(!pooling(4).holds_window_after(&events, item, 0, 2));
+        assert!(!pooling(1).holds_window_after(&events, item, 40, 2));
     }
 
     #[test]
