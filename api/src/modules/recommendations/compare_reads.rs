@@ -104,15 +104,14 @@ fn agreement<T: Eq + std::hash::Hash + Clone>(old: &[T], new: &[T]) -> Agreement
     };
     let old_common: Vec<T> = old
         .iter()
+        .filter(|x| new_set.contains(*x))
         .cloned()
-        .filter(|x| new_set.contains(x))
         .collect();
     let new_rank: HashMap<T, usize> = new
         .iter()
-        .cloned()
-        .filter(|x| old_set.contains(x))
+        .filter(|x| old_set.contains(*x))
         .enumerate()
-        .map(|(rank, x)| (x, rank))
+        .map(|(rank, x)| (x.clone(), rank))
         .collect();
     let n = old_common.len();
     let rank = if n < 2 {
