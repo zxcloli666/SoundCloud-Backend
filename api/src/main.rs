@@ -173,6 +173,7 @@ async fn main() {
     let auth_health =
         crate::modules::auth::AuthHealthService::with_database(redis_pool.clone(), pg.clone());
     let core = CoreRpc::new(nats.clone());
+    let state_core = core.clone();
     let auth = AuthService::new(
         pg.clone(),
         sc.clone(),
@@ -281,6 +282,7 @@ async fn main() {
         diag,
         pg,
         background_jobs,
+        core: state_core,
         http_metrics: std::sync::Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         cache,
         auth,

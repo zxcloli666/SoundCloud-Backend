@@ -5,6 +5,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_oauth_apps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_lyrics_cache;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_catalog_requests;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_maintenance_runs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_budget;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_cache;
@@ -131,6 +132,8 @@ BEGIN
     RETURN NULL;
 END
 $f$;
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_catalog_requests FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_catalog_requests', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_maintenance_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_maintenance_runs', 'cmd', 'migration', 'repl');
 
@@ -7151,6 +7154,7 @@ FROM (VALUES
     ('conflict', 'sync_queue', 'scd_conflict_sync_queue'),
     ('core_col', 'artists', 'scd_core_col_artists'),
     ('core_col', 'lyrics_cache', 'scd_core_col_lyrics_cache'),
+    ('guard', 'admin_catalog_requests', 'scd_guard_admin_catalog_requests'),
     ('guard', 'admin_maintenance_runs', 'scd_guard_admin_maintenance_runs'),
     ('guard', 'ai_resolver_budget', 'scd_guard_ai_resolver_budget'),
     ('guard', 'ai_resolver_cache', 'scd_guard_ai_resolver_cache'),
@@ -7270,6 +7274,7 @@ BEGIN
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname::text IN ('zz_core_col', 'zz_erase', 'zz_fk', 'zz_guard', 'zz_guard_intent', 'zz_guard_result', 'zz_max', 'zz_merge', 'zz_orphan', 'zz_owner', 'zz_purge_guard', 'zz_skip', 'zz_tomb', 'zz_tomb_check', 'zz_tomb_guard', 'zz_ver', 'zzz_suppress')
         EXCEPT VALUES
+            ('admin_catalog_requests', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_guard'),
             ('admin_maintenance_runs', 'zz_owner'),
             ('admin_maintenance_runs', 'zzz_suppress'),

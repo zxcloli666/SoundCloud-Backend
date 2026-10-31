@@ -9,6 +9,7 @@ async-nats = "0.49"
 axum = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
+admin-catalog = { version = "0.1.0", path = "../utils/admin-catalog" }
 backend-contracts = { version = "1.0.0", path = "../backend-contracts" }
 catalog-normalize = { version = "0.1.0", path = "../utils/catalog-normalize" }
 call-relay = { path = "../utils/call/relay" }

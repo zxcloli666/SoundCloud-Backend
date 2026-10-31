@@ -1,3 +1,15 @@
+CREATE OR REPLACE FUNCTION public.scd_row_json_admin_catalog_requests(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.admin_catalog_requests t WHERE t.request_id = (k ->> 'request_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_admin_maintenance_runs(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1264,6 +1276,8 @@ LANGUAGE plpgsql STABLE
 AS $f$
 BEGIN
     CASE tbl
+        WHEN 'admin_catalog_requests' THEN
+            RETURN public.scd_row_json_admin_catalog_requests(k);
         WHEN 'admin_maintenance_runs' THEN
             RETURN public.scd_row_json_admin_maintenance_runs(k);
         WHEN 'ai_resolver_budget' THEN
