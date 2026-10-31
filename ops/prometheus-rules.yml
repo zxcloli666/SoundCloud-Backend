@@ -416,3 +416,15 @@ groups:
         annotations:
           summary: "jobs recreated the worker consumer of lane {{ $labels.lane }}"
           description: "NATS refused to update a field in place, so the durable was deleted and created again. Tasks in the work queue survive; somebody changed the consumer by hand or an old owner is still around."
+
+  - name: scd-pg
+    rules:
+      - alert: PgIndexBloated
+        expr: (pg_index_size_bytes > 50 * 1024 * 1024) / on (host, table) group_left pg_table_heap_bytes > 20
+        for: 6h
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "Index {{ $labels.index }} on {{ $labels.host }} is {{ $value | humanize }}x its table heap and over 50 MB"
+          description: "Table {{ $labels.table }}. The index is probably bloated; REINDEX INDEX CONCURRENTLY brings it back."
