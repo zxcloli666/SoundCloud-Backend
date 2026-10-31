@@ -28,7 +28,7 @@ impl ReadStamps {
         let stamped = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", urn)
             .execute(pg)
             .await;
-        if stamped.is_ok_and(|done| done.rows_affected() == 1) {
+        if stamped.is_ok() {
             self.stamped.insert(key, ());
         }
     }
@@ -104,24 +104,35 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn a_noop_update_never_enters_the_cache_so_a_due_stamp_is_not_delayed(
+    async fn a_touch_the_sql_guard_skipped_is_remembered_and_the_next_one_stays_off_the_database(
         pool: PgPool,
     ) -> anyhow::Result<()> {
         seed(&pool).await?;
         assert_eq!(plain_sql(&pool).await?, 1);
         read_long_ago(&pool, "30 minutes").await?;
+        let fresh = last_read(&pool).await?;
         let stamps = ReadStamps::new();
 
         stamps.touch(&pool, URN).await;
+        assert_eq!(last_read(&pool).await?, fresh, "the sql guard wrote 0 rows");
         assert!(
-            stamps.stamped.get(&URN.to_owned()).is_none(),
-            "the guard skipped the row, nothing may be remembered"
+            stamps.stamped.get(&URN.to_owned()).is_some(),
+            "the guard skipped the row and the answer was ok, so the key is remembered"
         );
 
         read_long_ago(&pool, "61 minutes").await?;
         let due = last_read(&pool).await?.expect("old stamp");
         stamps.touch(&pool, URN).await;
-        assert!(last_read(&pool).await?.expect("restamped") > due);
+        assert_eq!(
+            last_read(&pool).await?,
+            Some(due),
+            "a remembered key never reaches the database, even with a due stamp"
+        );
+        assert_eq!(
+            plain_sql(&pool).await?,
+            1,
+            "the database would have restamped it"
+        );
         Ok(())
     }
 
