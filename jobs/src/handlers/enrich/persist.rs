@@ -442,7 +442,7 @@ async fn maybe_promote(
         }
     }
     write_promotion(
-        &mut **tx,
+        tx,
         id,
         cur_mb.as_deref(),
         cur_genius.as_deref(),
