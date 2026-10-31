@@ -88,6 +88,7 @@ struct Inner {
     http: Client,
     api_base: String,
     home_base: String,
+    auth_base: String,
     proxy_url: String,
     proxy_fallback: bool,
     relay: Option<Arc<dyn RelayTransport>>,
@@ -153,6 +154,7 @@ impl ScClient {
                 http,
                 api_base: cfg.api_base.clone().unwrap_or_else(|| API_BASE.to_owned()),
                 home_base: cfg.home_base.clone().unwrap_or_else(|| SC_HOME.to_owned()),
+                auth_base: AUTH_BASE.to_owned(),
                 proxy_url: cfg.proxy_url.clone(),
                 proxy_fallback: cfg.proxy_fallback,
                 relay: None,
@@ -167,6 +169,7 @@ impl ScClient {
             http: self.inner.http.clone(),
             api_base: self.inner.api_base.clone(),
             home_base: self.inner.home_base.clone(),
+            auth_base: self.inner.auth_base.clone(),
             proxy_url: self.inner.proxy_url.clone(),
             proxy_fallback: self.inner.proxy_fallback,
             relay: Some(relay),
@@ -182,7 +185,23 @@ impl ScClient {
     }
 
     pub fn auth_base_url(&self) -> &str {
-        AUTH_BASE
+        &self.inner.auth_base
+    }
+
+    pub fn with_auth_base(self, auth_base: &str) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                http: self.inner.http.clone(),
+                api_base: self.inner.api_base.clone(),
+                home_base: self.inner.home_base.clone(),
+                auth_base: auth_base.to_owned(),
+                proxy_url: self.inner.proxy_url.clone(),
+                proxy_fallback: self.inner.proxy_fallback,
+                relay: self.inner.relay.clone(),
+                anon_client_id: RwLock::new(AnonClientId::default()),
+                anon_refresh: Mutex::new(()),
+            }),
+        }
     }
 
     #[cfg(feature = "upload")]
@@ -235,7 +254,7 @@ impl ScClient {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
 
-        let url = format!("{AUTH_BASE}/oauth/token");
+        let url = format!("{}/oauth/token", self.inner.auth_base);
         let bytes = self
             .send_direct_limited(
                 Method::POST,
@@ -271,7 +290,7 @@ impl ScClient {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
 
-        let url = format!("{AUTH_BASE}/oauth/token");
+        let url = format!("{}/oauth/token", self.inner.auth_base);
         let bytes = self
             .send_direct_limited(
                 Method::POST,
