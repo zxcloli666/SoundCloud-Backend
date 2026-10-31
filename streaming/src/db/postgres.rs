@@ -149,7 +149,7 @@ impl PgPool {
                 "SELECT EXISTS (
                      SELECT 1
                      FROM _sqlx_migrations
-                     WHERE version = 315
+                     WHERE version = 323
                        AND success = true
                  )
                  AND to_regclass('soundcloud_connections') IS NOT NULL",
@@ -159,7 +159,7 @@ impl PgPool {
             .get(0);
         if !schema_ready {
             return Err(
-                "PostgreSQL schema is incompatible; apply core migrations through 0315".into(),
+                "PostgreSQL schema is incompatible; apply core migrations through 0323".into(),
             );
         }
         info!(pool_max = config.database_pool_max, "PostgreSQL connected");

@@ -251,3 +251,124 @@ async fn job_status_is_kept_on_a_legacy_node_for_local_and_replicated_writes(
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn retention_drops_reasserts_and_purges_with_their_ack_and_old_upload_receipts(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "INSERT INTO cmd_done (node, id, status, at) VALUES
+             ('main', '00000000-0000-4000-8000-0000000000a1', 'ok', now() - interval '8 days'),
+             ('main', '00000000-0000-4000-8000-0000000000a2', 'dead', now() - interval '9 days'),
+             ('star', '00000000-0000-4000-8000-0000000000a3', 'ok', now() - interval '6 days 23 hours');
+         INSERT INTO cmd_reassert (node, id, tbl, pk, \"row\") VALUES
+             ('main', '00000000-0000-4000-8000-0000000000a1', 'tracks', '{\"id\": 1}', '{}'),
+             ('main', '00000000-0000-4000-8000-0000000000a2', 'tracks', '{\"id\": 2}', '{}'),
+             ('star', '00000000-0000-4000-8000-0000000000a3', 'tracks', '{\"id\": 3}', '{}');
+         INSERT INTO cmd_purge (node, id, tbl, pk) VALUES
+             ('main', '00000000-0000-4000-8000-0000000000a1', 'playlists', '{\"urn\": \"p1\"}'),
+             ('main', '00000000-0000-4000-8000-0000000000a1', 'playlist_membership_state', '{\"playlist_urn\": \"p1\"}'),
+             ('star', '00000000-0000-4000-8000-0000000000a3', 'playlists', '{\"urn\": \"p3\"}');
+         INSERT INTO tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
+         SELECT gen_random_uuid(), 'urn:t:r' || n, 'r' || n, 'T', 't', 1000 FROM generate_series(1, 3) n;
+         INSERT INTO storage_event_repairs (sc_track_id, uploaded_at) VALUES
+             ('r1', (now() AT TIME ZONE 'UTC') - interval '8 days'),
+             ('r2', (now() AT TIME ZONE 'UTC') - interval '30 days'),
+             ('r3', (now() AT TIME ZONE 'UTC') - interval '2 days')",
+    )
+    .execute(&pool)
+    .await?;
+
+    ReplHandler::new(pool.clone()).retain().await?;
+
+    let left: (i64, i64, i64, Vec<String>) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM cmd_done), (SELECT count(*) FROM cmd_reassert),
+                (SELECT count(*) FROM cmd_purge),
+                (SELECT array_agg(sc_track_id ORDER BY sc_track_id) FROM storage_event_repairs)",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(left, (1, 1, 1, vec!["r3".to_owned()]));
+    let kept: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM cmd_done d JOIN cmd_reassert r USING (node, id) JOIN cmd_purge p USING (node, id)
+         WHERE d.id = '00000000-0000-4000-8000-0000000000a3'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(kept, 1, "the young ack keeps its reassert and purge");
+    Ok(())
+}
+
+const LOGIN_LETTERS: &str = "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
+         VALUES ('40000000-0000-4000-8000-000000000001', 'app', 'client', 'secret', 'https://app.test/');
+     INSERT INTO soundcloud_connections (id, soundcloud_user_id, username, oauth_app_id, access_token, refresh_token, expires_at, scope)
+         VALUES ('20000000-0000-4000-8000-000000000001', '11', 'one', '40000000-0000-4000-8000-000000000001', 'core-a', 'core-r', now() + interval '1 hour', '');
+     UPDATE soundcloud_connections SET login_v = 50 WHERE id = '20000000-0000-4000-8000-000000000001';
+     INSERT INTO cmd_dead (node, id, kind, args, sqlstate, message)
+     SELECT 'main', l.id, 'connection.login',
+            jsonb_build_object('connection_id', l.conn, 'soundcloud_user_id', '11', 'username', 'one',
+                'oauth_app_id', '40000000-0000-4000-8000-000000000001', 'access_token', 'letter-a',
+                'refresh_token', 'letter-r', 'expires_at', now() + interval '1 hour', 'scope', '',
+                'login_v', l.v, 'at', now()),
+            '23503', 'seed'
+     FROM (VALUES
+         ('00000000-0000-4000-8000-0000000000b1'::uuid, '20000000-0000-4000-8000-000000000001', '40'),
+         ('00000000-0000-4000-8000-0000000000b2'::uuid, '20000000-0000-4000-8000-000000000001', '60'),
+         ('00000000-0000-4000-8000-0000000000b3'::uuid, '20000000-0000-4000-8000-000000000009', '70'),
+         ('00000000-0000-4000-8000-0000000000b4'::uuid, 'not-a-uuid', '80')
+     ) AS l (id, conn, v);
+     INSERT INTO cmd_dead (node, id, kind, args, sqlstate, message)
+     VALUES ('main', '00000000-0000-4000-8000-0000000000b5', 'track.edit', '{\"access_token\": \"kept\"}', '23514', 'seed')";
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn dead_logins_lose_their_tokens_once_no_replay_can_install_them(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(LOGIN_LETTERS).execute(&pool).await?;
+
+    ReplHandler::new(pool.clone()).retain().await?;
+
+    let letters: Vec<(Uuid, bool)> = sqlx::query_as(
+        "SELECT id, args ?| ARRAY['access_token', 'refresh_token'] FROM cmd_dead ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let with_tokens: Vec<bool> = letters.iter().map(|letter| letter.1).collect();
+    assert_eq!(with_tokens, vec![false, true, false, false, true]);
+    let marked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM cmd_dead WHERE kind = 'connection.login' AND args ->> 'redacted' = 'true'
+             AND args ->> 'login_v' IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(marked, 3);
+
+    let handler = ReplHandler::new(pool.clone());
+    let redacted = handler
+        .replay(ReplReplayPayload {
+            node: Some("main".to_owned()),
+            id: Some(letters[0].0),
+        })
+        .await;
+    assert!(redacted.is_err(), "a redacted login cannot be replayed");
+    let pair: (String, String, i64) = sqlx::query_as(
+        "SELECT access_token, refresh_token, login_v FROM soundcloud_connections WHERE id = '20000000-0000-4000-8000-000000000001'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(pair, ("core-a".to_owned(), "core-r".to_owned(), 50));
+
+    handler
+        .replay(ReplReplayPayload {
+            node: Some("main".to_owned()),
+            id: Some(letters[1].0),
+        })
+        .await?;
+    let pair: (String, String, i64) = sqlx::query_as(
+        "SELECT access_token, refresh_token, login_v FROM soundcloud_connections WHERE id = '20000000-0000-4000-8000-000000000001'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(pair, ("letter-a".to_owned(), "letter-r".to_owned(), 60));
+    Ok(())
+}
