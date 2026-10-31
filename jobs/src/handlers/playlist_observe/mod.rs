@@ -273,7 +273,7 @@ impl PlaylistObserveHandler {
         if let Some(app_id) = token.oauth_app_id
             && let Some(retry_after_seconds) = self
                 .connections
-                .app_retry_after_seconds(app_id)
+                .read_retry_after_seconds(app_id)
                 .await
                 .map_err(connection_job_error)?
         {
@@ -359,7 +359,7 @@ impl PlaylistObserveHandler {
         for token in tokens.into_iter().take(PUBLIC_TOKEN_ATTEMPTS) {
             if let Some(retry_after_seconds) = self
                 .connections
-                .app_retry_after_seconds(token.oauth_app_id)
+                .read_retry_after_seconds(token.oauth_app_id)
                 .await
                 .map_err(connection_job_error)?
             {
@@ -468,12 +468,8 @@ impl PlaylistObserveHandler {
         let failure = read_failure(&error);
         if let Some(oauth_app_id) = oauth_app_id
             && let Some(minimum_seconds) = app_wide_cooldown(&failure)
-            && let Err(error) = self
-                .connections
-                .penalize_app(oauth_app_id, minimum_seconds)
-                .await
         {
-            tracing::warn!(%error, "playlist observation could not publish the oauth app cooldown");
+            self.connections.pause_reads(oauth_app_id, minimum_seconds);
         }
         self.finish_failure(capture, failure).await
     }
