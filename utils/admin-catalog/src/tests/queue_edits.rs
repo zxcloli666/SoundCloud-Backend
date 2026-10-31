@@ -112,7 +112,9 @@ async fn abandoning_a_legacy_intent_wakes_the_playlist_once(pool: PgPool) {
     .unwrap();
     let archive = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO playlist_legacy_membership_intents (archive_id, playlist_urn, source) VALUES ($1, $2, 'sync_queue')",
+        "INSERT INTO playlist_legacy_membership_intents
+         (archive_id, playlist_urn, source, legacy_desired_revision, legacy_synced_revision)
+         VALUES ($1, $2, 'revision', 2, 1)",
     )
     .bind(archive)
     .bind(urn)

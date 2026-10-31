@@ -33,7 +33,7 @@ pub async fn artist(pool: &PgPool, name: &str) -> Uuid {
 
 pub async fn track(pool: &PgPool, uploader: Option<&str>) -> Uuid {
     let id = Uuid::new_v4();
-    let sc_track_id = id.as_u128().to_string();
+    let sc_track_id = (id.as_u128() % 1_000_000_000_000).to_string();
     sqlx::query(
         "INSERT INTO tracks (id, sc_track_id, urn, title, title_normalized, duration_ms, uploader_sc_user_id)
          VALUES ($1, $2, 'soundcloud:tracks:' || $2, 'Night Drive', 'night drive', 213000, $3)",

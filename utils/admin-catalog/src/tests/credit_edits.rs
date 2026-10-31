@@ -58,6 +58,12 @@ async fn rejecting_a_weak_primary_credit_clears_the_primary_artist(pool: PgPool)
     assert_eq!(reply.body["primaryCleared"], true);
     assert_eq!(primary(&pool, track).await, None);
     assert!(credits(&pool, track).await.is_empty());
+    let state: String = sqlx::query_scalar("SELECT enrich_state FROM tracks WHERE id = $1")
+        .bind(track)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "pending");
 
     let again = send(&pool, AdminCommand::CreditReject(reference)).await;
     assert_eq!(again.status, 404);

@@ -1,3 +1,8 @@
+WITH locked AS MATERIALIZED (SELECT track.id
+                             FROM tracks track
+                             WHERE track.enrich_state IN ('failed', 'dead')
+                             ORDER BY track.sc_track_id
+                                 FOR NO KEY UPDATE OF track)
 UPDATE tracks
 SET enrich_state       = 'pending',
     enrich_attempts    = 0,
@@ -7,4 +12,5 @@ SET enrich_state       = 'pending',
     enrich_next_run_at = now(),
     enrich_locked_at   = NULL,
     enrich_error       = NULL
-WHERE enrich_state IN ('failed', 'dead')
+FROM locked
+WHERE tracks.id = locked.id

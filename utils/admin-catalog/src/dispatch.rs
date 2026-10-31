@@ -5,14 +5,26 @@ use crate::error::{Done, Fail, Refusal};
 use crate::ledger::{self, Claim};
 use crate::{artists, credits, enrich, playlists, tracks, wanted};
 
+const RETRIES: u32 = 3;
+
 pub async fn execute(
     pool: &PgPool,
     request: &AdminCatalogRequest,
 ) -> Result<AdminCatalogReply, sqlx::Error> {
-    match wt::retry(|| attempt(pool, request)).await {
+    match retrying(pool, request).await {
         Ok(reply) => Ok(reply),
         Err(Fail::Refused(refusal)) => Ok(refusal.into_reply()),
         Err(Fail::Database(error)) => Err(error),
+    }
+}
+
+async fn retrying(pool: &PgPool, request: &AdminCatalogRequest) -> Result<AdminCatalogReply, Fail> {
+    let mut retries = 0;
+    loop {
+        match attempt(pool, request).await {
+            Err(fail) if fail.retryable() && retries < RETRIES => retries += 1,
+            result => return result,
+        }
     }
 }
 

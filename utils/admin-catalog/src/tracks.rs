@@ -44,6 +44,7 @@ pub async fn set_primary_artist(
     body: &SetPrimaryArtist,
 ) -> Done {
     require_artist(connection, body.artist_id).await?;
+    require_track(connection, track_id).await?;
     sqlx::query_file!(
         "queries/tracks/block_delete_pair.sql",
         track_id,
@@ -51,16 +52,6 @@ pub async fn set_primary_artist(
     )
     .execute(&mut *connection)
     .await?;
-    let updated = sqlx::query_file!(
-        "queries/tracks/set_primary_artist.sql",
-        body.artist_id,
-        track_id
-    )
-    .execute(&mut *connection)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err(Refusal::not_found("track not found").into());
-    }
     sqlx::query_file!("queries/tracks/credit_delete_primary.sql", track_id)
         .execute(&mut *connection)
         .await?;
@@ -68,6 +59,13 @@ pub async fn set_primary_artist(
         "queries/tracks/credit_insert_primary.sql",
         track_id,
         body.artist_id
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query_file!(
+        "queries/tracks/set_primary_artist.sql",
+        body.artist_id,
+        track_id
     )
     .execute(&mut *connection)
     .await?;

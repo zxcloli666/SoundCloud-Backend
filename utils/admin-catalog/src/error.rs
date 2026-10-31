@@ -63,9 +63,18 @@ impl From<sqlx::Error> for Fail {
     }
 }
 
-impl Raced for Fail {
-    fn raced(&self) -> bool {
-        matches!(self, Self::Database(error) if error.raced())
+impl Fail {
+    pub fn retryable(&self) -> bool {
+        let Self::Database(error) = self else {
+            return false;
+        };
+        if error.raced() {
+            return true;
+        }
+        error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == "40P01" || code == "40001")
     }
 }
 
