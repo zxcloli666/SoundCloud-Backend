@@ -46,9 +46,7 @@ pub fn root_span(req: &Request) -> Span {
         request_id = Empty,
     );
     dependency::attach(&span);
-    if let Some(version) = label(req.headers(), "x-scd-version", 16, version_char) {
-        span.record("scd.app_version", version);
-    }
+    span.record("scd.app_version", app_version(req.headers()));
     span.record("scd.hop", hop(req.headers()));
     if let Some(incoming) = incoming(req.headers()) {
         let incoming = if incoming.debug() && !debug_cap::admit() {
@@ -91,11 +89,30 @@ fn hop(headers: &HeaderMap) -> &str {
     }
 }
 
-fn version_char(character: char) -> bool {
-    character.is_ascii_digit()
-        || character == '.'
-        || character == '-'
-        || character.is_ascii_lowercase()
+fn app_version(headers: &HeaderMap) -> &str {
+    let Some(value) = headers.get("x-scd-version") else {
+        return "unknown";
+    };
+    value
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|version| release(version))
+        .unwrap_or("other")
+}
+
+fn release(version: &str) -> bool {
+    let (numbers, suffix) = version.split_once('-').unwrap_or((version, "a"));
+    let parts: Vec<&str> = numbers.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| (1..=4).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()))
+        && !suffix.is_empty()
+        && suffix.len() <= 12
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
 }
 
 fn hop_char(character: char) -> bool {
@@ -261,6 +278,31 @@ mod tests {
             let mut headers = HeaderMap::new();
             headers.insert("x-scd-hop", forged.parse().expect("header"));
             assert_eq!(hop(&headers), "other", "{forged}");
+        }
+    }
+
+    #[test]
+    fn the_app_version_label_is_a_release_a_missing_header_or_other() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-scd-version", value.parse().expect("header"));
+            headers
+        };
+
+        assert_eq!(app_version(&with("8.7.1")), "8.7.1");
+        assert_eq!(app_version(&with("8.7.1-beta.2")), "8.7.1-beta.2");
+        assert_eq!(app_version(&HeaderMap::new()), "unknown");
+        for junk in [
+            "",
+            "latest",
+            "8.7",
+            "8.7.1.4",
+            "8.7.x",
+            "<script>",
+            "8.7.1;drop",
+            "99999.1.1",
+        ] {
+            assert_eq!(app_version(&with(junk)), "other", "{junk}");
         }
     }
 }
