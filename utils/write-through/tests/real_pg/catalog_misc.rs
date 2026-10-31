@@ -187,15 +187,15 @@ async fn a_track_core_released_already_is_handed_back() {
 }
 
 #[tokio::test]
-async fn s3_verdicts_land_the_same_on_api_and_core_and_skip_too_long_tracks() {
+async fn s3_verdicts_ship_from_the_api_untouched_land_on_core_and_skip_too_long_tracks() {
     let pair = Pair::new(TRACKS).await;
 
-    let changed = pair
+    let run = pair
         .run(&verdicts(&["2003", "9999"], &["2004", "2005"]), &[])
-        .await
-        .assert_same();
+        .await;
 
-    assert_eq!(changed, json!(2));
+    assert_eq!((&run.api, &run.core), (&json!(null), &json!(2)));
+    run.assert_same();
     let stamp = Some(at("2026-10-31T08:00:00Z"));
     assert_eq!(
         storage(&pair.core, "2003").await,
@@ -220,19 +220,22 @@ async fn s3_verdicts_land_the_same_on_api_and_core_and_skip_too_long_tracks() {
 async fn a_track_found_and_missing_in_one_batch_ends_missing_and_is_touched_once() {
     let pair = Pair::new(TRACKS).await;
 
-    let changed = pair
-        .run(&verdicts(&["2003", "2003"], &["2003"]), &[])
-        .await
-        .assert_same();
-
-    assert_eq!(changed, json!(1));
+    let batch = verdicts(&["2003", "2003"], &["2003"]);
+    let mut probe = pair.core.begin().await.unwrap();
     let touched: i32 = sqlx::query_scalar(
-        "SELECT jsonb_array_length(touched) FROM public.cmd_outbox ORDER BY created_at DESC LIMIT 1",
+        "SELECT jsonb_array_length(public.scd_cmd_track_s3_state($1) -> 'touched')",
     )
-    .fetch_one(&pair.api)
+    .bind(serde_json::to_value(&batch).unwrap())
+    .fetch_one(&mut *probe)
     .await
     .unwrap();
+    probe.rollback().await.unwrap();
     assert_eq!(touched, 1);
+
+    let run = pair.run(&batch, &[]).await;
+
+    assert_eq!(run.core, json!(1));
+    run.assert_same();
     assert_eq!(
         storage(&pair.core, "2003").await,
         (
@@ -246,7 +249,7 @@ async fn a_track_found_and_missing_in_one_batch_ends_missing_and_is_touched_once
 }
 
 #[tokio::test]
-async fn a_verdict_on_a_track_core_marked_too_long_is_handed_back() {
+async fn a_verdict_on_a_track_core_marked_too_long_changes_nothing_anywhere() {
     let pair = Pair::new(TRACKS).await;
     on_core(
         &pair,
@@ -258,7 +261,11 @@ async fn a_verdict_on_a_track_core_marked_too_long_is_handed_back() {
 
     let run = pair.run(&verdicts(&["2003"], &[]), &[]).await;
 
-    assert_eq!((&run.api, &run.core), (&json!(1), &json!(0)));
-    assert!(handed_back(&run.diverged), "{:#?}", run.diverged);
+    assert_eq!((&run.api, &run.core), (&json!(null), &json!(0)));
+    run.assert_same();
+    assert_eq!(
+        storage(&pair.core, "2003").await,
+        ("too_long".to_owned(), None, None, None)
+    );
     pair.finish().await;
 }

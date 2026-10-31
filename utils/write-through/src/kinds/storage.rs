@@ -45,5 +45,5 @@ pub struct TrackS3State {
 
 impl Kind for TrackS3State {
     const NAME: &'static str = "track.s3_state";
-    type Output = i64;
+    type Output = Option<i64>;
 }

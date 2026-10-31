@@ -99,8 +99,8 @@ async fn a_writing_node_stores_both_verdicts_through_the_kind(pool: PgPool) -> a
     assert_eq!(again, lost());
     assert_eq!(
         storage.heads.load(Ordering::SeqCst),
-        probed + 1,
-        "only the unmarked too long track is probed again"
+        probed,
+        "nothing is probed again, the too long track the kind never marks is answered from the process"
     );
     let commands: i64 = sqlx::query_scalar("SELECT count(*) FROM cmd_outbox")
         .fetch_one(&pool)
@@ -139,5 +139,54 @@ async fn a_node_without_api_background_keeps_its_verdicts_in_process(
         probed,
         "both verdicts are answered from the process"
     );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_writing_api_node_in_split_sends_its_verdicts_to_core_and_leaves_its_tracks_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    sqlx::query("SELECT count(*) FROM public.scd_configure('main', 'api', 'split')")
+        .execute(&pool)
+        .await?;
+    let api = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with((*pool.connect_options()).clone())
+        .await?;
+    let before = [
+        stored(&api, "7001").await?,
+        stored(&api, "7002").await?,
+        stored(&api, "7003").await?,
+    ];
+    let storage = storage_holding("soundcloud_tracks_7001.m4a").await?;
+    let verifier = S3VerifierService::new(wreq::Client::new(), storage.url, api.clone(), true);
+
+    let missing = verifier.find_missing(&ids()).await?;
+    assert_eq!(missing, lost());
+    let after = [
+        stored(&api, "7001").await?,
+        stored(&api, "7002").await?,
+        stored(&api, "7003").await?,
+    ];
+    assert_eq!(
+        before, after,
+        "the api node never writes or locks a verdict row"
+    );
+    let shipped: (String, i32) =
+        sqlx::query_as("SELECT kind, jsonb_array_length(touched) FROM cmd_outbox")
+            .fetch_one(&api)
+            .await?;
+    assert_eq!(shipped, ("track.s3_state".to_owned(), 0));
+
+    let probed = storage.heads.load(Ordering::SeqCst);
+    let again = verifier.find_missing(&ids()).await?;
+    assert_eq!(again, lost());
+    assert_eq!(
+        storage.heads.load(Ordering::SeqCst),
+        probed,
+        "until core's verdicts arrive the process answers, nothing is probed twice"
+    );
+    api.close().await;
     Ok(())
 }

@@ -123,13 +123,13 @@ impl S3VerifierService {
         if ok.is_empty() && missing.is_empty() {
             return Ok(());
         }
+        for id in &ok {
+            self.found.insert(id.clone(), ());
+        }
+        for id in &missing {
+            self.gone.insert(id.clone(), ());
+        }
         if !self.writes_verdicts {
-            for id in ok {
-                self.found.insert(id, ());
-            }
-            for id in missing {
-                self.gone.insert(id, ());
-            }
             return Ok(());
         }
         let verdicts = wt::TrackS3State {

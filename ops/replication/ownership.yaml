@@ -18,7 +18,7 @@ kinds:
   track.too_long: {touches: [tracks], from: "api indexing ingest and release_held, jobs catalog_refresh_writer"}
   track.release_held: {touches: [tracks], from: "api indexing release_held, only when the local row is held"}
   track.storage_lost: {touches: [tracks], from: "streaming mark_storage_lost"}
-  track.s3_state: {touches: [tracks], from: "api s3_verifier remember, only where API_BACKGROUND=on"}
+  track.s3_state: {touches: [tracks], optimistic: false, from: "api s3_verifier remember, only where API_BACKGROUND=on; verdicts are core results, an api node in split never locks tracks for them"}
   match.wanted_link: {touches: [wanted_tracks], from: "utils/catalog-match link_to_indexed"}
   match.album_track: {touches: [album_tracks, tracks], from: "utils/catalog-match insert_album_track, inherit_track_album"}
   match.sc_account: {touches: [artist_sc_accounts, artists], from: "utils/catalog-match upsert_account, delete_account, backfill_artist_sc_user_id"}

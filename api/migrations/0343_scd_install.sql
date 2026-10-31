@@ -167,7 +167,7 @@ VALUES
     ('track.delete', true),
     ('track.edit', true),
     ('track.release_held', true),
-    ('track.s3_state', true),
+    ('track.s3_state', false),
     ('track.storage_lost', true),
     ('track.too_long', true)
 $f$;
