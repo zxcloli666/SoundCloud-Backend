@@ -226,7 +226,7 @@ impl JobHandlers {
     ) -> Result<Self, crate::ClientBuildError> {
         let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
             proxy_url: config.enrich.proxy_url.clone(),
-            proxy_fallback: true,
+            proxy_fallback: false,
             api_base: None,
             home_base: None,
         })?;

@@ -11,3 +11,5 @@ pub const USER_COLLECTION: &str = call_lua_macros::lua_script!("sc_methods/user_
 pub const SEARCH: &str = call_lua_macros::lua_script!("sc_methods/search.lua");
 
 pub const APIV2_GET: &str = call_lua_macros::lua_script!("sc_methods/apiv2_get.lua");
+
+pub const REDIRECT: &str = call_lua_macros::lua_script!("sc_methods/redirect.lua");
