@@ -460,8 +460,21 @@ async fn writes_mark_star_tracks_only_while_a_refresh_watches(pool: PgPool) -> a
     Ok(())
 }
 
+async fn apply_index_state(pool: &PgPool, settings: &str, state: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::raw_sql(settings).execute(&mut *tx).await?;
+    sqlx::query("UPDATE tracks SET index_state = $1 WHERE sc_track_id = '1'")
+        .bind(state)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 #[sqlx::test(migrations = "../api/migrations")]
-async fn every_mark_trigger_also_fires_on_replication_apply(pool: PgPool) -> anyhow::Result<()> {
+async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_legacy(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let triggers: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT tgrelid::regclass::text, tgname::text, tgenabled::text
          FROM pg_trigger
@@ -488,5 +501,27 @@ async fn every_mark_trigger_also_fires_on_replication_apply(pool: PgPool) -> any
         })
         .collect();
     assert_eq!(triggers, expected);
+
+    sqlx::raw_sql(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+         VALUES ('1', 'soundcloud:tracks:1', 'Star', 'star', 1000);
+         INSERT INTO star_track_tiers (sc_track_id, tier) VALUES ('1', 1);
+         INSERT INTO star_due_watch (singleton, watched_at) VALUES (true, now());",
+    )
+    .execute(&pool)
+    .await?;
+
+    apply_index_state(&pool, "SET LOCAL session_replication_role = replica", "ok").await?;
+    assert!(marks(&pool).await?.is_empty());
+
+    apply_index_state(
+        &pool,
+        "SET LOCAL scd.mode = 'split';
+         SET LOCAL scd.role = 'core';
+         SET LOCAL session_replication_role = replica",
+        "pending",
+    )
+    .await?;
+    assert_eq!(marks(&pool).await?, ["1"]);
     Ok(())
 }

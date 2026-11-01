@@ -118,6 +118,8 @@ SELECT v.cls FROM (VALUES
     ('search_terms', 'C'),
     ('sessions', 'A'),
     ('soundcloud_connections', 'M'),
+    ('star_due_marks', 'L'),
+    ('star_due_watch', 'L'),
     ('star_track_tiers', 'P'),
     ('storage_event_repairs', 'P'),
     ('storage_event_state', 'P'),
