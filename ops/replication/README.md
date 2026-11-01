@@ -94,6 +94,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 27. `0268_lyrics_cache_embedding_request`: `lyrics_cache.embedding_request_id` and `embedding_request_created_at`, the request id and lyrics stamp of the wire state, so api nodes decide vector eligibility without the core-private `lyrics_embedding_wire_state`.
 28. `0269_lyrics_cache_embedding_request_backfill`: batched copy from the wire state on core (role gate); `open_embedding_request` keeps both columns in step.
 29. `0270_scd_install`: the generated SQL again: the two columns are published by core.
+30. `0271_kinds_oauth_app_delete`: kind `oauth_app.delete` (non-optimistic, so an A table may be touched): the admin delete of an OAuth app runs on core, where `zz_fk` can refuse it.
+31. `0272_scd_install`: the generated SQL again: the new kind in the registry.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

@@ -160,6 +160,7 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 . "$here/r1.sh"
 . "$here/b5a.sh"
 . "$here/lyrics.sh"
+. "$here/deletes.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

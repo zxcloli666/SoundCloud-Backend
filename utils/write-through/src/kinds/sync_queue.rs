@@ -40,6 +40,16 @@ impl Kind for ConnectionDropOrphan {
     type Output = Option<bool>;
 }
 
+#[derive(Debug, Serialize)]
+pub struct OauthAppDelete {
+    pub app_id: Uuid,
+}
+
+impl Kind for OauthAppDelete {
+    const NAME: &'static str = "oauth_app.delete";
+    type Output = Option<bool>;
+}
+
 #[derive(Serialize)]
 pub struct ConnectionLogin<'a> {
     pub connection_id: Uuid,

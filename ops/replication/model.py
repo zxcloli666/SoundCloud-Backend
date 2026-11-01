@@ -213,8 +213,8 @@ class Model:
                 t = self.tables.get(tname)
                 if not t:
                     out.append("kind %s: touches unknown table %s" % (kind, tname))
-                elif t.cls not in ("C", "P", "M"):
-                    out.append("kind %s: touches %s of class %s; kinds only touch C, P and M tables" % (kind, tname, t.cls))
+                elif t.cls not in ("C", "P", "M") and not (t.cls == "A" and not k.get("optimistic", True)):
+                    out.append("kind %s: touches %s of class %s; kinds only touch C, P and M tables, and A tables when not optimistic" % (kind, tname, t.cls))
         for pub, p in sorted(self.publications.items()):
             if p.get("node") not in ("core", "api"):
                 out.append("publication %s: node must be core or api" % pub)

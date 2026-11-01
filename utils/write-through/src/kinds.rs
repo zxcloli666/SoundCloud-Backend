@@ -24,7 +24,9 @@ pub use observe::{
     ObservedTrack, ObservedUser,
 };
 pub use storage::{TrackReleaseHeld, TrackS3State, TrackStorageLost, TrackTooLong};
-pub use sync_queue::{ConnectionDropOrphan, ConnectionLogin, SyncQueuePurge, SyncQueueRevive};
+pub use sync_queue::{
+    ConnectionDropOrphan, ConnectionLogin, OauthAppDelete, SyncQueuePurge, SyncQueueRevive,
+};
 
 pub trait Kind: Serialize + Debug + Sync {
     const NAME: &'static str;

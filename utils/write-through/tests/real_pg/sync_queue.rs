@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use uuid::Uuid;
 use write_through as wt;
-use wt::{ConnectionDropOrphan, ConnectionLogin, SyncQueuePurge, SyncQueueRevive};
+use wt::{ConnectionDropOrphan, ConnectionLogin, OauthAppDelete, SyncQueuePurge, SyncQueueRevive};
 
 use crate::harness::Pair;
 
@@ -206,5 +206,36 @@ async fn a_relogin_lands_the_same_on_both_nodes_and_an_older_one_only_touches_th
     assert_eq!(run.assert_same(), json!(false));
     assert_eq!(login_row(&pair.core).await, landed);
     assert_eq!(login_row(&pair.api).await, landed);
+    pair.finish().await;
+}
+
+#[tokio::test]
+async fn an_oauth_app_delete_runs_on_core_and_a_missing_app_is_a_no_op() {
+    let pair = Pair::new(
+        "INSERT INTO public.oauth_apps (id, name, client_id, client_secret, redirect_uri) VALUES
+        ('40000000-0000-4000-8000-000000000002', 'app', 'client', 'secret', 'https://app.test/')",
+    )
+    .await;
+    let missing = OauthAppDelete {
+        app_id: "40000000-0000-4000-8000-000000000009"
+            .parse::<Uuid>()
+            .unwrap(),
+    };
+    let run = pair.run(&missing, &[]).await;
+    assert_eq!(run.core, json!(false));
+    run.assert_same();
+    let app = OauthAppDelete {
+        app_id: "40000000-0000-4000-8000-000000000002"
+            .parse::<Uuid>()
+            .unwrap(),
+    };
+    let run = pair.run(&app, &[]).await;
+    assert_eq!(run.core, json!(true));
+    run.assert_same();
+    assert!(
+        ids(&pair.core, "SELECT id::text FROM public.oauth_apps")
+            .await
+            .is_empty()
+    );
     pair.finish().await;
 }

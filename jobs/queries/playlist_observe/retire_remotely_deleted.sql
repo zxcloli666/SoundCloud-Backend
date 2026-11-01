@@ -12,9 +12,11 @@ WITH observation AS MATERIALIZED (
     WHERE playlist.urn = $1 AND playlist.owner_sc_user_id = $2
     RETURNING playlist.urn
 ), cancelled AS (
-    DELETE FROM sync_queue AS queued
-    USING gone
-    WHERE queued.user_id = $2 AND queued.target_urn = gone.urn
+    SELECT count(*) AS purged
+    FROM sync_queue AS queued
+    JOIN gone ON queued.target_urn = gone.urn
+    WHERE queued.user_id = $2
+      AND public.scd_purge_intent('sync_queue', jsonb_build_object('id', queued.id), queued.intent_v)
 ), retired AS (
     UPDATE playlist_membership_state AS state
     SET next_reconcile_at = NULL, reconcile_generation = state.reconcile_generation + 1,
@@ -26,5 +28,6 @@ WITH observation AS MATERIALIZED (
     USING gone
     WHERE owned.playlist_urn = gone.urn AND owned.user_id = ANY ($3)
 )
-SELECT urn AS "urn!"
+SELECT gone.urn AS "urn!"
 FROM gone
+CROSS JOIN cancelled

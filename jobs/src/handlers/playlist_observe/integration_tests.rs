@@ -181,11 +181,21 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              remote_attempted_generation bigint,
              remote_completed_generation bigint,
              remote_result jsonb,
-             dead boolean NOT NULL DEFAULT false
+             dead boolean NOT NULL DEFAULT false,
+             intent_v bigint NOT NULL DEFAULT 1
          );
          CREATE UNIQUE INDEX sync_queue_target_uq
              ON sync_queue (user_id, action_type, target_urn)
              WHERE action_type <> 'comment';
+         CREATE FUNCTION scd_purge_intent(tbl text, k jsonb, seen bigint)
+         RETURNS boolean
+         LANGUAGE sql
+         AS $f$
+         WITH gone AS (
+             DELETE FROM sync_queue WHERE id = (k ->> 'id')::uuid AND intent_v = seen RETURNING id
+         )
+         SELECT EXISTS (SELECT 1 FROM gone)
+         $f$;
          CREATE TABLE user_owned_playlists (
              user_id text NOT NULL,
              playlist_urn text NOT NULL,
