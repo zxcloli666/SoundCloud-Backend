@@ -127,7 +127,8 @@ impl PlaylistReadClient {
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if status == StatusCode::TOO_MANY_REQUESTS {
-            tracing::warn!(%status, ?retry_after_seconds, "soundcloud owner read was rate limited");
+            let detail: String = String::from_utf8_lossy(&body).chars().take(400).collect();
+            tracing::warn!(%status, ?retry_after_seconds, path = target.path(), detail = %detail, "soundcloud owner read was rate limited");
         }
         if !status.is_success() {
             return Err(api_error(status, body, retry_after_seconds));
