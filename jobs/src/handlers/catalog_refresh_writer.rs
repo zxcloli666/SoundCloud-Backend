@@ -55,6 +55,14 @@ impl CatalogWriter {
         observation: catalog_ingest::Observation,
     ) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
+        self.persist_in(
+            &mut transaction,
+            payload,
+            value,
+            TrackPriority::Discovery,
+            observation,
+        )
+        .await?;
         let fence = sqlx::query_file_scalar!(
             "queries/catalog_refresh/fence.sql",
             job.id,
@@ -67,14 +75,6 @@ impl CatalogWriter {
         if fence.is_none() {
             return Ok(());
         }
-        self.persist_in(
-            &mut transaction,
-            payload,
-            value,
-            TrackPriority::Discovery,
-            observation,
-        )
-        .await?;
         transaction.commit().await.map_err(JobError::retryable)
     }
 
