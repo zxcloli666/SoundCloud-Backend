@@ -30,9 +30,6 @@ impl CollectionWriter {
     ) -> JobResult<bool> {
         let mut more = page.next.is_some();
         let mut tx = self.pool.begin().await.map_err(JobError::retryable)?;
-        if !state::fence(&mut tx, job).await? {
-            return Ok(more);
-        }
         let current = state::load(&mut tx, job, payload).await?;
         if current.snapshot_id != snapshot.snapshot_id
             || current.page_count != snapshot.page_count
@@ -140,6 +137,9 @@ impl CollectionWriter {
         }
         if !more {
             state::sweep_seen(&mut tx, payload, snapshot).await?;
+        }
+        if !state::fence(&mut tx, job).await? {
+            return Ok(page.next.is_some());
         }
         sqlx::query_file!(
             "queries/catalog_collection/reset_attempts.sql",

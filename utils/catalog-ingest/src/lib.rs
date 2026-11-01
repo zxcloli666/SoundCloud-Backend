@@ -23,7 +23,7 @@ pub use sc_ids::{
     EntityKind, EntityRef, extract_sc_id, normalize_sc_track_id, track_object_key,
     user_id_variants, user_urn,
 };
-pub use sc_payload::parse_dt;
+pub use sc_payload::{parse_dt, without_nul};
 pub use track_metadata::TrackUpdate;
 pub use upsert::{
     IngestResult, TrackPriority, bump_track_priority, upsert_from_sc, upsert_track_in,

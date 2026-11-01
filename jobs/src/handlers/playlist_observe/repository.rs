@@ -1095,12 +1095,13 @@ pub(super) async fn upsert_hydrated_tracks(
     payload: &serde_json::Value,
     observation: i64,
 ) -> Result<(), RepositoryError> {
+    let payload = catalog_ingest::without_nul(payload);
     let mut attempt = 1;
     loop {
         let mut savepoint = transaction.begin().await?;
         let upserted = sqlx::query_file!(
             "queries/playlist_observe/upsert_tracks.sql",
-            payload,
+            &payload,
             observation
         )
         .execute(&mut *savepoint)

@@ -1233,4 +1233,54 @@ async fn an_owner_run_abandoned_by_apiv2_starts_over_on_the_owner_api(
     Ok(())
 }
 
+#[sqlx::test(migrations = false)]
+async fn a_page_waiting_on_a_track_does_not_hold_its_job_row(pool: PgPool) -> anyhow::Result<()> {
+    let (job, payload, writer) = setup(&pool).await?;
+    let first = state::begin(&pool, &job, &payload).await?.unwrap();
+    writer
+        .persist(
+            &job,
+            &payload,
+            &first,
+            page(&[7], Some("v1:/me/likes/tracks?offset=100")),
+            catalog_ingest::Observation::begin(&pool).await?,
+        )
+        .await?;
+    let resumed = state::begin(&pool, &job, &payload).await?.unwrap();
+    let mut holder = pool.begin().await?;
+    sqlx::query("SELECT 1 FROM tracks WHERE sc_track_id = '7' FOR UPDATE")
+        .execute(&mut *holder)
+        .await?;
+    let observation = catalog_ingest::Observation::begin(&pool).await?;
+    let probe = async {
+        let waiting = "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%scd_wt%'";
+        for _ in 0..200 {
+            let count: i64 = sqlx::query_scalar(waiting).fetch_one(&pool).await?;
+            if count > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let mut other = pool.begin().await?;
+        let job_row = sqlx::query("SELECT 1 FROM background_jobs WHERE id = $1 FOR UPDATE NOWAIT")
+            .bind(job.id)
+            .execute(&mut *other)
+            .await
+            .map(|_| ());
+        other.rollback().await?;
+        holder.rollback().await?;
+        anyhow::Ok(job_row)
+    };
+    let persist = writer.persist(&job, &payload, &resumed, page(&[7, 8], None), observation);
+    let (job_row, persisted) = tokio::join!(probe, persist);
+    job_row?.map_err(|error| anyhow::anyhow!("the page held its job row: {error}"))?;
+    persisted?;
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT sc_track_id FROM tracks ORDER BY sc_track_id")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(ids, ["7", "8"]);
+    Ok(())
+}
+
 mod giving_up;
