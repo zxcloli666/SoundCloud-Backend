@@ -94,28 +94,22 @@ async fn install_catalog(pool: &PgPool, embedded: &[u64]) -> anyhow::Result<()> 
              sc_track_id text PRIMARY KEY,
              embedded_at timestamptz,
              embedding_state varchar(16),
-             created_at timestamp NOT NULL
-         );
-         CREATE TABLE lyrics_embedding_wire_state (
-             sc_track_id text PRIMARY KEY,
-             lyrics_created_at timestamp,
-             request_message_id varchar(128)
+             created_at timestamp NOT NULL,
+             embedding_request_id varchar(128),
+             embedding_request_created_at timestamp
          )",
     )
     .execute(pool)
     .await?;
     for id in embedded {
-        sqlx::query("INSERT INTO lyrics_cache VALUES ($1, now(), 'done', $2::timestamp)")
-            .bind(id.to_string())
-            .bind(LYRICS_CREATED_AT)
-            .execute(pool)
-            .await?;
-        sqlx::query("INSERT INTO lyrics_embedding_wire_state VALUES ($1, $2::timestamp, $3)")
-            .bind(id.to_string())
-            .bind(LYRICS_CREATED_AT)
-            .bind(CURRENT_REQUEST)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO lyrics_cache VALUES ($1, now(), 'done', $2::timestamp, $3, $2::timestamp)",
+        )
+        .bind(id.to_string())
+        .bind(LYRICS_CREATED_AT)
+        .bind(CURRENT_REQUEST)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }

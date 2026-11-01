@@ -499,7 +499,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.content_generation, t.content_hash, t.created_at, t.embedded_at, t.embedding_state, t.language, t.language_confidence, t.plain_source, t.plain_text, t.sc_track_id, t.source, t.synced_lrc, t.synced_source, t.synced_version, t.track_id, t.updated_at)::text) FROM public.lyrics_cache t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+SELECT md5(ROW(t.content_generation, t.content_hash, t.created_at, t.embedded_at, t.embedding_request_created_at, t.embedding_request_id, t.embedding_state, t.language, t.language_confidence, t.plain_source, t.plain_text, t.sc_track_id, t.source, t.synced_lrc, t.synced_source, t.synced_version, t.track_id, t.updated_at)::text) FROM public.lyrics_cache t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_embedding_wire_state(k jsonb)

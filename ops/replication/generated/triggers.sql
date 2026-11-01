@@ -2633,7 +2633,7 @@ BEGIN
         IF NEW.sc_track_id IS DISTINCT FROM OLD.sc_track_id THEN
             IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', OLD.sc_track_id)) THEN
                 IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_cache' AND p.pk = jsonb_build_object('sc_track_id', NEW.sc_track_id)) THEN
-                    INSERT INTO public.lyrics_cache (content_generation, content_hash, created_at, embedded_at, embedding_state, fts, language, language_confidence, plain_source, plain_text, sc_track_id, source, synced_lrc, synced_source, synced_version, track_id, updated_at) VALUES (NEW.content_generation, NEW.content_hash, NEW.created_at, NEW.embedded_at, NEW.embedding_state, NEW.fts, NEW.language, NEW.language_confidence, NEW.plain_source, NEW.plain_text, NEW.sc_track_id, NEW.source, NEW.synced_lrc, NEW.synced_source, NEW.synced_version, NEW.track_id, NEW.updated_at);
+                    INSERT INTO public.lyrics_cache (content_generation, content_hash, created_at, embedded_at, embedding_request_created_at, embedding_request_id, embedding_state, fts, language, language_confidence, plain_source, plain_text, sc_track_id, source, synced_lrc, synced_source, synced_version, track_id, updated_at) VALUES (NEW.content_generation, NEW.content_hash, NEW.created_at, NEW.embedded_at, NEW.embedding_request_created_at, NEW.embedding_request_id, NEW.embedding_state, NEW.fts, NEW.language, NEW.language_confidence, NEW.plain_source, NEW.plain_text, NEW.sc_track_id, NEW.source, NEW.synced_lrc, NEW.synced_source, NEW.synced_version, NEW.track_id, NEW.updated_at);
                 END IF;
                 RETURN NULL;
             END IF;
@@ -2648,6 +2648,8 @@ BEGIN
                     NEW.content_hash := OLD.content_hash;
                     NEW.created_at := OLD.created_at;
                     NEW.embedded_at := OLD.embedded_at;
+                    NEW.embedding_request_created_at := OLD.embedding_request_created_at;
+                    NEW.embedding_request_id := OLD.embedding_request_id;
                     NEW.embedding_state := OLD.embedding_state;
                     NEW.language := OLD.language;
                     NEW.language_confidence := OLD.language_confidence;
@@ -2676,12 +2678,12 @@ BEGIN
             RETURN NULL;
         END IF;
         IF held THEN
-            UPDATE public.lyrics_cache t SET content_generation = NEW.content_generation, content_hash = NEW.content_hash, created_at = NEW.created_at, embedded_at = NEW.embedded_at, embedding_state = NEW.embedding_state, fts = NEW.fts, language = NEW.language, language_confidence = NEW.language_confidence, plain_source = NEW.plain_source, plain_text = NEW.plain_text, source = NEW.source, synced_lrc = NEW.synced_lrc, synced_source = NEW.synced_source, synced_version = NEW.synced_version, track_id = NEW.track_id, updated_at = NEW.updated_at WHERE t.sc_track_id = NEW.sc_track_id;
+            UPDATE public.lyrics_cache t SET content_generation = NEW.content_generation, content_hash = NEW.content_hash, created_at = NEW.created_at, embedded_at = NEW.embedded_at, embedding_request_created_at = NEW.embedding_request_created_at, embedding_request_id = NEW.embedding_request_id, embedding_state = NEW.embedding_state, fts = NEW.fts, language = NEW.language, language_confidence = NEW.language_confidence, plain_source = NEW.plain_source, plain_text = NEW.plain_text, source = NEW.source, synced_lrc = NEW.synced_lrc, synced_source = NEW.synced_source, synced_version = NEW.synced_version, track_id = NEW.track_id, updated_at = NEW.updated_at WHERE t.sc_track_id = NEW.sc_track_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.lyrics_cache (content_generation, content_hash, created_at, embedded_at, embedding_state, fts, language, language_confidence, plain_source, plain_text, sc_track_id, source, synced_lrc, synced_source, synced_version, track_id, updated_at)
-        VALUES (NEW.content_generation, NEW.content_hash, NEW.created_at, NEW.embedded_at, NEW.embedding_state, NEW.fts, NEW.language, NEW.language_confidence, NEW.plain_source, NEW.plain_text, NEW.sc_track_id, NEW.source, NEW.synced_lrc, NEW.synced_source, NEW.synced_version, NEW.track_id, NEW.updated_at)
+        INSERT INTO public.lyrics_cache (content_generation, content_hash, created_at, embedded_at, embedding_request_created_at, embedding_request_id, embedding_state, fts, language, language_confidence, plain_source, plain_text, sc_track_id, source, synced_lrc, synced_source, synced_version, track_id, updated_at)
+        VALUES (NEW.content_generation, NEW.content_hash, NEW.created_at, NEW.embedded_at, NEW.embedding_request_created_at, NEW.embedding_request_id, NEW.embedding_state, NEW.fts, NEW.language, NEW.language_confidence, NEW.plain_source, NEW.plain_text, NEW.sc_track_id, NEW.source, NEW.synced_lrc, NEW.synced_source, NEW.synced_version, NEW.track_id, NEW.updated_at)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);

@@ -114,7 +114,7 @@ tables:
     pk: [node, id]
     columns: {node: text, id: uuid, kind: "text NOT NULL", args: "jsonb NOT NULL", sqlstate: text, message: text, at: "timestamptz NOT NULL DEFAULT now()"}
   enrich_calibration: {class: P, note: "no code writer, read by jobs only"}
-  lyrics_embedding_wire_state: {class: P}
+  lyrics_embedding_wire_state: {class: P, note: "api nodes read vector eligibility from lyrics_cache.embedding_request_id and embedding_request_created_at, set by open_embedding_request"}
   lyrics_lookup_backfill_state: {class: P}
   oauth_app_token_issuance_reservations: {class: P}
   oauth_app_token_refresh_state: {class: P}
