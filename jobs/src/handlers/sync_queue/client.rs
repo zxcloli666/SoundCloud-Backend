@@ -115,7 +115,7 @@ impl SoundCloudClient {
         };
         apiv1_pace::wait_for_turn(usage).await;
         let result = self.send_routed(method, &target, access_token, body).await;
-        apiv1_pace::record(usage, false);
+        apiv1_pace::answered(usage);
         result
     }
 

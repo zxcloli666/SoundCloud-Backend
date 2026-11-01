@@ -13,6 +13,7 @@ use crate::handlers::apiv1_pace;
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RETRY_AFTER_SECONDS: i64 = 24 * 60 * 60;
+const PACE_PATIENCE: Duration = Duration::from_secs(5);
 
 pub struct PlaylistReadClient {
     http: Client,
@@ -45,6 +46,9 @@ pub enum PlaylistReadError {
 
     #[error("SoundCloud playlist response is not valid JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
+
+    #[error("SoundCloud reads are paced, the next turn is in {retry_after_seconds} s")]
+    Paced { retry_after_seconds: i64 },
 }
 
 impl PlaylistReadClient {
@@ -109,13 +113,17 @@ impl PlaylistReadClient {
         )
         .header(ACCEPT, "application/json; charset=utf-8")
         .header(ACCEPT_ENCODING, "identity");
-        apiv1_pace::wait_for_turn(apiv1_pace::Use::Read).await;
+        apiv1_pace::turn_within(apiv1_pace::Use::Read, PACE_PATIENCE)
+            .await
+            .map_err(|wait| PlaylistReadError::Paced {
+                retry_after_seconds: i64::try_from(wait.as_secs().saturating_add(1))
+                    .unwrap_or(MAX_RETRY_AFTER_SECONDS),
+            })?;
         let response = request.send().await?;
         let status = response.status();
-        apiv1_pace::record(
-            apiv1_pace::Use::Read,
-            status == StatusCode::TOO_MANY_REQUESTS,
-        );
+        if status != StatusCode::TOO_MANY_REQUESTS {
+            apiv1_pace::answered(apiv1_pace::Use::Read);
+        }
         let retry_after_seconds = retry_after(response.headers().get(RETRY_AFTER));
         let body = read_body(response).await?;
         if status == StatusCode::TOO_MANY_REQUESTS {
@@ -138,6 +146,10 @@ impl PlaylistReadError {
 
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status == StatusCode::UNAUTHORIZED)
+    }
+
+    pub fn is_paced(&self) -> bool {
+        matches!(self, Self::Paced { .. })
     }
 }
 

@@ -530,6 +530,9 @@ fn read_failure(error: &PlaylistObserveError) -> FailureObservation {
         PlaylistObserveError::Deadline => {
             transport_failure("soundcloud_playlist_deadline", TRANSPORT_RETRY)
         }
+        PlaylistObserveError::Read(PlaylistReadError::Paced {
+            retry_after_seconds,
+        }) => cooling_down_failure(seconds(*retry_after_seconds, TRANSPORT_RETRY)),
         PlaylistObserveError::Read(PlaylistReadError::Api { status, .. })
             if status.is_server_error() =>
         {
