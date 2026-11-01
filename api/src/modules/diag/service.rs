@@ -102,8 +102,10 @@ impl DiagService {
         client: &ClientIdentity,
     ) -> Result<(), AppError> {
         let origin = self.origin(client);
+        let mut events: Vec<_> = body.events.iter().collect();
+        events.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         let mut transaction = self.pg.begin().await?;
-        for event in &body.events {
+        for event in events {
             let title: String = event
                 .message
                 .lines()
