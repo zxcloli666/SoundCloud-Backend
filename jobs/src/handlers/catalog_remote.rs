@@ -69,7 +69,11 @@ impl CatalogRemote {
                 continue;
             }
             match self.owner.get_path(path, &candidate.value).await {
-                Ok(response) => return Ok(response.value),
+                Ok(response) => {
+                    self.connections
+                        .reads_answered(Some(candidate.oauth_app_id));
+                    return Ok(response.value);
+                }
                 Err(error) if error.is_unauthorized() => {
                     self.connections
                         .reject_app_token(&candidate)
@@ -109,7 +113,10 @@ impl CatalogRemote {
             ));
         }
         match self.owner.get_path(path, &token.value).await {
-            Ok(response) => Ok(response.value),
+            Ok(response) => {
+                self.connections.reads_answered(token.oauth_app_id);
+                Ok(response.value)
+            }
             Err(error) if error.is_unauthorized() => {
                 let refreshed = self
                     .connections
@@ -117,7 +124,10 @@ impl CatalogRemote {
                     .await
                     .map_err(connection_error)?;
                 match self.owner.get_path(path, &refreshed.value).await {
-                    Ok(response) => Ok(response.value),
+                    Ok(response) => {
+                        self.connections.reads_answered(refreshed.oauth_app_id);
+                        Ok(response.value)
+                    }
                     Err(error) => {
                         if error.is_unauthorized() {
                             self.connections

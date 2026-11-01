@@ -20,7 +20,6 @@ const RATE_LIMIT_RETRY_SECONDS: i32 = 5 * 60;
 const APP_CREDENTIALS_RETRY_SECONDS: i64 = 30 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const APP_TOKEN_MIN_LIFETIME_SECONDS: i64 = 30;
-const READ_PROBE_HOLD: Duration = Duration::from_secs(30);
 
 static READ_PAUSES: LazyLock<WritePauses<Uuid>> = LazyLock::new(WritePauses::default);
 
@@ -107,7 +106,13 @@ impl ConnectionManager {
         if let Some(seconds) = self.cooldowns.retry_after_seconds(oauth_app_id).await? {
             return Ok(Some(seconds));
         }
-        Ok(READ_PAUSES.wait_or_probe(&oauth_app_id, READ_PROBE_HOLD))
+        Ok(READ_PAUSES.remaining_seconds(&oauth_app_id))
+    }
+
+    pub fn reads_answered(&self, oauth_app_id: Option<Uuid>) {
+        if let Some(oauth_app_id) = oauth_app_id {
+            READ_PAUSES.probe_answered(&oauth_app_id);
+        }
     }
 
     pub async fn app_tokens(&self) -> Result<Vec<AppToken>, ConnectionError> {
