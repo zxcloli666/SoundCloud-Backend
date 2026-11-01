@@ -357,7 +357,18 @@ impl ScClient {
             let found = match channel {
                 Channel::Direct => self.location_direct(url, false).await,
                 Channel::Proxy if proxy_set => self.location_direct(url, true).await,
-                Channel::Relay if relay_set => self.location_relay(url).await,
+                Channel::Relay if relay_set => match self.location_relay_lua(url).await {
+                    Some(found) => found,
+                    None => {
+                        tokio::time::timeout(RELAY_REDIRECT_RAW_BUDGET, self.location_relay(url))
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(ScError::Unreachable(
+                                    "relay short link timed out".to_owned(),
+                                ))
+                            })
+                    }
+                },
                 Channel::Proxy | Channel::Relay => continue,
             };
             match found {
@@ -397,6 +408,24 @@ impl ScClient {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         redirect_target(response.status().as_u16(), location)
+    }
+
+    async fn location_relay_lua(&self, url: &str) -> Option<ScResult<String>> {
+        let inputs = serde_json::to_vec(&serde_json::json!({ "url": url })).ok()?;
+        let answer = tokio::time::timeout(
+            RELAY_REDIRECT_LUA_BUDGET,
+            self.call_relay_method("sc.redirect", crate::lua_methods::REDIRECT, inputs),
+        )
+        .await
+        .ok()??;
+        if answer.get("ok").and_then(Value::as_bool) == Some(true) {
+            return answer
+                .get("location")
+                .and_then(Value::as_str)
+                .map(|location| Ok(location.to_owned()));
+        }
+        (answer.get("reason").and_then(Value::as_str) == Some("gone"))
+            .then(|| Err(api_error(404, &[], None)))
     }
 
     async fn location_relay(&self, target_url: &str) -> ScResult<String> {
@@ -1025,6 +1054,9 @@ fn is_semantic_miss(error: &ScError) -> bool {
     matches!(error.status(), Some(404 | 410))
 }
 
+const RELAY_REDIRECT_LUA_BUDGET: Duration = Duration::from_millis(2500);
+const RELAY_REDIRECT_RAW_BUDGET: Duration = Duration::from_secs(2);
+
 fn redirect_target(status: u16, location: Option<String>) -> ScResult<String> {
     match (status, location) {
         (300..=399, Some(location)) => Ok(location),
@@ -1494,6 +1526,35 @@ mod size_tests {
         .expect("builds")
         .with_relay(relay);
         (sc, calls)
+    }
+
+    #[tokio::test]
+    async fn a_short_link_takes_the_relay_lua_answer_first() -> TestResult {
+        let (sc, calls) = relayed(Some(
+            r#"{"ok":true,"location":"https://soundcloud.com/forss/flickermood"}"#,
+        ));
+
+        let location = sc
+            .redirect_location("https://on.soundcloud.com/AbCdEf")
+            .await?;
+
+        assert_eq!(location, "https://soundcloud.com/forss/flickermood");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_short_link_the_relay_calls_gone_is_a_miss() {
+        let (sc, _) = relayed(Some(r#"{"ok":false,"reason":"gone"}"#));
+
+        let missing = sc
+            .redirect_location("https://on.soundcloud.com/AbCdEf")
+            .await;
+
+        assert!(
+            matches!(missing, Err(ScError::Api { status: 404, .. })),
+            "{missing:?}"
+        );
     }
 
     #[tokio::test]
