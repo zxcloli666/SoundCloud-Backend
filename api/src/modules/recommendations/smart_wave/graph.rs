@@ -30,7 +30,7 @@ const CACHE_TTL_SECS: u64 = 600;
 const EDGES_TTL: Duration = Duration::from_secs(3600);
 const EDGES_KEPT: u64 = 4_000_000;
 const EDGES_TOP_K_COPLAY: i64 = 256;
-const EDGES_TOP_K_COLIKE: Option<i64> = None;
+const EDGES_TOP_K_COLIKE: Option<i64> = Some(1024);
 const EDGES_CACHE: &str = "graph_edges";
 
 pub enum GraphSeed {
