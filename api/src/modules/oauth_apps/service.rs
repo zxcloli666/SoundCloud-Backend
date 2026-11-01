@@ -3,7 +3,6 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
-use write_through as wt;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::oauth_apps::model::OAuthApp;
