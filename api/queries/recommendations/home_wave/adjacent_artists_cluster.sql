@@ -12,6 +12,7 @@ FROM recent_likes rl
     JOIN tracks it
 ON it.sc_track_id = rl.sc_track_id
     JOIN track_artists ta ON ta.track_id = it.id AND ta.role = 'primary'
+ORDER BY ta.artist_id
     LIMIT 100
     ),
     co AS (
@@ -26,7 +27,7 @@ WHERE (ac.a_id IN (SELECT artist_id FROM user_artists)
   AND ac.b_id IN (SELECT artist_id FROM user_artists)
     )
 GROUP BY co_id
-ORDER BY w DESC
+ORDER BY w DESC, co_id
     LIMIT $2
     ),
     ranked AS (
@@ -51,4 +52,4 @@ FROM ranked r
          JOIN artists a ON a.id = r.artist_id
 WHERE r.rn = 1
   AND a.merged_into IS NULL
-ORDER BY r.w DESC NULLS LAST
+ORDER BY r.w DESC NULLS LAST, a.id
