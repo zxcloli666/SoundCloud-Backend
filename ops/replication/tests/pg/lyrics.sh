@@ -12,7 +12,7 @@ joined() {
 open_req() { sql -d "scd_b1_$1" -c "$open_sql" -c "EXECUTE open_req('$2', 1, 'text', 'en', decode(repeat('00', 32), 'hex'), '$3')" > /dev/null; }
 finish() { sql -d "scd_b1_$1" -c "UPDATE public.lyrics_cache SET embedded_at = now(), embedding_state = 'done' WHERE sc_track_id = '$2'" > /dev/null; }
 queue() {
-  sql -d "scd_b1_$1" -c "UPDATE public.lyrics_embedding_wire_state SET status = 'quarantined', quarantine_reason = 'lyrics_changed' WHERE sc_track_id = '$2'" \
+  sql -d "scd_b1_$1" -c "UPDATE public.lyrics_embedding_wire_state SET status = 'quarantined', quarantine_reason = 'lyrics_changed', completed_at = now() WHERE sc_track_id = '$2'" \
     -c "UPDATE public.lyrics_cache SET embedded_at = NULL, embedding_state = 'queued' WHERE sc_track_id = '$2'" > /dev/null
 }
 
