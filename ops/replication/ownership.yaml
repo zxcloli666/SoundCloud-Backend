@@ -58,10 +58,11 @@ tables:
     pk: [kind, dedup_key]
     columns: {kind: text, dedup_key: text, state: "text NOT NULL", available_at: timestamptz, updated_at: "timestamptz NOT NULL DEFAULT now()"}
     note: "jobs writes on state change of the 3 kinds the api reads"
-  lyrics_cache: {class: C, derived: {lyrics_cache_fts_trg: {writes: [lyrics_cache.fts]}}}
+  lyrics_cache: {class: C, derived: {lyrics_cache_fts_trg: {writes: [lyrics_cache.fts]}, star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   lyrics_lookup_state:
     class: C
     unique: {lyrics_lookup_state_sc_track_id_key: key}
+    derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}
     note: "rows come from the tracks derived trigger on core; api only through lyrics.wake; track_id and sc_track_id are one tracks row"
   oauth_app_tokens: {class: C}
   playlist_membership_operations: {class: C, reassert: always, note: "core assigns sequence and runs the acceptance check (was mixed)"}
@@ -85,6 +86,8 @@ tables:
     derived:
       tracks_lyrics_lookup_state_refresh: {rows: [lyrics_lookup_state]}
       tracks_primary_block_guard_trg: {vetoes: [tracks.primary_artist_id]}
+      star_due_mark_row: {rows: [star_due_marks]}
+      star_due_mark_update: {rows: [star_due_marks]}
     note: "last_read_at has no writer since B5a, reads go to entity_reads; jobs-private columns go to narrow P tables in A7"
   user_followers: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
   user_owned_playlists: {class: C, local: [last_read_at], note: "last_read_at has no writer"}
@@ -100,7 +103,7 @@ tables:
   admin_catalog_requests: {class: P, note: "admin.catalog.v1 replay ledger, written by jobs on core in the edit transaction (B5c)"}
   ai_resolver_budget: {class: P}
   ai_resolver_cache: {class: P}
-  audio_index_wire_state: {class: P}
+  audio_index_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   background_job_enqueues: {class: P}
   background_jobs: {class: P, note: "api enqueues only through job.enqueue; api status reads go to job_status"}
   background_schedules: {class: P}
@@ -114,7 +117,7 @@ tables:
     pk: [node, id]
     columns: {node: text, id: uuid, kind: "text NOT NULL", args: "jsonb NOT NULL", sqlstate: text, message: text, at: "timestamptz NOT NULL DEFAULT now()"}
   enrich_calibration: {class: P, note: "no code writer, read by jobs only"}
-  lyrics_embedding_wire_state: {class: P}
+  lyrics_embedding_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   lyrics_lookup_backfill_state: {class: P}
   oauth_app_token_issuance_reservations: {class: P}
   oauth_app_token_refresh_state: {class: P}
@@ -124,14 +127,14 @@ tables:
   playlist_sweep_cursor: {class: P}
   playlist_tracks_v9_repair: {class: P, prod_only: true, note: "prod leftover, not in migrations, no code; drop candidate"}
   recommendation_quality_models: {class: P}
-  star_track_tiers: {class: P, note: "read only by streaming-core once HQ upgrade runs on core (BREAK H1)"}
+  star_track_tiers: {class: P, note: "read only by streaming-core once HQ upgrade runs on core (BREAK H1); recheck_at is when the refresh rechecks a row without a mark"}
   storage_event_repairs: {class: P, note: "jobs receipt of a re-announced upload (B10)"}
-  storage_event_state: {class: P}
+  storage_event_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   subscription_snapshot_state: {class: P}
   taste_schedule: {class: P}
   track_work_aliases: {class: P}
   transcription_sync_versions: {class: P}
-  transcription_wire_state: {class: P}
+  transcription_wire_state: {class: P, derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}}
   user_collection_sync: {class: P, note: "no code reader or writer; drop candidate"}
   wanted_track_work_aliases: {class: P}
   rec_hard_negative_sweep: {class: P, db: ops}
@@ -272,6 +275,8 @@ tables:
     pk: [tbl, pk, id]
     columns: {tbl: text, pk: jsonb, node: "text NOT NULL", id: uuid}
   oauth_app_tokens_local: {class: L, planned: B8, note: "fallback app tokens of this node: B11 issues them, streaming and the api read them with oauth_app_tokens"}
+  star_due_marks: {class: L, note: "tracks whose star flags the refresh rechecks next, written by the star_due_mark triggers on core, read and deleted by the jobs refresh"}
+  star_due_watch: {class: L, note: "one row, the last refresh of this node; without a fresh row the triggers write no marks"}
   repl_resend:
     class: L
     planned: B2

@@ -835,7 +835,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.align_due, t.audio_due, t.embed_due, t.enrich_due, t.lookup_due, t.sc_track_id, t.tier, t.tiered_at, t.upgrade_from, t.upgrade_tried_at)::text) FROM public.star_track_tiers t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
+SELECT md5(ROW(t.align_due, t.audio_due, t.embed_due, t.enrich_due, t.lookup_due, t.recheck_at, t.sc_track_id, t.tier, t.tiered_at, t.upgrade_from, t.upgrade_tried_at)::text) FROM public.star_track_tiers t WHERE t.sc_track_id = (k ->> 'sc_track_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_storage_event_repairs(k jsonb)

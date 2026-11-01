@@ -234,8 +234,8 @@ class Model(unittest.TestCase):
         self.assertEqual(support.build(s, sc).tables["items"].core_cols, ["last_read_at"])
         s["tables"]["reads"]["derived"]["reads_wake"]["rows"] = ["item_tags", "likes"]
         self.assertEqual(problems(s, sc), ["reads: derived trigger reads_wake does not write rows of likes; drop it from rows"])
-        s["tables"]["jobs_q"]["derived"] = {"reads_wake": {}}
-        self.assertIn("jobs_q: derived triggers only on C and K tables", problems(s, sc))
+        s["tables"]["events"]["derived"] = {"reads_wake": {}}
+        self.assertIn("events: derived triggers only on C, K and P tables", problems(s, sc))
 
     def test_fk_parents_and_orphan_fks(self):
         sc = support.schema()

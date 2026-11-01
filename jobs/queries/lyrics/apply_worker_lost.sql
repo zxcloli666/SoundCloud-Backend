@@ -13,4 +13,6 @@ WHERE state.sc_track_id = $1
   AND state.attempt = $3
   AND state.status IN ('pending', 'reopenable')
   AND COALESCE(state.result_rank, 0) <= $5::smallint
+  AND (state.status, state.reason, state.result_rank)
+      IS DISTINCT FROM ('reopenable', $4::varchar, $5::smallint)
 RETURNING state.sc_track_id AS "sc_track_id!"

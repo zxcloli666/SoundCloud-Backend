@@ -86,7 +86,9 @@ pub(super) async fn alignments(
         .iter()
         .map(|candidate| candidate.sc_track_id.clone())
         .collect();
-    let tiers = of_tracks(&mut **transaction, &ids).await?;
+    let tiers = of_tracks(&mut **transaction, &ids)
+        .await
+        .inspect_err(super::statement_failed("track_tiers"))?;
     Ok(picked
         .into_iter()
         .map(|candidate| {
@@ -167,39 +169,36 @@ async fn align_pass(
 ) -> Result<Vec<AlignCandidate>, sqlx::Error> {
     let limit = with_next(left);
     match pass {
-        Pass::Star(stored) => {
-            sqlx::query_file_as!(
-                AlignCandidate,
-                "queries/lyrics/reap_transcriptions_align_star.sql",
-                limit,
-                stored,
-                taken,
-                STAR_SCAN_WINDOW
-            )
-            .fetch_all(&mut **transaction)
-            .await
-        }
-        Pass::Liked => {
-            sqlx::query_file_as!(
-                AlignCandidate,
-                "queries/lyrics/reap_transcriptions_align_liked.sql",
-                limit,
-                LIKED_PRIORITY,
-                taken,
-                LIKED_SCAN_WINDOW
-            )
-            .fetch_all(&mut **transaction)
-            .await
-        }
-        Pass::Rest => {
-            sqlx::query_file_as!(
-                AlignCandidate,
-                "queries/lyrics/reap_transcriptions_align.sql",
-                limit,
-                taken
-            )
-            .fetch_all(&mut **transaction)
-            .await
-        }
+        Pass::Star(stored) => sqlx::query_file_as!(
+            AlignCandidate,
+            "queries/lyrics/reap_transcriptions_align_star.sql",
+            limit,
+            stored,
+            taken,
+            STAR_SCAN_WINDOW
+        )
+        .fetch_all(&mut **transaction)
+        .await
+        .inspect_err(super::statement_failed("reap_transcriptions_align_star")),
+        Pass::Liked => sqlx::query_file_as!(
+            AlignCandidate,
+            "queries/lyrics/reap_transcriptions_align_liked.sql",
+            limit,
+            LIKED_PRIORITY,
+            taken,
+            LIKED_SCAN_WINDOW
+        )
+        .fetch_all(&mut **transaction)
+        .await
+        .inspect_err(super::statement_failed("reap_transcriptions_align_liked")),
+        Pass::Rest => sqlx::query_file_as!(
+            AlignCandidate,
+            "queries/lyrics/reap_transcriptions_align.sql",
+            limit,
+            taken
+        )
+        .fetch_all(&mut **transaction)
+        .await
+        .inspect_err(super::statement_failed("reap_transcriptions_align")),
     }
 }
