@@ -14,6 +14,7 @@ const READERS: &[&str] = &[
     "std::env::var",
     "schedule_interval(",
     "stream_bytes(",
+    "jetstream_domains(",
     "worker_backlog(",
 ];
 
@@ -38,6 +39,12 @@ const READ_BY_A_LIBRARY: &[&str] = &[
     "DATABASE_SSL_CA",
     "DATABASE_SSL_CERT",
     "DATABASE_SSL_KEY",
+    "NATS_TLS_CA",
+    "NATS_TLS_CERT",
+    "NATS_TLS_KEY",
+    "QDRANT_TLS_CA",
+    "QDRANT_TLS_CERT",
+    "QDRANT_TLS_KEY",
     "OPS_DATABASE_HOST",
     "OPS_DATABASE_PORT",
     "OPS_DATABASE_NAME",

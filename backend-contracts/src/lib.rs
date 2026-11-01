@@ -1,3 +1,5 @@
+pub mod admin_catalog;
+pub mod auth;
 mod catalog_collection;
 mod catalog_refresh;
 pub mod diag;
@@ -23,8 +25,9 @@ pub use catalog_refresh::{
 pub use job::{
     AdminMaintenancePayload, COLLAB_MAX_MIN_COUNT, CollabTrainPayload, CrawlArtistPayload,
     EmptyPayload, INDEX_TRACK_PRIORITY, IndexTrackPayload, JobKind, JobLane, LyricsEmbedPayload,
-    LyricsLookupPayload, PlaylistObservePayload, STAR_PRIORITY_BONUS, SYNC_QUEUE_MAX_RETRIES,
-    StoredAudioDispatchPayload, SyncQueueFlushPayload, UnknownJobKind, Versioned,
+    LyricsLookupPayload, PlaylistObservePayload, ReplReplayPayload, STAR_PRIORITY_BONUS,
+    SYNC_QUEUE_MAX_RETRIES, StoredAudioDispatchPayload, SyncQueueFlushPayload, UnknownJobKind,
+    Versioned,
 };
 pub use taste::SUPERLIKE_WEIGHT;
 pub use telemetry::{HardNegative, Impression, ImpressionBatch};

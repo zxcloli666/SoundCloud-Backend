@@ -4,7 +4,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::modules::auth::{AuthHealthService, AuthService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
 
@@ -25,6 +25,7 @@ fn auth(pool: &PgPool) -> anyhow::Result<Arc<AuthService>> {
         sc,
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis, pool.clone()),
+        CoreRpc::unreachable(),
     ))
 }
 

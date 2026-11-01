@@ -41,7 +41,7 @@ impl FromRequestParts<AppState> for SessionCtx {
 
         let session = state
             .auth
-            .get_session_cached(session_id)
+            .find_session_cached(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
 

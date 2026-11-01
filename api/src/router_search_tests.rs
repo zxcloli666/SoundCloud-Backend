@@ -16,7 +16,7 @@ use crate::config::{
     DbSslCfg, DiagCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg,
     StreamingCfg, SubscriptionsCfg,
 };
-use crate::modules::auth::{AuthHealthService, AuthService, LinkService, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::sc::read_tests::SearchRelay;
 use crate::sc::{ScClient, ScReadService};
@@ -100,10 +100,12 @@ fn config(redis: &str) -> AppConfig {
         },
         nats: NatsCfg {
             url: "nats://127.0.0.1:1".to_owned(),
+            tls: None,
         },
         qdrant: QdrantCfg {
             grpc_url: "http://127.0.0.1:1".to_owned(),
             api_key: String::new().into(),
+            tls: None,
         },
         storage: StorageCfg { url: String::new() },
         subscriptions: SubscriptionsCfg {
@@ -130,6 +132,7 @@ fn config(redis: &str) -> AppConfig {
         max_track_duration_ms: 420_000,
         premium_reserve: false,
         reserve_backend: false,
+        api_background: true,
     }
 }
 
@@ -159,6 +162,7 @@ pub(super) async fn state(
         sc.clone(),
         oauth_apps.clone(),
         AuthHealthService::with_database(redis_pool.clone(), pg.clone()),
+        CoreRpc::unreachable(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
     let tokens = TokenProvider::new(auth.clone(), OAuthAppTokenService::new(pg.clone()));
@@ -192,6 +196,7 @@ pub(super) async fn state(
         wreq::Client::new(),
         String::new(),
         pg.clone(),
+        true,
     );
     let worker =
         crate::modules::lyrics::WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());
@@ -200,7 +205,7 @@ pub(super) async fn state(
         qdrant,
         pg.clone(),
         nats,
-        redis_pool,
+        redis_pool.clone(),
         worker,
         s3,
         collab_vector.clone(),
@@ -236,7 +241,7 @@ pub(super) async fn state(
             sync_queue: sync_queue.clone(),
             cold_refresh: cold_refresh.clone(),
             tokens,
-            background_jobs: background_jobs.clone(),
+            redis: redis_pool.clone(),
             miss: miss.clone(),
         },
     );
@@ -246,6 +251,7 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
+        core: CoreRpc::unreachable(),
         diag: crate::modules::diag::DiagService::new(pg.clone(), &config.diag),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),
@@ -261,11 +267,7 @@ pub(super) async fn state(
         ),
         history: crate::modules::history::HistoryService::new(pg.clone()),
         featured: crate::modules::featured::FeaturedService::new(pg.clone()),
-        lyrics: crate::modules::lyrics::LyricsService::new(
-            pg.clone(),
-            background_jobs.clone(),
-            false,
-        ),
+        lyrics: crate::modules::lyrics::LyricsService::new(pg.clone(), false),
         discover: crate::modules::discover::DiscoverService::new(pg.clone(), cache.clone()),
         config,
         background_jobs,

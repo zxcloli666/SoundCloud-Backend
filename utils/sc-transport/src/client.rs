@@ -86,9 +86,9 @@ pub struct ScClient {
 
 struct Inner {
     http: Client,
+    auth_base: String,
     api_base: String,
     home_base: String,
-    auth_base: String,
     proxy_url: String,
     proxy_fallback: bool,
     relay: Option<Arc<dyn RelayTransport>>,
@@ -152,9 +152,9 @@ impl ScClient {
         Ok(Self {
             inner: Arc::new(Inner {
                 http,
+                auth_base: AUTH_BASE.to_owned(),
                 api_base: cfg.api_base.clone().unwrap_or_else(|| API_BASE.to_owned()),
                 home_base: cfg.home_base.clone().unwrap_or_else(|| SC_HOME.to_owned()),
-                auth_base: AUTH_BASE.to_owned(),
                 proxy_url: cfg.proxy_url.clone(),
                 proxy_fallback: cfg.proxy_fallback,
                 relay: None,
@@ -164,12 +164,28 @@ impl ScClient {
         })
     }
 
+    pub fn with_auth_base(self, auth_base: &str) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                http: self.inner.http.clone(),
+                auth_base: auth_base.trim_end_matches('/').to_owned(),
+                api_base: self.inner.api_base.clone(),
+                home_base: self.inner.home_base.clone(),
+                proxy_url: self.inner.proxy_url.clone(),
+                proxy_fallback: self.inner.proxy_fallback,
+                relay: self.inner.relay.clone(),
+                anon_client_id: RwLock::new(AnonClientId::default()),
+                anon_refresh: Mutex::new(()),
+            }),
+        }
+    }
+
     pub fn with_relay(self, relay: Arc<dyn RelayTransport>) -> Self {
         let inner = Arc::new(Inner {
             http: self.inner.http.clone(),
+            auth_base: self.inner.auth_base.clone(),
             api_base: self.inner.api_base.clone(),
             home_base: self.inner.home_base.clone(),
-            auth_base: self.inner.auth_base.clone(),
             proxy_url: self.inner.proxy_url.clone(),
             proxy_fallback: self.inner.proxy_fallback,
             relay: Some(relay),
@@ -186,22 +202,6 @@ impl ScClient {
 
     pub fn auth_base_url(&self) -> &str {
         &self.inner.auth_base
-    }
-
-    pub fn with_auth_base(self, auth_base: &str) -> Self {
-        Self {
-            inner: Arc::new(Inner {
-                http: self.inner.http.clone(),
-                api_base: self.inner.api_base.clone(),
-                home_base: self.inner.home_base.clone(),
-                auth_base: auth_base.to_owned(),
-                proxy_url: self.inner.proxy_url.clone(),
-                proxy_fallback: self.inner.proxy_fallback,
-                relay: self.inner.relay.clone(),
-                anon_client_id: RwLock::new(AnonClientId::default()),
-                anon_refresh: Mutex::new(()),
-            }),
-        }
     }
 
     #[cfg(feature = "upload")]
@@ -267,18 +267,16 @@ impl ScClient {
         decode_json(&bytes)
     }
 
-    pub async fn refresh_access_token(
+    pub async fn client_credentials_token(
         &self,
-        refresh_token: &str,
         creds: &OAuthCredentials,
     ) -> ScResult<ScTokenResponse> {
-        let body = serde_urlencoded::to_string([
-            ("grant_type", "refresh_token"),
-            ("client_id", creds.client_id.as_str()),
-            ("client_secret", creds.client_secret.as_str()),
-            ("refresh_token", refresh_token),
-        ])
-        .map_err(|e| ScError::invalid(format!("urlencode: {e}")))?;
+        let body = serde_urlencoded::to_string([("grant_type", "client_credentials")])
+            .map_err(|e| ScError::invalid(format!("urlencode: {e}")))?;
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", creds.client_id, creds.client_secret));
+        let authorization = HeaderValue::from_str(&format!("Basic {basic}"))
+            .map_err(|_| ScError::invalid("client credentials are not a valid header"))?;
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -289,6 +287,7 @@ impl ScClient {
             ACCEPT,
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
+        headers.insert(AUTHORIZATION, authorization);
 
         let url = format!("{}/oauth/token", self.inner.auth_base);
         let bytes = self

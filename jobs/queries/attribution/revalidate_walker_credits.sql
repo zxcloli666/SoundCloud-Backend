@@ -6,13 +6,27 @@ WITH doomed AS (SELECT credit.track_id,
                   AND track.enrich_locked_at IS NULL
                 ORDER BY credit.track_id
                 LIMIT $1),
+     credits AS MATERIALIZED (SELECT credit.track_id, credit.artist_id, credit.role
+                              FROM track_artists AS credit
+                              WHERE (credit.track_id, credit.artist_id) IN (SELECT track_id, artist_id FROM doomed)
+                                AND credit.source = 'walker'
+                              ORDER BY credit.track_id, credit.artist_id, credit.role
+                              FOR UPDATE OF credit),
      removed AS (
          DELETE FROM track_artists AS credit
-             USING doomed
-             WHERE credit.track_id = doomed.track_id
-                 AND credit.artist_id = doomed.artist_id
-                 AND credit.source = 'walker'
+             USING credits
+             WHERE credit.track_id = credits.track_id
+                 AND credit.artist_id = credits.artist_id
+                 AND credit.role = credits.role
              RETURNING credit.track_id, credit.artist_id),
+     locked AS MATERIALIZED (SELECT track.id
+                             FROM tracks AS track
+                             WHERE EXISTS (SELECT 1
+                                           FROM removed
+                                           WHERE removed.track_id = track.id
+                                             AND removed.artist_id = track.primary_artist_id)
+                             ORDER BY track.sc_track_id
+                             FOR NO KEY UPDATE OF track),
      reset AS (
          UPDATE tracks AS track
              SET primary_artist_id = NULL,
@@ -23,9 +37,8 @@ WITH doomed AS (SELECT credit.track_id,
                  enrich_attempts = 0,
                  enrich_next_run_at = now() + random() * interval '30 minutes',
                  updated_at = now()
-             FROM removed
-             WHERE track.id = removed.track_id
-                 AND track.primary_artist_id = removed.artist_id
+             FROM locked
+             WHERE track.id = locked.id
              RETURNING track.id)
 SELECT (SELECT count(*) FROM removed) AS "credits_removed!",
        (SELECT count(*) FROM reset)   AS "tracks_reset!"

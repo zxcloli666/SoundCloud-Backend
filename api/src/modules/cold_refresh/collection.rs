@@ -1,14 +1,15 @@
 use backend_contracts::{
     CatalogCollection, CatalogCollectionPayload, CatalogEntity, CollectionFailure, JobKind,
-    STAR_PRIORITY_BONUS, Versioned,
+    STAR_PRIORITY_BONUS,
 };
 use chrono::{DateTime, Utc};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sqlx::PgPool;
-use uuid::Uuid;
+use wt::EnqueuedJob;
 
+use crate::background_jobs::queue;
 use crate::cache::ListPageResult;
 use crate::common::pagination::last_page;
 use crate::common::sc_ids::{extract_sc_id, user_id_variants};
@@ -128,26 +129,22 @@ pub(super) async fn ensure(
         } else {
             Vec::new()
         };
-        let body = serde_json::to_value(Versioned::V1(payload))
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        let kind = JobKind::CatalogCollection;
         let priority = if owner {
             OWNER_PRIORITY
         } else {
             VIEWER_PRIORITY
         };
-        sqlx::query_file!(
-            "queries/cold_refresh/enqueue_entity.sql",
-            Uuid::now_v7(),
-            kind.as_str(),
-            kind.lane().as_str(),
-            &key,
-            body,
-            priority,
-            &star_candidates,
-            STAR_PRIORITY_BONUS
+        let job = queue::job(JobKind::CatalogCollection, key.clone(), payload, priority)?;
+        queue::enqueue(
+            pool,
+            vec![EnqueuedJob {
+                raise_priority: true,
+                star_candidates,
+                star_bonus: STAR_PRIORITY_BONUS,
+                ..job
+            }],
+            None,
         )
-        .execute(pool)
         .await?;
     }
     let job = sqlx::query_file!("queries/cold_refresh/collection_job.sql", &key)
@@ -160,7 +157,7 @@ pub(super) async fn ensure(
     Ok(CollectionSync {
         status: "refreshing",
         last_completed_at: synced_at,
-        queued_since: job.map(|job| job.created_at),
+        queued_since: job.map(|job| job.queued_since),
         error_code: failure
             .and_then(|failure| CollectionFailure::from_last_error(&failure.code))
             .map(CollectionFailure::as_str),

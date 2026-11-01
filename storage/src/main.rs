@@ -16,6 +16,7 @@ mod config;
 mod pipeline;
 mod quality;
 mod routes;
+mod spool;
 mod transcode;
 
 use backend::{Backend, GdriveBackend, LocalBackend, S3Backend};
@@ -135,7 +136,7 @@ async fn main() {
     );
 
     let config = Arc::new(config);
-    let bus = BusClient::connect(&config.nats_url).await;
+    let bus = BusClient::connect(&config.nats_url, &config.event_spool_path).await;
     if bus.enabled() && config.event_base_url.is_empty() {
         warn!("NATS connected but EVENT_BASE_URL is empty — track_uploaded events will be skipped");
     }

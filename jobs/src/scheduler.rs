@@ -47,6 +47,7 @@ const SCHEDULES: &[Schedule] = &[
     Schedule::new(JobKind::RecommendationQualityBackfill, 10 * 60, -5, 8),
     Schedule::new(JobKind::RecommendationQualityTrain, 6 * 60 * 60, -10, 4),
     Schedule::new(JobKind::RecommendationWavePriority, 60 * 60, -5, 4),
+    Schedule::new(JobKind::ReplRetention, 10 * 60, -10, 4).delayed(),
     Schedule::new(JobKind::SearchTermsRefresh, 24 * 60 * 60, -10, 2).delayed(),
     Schedule::new(JobKind::StarTrackTiers, 5 * 60, 0, 4),
     Schedule::new(JobKind::SubscriptionsSnapshot, 5 * 60, -5, 8),

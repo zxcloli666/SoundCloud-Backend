@@ -7,7 +7,6 @@ use axum::extract::{DefaultBodyLimit, Multipart, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use catalog_ingest::TrackPriority;
 use serde_json::Value;
 use tower_http::timeout::TimeoutLayer;
 
@@ -54,20 +53,15 @@ async fn remember_upload(st: &AppState, sc_user_id: &str, track: &Value) {
         tracing::warn!("uploaded track came back without an urn");
         return;
     };
+    let owned = wt::OwnedInsert {
+        user_id: extract_sc_id(sc_user_id).to_owned(),
+        sc_track_id: sc_track_id.clone(),
+        variants: user_id_variants(sc_user_id),
+        at: wt::now(),
+    };
     let ingested = async {
         let observation = catalog_ingest::Observation::begin(&st.pg).await?;
-        st.indexing
-            .ingest_track_from_sc(track, TrackPriority::FreshDrop, observation)
-            .await?;
-        sqlx::query_file!(
-            "queries/tracks/service/insert_owned.sql",
-            extract_sc_id(sc_user_id),
-            &sc_track_id,
-            &user_id_variants(sc_user_id)
-        )
-        .execute(&st.pg)
-        .await?;
-        AppResult::Ok(())
+        st.indexing.ingest_upload(track, &owned, observation).await
     };
     if let Err(error) = ingested.await {
         tracing::warn!(track = %sc_track_id, %error, "uploaded track not mirrored yet");

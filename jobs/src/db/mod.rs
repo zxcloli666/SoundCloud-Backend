@@ -2,12 +2,14 @@
 mod connection_discipline_tests;
 pub(crate) mod migrations;
 mod pool;
+mod retry;
 
 use sqlx::PgPool;
 
 use crate::config::JobsConfig;
 
 pub use pool::DatabaseError;
+pub use retry::retry_conflicts;
 
 #[derive(Clone)]
 pub struct Databases {
@@ -41,6 +43,9 @@ impl Databases {
         let analytics = connect_analytics(config);
         let (main, queue, maintenance, ops, analytics) =
             tokio::try_join!(main, queue, maintenance, ops, analytics)?;
+        if let Some(read) = &analytics {
+            pool::ensure_same_scd_node(&main.fast, read).await?;
+        }
         let analytics = analytics.unwrap_or_else(|| maintenance.clone());
         Ok(Self {
             main,

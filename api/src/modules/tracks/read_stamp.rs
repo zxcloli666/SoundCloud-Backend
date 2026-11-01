@@ -20,12 +20,12 @@ impl ReadStamps {
         }
     }
 
-    pub(super) async fn touch(&self, pg: &PgPool, sc_track_id: &str) {
-        let key = sc_track_id.to_owned();
+    pub(super) async fn touch(&self, pg: &PgPool, urn: &str) {
+        let key = urn.to_owned();
         if self.stamped.contains_key(&key) {
             return;
         }
-        let stamped = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
+        let stamped = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", urn)
             .execute(pg)
             .await;
         if stamped.is_ok() {
@@ -37,6 +37,8 @@ impl ReadStamps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const URN: &str = "soundcloud:tracks:7001";
 
     async fn seed(pool: &PgPool) -> anyhow::Result<()> {
         sqlx::query(
@@ -50,15 +52,27 @@ mod tests {
 
     async fn last_read(pool: &PgPool) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
         Ok(
-            sqlx::query_scalar("SELECT last_read_at FROM tracks WHERE sc_track_id = '7001'")
-                .fetch_one(pool)
+            sqlx::query_scalar("SELECT last_read_at FROM entity_reads WHERE entity_urn = $1")
+                .bind(URN)
+                .fetch_optional(pool)
                 .await?,
         )
     }
 
+    async fn read_long_ago(pool: &PgPool, age: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE entity_reads SET last_read_at = now() - $2::interval WHERE entity_urn = $1",
+        )
+        .bind(URN)
+        .bind(age)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     async fn plain_sql(pool: &PgPool) -> anyhow::Result<u64> {
         Ok(
-            sqlx::query_file!("queries/tracks/service/touch_last_read.sql", "7001")
+            sqlx::query_file!("queries/tracks/service/touch_last_read.sql", URN)
                 .execute(pool)
                 .await?
                 .rows_affected(),
@@ -72,36 +86,52 @@ mod tests {
         seed(&pool).await?;
         let stamps = ReadStamps::new();
 
-        stamps.touch(&pool, "7001").await;
+        stamps.touch(&pool, URN).await;
         let first = last_read(&pool).await?.expect("stamped");
 
-        stamps.touch(&pool, "7001").await;
+        stamps.touch(&pool, URN).await;
         assert_eq!(last_read(&pool).await?, Some(first));
         assert_eq!(plain_sql(&pool).await?, 0, "the sql guard also skips it");
+        let track_stamp: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT last_read_at FROM tracks WHERE sc_track_id = '7001'")
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            track_stamp.is_none(),
+            "a read no longer rewrites the track row"
+        );
         Ok(())
     }
 
     #[sqlx::test(migrations = "./migrations")]
-    async fn a_fresh_stamp_is_remembered_so_the_next_read_skips_the_database(
+    async fn a_touch_the_sql_guard_skipped_is_remembered_and_the_next_one_stays_off_the_database(
         pool: PgPool,
     ) -> anyhow::Result<()> {
         seed(&pool).await?;
-        sqlx::query("UPDATE tracks SET last_read_at = now() - interval '2 hours'")
-            .execute(&pool)
-            .await?;
+        assert_eq!(plain_sql(&pool).await?, 1);
+        read_long_ago(&pool, "30 minutes").await?;
+        let fresh = last_read(&pool).await?;
         let stamps = ReadStamps::new();
 
-        stamps.touch(&pool, "7001").await;
-        assert!(stamps.stamped.get(&"7001".to_owned()).is_some());
+        stamps.touch(&pool, URN).await;
+        assert_eq!(last_read(&pool).await?, fresh, "the sql guard wrote 0 rows");
+        assert!(
+            stamps.stamped.get(&URN.to_owned()).is_some(),
+            "the guard skipped the row and the answer was ok, so the key is remembered"
+        );
 
-        sqlx::query("UPDATE tracks SET last_read_at = NULL")
-            .execute(&pool)
-            .await?;
-        stamps.touch(&pool, "7001").await;
+        read_long_ago(&pool, "61 minutes").await?;
+        let due = last_read(&pool).await?.expect("old stamp");
+        stamps.touch(&pool, URN).await;
         assert_eq!(
             last_read(&pool).await?,
-            None,
-            "the second touch must not reach the database"
+            Some(due),
+            "a remembered key never reaches the database, even with a due stamp"
+        );
+        assert_eq!(
+            plain_sql(&pool).await?,
+            1,
+            "the database would have restamped it"
         );
         Ok(())
     }
@@ -110,11 +140,11 @@ mod tests {
     async fn a_failed_update_is_not_remembered(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool).await?;
         let stamps = ReadStamps::new();
-        sqlx::query("ALTER TABLE tracks RENAME COLUMN last_read_at TO last_read_at_x")
+        sqlx::query("ALTER TABLE entity_reads RENAME COLUMN last_read_at TO last_read_at_x")
             .execute(&pool)
             .await?;
-        stamps.touch(&pool, "7001").await;
-        assert!(stamps.stamped.get(&"7001".to_owned()).is_none());
+        stamps.touch(&pool, URN).await;
+        assert!(stamps.stamped.get(&URN.to_owned()).is_none());
         Ok(())
     }
 }

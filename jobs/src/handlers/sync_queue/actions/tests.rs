@@ -37,6 +37,7 @@ fn mutation(action_type: &str, target_urn: &str, payload: Option<Value>) -> Clai
         remote_result: None,
         created_at: chrono::Utc::now(),
         star: false,
+        desired: None,
     }
 }
 
@@ -77,11 +78,12 @@ async fn a_like_or_follow_of_a_missing_target_is_done_but_a_missing_playlist_edi
             let done = execute_remote(&client, &mutation(action, target, None), "token").await?;
             assert!(matches!(done, Remote::TargetMissing), "{action} {target}");
         }
-        let edit = mutation(
+        let mut edit = mutation(
             "playlist_update",
             "soundcloud:playlists:404",
             Some(serde_json::json!({"playlist": {"title": "Renamed"}})),
         );
+        edit.desired = Some(serde_json::json!({"title": "Renamed", "title_normalized": "renamed"}));
         let failed = execute_remote(&client, &edit, "token").await;
         assert!(matches!(
             failed,

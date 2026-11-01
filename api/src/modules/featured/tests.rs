@@ -21,11 +21,10 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn featured_changes_atomically_enqueue_public_catalog_hydration(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install(&pool).await?;
     let service = super::service::FeaturedService::new(pool.clone());
     assert!(service.create("track", "42", None, None).await.is_err());
     let item = service
@@ -44,6 +43,14 @@ async fn featured_changes_atomically_enqueue_public_catalog_hydration(
         .first()
         .ok_or_else(|| anyhow::anyhow!("hydration job missing"))?;
     assert_eq!(key, "track:42:public");
+    let status: Vec<(String, String)> =
+        sqlx::query_as("SELECT dedup_key, state FROM job_status WHERE kind = 'catalog.refresh'")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        status,
+        vec![("track:42:public".to_owned(), "queued".to_owned())]
+    );
     let payload: backend_contracts::Versioned<backend_contracts::CatalogRefreshPayload> =
         serde_json::from_value(body.clone())?;
     let backend_contracts::Versioned::V1(payload) = payload;
@@ -62,9 +69,8 @@ async fn featured_changes_atomically_enqueue_public_catalog_hydration(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "./migrations")]
 async fn hydration_failure_rolls_back_featured_creation(pool: PgPool) -> anyhow::Result<()> {
-    install(&pool).await?;
     sqlx::query("ALTER TABLE background_jobs ADD CHECK (kind <> 'catalog.refresh')")
         .execute(&pool)
         .await?;

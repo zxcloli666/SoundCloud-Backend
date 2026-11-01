@@ -4,9 +4,11 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 use super::actions::{self, ActionError};
-use super::model::{ClaimedMutation, LockedMutation, NextWaiting};
+use super::model::{ClaimedMutation, LockedMutation, NextWaiting, SettledRow};
 
 pub const PACED_ACTIONS: [&str; 2] = ["like_track", "like_playlist"];
+const SETTLE_BATCH: i64 = 500;
+const SETTLE_ROUNDS: usize = 20;
 const LIKES_AND_UNLIKES: [&str; 4] = [
     "like_track",
     "unlike_track",
@@ -185,6 +187,18 @@ impl SyncQueueRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn drop_superseded(&self, mutation: &ClaimedMutation) -> Result<bool, sqlx::Error> {
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/drop_superseded.sql",
+            mutation.id,
+            mutation.lease_id,
+            mutation.lease_generation,
+            mutation.generation
+        )
+        .fetch_one(&self.pool)
+        .await
+    }
+
     pub async fn record_remote_attempt(
         &self,
         mutation: &ClaimedMutation,
@@ -203,6 +217,21 @@ impl SyncQueueRepository {
 
     pub async fn finalize(&self, mutation: &ClaimedMutation) -> Result<(), FinalizeError> {
         let mut transaction = self.pool.begin().await?;
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/lock_mirror.sql",
+            mutation.action_type,
+            mutation.user_id,
+            mutation.target_urn
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        sqlx::query_file_scalar!(
+            "queries/sync_queue/lock_catalog_target.sql",
+            mutation.action_type,
+            mutation.target_urn
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
         let locked = sqlx::query_file_as!(
             LockedMutation,
             "queries/sync_queue/lock_for_finalize.sql",
@@ -236,15 +265,70 @@ impl SyncQueueRepository {
             .await?;
         actions::apply_local(&mut transaction, mutation, remote_result).await?;
         sqlx::query_file!(
-            "queries/sync_queue/delete_completed.sql",
+            "queries/sync_queue/release_lease.sql",
             mutation.id,
             mutation.lease_id,
             mutation.lease_generation
         )
         .execute(&mut *transaction)
         .await?;
+        sqlx::query_file_scalar!("queries/sync_queue/purge.sql", mutation.id, locked.intent_v)
+            .fetch_one(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub async fn adopt(&self) -> Result<u64, sqlx::Error> {
+        let mut adopted = 0;
+        for _ in 0..SETTLE_ROUNDS {
+            let batch = sqlx::query_file!("queries/sync_queue/adopt.sql", SETTLE_BATCH)
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
+            adopted += batch;
+            if batch < SETTLE_BATCH as u64 {
+                break;
+            }
+        }
+        Ok(adopted)
+    }
+
+    pub async fn settle_cancelled(&self) -> Result<u64, sqlx::Error> {
+        let ids = sqlx::query_file_scalar!("queries/sync_queue/cancelled.sql", SETTLE_BATCH)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut settled = 0;
+        for id in ids {
+            match self.settle(id).await {
+                Ok(true) => settled += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(id = %id, error = %error, "cancelled sync mutation was not settled")
+                }
+            }
+        }
+        Ok(settled)
+    }
+
+    async fn settle(&self, id: uuid::Uuid) -> Result<bool, sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+        let queued = sqlx::query_file_as!(SettledRow, "queries/sync_queue/lock_settled.sql", id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        let Some(queued) = queued.filter(|row| row.cancelled && row.idle) else {
+            transaction.commit().await?;
+            return Ok(false);
+        };
+        if queued.wanted == Some(true) {
+            sqlx::query_file!("queries/sync_queue/uncancel.sql", queued.id)
+                .execute(&mut *transaction)
+                .await?;
+        } else {
+            purge(&mut transaction, &queued).await?;
+        }
+        transaction.commit().await?;
+        Ok(true)
     }
 
     async fn enqueue_confirmation(
@@ -382,6 +466,12 @@ impl SyncQueueRepository {
     fn lease_milliseconds(&self) -> i64 {
         i64::try_from(self.lease_duration.as_millis()).unwrap_or(i64::MAX)
     }
+}
+
+async fn purge(connection: &mut sqlx::PgConnection, row: &SettledRow) -> Result<bool, sqlx::Error> {
+    sqlx::query_file_scalar!("queries/sync_queue/purge.sql", row.id, row.intent_v)
+        .fetch_one(connection)
+        .await
 }
 
 fn bounded_message(message: &str) -> String {

@@ -4,11 +4,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::forward::{RequestKey, forward};
 use crate::common::admin::AdminAuth;
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::TokenKind;
 use crate::state::AppState;
-use catalog_normalize::{RawMetaMatch, compare_with_meta, meta_artist_names, normalize_name};
+use axum::response::Response;
+use backend_contracts::admin_catalog::{
+    AddCredit, AdminCommand, ArtistCreate, ArtistUpdate, DetachAccountTracks, DetachArtist,
+    SetAlbum, SetPrimaryArtist, featured_role,
+};
+use catalog_normalize::{RawMetaMatch, compare_with_meta, meta_artist_names};
 
 #[derive(Deserialize)]
 pub struct ResolveQuery {
@@ -145,9 +151,6 @@ pub struct ArtistRow {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-const ARTIST_COLS: &str = "id, name, normalized_name, country, avatar_url, bio, sc_user_id, source, \
-     confidence, mb_artist_id, spotify_artist_id, genius_artist_id, merged_into, created_at, updated_at";
-
 #[derive(Serialize, sqlx::FromRow)]
 pub struct ScAccountRow {
     pub sc_user_id: String,
@@ -211,112 +214,25 @@ pub async fn artist_detail(
     }))
 }
 
-#[derive(Deserialize)]
-pub struct CreateArtist {
-    pub name: String,
-    #[serde(default)]
-    pub country: Option<String>,
-    #[serde(default)]
-    pub bio: Option<String>,
-    #[serde(default)]
-    pub avatar_url: Option<String>,
-    #[serde(default)]
-    pub sc_user_id: Option<String>,
-}
-
 #[tracing::instrument(skip_all)]
 pub async fn artist_create(
     _: AdminAuth,
     State(st): State<AppState>,
-    Json(body): Json<CreateArtist>,
-) -> AppResult<Json<ArtistRow>> {
-    let name = body.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request("name is required"));
-    }
-    let normalized = normalize_name(name);
-    if normalized.is_empty() {
-        return Err(AppError::bad_request("name normalizes to empty"));
-    }
-
-    let exists: bool =
-        sqlx::query_file_scalar!("queries/admin/catalog/artist_name_exists.sql", &normalized)
-            .fetch_one(&st.pg)
-            .await?;
-    if exists {
-        return Err(AppError::bad_request(
-            "artist with this name already exists",
-        ));
-    }
-
-    let row = sqlx::query_as::<_, ArtistRow>(&format!(
-        "INSERT INTO artists (name, normalized_name, country, bio, avatar_url, sc_user_id, source, confidence) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'manual', 1.0) \
-         ON CONFLICT (normalized_name) WHERE merged_into IS NULL DO NOTHING \
-         RETURNING {ARTIST_COLS}"
-    ))
-        .bind(name)
-        .bind(&normalized)
-        .bind(&body.country)
-        .bind(&body.bio)
-        .bind(&body.avatar_url)
-        .bind(&body.sc_user_id)
-        .fetch_optional(&st.pg)
-        .await?;
-    match row {
-        Some(row) => Ok(Json(row)),
-        None => Err(AppError::bad_request(
-            "artist with this name already exists",
-        )),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct UpdateArtist {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub country: Option<String>,
-    #[serde(default)]
-    pub bio: Option<String>,
-    #[serde(default)]
-    pub avatar_url: Option<String>,
-    #[serde(default)]
-    pub sc_user_id: Option<String>,
-    #[serde(default)]
-    pub confidence: Option<f32>,
+    key: RequestKey,
+    Json(body): Json<ArtistCreate>,
+) -> AppResult<Response> {
+    forward(&st, key, AdminCommand::ArtistCreate(body)).await
 }
 
 #[tracing::instrument(skip_all)]
 pub async fn artist_update(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path(artist_id): Path<Uuid>,
-    Json(body): Json<UpdateArtist>,
-) -> AppResult<Json<ArtistRow>> {
-    let name = body
-        .name
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let normalized = name.as_deref().map(normalize_name);
-
-    let row = sqlx::query_file_as!(
-        ArtistRow,
-        "queries/admin/catalog/artist_update.sql",
-        artist_id,
-        name.as_deref(),
-        normalized.as_deref(),
-        body.country.as_deref(),
-        body.bio.as_deref(),
-        body.avatar_url.as_deref(),
-        body.sc_user_id.as_deref(),
-        body.confidence
-    )
-    .fetch_optional(&st.pg)
-    .await?
-    .ok_or_else(|| AppError::not_found("artist not found"))?;
-    Ok(Json(row))
+    Json(body): Json<ArtistUpdate>,
+) -> AppResult<Response> {
+    forward(&st, key, AdminCommand::ArtistUpdate { artist_id, body }).await
 }
 
 #[derive(Deserialize)]
@@ -540,211 +456,47 @@ pub async fn track_detail(
     }))
 }
 
-#[derive(Deserialize)]
-pub struct SetPrimaryArtist {
-    pub artist_id: Uuid,
-}
-
 #[tracing::instrument(skip_all)]
 pub async fn track_set_primary_artist(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path(track_id): Path<Uuid>,
     Json(body): Json<SetPrimaryArtist>,
-) -> AppResult<Json<Value>> {
-    let artist_ok: bool =
-        sqlx::query_file_scalar!("queries/admin/catalog/artist_exists.sql", body.artist_id)
-            .fetch_one(&st.pg)
-            .await?;
-    if !artist_ok {
-        return Err(AppError::bad_request("artist not found"));
-    }
-
-    let mut tx = st.pg.begin().await?;
-    sqlx::query_file!(
-        "queries/admin/catalog/block_delete_pair.sql",
-        track_id,
-        body.artist_id
+) -> AppResult<Response> {
+    forward(
+        &st,
+        key,
+        AdminCommand::TrackSetPrimaryArtist { track_id, body },
     )
-    .execute(&mut *tx)
-    .await?;
-    let updated = sqlx::query_file!(
-        "queries/admin/catalog/track_set_primary_artist.sql",
-        body.artist_id,
-        track_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err(AppError::not_found("track not found"));
-    }
-    sqlx::query_file!(
-        "queries/admin/catalog/track_artists_delete_primary.sql",
-        track_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/admin/catalog/track_artists_insert_primary.sql",
-        track_id,
-        body.artist_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(Json(serde_json::json!({ "ok": true })))
-}
-
-#[derive(Deserialize)]
-pub struct SetAlbum {
-    #[serde(default)]
-    pub album_id: Option<Uuid>,
+    .await
 }
 
 #[tracing::instrument(skip_all)]
 pub async fn track_set_album(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path(track_id): Path<Uuid>,
     Json(body): Json<SetAlbum>,
-) -> AppResult<Json<Value>> {
-    if let Some(album_id) = body.album_id {
-        let album_ok: bool =
-            sqlx::query_file_scalar!("queries/admin/catalog/album_exists.sql", album_id)
-                .fetch_one(&st.pg)
-                .await?;
-        if !album_ok {
-            return Err(AppError::bad_request("album not found"));
-        }
-    }
-
-    let mut tx = st.pg.begin().await?;
-    let updated = sqlx::query_file!(
-        "queries/admin/catalog/track_set_album.sql",
-        body.album_id,
-        track_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err(AppError::not_found("track not found"));
-    }
-    sqlx::query_file!(
-        "queries/admin/catalog/album_tracks_delete_by_track.sql",
-        track_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    if let Some(album_id) = body.album_id {
-        sqlx::query_file!(
-            "queries/admin/catalog/album_tracks_insert.sql",
-            album_id,
-            track_id
-        )
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "album_id": body.album_id }),
-    ))
-}
-
-const CREDIT_ROLES: [&str; 4] = ["primary", "featured", "remixer", "producer"];
-
-fn default_feature_role() -> String {
-    "featured".to_string()
-}
-
-fn canonical_role(role: &str) -> String {
-    let role = role.trim().to_lowercase();
-    if role == "feature" {
-        "featured".to_string()
-    } else {
-        role
-    }
-}
-
-#[derive(Deserialize)]
-pub struct AddCredit {
-    pub artist_id: Uuid,
-    #[serde(default = "default_feature_role")]
-    pub role: String,
-    #[serde(default)]
-    pub position: Option<i16>,
+) -> AppResult<Response> {
+    forward(&st, key, AdminCommand::TrackSetAlbum { track_id, body }).await
 }
 
 #[tracing::instrument(skip_all)]
 pub async fn track_add_credit(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path(track_id): Path<Uuid>,
     Json(body): Json<AddCredit>,
-) -> AppResult<Json<Value>> {
-    let role = canonical_role(&body.role);
-    if !CREDIT_ROLES.contains(&role.as_str()) {
-        return Err(AppError::bad_request(
-            "role must be one of: primary, featured, remixer, producer",
-        ));
-    }
-    let artist_ok: bool =
-        sqlx::query_file_scalar!("queries/admin/catalog/artist_exists.sql", body.artist_id)
-            .fetch_one(&st.pg)
-            .await?;
-    if !artist_ok {
-        return Err(AppError::bad_request("artist not found"));
-    }
-
-    let mut tx = st.pg.begin().await?;
-    let track_ok: bool =
-        sqlx::query_file_scalar!("queries/admin/catalog/track_exists.sql", track_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !track_ok {
-        return Err(AppError::not_found("track not found"));
-    }
-
-    sqlx::query_file!(
-        "queries/admin/catalog/block_delete_pair.sql",
-        track_id,
-        body.artist_id
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query_file!(
-        "queries/admin/catalog/track_artists_upsert_credit.sql",
-        track_id,
-        body.artist_id,
-        &role,
-        body.position.map(i32::from)
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    if role == "primary" {
-        sqlx::query_file!(
-            "queries/admin/catalog/track_artists_delete_other_primary.sql",
-            track_id,
-            body.artist_id
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query_file!(
-            "queries/admin/catalog/track_set_primary_artist_id.sql",
-            body.artist_id,
-            track_id
-        )
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(Json(serde_json::json!({ "ok": true, "role": role })))
+) -> AppResult<Response> {
+    forward(&st, key, AdminCommand::TrackAddCredit { track_id, body }).await
 }
 
 #[derive(Deserialize)]
 pub struct CreditQuery {
-    #[serde(default = "default_feature_role")]
+    #[serde(default = "featured_role")]
     pub role: String,
 }
 
@@ -752,100 +504,41 @@ pub struct CreditQuery {
 pub async fn track_remove_credit(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path((track_id, artist_id)): Path<(Uuid, Uuid)>,
     Query(q): Query<CreditQuery>,
-) -> AppResult<Json<Value>> {
-    let role = canonical_role(&q.role);
-
-    let mut tx = st.pg.begin().await?;
-    let res = sqlx::query_file!(
-        "queries/admin/catalog/track_artists_delete_credit.sql",
+) -> AppResult<Response> {
+    let command = AdminCommand::TrackRemoveCredit {
         track_id,
         artist_id,
-        &role
-    )
-    .execute(&mut *tx)
-    .await?;
-    if role == "primary" {
-        sqlx::query_file!(
-            "queries/admin/catalog/track_clear_primary_if_match.sql",
-            track_id,
-            artist_id
-        )
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "removed": res.rows_affected() }),
-    ))
-}
-
-#[derive(Deserialize)]
-pub struct DetachArtist {
-    pub artist_id: Uuid,
-    #[serde(default)]
-    pub note: Option<String>,
+        role: q.role,
+    };
+    forward(&st, key, command).await
 }
 
 #[tracing::instrument(skip_all)]
 pub async fn track_detach_artist(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path(track_id): Path<Uuid>,
     Json(body): Json<DetachArtist>,
-) -> AppResult<Json<Value>> {
-    let mut tx = st.pg.begin().await?;
-    let track_ok: bool =
-        sqlx::query_file_scalar!("queries/admin/catalog/track_exists.sql", track_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !track_ok {
-        return Err(AppError::not_found("track not found"));
-    }
-    sqlx::query(
-        "INSERT INTO track_artist_blocks (track_id, artist_id, note) VALUES ($1, $2, $3) \
-         ON CONFLICT (track_id, artist_id) DO UPDATE SET note = EXCLUDED.note",
-    )
-    .bind(track_id)
-    .bind(body.artist_id)
-    .bind(&body.note)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/admin/catalog/track_artists_delete_pair.sql",
-        track_id,
-        body.artist_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/admin/catalog/track_clear_primary_if_match.sql",
-        track_id,
-        body.artist_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+) -> AppResult<Response> {
+    forward(&st, key, AdminCommand::TrackDetachArtist { track_id, body }).await
 }
 
 #[tracing::instrument(skip_all)]
 pub async fn track_unblock_artist(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path((track_id, artist_id)): Path<(Uuid, Uuid)>,
-) -> AppResult<Json<Value>> {
-    let res = sqlx::query_file!(
-        "queries/admin/catalog/block_delete_pair.sql",
+) -> AppResult<Response> {
+    let command = AdminCommand::TrackUnblockArtist {
         track_id,
-        artist_id
-    )
-    .execute(&st.pg)
-    .await?;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "removed": res.rows_affected() }),
-    ))
+        artist_id,
+    };
+    forward(&st, key, command).await
 }
 
 #[derive(Deserialize)]
@@ -907,66 +600,18 @@ pub async fn sc_account_tracks(
     Ok(Json(enrich_track_rows(&st.pg, rows).await?))
 }
 
-#[derive(Deserialize)]
-pub struct DetachAccountTracks {
-    #[serde(default)]
-    pub note: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct DetachAccountTracksResult {
-    pub detached_tracks: i64,
-}
-
 #[tracing::instrument(skip_all)]
 pub async fn sc_account_detach_tracks(
     _: AdminAuth,
     State(st): State<AppState>,
+    key: RequestKey,
     Path((artist_id, sc_user_id)): Path<(Uuid, String)>,
     Json(body): Json<DetachAccountTracks>,
-) -> AppResult<Json<DetachAccountTracksResult>> {
-    let mut tx = crate::db::begin_admin(&st.pg).await?;
-
-    let detached: i64 = sqlx::query_file_scalar!(
-        "queries/admin/catalog/sc_account_detach_count.sql",
+) -> AppResult<Response> {
+    let command = AdminCommand::ScAccountDetachTracks {
         artist_id,
-        sc_user_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO track_artist_blocks (track_id, artist_id, note) \
-         SELECT t.id, $1, $2 FROM tracks t \
-         WHERE t.uploader_sc_user_id = $3 \
-           AND (t.primary_artist_id = $1 \
-                OR EXISTS (SELECT 1 FROM track_artists ta \
-                           WHERE ta.track_id = t.id AND ta.artist_id = $1)) \
-         ON CONFLICT (track_id, artist_id) DO UPDATE SET note = EXCLUDED.note",
-    )
-    .bind(artist_id)
-    .bind(&body.note)
-    .bind(&sc_user_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query_file!(
-        "queries/admin/catalog/sc_account_detach_delete_credits.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query_file!(
-        "queries/admin/catalog/sc_account_detach_clear_primary.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(Json(DetachAccountTracksResult {
-        detached_tracks: detached,
-    }))
+        sc_user_id,
+        body,
+    };
+    forward(&st, key, command).await
 }

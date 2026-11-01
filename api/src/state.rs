@@ -8,7 +8,7 @@ use crate::common::admission::PublicAdmission;
 use crate::common::http_metrics::HttpMetrics;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
-use crate::modules::auth::{AuthService, LinkService};
+use crate::modules::auth::{AuthService, CoreRpc, LinkService};
 use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
 use crate::modules::dislikes::DislikesService;
@@ -38,6 +38,7 @@ pub struct AppState {
     pub diag: Arc<crate::modules::diag::DiagService>,
     pub pg: PgPool,
     pub background_jobs: Arc<BackgroundJobs>,
+    pub core: Arc<CoreRpc>,
     pub http_metrics: Arc<HttpMetrics>,
     pub cache: Arc<CacheService>,
     pub auth: Arc<AuthService>,

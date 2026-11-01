@@ -1,6 +1,7 @@
 pub(crate) mod database;
 mod env;
 mod oauth;
+mod scd;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ pub use database::{DatabaseConfig, PoolConfig, PoolCoverage, SessionLimits};
 use database::{maintenance_pool_from_env, queue_pool_from_env, read_database_from_env};
 pub use env::ConfigError;
 pub use oauth::{OAuthAppBootstrap, OAuthConfig};
+pub use scd::ScdNode;
 
 const DURATION_MAX_BATCH_SIZE: i64 = 500;
 const DURATION_MAX_CONCURRENCY: usize = 32;
@@ -48,6 +50,7 @@ pub struct JobsConfig {
     pub subscriptions_always_premium: bool,
     pub schedules: JobScheduleConfig,
     pub oauth: OAuthConfig,
+    pub repl_verify: repl_verify::Mode,
     pub shutdown_grace: Duration,
 }
 
@@ -290,6 +293,7 @@ pub struct NatsConfig {
     pub max_age: Duration,
     pub job_stream_max_bytes: i64,
     pub impression_stream_max_bytes: i64,
+    pub storage_event_sources: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -485,6 +489,7 @@ impl JobsConfig {
             subscriptions_always_premium: env::boolean("SUBSCRIPTIONS_ALWAYS_PREMIUM", false)?,
             schedules: JobScheduleConfig::from_env()?,
             oauth: OAuthConfig::from_env()?,
+            repl_verify: env::parse("REPL_VERIFY", "repair")?,
             shutdown_grace: Duration::from_secs(env::positive_u64(
                 "JOBS_SHUTDOWN_GRACE_SECONDS",
                 30,
@@ -938,8 +943,30 @@ impl NatsConfig {
                 "JOBS_NATS_IMPRESSION_STREAM_MAX_BYTES",
                 8 * 1024 * 1024 * 1024,
             )?,
+            storage_event_sources: jetstream_domains("JOBS_NATS_STORAGE_EVENT_SOURCES")?,
         })
     }
+}
+
+fn jetstream_domains(key: &str) -> Result<Vec<String>, ConfigError> {
+    let domains: Vec<String> = env::optional(key)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if let Some(bad) = domains.iter().find(|domain| {
+        !domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }) {
+        return Err(ConfigError::Invalid {
+            key: key.to_owned(),
+            reason: format!("{bad} is not a JetStream domain name"),
+        });
+    }
+    Ok(domains)
 }
 
 fn stream_bytes(key: &str, default: u64) -> Result<i64, ConfigError> {

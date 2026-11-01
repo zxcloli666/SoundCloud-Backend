@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 use crate::modules::auth::health::AuthHealthService;
-use crate::modules::auth::{AuthService, TokenProvider};
+use crate::modules::auth::{AuthService, CoreRpc, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::sc::{ScClient, ScReadService};
 
@@ -28,6 +28,7 @@ fn auth(pool: &PgPool) -> anyhow::Result<(Arc<AuthService>, Arc<AuthHealthServic
         sc,
         OAuthAppsService::new(pool.clone()),
         health.clone(),
+        CoreRpc::unreachable(),
     );
     Ok((auth, health))
 }
@@ -191,6 +192,7 @@ fn callback_stack(
         sc.clone(),
         OAuthAppsService::new(pool.clone()),
         health.clone(),
+        CoreRpc::unreachable(),
     );
     let tokens = TokenProvider::new(auth.clone(), OAuthAppTokenService::new(pool.clone()));
     let public = ScReadService::new(sc, tokens, pool.clone());

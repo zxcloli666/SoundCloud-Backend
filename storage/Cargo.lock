@@ -3301,6 +3301,7 @@ dependencies = [
  "socket2",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",

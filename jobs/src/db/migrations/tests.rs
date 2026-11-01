@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::*;
 
 const LEGACY_SCHEMA_VERSION: i64 = CONNECTION_MIGRATION - 1;
-const LATEST_SCHEMA_VERSION: i64 = 173;
+const LATEST_SCHEMA_VERSION: i64 = 267;
 
 #[sqlx::test(migrations = false)]
 async fn legacy_playlist_update_is_archived_before_sharing_becomes_metadata_update(
@@ -736,5 +736,133 @@ async fn oauth_identity_migration_matches_rust_unicode_trim(pool: PgPool) -> any
         .expect("duplicate identity must be a database error");
 
     assert_eq!(error.code().as_deref(), Some("23505"));
+    Ok(())
+}
+
+async fn node_settings(pool: &PgPool) -> anyhow::Result<String> {
+    use sqlx::Connection;
+    let mut fresh = sqlx::PgConnection::connect_with(&pool.connect_options()).await?;
+    let settings = sqlx::query_scalar(
+        "SELECT public.scd_node() || '/' || public.scd_role() || '/' || public.scd_mode()",
+    )
+    .fetch_one(&mut fresh)
+    .await?;
+    fresh.close().await?;
+    Ok(settings)
+}
+
+#[sqlx::test(migrations = false)]
+async fn node_configuration_reaches_new_sessions_once(pool: PgPool) -> anyhow::Result<()> {
+    run_core(&pool, None).await?;
+    assert_eq!(node_settings(&pool).await?, "core/core/legacy");
+    let node = ScdNode {
+        node: "main".into(),
+        role: "api".into(),
+        mode: "legacy".into(),
+    };
+    let first = configure_node(&pool, &node).await?;
+    for setting in ["scd.node = main", "scd.role = api", "scd.mode = legacy"] {
+        assert!(first.iter().any(|change| change == setting), "{first:?}");
+    }
+    let again = configure_node(&pool, &node).await?;
+    assert!(
+        again.iter().all(|change| !change.starts_with("scd.")),
+        "{again:?}"
+    );
+    assert_eq!(node_settings(&pool).await?, "main/api/legacy");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn split_mode_is_refused_before_it_is_stored_while_grants_are_missing(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    run_core(&pool, None).await?;
+    let repl_role: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scd_repl')")
+            .fetch_one(&pool)
+            .await?;
+    if repl_role {
+        return Ok(());
+    }
+    let node = ScdNode {
+        node: "star".into(),
+        role: "api".into(),
+        mode: "split".into(),
+    };
+    let error = configure_node(&pool, &node).await.unwrap_err();
+    let MigrationError::SplitNotReady { problems } = error else {
+        anyhow::bail!("unexpected migration error: {error:?}");
+    };
+    assert_eq!(problems, "role scd_repl does not exist");
+    assert_eq!(node_settings(&pool).await?, "core/core/legacy");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn scd_uuid_equals_rust_uuid_v5_of_the_same_name(pool: PgPool) -> anyhow::Result<()> {
+    run_core(&pool, None).await?;
+    let namespace = Uuid::parse_str("e5f6011f-72fa-46e1-ad97-55586f6f1f83")?;
+    let cases: [(&str, Vec<&str>); 3] = [
+        ("like", vec!["u1", "t1"]),
+        ("k", vec!["\u{e9}"]),
+        ("follow", vec!["soundcloud:users:1", "soundcloud:users:2"]),
+    ];
+    for (ns, key) in cases {
+        let name = format!("{ns}:{}", key.join("\u{1f}"));
+        let stored: Uuid = sqlx::query_scalar("SELECT public.scd_uuid($1, VARIADIC $2)")
+            .bind(ns)
+            .bind(&key)
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(stored, Uuid::new_v5(&namespace, name.as_bytes()), "{name}");
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn merged_losers_take_the_canonical_of_their_winner(pool: PgPool) -> anyhow::Result<()> {
+    core_through(265).run(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO tracks (
+             id, sc_track_id, urn, title, title_normalized, duration_ms,
+             superseded_by, canonical_track_id
+         ) VALUES
+             ('00000000-0000-4000-8000-000000000001', '1', 'soundcloud:tracks:1', 'w', 'w', 1000,
+              NULL, '00000000-0000-4000-8000-0000000000a1'),
+             ('00000000-0000-4000-8000-000000000002', '2', 'soundcloud:tracks:2', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000001', NULL),
+             ('00000000-0000-4000-8000-000000000003', '3', 'soundcloud:tracks:3', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a3'),
+             ('00000000-0000-4000-8000-000000000004', '4', 'soundcloud:tracks:4', 'w', 'w', 1000,
+              NULL, NULL),
+             ('00000000-0000-4000-8000-000000000005', '5', 'soundcloud:tracks:5', 'l', 'l', 1000,
+              '00000000-0000-4000-8000-000000000004', NULL),
+             ('00000000-0000-4000-8000-000000000006', '6', 'soundcloud:tracks:6', 'n', 'n', 1000,
+              NULL, NULL)",
+    )
+    .execute(&pool)
+    .await?;
+
+    core_through(266).run(&pool).await?;
+
+    let canonical = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT sc_track_id, canonical_track_id FROM tracks ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let group = Uuid::parse_str("00000000-0000-4000-8000-0000000000a1")?;
+    let own = Uuid::parse_str("00000000-0000-4000-8000-0000000000a3")?;
+    assert_eq!(
+        canonical,
+        vec![
+            ("1".to_owned(), Some(group)),
+            ("2".to_owned(), Some(group)),
+            ("3".to_owned(), Some(own)),
+            ("4".to_owned(), None),
+            ("5".to_owned(), None),
+            ("6".to_owned(), None),
+        ]
+    );
     Ok(())
 }

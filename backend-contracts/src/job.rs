@@ -33,6 +33,15 @@ pub struct AdminMaintenancePayload {
     pub run_id: uuid::Uuid,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplReplayPayload {
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub id: Option<uuid::Uuid>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncQueueFlushPayload {
     #[serde(default)]
@@ -131,6 +140,8 @@ pub enum JobKind {
     RecommendationQualityTrain,
     RecommendationWavePriority,
     RecordHardNegative,
+    ReplReplayDead,
+    ReplRetention,
     ResolveDurations,
     ResolveWantedTracks,
     SearchTermsRefresh,
@@ -186,6 +197,8 @@ impl JobKind {
         Self::RecommendationQualityTrain,
         Self::RecommendationWavePriority,
         Self::RecordHardNegative,
+        Self::ReplReplayDead,
+        Self::ReplRetention,
         Self::ResolveDurations,
         Self::ResolveWantedTracks,
         Self::SearchTermsRefresh,
@@ -241,6 +254,8 @@ impl JobKind {
             Self::RecommendationQualityTrain => "recommendations.quality_train",
             Self::RecommendationWavePriority => "recommendations.wave_priority",
             Self::RecordHardNegative => "telemetry.hard_negative",
+            Self::ReplReplayDead => "repl.replay_dead",
+            Self::ReplRetention => "repl.retention",
             Self::ResolveDurations => "indexing.resolve_durations",
             Self::ResolveWantedTracks => "enrich.resolve_wanted",
             Self::SearchTermsRefresh => "search.refresh_terms",
@@ -262,6 +277,7 @@ impl JobKind {
             | Self::DispatchTranscription
             | Self::LyricsEmbed
             | Self::OAuthAppsRefresh
+            | Self::ReplReplayDead
             | Self::SyncQueueFlush
             | Self::SyncQueueHeal => JobLane::CoreFast,
             Self::RecordHardNegative | Self::SearchTermsRefresh | Self::SweepHardNegatives => {
@@ -292,6 +308,7 @@ impl JobKind {
             | Self::RecommendationQualityBackfill
             | Self::RecommendationQualityTrain
             | Self::RecommendationWavePriority
+            | Self::ReplRetention
             | Self::ResolveDurations
             | Self::ResolveWantedTracks
             | Self::StarTrackTiers
@@ -363,6 +380,8 @@ impl FromStr for JobKind {
             "recommendations.quality_train" => Self::RecommendationQualityTrain,
             "recommendations.wave_priority" => Self::RecommendationWavePriority,
             "telemetry.hard_negative" => Self::RecordHardNegative,
+            "repl.replay_dead" => Self::ReplReplayDead,
+            "repl.retention" => Self::ReplRetention,
             "indexing.resolve_durations" => Self::ResolveDurations,
             "enrich.resolve_wanted" => Self::ResolveWantedTracks,
             "search.refresh_terms" => Self::SearchTermsRefresh,
@@ -461,7 +480,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 51);
+        assert_eq!(kinds.len(), 53);
     }
 
     #[test]

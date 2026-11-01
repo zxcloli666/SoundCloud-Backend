@@ -9,6 +9,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "admin-catalog"
+version = "0.1.0"
+dependencies = [
+ "backend-contracts",
+ "catalog-match",
+ "catalog-normalize",
+ "chrono",
+ "entity-ref",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "write-through",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -596,6 +612,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -607,6 +624,7 @@ dependencies = [
  "sqlx",
  "url",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -1902,6 +1920,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 name = "jobs"
 version = "1.0.0"
 dependencies = [
+ "admin-catalog",
  "anyhow",
  "async-nats",
  "axum 0.8.9",
@@ -1918,6 +1937,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "qdrant-client",
  "redact",
+ "repl-verify",
  "sc-fingerprint",
  "sc-transport",
  "serde",
@@ -1937,6 +1957,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wreq",
+ "write-through",
 ]
 
 [[package]]
@@ -2835,6 +2856,17 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repl-verify"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+ "sqlx",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "reqwest"
@@ -3853,6 +3885,7 @@ dependencies = [
  "socket2 0.6.5",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower 0.5.3",
@@ -4743,6 +4776,17 @@ dependencies = [
  "typed-builder",
  "wreq",
  "zstd",
+]
+
+[[package]]
+name = "write-through"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
 ]
 
 [[package]]

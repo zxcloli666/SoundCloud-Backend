@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use backend_contracts::JobKind;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Acquire, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::classification::{MembershipRelation, membership_relation};
@@ -16,6 +16,7 @@ use super::urn::PlaylistUrn;
 
 pub const OPERATION_MALFORMED: &str = "operation_malformed";
 const PARTIAL_OBSERVATION: &str = "soundcloud_playlist_partial";
+const TRACK_INSERT_ATTEMPTS: u32 = 3;
 
 pub struct PlaylistObserveRepository {
     pool: PgPool,
@@ -392,6 +393,14 @@ impl PlaylistObserveRepository {
             return Ok(PersistResult::Superseded);
         }
 
+        sqlx::query_file!(
+            "queries/playlist_observe/update_playlist_metadata.sql",
+            &capture.playlist_urn,
+            snapshot.track_count
+        )
+        .execute(&mut *transaction)
+        .await?;
+
         let catalog_complete =
             hydrate_catalog(&mut transaction, snapshot, metadata_observation).await?;
 
@@ -465,13 +474,6 @@ impl PlaylistObserveRepository {
             .execute(&mut *transaction)
             .await?;
         }
-        sqlx::query_file!(
-            "queries/playlist_observe/update_playlist_metadata.sql",
-            &capture.playlist_urn,
-            snapshot.track_count
-        )
-        .execute(&mut *transaction)
-        .await?;
         let projection_length = match outcome.projection.as_ref() {
             Some(target) if projection_changed => target.len(),
             _ => local_track_ids.len(),
@@ -1083,15 +1085,41 @@ async fn hydrate_catalog(
 ) -> Result<bool, RepositoryError> {
     if !snapshot.hydrated_tracks.is_empty() {
         let payload = serde_json::to_value(&snapshot.hydrated_tracks)?;
-        sqlx::query_file!(
-            "queries/playlist_observe/upsert_tracks.sql",
-            payload,
-            metadata_observation.sequence()
-        )
-        .execute(&mut **transaction)
-        .await?;
+        upsert_hydrated_tracks(transaction, &payload, metadata_observation.sequence()).await?;
     }
     schedule_missing_tracks(transaction, &snapshot.track_ids).await
+}
+
+pub(super) async fn upsert_hydrated_tracks(
+    transaction: &mut Transaction<'_, Postgres>,
+    payload: &serde_json::Value,
+    observation: i64,
+) -> Result<(), RepositoryError> {
+    let mut attempt = 1;
+    loop {
+        let mut savepoint = transaction.begin().await?;
+        let upserted = sqlx::query_file!(
+            "queries/playlist_observe/upsert_tracks.sql",
+            payload,
+            observation
+        )
+        .execute(&mut *savepoint)
+        .await;
+        match upserted {
+            Ok(_) => return Ok(savepoint.commit().await?),
+            Err(error) if attempt < TRACK_INSERT_ATTEMPTS && lost_track_insert_race(&error) => {
+                savepoint.rollback().await?;
+                attempt += 1;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn lost_track_insert_race(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|error| error.is_unique_violation() && error.table() == Some("tracks"))
 }
 
 async fn schedule_missing_tracks(

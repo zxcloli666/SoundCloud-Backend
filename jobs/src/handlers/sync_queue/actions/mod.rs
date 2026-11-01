@@ -2,7 +2,7 @@ mod membership;
 
 mod playlist;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::PgConnection;
 
 use super::client::{SoundCloudClient, SoundCloudError};
@@ -93,33 +93,41 @@ pub async fn execute_remote(
                 .delete(&format!("/playlists/{target}"), access_token)
                 .await
         }
-        "track_update" => {
-            let update = catalog_ingest::TrackUpdate::parse(required_payload(mutation)?)
-                .map_err(ActionError::InvalidPayload)?;
-            client
-                .put(
-                    &format!("/tracks/{target}"),
-                    access_token,
-                    Some(update.body()),
-                )
-                .await
-        }
+        "track_update" => match unconfirmed(mutation.desired.as_ref()) {
+            None => Ok(json!({"desired": {}})),
+            Some(desired) => {
+                let update = catalog_ingest::TrackUpdate::from_desired(desired)
+                    .map_err(ActionError::InvalidPayload)?;
+                client
+                    .put(
+                        &format!("/tracks/{target}"),
+                        access_token,
+                        Some(update.body()),
+                    )
+                    .await
+                    .map(|_| json!({"desired": desired}))
+            }
+        },
         "track_delete" => {
             client
                 .delete(&format!("/tracks/{target}"), access_token)
                 .await
         }
-        "playlist_update" => {
-            let update = catalog_ingest::PlaylistUpdate::parse(required_payload(mutation)?)
-                .map_err(ActionError::InvalidPayload)?;
-            client
-                .put(
-                    &format!("/playlists/{target}"),
-                    access_token,
-                    Some(update.body()),
-                )
-                .await
-        }
+        "playlist_update" => match unconfirmed(mutation.desired.as_ref()) {
+            None => Ok(json!({"desired": {}})),
+            Some(desired) => {
+                let update = catalog_ingest::PlaylistUpdate::from_desired(desired)
+                    .map_err(ActionError::InvalidPayload)?;
+                client
+                    .put(
+                        &format!("/playlists/{target}"),
+                        access_token,
+                        Some(update.body()),
+                    )
+                    .await
+                    .map(|_| json!({"desired": desired}))
+            }
+        },
         membership::ACTION_TYPE => {
             let apply = membership::MembershipApply::parse(required_payload(mutation)?)
                 .map_err(ActionError::InvalidPayload)?;
@@ -175,92 +183,47 @@ pub async fn apply_local(
     mutation: &ClaimedMutation,
     remote_result: &Value,
 ) -> Result<(), ActionError> {
+    if settle_mirror(
+        &mut *connection,
+        &mutation.action_type,
+        &mutation.user_id,
+        &mutation.target_urn,
+    )
+    .await?
+    {
+        return Ok(());
+    }
     let user_id = extract_sc_id(&mutation.user_id);
     let target = &mutation.target_urn;
     match mutation.action_type.as_str() {
-        "like_track" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/like_track.sql",
-                user_id,
-                extract_sc_id(target)
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unlike_track" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unlike_track.sql",
-                user_id,
-                extract_sc_id(target)
-            )
-            .execute(connection)
-            .await?;
-        }
-        "like_playlist" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/like_playlist.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unlike_playlist" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unlike_playlist.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "follow_user" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/follow_user.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
-        "unfollow_user" => {
-            sqlx::query_file!(
-                "queries/sync_queue/actions/unfollow_user.sql",
-                user_id,
-                target
-            )
-            .execute(connection)
-            .await?;
-        }
         "playlist_create" => {
             playlist::finalize_create(connection, mutation.id, user_id, remote_result).await?;
         }
         "playlist_delete" => {
-            let variants = user_id_variants(user_id);
             sqlx::query_file!(
-                "queries/sync_queue/actions/delete_owned_playlist.sql",
-                &variants,
+                "queries/sync_queue/actions/confirm_playlist_delete.sql",
                 target
             )
             .execute(&mut *connection)
             .await?;
             sqlx::query_file!(
-                "queries/sync_queue/actions/confirm_playlist_delete.sql",
+                "queries/sync_queue/actions/delete_owned_playlist.sql",
+                &user_id_variants(user_id),
                 target
             )
             .execute(connection)
             .await?;
         }
         "track_update" => {
-            let update = catalog_ingest::TrackUpdate::parse(required_payload(mutation)?)
-                .map_err(ActionError::InvalidPayload)?;
-            sqlx::query_file!(
-                "queries/sync_queue/actions/confirm_track_update.sql",
-                extract_sc_id(target),
-                update.desired()
-            )
-            .execute(connection)
-            .await?;
+            if let Some(pushed) = unconfirmed(remote_result.get("desired")) {
+                sqlx::query_file!(
+                    "queries/sync_queue/actions/confirm_track_update.sql",
+                    extract_sc_id(target),
+                    pushed
+                )
+                .execute(connection)
+                .await?;
+            }
         }
         "track_delete" => {
             sqlx::query_file!(
@@ -271,15 +234,15 @@ pub async fn apply_local(
             .await?;
         }
         "playlist_update" => {
-            let update = catalog_ingest::PlaylistUpdate::parse(required_payload(mutation)?)
-                .map_err(ActionError::InvalidPayload)?;
-            sqlx::query_file!(
-                "queries/sync_queue/actions/confirm_playlist_update.sql",
-                target,
-                update.desired()
-            )
-            .execute(connection)
-            .await?;
+            if let Some(pushed) = unconfirmed(remote_result.get("desired")) {
+                sqlx::query_file!(
+                    "queries/sync_queue/actions/confirm_playlist_update.sql",
+                    target,
+                    pushed
+                )
+                .execute(connection)
+                .await?;
+            }
         }
         membership::ACTION_TYPE => {
             let apply = membership::MembershipApply::parse(required_payload(mutation)?)
@@ -299,11 +262,82 @@ pub async fn apply_local(
     Ok(())
 }
 
+pub async fn settle_mirror(
+    connection: &mut PgConnection,
+    action_type: &str,
+    user_id: &str,
+    target: &str,
+) -> Result<bool, sqlx::Error> {
+    let user_id = extract_sc_id(user_id);
+    match action_type {
+        "like_track" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/like_track.sql",
+                user_id,
+                extract_sc_id(target)
+            )
+            .execute(connection)
+            .await?
+        }
+        "unlike_track" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unlike_track.sql",
+                user_id,
+                extract_sc_id(target)
+            )
+            .execute(connection)
+            .await?
+        }
+        "like_playlist" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/like_playlist.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "unlike_playlist" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unlike_playlist.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "follow_user" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/follow_user.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        "unfollow_user" => {
+            sqlx::query_file!(
+                "queries/sync_queue/actions/unfollow_user.sql",
+                user_id,
+                target
+            )
+            .execute(connection)
+            .await?
+        }
+        _ => return Ok(false),
+    };
+    Ok(true)
+}
+
 fn required_payload(mutation: &ClaimedMutation) -> Result<&Value, ActionError> {
     mutation
         .payload
         .as_ref()
         .ok_or(ActionError::InvalidPayload("payload is missing"))
+}
+
+fn unconfirmed(desired: Option<&Value>) -> Option<&Value> {
+    desired.filter(|desired| desired.as_object().is_some_and(|fields| !fields.is_empty()))
 }
 
 fn extract_sc_id(value: &str) -> &str {

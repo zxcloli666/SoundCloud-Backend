@@ -13,8 +13,8 @@ pub(crate) mod read_tests;
 
 pub use egress::{EGRESS_APP, PgEgressHealth};
 pub use errors::{
-    RETRY_AFTER_MAX_SECONDS, classify, is_app_credentials_error, is_ban_error, is_invalid_grant,
-    is_rate_limited, is_upstream_failure, retry_after_seconds,
+    RETRY_AFTER_MAX_SECONDS, classify, is_app_credentials_error, is_ban_error, is_rate_limited,
+    is_upstream_failure, retry_after_seconds,
 };
 pub use health::{FetchStrategy, hedge, race, within_budget};
 pub use read::ScReadService;

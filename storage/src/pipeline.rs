@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::backend::{self, Backend, BackendError};
@@ -38,6 +38,7 @@ pub enum PipelineError {
 
 pub struct PipelineOutput {
     pub duration_secs: f64,
+    pub quality: &'static str,
 }
 
 pub struct Pipeline {
@@ -178,10 +179,7 @@ async fn run_batch(
 
     // 2. ffmpeg: try multi-input batch first; on failure, fall back per-file.
     let started = Instant::now();
-    let inputs: Vec<&Path> = accepted
-        .iter()
-        .map(|(j, _)| j.source.as_path())
-        .collect();
+    let inputs: Vec<&Path> = accepted.iter().map(|(j, _)| j.source.as_path()).collect();
     let outputs: Vec<PathBuf> = accepted.iter().map(|(_, o)| o.clone()).collect();
     let bitrates: Vec<&str> = accepted
         .iter()
@@ -297,10 +295,11 @@ fn spawn_commit(
         let res = commit_single(&bk, &wp, &cfg, &job.filename, out).await;
         let _ = tokio::fs::remove_file(&job.source).await;
         if res.is_ok() {
-            publish_uploaded(&bs, &cfg, &job.filename, job.quality);
+            publish_uploaded(&bs, &cfg, &job.filename, job.quality).await;
         }
         let _ = job.reply.send(res.map(|()| PipelineOutput {
             duration_secs: out_secs,
+            quality: job.quality,
         }));
     });
 }
@@ -339,7 +338,8 @@ async fn reject(bus: &BusClient, job: PipelineJob, err: PipelineError) {
             reason,
             actual_secs,
             job.expected_duration_ms,
-        );
+        )
+        .await;
     }
     let _ = job.reply.send(Err(err));
 }
@@ -355,7 +355,7 @@ fn reject_event(err: &PipelineError) -> Option<(&'static str, f64)> {
     }
 }
 
-fn publish_rejected(
+async fn publish_rejected(
     bus: &BusClient,
     filename: &str,
     reason: &'static str,
@@ -368,10 +368,11 @@ fn publish_rejected(
     let Some(sc_track_id) = bus::sc_track_id_from_filename(filename) else {
         return;
     };
-    bus.publish_track_rejected(sc_track_id, reason, actual_secs, expected_duration_ms);
+    bus.publish_track_rejected(sc_track_id, reason, actual_secs, expected_duration_ms)
+        .await;
 }
 
-fn publish_uploaded(bus: &BusClient, config: &Config, filename: &str, quality: &'static str) {
+async fn publish_uploaded(bus: &BusClient, config: &Config, filename: &str, quality: &'static str) {
     if !bus.enabled() || config.event_base_url.is_empty() {
         return;
     }
@@ -379,7 +380,8 @@ fn publish_uploaded(bus: &BusClient, config: &Config, filename: &str, quality: &
         return;
     };
     let storage_url = format!("{}/{}.m4a", config.event_base_url, filename);
-    bus.publish_track_uploaded(sc_track_id, storage_url, quality);
+    bus.publish_track_uploaded(sc_track_id, storage_url, quality)
+        .await;
 }
 
 async fn commit_single(

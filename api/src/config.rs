@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub max_track_duration_ms: i32,
     pub premium_reserve: bool,
     pub reserve_backend: bool,
+    pub api_background: bool,
 }
 
 impl AppConfig {
@@ -248,12 +249,14 @@ fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimit
 #[derive(Clone)]
 pub struct NatsCfg {
     pub url: String,
+    pub tls: Option<tls_common::ClientIdentity>,
 }
 
 impl std::fmt::Debug for NatsCfg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NatsCfg")
             .field("url", &redact::url(&self.url))
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -262,6 +265,7 @@ impl std::fmt::Debug for NatsCfg {
 pub struct QdrantCfg {
     pub grpc_url: String,
     pub api_key: redact::Secret<String>,
+    pub tls: Option<tls_common::ClientIdentity>,
 }
 
 #[derive(Clone, Debug)]
@@ -390,11 +394,13 @@ impl AppConfig {
 
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),
+                tls: tls_common::ClientIdentity::from_env("NATS"),
             },
 
             qdrant: QdrantCfg {
                 grpc_url: env_str("QDRANT_URL", "http://localhost:6334"),
                 api_key: env_str("QDRANT_API_KEY", "").into(),
+                tls: tls_common::ClientIdentity::from_env("QDRANT"),
             },
 
             storage: StorageCfg {
@@ -429,6 +435,7 @@ impl AppConfig {
             max_track_duration_ms: (env_u64("MAX_TRACK_DURATION_SEC", 420) * 1000) as i32,
             premium_reserve: env_str("PREMIUM_RESERVE", "false") == "true",
             reserve_backend: env_str("RESERVE_BACKEND", "false") == "true",
+            api_background: env_str("API_BACKGROUND", "on") != "off",
         }
     }
 }
@@ -538,12 +545,14 @@ mod tests {
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),
             api_key: "s3cr3t-qdrant-key".to_owned().into(),
+            tls: None,
         };
         let redis = RedisCfg {
             url: "redis://user:s3cr3t-redis-pw@cache:6379".to_owned(),
         };
         let nats = NatsCfg {
             url: "nats://user:s3cr3t-nats-pw@bus:4222".to_owned(),
+            tls: None,
         };
 
         for rendered in [

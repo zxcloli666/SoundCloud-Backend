@@ -62,12 +62,14 @@ impl AttributionHandler {
     }
 
     async fn revalidate_walker_credits(&self) -> JobResult {
-        let removed = sqlx::query_file_as!(
-            Removed,
-            "queries/attribution/revalidate_walker_credits.sql",
-            WALKER_BATCH
-        )
-        .fetch_one(&self.pool)
+        let removed = crate::db::retry_conflicts(|| {
+            sqlx::query_file_as!(
+                Removed,
+                "queries/attribution/revalidate_walker_credits.sql",
+                WALKER_BATCH
+            )
+            .fetch_one(&self.pool)
+        })
         .await
         .map_err(JobError::retryable)?;
 
@@ -116,14 +118,16 @@ impl AttributionHandler {
             return Ok(());
         };
 
-        let removed = sqlx::query_file_as!(
-            Removed,
-            "queries/attribution/reset_identity_tracks.sql",
-            link.artist_id,
-            link.sc_user_id,
-            IDENTITY_BATCH
-        )
-        .fetch_one(&self.pool)
+        let removed = crate::db::retry_conflicts(|| {
+            sqlx::query_file_as!(
+                Removed,
+                "queries/attribution/reset_identity_tracks.sql",
+                link.artist_id,
+                link.sc_user_id,
+                IDENTITY_BATCH
+            )
+            .fetch_one(&self.pool)
+        })
         .await
         .map_err(JobError::retryable)?;
 

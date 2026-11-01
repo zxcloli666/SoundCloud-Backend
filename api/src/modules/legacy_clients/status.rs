@@ -29,7 +29,7 @@ pub(super) async fn read(
     let Some(session_id) = session_id else {
         return Ok(SIGNED_OUT);
     };
-    let session = auth.get_auth_session(session_id).await?;
+    let session = auth.find_auth_session(session_id).await?;
     let Some(sc_user_id) = session.and_then(|session| session.soundcloud_user_id) else {
         return Ok(SIGNED_OUT);
     };

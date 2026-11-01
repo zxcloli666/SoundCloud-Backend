@@ -53,11 +53,16 @@ fn apiv2_page(ids: &[i64]) -> page::Page {
 }
 
 async fn age_likes(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "UPDATE user_likes_tracks SET synced_at = now() - interval '1 day', created_at = created_at - interval '1 day'",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 

@@ -16,16 +16,17 @@ COPY scripts/cargo-skeleton.sh scripts/build-db.sh /scripts/
 COPY backend-contracts /backend-contracts
 COPY utils/call /utils/call
 COPY utils/catalog-ingest /utils/catalog-ingest
-COPY utils/catalog-match /utils/catalog-match
 COPY utils/catalog-normalize /utils/catalog-normalize
 COPY utils/catalog-sources /utils/catalog-sources
 COPY utils/entity-ref /utils/entity-ref
 COPY utils/redact /utils/redact
+COPY utils/repl-verify /utils/repl-verify
 COPY utils/sc-fingerprint /utils/sc-fingerprint
 COPY utils/sc-transport /utils/sc-transport
 COPY utils/stream-ticket /utils/stream-ticket
 COPY utils/telemetry /utils/telemetry
 COPY utils/tls-common /utils/tls-common
+COPY utils/write-through /utils/write-through
 COPY api/Cargo.toml api/Cargo.lock /api/
 COPY api/src /api/src
 COPY api/queries /api/queries

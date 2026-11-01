@@ -3,11 +3,6 @@ use serde_json::json;
 
 async fn setup(pool: &PgPool) -> anyhow::Result<(CatalogWriter, LeasedJob, CatalogRefreshPayload)> {
     let (writer, job) = super::tests::setup(pool).await?;
-    sqlx::raw_sql(include_str!(
-        "../../../api/migrations/0099_user_web_profiles.sql"
-    ))
-    .execute(pool)
-    .await?;
     Ok((
         writer,
         job,
@@ -19,7 +14,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(CatalogWriter, LeasedJob, Catal
     ))
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn web_profiles_snapshot_ordering_preserves_new_links_until_confirmed_removal(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -49,7 +44,7 @@ async fn web_profiles_snapshot_ordering_preserves_new_links_until_confirmed_remo
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn web_profiles_malformed_responses_and_lost_leases_cannot_replace_the_snapshot(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -226,6 +226,10 @@ mod router_likes_order_tests;
 mod router_likes_rank_tests;
 
 #[cfg(test)]
+#[path = "router_mutation_tests.rs"]
+mod router_mutation_tests;
+
+#[cfg(test)]
 #[path = "router_superlikes_tests.rs"]
 mod router_superlikes_tests;
 

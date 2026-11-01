@@ -2,6 +2,8 @@ mod actions;
 mod client;
 mod connection;
 mod create_check;
+#[cfg(test)]
+mod intent_tests;
 mod model;
 #[cfg(test)]
 mod playlist_tests;
@@ -35,6 +37,7 @@ use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
 
 pub(super) use self::client::TokenRefreshClient;
 pub(super) use self::connection::{AccessToken, ConnectionError, ConnectionManager};
+pub(super) use self::model::Connection;
 
 const REAUTHORIZATION_RETRY_SECONDS: i64 = 15 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
@@ -95,6 +98,11 @@ impl SyncQueueHandler {
         self.pauses_restored
             .get_or_init(|| self.restore_pauses())
             .await;
+        self.repository.adopt().await.map_err(JobError::retryable)?;
+        self.repository
+            .settle_cancelled()
+            .await
+            .map_err(JobError::retryable)?;
         let deadline = Instant::now() + PACED_DRAIN_BUDGET;
         let mut round = Round::new("sync_queue");
         for _ in 0..MAX_DRAIN_BATCHES {
@@ -168,6 +176,9 @@ impl SyncQueueHandler {
         }
         if mutation.has_remote_result() {
             return self.finalize(&mutation).await;
+        }
+        if self.repository.drop_superseded(&mutation).await? {
+            return Ok(());
         }
         if mutation.action_type == "comment" && mutation.has_ambiguous_remote_attempt() {
             self.repository

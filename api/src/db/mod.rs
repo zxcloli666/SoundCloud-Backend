@@ -11,7 +11,11 @@ use tracing::{info, warn};
 
 use crate::config::{AppConfig, DatabaseCfg};
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 156;
+mod retry;
+
+pub use retry::retry_conflicts;
+
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 267;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -53,7 +57,7 @@ fn connect_opts(cfg: &DatabaseCfg) -> Result<PgConnectOptions, sqlx::Error> {
     }
 
     Ok(opts
-        .options([("jit", "off")])
+        .options([("jit", "off"), ("scd.writer", "api")])
         .log_statements(LevelFilter::Debug)
         .log_slow_statements(LevelFilter::Warn, Duration::from_millis(500)))
 }
@@ -436,6 +440,9 @@ mod tests {
         let core_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
             .fetch_one(&core)
             .await?;
+        let core_writer: String = sqlx::query_scalar("SHOW scd.writer")
+            .fetch_one(&core)
+            .await?;
         let core_idle_in_transaction: String =
             sqlx::query_scalar("SHOW idle_in_transaction_session_timeout")
                 .fetch_one(&core)
@@ -448,6 +455,7 @@ mod tests {
             .await?;
 
         assert_eq!(core_jit, "off");
+        assert_eq!(core_writer, "api");
         assert_eq!(core_timeout, "15s");
         assert_eq!(core_idle_in_transaction, "15s");
         assert_eq!(recommendations_jit, "off");

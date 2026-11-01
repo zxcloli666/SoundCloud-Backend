@@ -23,6 +23,14 @@ const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
 const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "jobs_star_priority_waiting_seconds";
 const STAR_PRIORITY_QUEUED_WAITING: &str = "jobs_star_priority_queued_waiting_seconds";
+const STORAGE_REPAIR_PAUSED: &str = "jobs_storage_repair_paused_seconds";
+
+const CMD_BACKLOG: &str = "scd_cmd_backlog";
+const CMD_AGE: &str = "scd_cmd_age_seconds";
+const CMD_SUB_UP: &str = "scd_cmd_sub_up";
+const CMD_DEAD: &str = "scd_cmd_dead";
+const CMD_DEAD_OLDEST: &str = "scd_cmd_dead_oldest_seconds";
+const CMD_REPLAYED: &str = "scd_cmd_replayed_total";
 
 const WORKER_STATUS_AGE: &str = "jobs_worker_status_age_seconds";
 const WORKER_LANE_STATE: &str = "jobs_worker_lane_state";
@@ -63,7 +71,19 @@ const DURATION_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 3
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 static LANE_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 static KIND_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+static REPL_SNAPSHOT_AT: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 const SNAPSHOT_TTL: Duration = Duration::from_secs(60);
+const REPL_SNAPSHOT_TTL: Duration = Duration::from_secs(15);
+const RETENTION_TABLES: [&str; 7] = [
+    "cmd_reassert",
+    "cmd_purge",
+    "cmd_done",
+    "cmd_dead",
+    "repl_purges",
+    "repl_tombstones",
+    "storage_event_repairs",
+];
+const REPLAY_RESULTS: [&str; 3] = ["ok", "missing", "failed"];
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
 
 pub fn init() {
@@ -111,6 +131,7 @@ fn register_series_that_start_at_zero() {
     for reason in CollabSkipReason::ALL {
         metrics::counter!(COLLAB_SKIPPED, "reason" => reason.as_str()).increment(0);
     }
+    record_storage_repair_paused(None);
     for spec in &WORKER_LANES {
         let lane = spec.lane.as_str();
         metrics::gauge!(WORKER_LANE_STATUS_AGE, "lane" => lane).set(0.0);
@@ -136,6 +157,25 @@ fn register_series_that_start_at_zero() {
     }
     metrics::gauge!(WORKER_SLOT_RESTARTS_LAST_HOUR_MAX).set(0.0);
     metrics::gauge!(WORKER_SLOT_RESERVED_GAP_MAX).set(0.0);
+    for table in RETENTION_TABLES {
+        repl_verify::register_retention(table);
+    }
+    for result in REPLAY_RESULTS {
+        metrics::counter!(CMD_REPLAYED, "result" => result).increment(0);
+    }
+}
+
+pub fn record_repl_retention(
+    table: &'static str,
+    deleted: u64,
+    redacted: u64,
+    reason: Option<&str>,
+) {
+    repl_verify::record_retention(table, deleted, redacted, reason);
+}
+
+pub fn record_repl_replay(result: &'static str) {
+    metrics::counter!(CMD_REPLAYED, "result" => result).increment(1);
 }
 
 pub fn record_execution(kind: &'static str, outcome: Outcome, elapsed: Duration) {
@@ -196,6 +236,38 @@ impl CollabSkipReason {
             Self::EmptyVocab => "empty_vocab",
             Self::BelowBaseline => "below_baseline",
             Self::InFlight => "in_flight",
+        }
+    }
+}
+
+pub fn record_storage_repair_paused(paused: Option<(RepairPauseReason, Duration)>) {
+    for reason in RepairPauseReason::ALL {
+        let seconds = paused
+            .filter(|(held_by, _)| *held_by == reason)
+            .map_or(0.0, |(_, held)| held.as_secs_f64());
+        metrics::gauge!(STORAGE_REPAIR_PAUSED, "reason" => reason.as_str()).set(seconds);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairPauseReason {
+    LeafSourceBehind,
+    UploadsUndelivered,
+    StorageEventsUnreadable,
+}
+
+impl RepairPauseReason {
+    pub const ALL: [Self; 3] = [
+        Self::LeafSourceBehind,
+        Self::UploadsUndelivered,
+        Self::StorageEventsUnreadable,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LeafSourceBehind => "leaf_source_behind",
+            Self::UploadsUndelivered => "uploads_undelivered",
+            Self::StorageEventsUnreadable => "storage_events_unreadable",
         }
     }
 }
@@ -406,6 +478,7 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
     futures::future::join_all(metered.iter().map(sample_pool_wait)).await;
     record_lane_depths(pool).await;
     record_kind_depths(pool).await;
+    record_repl_ops(pool).await;
     Some(handle.render())
 }
 
@@ -413,6 +486,7 @@ pub async fn render(pool: &PgPool, metered: &[MeteredPool]) -> Option<String> {
 pub(crate) async fn forget_snapshots() {
     *LANE_SNAPSHOT_AT.lock().await = None;
     *KIND_SNAPSHOT_AT.lock().await = None;
+    *REPL_SNAPSHOT_AT.lock().await = None;
 }
 
 async fn record_lane_depths(pool: &PgPool) {
@@ -492,6 +566,36 @@ async fn record_kind_depths(pool: &PgPool) {
     }
     if let Err(error) = crate::handlers::star_priority::record_queued_waits(pool).await {
         tracing::warn!(%error, "star priority queue metrics snapshot failed");
+    }
+}
+
+async fn record_repl_ops(pool: &PgPool) {
+    let mut snapshot_at = REPL_SNAPSHOT_AT.lock().await;
+    if snapshot_at.is_some_and(|taken| taken.elapsed() < REPL_SNAPSHOT_TTL) {
+        return;
+    }
+    let (subscriptions, dead) = tokio::join!(
+        sqlx::query_file!("queries/repl/metrics_subscriptions.sql").fetch_all(pool),
+        sqlx::query_file!("queries/repl/metrics_dead.sql").fetch_all(pool)
+    );
+    match (subscriptions, dead) {
+        (Ok(subscriptions), Ok(dead)) => {
+            *snapshot_at = Some(Instant::now());
+            for row in subscriptions {
+                let sub = row.sub;
+                metrics::gauge!(CMD_SUB_UP, "sub" => sub.clone()).set(f64::from(u8::from(row.up)));
+                metrics::gauge!(CMD_BACKLOG, "sub" => sub.clone()).set(row.backlog_bytes);
+                metrics::gauge!(CMD_AGE, "sub" => sub).set(row.age_seconds);
+            }
+            for row in dead {
+                let kind = row.kind;
+                metrics::gauge!(CMD_DEAD, "kind" => kind.clone()).set(row.dead as f64);
+                metrics::gauge!(CMD_DEAD_OLDEST, "kind" => kind).set(row.oldest_seconds);
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::warn!(%error, "replication metrics snapshot failed");
+        }
     }
 }
 

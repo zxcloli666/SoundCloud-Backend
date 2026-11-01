@@ -126,6 +126,7 @@ async fn a_bucket_lists_its_live_objects_with_their_age() -> anyhow::Result<()> 
         max_age: Duration::from_secs(60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "object-listing-test").await?;
     const BUCKET: &str = "OBJECT_LISTING_TEST";
@@ -173,6 +174,7 @@ async fn explicit_pipeline_duplicate_window_round_trips() -> anyhow::Result<()> 
         max_age: Duration::from_secs(60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "pipeline-contract-test").await?;
     const NAME: &str = "PIPELINE_CONTRACT_TEST";
@@ -218,6 +220,68 @@ fn managed_stream_update_preserves_unowned_settings() {
     assert_eq!(updated.max_bytes, 2);
 }
 
+#[test]
+fn every_listed_leaf_domain_is_sourced_into_storage_events() {
+    let sources = leaf_sources(&["main".to_owned(), "star".to_owned()]).unwrap_or_default();
+    let prefixes: Vec<&str> = sources
+        .iter()
+        .filter_map(|source| source.external.as_ref())
+        .map(|external| external.api_prefix.as_str())
+        .collect();
+
+    assert_eq!(prefixes, ["$JS.main.API", "$JS.star.API"]);
+    assert!(
+        sources
+            .iter()
+            .all(|source| source.name == STORAGE_EVENTS_STREAM.name)
+    );
+    assert_eq!(leaf_sources(&[]), None);
+}
+
+#[test]
+fn jobs_drops_a_leaf_source_that_left_the_list() {
+    let current = StreamConfig {
+        name: STORAGE_EVENTS_STREAM.name.to_owned(),
+        sources: leaf_sources(&["main".to_owned(), "gone".to_owned()]),
+        ..Default::default()
+    };
+    let desired = StreamConfig {
+        name: STORAGE_EVENTS_STREAM.name.to_owned(),
+        sources: leaf_sources(&["main".to_owned()]),
+        ..Default::default()
+    };
+
+    let updated = managed_stream_config(current, &desired);
+
+    assert_eq!(updated.sources, desired.sources);
+}
+
+#[test]
+fn a_leaf_is_settled_only_when_caught_up_and_recently_heard() {
+    let source = |lag, active| SourceInfo {
+        name: STORAGE_EVENTS_STREAM.name.to_owned(),
+        lag,
+        active,
+        filter_subject: None,
+        subject_transform_dest: None,
+        subject_transforms: Vec::new(),
+    };
+
+    assert!(source_is_current(&source(
+        0,
+        Some(Duration::from_millis(300))
+    )));
+    assert!(!source_is_current(&source(
+        4,
+        Some(Duration::from_millis(300))
+    )));
+    assert!(!source_is_current(&source(
+        0,
+        Some(Duration::from_secs(90))
+    )));
+    assert!(!source_is_current(&source(0, None)));
+}
+
 #[tokio::test]
 #[ignore = "requires a local JetStream server"]
 async fn impression_delivery_is_durable_and_acknowledged() -> anyhow::Result<()> {
@@ -229,6 +293,7 @@ async fn impression_delivery_is_durable_and_acknowledged() -> anyhow::Result<()>
         max_age: Duration::from_secs(60 * 60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "integration-test").await?;
     let suffix = Uuid::now_v7().simple().to_string();
@@ -329,6 +394,7 @@ async fn a_message_whose_handler_failed_comes_back_and_stops_once_it_succeeds() 
         max_age: Duration::from_secs(60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "redelivery-test").await?;
     let suffix = Uuid::now_v7().simple().to_string();
@@ -426,6 +492,7 @@ async fn delayed_retry_releases_consumer_capacity_immediately() -> anyhow::Resul
         max_age: Duration::from_secs(60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "retry-capacity-test").await?;
     let suffix = Uuid::now_v7().simple().to_string();
@@ -519,6 +586,7 @@ async fn consumer_update_preserves_the_delivery_cursor() -> anyhow::Result<()> {
         max_age: Duration::from_secs(60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "consumer-update-test").await?;
     let suffix = Uuid::now_v7().simple().to_string();
@@ -621,6 +689,7 @@ async fn job_ingress_persists_in_the_canonical_queue(pool: PgPool) -> anyhow::Re
         max_age: Duration::from_secs(60 * 60),
         job_stream_max_bytes: 16 * 1024 * 1024,
         impression_stream_max_bytes: 16 * 1024 * 1024,
+        storage_event_sources: Vec::new(),
     };
     let bus = Bus::connect(&config, "integration-test").await?;
     let suffix = Uuid::now_v7().simple().to_string();

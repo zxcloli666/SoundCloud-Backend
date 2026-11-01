@@ -65,6 +65,11 @@ if command -v eugene >/dev/null 2>&1; then
   done
 fi
 
+repl_fail=0
+if [[ ${#all_added[@]} -gt 0 ]]; then
+  python3 ops/replication/check_migrations.py "${all_added[@]}" >&2 || repl_fail=1
+fi
+
 if [[ "$fail" == "1" ]]; then
   cat >&2 <<'EOF'
 
@@ -74,4 +79,5 @@ if [[ "$fail" == "1" ]]; then
 EOF
   exit 1
 fi
+[[ "$repl_fail" == "1" ]] && exit 1
 echo "check-migrations: ok"

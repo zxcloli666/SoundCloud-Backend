@@ -72,6 +72,20 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              progress boolean NOT NULL DEFAULT false,
              synced_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE TABLE tracks (
+             sc_track_id text PRIMARY KEY,
+             urn text NOT NULL,
+             sc_desired jsonb NOT NULL DEFAULT '{}',
+             deleted_at timestamptz
+         );
+         CREATE TABLE playlists (
+             urn text PRIMARY KEY,
+             sc_desired jsonb NOT NULL DEFAULT '{}',
+             deleted_at timestamptz
+         );
+         CREATE TABLE playlist_membership_state (
+             playlist_urn text PRIMARY KEY
          );",
     )
     .execute(pool)
@@ -84,6 +98,24 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0070_sync_queue_remote_attempts.sql"
     ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0190_scd_versions_sync_queue.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(
+        "CREATE FUNCTION scd_purge_intent(tbl text, k jsonb, seen bigint)
+         RETURNS boolean
+         LANGUAGE sql
+         AS $f$
+         WITH gone AS (
+             DELETE FROM sync_queue WHERE id = (k ->> 'id')::uuid AND intent_v = seen RETURNING id
+         )
+         SELECT EXISTS (SELECT 1 FROM gone)
+         $f$",
+    )
     .execute(pool)
     .await?;
     Ok(())

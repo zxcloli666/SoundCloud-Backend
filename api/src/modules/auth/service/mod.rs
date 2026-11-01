@@ -1,6 +1,7 @@
 mod connection;
 pub(crate) mod login;
 mod oauth;
+mod replica;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppResult;
+use crate::modules::auth::core_rpc::CoreRpc;
 use crate::modules::auth::health::AuthHealthService;
 use crate::modules::auth::model::{AuthSession, Session, SoundCloudConnection};
 use crate::modules::oauth_apps::OAuthAppsService;
@@ -26,6 +28,7 @@ pub struct AuthService {
     sc: ScClient,
     oauth_apps: Arc<OAuthAppsService>,
     health: Arc<AuthHealthService>,
+    core: Arc<CoreRpc>,
     sessions: Cache<Uuid, Session>,
 }
 
@@ -35,12 +38,14 @@ impl AuthService {
         sc: ScClient,
         oauth_apps: Arc<OAuthAppsService>,
         health: Arc<AuthHealthService>,
+        core: Arc<CoreRpc>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pool,
             sc,
             oauth_apps,
             health,
+            core,
             sessions: Cache::builder()
                 .max_capacity(SESSION_CACHE_CAPACITY)
                 .time_to_live(SESSION_CACHE_TTL)
@@ -118,11 +123,10 @@ impl AuthService {
             .fetch_optional(&mut *transaction)
             .await?;
         if let Some(connection_id) = deleted.and_then(|row| row.soundcloud_connection_id) {
-            sqlx::query_file!(
-                "queries/auth/service/delete_orphan_connection.sql",
-                connection_id
+            wt::call(
+                &mut transaction,
+                &wt::ConnectionDropOrphan { connection_id },
             )
-            .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;

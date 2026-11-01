@@ -122,6 +122,10 @@ impl LyricsHandler {
         self.lookup.run_targeted(job, payload).await
     }
 
+    pub async fn listen_wakes(&self, cancellation: tokio_util::sync::CancellationToken) {
+        self.sweep.listen_wakes(cancellation).await
+    }
+
     pub async fn sweep_lookups(&self, job: &LeasedJob) -> JobResult {
         self.sweep.run_sweep(job).await
     }
