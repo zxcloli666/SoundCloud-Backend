@@ -1045,6 +1045,8 @@
     {"default": null, "generated": false, "name": "content_hash", "notnull": false, "type": "bytea"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "embedded_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "embedding_request_created_at", "notnull": false, "type": "timestamp without time zone"},
+    {"default": null, "generated": false, "name": "embedding_request_id", "notnull": false, "type": "character varying(128)"},
     {"default": null, "generated": false, "name": "embedding_state", "notnull": false, "type": "character varying(16)"},
     {"default": null, "generated": false, "name": "fts", "notnull": false, "type": "tsvector"},
     {"default": null, "generated": false, "name": "language", "notnull": false, "type": "character varying(8)"},

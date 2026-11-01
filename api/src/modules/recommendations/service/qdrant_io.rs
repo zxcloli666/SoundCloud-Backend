@@ -476,26 +476,17 @@ mod tests {
                  sc_track_id text PRIMARY KEY,
                  embedded_at timestamptz,
                  embedding_state varchar(16),
-                 created_at timestamp NOT NULL
-             );
-             CREATE TABLE lyrics_embedding_wire_state (
-                 sc_track_id text PRIMARY KEY,
-                 lyrics_created_at timestamp,
-                 request_message_id varchar(128)
+                 created_at timestamp NOT NULL,
+                 embedding_request_id varchar(128),
+                 embedding_request_created_at timestamp
              );
              INSERT INTO lyrics_cache VALUES
-                 ('1', now(), 'done', timestamp '2025-01-01'),
-                 ('2', now(), 'legacy', timestamp '2025-01-02'),
-                 ('3', now(), 'done', timestamp '2025-01-03'),
-                 ('4', NULL, 'dispatched', timestamp '2025-01-04'),
-                 ('5', now(), 'skipped', timestamp '2025-01-05'),
-                 ('6', now(), 'done', timestamp '2025-01-06');
-             INSERT INTO lyrics_embedding_wire_state VALUES
-                 ('1', timestamp '2025-01-01', 'lyr:1:1'),
-                 ('3', timestamp '2025-01-03', NULL),
-                 ('4', timestamp '2025-01-04', 'lyr:4:1'),
-                 ('5', timestamp '2025-01-05', 'lyr:5:1'),
-                 ('6', timestamp '2025-01-01', 'lyr:6:1')",
+                 ('1', now(), 'done', timestamp '2025-01-01', 'lyr:1:1', timestamp '2025-01-01'),
+                 ('2', now(), 'legacy', timestamp '2025-01-02', NULL, NULL),
+                 ('3', now(), 'done', timestamp '2025-01-03', NULL, timestamp '2025-01-03'),
+                 ('4', NULL, 'dispatched', timestamp '2025-01-04', 'lyr:4:1', timestamp '2025-01-04'),
+                 ('5', now(), 'skipped', timestamp '2025-01-05', 'lyr:5:1', timestamp '2025-01-05'),
+                 ('6', now(), 'done', timestamp '2025-01-06', 'lyr:6:1', timestamp '2025-01-01')",
         )
         .execute(pool)
         .await?;
