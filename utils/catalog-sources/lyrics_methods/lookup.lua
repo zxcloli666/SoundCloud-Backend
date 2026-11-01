@@ -129,21 +129,6 @@ local function attempt(source, step, ...)
   return nil
 end
 
-local linked = attempt("genius", linked_genius)
-if linked ~= nil then
-  return {
-    kind = "found",
-    candidates = {
-      {
-        source = "genius",
-        plain_text = linked,
-        exact = true,
-        query_index = 0
-      }
-    }
-  }
-end
-
 local candidates = {}
 
 local function normalized(value)
@@ -259,6 +244,23 @@ local function add_genius(query, query_index)
       end
     end
   end
+end
+
+local linked = attempt("genius", linked_genius)
+if linked ~= nil then
+  if spare(1) then
+    attempt("lrclib", add_lrclib_exact)
+  end
+  candidates[#candidates + 1] = {
+    source = "genius",
+    plain_text = linked,
+    exact = true,
+    query_index = 0
+  }
+  if #failures > 0 then
+    return { kind = "found", candidates = candidates, failed = failures }
+  end
+  return { kind = "found", candidates = candidates }
 end
 
 for index, query in ipairs(inputs.queries or {}) do

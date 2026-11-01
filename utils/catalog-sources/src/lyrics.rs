@@ -234,7 +234,7 @@ impl LyricsSources {
                             exact: true,
                             query_index: 0,
                         }) {
-                            return LyricsLookupOutcome::Found(candidate);
+                            return self.with_lrclib_exact(hints, candidate).await;
                         }
                     }
                     Ok(None) => {}
@@ -256,7 +256,7 @@ impl LyricsSources {
                         exact: true,
                         query_index: 0,
                     }) {
-                        return LyricsLookupOutcome::Found(candidate);
+                        return self.with_lrclib_exact(hints, candidate).await;
                     }
                 }
                 Ok(None) => {}
@@ -289,6 +289,55 @@ impl LyricsSources {
             return LyricsLookupOutcome::Retry(merge_failures(failures));
         }
         LyricsLookupOutcome::CleanMiss
+    }
+
+    async fn with_lrclib_exact(
+        &self,
+        hints: &LyricsHints,
+        linked: LyricsCandidate,
+    ) -> LyricsLookupOutcome {
+        match self.lrclib_exact(hints).await {
+            Ok(exact) => {
+                let candidates = exact.into_iter().chain([linked.clone()]).collect();
+                found(select_candidate(hints, candidates).unwrap_or(linked), false)
+            }
+            Err(_) => found(linked, true),
+        }
+    }
+
+    async fn lrclib_exact(&self, hints: &LyricsHints) -> SourceResult<Option<LyricsCandidate>> {
+        let (title, artist) = (hints.title.trim(), hints.artist.trim());
+        let Some(duration) = hints
+            .duration_sec
+            .filter(|duration| (1..=3600).contains(duration))
+        else {
+            return Ok(None);
+        };
+        if title.is_empty() || artist.is_empty() {
+            return Ok(None);
+        }
+        let url = format!(
+            "{LRCLIB_API}/get?track_name={}&artist_name={}&duration={duration}",
+            urlencoding::encode(title),
+            urlencoding::encode(artist)
+        );
+        let bytes = match self.fetcher.get_bytes(&url, json_headers()).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.status_code() == Some(404) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let entry: LrclibRaw = serde_json::from_slice(&bytes)
+            .map_err(|error| SourceError::Invalid(format!("lrclib get: {error}")))?;
+        Ok(normalize_candidate(LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: entry.synced_lyrics,
+            plain_text: entry.plain_lyrics,
+            artist: entry.artist_name,
+            title: entry.track_name,
+            duration_sec: entry.duration.map(|duration| duration.round() as i64),
+            exact: true,
+            query_index: 1,
+        }))
     }
 
     async fn search_lrclib(
