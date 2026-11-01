@@ -100,6 +100,24 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         Admission::Probe
     }
 
+    pub fn wait_or_probe(&self, key: &K, probe_hold: Duration) -> Option<i64> {
+        let now = Instant::now();
+        let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
+        let pause = paused.get_mut(key)?;
+        let remaining = pause.until.saturating_duration_since(now);
+        if !remaining.is_zero() {
+            return Some(whole_seconds(remaining));
+        }
+        if pause.strikes == 0 {
+            paused.remove(key);
+            return None;
+        }
+        pause.until = now + probe_hold;
+        pause.strikes = 0;
+        pause.probing = false;
+        None
+    }
+
     pub fn succeeded(&self, key: &K, spacing: Option<Duration>) {
         let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
         match spacing {
@@ -274,6 +292,26 @@ mod tests {
         assert!(matches!(pauses.admit(&"likes"), Admission::Paused(_)));
         pauses.succeeded(&"likes", None);
         assert_eq!(pauses.admit(&"likes"), Admission::Open);
+    }
+
+    #[test]
+    fn after_a_read_pause_one_probe_goes_out_and_the_rest_wait_for_its_answer() {
+        let pauses = WritePauses::default();
+        let hold = Duration::from_secs(30);
+
+        pauses.pause_refused("app", 300);
+        expire(&pauses, &"app");
+
+        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
+        assert!(matches!(pauses.wait_or_probe(&"app", hold), Some(seconds) if seconds <= 30));
+        pauses.pause_refused("app", 300);
+        assert!(matches!(pauses.wait_or_probe(&"app", hold), Some(seconds) if seconds > 290));
+        expire(&pauses, &"app");
+        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
+        expire(&pauses, &"app");
+        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
+        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
+        assert_eq!(pauses.wait_or_probe(&"other", hold), None);
     }
 
     #[test]
