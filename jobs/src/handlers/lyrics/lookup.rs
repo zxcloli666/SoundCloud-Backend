@@ -27,6 +27,7 @@ const MAX_ATTEMPTS: i16 = 8;
 const EXPIRED_RELEASE_BATCH: i64 = 256;
 const DUE_WAKE_BATCH: i64 = 256;
 const INSUFFICIENT_METADATA_DELAY: i64 = 7 * 24 * 60 * 60;
+const RECHECK_MAX_STREAK: i32 = 7;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(180);
 
 #[derive(sqlx::FromRow)]
@@ -166,7 +167,10 @@ impl LyricsLookupHandler {
         };
         match outcome {
             LyricsLookupOutcome::Found(candidate) => {
-                self.settle_found(job, &claim, candidate).await
+                self.settle_found(job, &claim, candidate, false).await
+            }
+            LyricsLookupOutcome::FoundWithoutSync(candidate) => {
+                self.settle_found(job, &claim, candidate, true).await
             }
             LyricsLookupOutcome::CleanMiss => {
                 let delay = miss_delay_seconds(&claim);
@@ -190,6 +194,7 @@ impl LyricsLookupHandler {
         job: &LeasedJob,
         claim: &LookupClaim,
         candidate: LyricsCandidate,
+        recheck: bool,
     ) -> JobResult {
         let synced_lrc = candidate.synced_lrc.unwrap_or_default();
         let plain_text = candidate.plain_text.unwrap_or_default();
@@ -203,7 +208,9 @@ impl LyricsLookupHandler {
             claim.generation,
             &candidate.source,
             &synced_lrc,
-            &plain_text
+            &plain_text,
+            recheck,
+            RECHECK_MAX_STREAK
         )
         .fetch_optional(&mut *transaction)
         .await
@@ -217,6 +224,10 @@ impl LyricsLookupHandler {
             return Err(JobError::retryable(anyhow::anyhow!(
                 "lyrics lookup result was not fenced"
             )));
+        }
+        if settled.plain_text.is_none() && settled.synced_lrc.is_none() {
+            transaction.commit().await.map_err(JobError::retryable)?;
+            return Ok(());
         }
         let tier = star_priority::of_track(&mut *transaction, &settled.sc_track_id)
             .await

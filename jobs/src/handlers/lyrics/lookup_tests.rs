@@ -7,12 +7,12 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::any;
 use base64::Engine as _;
-use catalog_sources::{ExternalFetcher, GeniusCfg, GeniusService, LyricsSources};
+use catalog_sources::{ExternalFetcher, GeniusCfg, GeniusService, LyricsCandidate, LyricsSources};
 use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::config::LyricsConfig;
-use crate::queue::{ClaimOrder, JobRepository};
+use crate::queue::{ClaimOrder, JobRepository, LeasedJob};
 
 async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
@@ -883,5 +883,331 @@ async fn wake_many_leaves_the_same_jobs_and_marks_as_one_wake_per_track(
     let (many_rows, per_track_rows) = (outcome("a").await?, outcome("b").await?);
     assert_eq!(many_rows, per_track_rows);
     assert_eq!(many_rows.iter().filter(|row| row.1).count(), 4);
+    Ok(())
+}
+
+fn offline_handler(pool: &PgPool) -> anyhow::Result<super::LyricsLookupHandler> {
+    let http = sc_fingerprint::builder(None)
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    let fetcher = ExternalFetcher::new(http, String::new(), None);
+    let genius = GeniusService::new(
+        fetcher.clone(),
+        GeniusCfg {
+            access_token: String::new(),
+            max_concurrent_scrapes: 8,
+        },
+    );
+    let sources = LyricsSources::new(
+        fetcher,
+        genius,
+        "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
+    );
+    Ok(super::LyricsLookupHandler::new(
+        pool.clone(),
+        sources,
+        LyricsConfig {
+            batch: 8,
+            concurrency: 4,
+            claim_seconds: 900,
+            backfill_batch: 100,
+            musixmatch_base: "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
+        },
+    ))
+}
+
+async fn lookup_job(pool: &PgPool) -> anyhow::Result<LeasedJob> {
+    let queue = JobRepository::new(pool.clone(), "lyrics-recheck".to_owned());
+    super::super::wake::enqueue(pool, &queue, "42").await?;
+    queue
+        .claim(
+            &[backend_contracts::JobKind::LyricsLookup],
+            ClaimOrder::Priority,
+            1,
+            Duration::from_secs(600),
+        )
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("lookup job was not claimed"))
+}
+
+async fn claim_track(
+    pool: &PgPool,
+    handler: &super::LyricsLookupHandler,
+    job: &LeasedJob,
+) -> anyhow::Result<super::LookupClaim> {
+    sqlx::query("UPDATE lyrics_lookup_state SET next_run_at = now() WHERE sc_track_id = '42'")
+        .execute(pool)
+        .await?;
+    sqlx::query_file_as!(
+        super::LookupClaim,
+        "queries/lyrics/lookup_claim_target.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        "42",
+        handler.config.claim_seconds
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("track was not claimed"))
+}
+
+fn candidate(source: &str, synced: Option<&str>, plain: &str) -> LyricsCandidate {
+    LyricsCandidate {
+        source: source.to_owned(),
+        synced_lrc: synced.map(str::to_owned),
+        plain_text: Some(plain.to_owned()),
+        artist: None,
+        title: None,
+        duration_sec: None,
+        exact: true,
+        query_index: 0,
+    }
+}
+
+const PLAIN_BODY: &str = "A sufficiently long plain lyrics body from genius";
+
+async fn settle(
+    pool: &PgPool,
+    handler: &super::LyricsLookupHandler,
+    job: &LeasedJob,
+    candidate: LyricsCandidate,
+    recheck: bool,
+) -> anyhow::Result<()> {
+    let claim = claim_track(pool, handler, job).await?;
+    handler
+        .settle_found(job, &claim, candidate, recheck)
+        .await?;
+    Ok(())
+}
+
+async fn recheck_state(pool: &PgPool) -> anyhow::Result<Option<(String, i32, bool, bool, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT status,
+                failure_streak,
+                next_run_at BETWEEN now() + interval '23 hours' AND now() + interval '25 hours',
+                claim_job_id IS NULL,
+                wake_message_id IS NULL
+         FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+async fn cached_text(pool: &PgPool) -> anyhow::Result<(Option<String>, Option<String>, i64)> {
+    Ok(sqlx::query_as(
+        "SELECT synced_lrc, plain_text, content_generation FROM lyrics_cache WHERE sc_track_id = '42'",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = false)]
+async fn plain_text_found_while_lrclib_failed_keeps_the_lookup_for_a_day(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+
+    let (synced, plain, _) = cached_text(&pool).await?;
+    assert_eq!(synced, None);
+    assert_eq!(plain.as_deref(), Some(PLAIN_BODY));
+    assert_eq!(
+        recheck_state(&pool).await?,
+        Some(("retry".to_owned(), 1, true, true, true))
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        false,
+    )
+    .await?;
+
+    assert_eq!(cached_text(&pool).await?.1.as_deref(), Some(PLAIN_BODY));
+    assert_eq!(recheck_state(&pool).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_later_lookup_with_synced_text_fills_the_plain_only_row(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+
+    let synced = candidate("lrclib", Some("[00:01.00] A synced line"), "A synced line");
+    settle(&pool, &handler, &job, synced, false).await?;
+
+    let (synced_lrc, plain, _) = cached_text(&pool).await?;
+    assert_eq!(synced_lrc.as_deref(), Some("[00:01.00] A synced line"));
+    assert_eq!(plain.as_deref(), Some(PLAIN_BODY));
+    assert_eq!(
+        sync_provenance(&pool).await?,
+        (Some("lrclib".to_owned()), None)
+    );
+    assert_eq!(recheck_state(&pool).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_recheck_stops_after_a_week_and_repeats_change_nothing(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    sqlx::query("UPDATE lyrics_lookup_state SET failure_streak = 5 WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+
+    for streak in [6, 7] {
+        settle(
+            &pool,
+            &handler,
+            &job,
+            candidate("genius", None, PLAIN_BODY),
+            true,
+        )
+        .await?;
+        assert_eq!(
+            recheck_state(&pool).await?,
+            Some(("retry".to_owned(), streak, true, true, true))
+        );
+    }
+    assert_eq!(cached_text(&pool).await?.2, 1);
+
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+
+    assert_eq!(recheck_state(&pool).await?, None);
+    assert_eq!(cached_text(&pool).await?.1.as_deref(), Some(PLAIN_BODY));
+    Ok(())
+}
+
+const OUTAGE_BACKFILL: &str = "
+SET lock_timeout = '5s';
+INSERT INTO lyrics_lookup_state (
+    track_id, sc_track_id, status, priority, next_run_at,
+    input_title, input_artist, input_duration_ms, input_genius_song_id,
+    input_genius_url, input_release_date, input_sc_created_at,
+    failure_streak, created_at
+)
+SELECT track.id, track.sc_track_id, 'retry', track.index_priority,
+       now() + random() * interval '24 hours',
+       btrim(track.title),
+       COALESCE(NULLIF(btrim(track.metadata_artist), ''), NULLIF(btrim(track.uploader_username), ''), ''),
+       track.duration_ms, track.genius_song_id, NULLIF(btrim(track.genius_url), ''),
+       track.release_date, track.sc_created_at, 1, track.created_at
+FROM lyrics_cache AS cache
+JOIN tracks AS track ON track.sc_track_id = cache.sc_track_id
+WHERE cache.updated_at >= '2026-10-31 04:00+00'
+  AND NULLIF(btrim(cache.synced_lrc), '') IS NULL
+  AND NULLIF(btrim(cache.plain_text), '') IS NOT NULL
+  AND cache.plain_source IN ('genius', 'musixmatch', 'netease')
+  AND NOT track.pipeline_held
+  AND NOT EXISTS (SELECT 1 FROM lyrics_lookup_state AS state WHERE state.track_id = track.id)
+LIMIT 5000
+ON CONFLICT (track_id) DO NOTHING;
+";
+
+#[sqlx::test(migrations = false)]
+async fn the_outage_backfill_reschedules_only_plain_only_rows_without_a_state(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_base(&pool).await?;
+    install_lookup(&pool).await?;
+    for id in ["1", "2", "3", "4", "5"] {
+        insert_track(&pool, id, "Lose Yourself").await?;
+    }
+    for (id, synced, source, updated) in [
+        ("1", None, "genius", "2026-10-31 06:00+00"),
+        (
+            "2",
+            Some("[00:01.00] line"),
+            "genius",
+            "2026-10-31 06:00+00",
+        ),
+        ("3", None, "musixmatch", "2026-10-31 06:00+00"),
+        ("4", None, "genius", "2026-10-30 06:00+00"),
+        ("5", None, "lrclib", "2026-10-31 06:00+00"),
+    ] {
+        sqlx::query(
+            "INSERT INTO lyrics_cache (sc_track_id, synced_lrc, plain_text, source, plain_source, updated_at)
+             VALUES ($1, $2, 'plain', $3, $3, $4::timestamptz)",
+        )
+        .bind(id)
+        .bind(synced)
+        .bind(source)
+        .bind(updated)
+        .execute(&pool)
+        .await?;
+    }
+    sqlx::query("DELETE FROM lyrics_lookup_state WHERE sc_track_id <> '3'")
+        .execute(&pool)
+        .await?;
+
+    for _ in 0..2 {
+        sqlx::raw_sql(OUTAGE_BACKFILL).execute(&pool).await?;
+    }
+
+    let rows: Vec<(String, String, i32, bool)> = sqlx::query_as(
+        "SELECT sc_track_id, status, failure_streak,
+                next_run_at <= now() + interval '24 hours'
+         FROM lyrics_lookup_state ORDER BY sc_track_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(
+        rows,
+        vec![
+            ("1".to_owned(), "retry".to_owned(), 1, true),
+            ("3".to_owned(), "pending".to_owned(), 0, true),
+        ]
+    );
     Ok(())
 }

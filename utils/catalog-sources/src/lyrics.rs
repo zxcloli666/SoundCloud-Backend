@@ -52,6 +52,7 @@ pub struct LyricsFailure {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LyricsLookupOutcome {
     Found(LyricsCandidate),
+    FoundWithoutSync(LyricsCandidate),
     CleanMiss,
     Retry(LyricsFailure),
     InsufficientMetadata,
@@ -178,6 +179,10 @@ impl LyricsSources {
                 .iter()
                 .all(|failure| failure.starts_with("genius: "));
         let clean = envelope.failed.is_empty() || only_blocked_genius;
+        let lrclib_failed = envelope
+            .failed
+            .iter()
+            .any(|failure| failure.starts_with("lrclib: "));
         match envelope.kind.as_str() {
             "empty" if envelope.candidates.is_empty() && clean => {
                 Ok(LyricsLookupOutcome::CleanMiss)
@@ -193,7 +198,7 @@ impl LyricsSources {
                     .filter_map(lua_candidate)
                     .collect();
                 match select_candidate(hints, candidates) {
-                    Some(candidate) => Ok(LyricsLookupOutcome::Found(candidate)),
+                    Some(candidate) => Ok(found(candidate, lrclib_failed)),
                     None if clean => Ok(LyricsLookupOutcome::CleanMiss),
                     None => Ok(LyricsLookupOutcome::Retry(relay_failure(&envelope.failed))),
                 }
@@ -229,7 +234,7 @@ impl LyricsSources {
                             exact: true,
                             query_index: 0,
                         }) {
-                            return LyricsLookupOutcome::Found(candidate);
+                            return self.with_lrclib_exact(hints, candidate).await;
                         }
                     }
                     Ok(None) => {}
@@ -251,7 +256,7 @@ impl LyricsSources {
                         exact: true,
                         query_index: 0,
                     }) {
-                        return LyricsLookupOutcome::Found(candidate);
+                        return self.with_lrclib_exact(hints, candidate).await;
                     }
                 }
                 Ok(None) => {}
@@ -261,6 +266,7 @@ impl LyricsSources {
 
         let mut candidates = Vec::new();
         let mut source_failures = Vec::new();
+        let mut lrclib_failed = false;
         collect_source(
             self.musixmatch.search(hints, 0).await,
             &mut candidates,
@@ -271,17 +277,67 @@ impl LyricsSources {
                 self.search_lrclib(query, query_index + 1),
                 self.search_genius(query, query_index + 1),
             );
+            lrclib_failed |= lrclib.is_err();
             collect_source(lrclib, &mut candidates, &mut source_failures);
             collect_source(genius, &mut candidates, &mut source_failures);
         }
         if let Some(candidate) = select_candidate(hints, candidates) {
-            return LyricsLookupOutcome::Found(candidate);
+            return found(candidate, lrclib_failed);
         }
         failures.extend(source_failures);
         if failures.len() > 1 {
             return LyricsLookupOutcome::Retry(merge_failures(failures));
         }
         LyricsLookupOutcome::CleanMiss
+    }
+
+    async fn with_lrclib_exact(
+        &self,
+        hints: &LyricsHints,
+        linked: LyricsCandidate,
+    ) -> LyricsLookupOutcome {
+        match self.lrclib_exact(hints).await {
+            Ok(exact) => {
+                let candidates = exact.into_iter().chain([linked.clone()]).collect();
+                found(select_candidate(hints, candidates).unwrap_or(linked), false)
+            }
+            Err(_) => found(linked, true),
+        }
+    }
+
+    async fn lrclib_exact(&self, hints: &LyricsHints) -> SourceResult<Option<LyricsCandidate>> {
+        let (title, artist) = (hints.title.trim(), hints.artist.trim());
+        let Some(duration) = hints
+            .duration_sec
+            .filter(|duration| (1..=3600).contains(duration))
+        else {
+            return Ok(None);
+        };
+        if title.is_empty() || artist.is_empty() {
+            return Ok(None);
+        }
+        let url = format!(
+            "{LRCLIB_API}/get?track_name={}&artist_name={}&duration={duration}",
+            urlencoding::encode(title),
+            urlencoding::encode(artist)
+        );
+        let bytes = match self.fetcher.get_bytes(&url, json_headers()).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.status_code() == Some(404) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let entry: LrclibRaw = serde_json::from_slice(&bytes)
+            .map_err(|error| SourceError::Invalid(format!("lrclib get: {error}")))?;
+        Ok(normalize_candidate(LyricsCandidate {
+            source: "lrclib".to_owned(),
+            synced_lrc: entry.synced_lyrics,
+            plain_text: entry.plain_lyrics,
+            artist: entry.artist_name,
+            title: entry.track_name,
+            duration_sec: entry.duration.map(|duration| duration.round() as i64),
+            exact: true,
+            query_index: 1,
+        }))
     }
 
     async fn search_lrclib(
@@ -334,6 +390,14 @@ impl LyricsSources {
                 })
             })
             .collect())
+    }
+}
+
+fn found(candidate: LyricsCandidate, lrclib_failed: bool) -> LyricsLookupOutcome {
+    if lrclib_failed && candidate.synced_lrc.is_none() {
+        LyricsLookupOutcome::FoundWithoutSync(candidate)
+    } else {
+        LyricsLookupOutcome::Found(candidate)
     }
 }
 
@@ -1071,6 +1135,8 @@ mod tests {
         Unusable,
         GeniusBlocked,
         LrclibBusy,
+        PlainWhileLrclibDown,
+        SyncedWhileGeniusDown,
         Fail,
     }
 
@@ -1172,6 +1238,12 @@ mod tests {
                     )),
                     MethodMode::LrclibBusy => Ok(Bytes::from_static(
                         br#"{"kind":"empty","failed":["lrclib: lyrics upstream status 503"]}"#,
+                    )),
+                    MethodMode::PlainWhileLrclibDown => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"genius","plain_text":"A sufficiently long exact lyrics body returned by relay Lua","exact":true,"query_index":0}],"failed":["lrclib: lyrics upstream status 503"]}"#,
+                    )),
+                    MethodMode::SyncedWhileGeniusDown => Ok(Bytes::from_static(
+                        br#"{"kind":"found","candidates":[{"source":"lrclib","synced_lrc":"[00:01.00] A sufficiently long lyrics body from relay","artist":"Eminem","title":"Lose Yourself","duration_sec":326,"query_index":1}],"failed":["genius: lyrics upstream status 500"]}"#,
                     )),
                     MethodMode::Fail => Err(SourceError::Unreachable(
                         "mock Lua channel failure".to_owned(),
@@ -1345,6 +1417,26 @@ mod tests {
         );
         assert_eq!(relay.method_calls.load(Ordering::Relaxed), 1);
         assert_eq!(relay.raw_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn plain_text_while_lrclib_failed_is_marked_for_a_recheck() {
+        let relay = MockRelay::new(MethodMode::PlainWhileLrclibDown, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        assert!(matches!(outcome, LyricsLookupOutcome::FoundWithoutSync(_)));
+    }
+
+    #[tokio::test]
+    async fn synced_text_is_final_even_if_another_source_failed() {
+        let relay = MockRelay::new(MethodMode::SyncedWhileGeniusDown, RawMode::Fail);
+        let service = sources(relay.clone(), String::new());
+
+        let outcome = service.lookup(&hints()).await;
+
+        assert!(matches!(outcome, LyricsLookupOutcome::Found(_)));
     }
 
     #[test]
