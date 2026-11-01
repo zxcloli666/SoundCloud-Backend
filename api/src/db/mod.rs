@@ -15,7 +15,7 @@ mod retry;
 
 pub use retry::retry_conflicts;
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 268;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 271;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);

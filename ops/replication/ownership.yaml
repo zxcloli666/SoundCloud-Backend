@@ -35,6 +35,7 @@ kinds:
   app_token.reject: {touches: [oauth_app_tokens], from: "api oauth_apps token_service reject_generation"}
   sync_queue.revive: {touches: [sync_queue], optimistic: false, from: "api sync_queue revive_dead, core only"}
   sync_queue.purge: {touches: [sync_queue], optimistic: false, from: "api admin sync_queue purge, core only"}
+  oauth_app.delete: {touches: [oauth_apps], optimistic: false, from: "api oauth_apps remove (admin), core only"}
   connection.drop_orphan: {touches: [soundcloud_connections], optimistic: false, from: "api auth delete_orphan_connection, core only (B6)"}
   connection.login: {touches: [soundcloud_connections], from: "api auth store_connection, re-login of the same account (B11)"}
 

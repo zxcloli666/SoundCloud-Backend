@@ -1,2 +1,0 @@
-api-delete-shared|api/queries/oauth_apps/service/delete_by_id.sql|oauth_apps
-core-delete-m|jobs/queries/playlist_observe/retire_remotely_deleted.sql|sync_queue

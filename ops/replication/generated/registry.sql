@@ -14,6 +14,7 @@ VALUES
     ('match.genius_song', true),
     ('match.sc_account', true),
     ('match.wanted_link', true),
+    ('oauth_app.delete', false),
     ('observe.playlists', true),
     ('observe.profile', true),
     ('observe.tracks', true),

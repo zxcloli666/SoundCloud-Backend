@@ -8,10 +8,10 @@ pub use kinds::{
     AlbumSlot, AppTokenReject, ColdRefreshClear, CommentPost, ConnectionDropOrphan,
     ConnectionLogin, Enqueued, EnqueuedJob, JobEnqueue, Kind, LyricsWake, LyricsWakeState,
     MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWantedLink, MembershipOp,
-    MembershipOperation, MembershipOutcome, Mode, ObserveClaim, ObservePlaylists, ObserveProfile,
-    ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack, ObservedUser, OwnedDelete,
-    OwnedInsert, PlaylistDelete, PlaylistEdit, SyncQueuePurge, SyncQueueRevive, TrackDelete,
-    TrackEdit, TrackReleaseHeld, TrackS3State, TrackStorageLost, TrackTooLong,
+    MembershipOperation, MembershipOutcome, Mode, OauthAppDelete, ObserveClaim, ObservePlaylists,
+    ObserveProfile, ObserveTracks, ObserveUsers, ObservedPlaylist, ObservedTrack, ObservedUser,
+    OwnedDelete, OwnedInsert, PlaylistDelete, PlaylistEdit, SyncQueuePurge, SyncQueueRevive,
+    TrackDelete, TrackEdit, TrackReleaseHeld, TrackS3State, TrackStorageLost, TrackTooLong,
 };
 #[cfg(feature = "sqlx")]
 pub use sqlx_pg::{call, conflicted};
