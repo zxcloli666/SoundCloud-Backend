@@ -347,8 +347,8 @@ impl ScClient {
     pub async fn redirect_location(&self, url: &str) -> ScResult<String> {
         let proxy_set = !self.inner.proxy_url.is_empty();
         let relay_set = self.inner.relay.is_some();
-        let chain: &[Channel] = if self.inner.proxy_fallback || (!proxy_set && !relay_set) {
-            &[Channel::Direct, Channel::Proxy, Channel::Relay]
+        let chain: &[Channel] = if !proxy_set && !relay_set {
+            &[Channel::Direct]
         } else {
             &[Channel::Relay, Channel::Proxy]
         };
@@ -1198,6 +1198,33 @@ mod size_tests {
             let _ = stream.shutdown().await;
         });
         Ok((format!("http://{address}/probe"), server))
+    }
+
+    #[tokio::test]
+    async fn a_short_link_is_never_opened_from_our_own_address_once_a_proxy_is_set() -> TestResult {
+        let (short_link, _direct) = serve(
+            "HTTP/1.1 302 Found\r\nLocation: https://soundcloud.com/direct\r\nContent-Length: 0\r\n\r\n"
+                .to_owned(),
+            Vec::new(),
+        )
+        .await?;
+        let (proxy, _proxy) = serve(
+            "HTTP/1.1 302 Found\r\nLocation: https://soundcloud.com/proxied\r\nContent-Length: 0\r\n\r\n"
+                .to_owned(),
+            Vec::new(),
+        )
+        .await?;
+        let client = ScClient::new(&ScConfig {
+            proxy_url: proxy,
+            proxy_fallback: true,
+            api_base: None,
+            home_base: None,
+        })?;
+        assert_eq!(
+            client.redirect_location(&short_link).await?,
+            "https://soundcloud.com/proxied"
+        );
+        Ok(())
     }
 
     fn client(api_base: &str) -> ScClient {
