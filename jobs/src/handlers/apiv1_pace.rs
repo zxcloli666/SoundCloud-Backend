@@ -39,6 +39,18 @@ impl Pace {
         slot.saturating_duration_since(now)
     }
 
+    fn reserve_within(&mut self, now: Instant, patience: Duration) -> Result<Duration, Duration> {
+        let wait = self
+            .next
+            .max(now)
+            .max(self.paused_until)
+            .saturating_duration_since(now);
+        if wait > patience {
+            return Err(wait);
+        }
+        Ok(self.reserve(now))
+    }
+
     fn limited(&mut self, now: Instant) {
         if self
             .limited_at
@@ -82,6 +94,20 @@ pub async fn wait_for_turn(usage: Use) {
     if !wait.is_zero() {
         tokio::time::sleep(wait).await;
     }
+}
+
+pub async fn turn_within(usage: Use, patience: Duration) -> Result<(), Duration> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    let wait = pace(usage)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .reserve_within(Instant::now(), patience)?;
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
+    Ok(())
 }
 
 pub fn record(usage: Use, rate_limited: bool) {
@@ -143,5 +169,37 @@ mod tests {
 
         pace.succeeded(now + Duration::from_secs(61));
         assert!(pace.rate > slowed);
+    }
+
+    #[test]
+    fn a_caller_that_would_wait_past_its_patience_takes_no_turn() {
+        let now = Instant::now();
+        let mut pace = Pace::new(now, START, CEILING);
+        for _ in 0..3 {
+            pace.reserve(now);
+        }
+
+        let refused = pace.reserve_within(now, Duration::from_secs(1));
+        let waited = pace.reserve_within(now, Duration::from_secs(2));
+
+        assert_eq!(refused, Err(Duration::from_millis(1500)));
+        assert_eq!(waited, Ok(Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn a_crowd_after_a_rate_limit_never_queues_past_the_patience() {
+        let now = Instant::now();
+        let patience = Duration::from_secs(5);
+        let mut pace = Pace::new(now, START, CEILING);
+        pace.limited(now);
+
+        let arrival = |caller: u64| now + Duration::from_millis(caller * 100);
+        let granted = (0..200)
+            .filter(|caller| pace.reserve_within(arrival(*caller), patience).is_ok())
+            .count();
+
+        let horizon = pace.next.saturating_duration_since(arrival(199));
+        assert!(granted > 0);
+        assert!(horizon <= patience + Duration::from_secs_f64(1.0 / pace.rate));
     }
 }

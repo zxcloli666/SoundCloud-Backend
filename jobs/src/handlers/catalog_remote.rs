@@ -78,9 +78,9 @@ impl CatalogRemote {
                     failure = postpone(60, error);
                 }
                 Err(error) => {
-                    let missing = matches!(&error, PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::NOT_FOUND);
+                    let last = error.is_not_found() || error.is_paced();
                     let classified = self.owner_error(error, Some(candidate.oauth_app_id)).await;
-                    if missing {
+                    if last {
                         return Err(classified);
                     }
                     failure = classified;
@@ -192,6 +192,9 @@ pub(super) fn owner_error(error: PlaylistReadError) -> JobError {
         PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::UNAUTHORIZED => {
             postpone(300, error)
         }
+        PlaylistReadError::Paced {
+            retry_after_seconds,
+        } => postpone(*retry_after_seconds, error),
         _ => JobError::retryable(error),
     }
 }
