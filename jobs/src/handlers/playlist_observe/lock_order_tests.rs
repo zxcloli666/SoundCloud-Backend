@@ -432,6 +432,29 @@ fn hydrated(sc_track_ids: &[String]) -> serde_json::Value {
 }
 
 #[sqlx::test(migrations = false)]
+async fn hydrated_tracks_with_nul_in_their_text_are_stored_without_it(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    let core = split_core(&pool).await?;
+    let mut payload = hydrated(&["910".to_owned()]);
+    payload[0]["title"] = json!("Death In June\u{0}");
+    payload[0]["description"] = json!("let me down\n\u{0}");
+    let mut transaction = core.begin().await?;
+    super::repository::upsert_hydrated_tracks(&mut transaction, &payload, 1).await?;
+    transaction.commit().await?;
+    let stored: (String, Option<String>) =
+        sqlx::query_as("SELECT title, description FROM tracks WHERE sc_track_id = '910'")
+            .fetch_one(&core)
+            .await?;
+    assert_eq!(
+        stored,
+        ("Death In June".to_owned(), Some("let me down\n".to_owned()))
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn hydrated_batches_racing_on_one_new_track_retry_and_keep_their_other_rows(
     pool: PgPool,
 ) -> anyhow::Result<()> {
