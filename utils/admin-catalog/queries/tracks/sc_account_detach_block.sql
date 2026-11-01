@@ -7,4 +7,5 @@ WHERE t.uploader_sc_user_id = $3
                FROM track_artists ta
                WHERE ta.track_id = t.id
                  AND ta.artist_id = $1))
+ORDER BY t.id
 ON CONFLICT (track_id, artist_id) DO UPDATE SET note = EXCLUDED.note

@@ -62,16 +62,25 @@ async fn persist_like_batches(pool: PgPool, ids: Vec<Uuid>) -> usize {
         .await;
         let result = match credits {
             Ok(_) => {
-                sqlx::query(
-                    "WITH locked AS MATERIALIZED (SELECT track.id FROM tracks track
-                     WHERE track.id = ANY($1)
-                     ORDER BY track.sc_track_id FOR NO KEY UPDATE OF track)
-                     UPDATE tracks SET title = 'batch ' || $2::text FROM locked WHERE tracks.id = locked.id",
+                let locked: Result<Vec<Uuid>, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT track.id FROM tracks track WHERE track.id = ANY($1)
+                     ORDER BY track.sc_track_id FOR NO KEY UPDATE OF track",
                 )
                 .bind(&ids)
-                .bind(round as i32)
-                .execute(&mut *transaction)
-                .await
+                .fetch_all(&mut *transaction)
+                .await;
+                match locked {
+                    Ok(locked) => {
+                        sqlx::query(
+                            "UPDATE tracks SET title = 'batch ' || $2::text WHERE id = ANY($1)",
+                        )
+                        .bind(&locked)
+                        .bind(round as i32)
+                        .execute(&mut *transaction)
+                        .await
+                    }
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(error),
         };

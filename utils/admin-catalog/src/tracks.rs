@@ -242,10 +242,16 @@ pub async fn detach_account_tracks(
     )
     .execute(&mut *connection)
     .await?;
-    sqlx::query_file!(
-        "queries/tracks/sc_account_detach_clear_primary.sql",
+    let primary_tracks = sqlx::query_file_scalar!(
+        "queries/tracks/sc_account_detach_lock_primary.sql",
         artist_id,
         sc_user_id
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    sqlx::query_file!(
+        "queries/tracks/sc_account_detach_clear_primary.sql",
+        &primary_tracks
     )
     .execute(&mut *connection)
     .await?;
