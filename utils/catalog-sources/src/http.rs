@@ -164,27 +164,8 @@ impl ExternalFetcher {
         headers: HeaderMap,
         max_bytes: usize,
     ) -> SourceResult<Bytes> {
-        let relay_error = match self
-            .send_relay(
-                Method::GET,
-                url.to_owned(),
-                headers.clone(),
-                None,
-                max_bytes,
-            )
+        self.get_relay_then_proxy(url, headers, max_bytes, None)
             .await
-        {
-            Ok(bytes) => return Ok(bytes),
-            Err(error) => error,
-        };
-        match self
-            .send_proxy(Method::GET, url, headers, None, max_bytes)
-            .await
-        {
-            Ok(bytes) => Ok(bytes),
-            Err(SourceError::NotConfigured(_)) => Err(relay_error),
-            Err(error) => Err(error),
-        }
     }
 
     pub async fn get_api(
@@ -199,7 +180,8 @@ impl ExternalFetcher {
                 .send_proxy(Method::GET, url, headers, None, DEFAULT_JSON_LIMIT)
                 .await;
         }
-        self.get_bytes(url, headers).await
+        self.get_relay_then_proxy(url, headers, DEFAULT_JSON_LIMIT, Some(throttle))
+            .await
     }
 
     pub async fn get_scrape(
@@ -208,22 +190,35 @@ impl ExternalFetcher {
         headers: HeaderMap,
         throttle: &Throttle,
     ) -> SourceResult<Bytes> {
+        self.get_relay_then_proxy(url, headers, 4 * 1024 * 1024, Some(throttle))
+            .await
+    }
+
+    async fn get_relay_then_proxy(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        max_bytes: usize,
+        throttle: Option<&Throttle>,
+    ) -> SourceResult<Bytes> {
         let relay_error = match self
             .send_relay(
                 Method::GET,
                 url.to_owned(),
                 headers.clone(),
                 None,
-                4 * 1024 * 1024,
+                max_bytes,
             )
             .await
         {
             Ok(bytes) => return Ok(bytes),
             Err(error) => error,
         };
-        throttle.wait().await;
+        if let Some(throttle) = throttle {
+            throttle.wait().await;
+        }
         match self
-            .send_proxy(Method::GET, url, headers, None, 4 * 1024 * 1024)
+            .send_proxy(Method::GET, url, headers, None, max_bytes)
             .await
         {
             Ok(bytes) => Ok(bytes),
@@ -395,6 +390,40 @@ fn parse_retry_after(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use axum::Router;
+    use axum::routing::any;
+
+    async fn proxy_stub() -> String {
+        let app = Router::new().route("/", any(|| async { "{}" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{address}/")
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_api_calls_are_spaced_before_the_proxy() {
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new(http, proxy_stub().await, None);
+        let throttle = Throttle::new(Duration::from_millis(400));
+        let started = std::time::Instant::now();
+
+        for _ in 0..2 {
+            fetcher
+                .get_api(
+                    "https://musicbrainz.org/ws/2/x",
+                    HeaderMap::new(),
+                    &throttle,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert!(started.elapsed() >= Duration::from_millis(380));
+    }
 
     #[test]
     fn retry_after_accepts_seconds_and_http_dates() {
