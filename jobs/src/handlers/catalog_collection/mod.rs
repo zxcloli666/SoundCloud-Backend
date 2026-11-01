@@ -3,7 +3,7 @@ mod page;
 mod state;
 mod writer;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use backend_contracts::{CatalogCollectionPayload, CatalogEntity, CollectionFailure};
@@ -61,12 +61,23 @@ impl CatalogCollectionHandler {
         let observation = catalog_ingest::Observation::begin(&self.pool)
             .await
             .map_err(JobError::retryable)?;
+        let step = Mutex::new("apiv2");
         let page = tokio::time::timeout(
             Duration::from_secs(45),
-            self.fetch(&payload, snapshot.next_cursor.as_deref()),
+            self.fetch(&payload, snapshot.next_cursor.as_deref(), &step),
         )
         .await
-        .map_err(|_| JobError::retryable(anyhow::anyhow!("collection page deadline exceeded")))?;
+        .map_err(|_| {
+            let step = *step.lock().unwrap_or_else(PoisonError::into_inner);
+            tracing::warn!(
+                job = %job.id,
+                collection = payload.collection.as_str(),
+                owner = payload.owner,
+                step,
+                "collection page deadline exceeded"
+            );
+            JobError::retryable(anyhow::anyhow!("collection page deadline exceeded"))
+        })?;
         let page = match page {
             Err(error) if payload.owner && owner_is_signed_out(&error) => {
                 return self.finish_without_owner(job, &payload, &snapshot).await;
@@ -115,7 +126,11 @@ impl CatalogCollectionHandler {
         &self,
         payload: &CatalogCollectionPayload,
         cursor: Option<&str>,
+        step: &Mutex<&'static str>,
     ) -> JobResult<Option<page::Page>> {
+        let enter = |name: &'static str| {
+            *step.lock().unwrap_or_else(PoisonError::into_inner) = name;
+        };
         let (apiv2, path) = match cursor {
             Some(cursor) => page::target(payload, cursor)?,
             None => {
@@ -125,8 +140,10 @@ impl CatalogCollectionHandler {
         };
         let path = page::request_path(payload, &path)?;
         if !apiv2 {
+            enter("apiv1");
             return self.apiv1(payload, &path).await.map(Some);
         }
+        enter("apiv2");
         let failure = match self.apiv2(payload, &path).await {
             Ok(value) => match page::parse(payload, value, true) {
                 Ok(page) => return Ok(Some(page)),
@@ -153,6 +170,7 @@ impl CatalogCollectionHandler {
             }
         }
         let path = page::request_path(payload, &page::first_path(payload, false))?;
+        enter("apiv1 after apiv2");
         self.apiv1(payload, &path).await.map(Some)
     }
 
