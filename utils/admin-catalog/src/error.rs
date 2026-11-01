@@ -68,13 +68,7 @@ impl Fail {
         let Self::Database(error) = self else {
             return false;
         };
-        if error.raced() {
-            return true;
-        }
-        error
-            .as_database_error()
-            .and_then(|database| database.code())
-            .is_some_and(|code| code == "40P01" || code == "40001")
+        error.raced() || wt::conflicted(error)
     }
 }
 

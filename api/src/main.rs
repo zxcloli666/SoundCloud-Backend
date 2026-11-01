@@ -102,6 +102,9 @@ async fn main() {
             "reserve mode ON: background pipelines disabled"
         );
     }
+    if !config.api_background {
+        info!("API_BACKGROUND=off: s3 verdicts stay in this process, another node writes them");
+    }
 
     let pg = db::connect(&config)
         .await
@@ -204,8 +207,12 @@ async fn main() {
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
     let cold_refresh = ColdRefreshService::new(pg.clone(), config.cold.clone());
     let me = MeService::new(pg.clone(), sync_queue.clone(), cold_refresh.clone());
-    let s3_verifier =
-        S3VerifierService::new(http_client.clone(), config.storage.url.clone(), pg.clone());
+    let s3_verifier = S3VerifierService::new(
+        http_client.clone(),
+        config.storage.url.clone(),
+        pg.clone(),
+        config.api_background,
+    );
     let worker = WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());
     let collab_vector = CollabVectorService::new(qdrant.clone());
     let recommendations = RecommendationsService::new(

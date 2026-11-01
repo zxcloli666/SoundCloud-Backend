@@ -1,10 +1,2 @@
 api-delete-shared|api/queries/oauth_apps/service/delete_by_id.sql|oauth_apps
-api-write-c|api/queries/indexing/service/release_held.sql|tracks
-api-write-c|api/queries/playlists/touch_last_read.sql|playlists
-api-write-c|api/queries/playlists/wake_auth_required.sql|playlist_membership_state
-api-write-c|api/queries/recommendations/s3_verifier/mark_missing.sql|tracks
-api-write-c|api/queries/recommendations/s3_verifier/mark_ok.sql|tracks
-api-write-c|api/queries/tracks/mark_too_long.sql|tracks
-api-write-c|api/queries/tracks/service/touch_last_read.sql|tracks
-api-write-c|api/queries/users/repository/touch_last_read.sql|users
 core-delete-m|jobs/queries/playlist_observe/retire_remotely_deleted.sql|sync_queue

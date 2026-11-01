@@ -50,10 +50,16 @@ async fn persist_like_batches(pool: PgPool, ids: Vec<Uuid>) -> usize {
     let mut deadlocks = 0;
     for round in 0..ROUNDS {
         let mut transaction = pool.begin().await.unwrap();
-        let credits = sqlx::query("DELETE FROM track_artists WHERE track_id = ANY($1)")
-            .bind(&ids)
-            .execute(&mut *transaction)
-            .await;
+        let credits = sqlx::query(
+            "WITH locked AS MATERIALIZED (SELECT credit.track_id, credit.artist_id, credit.role
+             FROM track_artists credit WHERE credit.track_id = ANY($1)
+             ORDER BY credit.track_id, credit.artist_id, credit.role FOR UPDATE OF credit)
+             DELETE FROM track_artists ta USING locked
+             WHERE ta.track_id = locked.track_id AND ta.artist_id = locked.artist_id AND ta.role = locked.role",
+        )
+        .bind(&ids)
+        .execute(&mut *transaction)
+        .await;
         let result = match credits {
             Ok(_) => {
                 sqlx::query(

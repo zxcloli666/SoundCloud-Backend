@@ -100,7 +100,7 @@ def trigger_problems(model, t, name, decl):
         out.append("%s: derived trigger %s writes rows of %s; list it under rows or vetoes" % (t.name, name, tbl))
     for tbl, col in sorted(want_cols - cols):
         out.append("%s: derived trigger %s does not write %s.%s; drop it from the declaration" % (t.name, name, tbl, col))
-    for tbl in sorted(set(decl.get("rows") or []) - rows):
+    for tbl in sorted(set(decl.get("rows") or []) - rows - {tbl for tbl, _ in cols}):
         out.append("%s: derived trigger %s does not write rows of %s; drop it from rows" % (t.name, name, tbl))
     for tbl in sorted(set(decl.get("rows") or [])):
         for kind, k in sorted(model.kinds.items()):

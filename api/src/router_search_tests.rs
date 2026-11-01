@@ -127,6 +127,7 @@ fn config(redis: &str) -> AppConfig {
         max_track_duration_ms: 420_000,
         premium_reserve: false,
         reserve_backend: false,
+        api_background: true,
     }
 }
 
@@ -190,6 +191,7 @@ pub(super) async fn state(
         wreq::Client::new(),
         String::new(),
         pg.clone(),
+        true,
     );
     let worker =
         crate::modules::lyrics::WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());

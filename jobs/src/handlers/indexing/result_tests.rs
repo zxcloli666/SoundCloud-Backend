@@ -239,8 +239,10 @@ async fn fingerprint(pool: &PgPool, sc_track_id: &str, value: &str) -> anyhow::R
         .take(FINGERPRINT_PREFIX_CHARS)
         .collect::<String>();
     let mut transaction = pool.begin().await?;
-    lock_fingerprint(&mut transaction, &prefix).await?;
-    apply_fingerprint(&mut transaction, sc_track_id, value, &prefix).await?;
+    let locks = lock_fingerprint_rows(&mut transaction, sc_track_id, &prefix)
+        .await?
+        .context("the fingerprinted track is missing")?;
+    apply_fingerprint(&mut transaction, value, &locks).await?;
     transaction.commit().await?;
     Ok(())
 }

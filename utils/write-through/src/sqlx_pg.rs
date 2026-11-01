@@ -19,3 +19,10 @@ impl Raced for sqlx::Error {
             .is_some_and(|error| error.code() == "23505" && error.hint() == Some(RACE_HINT))
     }
 }
+
+pub fn conflicted(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == "40P01" || code == "40001")
+}

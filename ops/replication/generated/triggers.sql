@@ -5,6 +5,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_oauth_apps;
 CREATE SEQUENCE IF NOT EXISTS public.scd_conflict_sync_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_artists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_lyrics_cache;
+CREATE SEQUENCE IF NOT EXISTS public.scd_core_col_playlists;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_catalog_requests;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_admin_maintenance_runs;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_ai_resolver_budget;
@@ -3583,6 +3584,20 @@ ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner;
 CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
 ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zzz_suppress;
 
+CREATE OR REPLACE FUNCTION public.scd_core_col_playlists()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF NEW.last_read_at IS DISTINCT FROM OLD.last_read_at THEN
+        NEW.last_read_at := OLD.last_read_at;
+        PERFORM nextval('public.scd_core_col_playlists'::regclass);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF last_read_at ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_playlists();
+
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlists', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlists()
@@ -3621,6 +3636,41 @@ BEGIN
             END IF;
         ELSE
             IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+                IF NEW.last_read_at IS DISTINCT FROM OLD.last_read_at THEN
+                    NEW.artwork_url := OLD.artwork_url;
+                    NEW.created_at := OLD.created_at;
+                    NEW.deleted_at := OLD.deleted_at;
+                    NEW.description := OLD.description;
+                    NEW.duration_ms := OLD.duration_ms;
+                    NEW.genre := OLD.genre;
+                    NEW.kind := OLD.kind;
+                    NEW.label_name := OLD.label_name;
+                    NEW.likes_count_sc := OLD.likes_count_sc;
+                    NEW.owner_sc_user_id := OLD.owner_sc_user_id;
+                    NEW.owner_urn := OLD.owner_urn;
+                    NEW.owner_username := OLD.owner_username;
+                    NEW.permalink_url := OLD.permalink_url;
+                    NEW.playlist_type := OLD.playlist_type;
+                    NEW.release_date := OLD.release_date;
+                    NEW.release_year := OLD.release_year;
+                    NEW.reposts_count_sc := OLD.reposts_count_sc;
+                    NEW.sc_created_at := OLD.sc_created_at;
+                    NEW.sc_desired := OLD.sc_desired;
+                    NEW.sc_last_modified := OLD.sc_last_modified;
+                    NEW.sc_metadata := OLD.sc_metadata;
+                    NEW.sc_mutation_observation := OLD.sc_mutation_observation;
+                    NEW.sc_observation := OLD.sc_observation;
+                    NEW.sc_playlist_id := OLD.sc_playlist_id;
+                    NEW.sc_synced_at := OLD.sc_synced_at;
+                    NEW.sc_write_confirmed := OLD.sc_write_confirmed;
+                    NEW.sharing := OLD.sharing;
+                    NEW.tags := OLD.tags;
+                    NEW.title := OLD.title;
+                    NEW.title_normalized := OLD.title_normalized;
+                    NEW.track_count := OLD.track_count;
+                    NEW.updated_at := OLD.updated_at;
+                    RETURN NEW;
+                END IF;
                 RETURN NULL;
             END IF;
         END IF;
@@ -3636,13 +3686,16 @@ BEGIN
         PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            UPDATE public.playlists t SET last_read_at = NEW.last_read_at WHERE t.urn = NEW.urn AND t.last_read_at IS DISTINCT FROM NEW.last_read_at;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
             RETURN NULL;
         END IF;
         FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
             PERFORM public.scd_purge_playlists(jsonb_build_object('urn', r.urn));
         END LOOP;
         IF held THEN
-            UPDATE public.playlists t SET artwork_url = NEW.artwork_url, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, genre = NEW.genre, kind = NEW.kind, label_name = NEW.label_name, likes_count_sc = NEW.likes_count_sc, owner_sc_user_id = NEW.owner_sc_user_id, owner_urn = NEW.owner_urn, owner_username = NEW.owner_username, permalink_url = NEW.permalink_url, playlist_type = NEW.playlist_type, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_playlist_id = NEW.sc_playlist_id, sc_synced_at = NEW.sc_synced_at, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, track_count = NEW.track_count, updated_at = NEW.updated_at WHERE t.urn = NEW.urn;
+            UPDATE public.playlists t SET artwork_url = NEW.artwork_url, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, genre = NEW.genre, kind = NEW.kind, label_name = NEW.label_name, last_read_at = NEW.last_read_at, likes_count_sc = NEW.likes_count_sc, owner_sc_user_id = NEW.owner_sc_user_id, owner_urn = NEW.owner_urn, owner_username = NEW.owner_username, permalink_url = NEW.permalink_url, playlist_type = NEW.playlist_type, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_playlist_id = NEW.sc_playlist_id, sc_synced_at = NEW.sc_synced_at, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, track_count = NEW.track_count, updated_at = NEW.updated_at WHERE t.urn = NEW.urn;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -7154,6 +7207,7 @@ FROM (VALUES
     ('conflict', 'sync_queue', 'scd_conflict_sync_queue'),
     ('core_col', 'artists', 'scd_core_col_artists'),
     ('core_col', 'lyrics_cache', 'scd_core_col_lyrics_cache'),
+    ('core_col', 'playlists', 'scd_core_col_playlists'),
     ('guard', 'admin_catalog_requests', 'scd_guard_admin_catalog_requests'),
     ('guard', 'admin_maintenance_runs', 'scd_guard_admin_maintenance_runs'),
     ('guard', 'ai_resolver_budget', 'scd_guard_ai_resolver_budget'),
@@ -7425,6 +7479,7 @@ BEGIN
             ('playlist_track_projection', 'zz_guard'),
             ('playlist_track_projection', 'zz_owner'),
             ('playlist_track_projection', 'zzz_suppress'),
+            ('playlists', 'zz_core_col'),
             ('playlists', 'zz_guard'),
             ('playlists', 'zz_owner'),
             ('playlists', 'zzz_suppress'),

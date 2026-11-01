@@ -28,7 +28,7 @@ VALUES
     ('track.delete', true),
     ('track.edit', true),
     ('track.release_held', true),
-    ('track.s3_state', true),
+    ('track.s3_state', false),
     ('track.storage_lost', true),
     ('track.too_long', true)
 $f$;
@@ -164,7 +164,8 @@ LANGUAGE sql STABLE
 AS $f$
 VALUES
     ('artists', 'has_sc_account'),
-    ('lyrics_cache', 'fts')
+    ('lyrics_cache', 'fts'),
+    ('playlists', 'last_read_at')
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_reassert_always(tbl text)

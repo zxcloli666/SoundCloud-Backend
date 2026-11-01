@@ -727,7 +727,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT pg_catalog.to_jsonb(t) - ARRAY['last_read_at']::text[] FROM public.playlists t WHERE t.urn = (k ->> 'urn')::text
+SELECT pg_catalog.to_jsonb(t) FROM public.playlists t WHERE t.urn = (k ->> 'urn')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_recommendation_quality_models(k jsonb)

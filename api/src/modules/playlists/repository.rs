@@ -58,9 +58,6 @@ impl PlaylistRepository {
     }
 
     pub async fn touch_last_read(&self, urn: &str) -> AppResult<()> {
-        sqlx::query_file!("queries/playlists/wake_auth_required.sql", urn)
-            .execute(&self.pg)
-            .await?;
         sqlx::query_file!("queries/playlists/touch_last_read.sql", urn)
             .execute(&self.pg)
             .await?;

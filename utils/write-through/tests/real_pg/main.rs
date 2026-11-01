@@ -1,3 +1,4 @@
+mod catalog_misc;
 mod client;
 mod db;
 mod dispatch;

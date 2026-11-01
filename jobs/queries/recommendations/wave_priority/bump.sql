@@ -61,12 +61,19 @@ WITH active_users AS MATERIALIZED (
     WHERE candidate.sharing = 'public'
       AND candidate.storage_state = 'pending'
       AND (candidate.storage_priority > 0 OR candidate.index_priority > 0)
+), locked AS MATERIALIZED (
+    SELECT track.id
+    FROM tracks AS track
+    WHERE track.id IN (
+        SELECT id
+        FROM candidates
+        WHERE rank <= 4
+    )
+    ORDER BY track.sc_track_id
+    FOR NO KEY UPDATE OF track
 )
-UPDATE tracks
+UPDATE tracks AS track
 SET storage_priority = 0,
     index_priority = 0
-WHERE id IN (
-    SELECT id
-    FROM candidates
-    WHERE rank <= 4
-)
+FROM locked
+WHERE track.id = locked.id

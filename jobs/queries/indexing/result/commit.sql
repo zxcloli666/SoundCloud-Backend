@@ -5,7 +5,7 @@ WITH track AS MATERIALIZED (
            current.needs_duration_resolve
     FROM tracks AS current
     WHERE current.sc_track_id = $5
-    FOR UPDATE
+    FOR NO KEY UPDATE
 ), wire AS MATERIALIZED (
     SELECT state.sc_track_id,
            state.status,

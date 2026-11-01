@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -230,6 +230,9 @@ async fn insert_users(
 }
 
 fn unique<T>(items: impl Iterator<Item = T>, key: impl Fn(&T) -> String) -> Vec<T> {
-    let mut seen = HashSet::new();
-    items.filter(|item| seen.insert(key(item))).collect()
+    let mut by_key = BTreeMap::new();
+    for item in items {
+        by_key.entry(key(&item)).or_insert(item);
+    }
+    by_key.into_values().collect()
 }

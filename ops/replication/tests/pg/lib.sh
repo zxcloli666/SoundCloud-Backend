@@ -7,7 +7,7 @@ val() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -v FETCH_COUNT=5000 -At -d "$1" -c "$
 say() { printf '== %s\n' "$*"; }
 
 teardown() {
-  for n in $nodes legacy_star; do
+  for n in $nodes legacy_main legacy_star; do
     for s in $(val postgres "SELECT s.subname FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_database d ON d.oid = s.subdbid WHERE d.datname = 'scd_b1_$n'"); do
       sql -d "scd_b1_$n" -c "ALTER SUBSCRIPTION $s DISABLE" -c "ALTER SUBSCRIPTION $s SET (slot_name = NONE)" -c "DROP SUBSCRIPTION $s"
     done
