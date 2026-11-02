@@ -8,10 +8,12 @@ const FIRST_GAP: Duration = Duration::from_secs(10);
 const LONGEST_GAP: Duration = Duration::from_secs(5 * 60);
 const FREE_BELOW: Duration = Duration::from_millis(125);
 const SHORTEN: f64 = 0.8;
+const SHORTEN_EVERY: Duration = Duration::from_secs(30);
 
 struct Limit {
     gap: Duration,
     next: Instant,
+    changed_at: Instant,
 }
 
 #[derive(Default)]
@@ -30,11 +32,19 @@ impl AppReadLimits {
     }
 
     pub fn answered(&self, app: Uuid) {
+        self.answered_at(app, Instant::now());
+    }
+
+    fn answered_at(&self, app: Uuid, now: Instant) {
         let mut apps = self.apps.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(limit) = apps.get_mut(&app) else {
             return;
         };
+        if now.saturating_duration_since(limit.changed_at) < SHORTEN_EVERY {
+            return;
+        }
         limit.gap = limit.gap.mul_f64(SHORTEN);
+        limit.changed_at = now;
         if limit.gap < FREE_BELOW {
             apps.remove(&app);
         }
@@ -45,9 +55,11 @@ impl AppReadLimits {
         let limit = apps.entry(app).or_insert(Limit {
             gap: FIRST_GAP / 2,
             next: now,
+            changed_at: now,
         });
         limit.gap = (limit.gap * 2).clamp(FIRST_GAP, LONGEST_GAP);
         limit.next = limit.next.max(now + pause.max(limit.gap));
+        limit.changed_at = limit.next;
         limit.next.saturating_duration_since(now)
     }
 
@@ -107,19 +119,27 @@ mod tests {
     }
 
     #[test]
-    fn answers_shorten_the_gap_until_the_app_reads_freely_again() {
+    fn answers_shorten_the_gap_once_per_half_minute_until_the_app_reads_freely_again() {
         let limits = AppReadLimits::default();
         let app = Uuid::now_v7();
         let now = Instant::now();
         limits.limited_at(app, PAUSE, now);
+        let resumed = now + PAUSE;
 
-        limits.answered(app);
+        for answer in 0..20 {
+            limits.answered_at(app, resumed + Duration::from_secs(answer));
+        }
+        assert_eq!(gap(&limits, app), Some(FIRST_GAP));
+
+        limits.answered_at(app, resumed + SHORTEN_EVERY);
+        limits.answered_at(app, resumed + SHORTEN_EVERY);
         assert_eq!(gap(&limits, app), Some(FIRST_GAP.mul_f64(SHORTEN)));
-        for _ in 0..18 {
-            limits.answered(app);
+
+        for step in 2..20 {
+            limits.answered_at(app, resumed + SHORTEN_EVERY * step);
         }
         assert!(gap(&limits, app).is_some_and(|gap| gap < Duration::from_millis(200)));
-        limits.answered(app);
+        limits.answered_at(app, resumed + SHORTEN_EVERY * 20);
 
         assert_eq!(gap(&limits, app), None);
         assert_eq!(limits.admit_at(app, now), None);
