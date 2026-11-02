@@ -7,6 +7,7 @@ use sqlx::PgConnection;
 
 use super::client::{SoundCloudClient, SoundCloudError};
 use super::model::ClaimedMutation;
+use super::write_gate::{GatedClient, WriteGate};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ActionError {
@@ -46,7 +47,9 @@ pub async fn execute_remote(
     client: &SoundCloudClient,
     mutation: &ClaimedMutation,
     access_token: &str,
+    gate: &WriteGate<'_>,
 ) -> Result<Remote, ActionError> {
+    let client = GatedClient::new(client, gate);
     let target = &mutation.target_urn;
     let response = match mutation.action_type.as_str() {
         "like_track" => {

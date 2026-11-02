@@ -6,43 +6,41 @@ use std::time::{Duration, Instant};
 pub const ESCALATION_USERS: usize = 3;
 const ESCALATION_WINDOW: Duration = Duration::from_secs(10 * 60);
 
-const LIKES: [&str; 4] = [
-    "like_track",
-    "unlike_track",
-    "like_playlist",
-    "unlike_playlist",
-];
-const FOLLOWS: [&str; 2] = ["follow_user", "unfollow_user"];
-const PLAYLISTS: [&str; 4] = [
-    "playlist_create",
-    "playlist_delete",
-    "playlist_membership",
-    "playlist_update",
+const LEGACY_GROUPS: [(&str, &[&str]); 4] = [
+    (
+        "likes",
+        &[
+            "like_track",
+            "unlike_track",
+            "like_playlist",
+            "unlike_playlist",
+        ],
+    ),
+    ("follows", &["follow_user", "unfollow_user"]),
+    (
+        "playlists",
+        &[
+            "playlist_create",
+            "playlist_delete",
+            "playlist_membership",
+            "playlist_update",
+        ],
+    ),
+    ("comments", &["comment"]),
 ];
 
-pub fn group(action_type: &str) -> String {
-    if LIKES.contains(&action_type) {
-        "likes".to_owned()
-    } else if FOLLOWS.contains(&action_type) {
-        "follows".to_owned()
-    } else if action_type.starts_with("playlist_") {
-        "playlists".to_owned()
-    } else if action_type == "comment" {
-        "comments".to_owned()
-    } else {
-        action_type.to_owned()
+pub fn actions_of(saved: &str) -> Vec<String> {
+    match LEGACY_GROUPS.iter().find(|(group, _)| *group == saved) {
+        Some((_, members)) => members.iter().map(|action| (*action).to_owned()).collect(),
+        None => vec![saved.to_owned()],
     }
 }
 
-pub fn members(group: &str) -> Vec<String> {
-    let names: &[&str] = match group {
-        "likes" => &LIKES,
-        "follows" => &FOLLOWS,
-        "playlists" => &PLAYLISTS,
-        "comments" => &["comment"],
-        other => &[other],
-    };
-    names.iter().map(|name| (*name).to_owned()).collect()
+pub fn legacy_group(action_type: &str) -> Option<&'static str> {
+    LEGACY_GROUPS
+        .iter()
+        .find(|(_, members)| members.contains(&action_type))
+        .map(|(group, _)| *group)
 }
 
 pub struct AppReports<K> {
@@ -83,34 +81,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn actions_fall_into_their_groups() {
-        assert_eq!(group("like_track"), "likes");
-        assert_eq!(group("unlike_playlist"), "likes");
-        assert_eq!(group("unfollow_user"), "follows");
-        assert_eq!(group("playlist_create"), "playlists");
-        assert_eq!(group("playlist_membership"), "playlists");
-        assert_eq!(group("playlist_update"), "playlists");
-        assert_eq!(group("comment"), "comments");
-        assert_eq!(group("track_update"), "track_update");
+    fn a_saved_group_name_expands_to_its_actions_and_an_action_stays_alone() {
+        assert_eq!(actions_of("likes").len(), 4);
+        assert_eq!(actions_of("follows"), ["follow_user", "unfollow_user"]);
+        assert_eq!(actions_of("like_track"), ["like_track"]);
+        assert_eq!(actions_of("track_update"), ["track_update"]);
     }
 
     #[test]
-    fn every_member_maps_back_to_its_group() {
-        for name in ["likes", "follows", "playlists", "comments", "track_delete"] {
-            for member in members(name) {
-                assert_eq!(group(&member), name);
-            }
-        }
-    }
-
-    #[test]
-    fn the_same_user_counts_once() {
-        let reports = AppReports::default();
-
-        assert_eq!(reports.record("likes", "1"), 1);
-        assert_eq!(reports.record("likes", "1"), 1);
-        assert_eq!(reports.record("likes", "2"), 2);
-        assert_eq!(reports.record("follows", "3"), 1);
+    fn every_grouped_action_knows_its_legacy_group() {
+        assert_eq!(legacy_group("unlike_playlist"), Some("likes"));
+        assert_eq!(legacy_group("playlist_membership"), Some("playlists"));
+        assert_eq!(legacy_group("track_update"), None);
     }
 
     #[test]
@@ -124,6 +106,16 @@ mod tests {
 
         assert_eq!(reports.record("likes", "3"), 1);
         assert_eq!(reports.record("follows", "2"), 2);
+    }
+
+    #[test]
+    fn the_same_user_counts_once() {
+        let reports = AppReports::default();
+
+        assert_eq!(reports.record("likes", "1"), 1);
+        assert_eq!(reports.record("likes", "1"), 1);
+        assert_eq!(reports.record("likes", "2"), 2);
+        assert_eq!(reports.record("follows", "3"), 1);
     }
 
     #[test]

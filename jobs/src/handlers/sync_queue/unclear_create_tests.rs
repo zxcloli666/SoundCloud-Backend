@@ -190,6 +190,7 @@ pub(super) fn handler(
         concurrency: 1,
         claim_batch: 1,
         turns: Turns::default(),
+        before_write: std::sync::Mutex::default(),
     })
 }
 
@@ -342,17 +343,14 @@ async fn an_unclear_create_keeps_its_mark_through_a_lost_login_and_both_pauses(
     let app: uuid::Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
         .fetch_one(&pool)
         .await?;
-    let app_action = (app, super::pause_group::group("playlist_create"));
+    let app_action = (app, "playlist_create".to_owned());
     handler.write_pauses.pause(app_action.clone(), 600);
     run(&pool, &handler).await?;
     assert_eq!(row(&pool).await?, Some((1, false, true)));
     assert_eq!(fake.methods(), ["POST", "GET"]);
     handler.write_pauses.succeeded(&app_action, None);
 
-    let account_action = (
-        "17".to_owned(),
-        super::pause_group::group("playlist_create"),
-    );
+    let account_action = ("17".to_owned(), "playlist_create".to_owned());
     handler.account_pauses.pause(account_action.clone(), 600);
     run(&pool, &handler).await?;
     assert_eq!(row(&pool).await?, Some((1, false, true)));
