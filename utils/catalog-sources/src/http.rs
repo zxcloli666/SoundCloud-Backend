@@ -25,6 +25,7 @@ pub(crate) type RelayFuture<'a, T> = Pin<Box<dyn Future<Output = SourceResult<T>
 #[derive(Clone)]
 pub struct ExternalFetcher {
     inner: Arc<Inner>,
+    background: bool,
 }
 
 struct Inner {
@@ -111,6 +112,14 @@ impl ExternalFetcher {
                 relay_sem: Arc::new(Semaphore::new(RELAY_MAX_CONCURRENT)),
                 proxy_sem: Arc::new(Semaphore::new(PROXY_MAX_CONCURRENT)),
             }),
+            background: false,
+        })
+    }
+
+    pub fn background(&self) -> Arc<Self> {
+        Arc::new(Self {
+            inner: self.inner.clone(),
+            background: true,
         })
     }
 
@@ -306,6 +315,7 @@ impl ExternalFetcher {
             method: method.as_str().to_owned(),
             headers: relay_headers,
             body: body.unwrap_or_default(),
+            background: self.background,
         };
         let response = tokio::time::timeout(OPERATION_TIMEOUT, relay.fetch(request))
             .await
@@ -402,6 +412,52 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         format!("http://{address}/")
+    }
+
+    #[derive(Default)]
+    struct RecordingRelay {
+        background: std::sync::Mutex<Vec<bool>>,
+    }
+
+    impl RelayTransport for RecordingRelay {
+        fn call_method(
+            &self,
+            _method_id: String,
+            _script: String,
+            _inputs: Bytes,
+        ) -> RelayFuture<'_, Bytes> {
+            Box::pin(async { Ok(Bytes::new()) })
+        }
+
+        fn fetch(&self, request: RelayRequest) -> RelayFuture<'_, RelayReply> {
+            self.background.lock().unwrap().push(request.background);
+            Box::pin(async {
+                Ok(RelayReply {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: Bytes::from_static(b"{}"),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_background_view_marks_its_relay_requests() {
+        let relay = Arc::new(RecordingRelay::default());
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new_with_transport(http, String::new(), relay.clone());
+
+        fetcher
+            .get_bytes("https://genius.com/api/search/multi?q=x", HeaderMap::new())
+            .await
+            .unwrap();
+        fetcher
+            .background()
+            .get_bytes("https://musicbrainz.org/ws/2/x", HeaderMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(*relay.background.lock().unwrap(), [false, true]);
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ pub struct ExternalSources {
     pub musicbrainz: Arc<MbClient>,
     pub genius: Arc<GeniusService>,
     pub lyrics: Arc<LyricsSources>,
+    pub lyrics_on_demand: Arc<LyricsSources>,
 }
 
 impl ExternalSources {
@@ -20,17 +21,24 @@ impl ExternalSources {
         lyrics: &LyricsConfig,
     ) -> Result<Self, ClientBuildError> {
         let fetcher = ExternalFetcher::new(http_client()?, enrich.proxy_url.clone(), relay);
+        let background = fetcher.background();
         let genius = GeniusService::new(
-            fetcher.clone(),
+            background.clone(),
             GeniusCfg {
                 access_token: enrich.genius_access_token.expose().clone(),
                 max_concurrent_scrapes: enrich.genius_max_concurrent_scrapes,
             },
         );
+        let lyrics = LyricsSources::new(
+            background.clone(),
+            genius.clone(),
+            lyrics.musixmatch_base.clone(),
+        );
         Ok(Self {
-            musicbrainz: MbClient::new(fetcher.clone(), enrich.musicbrainz_rate_limit_ms),
-            genius: genius.clone(),
-            lyrics: LyricsSources::new(fetcher, genius, lyrics.musixmatch_base.clone()),
+            musicbrainz: MbClient::new(background, enrich.musicbrainz_rate_limit_ms),
+            genius,
+            lyrics_on_demand: lyrics.with_fetcher(fetcher),
+            lyrics,
         })
     }
 }

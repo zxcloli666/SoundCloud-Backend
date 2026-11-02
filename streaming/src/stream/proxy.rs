@@ -327,6 +327,7 @@ async fn via_relay(
             method: "GET".to_string(),
             headers: extra.clone(),
             body: Bytes::new(),
+            background: false,
         };
         match relay.fetch(&req).await {
             Ok(resp) if (200..400).contains(&resp.status) => {
@@ -456,6 +457,7 @@ async fn via_relay_post(
             method: "POST".to_string(),
             headers: extra.clone(),
             body: Bytes::from(body.clone()),
+            background: false,
         };
         match relay.fetch(&req).await {
             Ok(resp) if (200..400).contains(&resp.status) => {
