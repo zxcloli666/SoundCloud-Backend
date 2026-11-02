@@ -100,22 +100,11 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         Admission::Probe
     }
 
-    pub fn wait_or_probe(&self, key: &K, probe_hold: Duration) -> Option<i64> {
-        let now = Instant::now();
+    pub fn probe_answered(&self, key: &K) {
         let mut paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
-        let pause = paused.get_mut(key)?;
-        let remaining = pause.until.saturating_duration_since(now);
-        if !remaining.is_zero() {
-            return Some(whole_seconds(remaining));
-        }
-        if pause.strikes == 0 {
+        if paused.get(key).is_some_and(|pause| pause.probing) {
             paused.remove(key);
-            return None;
         }
-        pause.until = now + probe_hold;
-        pause.strikes = 0;
-        pause.probing = false;
-        None
     }
 
     pub fn succeeded(&self, key: &K, spacing: Option<Duration>) {
@@ -295,23 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn after_a_read_pause_one_probe_goes_out_and_the_rest_wait_for_its_answer() {
+    fn a_read_pause_opens_only_when_its_probe_is_answered() {
         let pauses = WritePauses::default();
-        let hold = Duration::from_secs(30);
 
         pauses.pause_refused("app", 300);
+        pauses.probe_answered(&"app");
+        assert!(matches!(pauses.admit(&"app"), Admission::Paused(seconds) if seconds > 290));
         expire(&pauses, &"app");
 
-        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
-        assert!(matches!(pauses.wait_or_probe(&"app", hold), Some(seconds) if seconds <= 30));
-        pauses.pause_refused("app", 300);
-        assert!(matches!(pauses.wait_or_probe(&"app", hold), Some(seconds) if seconds > 290));
+        assert_eq!(pauses.admit(&"app"), Admission::Probe);
+        assert!(matches!(pauses.admit(&"app"), Admission::Paused(_)));
         expire(&pauses, &"app");
-        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
-        expire(&pauses, &"app");
-        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
-        assert_eq!(pauses.wait_or_probe(&"app", hold), None);
-        assert_eq!(pauses.wait_or_probe(&"other", hold), None);
+        assert_eq!(pauses.admit(&"app"), Admission::Probe);
+        pauses.probe_answered(&"app");
+        assert_eq!(pauses.admit(&"app"), Admission::Open);
+        pauses.probe_answered(&"other");
+        assert_eq!(pauses.admit(&"other"), Admission::Open);
     }
 
     #[test]

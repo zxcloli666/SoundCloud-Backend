@@ -329,6 +329,7 @@ impl PlaylistObserveHandler {
                     .await;
             }
         };
+        self.connections.reads_answered(token.oauth_app_id);
         self.finish_success(capture, &snapshot, Authority::Owner, metadata_observation)
             .await
     }
@@ -368,6 +369,7 @@ impl PlaylistObserveHandler {
             }
             match self.reader.observe(urn, &token.value).await {
                 Ok(snapshot) => {
+                    self.connections.reads_answered(Some(token.oauth_app_id));
                     return self
                         .finish_success(capture, &snapshot, Authority::Public, metadata_observation)
                         .await;

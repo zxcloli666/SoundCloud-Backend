@@ -96,7 +96,10 @@ fn core_text(core: &str, hide_next: &mut bool) -> String {
         let separator = &value[..1];
         let value = &value[1..];
         let key_name = key.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-        if key_name.ends_with("request_id") || key_name.ends_with("trace_id") {
+        if key_name.ends_with("request_id")
+            || key_name.ends_with("trace_id")
+            || key_name == "oauth_app_id"
+        {
             return core.to_owned();
         }
         if secret_key(key_name) {
@@ -104,7 +107,8 @@ fn core_text(core: &str, hide_next: &mut bool) -> String {
                 *hide_next = true;
                 return core.to_owned();
             }
-            return format!("{key}{separator}{MASK}");
+            let quote = &value[..value.len() - value.trim_start_matches(is_wrapper).len()];
+            return format!("{key}{separator}{quote}{MASK}");
         }
         if value.starts_with(':') {
             return core.to_owned();
@@ -283,5 +287,21 @@ mod tests {
         assert!(written.contains("reset"));
         assert!(written.contains("\"message\":\"x\""));
         assert!(written.contains("4bf92f3577b3da6a3ce929d0e0e4736f"));
+    }
+
+    #[test]
+    fn a_masked_json_field_keeps_the_line_valid_json_and_an_app_id_stays_readable() {
+        let app = "019a4f2e-7c1d-7b3a-9e55-1d2c3b4a5f60";
+        let line = format!(
+            "{{\"fields\":{{\"message\":\"paused\",\"oauth_app_id\":\"{app}\",\"client_id\":\"{CLIENT_ID}\",\"seconds\":300}}}}"
+        );
+
+        let cleaned = text(&line);
+
+        assert!(!forbidden(&cleaned), "{cleaned}");
+        let parsed: serde_json::Value = serde_json::from_str(&cleaned).expect("still json");
+        assert_eq!(parsed["fields"]["oauth_app_id"], app);
+        assert_eq!(parsed["fields"]["client_id"], MASK);
+        assert_eq!(parsed["fields"]["seconds"], 300);
     }
 }
