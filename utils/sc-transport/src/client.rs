@@ -439,6 +439,7 @@ impl ScClient {
             method: Method::GET.as_str().to_owned(),
             headers: HashMap::new(),
             body: Bytes::new(),
+            background: false,
         };
         let response = relay
             .fetch(&request)
@@ -920,6 +921,7 @@ impl ScClient {
             method: method.as_str().to_string(),
             headers: h,
             body: body.unwrap_or_default(),
+            background: false,
         };
         let resp = relay
             .fetch(&req)

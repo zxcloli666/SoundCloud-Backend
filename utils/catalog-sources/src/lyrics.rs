@@ -135,6 +135,14 @@ impl LyricsSources {
         })
     }
 
+    pub fn with_fetcher(&self, fetcher: Arc<ExternalFetcher>) -> Arc<Self> {
+        Arc::new(Self {
+            musixmatch: Arc::new(self.musixmatch.with_fetcher(fetcher.clone())),
+            genius: self.genius.with_fetcher(fetcher.clone()),
+            fetcher,
+        })
+    }
+
     pub async fn lookup(&self, hints: &LyricsHints) -> LyricsLookupOutcome {
         let title = hints.title.trim();
         if title.is_empty() {
@@ -854,7 +862,7 @@ struct MusixmatchLyrics {
     fetcher: Arc<ExternalFetcher>,
     base: String,
     guid: String,
-    token: Mutex<Option<TokenCache>>,
+    token: Arc<Mutex<Option<TokenCache>>>,
 }
 
 #[derive(Deserialize)]
@@ -889,7 +897,16 @@ impl MusixmatchLyrics {
             fetcher,
             base: base.trim_end_matches('/').to_owned(),
             guid: uuid::Uuid::new_v4().to_string(),
-            token: Mutex::new(None),
+            token: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn with_fetcher(&self, fetcher: Arc<ExternalFetcher>) -> Self {
+        Self {
+            fetcher,
+            base: self.base.clone(),
+            guid: self.guid.clone(),
+            token: self.token.clone(),
         }
     }
 
@@ -1301,6 +1318,25 @@ mod tests {
             genius,
             "https://apic-desktop.musixmatch.com/ws/1.1".to_owned(),
         )
+    }
+
+    #[test]
+    fn a_copy_with_another_fetcher_keeps_the_musixmatch_session() {
+        let on_demand = sources(
+            MockRelay::new(MethodMode::Empty, RawMode::Hit),
+            String::new(),
+        );
+        let fetcher = on_demand.fetcher.background();
+        let background = on_demand.with_fetcher(fetcher.clone());
+
+        assert!(Arc::ptr_eq(&background.fetcher, &fetcher));
+        assert!(Arc::ptr_eq(&background.musixmatch.fetcher, &fetcher));
+        assert!(!Arc::ptr_eq(&background.genius, &on_demand.genius));
+        assert!(Arc::ptr_eq(
+            &background.musixmatch.token,
+            &on_demand.musixmatch.token
+        ));
+        assert_eq!(background.musixmatch.guid, on_demand.musixmatch.guid);
     }
 
     async fn proxy_server() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {

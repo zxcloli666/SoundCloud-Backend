@@ -309,6 +309,7 @@ impl JobHandlers {
             )?,
             lyrics: LyricsHandler::new(
                 databases,
+                sources.lyrics_on_demand.clone(),
                 sources.lyrics.clone(),
                 config,
                 bus.clone(),

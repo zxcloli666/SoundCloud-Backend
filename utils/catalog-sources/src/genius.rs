@@ -336,6 +336,16 @@ impl GeniusService {
         })
     }
 
+    pub fn with_fetcher(&self, fetcher: Arc<ExternalFetcher>) -> Arc<Self> {
+        Arc::new(Self {
+            fetcher,
+            cfg: self.cfg.clone(),
+            api_throttle: self.api_throttle.clone(),
+            web_throttle: self.web_throttle.clone(),
+            scrape_sem: self.scrape_sem.clone(),
+        })
+    }
+
     fn has_token(&self) -> bool {
         !self.cfg.access_token.is_empty()
     }
@@ -1159,6 +1169,18 @@ mod tests {
                 max_concurrent_scrapes: 50,
             },
         )
+    }
+
+    #[test]
+    fn a_copy_with_another_fetcher_shares_throttles_and_scrape_slots() {
+        let genius = build_client();
+        let fetcher = genius.fetcher.background();
+        let copy = genius.with_fetcher(fetcher.clone());
+
+        assert!(Arc::ptr_eq(&copy.fetcher, &fetcher));
+        assert!(Arc::ptr_eq(&copy.api_throttle, &genius.api_throttle));
+        assert!(Arc::ptr_eq(&copy.web_throttle, &genius.web_throttle));
+        assert!(Arc::ptr_eq(&copy.scrape_sem, &genius.scrape_sem));
     }
 
     #[tokio::test]
