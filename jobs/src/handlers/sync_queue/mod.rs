@@ -230,6 +230,18 @@ impl SyncQueueHandler {
         } else {
             token
         };
+        if let Some(seconds) = self
+            .account_pauses
+            .remaining_seconds(&account_action(&mutation))
+        {
+            self.postpone_before_post(
+                &mutation,
+                "SoundCloud limits this action for the account",
+                seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+            )
+            .await?;
+            return Ok(());
+        }
         if let Some(oauth_app_id) = token.oauth_app_id {
             let spaced = (oauth_app_id, mutation.action_type.clone());
             if let Admission::Paused(seconds) = self.spacings.admit(&spaced) {
@@ -260,18 +272,6 @@ impl SyncQueueHandler {
                 }
                 Admission::Probe => {}
             }
-        }
-        if let Some(seconds) = self
-            .account_pauses
-            .remaining_seconds(&account_action(&mutation))
-        {
-            self.postpone_before_post(
-                &mutation,
-                "SoundCloud limits this action for the account",
-                seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
-            )
-            .await?;
-            return Ok(());
         }
         if !self.repository.record_remote_attempt(&mutation).await? {
             self.repository.release(&mutation).await?;
