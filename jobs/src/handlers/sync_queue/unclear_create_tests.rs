@@ -16,6 +16,7 @@ use crate::handlers::star_priority::Turns;
 use super::SyncQueueHandler;
 use super::client::{SoundCloudClient, TokenRefreshClient};
 use super::connection::ConnectionManager;
+use super::pause_group::AppReports;
 use super::repository::SyncQueueRepository;
 use super::storage::TrackStorage;
 use super::write_pause::WritePauses;
@@ -181,7 +182,9 @@ pub(super) fn handler(
         token_client: Arc::new(TokenRefreshClient::new(&oauth)?),
         storage: TrackStorage::new(&config)?,
         write_pauses: WritePauses::default(),
+        spacings: WritePauses::default(),
         account_pauses: WritePauses::default(),
+        app_reports: AppReports::default(),
         like_interval: config.like_interval,
         pauses_restored: tokio::sync::OnceCell::new(),
         concurrency: 1,
@@ -339,14 +342,17 @@ async fn an_unclear_create_keeps_its_mark_through_a_lost_login_and_both_pauses(
     let app: uuid::Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
         .fetch_one(&pool)
         .await?;
-    let app_action = (app, "playlist_create".to_owned());
+    let app_action = (app, super::pause_group::group("playlist_create"));
     handler.write_pauses.pause(app_action.clone(), 600);
     run(&pool, &handler).await?;
     assert_eq!(row(&pool).await?, Some((1, false, true)));
     assert_eq!(fake.methods(), ["POST", "GET"]);
     handler.write_pauses.succeeded(&app_action, None);
 
-    let account_action = ("17".to_owned(), "playlist_create".to_owned());
+    let account_action = (
+        "17".to_owned(),
+        super::pause_group::group("playlist_create"),
+    );
     handler.account_pauses.pause(account_action.clone(), 600);
     run(&pool, &handler).await?;
     assert_eq!(row(&pool).await?, Some((1, false, true)));

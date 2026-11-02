@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::SyncQueueHandler;
+use super::pause_group::group;
 use super::unclear_create_tests::{handler, run};
 
 async fn serve() -> anyhow::Result<std::net::SocketAddr> {
@@ -64,7 +65,7 @@ async fn setup(
         .await?;
         handler
             .write_pauses
-            .restore((app, action.to_owned()), Duration::from_secs(600), 1);
+            .restore((app, group(action)), Duration::from_secs(600), 1);
     }
     sqlx::query("INSERT INTO sync_queue (user_id, action_type, target_urn) VALUES ('17', $1, $2)")
         .bind(action_type)
@@ -99,9 +100,13 @@ async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_
     let paused = |app: Uuid, action: &str| {
         handler
             .write_pauses
-            .remaining_seconds(&(app, action.to_owned()))
+            .remaining_seconds(&(app, group(action)))
             .is_some()
     };
+
+    handler
+        .write_pauses
+        .restore((app, group("like_track")), Duration::ZERO, 1);
 
     run(&pool, &handler).await?;
 
@@ -132,7 +137,7 @@ async fn a_like_closed_on_a_missing_track_leaves_every_mark_in_place(
     let (app, _, handler) = setup(&pool, "like_track", "soundcloud:tracks:404").await?;
     handler
         .write_pauses
-        .restore((app, "like_track".to_owned()), Duration::ZERO, 1);
+        .restore((app, group("like_track")), Duration::ZERO, 1);
     let before = marks(&pool, app).await?;
 
     run(&pool, &handler).await?;
@@ -143,7 +148,7 @@ async fn a_like_closed_on_a_missing_track_leaves_every_mark_in_place(
     assert!(
         handler
             .write_pauses
-            .remaining_seconds(&(app, "playlist_create".to_owned()))
+            .remaining_seconds(&(app, group("playlist_create")))
             .is_some()
     );
     Ok(())

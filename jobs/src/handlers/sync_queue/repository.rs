@@ -108,12 +108,12 @@ impl SyncQueueRepository {
     pub async fn clear_action_pauses(
         &self,
         oauth_app_id: uuid::Uuid,
-        action_type: &str,
+        action_types: &[String],
     ) -> Result<Vec<String>, sqlx::Error> {
         sqlx::query_file_scalar!(
             "queries/sync_queue/pauses/clear.sql",
             oauth_app_id,
-            action_type
+            action_types
         )
         .fetch_all(&self.pool)
         .await
