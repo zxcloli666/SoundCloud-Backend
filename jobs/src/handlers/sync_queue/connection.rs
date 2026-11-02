@@ -10,7 +10,7 @@ use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 
 use super::client::{RefreshedToken, SoundCloudError, TokenRefreshClient};
 use super::model::Connection;
-use super::write_pause::WritePauses;
+use super::read_limit::AppReadLimits;
 
 const REFRESH_LEASE_SECONDS: i32 = 60;
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
@@ -21,7 +21,7 @@ const APP_CREDENTIALS_RETRY_SECONDS: i64 = 30 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const APP_TOKEN_MIN_LIFETIME_SECONDS: i64 = 30;
 
-static READ_PAUSES: LazyLock<WritePauses<Uuid>> = LazyLock::new(WritePauses::default);
+static READ_LIMITS: LazyLock<AppReadLimits> = LazyLock::new(AppReadLimits::default);
 
 #[derive(Clone, Debug)]
 pub struct AccessToken {
@@ -94,7 +94,7 @@ impl ConnectionManager {
     }
 
     pub fn pause_reads(&self, oauth_app_id: Uuid, seconds: i64) -> i64 {
-        let (seconds, _) = READ_PAUSES.pause_refused(oauth_app_id, seconds);
+        let seconds = READ_LIMITS.limited(oauth_app_id, seconds);
         tracing::warn!(%oauth_app_id, seconds, "soundcloud app reads paused");
         seconds
     }
@@ -106,12 +106,12 @@ impl ConnectionManager {
         if let Some(seconds) = self.cooldowns.retry_after_seconds(oauth_app_id).await? {
             return Ok(Some(seconds));
         }
-        Ok(READ_PAUSES.remaining_seconds(&oauth_app_id))
+        Ok(READ_LIMITS.admit(oauth_app_id))
     }
 
     pub fn reads_answered(&self, oauth_app_id: Option<Uuid>) {
         if let Some(oauth_app_id) = oauth_app_id {
-            READ_PAUSES.probe_answered(&oauth_app_id);
+            READ_LIMITS.answered(oauth_app_id);
         }
     }
 
