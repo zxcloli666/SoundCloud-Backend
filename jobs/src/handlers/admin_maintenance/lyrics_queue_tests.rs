@@ -70,6 +70,12 @@ struct Queued {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+struct Found {
+    #[sqlx(rename = "settled!")]
+    settled: bool,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 struct Totals {
     status: String,
     scanned: i64,
@@ -615,19 +621,18 @@ async fn settle_found(
     plain: &str,
     recheck: bool,
 ) -> anyhow::Result<bool> {
-    let settled: Option<(String, Option<String>, Option<String>, Option<String>, bool)> =
-        sqlx::query_as(SETTLE_FOUND)
-            .bind(job.id)
-            .bind(job.generation)
-            .bind(job.lease_id)
-            .bind(track_id)
-            .bind(generation)
-            .bind("lrclib")
-            .bind(synced)
-            .bind(plain)
-            .bind(recheck)
-            .bind(7_i32)
-            .fetch_optional(pool)
-            .await?;
-    Ok(settled.is_some_and(|row| row.4))
+    let found: Option<Found> = sqlx::query_as(SETTLE_FOUND)
+        .bind(job.id)
+        .bind(job.generation)
+        .bind(job.lease_id)
+        .bind(track_id)
+        .bind(generation)
+        .bind("lrclib")
+        .bind(synced)
+        .bind(plain)
+        .bind(recheck)
+        .bind(7_i32)
+        .fetch_optional(pool)
+        .await?;
+    Ok(found.is_some_and(|row| row.settled))
 }
