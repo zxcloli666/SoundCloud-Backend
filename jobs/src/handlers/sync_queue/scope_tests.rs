@@ -91,8 +91,8 @@ fn app_pause(handler: &SyncQueueHandler, app: Uuid, group: &str) -> Option<i64> 
 
 fn open_spacing(handler: &SyncQueueHandler, app: Uuid) {
     handler
-        .write_pauses
-        .succeeded(&(app, "likes".to_owned()), None);
+        .spacings
+        .succeeded(&(app, "like_track".to_owned()), None);
 }
 
 #[sqlx::test(migrations = false)]
@@ -128,10 +128,15 @@ async fn three_users_with_a_429_and_no_success_in_likes_pause_the_app_likes_only
     assert!(!attempt(&pool, &handler, &calls, "24", "unlike_track", "9").await?);
     assert!(attempt(&pool, &handler, &calls, "24", "follow_user", "9").await?);
     assert_eq!(app_pause(&handler, app, "follows"), None);
-    let saved: Vec<String> = sqlx::query_scalar("SELECT action_type FROM sync_queue_action_pauses")
-        .fetch_all(&pool)
-        .await?;
-    assert_eq!(saved, ["likes"]);
+    let mut saved: Vec<String> =
+        sqlx::query_scalar("SELECT action_type FROM sync_queue_action_pauses")
+            .fetch_all(&pool)
+            .await?;
+    saved.sort();
+    let mut expected = super::pause_group::members("likes");
+    expected.sort();
+    assert_eq!(saved, expected);
+    assert_eq!(saved.len(), 4);
     Ok(())
 }
 
@@ -153,6 +158,19 @@ async fn a_like_that_goes_through_keeps_the_429s_per_account(pool: PgPool) -> an
     }
     open_spacing(&handler, app);
     assert!(attempt(&pool, &handler, &calls, "24", "like_track", "ok").await?);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_like_spaces_only_its_own_action(pool: PgPool) -> anyhow::Result<()> {
+    let (app, handler, calls) = setup(&pool).await?;
+
+    assert!(attempt(&pool, &handler, &calls, "21", "like_track", "ok").await?);
+
+    assert!(!attempt(&pool, &handler, &calls, "22", "like_track", "ok").await?);
+    assert!(attempt(&pool, &handler, &calls, "22", "unlike_track", "ok").await?);
+    assert!(attempt(&pool, &handler, &calls, "22", "like_playlist", "ok").await?);
+    assert_eq!(app_pause(&handler, app, "likes"), None);
     Ok(())
 }
 

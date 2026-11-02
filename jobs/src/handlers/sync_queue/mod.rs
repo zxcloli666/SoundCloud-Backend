@@ -64,6 +64,7 @@ pub struct SyncQueueHandler {
     token_client: Arc<TokenRefreshClient>,
     storage: TrackStorage,
     write_pauses: WritePauses<(uuid::Uuid, String)>,
+    spacings: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
     app_reports: AppReports<(uuid::Uuid, String)>,
     like_interval: Duration,
@@ -85,6 +86,7 @@ impl SyncQueueHandler {
             token_client: Arc::new(TokenRefreshClient::new(&config.oauth)?),
             storage: TrackStorage::new(&config.sync_queue)?,
             write_pauses: WritePauses::default(),
+            spacings: WritePauses::default(),
             account_pauses: WritePauses::default(),
             app_reports: AppReports::default(),
             like_interval: config.sync_queue.like_interval,
@@ -117,7 +119,7 @@ impl SyncQueueHandler {
             if claimed >= self.claim_batch as usize {
                 continue;
             }
-            match self.write_pauses.next_spacing_end() {
+            match self.spacings.next_spacing_end() {
                 Some(wait) if Instant::now() + wait < deadline => tokio::time::sleep(wait).await,
                 _ => break,
             }
@@ -134,15 +136,21 @@ impl SyncQueueHandler {
     }
 
     fn held_actions(&self) -> Vec<String> {
-        self.write_pauses
+        let paused = self
+            .write_pauses
             .held()
             .into_iter()
             .flat_map(|(oauth_app_id, group)| {
                 members(&group)
                     .into_iter()
                     .map(move |action| format!("{oauth_app_id}:{action}"))
-            })
-            .collect()
+            });
+        let spaced = self
+            .spacings
+            .held()
+            .into_iter()
+            .map(|(oauth_app_id, action)| format!("{oauth_app_id}:{action}"));
+        paused.chain(spaced).collect()
     }
 
     async fn flush_batch(&self, round: &mut Round) -> JobResult<usize> {
@@ -223,6 +231,16 @@ impl SyncQueueHandler {
             token
         };
         if let Some(oauth_app_id) = token.oauth_app_id {
+            let spaced = (oauth_app_id, mutation.action_type.clone());
+            if let Admission::Paused(seconds) = self.spacings.admit(&spaced) {
+                self.postpone_before_post(
+                    &mutation,
+                    "SoundCloud paused this action for the application",
+                    seconds.min(PAUSED_ACTION_RECHECK_SECONDS),
+                )
+                .await?;
+                return Ok(());
+            }
             let action = (oauth_app_id, group(&mutation.action_type));
             match self.write_pauses.admit(&action) {
                 Admission::Paused(seconds) => {
@@ -236,8 +254,8 @@ impl SyncQueueHandler {
                 }
                 Admission::Open => {
                     if let Some(spacing) = self.spacing(&mutation.action_type) {
-                        self.write_pauses
-                            .pause(action, i64::try_from(spacing.as_secs()).unwrap_or(1));
+                        self.spacings
+                            .pause(spaced, i64::try_from(spacing.as_secs()).unwrap_or(1));
                     }
                 }
                 Admission::Probe => {}
@@ -312,10 +330,14 @@ impl SyncQueueHandler {
                 if let Some(oauth_app_id) = oauth_app_id {
                     let group = group(&mutation.action_type);
                     self.app_reports.succeeded(&(oauth_app_id, group.clone()));
-                    self.write_pauses.succeeded(
-                        &(oauth_app_id, group.clone()),
-                        self.spacing(&mutation.action_type),
-                    );
+                    if let Some(spacing) = self.spacing(&mutation.action_type) {
+                        self.spacings.succeeded(
+                            &(oauth_app_id, mutation.action_type.clone()),
+                            Some(spacing),
+                        );
+                    }
+                    self.write_pauses
+                        .succeeded(&(oauth_app_id, group.clone()), None);
                     self.forget_pauses(oauth_app_id, &group).await;
                 }
                 result
@@ -455,11 +477,9 @@ impl SyncQueueHandler {
     }
 
     async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, group_name: &str) {
-        let mut names = members(group_name);
-        names.push(group_name.to_owned());
         let cleared = self
             .repository
-            .clear_action_pauses(oauth_app_id, &names)
+            .clear_action_pauses(oauth_app_id, &members(group_name))
             .await;
         match cleared {
             Ok(lifted) => {
@@ -530,12 +550,14 @@ impl SyncQueueHandler {
         } else {
             return;
         };
-        let saved = self
-            .repository
-            .save_action_pause(oauth_app_id, &group, seconds, strikes, reason)
-            .await;
-        if let Err(error) = saved {
-            warn!(%error, "a refused action pause was not saved and will not survive a restart");
+        for member in members(&group) {
+            let saved = self
+                .repository
+                .save_action_pause(oauth_app_id, &member, seconds, strikes, reason)
+                .await;
+            if let Err(error) = saved {
+                warn!(%error, "a refused action pause was not saved and will not survive a restart");
+            }
         }
         warn!(
             %oauth_app_id,

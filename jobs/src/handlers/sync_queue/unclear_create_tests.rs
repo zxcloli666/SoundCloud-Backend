@@ -182,6 +182,7 @@ pub(super) fn handler(
         token_client: Arc::new(TokenRefreshClient::new(&oauth)?),
         storage: TrackStorage::new(&config)?,
         write_pauses: WritePauses::default(),
+        spacings: WritePauses::default(),
         account_pauses: WritePauses::default(),
         app_reports: AppReports::default(),
         like_interval: config.like_interval,
@@ -341,7 +342,7 @@ async fn an_unclear_create_keeps_its_mark_through_a_lost_login_and_both_pauses(
     let app: uuid::Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
         .fetch_one(&pool)
         .await?;
-    let app_action = (app, "playlist_create".to_owned());
+    let app_action = (app, super::pause_group::group("playlist_create"));
     handler.write_pauses.pause(app_action.clone(), 600);
     run(&pool, &handler).await?;
     assert_eq!(row(&pool).await?, Some((1, false, true)));
