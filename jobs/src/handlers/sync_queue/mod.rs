@@ -7,6 +7,7 @@ mod intent_tests;
 mod model;
 #[cfg(test)]
 mod playlist_tests;
+mod read_limit;
 #[cfg(test)]
 mod refusal_tests;
 mod repository;
