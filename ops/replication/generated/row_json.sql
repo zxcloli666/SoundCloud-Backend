@@ -526,6 +526,18 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.lyrics_lookup_backfill_state t WHERE t.singleton = (k ->> 'singleton')::boolean
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_lyrics_lookup_queue(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.lyrics_lookup_queue t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_lyrics_lookup_state(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1364,6 +1376,8 @@ BEGIN
             RETURN public.scd_row_json_lyrics_embedding_wire_state(k);
         WHEN 'lyrics_lookup_backfill_state' THEN
             RETURN public.scd_row_json_lyrics_lookup_backfill_state(k);
+        WHEN 'lyrics_lookup_queue' THEN
+            RETURN public.scd_row_json_lyrics_lookup_queue(k);
         WHEN 'lyrics_lookup_state' THEN
             RETURN public.scd_row_json_lyrics_lookup_state(k);
         WHEN 'oauth_app_request_cooldowns' THEN

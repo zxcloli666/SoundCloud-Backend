@@ -37,6 +37,7 @@ CREATE SEQUENCE IF NOT EXISTS public.scd_guard_job_status;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_cache;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_embedding_wire_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_backfill_state;
+CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_queue;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_lyrics_lookup_state;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_oauth_app_token_issuance_reservations;
 CREATE SEQUENCE IF NOT EXISTS public.scd_guard_oauth_app_token_refresh_state;
@@ -2703,6 +2704,8 @@ ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zzz_suppress;
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_embedding_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_embedding_wire_state', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_backfill_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_backfill_state', 'cmd', 'migration', 'repl');
+
+CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_queue', 'cmd', 'migration', 'repl');
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_state', 'cmd', 'migration', 'repl');
 
@@ -7241,6 +7244,7 @@ FROM (VALUES
     ('guard', 'lyrics_cache', 'scd_guard_lyrics_cache'),
     ('guard', 'lyrics_embedding_wire_state', 'scd_guard_lyrics_embedding_wire_state'),
     ('guard', 'lyrics_lookup_backfill_state', 'scd_guard_lyrics_lookup_backfill_state'),
+    ('guard', 'lyrics_lookup_queue', 'scd_guard_lyrics_lookup_queue'),
     ('guard', 'lyrics_lookup_state', 'scd_guard_lyrics_lookup_state'),
     ('guard', 'oauth_app_token_issuance_reservations', 'scd_guard_oauth_app_token_issuance_reservations'),
     ('guard', 'oauth_app_token_refresh_state', 'scd_guard_oauth_app_token_refresh_state'),
@@ -7443,6 +7447,7 @@ BEGIN
             ('lyrics_cache', 'zzz_suppress'),
             ('lyrics_embedding_wire_state', 'zz_guard'),
             ('lyrics_lookup_backfill_state', 'zz_guard'),
+            ('lyrics_lookup_queue', 'zz_guard'),
             ('lyrics_lookup_state', 'zz_guard'),
             ('lyrics_lookup_state', 'zz_owner'),
             ('lyrics_lookup_state', 'zzz_suppress'),

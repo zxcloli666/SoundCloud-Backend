@@ -484,6 +484,21 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_purge_lyrics_lookup_queue(k jsonb)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    p record;
+BEGIN
+    SELECT t.track_id INTO p FROM public.lyrics_lookup_queue t WHERE t.track_id = (k ->> 'track_id')::uuid;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    DELETE FROM public.lyrics_lookup_queue t WHERE t.track_id = (k ->> 'track_id')::uuid;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_purge_lyrics_lookup_state(k jsonb)
 RETURNS void
 LANGUAGE plpgsql
@@ -495,6 +510,7 @@ BEGIN
     IF NOT FOUND THEN
         RETURN;
     END IF;
+    DELETE FROM public.lyrics_lookup_queue c WHERE c.track_id = p.track_id;
     DELETE FROM public.lyrics_lookup_state t WHERE t.track_id = (k ->> 'track_id')::uuid;
 END
 $f$;
@@ -916,6 +932,7 @@ LANGUAGE plpgsql
 AS $f$
 DECLARE
     p record;
+    r record;
 BEGIN
     SELECT t.id, t.sc_track_id INTO p FROM public.tracks t WHERE t.id = (k ->> 'id')::uuid;
     IF NOT FOUND THEN
@@ -924,7 +941,9 @@ BEGIN
     DELETE FROM public.album_tracks c WHERE c.track_id = p.id;
     DELETE FROM public.catalog_work_links c WHERE c.track_id = p.id;
     DELETE FROM public.lyrics_cache c WHERE c.track_id = p.id;
-    DELETE FROM public.lyrics_lookup_state c WHERE c.track_id = p.id;
+    FOR r IN SELECT c.track_id FROM public.lyrics_lookup_state c WHERE c.track_id = p.id LOOP
+        PERFORM public.scd_purge_lyrics_lookup_state(jsonb_build_object('track_id', r.track_id));
+    END LOOP;
     DELETE FROM public.storage_event_repairs c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.storage_event_state c WHERE c.sc_track_id = p.sc_track_id;
     DELETE FROM public.track_artist_blocks c WHERE c.track_id = p.id;
@@ -1218,6 +1237,8 @@ BEGIN
             PERFORM public.scd_purge_lyrics_embedding_wire_state(k);
         WHEN 'lyrics_lookup_backfill_state' THEN
             PERFORM public.scd_purge_lyrics_lookup_backfill_state(k);
+        WHEN 'lyrics_lookup_queue' THEN
+            PERFORM public.scd_purge_lyrics_lookup_queue(k);
         WHEN 'lyrics_lookup_state' THEN
             PERFORM public.scd_purge_lyrics_lookup_state(k);
         WHEN 'oauth_app_token_issuance_reservations' THEN

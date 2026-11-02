@@ -78,7 +78,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
+pub(super) fn handler(pool: &PgPool) -> AdminMaintenanceHandler {
     let http = sc_fingerprint::builder(None)
         .timeout(Duration::from_secs(1))
         .build()

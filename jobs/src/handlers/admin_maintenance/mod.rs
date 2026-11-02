@@ -1,3 +1,4 @@
+mod lyrics_queue;
 mod musicbrainz_names;
 mod renormalize;
 mod wanted_aliases;
@@ -18,6 +19,7 @@ use crate::config::AdminMaintenanceConfig;
 use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
 
 pub const CATALOG_RENORMALIZE: &str = "catalog_renormalize";
+pub const LYRICS_LOOKUP_QUEUE: &str = "lyrics_lookup_queue";
 pub const MUSICBRAINZ_NAMES: &str = "musicbrainz_names";
 pub const WANTED_ALIASES: &str = "wanted_aliases";
 
@@ -88,6 +90,14 @@ impl AdminMaintenanceHandler {
         self.run(job, payload, WANTED_ALIASES).await
     }
 
+    pub async fn backfill_lyrics_lookup_queue(
+        &self,
+        job: &LeasedJob,
+        payload: AdminMaintenancePayload,
+    ) -> JobResult {
+        self.run(job, payload, LYRICS_LOOKUP_QUEUE).await
+    }
+
     async fn run(
         &self,
         job: &LeasedJob,
@@ -144,6 +154,8 @@ impl AdminMaintenanceHandler {
             musicbrainz_names::FIRST_PHASE
         } else if kind == WANTED_ALIASES {
             wanted_aliases::FIRST_PHASE
+        } else if kind == LYRICS_LOOKUP_QUEUE {
+            lyrics_queue::FIRST_PHASE
         } else {
             renormalize::FIRST_PHASE
         }
@@ -154,6 +166,8 @@ impl AdminMaintenanceHandler {
             musicbrainz_names::execute(self, state).await
         } else if kind == WANTED_ALIASES {
             wanted_aliases::execute(self, state).await
+        } else if kind == LYRICS_LOOKUP_QUEUE {
+            lyrics_queue::execute(self, state).await
         } else {
             renormalize::execute(self, state).await
         }
@@ -239,6 +253,8 @@ fn continuation_kind(kind: &str) -> JobKind {
         JobKind::AdminMusicBrainzNames
     } else if kind == WANTED_ALIASES {
         JobKind::AdminWantedAliases
+    } else if kind == LYRICS_LOOKUP_QUEUE {
+        JobKind::AdminLyricsLookupQueue
     } else {
         JobKind::AdminCatalogRenormalize
     }

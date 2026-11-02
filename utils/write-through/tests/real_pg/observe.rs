@@ -6,6 +6,7 @@ use wt::{Mode, ObservePlaylists, ObserveProfile, ObserveTracks, ObserveUsers};
 
 use crate::harness::Pair;
 
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
 const PROD_TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const PROD_TRACK: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, sharing, artwork_url, permalink_url,
@@ -163,10 +164,7 @@ async fn a_new_track_gets_the_same_v5_id_on_api_and_core() {
         "2026-10-30T10:00:00.123456Z",
         vec![track("1874620099", "Sunset", "2026-10-29T10:00:00Z", 1)],
     );
-    let output = pair
-        .run(&upsert, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let output = pair.run(&upsert, DERIVED).await.assert_same();
     let v5: Uuid = scalar(
         &pair.core,
         "SELECT public.scd_uuid('tracks', 'soundcloud:tracks:1874620099')",
@@ -203,10 +201,7 @@ async fn a_changed_prod_track_keeps_its_v4_id() {
             1,
         )],
     );
-    let output = pair
-        .run(&upsert, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let output = pair.run(&upsert, DERIVED).await.assert_same();
     assert_eq!(
         output,
         json!([{"sc_track_id": "1874620031", "id": PROD_TRACK_ID, "was_new": false, "applied": true}])
@@ -233,10 +228,7 @@ async fn an_unchanged_track_only_lifts_its_priority() {
     let same = track("1874620031", "Night Drive", "2026-09-01T10:00:00Z", 2);
     let pair = Pair::new(PROD_TRACK).await;
     let upsert = tracks(Mode::Upsert, HLC_1, "2026-10-30T10:00:00Z", vec![same]);
-    let output = pair
-        .run(&upsert, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let output = pair.run(&upsert, DERIVED).await.assert_same();
     assert_eq!(
         output,
         json!([{"sc_track_id": "1874620031", "id": PROD_TRACK_ID, "was_new": false, "applied": false}])
@@ -263,10 +255,7 @@ async fn absent_tracks_insert_only_the_missing_rows() {
             track("1874620100", "Fresh One", "2026-10-29T10:00:00Z", 5),
         ],
     );
-    let output = pair
-        .run(&absent, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let output = pair.run(&absent, DERIVED).await.assert_same();
     let v5: Uuid = scalar(
         &pair.core,
         "SELECT public.scd_uuid('tracks', 'soundcloud:tracks:1874620100')",
@@ -297,10 +286,7 @@ async fn a_bump_lifts_priority_and_releases_the_hold() {
         "2026-10-30T10:00:00Z",
         vec![json!({"sc_track_id": "1874620031", "index_priority": 1, "storage_priority": 1})],
     );
-    let output = pair
-        .run(&bump, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let output = pair.run(&bump, DERIVED).await.assert_same();
     assert_eq!(output, json!([]));
     let row: (i16, i16, bool) =
         sqlx::query_as("SELECT index_priority, storage_priority, pipeline_held FROM public.tracks")
@@ -339,7 +325,7 @@ async fn a_backlog_observation_never_overwrites_newer_core_data() {
             5,
         )],
     );
-    let run = pair.run(&backlog, &["lyrics_lookup_state"]).await;
+    let run = pair.run(&backlog, DERIVED).await;
     assert_eq!(run.api[0]["applied"], json!(true));
     assert_eq!(run.core[0]["applied"], json!(false));
     assert_eq!(
@@ -404,7 +390,7 @@ async fn an_api_observation_up_to_the_skew_ahead_of_a_core_confirm_is_refused() 
     assert_eq!(skew, 1_000_000 << 4);
     for ahead in [1, skew / 2, skew] {
         let output = pair
-            .run(&observed_edit(confirmed + ahead), &["lyrics_lookup_state"])
+            .run(&observed_edit(confirmed + ahead), DERIVED)
             .await
             .assert_same();
         assert_eq!(output[0]["applied"], json!(false), "{ahead} ahead");
@@ -423,10 +409,7 @@ async fn an_observation_more_than_the_skew_after_a_confirm_is_accepted() {
     let pair = Pair::new(&confirmed_edit()).await;
     let (confirmed, skew) = confirm_and_skew(&pair).await;
     let output = pair
-        .run(
-            &observed_edit(confirmed + skew + 1),
-            &["lyrics_lookup_state"],
-        )
+        .run(&observed_edit(confirmed + skew + 1), DERIVED)
         .await
         .assert_same();
     assert_eq!(output[0]["applied"], json!(true));

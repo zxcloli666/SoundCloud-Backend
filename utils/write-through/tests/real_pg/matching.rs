@@ -6,6 +6,7 @@ use wt::{AlbumSlot, MatchAlbumTrack, MatchGeniusSong, MatchScAccount, MatchWante
 
 use crate::harness::Pair;
 
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
 const ARTIST_ID: &str = "0b7e5c3a-1d2f-4a6b-8c9d-3e4f5a6b7c8d";
 const TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const WANTED_ID: &str = "4a3b2c1d-9e8f-4b7a-8c6d-5e4f3a2b1c0d";
@@ -148,21 +149,14 @@ async fn a_genius_song_attaches_once() {
         genius_song_id: 5521337,
     };
     assert_eq!(
-        pair.run(&attach, &["lyrics_lookup_state"])
-            .await
-            .assert_same(),
+        pair.run(&attach, DERIVED).await.assert_same(),
         json!("1874620031")
     );
     let again = MatchGeniusSong {
         genius_song_id: 1,
         ..attach
     };
-    assert_eq!(
-        pair.run(&again, &["lyrics_lookup_state"])
-            .await
-            .assert_same(),
-        Value::Null
-    );
+    assert_eq!(pair.run(&again, DERIVED).await.assert_same(), Value::Null);
     pair.finish().await;
 }
 
@@ -182,12 +176,7 @@ async fn album_slots_fill_the_track_once_and_link_every_album() {
             },
         ],
     };
-    assert_eq!(
-        pair.run(&albums, &["lyrics_lookup_state"])
-            .await
-            .assert_same(),
-        Value::Null
-    );
+    assert_eq!(pair.run(&albums, DERIVED).await.assert_same(), Value::Null);
     let track: (Option<Uuid>, Option<i16>) =
         sqlx::query_as("SELECT album_id, album_position FROM public.tracks")
             .fetch_one(&pair.core)

@@ -14,6 +14,7 @@ const TRACK_ID: &str = "6f1c2b9e-4d7a-4c3e-9b8f-2a5d7e1c0b94";
 const APP_ID: &str = "1d3f5a7c-2b4e-4c6a-8d0f-9e1b3a5c7d2f";
 const GENERATION: &str = "5a7c9e1b-3d5f-4a7c-9e1b-3d5f7a9c1e3b";
 const CORE_CLOCK: [&str; 2] = ["background_jobs", "job_status"];
+const CORE_QUEUE: [&str; 1] = ["lyrics_lookup_queue"];
 const PLAYLIST: &str = "soundcloud:playlists:42";
 
 fn at(stamp: &str) -> DateTime<Utc> {
@@ -296,7 +297,7 @@ async fn lookup(pool: &PgPool) -> (String, i64, Option<i64>, bool) {
 #[tokio::test]
 async fn a_wake_creates_the_lookup_state_and_a_second_one_changes_nothing() {
     let pair = Pair::new(LYRICS_FIXTURE).await;
-    let first = pair.run(&wake("2026-10-30T10:00:00Z"), &[]).await;
+    let first = pair.run(&wake("2026-10-30T10:00:00Z"), &CORE_QUEUE).await;
     let state = first.assert_same();
     assert_eq!(state["status"], "pending");
     assert_eq!(
@@ -307,7 +308,7 @@ async fn a_wake_creates_the_lookup_state_and_a_second_one_changes_nothing() {
         lookup(&pair.core).await,
         ("pending".to_owned(), 1, Some(1), true)
     );
-    pair.run(&wake("2026-10-30T10:00:05Z"), &[])
+    pair.run(&wake("2026-10-30T10:00:05Z"), &CORE_QUEUE)
         .await
         .assert_same();
     assert_eq!(
@@ -328,10 +329,10 @@ async fn a_wake_reopens_a_missed_lookup_only_when_its_time_has_come() {
              213000, '2026-01-15 12:00:05+00', '2026-10-29 00:00:00+00')"
     ))
     .await;
-    let early = pair.run(&wake("2026-10-30T10:00:00Z"), &[]).await;
+    let early = pair.run(&wake("2026-10-30T10:00:00Z"), &CORE_QUEUE).await;
     assert_eq!(early.assert_same()["status"], "not_found");
     assert_eq!(lookup(&pair.core).await.1, 3);
-    let due = pair.run(&wake("2026-10-31T00:00:01Z"), &[]).await;
+    let due = pair.run(&wake("2026-10-31T00:00:01Z"), &CORE_QUEUE).await;
     assert_eq!(due.assert_same()["status"], "pending");
     assert_eq!(
         lookup(&pair.core).await,
