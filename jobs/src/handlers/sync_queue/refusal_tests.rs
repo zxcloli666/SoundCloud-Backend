@@ -104,6 +104,10 @@ async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_
             .is_some()
     };
 
+    handler
+        .write_pauses
+        .restore((app, group("like_track")), Duration::ZERO, 1);
+
     run(&pool, &handler).await?;
 
     assert_eq!(queued(&pool).await?, 0);

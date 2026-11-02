@@ -105,6 +105,7 @@ async fn one_users_429_pauses_only_that_users_likes(pool: PgPool) -> anyhow::Res
     assert!(!attempt(&pool, &handler, &calls, "21", "like_track", "9").await?);
     assert!(!attempt(&pool, &handler, &calls, "21", "unlike_track", "9").await?);
     assert!(attempt(&pool, &handler, &calls, "21", "playlist_delete", "9").await?);
+    open_spacing(&handler, app);
     assert!(attempt(&pool, &handler, &calls, "22", "like_track", "9").await?);
     assert_eq!(app_pause(&handler, app, "likes"), None);
     Ok(())

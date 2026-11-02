@@ -132,7 +132,7 @@ mod tests {
         let start = Instant::now();
 
         reports.record_at("likes", "1", start);
-        reports.record_at("likes", "2", start + Duration::from_secs(60));
+        reports.record_at("likes", "2", start + Duration::from_secs(120));
 
         assert_eq!(
             reports.record_at("likes", "3", start + Duration::from_secs(9 * 60)),
