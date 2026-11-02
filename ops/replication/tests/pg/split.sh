@@ -52,6 +52,12 @@ wait_for scd_b1_main "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'ur
 wait_for scd_b1_star "SELECT EXISTS (SELECT 1 FROM public.tracks WHERE urn = 'urn:t:e1')" "core's track reaches star"
 [ "$(val scd_b1_main "SELECT count(*) FROM public.lyrics_lookup_state WHERE sc_track_id = 'e1'")" = 1 ] \
   || { echo "FAIL the derived lyrics row did not replicate from core"; exit 1; }
+[ "$(val scd_b1_core "SELECT count(*) FROM public.lyrics_lookup_queue WHERE track_id = '00000000-0000-0000-0000-00000000e001'")" = 1 ] \
+  || { echo "FAIL core has no queue row for the derived lyrics row"; exit 1; }
+for n in main star; do
+  [ "$(val "scd_b1_$n" "SELECT count(*) FROM public.lyrics_lookup_queue")" = 0 ] || { echo "FAIL $n has lyrics queue rows"; exit 1; }
+done
+echo "ok the derived lyrics row has its queue row on core only"
 val scd_b1_main "SELECT id || ' ' || output FROM public.scd_wt('track.edit', '{\"urn\": \"urn:t:e1\", \"title\": \"Edited\"}');
   SELECT title FROM public.tracks WHERE urn = 'urn:t:e1';
   SELECT count(*) FROM public.cmd_pending p JOIN public.cmd_outbox o ON o.node = p.node AND o.id = p.id WHERE o.done_at IS NULL;
@@ -93,6 +99,9 @@ wait_for scd_b1_main "SELECT NOT EXISTS (SELECT 1 FROM public.tracks WHERE urn =
 settle ee16 ee17 ee18
 pairs tracks "urn = 'urn:t:e1'" "deleted track gone on all nodes"
 pairs lyrics_lookup_state "sc_track_id = 'e1'" "cascaded lyrics row gone on all nodes"
+[ "$(val scd_b1_core "SELECT count(*) FROM public.lyrics_lookup_queue WHERE track_id = '00000000-0000-0000-0000-00000000e001'")" = 0 ] \
+  || { echo "FAIL the queue row outlived the cascade on core"; exit 1; }
+echo "ok the cascade took the queue row on core"
 
 say "B2 dispatch: a key core does not create is purged on the api with its children (cmd_purge loop)"
 val scd_b1_main "SELECT id FROM public.scd_wt('observe.playlists', '{\"urn\": \"urn:p:1\", \"sc_id\": \"p1\", \"title\": \"P\", \"core\": \"skip\"}');

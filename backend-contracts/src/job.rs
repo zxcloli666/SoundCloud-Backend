@@ -98,6 +98,7 @@ pub const INDEX_TRACK_PRIORITY: i16 = 5;
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     AdminCatalogRenormalize,
+    AdminLyricsLookupQueue,
     AdminMusicBrainzNames,
     AdminWantedAliases,
     ArtistAttributionRevalidate,
@@ -155,6 +156,7 @@ pub enum JobKind {
 impl JobKind {
     pub const ALL: &'static [Self] = &[
         Self::AdminCatalogRenormalize,
+        Self::AdminLyricsLookupQueue,
         Self::AdminMusicBrainzNames,
         Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
@@ -212,6 +214,7 @@ impl JobKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
+            Self::AdminLyricsLookupQueue => "admin.lyrics_lookup_queue",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
             Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
@@ -314,6 +317,7 @@ impl JobKind {
             | Self::StarTrackTiers
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
+            | Self::AdminLyricsLookupQueue
             | Self::AdminMusicBrainzNames
             | Self::AdminWantedAliases
             | Self::CatalogRefresh
@@ -338,6 +342,7 @@ impl FromStr for JobKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let kind = match value {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
+            "admin.lyrics_lookup_queue" => Self::AdminLyricsLookupQueue,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
             "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
@@ -480,7 +485,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 53);
+        assert_eq!(kinds.len(), 54);
     }
 
     #[test]

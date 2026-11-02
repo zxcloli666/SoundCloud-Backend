@@ -526,6 +526,18 @@ AS $f$
 SELECT md5(ROW(t.completed, t.created_at, t.cursor_id, t.rows_created, t.rows_seen, t.singleton, t.updated_at)::text) FROM public.lyrics_lookup_backfill_state t WHERE t.singleton = (k ->> 'singleton')::boolean
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_lookup_queue(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.attempts, t.claim_expires_at, t.claim_job_generation, t.claim_job_id, t.claim_job_lease_id, t.claim_state_generation, t.created_at, t.last_attempt_at, t.next_run_at, t.priority, t.track_id, t.wake_at)::text) FROM public.lyrics_lookup_queue t WHERE t.track_id = (k ->> 'track_id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_lookup_state(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1364,6 +1376,8 @@ BEGIN
             RETURN public.scd_row_hash_lyrics_embedding_wire_state(k);
         WHEN 'lyrics_lookup_backfill_state' THEN
             RETURN public.scd_row_hash_lyrics_lookup_backfill_state(k);
+        WHEN 'lyrics_lookup_queue' THEN
+            RETURN public.scd_row_hash_lyrics_lookup_queue(k);
         WHEN 'lyrics_lookup_state' THEN
             RETURN public.scd_row_hash_lyrics_lookup_state(k);
         WHEN 'oauth_app_request_cooldowns' THEN

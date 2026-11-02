@@ -89,6 +89,7 @@ SELECT v.cls FROM (VALUES
     ('lyrics_cache', 'C'),
     ('lyrics_embedding_wire_state', 'P'),
     ('lyrics_lookup_backfill_state', 'P'),
+    ('lyrics_lookup_queue', 'P'),
     ('lyrics_lookup_state', 'C'),
     ('oauth_app_request_cooldowns', 'A'),
     ('oauth_app_token_issuance_reservations', 'P'),

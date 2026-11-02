@@ -1133,6 +1133,31 @@
     {"cols": ["singleton"], "expr": false, "keys": ["singleton"], "name": "lyrics_lookup_backfill_state_pkey", "primary": true, "where": null}
    ]
   },
+  "lyrics_lookup_queue": {
+   "columns": [
+    {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "claim_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "claim_job_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "claim_job_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "claim_job_lease_id", "notnull": false, "type": "uuid"},
+    {"default": null, "generated": false, "name": "claim_state_generation", "notnull": false, "type": "bigint"},
+    {"default": null, "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "last_attempt_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "next_run_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "priority", "notnull": true, "type": "smallint"},
+    {"default": null, "generated": false, "name": "track_id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "wake_at", "notnull": false, "type": "timestamp with time zone"}
+   ],
+   "fks": [
+    {"cols": ["track_id"], "name": "lyrics_lookup_queue_track_id_fkey", "on_delete": "c", "ref_cols": ["track_id"], "ref_table": "lyrics_lookup_state"}
+   ],
+   "triggers": [
+    {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["track_id"], "expr": false, "keys": ["track_id"], "name": "lyrics_lookup_queue_pkey", "primary": true, "where": null}
+   ]
+  },
   "lyrics_lookup_state": {
    "columns": [
     {"default": "1", "generated": false, "name": "algorithm_version", "notnull": true, "type": "integer"},
@@ -1172,6 +1197,7 @@
     {"cols": ["track_id"], "name": "lyrics_lookup_state_track_id_fkey", "on_delete": "c", "ref_cols": ["id"], "ref_table": "tracks"}
    ],
    "triggers": [
+    {"before": false, "enabled": "A", "function": "lyrics_lookup_queue_sync", "gated": true, "name": "lyrics_lookup_queue_sync", "pinned": true, "source": "\nDECLARE\n    open_wake timestamptz := CASE\n        WHEN NEW.wake_message_id IS NOT NULL AND NEW.wake_durable_at IS NULL THEN NEW.updated_at\n    END;\nBEGIN\n    INSERT INTO public.lyrics_lookup_queue (\n        track_id,\n        priority,\n        next_run_at,\n        created_at,\n        wake_at,\n        attempts,\n        last_attempt_at,\n        claim_job_id,\n        claim_job_generation,\n        claim_job_lease_id,\n        claim_state_generation,\n        claim_expires_at\n    )\n    VALUES (\n        NEW.track_id,\n        NEW.priority,\n        NEW.next_run_at,\n        NEW.created_at,\n        open_wake,\n        NEW.attempts,\n        NEW.last_attempt_at,\n        NEW.claim_job_id,\n        NEW.claim_job_generation,\n        NEW.claim_job_lease_id,\n        NEW.claim_state_generation,\n        NEW.claim_expires_at\n    )\n    ON CONFLICT (track_id) DO NOTHING;\n    IF FOUND THEN\n        RETURN NULL;\n    END IF;\n\n    UPDATE public.lyrics_lookup_queue AS queue\n    SET priority = NEW.priority,\n        next_run_at = NEW.next_run_at,\n        created_at = NEW.created_at,\n        wake_at = open_wake,\n        attempts = NEW.attempts,\n        last_attempt_at = NEW.last_attempt_at,\n        claim_job_id = NEW.claim_job_id,\n        claim_job_generation = NEW.claim_job_generation,\n        claim_job_lease_id = NEW.claim_job_lease_id,\n        claim_state_generation = NEW.claim_state_generation,\n        claim_expires_at = NEW.claim_expires_at\n    WHERE queue.track_id = NEW.track_id\n      AND (\n          queue.priority,\n          queue.next_run_at,\n          queue.created_at,\n          queue.wake_at,\n          queue.attempts,\n          queue.last_attempt_at,\n          queue.claim_job_id,\n          queue.claim_job_generation,\n          queue.claim_job_lease_id,\n          queue.claim_state_generation,\n          queue.claim_expires_at\n      ) IS DISTINCT FROM (\n          NEW.priority,\n          NEW.next_run_at,\n          NEW.created_at,\n          open_wake,\n          NEW.attempts,\n          NEW.last_attempt_at,\n          NEW.claim_job_id,\n          NEW.claim_job_generation,\n          NEW.claim_job_lease_id,\n          NEW.claim_state_generation,\n          NEW.claim_expires_at\n      );\n    RETURN NULL;\nEND\n"},
     {"enabled": "O", "function": "scd_guard", "gated": false, "name": "zz_guard", "pinned": false},
     {"enabled": "R", "function": "scd_owner_lyrics_lookup_state", "gated": false, "name": "zz_owner", "pinned": false},
     {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
