@@ -467,7 +467,7 @@ fn app_wide_retry_seconds(error: &SoundCloudError, transient_seconds: i64) -> Op
         SoundCloudError::Transport(_) | SoundCloudError::ResponseTooLarge => {
             Some(transient_seconds)
         }
-        SoundCloudError::InvalidTokenResponse => None,
+        SoundCloudError::InvalidTokenResponse | SoundCloudError::Paused(_) => None,
         SoundCloudError::Api { .. } => None,
     }
 }

@@ -3,6 +3,8 @@ mod client;
 mod connection;
 mod create_check;
 #[cfg(test)]
+mod gate_tests;
+#[cfg(test)]
 mod intent_tests;
 mod model;
 mod pause_group;
@@ -19,6 +21,7 @@ mod storage;
 mod track_tests;
 #[cfg(test)]
 mod unclear_create_tests;
+mod write_gate;
 mod write_pause;
 
 use std::sync::Arc;
@@ -35,9 +38,10 @@ use crate::queue::{JobError, JobResult};
 use self::actions::{ActionError, Remote};
 use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
-use self::pause_group::{AppReports, ESCALATION_USERS, group, members};
+use self::pause_group::{AppReports, ESCALATION_USERS, actions_of, legacy_group};
 use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
 use self::storage::TrackStorage;
+use self::write_gate::{WriteGate, WriteHold};
 use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
 
 pub(super) use self::client::TokenRefreshClient;
@@ -57,6 +61,9 @@ const RETRY_CAP_SECONDS: i64 = 60 * 60;
 const MAX_DRAIN_BATCHES: usize = 32;
 const PACED_DRAIN_BUDGET: Duration = Duration::from_secs(50);
 
+#[cfg(test)]
+type BeforeWrite = Box<dyn FnOnce(&SyncQueueHandler) + Send>;
+
 pub struct SyncQueueHandler {
     repository: Arc<SyncQueueRepository>,
     connections: Arc<ConnectionManager>,
@@ -72,6 +79,8 @@ pub struct SyncQueueHandler {
     concurrency: usize,
     claim_batch: i64,
     turns: Turns,
+    #[cfg(test)]
+    before_write: std::sync::Mutex<Option<BeforeWrite>>,
 }
 
 impl SyncQueueHandler {
@@ -94,6 +103,8 @@ impl SyncQueueHandler {
             concurrency: config.sync_queue.concurrency,
             claim_batch: i64::try_from(config.sync_queue.claim_batch).unwrap_or(i64::MAX),
             turns: Turns::default(),
+            #[cfg(test)]
+            before_write: std::sync::Mutex::default(),
         })
     }
 
@@ -140,11 +151,7 @@ impl SyncQueueHandler {
             .write_pauses
             .held()
             .into_iter()
-            .flat_map(|(oauth_app_id, group)| {
-                members(&group)
-                    .into_iter()
-                    .map(move |action| format!("{oauth_app_id}:{action}"))
-            });
+            .map(|(oauth_app_id, action)| format!("{oauth_app_id}:{action}"));
         let spaced = self
             .spacings
             .held()
@@ -242,6 +249,7 @@ impl SyncQueueHandler {
             .await?;
             return Ok(());
         }
+        let mut probing = false;
         if let Some(oauth_app_id) = token.oauth_app_id {
             let spaced = (oauth_app_id, mutation.action_type.clone());
             if let Admission::Paused(seconds) = self.spacings.admit(&spaced) {
@@ -253,7 +261,7 @@ impl SyncQueueHandler {
                 .await?;
                 return Ok(());
             }
-            let action = (oauth_app_id, group(&mutation.action_type));
+            let action = (oauth_app_id, mutation.action_type.clone());
             match self.write_pauses.admit(&action) {
                 Admission::Paused(seconds) => {
                     self.postpone_before_post(
@@ -270,75 +278,86 @@ impl SyncQueueHandler {
                             .pause(spaced, i64::try_from(spacing.as_secs()).unwrap_or(1));
                     }
                 }
-                Admission::Probe => {}
+                Admission::Probe => probing = true,
             }
         }
         if !self.repository.record_remote_attempt(&mutation).await? {
             self.repository.release(&mutation).await?;
             return Ok(());
         }
-        let (remote, oauth_app_id) =
-            match actions::execute_remote(&self.client, &mutation, &token.value).await {
-                Ok(remote) => (remote, token.oauth_app_id),
-                Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                    let refreshed = match self
-                        .connections
-                        .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
-                        .await
-                    {
-                        Ok(token) => token,
-                        Err(error) => {
-                            self.record_connection_failure(&mutation, &error).await?;
-                            return Ok(());
-                        }
-                    };
-                    match actions::execute_remote(&self.client, &mutation, &refreshed.value).await {
-                        Ok(remote) => (remote, refreshed.oauth_app_id),
-                        Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
-                            self.connections
-                                .reject_for_later(&mutation.user_id, &refreshed.value)
-                                .await?;
-                            self.postpone_before_post(
-                                &mutation,
-                                "SoundCloud rejected the refreshed access token",
-                                RATE_LIMIT_RETRY_SECONDS,
-                            )
+        let (remote, oauth_app_id) = match self
+            .write_remote(&mutation, &token.value, token.oauth_app_id, probing)
+            .await
+        {
+            Ok(remote) => (remote, token.oauth_app_id),
+            Err(ActionError::SoundCloud(SoundCloudError::Paused(hold))) => {
+                self.postpone_unsent(&mutation, hold, token.oauth_app_id)
+                    .await?;
+                return Ok(());
+            }
+            Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                let refreshed = match self
+                    .connections
+                    .refresh_rejected_token(&self.token_client, &mutation.user_id, &token.value)
+                    .await
+                {
+                    Ok(token) => token,
+                    Err(error) => {
+                        self.record_connection_failure(&mutation, &error).await?;
+                        return Ok(());
+                    }
+                };
+                match self
+                    .write_remote(&mutation, &refreshed.value, refreshed.oauth_app_id, probing)
+                    .await
+                {
+                    Ok(remote) => (remote, refreshed.oauth_app_id),
+                    Err(ActionError::SoundCloud(SoundCloudError::Paused(hold))) => {
+                        self.postpone_unsent(&mutation, hold, refreshed.oauth_app_id)
                             .await?;
-                            return Ok(());
-                        }
-                        Err(error) => {
-                            self.pause_writes_when_refused(
-                                &mutation,
-                                &error,
-                                refreshed.oauth_app_id,
-                            )
+                        return Ok(());
+                    }
+                    Err(ActionError::SoundCloud(error)) if error.is_unauthorized() => {
+                        self.connections
+                            .reject_for_later(&mutation.user_id, &refreshed.value)
+                            .await?;
+                        self.postpone_before_post(
+                            &mutation,
+                            "SoundCloud rejected the refreshed access token",
+                            RATE_LIMIT_RETRY_SECONDS,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        self.pause_writes_when_refused(&mutation, &error, refreshed.oauth_app_id)
                             .await;
-                            self.record_action_failure(&mutation, &error).await?;
-                            return Ok(());
-                        }
+                        self.record_action_failure(&mutation, &error).await?;
+                        return Ok(());
                     }
                 }
-                Err(error) => {
-                    self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id)
-                        .await;
-                    self.record_action_failure(&mutation, &error).await?;
-                    return Ok(());
-                }
-            };
+            }
+            Err(error) => {
+                self.pause_writes_when_refused(&mutation, &error, token.oauth_app_id)
+                    .await;
+                self.record_action_failure(&mutation, &error).await?;
+                return Ok(());
+            }
+        };
         let remote_result = match remote {
             Remote::Written(result) => {
                 if let Some(oauth_app_id) = oauth_app_id {
-                    let group = group(&mutation.action_type);
-                    self.app_reports.succeeded(&(oauth_app_id, group.clone()));
+                    let action = (oauth_app_id, mutation.action_type.clone());
+                    self.app_reports.succeeded(&action);
                     if let Some(spacing) = self.spacing(&mutation.action_type) {
                         self.spacings.succeeded(
                             &(oauth_app_id, mutation.action_type.clone()),
                             Some(spacing),
                         );
                     }
-                    self.write_pauses
-                        .succeeded(&(oauth_app_id, group.clone()), None);
-                    self.forget_pauses(oauth_app_id, &group).await;
+                    self.write_pauses.succeeded(&action, None);
+                    self.forget_pauses(oauth_app_id, &mutation.action_type)
+                        .await;
                 }
                 result
             }
@@ -353,6 +372,63 @@ impl SyncQueueHandler {
             return Ok(());
         }
         self.finalize(&mutation).await
+    }
+
+    async fn write_remote(
+        &self,
+        mutation: &ClaimedMutation,
+        access_token: &str,
+        oauth_app_id: Option<uuid::Uuid>,
+        probing: bool,
+    ) -> Result<Remote, ActionError> {
+        #[cfg(test)]
+        let hook = self
+            .before_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        #[cfg(test)]
+        if let Some(hook) = hook {
+            hook(self);
+        }
+        let hold = || self.hold_before_write(mutation, oauth_app_id, probing);
+        let gate = WriteGate::before_first_write(&hold);
+        actions::execute_remote(&self.client, mutation, access_token, &gate).await
+    }
+
+    fn hold_before_write(
+        &self,
+        mutation: &ClaimedMutation,
+        oauth_app_id: Option<uuid::Uuid>,
+        probing: bool,
+    ) -> Option<WriteHold> {
+        if let Some(seconds) = self
+            .account_pauses
+            .blocked(&account_action(mutation), false)
+        {
+            return Some(WriteHold::Account(seconds));
+        }
+        let key = (oauth_app_id?, mutation.action_type.clone());
+        self.write_pauses.blocked(&key, probing).map(WriteHold::App)
+    }
+
+    async fn postpone_unsent(
+        &self,
+        mutation: &ClaimedMutation,
+        hold: WriteHold,
+        oauth_app_id: Option<uuid::Uuid>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(oauth_app_id) = oauth_app_id {
+            self.spacings
+                .succeeded(&(oauth_app_id, mutation.action_type.clone()), None);
+        }
+        self.postpone_before_post(
+            mutation,
+            hold.message(),
+            hold.seconds().min(PAUSED_ACTION_RECHECK_SECONDS),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn confirm_unclear_create(
@@ -471,22 +547,26 @@ impl SyncQueueHandler {
         pauses.sort_by_key(|pause| pause.2);
         for (oauth_app_id, action_type, remaining_seconds, strikes) in pauses {
             let remaining = Duration::from_secs(u64::try_from(remaining_seconds).unwrap_or(0));
-            self.write_pauses
-                .restore((oauth_app_id, group(&action_type)), remaining, strikes);
+            for action in actions_of(&action_type) {
+                self.write_pauses
+                    .restore((oauth_app_id, action), remaining, strikes);
+            }
         }
     }
 
-    async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, group_name: &str) {
+    async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, action_type: &str) {
+        let mut names = vec![action_type.to_owned()];
+        names.extend(legacy_group(action_type).map(str::to_owned));
         let cleared = self
             .repository
-            .clear_action_pauses(oauth_app_id, &members(group_name))
+            .clear_action_pauses(oauth_app_id, &names)
             .await;
         match cleared {
             Ok(lifted) => {
                 for lifted in lifted
                     .iter()
-                    .map(|lifted| group(lifted))
-                    .filter(|lifted| lifted != group_name)
+                    .flat_map(|lifted| actions_of(lifted))
+                    .filter(|lifted| lifted != action_type)
                 {
                     self.write_pauses.succeeded(&(oauth_app_id, lifted), None);
                 }
@@ -512,13 +592,11 @@ impl SyncQueueHandler {
         let ActionError::SoundCloud(error) = error else {
             return;
         };
-        let group = group(&mutation.action_type);
         if error.is_rate_limited() {
             warn!(
                 user_id = %mutation.user_id,
-                oauth_app_id = ?oauth_app_id,
+                oauth_app_id = oauth_app_id.map(|id| id.to_string()).unwrap_or_default(),
                 action = %mutation.action_type,
-                group = %group,
                 seconds = ACCOUNT_LIMIT_SECONDS,
                 "soundcloud limits this action for the account, holding its queue"
             );
@@ -528,7 +606,7 @@ impl SyncQueueHandler {
         let Some(oauth_app_id) = oauth_app_id else {
             return;
         };
-        let action = (oauth_app_id, group.clone());
+        let action = (oauth_app_id, mutation.action_type.clone());
         let mut distinct_users = 0;
         let (seconds, strikes, reason) = if error.is_subscription_required() {
             let (seconds, strikes) = self
@@ -550,19 +628,22 @@ impl SyncQueueHandler {
         } else {
             return;
         };
-        for member in members(&group) {
-            let saved = self
-                .repository
-                .save_action_pause(oauth_app_id, &member, seconds, strikes, reason)
-                .await;
-            if let Err(error) = saved {
-                warn!(%error, "a refused action pause was not saved and will not survive a restart");
-            }
+        let saved = self
+            .repository
+            .save_action_pause(
+                oauth_app_id,
+                &mutation.action_type,
+                seconds,
+                strikes,
+                reason,
+            )
+            .await;
+        if let Err(error) = saved {
+            warn!(%error, "a refused action pause was not saved and will not survive a restart");
         }
         warn!(
             %oauth_app_id,
             action = %mutation.action_type,
-            group = %group,
             distinct_users,
             seconds,
             response = %error.response_excerpt(),
@@ -795,7 +876,7 @@ fn retry_delay_seconds(retry_count: i32) -> i64 {
 }
 
 fn account_action(mutation: &ClaimedMutation) -> (String, String) {
-    (mutation.user_id.clone(), group(&mutation.action_type))
+    (mutation.user_id.clone(), mutation.action_type.clone())
 }
 
 fn is_non_idempotent(action_type: &str) -> bool {

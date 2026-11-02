@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::SyncQueueHandler;
 use super::unclear_create_tests::{handler, run};
 
-type Calls = Arc<Mutex<Vec<String>>>;
+pub(super) type Calls = Arc<Mutex<Vec<String>>>;
 
 async fn serve() -> anyhow::Result<(std::net::SocketAddr, Calls)> {
     let calls = Calls::default();
@@ -40,7 +40,7 @@ async fn answer(State(calls): State<Calls>, method: Method, uri: Uri) -> impl In
     )
 }
 
-async fn setup(pool: &PgPool) -> anyhow::Result<(Uuid, SyncQueueHandler, Calls)> {
+pub(super) async fn setup(pool: &PgPool) -> anyhow::Result<(Uuid, SyncQueueHandler, Calls)> {
     crate::db::migrations::run_core(pool, None).await?;
     super::track_tests::connect_owner(pool).await?;
     let app: Uuid = sqlx::query_scalar("SELECT oauth_app_id FROM soundcloud_connections")
@@ -62,7 +62,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(Uuid, SyncQueueHandler, Calls)>
     Ok((app, handler(pool, address)?, calls))
 }
 
-async fn attempt(
+pub(super) async fn attempt(
     pool: &PgPool,
     handler: &SyncQueueHandler,
     calls: &Calls,
@@ -83,10 +83,10 @@ async fn attempt(
     Ok(after > before)
 }
 
-fn app_pause(handler: &SyncQueueHandler, app: Uuid, group: &str) -> Option<i64> {
+fn app_pause(handler: &SyncQueueHandler, app: Uuid, action: &str) -> Option<i64> {
     handler
         .write_pauses
-        .remaining_seconds(&(app, group.to_owned()))
+        .remaining_seconds(&(app, action.to_owned()))
 }
 
 fn open_spacing(handler: &SyncQueueHandler, app: Uuid) {
@@ -95,18 +95,36 @@ fn open_spacing(handler: &SyncQueueHandler, app: Uuid) {
         .succeeded(&(app, "like_track".to_owned()), None);
 }
 
+async fn restore_saved(
+    pool: &PgPool,
+    handler: &SyncQueueHandler,
+    app: Uuid,
+    saved: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO sync_queue_action_pauses (oauth_app_id, action_type, paused_until, strikes, reason)
+         VALUES ($1, $2, now() + interval '10 minutes', 1, 'rate_limited')",
+    )
+    .bind(app)
+    .bind(saved)
+    .execute(pool)
+    .await?;
+    handler.restore_pauses().await;
+    Ok(())
+}
+
 #[sqlx::test(migrations = false)]
-async fn one_users_429_pauses_only_that_users_likes(pool: PgPool) -> anyhow::Result<()> {
+async fn one_users_429_pauses_only_that_users_action(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
 
     assert!(attempt(&pool, &handler, &calls, "21", "like_track", "9").await?);
     open_spacing(&handler, app);
 
     assert!(!attempt(&pool, &handler, &calls, "21", "like_track", "9").await?);
-    assert!(!attempt(&pool, &handler, &calls, "21", "unlike_track", "9").await?);
+    assert!(attempt(&pool, &handler, &calls, "21", "unlike_track", "9").await?);
     assert!(attempt(&pool, &handler, &calls, "21", "playlist_delete", "9").await?);
     assert!(attempt(&pool, &handler, &calls, "22", "like_track", "9").await?);
-    assert_eq!(app_pause(&handler, app, "likes"), None);
+    assert_eq!(app_pause(&handler, app, "like_track"), None);
     Ok(())
 }
 
@@ -123,7 +141,7 @@ async fn an_account_paused_like_takes_no_spacing_slot(pool: PgPool) -> anyhow::R
 }
 
 #[sqlx::test(migrations = false)]
-async fn three_users_with_a_429_and_no_success_in_likes_pause_the_app_likes_only(
+async fn three_users_with_a_429_and_no_success_pause_the_app_action_only(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
@@ -131,24 +149,18 @@ async fn three_users_with_a_429_and_no_success_in_likes_pause_the_app_likes_only
     for user in ["21", "22"] {
         assert!(attempt(&pool, &handler, &calls, user, "like_track", "9").await?);
         open_spacing(&handler, app);
-        assert_eq!(app_pause(&handler, app, "likes"), None);
+        assert_eq!(app_pause(&handler, app, "like_track"), None);
     }
     assert!(attempt(&pool, &handler, &calls, "23", "like_track", "9").await?);
 
-    assert!(app_pause(&handler, app, "likes").is_some());
+    assert!(app_pause(&handler, app, "like_track").is_some());
     assert!(!attempt(&pool, &handler, &calls, "24", "like_track", "9").await?);
-    assert!(!attempt(&pool, &handler, &calls, "24", "unlike_track", "9").await?);
+    assert!(attempt(&pool, &handler, &calls, "24", "unlike_track", "9").await?);
     assert!(attempt(&pool, &handler, &calls, "24", "follow_user", "9").await?);
-    assert_eq!(app_pause(&handler, app, "follows"), None);
-    let mut saved: Vec<String> =
-        sqlx::query_scalar("SELECT action_type FROM sync_queue_action_pauses")
-            .fetch_all(&pool)
-            .await?;
-    saved.sort();
-    let mut expected = super::pause_group::members("likes");
-    expected.sort();
-    assert_eq!(saved, expected);
-    assert_eq!(saved.len(), 4);
+    let saved: Vec<String> = sqlx::query_scalar("SELECT action_type FROM sync_queue_action_pauses")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(saved, ["like_track"]);
     Ok(())
 }
 
@@ -164,7 +176,7 @@ async fn a_like_that_goes_through_keeps_the_429s_per_account(pool: PgPool) -> an
     open_spacing(&handler, app);
     assert!(attempt(&pool, &handler, &calls, "23", "like_track", "9").await?);
 
-    assert_eq!(app_pause(&handler, app, "likes"), None);
+    assert_eq!(app_pause(&handler, app, "like_track"), None);
     for user in ["21", "22", "23"] {
         assert!(!attempt(&pool, &handler, &calls, user, "like_track", "9").await?);
     }
@@ -182,25 +194,40 @@ async fn a_like_spaces_only_its_own_action(pool: PgPool) -> anyhow::Result<()> {
     assert!(!attempt(&pool, &handler, &calls, "22", "like_track", "ok").await?);
     assert!(attempt(&pool, &handler, &calls, "22", "unlike_track", "ok").await?);
     assert!(attempt(&pool, &handler, &calls, "22", "like_playlist", "ok").await?);
-    assert_eq!(app_pause(&handler, app, "likes"), None);
+    assert_eq!(app_pause(&handler, app, "like_track"), None);
     Ok(())
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_restored_row_with_an_action_name_pauses_its_group(pool: PgPool) -> anyhow::Result<()> {
+async fn a_restored_likes_group_row_pauses_all_four_like_actions(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
-    sqlx::query(
-        "INSERT INTO sync_queue_action_pauses (oauth_app_id, action_type, paused_until, strikes, reason)
-         VALUES ($1, 'like_track', now() + interval '10 minutes', 1, 'rate_limited')",
-    )
-    .bind(app)
-    .execute(&pool)
-    .await?;
 
-    handler.restore_pauses().await;
+    restore_saved(&pool, &handler, app, "likes").await?;
 
-    assert!(app_pause(&handler, app, "likes").is_some());
-    assert!(!attempt(&pool, &handler, &calls, "21", "unlike_track", "9").await?);
+    for action in [
+        "like_track",
+        "unlike_track",
+        "like_playlist",
+        "unlike_playlist",
+    ] {
+        assert!(app_pause(&handler, app, action).is_some(), "{action}");
+        assert!(!attempt(&pool, &handler, &calls, "21", action, "ok").await?);
+    }
     assert!(attempt(&pool, &handler, &calls, "21", "follow_user", "9").await?);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_restored_action_row_pauses_that_action_only(pool: PgPool) -> anyhow::Result<()> {
+    let (app, handler, calls) = setup(&pool).await?;
+
+    restore_saved(&pool, &handler, app, "like_track").await?;
+
+    assert!(app_pause(&handler, app, "like_track").is_some());
+    assert_eq!(app_pause(&handler, app, "unlike_track"), None);
+    assert!(!attempt(&pool, &handler, &calls, "21", "like_track", "ok").await?);
+    assert!(attempt(&pool, &handler, &calls, "21", "unlike_track", "ok").await?);
     Ok(())
 }
