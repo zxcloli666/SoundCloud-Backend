@@ -161,9 +161,13 @@ async fn input_wake_and_priority_changes_keep_the_queue_equal_and_equal_rows_are
     mark_wake_durable(&pool, "q2").await?;
     let state_before = xmin(&pool, "lyrics_lookup_state", q2).await?;
     let queue_before = xmin(&pool, "lyrics_lookup_queue", q2).await?;
-    sqlx::query("UPDATE tracks SET index_priority = 5 WHERE sc_track_id = 'q2'")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "UPDATE lyrics_lookup_state
+         SET miss_streak = miss_streak + 1, updated_at = now()
+         WHERE sc_track_id = 'q2'",
+    )
+    .execute(&pool)
+    .await?;
     assert_ne!(xmin(&pool, "lyrics_lookup_state", q2).await?, state_before);
     assert_eq!(xmin(&pool, "lyrics_lookup_queue", q2).await?, queue_before);
     assert_eq!(drift(&pool).await?, 0);

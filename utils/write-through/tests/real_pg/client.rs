@@ -9,6 +9,8 @@ use wt::{Kind, Raced};
 use crate::db::{self, hashes};
 use crate::harness::Pair;
 
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
+
 pub const TRACK: &str = "INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
     VALUES ('00000000-0000-0000-0000-0000000000a1', 'soundcloud:tracks:1', '1', 'Old', 'old', 1000)";
 const DEAD_SYNC: &str =
@@ -100,10 +102,7 @@ fn code(error: &sqlx::Error) -> String {
 #[tokio::test]
 async fn optimistic_kind_gives_equal_rows_and_output_on_api_and_core() {
     let pair = Pair::new(TRACK).await;
-    let out = pair
-        .run(&NEW_TITLE, &["lyrics_lookup_state"])
-        .await
-        .assert_same();
+    let out = pair.run(&NEW_TITLE, DERIVED).await.assert_same();
     assert_eq!(
         out,
         json!({"id": "00000000-0000-0000-0000-0000000000a1", "title": "New"})
@@ -126,7 +125,9 @@ async fn derived_rows_are_core_only_and_show_up_as_a_difference() {
     assert_eq!(
         run.diverged,
         [
+            "api and core differ: lyrics_lookup_queue",
             "api and core differ: lyrics_lookup_state",
+            "core local run and dispatch differ: lyrics_lookup_queue",
             "core local run and dispatch differ: lyrics_lookup_state"
         ]
     );
@@ -228,7 +229,7 @@ async fn a_nondeterministic_kind_is_caught_by_the_hash() {
             &Stamp {
                 urn: "soundcloud:tracks:1",
             },
-            &["lyrics_lookup_state"],
+            DERIVED,
         )
         .await;
     assert!(

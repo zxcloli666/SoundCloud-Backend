@@ -6,7 +6,7 @@ use wt::{TrackReleaseHeld, TrackS3State, TrackTooLong};
 
 use crate::harness::Pair;
 
-const DERIVED: &[&str] = &["lyrics_lookup_state"];
+const DERIVED: &[&str] = &["lyrics_lookup_queue", "lyrics_lookup_state"];
 const TRACKS: &str = "INSERT INTO public.tracks (
         id, sc_track_id, urn, title, title_normalized, duration_ms, pipeline_held,
         storage_state, storage_quality, index_state, s3_verified_at, s3_missing_at,
