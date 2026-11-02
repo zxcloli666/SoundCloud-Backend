@@ -5,12 +5,15 @@ mod create_check;
 #[cfg(test)]
 mod intent_tests;
 mod model;
+mod pause_group;
 #[cfg(test)]
 mod playlist_tests;
 mod read_limit;
 #[cfg(test)]
 mod refusal_tests;
 mod repository;
+#[cfg(test)]
+mod scope_tests;
 mod storage;
 #[cfg(test)]
 mod track_tests;
@@ -32,6 +35,7 @@ use crate::queue::{JobError, JobResult};
 use self::actions::{ActionError, Remote};
 use self::client::{SoundCloudClient, SoundCloudError};
 use self::model::ClaimedMutation;
+use self::pause_group::{AppReports, ESCALATION_USERS, group, members};
 use self::repository::{FinalizeError, PACED_ACTIONS, SyncQueueRepository};
 use self::storage::TrackStorage;
 use self::write_pause::{Admission, MAX_PAUSE, WritePauses};
@@ -61,6 +65,7 @@ pub struct SyncQueueHandler {
     storage: TrackStorage,
     write_pauses: WritePauses<(uuid::Uuid, String)>,
     account_pauses: WritePauses<(String, String)>,
+    app_reports: AppReports<(uuid::Uuid, String)>,
     like_interval: Duration,
     pauses_restored: tokio::sync::OnceCell<()>,
     concurrency: usize,
@@ -81,6 +86,7 @@ impl SyncQueueHandler {
             storage: TrackStorage::new(&config.sync_queue)?,
             write_pauses: WritePauses::default(),
             account_pauses: WritePauses::default(),
+            app_reports: AppReports::default(),
             like_interval: config.sync_queue.like_interval,
             pauses_restored: tokio::sync::OnceCell::new(),
             concurrency: config.sync_queue.concurrency,
@@ -131,7 +137,11 @@ impl SyncQueueHandler {
         self.write_pauses
             .held()
             .into_iter()
-            .map(|(oauth_app_id, action)| format!("{oauth_app_id}:{action}"))
+            .flat_map(|(oauth_app_id, group)| {
+                members(&group)
+                    .into_iter()
+                    .map(move |action| format!("{oauth_app_id}:{action}"))
+            })
             .collect()
     }
 
@@ -213,7 +223,7 @@ impl SyncQueueHandler {
             token
         };
         if let Some(oauth_app_id) = token.oauth_app_id {
-            let action = (oauth_app_id, mutation.action_type.clone());
+            let action = (oauth_app_id, group(&mutation.action_type));
             match self.write_pauses.admit(&action) {
                 Admission::Paused(seconds) => {
                     self.postpone_before_post(
@@ -300,12 +310,13 @@ impl SyncQueueHandler {
         let remote_result = match remote {
             Remote::Written(result) => {
                 if let Some(oauth_app_id) = oauth_app_id {
+                    let group = group(&mutation.action_type);
+                    self.app_reports.succeeded(&(oauth_app_id, group.clone()));
                     self.write_pauses.succeeded(
-                        &(oauth_app_id, mutation.action_type.clone()),
+                        &(oauth_app_id, group.clone()),
                         self.spacing(&mutation.action_type),
                     );
-                    self.forget_pauses(oauth_app_id, &mutation.action_type)
-                        .await;
+                    self.forget_pauses(oauth_app_id, &group).await;
                 }
                 result
             }
@@ -434,21 +445,29 @@ impl SyncQueueHandler {
                 return;
             }
         };
+        let mut pauses = pauses;
+        pauses.sort_by_key(|pause| pause.2);
         for (oauth_app_id, action_type, remaining_seconds, strikes) in pauses {
             let remaining = Duration::from_secs(u64::try_from(remaining_seconds).unwrap_or(0));
             self.write_pauses
-                .restore((oauth_app_id, action_type), remaining, strikes);
+                .restore((oauth_app_id, group(&action_type)), remaining, strikes);
         }
     }
 
-    async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, action_type: &str) {
+    async fn forget_pauses(&self, oauth_app_id: uuid::Uuid, group_name: &str) {
+        let mut names = members(group_name);
+        names.push(group_name.to_owned());
         let cleared = self
             .repository
-            .clear_action_pauses(oauth_app_id, action_type)
+            .clear_action_pauses(oauth_app_id, &names)
             .await;
         match cleared {
             Ok(lifted) => {
-                for lifted in lifted.into_iter().filter(|lifted| lifted != action_type) {
+                for lifted in lifted
+                    .iter()
+                    .map(|lifted| group(lifted))
+                    .filter(|lifted| lifted != group_name)
+                {
                     self.write_pauses.succeeded(&(oauth_app_id, lifted), None);
                 }
             }
@@ -473,49 +492,47 @@ impl SyncQueueHandler {
         let ActionError::SoundCloud(error) = error else {
             return;
         };
-        if error.is_account_rate_limited() {
+        let group = group(&mutation.action_type);
+        if error.is_rate_limited() {
             warn!(
                 user_id = %mutation.user_id,
+                oauth_app_id = ?oauth_app_id,
                 action = %mutation.action_type,
+                group = %group,
                 seconds = ACCOUNT_LIMIT_SECONDS,
                 "soundcloud limits this action for the account, holding its queue"
             );
             self.account_pauses
                 .pause(account_action(mutation), ACCOUNT_LIMIT_SECONDS);
-            return;
         }
         let Some(oauth_app_id) = oauth_app_id else {
             return;
         };
-        let action = (oauth_app_id, mutation.action_type.clone());
+        let action = (oauth_app_id, group.clone());
+        let mut distinct_users = 0;
         let (seconds, strikes, reason) = if error.is_subscription_required() {
             let (seconds, strikes) = self
                 .write_pauses
                 .pause_refused(action, SUBSCRIPTION_RETRY_SECONDS);
             (seconds, strikes, "subscription_required")
-        } else if let Some(seconds) = error
-            .retry_after_seconds()
-            .filter(|_| error.is_rate_limited())
-        {
-            let (seconds, strikes) = self.write_pauses.pause_refused(action, seconds);
-            (seconds, strikes, "rate_limited")
-        } else if error.is_rate_limited() {
-            let (seconds, strikes) = self
-                .write_pauses
-                .pause_longer_each_time(action, WRITE_PAUSE_SECONDS);
+        } else if error.is_app_rate_limited() {
+            distinct_users = self.app_reports.record(action.clone(), &mutation.user_id);
+            if distinct_users < ESCALATION_USERS {
+                return;
+            }
+            let (seconds, strikes) = match error.retry_after_seconds() {
+                Some(seconds) => self.write_pauses.pause_refused(action, seconds),
+                None => self
+                    .write_pauses
+                    .pause_longer_each_time(action, WRITE_PAUSE_SECONDS),
+            };
             (seconds, strikes, "rate_limited")
         } else {
             return;
         };
         let saved = self
             .repository
-            .save_action_pause(
-                oauth_app_id,
-                &mutation.action_type,
-                seconds,
-                strikes,
-                reason,
-            )
+            .save_action_pause(oauth_app_id, &group, seconds, strikes, reason)
             .await;
         if let Err(error) = saved {
             warn!(%error, "a refused action pause was not saved and will not survive a restart");
@@ -523,6 +540,8 @@ impl SyncQueueHandler {
         warn!(
             %oauth_app_id,
             action = %mutation.action_type,
+            group = %group,
+            distinct_users,
             seconds,
             response = %error.response_excerpt(),
             "soundcloud refused this action for the whole application, pausing it"
@@ -754,7 +773,7 @@ fn retry_delay_seconds(retry_count: i32) -> i64 {
 }
 
 fn account_action(mutation: &ClaimedMutation) -> (String, String) {
-    (mutation.user_id.clone(), mutation.action_type.clone())
+    (mutation.user_id.clone(), group(&mutation.action_type))
 }
 
 fn is_non_idempotent(action_type: &str) -> bool {

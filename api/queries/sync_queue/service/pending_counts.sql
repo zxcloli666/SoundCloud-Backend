@@ -15,10 +15,17 @@ writer AS (
     LIMIT 1
 ),
 holds AS (
-    SELECT pause.action_type, pause.paused_until
+    SELECT CASE
+            WHEN pause.action_type IN ('like_track', 'unlike_track', 'like_playlist', 'unlike_playlist') THEN 'likes'
+            WHEN pause.action_type IN ('follow_user', 'unfollow_user') THEN 'follows'
+            WHEN pause.action_type LIKE 'playlist\_%' THEN 'playlists'
+            WHEN pause.action_type = 'comment' THEN 'comments'
+            ELSE pause.action_type
+        END AS action_group, max(pause.paused_until) AS paused_until
     FROM sync_queue_action_pauses AS pause
     JOIN writer ON writer.oauth_app_id = pause.oauth_app_id
     WHERE pause.paused_until > now() - interval '10 minutes'
+    GROUP BY 1
 ),
 rows AS (
     SELECT state.dead,
@@ -29,7 +36,7 @@ rows AS (
            ) AS healed,
            CASE
                WHEN state.dead THEN NULL
-               WHEN hold.action_type IS NOT NULL THEN GREATEST(hold.paused_until, now())
+               WHEN hold.action_group IS NOT NULL THEN GREATEST(hold.paused_until, now())
                WHEN state.retry_count = 0
                     AND NOT state.fresh
                     AND queued.last_error IS NOT NULL
@@ -45,7 +52,13 @@ rows AS (
                    AND (queued.exec_generation IS NOT NULL OR queued.intent_v > 0) AS fresh
         ) AS adopted
     ) AS state
-    LEFT JOIN holds AS hold ON hold.action_type = queued.action_type
+    LEFT JOIN holds AS hold ON hold.action_group = CASE
+            WHEN queued.action_type IN ('like_track', 'unlike_track', 'like_playlist', 'unlike_playlist') THEN 'likes'
+            WHEN queued.action_type IN ('follow_user', 'unfollow_user') THEN 'follows'
+            WHEN queued.action_type LIKE 'playlist\_%' THEN 'playlists'
+            WHEN queued.action_type = 'comment' THEN 'comments'
+            ELSE queued.action_type
+        END
     WHERE queued.user_id = ANY ($1)
       AND NOT (
           queued.cancelled
