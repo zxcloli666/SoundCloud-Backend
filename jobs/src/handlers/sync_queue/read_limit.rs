@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 const FIRST_GAP: Duration = Duration::from_secs(10);
 const LONGEST_GAP: Duration = Duration::from_secs(5 * 60);
-const FREE_BELOW: Duration = Duration::from_secs(1);
+const FREE_BELOW: Duration = Duration::from_millis(125);
 const SHORTEN: f64 = 0.8;
 
 struct Limit {
@@ -115,9 +115,11 @@ mod tests {
 
         limits.answered(app);
         assert_eq!(gap(&limits, app), Some(FIRST_GAP.mul_f64(SHORTEN)));
-        for _ in 0..10 {
+        for _ in 0..18 {
             limits.answered(app);
         }
+        assert!(gap(&limits, app).is_some_and(|gap| gap < Duration::from_millis(200)));
+        limits.answered(app);
 
         assert_eq!(gap(&limits, app), None);
         assert_eq!(limits.admit_at(app, now), None);
