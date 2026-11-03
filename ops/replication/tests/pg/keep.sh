@@ -1,7 +1,7 @@
 keep_install="$(ls "$root"/api/migrations/*_scd_install.sql | sort | tail -1)"
 keep_triggers() {
   only keep "SELECT md5(string_agg(line, E'\n' ORDER BY line)) FROM (
-    SELECT t.tgrelid::regclass::text || ' ' || t.tgname || ' ' || t.tgenabled || ' ' || pg_catalog.pg_get_triggerdef(t.oid) AS line
+    SELECT t.tgrelid::regclass::text || ' ' || t.tgname || ' ' || t.tgenabled::text || ' ' || pg_catalog.pg_get_triggerdef(t.oid) AS line
     FROM pg_catalog.pg_trigger AS t
     WHERE NOT t.tgisinternal
   ) AS triggers"
