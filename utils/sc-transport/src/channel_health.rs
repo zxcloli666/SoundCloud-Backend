@@ -4,6 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::RelayRead;
 
 const BAN_THRESHOLD: u32 = 4;
+const STALL_THRESHOLD: u32 = 6;
+const STALL_WINDOW_MS: i64 = 30_000;
 pub(crate) const COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +19,8 @@ pub enum Trip {
 pub struct ChannelHealth {
     consecutive_bans: AtomicU32,
     open_until_ms: AtomicI64,
+    stalls: AtomicU32,
+    stall_window_start_ms: AtomicI64,
 }
 
 impl ChannelHealth {
@@ -42,7 +46,27 @@ impl ChannelHealth {
         if seen < BAN_THRESHOLD {
             return Trip::Steady;
         }
-        let now = now_ms();
+        self.open(now_ms())
+    }
+
+    pub fn record_stall(&self) -> Trip {
+        self.record_stall_at(now_ms())
+    }
+
+    fn record_stall_at(&self, now: i64) -> Trip {
+        if now - self.stall_window_start_ms.load(Ordering::Acquire) > STALL_WINDOW_MS {
+            self.stall_window_start_ms.store(now, Ordering::Release);
+            self.stalls.store(0, Ordering::Release);
+        }
+        let seen = self.stalls.fetch_add(1, Ordering::AcqRel) + 1;
+        if seen < STALL_THRESHOLD {
+            return Trip::Steady;
+        }
+        self.stalls.store(0, Ordering::Release);
+        self.open(now)
+    }
+
+    fn open(&self, now: i64) -> Trip {
         let previous = self
             .open_until_ms
             .swap(now + COOLDOWN.as_millis() as i64, Ordering::AcqRel);
@@ -89,6 +113,34 @@ mod tests {
         assert!(health.is_open(), "the breaker must open at the threshold");
         health.record_ok();
         assert!(!health.is_open(), "a success must reset the breaker");
+    }
+
+    #[test]
+    fn stalls_inside_the_window_open_the_breaker_and_an_ok_does_not_forgive_them() {
+        let health = ChannelHealth::default();
+        let start = now_ms();
+        for step in 0..STALL_THRESHOLD - 1 {
+            assert_eq!(
+                health.record_stall_at(start + i64::from(step)),
+                Trip::Steady
+            );
+            health.record_ok();
+        }
+        assert_eq!(
+            health.record_stall_at(start + i64::from(STALL_THRESHOLD)),
+            Trip::Opened
+        );
+        assert!(health.is_open());
+    }
+
+    #[test]
+    fn stalls_spread_over_more_than_the_window_never_open_it() {
+        let health = ChannelHealth::default();
+        let start = now_ms();
+        for step in 0..STALL_THRESHOLD * 3 {
+            health.record_stall_at(start + i64::from(step) * (STALL_WINDOW_MS + 1));
+        }
+        assert!(!health.is_open());
     }
 
     #[test]

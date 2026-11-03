@@ -241,7 +241,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(
         body: serde_json::Value::Null,
         retry_after_sec: Some(30),
     });
-    set_relay_breaker_open(false);
+    set_relay_breaker_open("relay_lua", false);
     sample_pool_wait(&pool).await;
 
     let Some(body) = render(&pool).await else {
