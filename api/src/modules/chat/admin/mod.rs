@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod auth;
 pub mod messages;
+pub mod process;
 pub mod reports;
 pub mod restore;
 pub mod restrictions;

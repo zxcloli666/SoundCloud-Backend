@@ -5,7 +5,7 @@ use tokio::time::Instant;
 
 use crate::modules::chat::ChatState;
 use crate::modules::chat::sweeps::{
-    devices, expired, gauges, leader, marks, purge, reports, rooms, startup,
+    devices, expired, gauges, leader, marks, purge, redis_info, reports, rooms, startup,
 };
 
 pub const TICK: Duration = Duration::from_secs(1);
@@ -19,16 +19,18 @@ pub enum Sweep {
     Purge,
     Devices,
     Reports,
+    RedisInfo,
 }
 
 impl Sweep {
-    pub const ALL: [Sweep; 6] = [
+    pub const ALL: [Sweep; 7] = [
         Sweep::Marks,
         Sweep::Expired,
         Sweep::Rooms,
         Sweep::Purge,
         Sweep::Devices,
         Sweep::Reports,
+        Sweep::RedisInfo,
     ];
 
     pub fn name(self) -> &'static str {
@@ -39,6 +41,7 @@ impl Sweep {
             Sweep::Purge => "purge",
             Sweep::Devices => "devices",
             Sweep::Reports => "reports",
+            Sweep::RedisInfo => "redis_info",
         }
     }
 
@@ -50,6 +53,7 @@ impl Sweep {
             Sweep::Purge => purge::EVERY_SECS,
             Sweep::Devices => devices::EVERY_SECS,
             Sweep::Reports => reports::EVERY_SECS,
+            Sweep::RedisInfo => redis_info::EVERY_SECS,
         })
     }
 }
@@ -116,6 +120,7 @@ impl Sweeper {
             Sweep::Purge => purge::run_once(chat).await,
             Sweep::Devices => devices::run_once(chat).await,
             Sweep::Reports => reports::run_once(chat).await,
+            Sweep::RedisInfo => redis_info::run_once(chat).await,
         };
         match outcome {
             Ok(items) => gauges::done(sweep.name(), items),
