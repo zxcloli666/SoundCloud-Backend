@@ -1691,6 +1691,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_remote_grants", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_remote_grants", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_remote_grants", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_remote_grants", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["access_hash"], "expr": false, "keys": ["access_hash"], "name": "remote_grants_access_uq", "primary": false, "where": "(access_hash IS NOT NULL)"},
@@ -1712,6 +1717,11 @@
    "fks": [
    ],
    "triggers": [
+    {"enabled": "R", "function": "scd_merge_remote_link_codes", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_remote_link_codes", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_remote_link_codes", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_remote_link_codes", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
    ],
    "unique": [
     {"cols": ["id"], "expr": false, "keys": ["id"], "name": "remote_link_codes_pkey", "primary": true, "where": null}
