@@ -4510,6 +4510,7 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.exp_date := OLD.exp_date;
+            NEW.star_since := OLD.star_since;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
@@ -4521,6 +4522,7 @@ BEGIN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.subscriptions t SET
                     exp_date = CASE WHEN NEW.row_v > o.row_v THEN NEW.exp_date ELSE o.exp_date END,
+                    star_since = CASE WHEN NEW.row_v > o.row_v THEN NEW.star_since ELSE o.star_since END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE t.user_urn = o.user_urn;
                 GET DIAGNOSTICS n = ROW_COUNT;
@@ -4538,8 +4540,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.subscriptions (exp_date, row_v, user_urn)
-        VALUES (NEW.exp_date, NEW.row_v, NEW.user_urn)
+        INSERT INTO public.subscriptions (exp_date, row_v, star_since, user_urn)
+        VALUES (NEW.exp_date, NEW.row_v, NEW.star_since, NEW.user_urn)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -4629,7 +4631,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn))));
         RETURN NEW;
     END IF;
-    IF NEW.exp_date IS DISTINCT FROM OLD.exp_date THEN
+    IF (NEW.exp_date, NEW.star_since) IS DISTINCT FROM (OLD.exp_date, OLD.star_since) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);

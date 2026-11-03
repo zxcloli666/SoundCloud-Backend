@@ -1967,6 +1967,7 @@
    "columns": [
     {"default": null, "generated": false, "name": "exp_date", "notnull": true, "type": "bigint"},
     {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "star_since", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "user_urn", "notnull": true, "type": "text"}
    ],
    "fks": [

@@ -2,12 +2,13 @@ pub mod catalog;
 pub mod failure;
 pub mod handlers;
 pub mod lyrics;
+pub mod matching;
 pub mod semantic;
 pub mod terms;
 pub mod vibe;
 
 #[cfg(test)]
-mod catalog_tests;
+pub(crate) mod catalog_tests;
 
 #[cfg(test)]
 mod failure_tests;

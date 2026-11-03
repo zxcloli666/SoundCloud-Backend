@@ -22,6 +22,8 @@ pub fn router() -> Router<AppState> {
 struct UpsertBody {
     user_urn: String,
     exp_date: i64,
+    #[serde(default)]
+    star_since: Option<i64>,
 }
 
 async fn list(_: AdminAuth, State(st): State<AppState>) -> AppResult<Json<Vec<Subscription>>> {
@@ -34,7 +36,7 @@ async fn upsert(
     Json(body): Json<UpsertBody>,
 ) -> AppResult<Json<Value>> {
     st.subscriptions
-        .upsert(&body.user_urn, body.exp_date)
+        .upsert(&body.user_urn, body.exp_date, body.star_since)
         .await?;
     Ok(Json(json!({ "message": "ok" })))
 }

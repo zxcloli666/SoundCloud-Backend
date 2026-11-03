@@ -7,16 +7,16 @@ use sqlx::PgPool;
 use super::SearchService;
 use crate::cache::CacheService;
 
-struct Song {
-    id: i64,
-    title: String,
-    artist: String,
-    uploader: String,
-    plays: i64,
-    duration_ms: i32,
+pub(crate) struct Song {
+    pub(crate) id: i64,
+    pub(crate) title: String,
+    pub(crate) artist: String,
+    pub(crate) uploader: String,
+    pub(crate) plays: i64,
+    pub(crate) duration_ms: i32,
 }
 
-fn song(id: i64, title: &str, artist: &str, plays: i64) -> Song {
+pub(crate) fn song(id: i64, title: &str, artist: &str, plays: i64) -> Song {
     Song {
         id,
         title: title.to_owned(),
@@ -27,7 +27,7 @@ fn song(id: i64, title: &str, artist: &str, plays: i64) -> Song {
     }
 }
 
-fn service(pool: &PgPool) -> anyhow::Result<Arc<SearchService>> {
+pub(super) fn service(pool: &PgPool) -> anyhow::Result<Arc<SearchService>> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     Ok(SearchService::new(pool.clone(), CacheService::new(redis)))
@@ -52,7 +52,7 @@ async fn insert(pool: &PgPool, song: &Song) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn seed(pool: &PgPool, songs: &[Song]) -> anyhow::Result<()> {
+pub(crate) async fn seed(pool: &PgPool, songs: &[Song]) -> anyhow::Result<()> {
     for song in songs {
         insert(pool, song).await?;
     }

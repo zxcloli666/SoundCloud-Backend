@@ -581,9 +581,9 @@ VALUES
     ('scd_api_pub', 'api', 'insert, update, delete', 'disliked_tracks', ARRAY['created_at', 'id', 'row_v', 'sc_track_id', 'sc_user_id', 'track_data']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'entity_reads', ARRAY['entity_urn', 'last_read_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'featured_items', ARRAY['active', 'created_at', 'id', 'row_v', 'sc_urn', 'type', 'weight']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'link_requests', ARRAY['bind_v', 'chat_bind', 'claim_token', 'created_at', 'error', 'expires_at', 'id', 'mode', 'row_v', 'source_session_id', 'status', 'target_session_id']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'link_requests', ARRAY['claim_token', 'created_at', 'error', 'expires_at', 'id', 'mode', 'row_v', 'source_session_id', 'status', 'target_session_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'listening_history', ARRAY['artist_name', 'artist_urn', 'artwork_url', 'duration', 'id', 'played_at', 'sc_track_id', 'soundcloud_user_id', 'title']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'login_requests', ARRAY['chat_bind', 'code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'login_requests', ARRAY['code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_app_request_cooldowns', ARRAY['failure_count', 'oauth_app_id', 'retry_at', 'row_v', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_apps', ARRAY['active', 'client_id', 'client_secret', 'created_at', 'id', 'name', 'redirect_uri', 'row_v', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_checksums', ARRAY['at', 'hash', 'node', 'range', 'tbl']::text[]),
@@ -591,9 +591,9 @@ VALUES
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'sc_egress_health', ARRAY['channel', 'open_until', 'opened_at', 'opened_by', 'row_v']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'sc_track_counters', ARRAY['comment_count', 'fetched_at', 'likes_count', 'play_count', 'reposts_count', 'sc_track_id']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'sessions', ARRAY['bind_v', 'chat_bind', 'created_at', 'id', 'row_v', 'soundcloud_connection_id', 'updated_at']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'sessions', ARRAY['created_at', 'id', 'row_v', 'soundcloud_connection_id', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'soundcloud_connections', ARRAY['access_token', 'created_at', 'expires_at', 'id', 'oauth_app_id', 'refresh_token', 'scope', 'soundcloud_user_id', 'token_v', 'username']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'subscriptions', ARRAY['exp_date', 'row_v', 'user_urn']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'subscriptions', ARRAY['exp_date', 'row_v', 'star_since', 'user_urn']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'sync_queue', ARRAY['action_type', 'cancelled', 'created_at', 'generation', 'id', 'intent_v', 'payload', 'target_urn', 'user_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'track_artist_blocks', ARRAY['artist_id', 'created_at', 'note', 'row_v', 'track_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'user_auras', ARRAY['aura_id', 'custom_hex', 'row_v', 'updated_at', 'user_urn']::text[]),
@@ -632,9 +632,9 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'disliked_tracks', ARRAY['created_at', 'id', 'row_v', 'sc_track_id', 'sc_user_id', 'track_data']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'featured_items', ARRAY['active', 'created_at', 'id', 'row_v', 'sc_urn', 'type', 'weight']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'job_status', ARRAY['available_at', 'dedup_key', 'kind', 'state', 'updated_at']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'link_requests', ARRAY['bind_v', 'chat_bind', 'claim_token', 'created_at', 'error', 'expires_at', 'id', 'mode', 'row_v', 'source_session_id', 'status', 'target_session_id']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'link_requests', ARRAY['claim_token', 'created_at', 'error', 'expires_at', 'id', 'mode', 'row_v', 'source_session_id', 'status', 'target_session_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'listening_history', ARRAY['artist_name', 'artist_urn', 'artwork_url', 'duration', 'id', 'played_at', 'sc_track_id', 'soundcloud_user_id', 'title']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'login_requests', ARRAY['chat_bind', 'code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'login_requests', ARRAY['code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'lyrics_cache', ARRAY['content_generation', 'content_hash', 'created_at', 'embedded_at', 'embedding_request_created_at', 'embedding_request_id', 'embedding_state', 'fts', 'language', 'language_confidence', 'plain_source', 'plain_text', 'sc_track_id', 'source', 'synced_lrc', 'synced_source', 'synced_version', 'track_id', 'updated_at']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'lyrics_lookup_state', ARRAY['algorithm_version', 'attempts', 'claim_expires_at', 'claim_job_generation', 'claim_job_id', 'claim_job_lease_id', 'claim_state_generation', 'created_at', 'failure_streak', 'generation', 'input_artist', 'input_duration_ms', 'input_genius_song_id', 'input_genius_url', 'input_release_date', 'input_sc_created_at', 'input_title', 'last_attempt_at', 'last_error', 'last_outcome', 'miss_streak', 'next_run_at', 'priority', 'retry_after_at', 'sc_track_id', 'source_set_version', 'status', 'track_id', 'updated_at', 'wake_durable_at', 'wake_generation', 'wake_message_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'oauth_app_request_cooldowns', ARRAY['failure_count', 'oauth_app_id', 'retry_at', 'row_v', 'updated_at']::text[]),
@@ -652,9 +652,9 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'sc_egress_health', ARRAY['channel', 'open_until', 'opened_at', 'opened_by', 'row_v']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'search_terms', ARRAY['latin', 'ndoc', 'word']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'sessions', ARRAY['bind_v', 'chat_bind', 'created_at', 'id', 'row_v', 'soundcloud_connection_id', 'updated_at']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'sessions', ARRAY['created_at', 'id', 'row_v', 'soundcloud_connection_id', 'updated_at']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'soundcloud_connections', ARRAY['access_token', 'created_at', 'expires_at', 'first_refresh_rejection_at', 'id', 'last_refresh_attempt_at', 'last_refresh_error', 'last_refresh_error_kind', 'last_refresh_success_at', 'login_v', 'oauth_app_id', 'refresh_failure_count', 'refresh_generation', 'refresh_lease_expires_at', 'refresh_lease_id', 'refresh_rejection_count', 'refresh_token', 'retry_at', 'scope', 'soundcloud_user_id', 'token_v', 'updated_at', 'username']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'subscriptions', ARRAY['exp_date', 'row_v', 'user_urn']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'subscriptions', ARRAY['exp_date', 'row_v', 'star_since', 'user_urn']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'sync_queue', ARRAY['action_type', 'cancelled', 'created_at', 'dead', 'exec_generation', 'failed_at', 'generation', 'id', 'intent_v', 'last_error', 'lease_generation', 'lease_id', 'locked_at', 'next_run_at', 'payload', 'remote_attempted_generation', 'remote_completed_generation', 'remote_result', 'retry_count', 'target_urn', 'user_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'sync_queue_action_pauses', ARRAY['action_type', 'oauth_app_id', 'paused_until', 'reason', 'strikes', 'updated_at']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'taste_model_versions', ARRAY['active', 'applied_at', 'collection', 'created_at', 'dim', 'input_object', 'items_count', 'metrics', 'pooling', 'refreshed_through', 'trained_at', 'users_count', 'version']::text[]),
@@ -4273,7 +4273,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.bind_v, t.chat_bind, t.claim_token, t.created_at, t.error, t.expires_at, t.id, t.mode, t.row_v, t.source_session_id, t.status, t.target_session_id)::text) FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.claim_token, t.created_at, t.error, t.expires_at, t.id, t.mode, t.row_v, t.source_session_id, t.status, t.target_session_id)::text) FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_link_requests(k jsonb)
@@ -4302,10 +4302,6 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.bind_v < OLD.bind_v OR (core AND NEW.bind_v = OLD.bind_v) THEN
-            NEW.chat_bind := OLD.chat_bind;
-            NEW.bind_v := OLD.bind_v;
-        END IF;
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.claim_token := OLD.claim_token;
             NEW.created_at := OLD.created_at;
@@ -4322,11 +4318,9 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.link_requests t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.bind_v > o.bind_v OR NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.link_requests t SET
-                    chat_bind = CASE WHEN NEW.bind_v > o.bind_v THEN NEW.chat_bind ELSE o.chat_bind END,
-                    bind_v = greatest(o.bind_v, NEW.bind_v),
                     claim_token = CASE WHEN NEW.row_v > o.row_v THEN NEW.claim_token ELSE o.claim_token END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
@@ -4350,8 +4344,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.link_requests (bind_v, chat_bind, claim_token, created_at, error, expires_at, id, mode, row_v, source_session_id, status, target_session_id)
-        VALUES (NEW.bind_v, NEW.chat_bind, NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.mode, NEW.row_v, NEW.source_session_id, NEW.status, NEW.target_session_id)
+        INSERT INTO public.link_requests (claim_token, created_at, error, expires_at, id, mode, row_v, source_session_id, status, target_session_id)
+        VALUES (NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.mode, NEW.row_v, NEW.source_session_id, NEW.status, NEW.target_session_id)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -4410,14 +4404,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.bind_v := public.scd_hlc(NEW.bind_v);
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
-    END IF;
-    IF NEW.chat_bind IS DISTINCT FROM OLD.chat_bind THEN
-        NEW.bind_v := public.scd_hlc(greatest(OLD.bind_v, NEW.bind_v));
-    ELSE
-        NEW.bind_v := greatest(OLD.bind_v, NEW.bind_v);
     END IF;
     IF (NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.mode, NEW.source_session_id, NEW.status, NEW.target_session_id) IS DISTINCT FROM (OLD.claim_token, OLD.created_at, OLD.error, OLD.expires_at, OLD.mode, OLD.source_session_id, OLD.status, OLD.target_session_id) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
@@ -4542,7 +4530,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.chat_bind, t.code_verifier, t.created_at, t.error, t.expires_at, t.id, t.oauth_app_id, t.profile_ok, t.redirect_url, t.result_session_id, t.retry_count, t.row_v, t.state, t.status, t.step, t.target_session_id, t.username)::text) FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.code_verifier, t.created_at, t.error, t.expires_at, t.id, t.oauth_app_id, t.profile_ok, t.redirect_url, t.result_session_id, t.retry_count, t.row_v, t.state, t.status, t.step, t.target_session_id, t.username)::text) FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_login_requests(k jsonb)
@@ -4572,7 +4560,6 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
-            NEW.chat_bind := OLD.chat_bind;
             NEW.code_verifier := OLD.code_verifier;
             NEW.created_at := OLD.created_at;
             NEW.error := OLD.error;
@@ -4597,7 +4584,6 @@ BEGIN
             IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.login_requests t SET
-                    chat_bind = CASE WHEN NEW.row_v > o.row_v THEN NEW.chat_bind ELSE o.chat_bind END,
                     code_verifier = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_verifier ELSE o.code_verifier END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
@@ -4627,8 +4613,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.login_requests (chat_bind, code_verifier, created_at, error, expires_at, id, oauth_app_id, profile_ok, redirect_url, result_session_id, retry_count, row_v, state, status, step, target_session_id, username)
-        VALUES (NEW.chat_bind, NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.row_v, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username)
+        INSERT INTO public.login_requests (code_verifier, created_at, error, expires_at, id, oauth_app_id, profile_ok, redirect_url, result_session_id, retry_count, row_v, state, status, step, target_session_id, username)
+        VALUES (NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.row_v, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -4690,7 +4676,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
     END IF;
-    IF (NEW.chat_bind, NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username) IS DISTINCT FROM (OLD.chat_bind, OLD.code_verifier, OLD.created_at, OLD.error, OLD.expires_at, OLD.oauth_app_id, OLD.profile_ok, OLD.redirect_url, OLD.result_session_id, OLD.retry_count, OLD.state, OLD.status, OLD.step, OLD.target_session_id, OLD.username) THEN
+    IF (NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username) IS DISTINCT FROM (OLD.code_verifier, OLD.created_at, OLD.error, OLD.expires_at, OLD.oauth_app_id, OLD.profile_ok, OLD.redirect_url, OLD.result_session_id, OLD.retry_count, OLD.state, OLD.status, OLD.step, OLD.target_session_id, OLD.username) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);
@@ -7337,7 +7323,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.bind_v, t.chat_bind, t.created_at, t.id, t.row_v, t.soundcloud_connection_id, t.updated_at)::text) FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.created_at, t.id, t.row_v, t.soundcloud_connection_id, t.updated_at)::text) FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_sessions(k jsonb)
@@ -7366,10 +7352,6 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.bind_v < OLD.bind_v OR (core AND NEW.bind_v = OLD.bind_v) THEN
-            NEW.chat_bind := OLD.chat_bind;
-            NEW.bind_v := OLD.bind_v;
-        END IF;
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.soundcloud_connection_id := OLD.soundcloud_connection_id;
@@ -7381,11 +7363,9 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.sessions t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.bind_v > o.bind_v OR NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.sessions t SET
-                    chat_bind = CASE WHEN NEW.bind_v > o.bind_v THEN NEW.chat_bind ELSE o.chat_bind END,
-                    bind_v = greatest(o.bind_v, NEW.bind_v),
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     soundcloud_connection_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.soundcloud_connection_id ELSE o.soundcloud_connection_id END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
@@ -7404,8 +7384,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.sessions (bind_v, chat_bind, created_at, id, row_v, soundcloud_connection_id, updated_at)
-        VALUES (NEW.bind_v, NEW.chat_bind, NEW.created_at, NEW.id, NEW.row_v, NEW.soundcloud_connection_id, NEW.updated_at)
+        INSERT INTO public.sessions (created_at, id, row_v, soundcloud_connection_id, updated_at)
+        VALUES (NEW.created_at, NEW.id, NEW.row_v, NEW.soundcloud_connection_id, NEW.updated_at)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -7478,14 +7458,8 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        NEW.bind_v := public.scd_hlc(NEW.bind_v);
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
-    END IF;
-    IF NEW.chat_bind IS DISTINCT FROM OLD.chat_bind THEN
-        NEW.bind_v := public.scd_hlc(greatest(OLD.bind_v, NEW.bind_v));
-    ELSE
-        NEW.bind_v := greatest(OLD.bind_v, NEW.bind_v);
     END IF;
     IF (NEW.created_at, NEW.soundcloud_connection_id, NEW.updated_at) IS DISTINCT FROM (OLD.created_at, OLD.soundcloud_connection_id, OLD.updated_at) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
@@ -7911,7 +7885,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.exp_date, t.row_v, t.user_urn)::text) FROM public.subscriptions t WHERE t.user_urn = (k ->> 'user_urn')::text
+SELECT md5(ROW(t.exp_date, t.row_v, t.star_since, t.user_urn)::text) FROM public.subscriptions t WHERE t.user_urn = (k ->> 'user_urn')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_subscriptions(k jsonb)
@@ -7942,6 +7916,7 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.exp_date := OLD.exp_date;
+            NEW.star_since := OLD.star_since;
             NEW.row_v := OLD.row_v;
         END IF;
         RETURN NEW;
@@ -7953,6 +7928,7 @@ BEGIN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.subscriptions t SET
                     exp_date = CASE WHEN NEW.row_v > o.row_v THEN NEW.exp_date ELSE o.exp_date END,
+                    star_since = CASE WHEN NEW.row_v > o.row_v THEN NEW.star_since ELSE o.star_since END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE t.user_urn = o.user_urn;
                 GET DIAGNOSTICS n = ROW_COUNT;
@@ -7970,8 +7946,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.subscriptions (exp_date, row_v, user_urn)
-        VALUES (NEW.exp_date, NEW.row_v, NEW.user_urn)
+        INSERT INTO public.subscriptions (exp_date, row_v, star_since, user_urn)
+        VALUES (NEW.exp_date, NEW.row_v, NEW.star_since, NEW.user_urn)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -8061,7 +8037,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(greatest(NEW.row_v, (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'subscriptions' AND x.pk = jsonb_build_object('user_urn', NEW.user_urn))));
         RETURN NEW;
     END IF;
-    IF NEW.exp_date IS DISTINCT FROM OLD.exp_date THEN
+    IF (NEW.exp_date, NEW.star_since) IS DISTINCT FROM (OLD.exp_date, OLD.star_since) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);
