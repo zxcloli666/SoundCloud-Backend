@@ -49,10 +49,9 @@ impl SubscriptionsService {
         }
         let now = chrono::Utc::now().timestamp();
         let variants = crate::common::sc_ids::user_id_variants(user_urn);
-        let row =
-            sqlx::query_file!("queries/subscriptions/service/get_exp_date.sql", &variants)
-                .fetch_optional(&self.pg)
-                .await?;
+        let row = sqlx::query_file!("queries/subscriptions/service/get_exp_date.sql", &variants)
+            .fetch_optional(&self.pg)
+            .await?;
         let premium = row.as_ref().is_some_and(|r| r.exp_date > now);
         Ok(PremiumStatus {
             premium,

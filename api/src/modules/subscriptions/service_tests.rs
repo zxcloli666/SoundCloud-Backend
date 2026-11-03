@@ -32,5 +32,12 @@ async fn status_carries_star_since_only_while_premium(pool: PgPool) {
     let unknown = service.status("soundcloud:users:9").await.unwrap();
     assert!(!unknown.premium);
 
-    assert_eq!(service.status("soundcloud:users:3").await.unwrap().star_since, None);
+    assert_eq!(
+        service
+            .status("soundcloud:users:3")
+            .await
+            .unwrap()
+            .star_since,
+        None
+    );
 }
