@@ -8,7 +8,7 @@ device fetched; receivers decrypt them and measure delivery time.
 ## Server side
 
 - `CHAT_LOADTEST=on` on chat-api enables `POST /chat-admin/loadtest/seed` and `/purge` (token file
-  as for every `/chat-admin/*` route). Off: both answer 404 and synthetic sessions never resolve.
+  as for every `/chat-admin/*` route). Off, or after `CHAT_LOADTEST_UNTIL`: both answer 404 and synthetic sessions never resolve.
 - `seed {users, devices_per_user, groups}` creates users `lt:<n>` (numbering continues after the
   last seed), their devices (history unlocked) and chats: users are split into `groups` chats of
   2 to 50, small ones more likely, a chat of 2 is a DM. Sessions live in `chat:lt:sess:*` for 2 h.
@@ -44,17 +44,17 @@ chat-load fake-pro
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--mix` | `direct=25,r1=25,r2=40,p1=10` | share of devices per route |
+| `--mix` | `r4=35,r2=30,p2=10,r1=15,p1=10` | share of devices per route |
 | `--relay-cap` | `9000` | refuse a plan with more devices on one relay (r1 maxconn 24000, a relay client holds 2) |
 | `--steps` | `2000,5000,10000,15000,20000` | devices online per step |
 | `--step-secs`, `--spread-secs` | `240`, `60` | step length, how long a step takes to bring its devices up |
-| `--hold-secs` | `900` | hold at the last step |
-| `--restart-cmd`, `--restart-at-secs` | none, `600` | run once at this second of the hold, record the reconnect curve |
-| `--worst-secs` | `300` | after the hold every device parks from its next sync, so the switch spreads over one short-sync period |
+| `--hold-secs` | `480` | phase A, realistic mix: hold at the last step |
+| `--restart-cmd`, `--restart-at-secs` | none, `1080` | run once at this second after the hold starts (inside the hold or the worst case), record the reconnect curve |
+| `--worst-secs` | `900` | phase B: after the hold every device parks from its next sync, so the switch spreads over one short-sync period. The restart default is minute 10 of it |
 | `--parked-share`, `--focus-share` | `0.3`, `0.5` | parked (visible window) devices, and how many of them focus their chat |
 | `--hold-ms`, `--short-every-secs` | `20000`, `60` | parked hold (15 s on pro), short sync period |
 | `--send-every-secs`, `--type-every-secs` | `300`, `120` | 0 turns it off |
-| `--direct`, `--relay n=url`, `--pro n=url`, `--origin` | prod names | route URLs |
+| `--relay n=url`, `--pro n=url`, `--origin` | prod names | route URLs; a given list replaces the defaults r1, r2, r4 and p1, p2. There is no direct tier |
 | `--ock-version`, `--ock-pub` | `1`, the sc-chat-wire pin | OCK the requests are sealed to |
 | `--watch name=cmd` | none | abort check, see below |
 | `--chat-metrics-cmd`, `--abort-pool-wait-ms` | none, `200` | PG pool wait p99 from chat-api metrics |
@@ -62,7 +62,7 @@ chat-load fake-pro
 | `--abort-error-rate` | `0.01` | harness error rate over 60 s with at least 1000 requests in it (the 60 s after the restart are left out) |
 | `--report` | `chat-load-report.json` | final report |
 
-Routes: `direct` posts to `https://api.scnative.dev/chat/x`, relays to `https://api.<node>.relay.scnative.dev/chat/x`,
+Routes: relays post to `https://api.<node>.relay.scnative.dev/chat/x`,
 pro goes through `https://<node>.pro.scnative.dev/open` and `/take` like the desktop. Plain `http://` routes use h2c.
 
 ## Abort checks
@@ -74,8 +74,11 @@ last stdout line, anything else three times in a row aborts too. Ready checks in
 ```sh
 --watch "r1-cpu=checks/relay-cpu.sh sc-relay1 75" \
 --watch "r2-cpu=checks/relay-cpu.sh sc-relay2 75" \
---watch "r1-queue=checks/haproxy-queue.sh sc-relay1 be_api" \
---watch "r2-queue=checks/haproxy-queue.sh sc-relay2 be_api" \
+--watch "r4-cpu=checks/relay-cpu.sh sc-relay4 75" \
+--watch "call1-cpu=checks/relay-cpu.sh sc-call1 75" \
+--watch "r1-queue=checks/haproxy-queue.sh sc-relay1 be_chat" \
+--watch "r2-queue=checks/haproxy-queue.sh sc-relay2 be_chat" \
+--watch "r4-queue=checks/haproxy-queue.sh sc-relay4 be_chat" \
 --watch "chat-rss=checks/container-rss.sh sc-main chat-api 1600" \
 --watch "redis-rt=checks/redis-memory.sh sc-main redis-rt 60" \
 --chat-metrics-cmd "checks/chat-metrics.sh sc-main" \
@@ -119,8 +122,8 @@ on `lt-net`:
 chat-load fake-pro &
 chat-load seed --admin http://lt-chat-api:3000 --token-file /keys/chat-admin-token --users 5000 --groups 220 --out layout.json
 chat-load run --layout layout.json --ock-pub dde332903df0f9e9fbc91a814131b5bcea28b46f5728e2a7e28700ed4a6c2d4d \
-  --direct http://lt-edge:8000 --relay r1=http://lt-edge:8000 --relay r2=http://lt-edge:8000 \
-  --pro p1=http://127.0.0.1:8080 --origin http://lt-edge:8000 \
+  --relay r1=http://lt-edge:8000 --relay r2=http://lt-edge:8000 --relay r4=http://lt-edge:8000 \
+  --pro p1=http://127.0.0.1:8080 --pro p2=http://127.0.0.1:8080 --origin http://lt-edge:8000 \
   --steps 1000,2500,5000 --step-secs 60 --spread-secs 30 --hold-secs 240 --worst-secs 90 \
   --restart-at-secs 120 --restart-cmd "curl -s --unix-socket /run/podman/podman.sock -X POST http://d/v4.0.0/libpod/containers/lt-chat-api/restart?t=20"
 chat-load purge --admin http://lt-chat-api:3000 --token-file /keys/chat-admin-token
@@ -130,6 +133,16 @@ Give the harness and haproxy containers `--ulimit nofile=250000:250000`. The pod
 with other work: a busy VM shows up as Redis commands over 10 ms in `SLOWLOG` and `chat_busy`
 answers, so read a local verdict next to `SLOWLOG GET`. Remove `lt-*` containers, the network and
 volumes after.
+
+## One generator host
+
+`sc-worker1` (8 vCPU) drives the whole night shape. Measured with the release binary against a local
+chat-api, 200 devices on the night mix (r4, r2, r1, p1, p2), 130 s, restart inside the worst case:
+2.4 CPU seconds and 29 MB peak, so 20k devices is about 2 cores of harness work and 3 GB. Every pro
+request opens a new connection (two per call): 4000 pro devices parked at 15 s are about 530 TLS
+handshakes a second and 16k sockets in TIME_WAIT per pro host, inside the 55k port range. Raise
+`ulimit -n` to 200000 and set `ip_local_port_range 10240 65535` first. TLS to the real edges adds
+roughly one more core.
 
 ## Night run (plan section 8)
 
@@ -144,20 +157,20 @@ Copy the Linux binary with `scp` straight from the target dir. On the Mac never 
 or `api` binaries: the copy gets killed (exit 137), run them from the target dir.
 
 1. `tools/loadtest/exempt.sh on 144.31.212.127` (Infra).
-2. `CHAT_LOADTEST=on` on chat-api, recreate it.
+2. `CHAT_LOADTEST=on` and `CHAT_LOADTEST_UNTIL=<RFC 3339 time or epoch>` (start plus 65 min) on chat-api, recreate it.
 3. Seed on main (the token never leaves the host), copy the layout to the generator:
 
 ```sh
-(umask 077; ssh sc-main 'printf "x-chat-admin-token: %s\nx-chat-admin-user: loadtest\n" "$(cat /srv/scd-secrets/chat/chat-admin-token)" |
+(umask 077; ssh sc-main 'printf "x-chat-admin-token: %s\nx-chat-admin-user: loadtest\n" "$(cat /srv/chat/secrets/chat-admin-token)" |
   curl -fsS -H @- -H "content-type: application/json" -d "{\"users\":20000,\"devices_per_user\":1,\"groups\":900}" \
-  http://127.0.0.1:3010/chat-admin/loadtest/seed' > layout.json)
+  http://127.0.0.1:9205/chat-admin/loadtest/seed' > layout.json)
 scp layout.json sc-worker1:
 ```
 
 4. On the generator:
 
 ```sh
-./chat-load run --layout layout.json --restart-cmd "ssh sc-main 'cd /root && docker compose restart chat-api'" \
+./chat-load run --layout layout.json --restart-cmd "ssh sc-main 'cd /srv/chat && docker compose restart chat-api'" \
   --watch ... --chat-metrics-cmd ... --music-metrics-cmd ... --report night.json
 ```
 
@@ -166,5 +179,5 @@ scp layout.json sc-worker1:
 
 Dry run before the night: the same with `--users 50 --groups 3` and
 `--steps 50 --step-secs 30 --spread-secs 20 --hold-secs 120 --worst-secs 0`, no `--restart-cmd`, flag on,
-no exemption, then purge. The default 60 s spread is longer than a 30 s step and the restart at 600 s
+no exemption, then purge. The default 60 s spread is longer than a 30 s step and the restart at 1080 s
 falls outside a 120 s hold: with either one the run refuses to start.

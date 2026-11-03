@@ -39,9 +39,9 @@ impl Schedule {
             bail!("the spread is longer than a step");
         }
         if let Some(at) = self.restart_at
-            && at >= self.hold
+            && at >= self.hold + self.worst
         {
-            bail!("the restart is not inside the hold");
+            bail!("the restart is not inside the hold or the worst case");
         }
         Ok(())
     }

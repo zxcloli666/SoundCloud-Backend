@@ -48,7 +48,6 @@ fn share(value: f64) -> u32 {
 pub fn plan(args: &RunArgs) -> anyhow::Result<Plan> {
     let layout = Layout::load(&args.layouts)?;
     let routes = Routes::build(
-        args.direct.as_deref(),
         &named(&args.relays)?,
         &named(&args.pros)?,
         args.origin.as_deref(),

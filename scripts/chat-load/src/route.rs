@@ -4,17 +4,20 @@ use anyhow::{Context, bail};
 use sc_chat_wire::proto::Tier;
 
 pub const DEFAULT_ORIGIN: &str = "https://api.scnative.dev";
-pub const DEFAULT_RELAYS: [(&str, &str); 2] = [
+pub const DEFAULT_RELAYS: [(&str, &str); 3] = [
     ("r1", "https://api.r1.relay.scnative.dev"),
     ("r2", "https://api.r2.relay.scnative.dev"),
+    ("r4", "https://api.r4.relay.scnative.dev"),
 ];
-pub const DEFAULT_PROS: [(&str, &str); 1] = [("p1", "https://p1.pro.scnative.dev")];
-pub const DEFAULT_MIX: &str = "direct=25,r1=25,r2=40,p1=10";
+pub const DEFAULT_PROS: [(&str, &str); 2] = [
+    ("p1", "https://p1.pro.scnative.dev"),
+    ("p2", "https://p2.pro.scnative.dev"),
+];
+pub const DEFAULT_MIX: &str = "r4=35,r2=30,p2=10,r1=15,p1=10";
 pub const DEFAULT_RELAY_CAP: usize = 9_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    Direct,
     Relay,
     Pro,
 }
@@ -22,7 +25,6 @@ pub enum Kind {
 impl Kind {
     pub fn tier(self) -> Tier {
         match self {
-            Kind::Direct => Tier::Direct,
             Kind::Relay => Tier::Relay,
             Kind::Pro => Tier::Pro,
         }
@@ -31,14 +33,14 @@ impl Kind {
     pub fn answer_bytes(self) -> u32 {
         match self {
             Kind::Pro => 24 * 1024,
-            Kind::Direct | Kind::Relay => 256 * 1024,
+            Kind::Relay => 256 * 1024,
         }
     }
 
     pub fn hold_cap_ms(self) -> u64 {
         match self {
             Kind::Pro => 15_000,
-            Kind::Direct | Kind::Relay => 20_000,
+            Kind::Relay => 20_000,
         }
     }
 }
@@ -58,17 +60,12 @@ pub struct Routes {
 
 impl Routes {
     pub fn build(
-        direct: Option<&str>,
         relays: &[(String, String)],
         pros: &[(String, String)],
         origin: Option<&str>,
     ) -> Self {
         let origin = trimmed(origin.unwrap_or(DEFAULT_ORIGIN));
-        let mut list = vec![Route {
-            name: "direct".to_owned(),
-            kind: Kind::Direct,
-            base: trimmed(direct.unwrap_or(&origin)),
-        }];
+        let mut list = Vec::new();
         let defaults = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
             pairs
                 .iter()
@@ -104,7 +101,7 @@ pub fn named_url(raw: &str) -> anyhow::Result<(String, String)> {
     let (name, url) = raw
         .split_once('=')
         .with_context(|| format!("{raw} is not name=url"))?;
-    if name.is_empty() || name == "direct" || !url.starts_with("http") {
+    if name.is_empty() || !url.starts_with("http") {
         bail!("{raw} is not name=url");
     }
     Ok((name.to_owned(), url.to_owned()))

@@ -7,19 +7,20 @@ fn night() -> Schedule {
         steps: vec![2_000, 5_000, 10_000, 15_000, 20_000],
         step: Duration::from_secs(240),
         spread: Duration::from_secs(60),
-        hold: Duration::from_secs(900),
-        restart_at: Some(Duration::from_secs(600)),
-        worst: Duration::from_secs(300),
+        hold: Duration::from_secs(480),
+        restart_at: Some(Duration::from_secs(1_080)),
+        worst: Duration::from_secs(900),
     }
 }
 
 #[test]
-fn the_night_plan_fits_the_hour() {
+fn the_night_plan_is_the_two_phases_of_the_delta() {
     let plan = night();
     plan.check(20_000).expect("a valid plan");
-    assert_eq!(plan.total(), Duration::from_secs(2_400));
-    assert_eq!(plan.restart(), Some(Duration::from_secs(1_800)));
-    assert_eq!(plan.worst_starts(), Duration::from_secs(2_100));
+    assert_eq!(plan.hold_starts(), Duration::from_secs(1_200));
+    assert_eq!(plan.worst_starts(), Duration::from_secs(1_680));
+    assert_eq!(plan.restart(), Some(Duration::from_secs(2_280)));
+    assert_eq!(plan.total(), Duration::from_secs(2_580));
 }
 
 #[test]
@@ -39,7 +40,8 @@ fn phases_follow_the_clock() {
     assert_eq!(plan.phase(Duration::from_secs(1_000)), Phase::Ramp(4));
     assert_eq!(plan.phase(Duration::from_secs(1_300)), Phase::Hold);
     assert_eq!(plan.phase(Duration::from_secs(2_200)), Phase::Worst);
-    assert_eq!(plan.phase(Duration::from_secs(2_400)), Phase::Done);
+    assert_eq!(plan.phase(Duration::from_secs(2_579)), Phase::Worst);
+    assert_eq!(plan.phase(Duration::from_secs(2_580)), Phase::Done);
 }
 
 #[test]
@@ -51,10 +53,15 @@ fn a_broken_plan_is_refused() {
     };
     assert!(falling.check(10).is_err());
     let late_restart = Schedule {
-        restart_at: Some(Duration::from_secs(900)),
+        restart_at: Some(Duration::from_secs(1_380)),
         ..night()
     };
     assert!(late_restart.check(20_000).is_err());
+    let in_the_hold = Schedule {
+        restart_at: Some(Duration::from_secs(300)),
+        ..night()
+    };
+    assert!(in_the_hold.check(20_000).is_ok());
     let wide = Schedule {
         spread: Duration::from_secs(241),
         ..night()

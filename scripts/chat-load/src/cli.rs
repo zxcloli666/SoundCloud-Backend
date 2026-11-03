@@ -67,8 +67,6 @@ pub struct RunArgs {
     pub ock_version: u8,
     #[arg(long)]
     pub ock_pub: Option<String>,
-    #[arg(long)]
-    pub direct: Option<String>,
     #[arg(long = "relay")]
     pub relays: Vec<String>,
     #[arg(long = "pro")]
@@ -85,13 +83,13 @@ pub struct RunArgs {
     pub step_secs: u64,
     #[arg(long, default_value_t = 60)]
     pub spread_secs: u64,
-    #[arg(long, default_value_t = 900)]
+    #[arg(long, default_value_t = 480)]
     pub hold_secs: u64,
     #[arg(long)]
     pub restart_cmd: Option<String>,
-    #[arg(long, default_value_t = 600)]
+    #[arg(long, default_value_t = 1_080)]
     pub restart_at_secs: u64,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 900)]
     pub worst_secs: u64,
     #[arg(long, default_value_t = 0.3)]
     pub parked_share: f64,

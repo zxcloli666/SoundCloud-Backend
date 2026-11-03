@@ -61,7 +61,7 @@ impl Transport {
             .no_proxy();
         let builder = match route.kind {
             Kind::Pro => builder.pool_max_idle_per_host(0).http1_only(),
-            Kind::Direct | Kind::Relay => {
+            Kind::Relay => {
                 let pooled = builder
                     .pool_max_idle_per_host(1)
                     .pool_idle_timeout(IDLE_KEPT);
@@ -92,7 +92,7 @@ impl Transport {
                 )
                 .await
             }
-            Kind::Direct | Kind::Relay => self.post(envelope, timeout).await,
+            Kind::Relay => self.post(envelope, timeout).await,
         }
     }
 
