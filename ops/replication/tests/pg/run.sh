@@ -163,6 +163,8 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 . "$here/lyrics_queue.sh"
 . "$here/deletes.sh"
 . "$here/chat.sh"
+. "$here/keep.sh"
+. "$here/lyrics_race.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

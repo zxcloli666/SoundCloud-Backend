@@ -14,89 +14,11 @@ use sqlx::PgPool;
 use crate::config::LyricsConfig;
 use crate::queue::{ClaimOrder, JobRepository, LeasedJob};
 
-async fn install_base(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(
-        "CREATE TABLE tracks (
-            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            sc_track_id text NOT NULL UNIQUE,
-            urn text NOT NULL UNIQUE,
-            title text NOT NULL,
-            metadata_artist text,
-            uploader_username text,
-            duration_ms integer NOT NULL,
-            genius_song_id bigint,
-            genius_url text,
-            release_date date,
-            sc_created_at timestamptz,
-            index_priority smallint NOT NULL DEFAULT 5,
-            play_count_sc bigint,
-            storage_state varchar(16) NOT NULL DEFAULT 'pending',
-            index_state varchar(16) NOT NULL DEFAULT 'pending',
-            needs_duration_resolve boolean NOT NULL DEFAULT false,
-            pipeline_held boolean NOT NULL DEFAULT false,
-            transcribe_state varchar(16),
-            created_at timestamptz NOT NULL DEFAULT now(),
-            updated_at timestamptz NOT NULL DEFAULT now()
-        );
-        CREATE TABLE lyrics_cache (
-            sc_track_id text PRIMARY KEY,
-            synced_lrc text,
-            plain_text text,
-            source varchar(16) NOT NULL,
-            language varchar(8),
-            language_confidence real,
-            embedded_at timestamptz,
-            embedding_state varchar(16),
-            created_at timestamp NOT NULL DEFAULT now()
-        );
-        CREATE TABLE storage_event_state (
-            sc_track_id text PRIMARY KEY REFERENCES tracks(sc_track_id) ON DELETE CASCADE,
-            uploaded_generation bigint NOT NULL,
-            updated_at timestamptz NOT NULL DEFAULT now()
-        );
-        CREATE TABLE transcription_wire_state (
-            sc_track_id text PRIMARY KEY,
-            status varchar(16) NOT NULL
-        );
-        CREATE TABLE lyrics_embedding_wire_state (
-            sc_track_id text PRIMARY KEY,
-            status varchar(16) NOT NULL
-        );",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../../api/migrations/0057_background_jobs.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../../api/migrations/0134_background_jobs_maintenance_lane.sql"
-    ))
-    .execute(pool)
-    .await?;
-    crate::handlers::star_priority::install_star_track_tiers(pool).await
-}
-
-async fn install_lookup(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../../api/migrations/0082_lyrics_lookup_state.sql"
-    ))
-    .execute(pool)
-    .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../../api/migrations/0114_lyrics_synced_version.sql"
-    ))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 async fn insert_track(pool: &PgPool, id: &str, title: &str) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (
-            sc_track_id, urn, title, uploader_username, duration_ms, index_priority
-         ) VALUES ($1, 'soundcloud:tracks:' || $1, $2, 'artist', 180000, 5)",
+            sc_track_id, urn, title, title_normalized, uploader_username, duration_ms, index_priority
+         ) VALUES ($1, 'soundcloud:tracks:' || $1, $2, lower($2), 'artist', 180000, 5)",
     )
     .bind(id)
     .bind(title)
@@ -178,11 +100,8 @@ async fn empty_lookup_proxy_response(headers: HeaderMap) -> (StatusCode, String)
     (StatusCode::OK, body.to_owned())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn new_track_creates_due_lookup_state(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
-
     insert_track(&pool, "42", "Track").await?;
 
     let state: (String, i64, i16, bool) = sqlx::query_as(
@@ -195,12 +114,10 @@ async fn new_track_creates_due_lookup_state(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn input_change_reopens_once_and_unrelated_change_does_not(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Track").await?;
     sqlx::query(
         "UPDATE lyrics_lookup_state
@@ -229,16 +146,14 @@ async fn input_change_reopens_once_and_unrelated_change_does_not(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn external_cache_prevents_lookup_state(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
     sqlx::query(
         "INSERT INTO lyrics_cache (sc_track_id, plain_text, source)
          VALUES ('42', 'A sufficiently long external lyrics body', 'genius')",
     )
     .execute(&pool)
     .await?;
-    install_lookup(&pool).await?;
 
     insert_track(&pool, "42", "Track").await?;
 
@@ -249,12 +164,13 @@ async fn external_cache_prevents_lookup_state(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn keyset_backfill_is_bounded_and_restart_safe(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
     insert_track(&pool, "41", "First").await?;
     insert_track(&pool, "42", "Second").await?;
-    install_lookup(&pool).await?;
+    sqlx::query("DELETE FROM lyrics_lookup_state")
+        .execute(&pool)
+        .await?;
 
     let first = sqlx::query_file_scalar!("queries/lyrics/lookup_backfill.sql", 1_i64)
         .fetch_one(&pool)
@@ -276,12 +192,10 @@ async fn keyset_backfill_is_bounded_and_restart_safe(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn clean_source_empty_persists_negative_without_worker_jobs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let queue = JobRepository::new(pool.clone(), "lyrics-empty".to_owned());
     super::super::wake::enqueue(&pool, &queue, "42").await?;
@@ -354,10 +268,8 @@ async fn clean_source_empty_persists_negative_without_worker_jobs(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn source_outage_persists_retry_without_worker_jobs(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let queue = JobRepository::new(pool.clone(), "lyrics-outage".to_owned());
     super::super::wake::enqueue(&pool, &queue, "42").await?;
@@ -429,15 +341,14 @@ async fn source_outage_persists_retry_without_worker_jobs(pool: PgPool) -> anyho
 }
 
 async fn lookup_through_proxy(pool: &PgPool, lrclib: &'static str) -> anyhow::Result<usize> {
-    install_base(pool).await?;
-    install_lookup(pool).await?;
     insert_track(pool, "42", "Lose Yourself").await?;
     sqlx::query("UPDATE tracks SET storage_state = 'ok' WHERE sc_track_id = '42'")
         .execute(pool)
         .await?;
     sqlx::query(
-        "INSERT INTO storage_event_state (sc_track_id, uploaded_generation)
-         VALUES ('42', 1)",
+        "INSERT INTO storage_event_state (
+             sc_track_id, stream, stream_sequence, event_published_at, uploaded_generation
+         ) VALUES ('42', 'storage', 1, now(), 1)",
     )
     .execute(pool)
     .await?;
@@ -504,7 +415,7 @@ async fn sync_provenance(pool: &PgPool) -> anyhow::Result<(Option<String>, Optio
     .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -551,7 +462,7 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn an_external_sync_is_labelled_with_its_source(pool: PgPool) -> anyhow::Result<()> {
     lookup_through_proxy(&pool, LRCLIB_SYNCED).await?;
 
@@ -567,10 +478,8 @@ async fn an_external_sync_is_labelled_with_its_source(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Track").await?;
     let queue = JobRepository::new(pool.clone(), "lookup-test".to_owned());
 
@@ -596,21 +505,21 @@ async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     for id in ["41", "42", "43"] {
         insert_track(&pool, id, "Track").await?;
     }
     sqlx::query(
-        "UPDATE lyrics_lookup_state
+        "UPDATE lyrics_lookup_queue AS queue
          SET claim_job_id = gen_random_uuid(), claim_job_generation = 1,
-             claim_job_lease_id = gen_random_uuid(), claim_state_generation = generation,
+             claim_job_lease_id = gen_random_uuid(), claim_state_generation = state.generation,
              claim_expires_at = now() + interval '1 hour'
-         WHERE sc_track_id = '43'",
+         FROM lyrics_lookup_state AS state
+         WHERE state.track_id = queue.track_id
+           AND state.sc_track_id = '43'",
     )
     .execute(&pool)
     .await?;
@@ -634,12 +543,10 @@ async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "51", "Track").await?;
     let queue = JobRepository::new(pool.clone(), "lookup-test".to_owned());
     let cancellation = tokio_util::sync::CancellationToken::new();
@@ -754,12 +661,10 @@ async fn wake_from_an_api_node_reaches_core_through_the_apply_worker() -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldest_share(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     for id in ["45", "44", "43", "42", "41"] {
         insert_track(&pool, id, "Track").await?;
     }
@@ -774,6 +679,7 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
     .execute(&pool)
     .await?;
     let job = sweep_job(&pool).await?;
+    let versions = state_versions(&pool).await?;
 
     let claims = super::tiered::claim(
         &pool,
@@ -788,7 +694,27 @@ async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldes
 
     let claimed: Vec<String> = claims.into_iter().map(|claim| claim.sc_track_id).collect();
     assert_eq!(claimed, ["44", "42", "43", "41", "45"]);
+    assert_eq!(state_versions(&pool).await?, versions);
+    let held: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue WHERE claim_job_id = $1")
+            .bind(job.id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(held, 5);
+    let next = sqlx::query_file_scalar!("queries/lyrics/lookup_next_oldest.sql")
+        .fetch_optional(&pool)
+        .await?;
+    assert_eq!(next, None);
     Ok(())
+}
+
+async fn state_versions(pool: &PgPool) -> anyhow::Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT sc_track_id, ctid::text || ':' || xmin::text
+         FROM lyrics_lookup_state ORDER BY sc_track_id",
+    )
+    .fetch_all(pool)
+    .await?)
 }
 
 async fn sweep_job(pool: &PgPool) -> anyhow::Result<crate::queue::LeasedJob> {
@@ -816,12 +742,10 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<crate::queue::LeasedJob> {
         .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn wake_many_leaves_the_same_jobs_and_marks_as_one_wake_per_track(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     sqlx::raw_sql(
         "CREATE FUNCTION refuse_broken_wake() RETURNS trigger LANGUAGE plpgsql AS $$
          BEGIN
@@ -939,18 +863,27 @@ async fn claim_track(
     sqlx::query("UPDATE lyrics_lookup_state SET next_run_at = now() WHERE sc_track_id = '42'")
         .execute(pool)
         .await?;
-    sqlx::query_file_as!(
+    claim_now(pool, job, handler.config.claim_seconds)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("track was not claimed"))
+}
+
+async fn claim_now(
+    pool: &PgPool,
+    job: &LeasedJob,
+    claim_seconds: i64,
+) -> anyhow::Result<Option<super::LookupClaim>> {
+    Ok(sqlx::query_file_as!(
         super::LookupClaim,
         "queries/lyrics/lookup_claim_target.sql",
         job.id,
         job.generation,
         job.lease_id,
         "42",
-        handler.config.claim_seconds
+        claim_seconds
     )
     .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("track was not claimed"))
+    .await?)
 }
 
 fn candidate(source: &str, synced: Option<&str>, plain: &str) -> LyricsCandidate {
@@ -984,12 +917,15 @@ async fn settle(
 
 async fn recheck_state(pool: &PgPool) -> anyhow::Result<Option<(String, i32, bool, bool, bool)>> {
     Ok(sqlx::query_as(
-        "SELECT status,
-                failure_streak,
-                next_run_at BETWEEN now() + interval '23 hours' AND now() + interval '25 hours',
-                claim_job_id IS NULL,
-                wake_message_id IS NULL
-         FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+        "SELECT state.status,
+                state.failure_streak,
+                state.next_run_at BETWEEN now() + interval '23 hours' AND now() + interval '25 hours'
+                    AND queue.next_run_at = state.next_run_at,
+                queue.claim_job_id IS NULL,
+                state.wake_message_id IS NULL AND queue.wake_at IS NULL
+         FROM lyrics_lookup_state AS state
+         JOIN lyrics_lookup_queue AS queue ON queue.track_id = state.track_id
+         WHERE state.sc_track_id = '42'",
     )
     .fetch_optional(pool)
     .await?)
@@ -1003,12 +939,10 @@ async fn cached_text(pool: &PgPool) -> anyhow::Result<(Option<String>, Option<St
     .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn plain_text_found_while_lrclib_failed_keeps_the_lookup_for_a_day(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
     let job = lookup_job(&pool).await?;
@@ -1032,10 +966,8 @@ async fn plain_text_found_while_lrclib_failed_keeps_the_lookup_for_a_day(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
     let job = lookup_job(&pool).await?;
@@ -1054,12 +986,10 @@ async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn a_later_lookup_with_synced_text_fills_the_plain_only_row(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
     let job = lookup_job(&pool).await?;
@@ -1086,12 +1016,10 @@ async fn a_later_lookup_with_synced_text_fills_the_plain_only_row(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn the_recheck_stops_after_a_week_and_repeats_change_nothing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
     let job = lookup_job(&pool).await?;
@@ -1155,12 +1083,10 @@ LIMIT 5000
 ON CONFLICT (track_id) DO NOTHING;
 ";
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrations = "../api/migrations")]
 async fn the_outage_backfill_reschedules_only_plain_only_rows_without_a_state(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    install_base(&pool).await?;
-    install_lookup(&pool).await?;
     for id in ["1", "2", "3", "4", "5"] {
         insert_track(&pool, id, "Lose Yourself").await?;
     }
@@ -1209,5 +1135,553 @@ async fn the_outage_backfill_reschedules_only_plain_only_rows_without_a_state(
             ("3".to_owned(), "pending".to_owned(), 0, true),
         ]
     );
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq, sqlx::FromRow)]
+struct Queued {
+    claim_job_id: Option<uuid::Uuid>,
+    attempts: i64,
+    priority: i16,
+    due: bool,
+    wake_open: bool,
+}
+
+async fn queued(pool: &PgPool) -> anyhow::Result<Option<Queued>> {
+    Ok(sqlx::query_as(
+        "SELECT queue.claim_job_id,
+                queue.attempts,
+                queue.priority,
+                queue.next_run_at <= now() AS due,
+                queue.wake_at IS NOT NULL AS wake_open
+         FROM lyrics_lookup_queue AS queue
+         JOIN lyrics_lookup_state AS state ON state.track_id = queue.track_id
+         WHERE state.sc_track_id = '42'",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+async fn version(pool: &PgPool) -> anyhow::Result<Option<(String, i64, String, i32)>> {
+    Ok(sqlx::query_as(
+        "SELECT ctid::text || ':' || xmin::text, generation, status, failure_streak
+         FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+async fn writes(connection: &mut sqlx::PgConnection) -> anyhow::Result<(i64, i64)> {
+    Ok(sqlx::query_as(
+        "SELECT COALESCE(sum(n_tup_upd) FILTER (WHERE relname = 'lyrics_lookup_state'), 0)::bigint,
+                COALESCE(sum(n_tup_upd) FILTER (WHERE relname = 'lyrics_lookup_queue'), 0)::bigint
+         FROM pg_stat_xact_user_tables",
+    )
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+async fn since(
+    connection: &mut sqlx::PgConnection,
+    base: (i64, i64),
+) -> anyhow::Result<(i64, i64)> {
+    let now = writes(connection).await?;
+    Ok((now.0 - base.0, now.1 - base.1))
+}
+
+async fn settle_miss_in(
+    connection: &mut sqlx::PgConnection,
+    job: &LeasedJob,
+    claim: &super::LookupClaim,
+) -> anyhow::Result<Option<uuid::Uuid>> {
+    Ok(sqlx::query_file_scalar!(
+        "queries/lyrics/lookup_settle_miss.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        claim.track_id,
+        claim.generation,
+        0_i64,
+        "not_found"
+    )
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+async fn settle_retry_in(
+    connection: &mut sqlx::PgConnection,
+    job: &LeasedJob,
+    claim: &super::LookupClaim,
+) -> anyhow::Result<Option<uuid::Uuid>> {
+    Ok(sqlx::query_file_scalar!(
+        "queries/lyrics/lookup_settle_retry.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        claim.track_id,
+        claim.generation,
+        0_i64,
+        "transport",
+        "transport",
+        0_i64
+    )
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+async fn settle_found_in(
+    connection: &mut sqlx::PgConnection,
+    job: &LeasedJob,
+    claim: &super::LookupClaim,
+    synced: &str,
+    recheck: bool,
+) -> anyhow::Result<Option<bool>> {
+    Ok(sqlx::query_file!(
+        "queries/lyrics/lookup_settle_found.sql",
+        job.id,
+        job.generation,
+        job.lease_id,
+        claim.track_id,
+        claim.generation,
+        "genius",
+        synced,
+        PLAIN_BODY,
+        recheck,
+        super::RECHECK_MAX_STREAK
+    )
+    .fetch_optional(&mut *connection)
+    .await?
+    .map(|row| row.settled))
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_claim_writes_only_the_queue_and_each_settle_writes_the_state_once(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let job = lookup_job(&pool).await?;
+
+    for round in 0..3_i64 {
+        let before = version(&pool).await?;
+        let mut transaction = pool.begin().await?;
+        let base = writes(&mut transaction).await?;
+        let claim = sqlx::query_file_as!(
+            super::LookupClaim,
+            "queries/lyrics/lookup_claim_target.sql",
+            job.id,
+            job.generation,
+            job.lease_id,
+            "42",
+            900_i64
+        )
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("track was not claimed"))?;
+        assert_eq!(since(&mut transaction, base).await?, (0, 1));
+        transaction.commit().await?;
+        assert_eq!(version(&pool).await?, before);
+        assert_eq!(
+            queued(&pool)
+                .await?
+                .map(|row| (row.claim_job_id, row.attempts)),
+            Some((Some(job.id), round + 1))
+        );
+
+        let mut transaction = pool.begin().await?;
+        let base = writes(&mut transaction).await?;
+        let settled = match round {
+            0 => settle_miss_in(&mut transaction, &job, &claim)
+                .await?
+                .is_some(),
+            1 => settle_retry_in(&mut transaction, &job, &claim)
+                .await?
+                .is_some(),
+            _ => settle_found_in(&mut transaction, &job, &claim, "", true).await? == Some(true),
+        };
+        assert!(settled, "round {round} did not settle");
+        assert_eq!(since(&mut transaction, base).await?, (1, 1));
+        transaction.commit().await?;
+        let row = queued(&pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+        assert_eq!(row.claim_job_id, None);
+        assert!(!row.wake_open);
+        sqlx::query("UPDATE lyrics_lookup_state SET next_run_at = now() WHERE sc_track_id = '42'")
+            .execute(&pool)
+            .await?;
+    }
+    let status: (String, String) = sqlx::query_as(
+        "SELECT status, last_outcome FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(status, ("retry".to_owned(), "recheck".to_owned()));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_found_synced_result_deletes_the_state_and_the_queue_row_in_one_statement(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    let claim = claim_track(&pool, &handler, &job).await?;
+
+    let mut transaction = pool.begin().await?;
+    let base = writes(&mut transaction).await?;
+    let settled = settle_found_in(
+        &mut transaction,
+        &job,
+        &claim,
+        "[00:01.00] A synced line",
+        false,
+    )
+    .await?;
+    assert_eq!(settled, Some(true));
+    assert_eq!(since(&mut transaction, base).await?, (0, 0));
+    transaction.commit().await?;
+
+    assert_eq!(version(&pool).await?, None);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_stale_claim_is_released_without_a_state_write(pool: PgPool) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+
+    for kind in ["miss", "retry", "found"] {
+        let claim = claim_track(&pool, &handler, &job).await?;
+        sqlx::raw_sql(
+            "ALTER TABLE lyrics_lookup_state DISABLE TRIGGER lyrics_lookup_queue_sync;
+             UPDATE lyrics_lookup_state SET generation = generation + 1 WHERE sc_track_id = '42';
+             ALTER TABLE lyrics_lookup_state ENABLE ALWAYS TRIGGER lyrics_lookup_queue_sync;",
+        )
+        .execute(&pool)
+        .await?;
+        let before = version(&pool).await?;
+
+        let mut transaction = pool.begin().await?;
+        let base = writes(&mut transaction).await?;
+        let answered = match kind {
+            "miss" => settle_miss_in(&mut transaction, &job, &claim)
+                .await?
+                .is_some(),
+            "retry" => settle_retry_in(&mut transaction, &job, &claim)
+                .await?
+                .is_some(),
+            _ => settle_found_in(&mut transaction, &job, &claim, "[00:01.00] line", false)
+                .await?
+                .is_some(),
+        };
+        assert!(!answered, "a stale {kind} settle answered");
+        assert_eq!(since(&mut transaction, base).await?, (0, 1));
+        transaction.commit().await?;
+
+        assert_eq!(version(&pool).await?, before);
+        let row = queued(&pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+        assert_eq!((row.claim_job_id, row.due), (None, true));
+    }
+    let cached: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_cache")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(cached, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_input_change_during_a_claim_clears_it_and_fences_out_its_settle(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    let claim = claim_track(&pool, &handler, &job).await?;
+
+    sqlx::query("UPDATE tracks SET title = 'Lose Yourself (Live)' WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+    let row = queued(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+    assert_eq!(
+        (row.claim_job_id, row.due, row.wake_open),
+        (None, true, true)
+    );
+    let before = version(&pool).await?;
+
+    let mut connection = pool.acquire().await?;
+    let settled = settle_found_in(&mut connection, &job, &claim, "[00:01.00] line", false).await?;
+    assert_eq!(settled, None);
+    assert_eq!(version(&pool).await?, before);
+
+    let reclaimed = claim_now(&pool, &job, 900)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("track was not claimed again"))?;
+    assert_eq!(reclaimed.generation, claim.generation + 1);
+    assert_eq!(reclaimed.input_title, "Lose Yourself (Live)");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_wake_during_a_claim_reopens_the_lookup_and_fences_out_the_old_settle(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    let first = claim_track(&pool, &handler, &job).await?;
+    let mut connection = pool.acquire().await?;
+    assert!(
+        settle_miss_in(&mut connection, &job, &first)
+            .await?
+            .is_some()
+    );
+    let claim = claim_now(&pool, &job, 900)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("due miss was not claimed"))?;
+    let due: Vec<String> = sqlx::query_file_scalar!("queries/lyrics/lookup_due_wakes.sql", 10_i64)
+        .fetch_all(&pool)
+        .await?;
+    assert!(due.is_empty());
+
+    let answer: serde_json::Value = sqlx::query_scalar(
+        "SELECT public.scd_cmd_lyrics_wake(jsonb_build_object('sc_track_id', '42', 'at', now())) -> 'output'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(answer["status"], "pending");
+    assert!(answer.get("claim_job_id").is_none());
+    let row = queued(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+    assert_eq!(
+        (row.claim_job_id, row.priority, row.due, row.wake_open),
+        (None, 0, true, true)
+    );
+
+    assert!(
+        settle_retry_in(&mut connection, &job, &claim)
+            .await?
+            .is_none()
+    );
+    let state = version(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no state"))?;
+    assert_eq!(
+        (state.1, state.2.as_str()),
+        (claim.generation + 1, "pending")
+    );
+    let due: Vec<String> = sqlx::query_file_scalar!("queries/lyrics/lookup_due_wakes.sql", 10_i64)
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(due, ["42"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_expired_claim_is_released_on_the_queue_only(pool: PgPool) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let job = lookup_job(&pool).await?;
+    let claimed = claim_now(&pool, &job, 0).await?;
+    assert!(claimed.is_some());
+    let before = version(&pool).await?;
+
+    let released = sqlx::query_file!("queries/lyrics/lookup_release_expired.sql", 10_i64)
+        .execute(&pool)
+        .await?
+        .rows_affected();
+
+    assert_eq!(released, 1);
+    assert_eq!(version(&pool).await?, before);
+    let row = queued(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+    assert_eq!((row.claim_job_id, row.attempts, row.due), (None, 1, true));
+    assert!(claim_now(&pool, &job, 900).await?.is_some());
+    Ok(())
+}
+
+async fn observe_and_bump(pool: &PgPool, priority: i16) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE tracks
+         SET title = title, uploader_username = uploader_username, duration_ms = duration_ms
+         WHERE sc_track_id = '42'",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("UPDATE tracks SET index_priority = $1 WHERE sc_track_id = '42'")
+        .bind(priority)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_recheck_row_survives_an_observe_and_a_priority_bump_and_ends_with_synced_lyrics(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+    let rescheduled = version(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("recheck row is gone"))?;
+
+    sqlx::query(
+        "UPDATE tracks
+         SET title = title, uploader_username = uploader_username, duration_ms = duration_ms
+         WHERE sc_track_id = '42'",
+    )
+    .execute(&pool)
+    .await?;
+    assert_eq!(version(&pool).await?.as_ref(), Some(&rescheduled));
+
+    sqlx::query("UPDATE tracks SET index_priority = 1 WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+    let bumped = version(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("recheck row is gone"))?;
+    assert_eq!(
+        (bumped.1, bumped.2.as_str(), bumped.3),
+        (rescheduled.1, "retry", 1)
+    );
+    assert_eq!(
+        recheck_state(&pool).await?,
+        Some(("retry".to_owned(), 1, true, true, true))
+    );
+    let row = queued(&pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no queue row"))?;
+    assert_eq!((row.priority, row.due), (1, false));
+
+    sqlx::query("UPDATE tracks SET title = 'Lose Yourself (Live)' WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+    let renamed: (i64, String, i32, String, bool) = sqlx::query_as(
+        "SELECT generation, status, failure_streak, input_title, wake_message_id IS NULL
+         FROM lyrics_lookup_state WHERE sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        renamed,
+        (
+            rescheduled.1 + 1,
+            "retry".to_owned(),
+            1,
+            "Lose Yourself (Live)".to_owned(),
+            true
+        )
+    );
+
+    let synced = candidate("lrclib", Some("[00:01.00] A synced line"), "A synced line");
+    settle(&pool, &handler, &job, synced, false).await?;
+    assert_eq!(version(&pool).await?, None);
+    assert_eq!(
+        cached_text(&pool).await?.0.as_deref(),
+        Some("[00:01.00] A synced line")
+    );
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_recheck_row_survives_observes_and_ends_after_seven_tries(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+
+    for streak in 1..=super::RECHECK_MAX_STREAK {
+        settle(
+            &pool,
+            &handler,
+            &job,
+            candidate("genius", None, PLAIN_BODY),
+            true,
+        )
+        .await?;
+        observe_and_bump(&pool, i16::try_from(streak % 5)?).await?;
+        assert_eq!(
+            recheck_state(&pool).await?,
+            Some(("retry".to_owned(), streak, true, true, true)),
+            "recheck {streak} lost its row"
+        );
+    }
+
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+    assert_eq!(version(&pool).await?, None);
+    observe_and_bump(&pool, 0).await?;
+    sqlx::query("UPDATE tracks SET title = 'Lose Yourself (Live)' WHERE sc_track_id = '42'")
+        .execute(&pool)
+        .await?;
+    assert_eq!(version(&pool).await?, None);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn external_synced_lyrics_end_a_recheck_row_on_the_next_track_update(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("genius", None, PLAIN_BODY),
+        true,
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE lyrics_cache
+         SET synced_lrc = '[00:01.00] A synced line', synced_source = 'lrclib', source = 'lrclib'
+         WHERE sc_track_id = '42'",
+    )
+    .execute(&pool)
+    .await?;
+    assert!(version(&pool).await?.is_some());
+
+    observe_and_bump(&pool, 3).await?;
+
+    assert_eq!(version(&pool).await?, None);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
     Ok(())
 }

@@ -42,10 +42,12 @@ def main():
             print("ownership.yaml: " + p, file=sys.stderr)
         sys.exit(1)
     files = render(m)
-    install = gen_install.render(m)
     if args.check:
+        shipped = gen_install.latest(args.migrations)
+        install = gen_install.render(m, gen_install.previous(args.migrations, shipped))
         sys.exit(check(files, args.out) | check_install(install, args.migrations))
     if args.install:
+        install = gen_install.render(m, gen_install.previous(args.migrations, args.install))
         with open(args.install, "w", encoding="utf-8", newline="") as f:
             f.write(install)
     os.makedirs(args.out, exist_ok=True)

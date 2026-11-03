@@ -798,33 +798,48 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         "lyrics recovery schema is incomplete; apply migration 0075"
     );
     let lyrics_lookup_ready = sqlx::query_scalar::<_, bool>(
-        "SELECT (SELECT count(*) = 32
-                 FROM information_schema.columns
-                 WHERE table_schema = current_schema()
-                   AND table_name = 'lyrics_lookup_state')
+        "SELECT EXISTS (
+                 SELECT 1
+                 FROM _sqlx_migrations
+                 WHERE version = 283 AND success
+             )
+             AND (SELECT count(*) = 25
+                  FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'lyrics_lookup_state'
+                    AND column_name IN (
+                        'track_id', 'sc_track_id', 'status', 'generation',
+                        'algorithm_version', 'source_set_version', 'priority', 'next_run_at',
+                        'input_title', 'input_artist', 'input_duration_ms',
+                        'input_genius_song_id', 'input_genius_url', 'input_release_date',
+                        'input_sc_created_at', 'miss_streak', 'failure_streak',
+                        'last_outcome', 'last_error', 'retry_after_at', 'wake_message_id',
+                        'wake_generation', 'wake_durable_at', 'created_at', 'updated_at'
+                    ))
+             AND (SELECT count(*) = 12
+                  FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'lyrics_lookup_queue')
              AND (SELECT count(*) = 7
                   FROM information_schema.columns
                   WHERE table_schema = current_schema()
                     AND table_name = 'lyrics_lookup_backfill_state')
+             AND (SELECT count(*) = 4
+                  FROM pg_index
+                  WHERE indexrelid IN (
+                      to_regclass('lyrics_lookup_queue_due_priority_idx'),
+                      to_regclass('lyrics_lookup_queue_due_oldest_idx'),
+                      to_regclass('lyrics_lookup_queue_expired_claim_idx'),
+                      to_regclass('lyrics_lookup_queue_wake_idx')
+                  )
+                    AND indisvalid AND indisready)
              AND EXISTS (
-                 SELECT 1 FROM pg_index
-                 WHERE indexrelid = to_regclass('lyrics_lookup_due_priority_idx')
-                   AND indisvalid AND indisready
-             )
-             AND EXISTS (
-                 SELECT 1 FROM pg_index
-                 WHERE indexrelid = to_regclass('lyrics_lookup_due_oldest_idx')
-                   AND indisvalid AND indisready
-             )
-             AND EXISTS (
-                 SELECT 1 FROM pg_index
-                 WHERE indexrelid = to_regclass('lyrics_lookup_expired_claim_idx')
-                   AND indisvalid AND indisready
-             )
-             AND EXISTS (
-                 SELECT 1 FROM pg_index
-                 WHERE indexrelid = to_regclass('lyrics_lookup_wake_idx')
-                   AND indisvalid AND indisready
+                 SELECT 1
+                 FROM pg_trigger
+                 WHERE tgrelid = to_regclass('lyrics_lookup_state')
+                   AND tgname = 'lyrics_lookup_queue_sync'
+                   AND tgenabled = 'A'
+                   AND NOT tgisinternal
              )
              AND EXISTS (
                  SELECT 1
@@ -839,7 +854,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
     .context("lyrics lookup schema validation failed")?;
     ensure!(
         lyrics_lookup_ready,
-        "lyrics lookup schema is incomplete; apply migration 0082"
+        "lyrics lookup schema is incomplete; apply migrations through 0283"
     );
 
     let ops_columns_ready = sqlx::query_scalar::<_, bool>(

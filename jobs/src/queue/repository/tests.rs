@@ -499,6 +499,53 @@ async fn newer_generation_cancels_current_lease_before_release(pool: PgPool) -> 
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_job_enqueued_again_during_its_lease_waits_for_the_new_time_after_the_supersede(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let repository = JobRepository::new(pool.clone(), "continuation-test".to_owned());
+    let kinds = [JobKind::DiscoverAggregates];
+    let at = |minutes: i64| {
+        new_job(
+            JobKind::DiscoverAggregates,
+            Some("summary"),
+            1,
+            3,
+            Utc::now() + ChronoDuration::minutes(minutes),
+        )
+    };
+    repository.enqueue(&at(-5)).await?;
+    let leased = repository
+        .claim(&kinds, ClaimOrder::Priority, 1, Duration::from_secs(30))
+        .await?
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("expected one claimed job"))?;
+
+    for minutes in [10, 2, 60] {
+        repository.enqueue(&at(minutes)).await?;
+    }
+    let completion = repository.complete(&leased).await?;
+
+    assert_eq!(completion, Completion::Superseded);
+    assert!(
+        repository
+            .claim(&kinds, ClaimOrder::Priority, 1, Duration::from_secs(30))
+            .await?
+            .is_empty()
+    );
+    let window: (bool, bool) = sqlx::query_as(
+        "SELECT available_at > now() + interval '1 minute',
+                available_at < now() + interval '3 minutes'
+         FROM background_jobs WHERE id = $1",
+    )
+    .bind(leased.id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(window, (true, true));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn existing_failure_is_updated_without_losing_live_job_transition(
     pool: PgPool,
 ) -> anyhow::Result<()> {

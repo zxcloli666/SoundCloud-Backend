@@ -1,6 +1,7 @@
 WITH owned_state AS MATERIALIZED (
     SELECT state.track_id,
            state.sc_track_id,
+           state.generation = $5 AS current,
            ($9::boolean AND state.failure_streak < $10::integer) AS recheck
     FROM tracks AS track
     JOIN lyrics_lookup_state AS state ON state.track_id = track.id
@@ -11,13 +12,21 @@ WITH owned_state AS MATERIALIZED (
      AND job.lease_id = $3
      AND job.lease_expires_at > now()
     WHERE state.track_id = $4
-      AND state.generation = $5
-      AND state.claim_job_id = $1
-      AND state.claim_job_generation = $2
-      AND state.claim_job_lease_id = $3
-      AND state.claim_state_generation = $5
-      AND state.claim_expires_at > now()
     FOR UPDATE OF track, state
+), claim AS MATERIALIZED (
+    SELECT owned_state.track_id,
+           owned_state.sc_track_id,
+           owned_state.current,
+           owned_state.recheck
+    FROM owned_state
+    JOIN lyrics_lookup_queue AS queue
+      ON queue.track_id = owned_state.track_id
+    WHERE queue.claim_job_id = $1
+      AND queue.claim_job_generation = $2
+      AND queue.claim_job_lease_id = $3
+      AND queue.claim_state_generation = $5
+      AND queue.claim_expires_at > now()
+    FOR UPDATE OF queue
 ), upserted AS (
     INSERT INTO lyrics_cache (
         sc_track_id,
@@ -34,8 +43,8 @@ WITH owned_state AS MATERIALIZED (
         content_generation,
         updated_at
     )
-    SELECT owned_state.sc_track_id,
-           owned_state.track_id,
+    SELECT claim.sc_track_id,
+           claim.track_id,
            NULLIF($7::text, ''),
            NULLIF($8::text, ''),
            $6::varchar(16),
@@ -47,9 +56,9 @@ WITH owned_state AS MATERIALIZED (
            NULL,
            1,
            now()
-    FROM owned_state
-    WHERE NULLIF($7::text, '') IS NOT NULL
-       OR NULLIF($8::text, '') IS NOT NULL
+    FROM claim
+    WHERE claim.current
+      AND (NULLIF($7::text, '') IS NOT NULL OR NULLIF($8::text, '') IS NOT NULL)
     ON CONFLICT (sc_track_id) DO UPDATE
     SET track_id = EXCLUDED.track_id,
         synced_lrc = COALESCE(lyrics_cache.synced_lrc, EXCLUDED.synced_lrc),
@@ -104,27 +113,40 @@ WITH owned_state AS MATERIALIZED (
         wake_message_id = NULL,
         wake_generation = NULL,
         wake_durable_at = NULL,
+        updated_at = now()
+    FROM claim
+    WHERE state.track_id = claim.track_id
+      AND claim.current
+      AND claim.recheck
+    RETURNING state.track_id, state.priority, state.next_run_at
+), removed AS (
+    DELETE FROM lyrics_lookup_state AS state
+    USING claim
+    WHERE state.track_id = claim.track_id
+      AND claim.current
+      AND NOT claim.recheck
+    RETURNING state.track_id
+), released AS (
+    UPDATE lyrics_lookup_queue AS queue
+    SET priority = COALESCE(rescheduled.priority, queue.priority),
+        next_run_at = COALESCE(rescheduled.next_run_at, queue.next_run_at),
+        wake_at = CASE WHEN rescheduled.track_id IS NULL THEN queue.wake_at END,
         claim_job_id = NULL,
         claim_job_generation = NULL,
         claim_job_lease_id = NULL,
         claim_state_generation = NULL,
-        claim_expires_at = NULL,
-        updated_at = now()
-    FROM owned_state
-    WHERE state.track_id = owned_state.track_id
-      AND owned_state.recheck
-    RETURNING state.track_id
-), removed AS (
-    DELETE FROM lyrics_lookup_state AS state
-    USING owned_state
-    WHERE state.track_id = owned_state.track_id
-      AND NOT owned_state.recheck
-    RETURNING state.track_id
+        claim_expires_at = NULL
+    FROM claim
+    LEFT JOIN rescheduled ON rescheduled.track_id = claim.track_id
+    WHERE queue.track_id = claim.track_id
+      AND (rescheduled.track_id IS NOT NULL OR NOT claim.current)
+    RETURNING queue.track_id
 )
-SELECT owned_state.sc_track_id AS "sc_track_id!",
+SELECT claim.sc_track_id AS "sc_track_id!",
        upserted.synced_lrc,
        upserted.plain_text,
        upserted.source,
        (EXISTS (SELECT 1 FROM removed) OR EXISTS (SELECT 1 FROM rescheduled)) AS "settled!"
-FROM owned_state
+FROM claim
          LEFT JOIN upserted ON true
+WHERE claim.current

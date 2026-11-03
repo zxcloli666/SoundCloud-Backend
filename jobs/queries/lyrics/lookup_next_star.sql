@@ -6,11 +6,13 @@ WITH star AS MATERIALIZED (
     ORDER BY tiered.tiered_at, tiered.sc_track_id
     LIMIT $2
 )
-SELECT greatest(state.next_run_at, star.tiered_at) AS "waiting_since!"
+SELECT greatest(queue.next_run_at, star.tiered_at) AS "waiting_since!"
 FROM star
 JOIN lyrics_lookup_state AS state
   ON state.sc_track_id = star.sc_track_id
-WHERE state.next_run_at <= now()
-  AND state.claim_job_id IS NULL
+JOIN lyrics_lookup_queue AS queue
+  ON queue.track_id = state.track_id
+WHERE queue.next_run_at <= now()
+  AND queue.claim_job_id IS NULL
 ORDER BY star.tiered_at, star.sc_track_id
 LIMIT 1

@@ -53,7 +53,6 @@ pub struct LyricsWakeState {
     pub status: String,
     pub next_run_at: DateTime<Utc>,
     pub failure_streak: i32,
-    pub claim_job_id: Option<Uuid>,
 }
 
 impl Kind for LyricsWake {
