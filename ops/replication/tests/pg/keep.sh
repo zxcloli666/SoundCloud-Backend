@@ -32,7 +32,7 @@ keep_first() { awk -F"'" -v replica="$1" 'index($0, "SELECT public.scd_keep_trig
 plain="$(keep_first false)"
 replica="$(keep_first true)"
 sql -d scd_b1_keep -c "DROP TRIGGER ${plain#* } ON ${plain% *}" -c "ALTER TABLE ${replica% *} ENABLE TRIGGER ${replica#* }" > /dev/null
-want "${plain#* } is gone and ${replica#* } fires on every write" "$(only keep "SELECT count(*) FILTER (WHERE tgname = '${plain#* }') || ' ' || string_agg(tgenabled::text, '') FILTER (WHERE tgname = '${replica#* }') FROM pg_catalog.pg_trigger WHERE tgrelid IN ('${plain% *}'::regclass, '${replica% *}'::regclass)")" "0 O"
+want "${plain#* } is gone and ${replica#* } fires on every write" "$(only keep "SELECT count(*) FILTER (WHERE tgrelid = '${plain% *}'::regclass AND tgname = '${plain#* }') || ' ' || string_agg(tgenabled::text, '') FILTER (WHERE tgrelid = '${replica% *}'::regclass AND tgname = '${replica#* }') FROM pg_catalog.pg_trigger WHERE tgrelid IN ('${plain% *}'::regclass, '${replica% *}'::regclass)")" "0 O"
 sql -d scd_b1_keep -c "SET client_min_messages = warning" -f - < "$keep_install" > /dev/null
 want "the re-run brings both back as the install made them" "$(keep_triggers)" "$before"
 sql -d postgres -c "DROP DATABASE scd_b1_keep WITH (FORCE)" > /dev/null
