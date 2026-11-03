@@ -274,11 +274,11 @@ pub fn record_taste_vector_read_error() {
     metrics::counter!(TASTE_VECTOR_READ_ERRORS).increment(1);
 }
 
-pub fn set_relay_breaker_open(open: bool) {
+pub fn set_relay_breaker_open(channel: &'static str, open: bool) {
     if HANDLE.get().is_none() {
         return;
     }
-    metrics::gauge!(SC_RELAY_BREAKER_OPEN).set(f64::from(u8::from(open)));
+    metrics::gauge!(SC_RELAY_BREAKER_OPEN, "channel" => channel).set(f64::from(u8::from(open)));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

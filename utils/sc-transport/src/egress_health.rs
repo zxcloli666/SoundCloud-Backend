@@ -91,6 +91,10 @@ impl EgressHealth {
         self.settle(self.local.record_ban()).await
     }
 
+    pub async fn record_stall(&self) -> bool {
+        self.settle(self.local.record_stall()).await
+    }
+
     pub async fn record_answer(&self, answered: bool) -> bool {
         if answered {
             self.record_ok().await
