@@ -895,7 +895,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.exp_date, t.row_v, t.user_urn)::text) FROM public.subscriptions t WHERE t.user_urn = (k ->> 'user_urn')::text
+SELECT md5(ROW(t.exp_date, t.row_v, t.star_since, t.user_urn)::text) FROM public.subscriptions t WHERE t.user_urn = (k ->> 'user_urn')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_sync_queue(k jsonb)

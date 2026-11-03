@@ -9,6 +9,13 @@ use crate::error::AppResult;
 pub struct Subscription {
     pub user_urn: String,
     pub exp_date: i64,
+    pub star_since: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PremiumStatus {
+    pub premium: bool,
+    pub star_since: Option<i64>,
 }
 
 pub struct SubscriptionsService {
@@ -27,11 +34,30 @@ impl SubscriptionsService {
         }
         let now = chrono::Utc::now().timestamp();
         let variants = crate::common::sc_ids::user_id_variants(user_urn);
+        let row = sqlx::query_file!("queries/subscriptions/service/get_exp_date.sql", &variants)
+            .fetch_optional(&self.pg)
+            .await?;
+        Ok(row.is_some_and(|r| r.exp_date > now))
+    }
+
+    pub async fn status(&self, user_urn: &str) -> AppResult<PremiumStatus> {
+        if self.always_premium {
+            return Ok(PremiumStatus {
+                premium: true,
+                star_since: None,
+            });
+        }
+        let now = chrono::Utc::now().timestamp();
+        let variants = crate::common::sc_ids::user_id_variants(user_urn);
         let row =
-            sqlx::query_file_scalar!("queries/subscriptions/service/get_exp_date.sql", &variants)
+            sqlx::query_file!("queries/subscriptions/service/get_exp_date.sql", &variants)
                 .fetch_optional(&self.pg)
                 .await?;
-        Ok(row.is_some_and(|exp| exp > now))
+        let premium = row.as_ref().is_some_and(|r| r.exp_date > now);
+        Ok(PremiumStatus {
+            premium,
+            star_since: row.and_then(|r| r.star_since).filter(|_| premium),
+        })
     }
 
     pub async fn list(&self) -> AppResult<Vec<Subscription>> {
@@ -43,15 +69,22 @@ impl SubscriptionsService {
             .map(|r| Subscription {
                 user_urn: r.user_urn,
                 exp_date: r.exp_date,
+                star_since: r.star_since,
             })
             .collect())
     }
 
-    pub async fn upsert(&self, user_urn: &str, exp_date: i64) -> AppResult<()> {
+    pub async fn upsert(
+        &self,
+        user_urn: &str,
+        exp_date: i64,
+        star_since: Option<i64>,
+    ) -> AppResult<()> {
         sqlx::query_file!(
             "queries/subscriptions/service/upsert.sql",
             crate::common::sc_ids::extract_sc_id(user_urn),
-            exp_date
+            exp_date,
+            star_since
         )
         .execute(&self.pg)
         .await?;

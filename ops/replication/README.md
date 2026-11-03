@@ -98,6 +98,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 31. `0272_scd_install`: the generated SQL again: the new kind in the registry.
 32. `0277_lyrics_lookup_queue`: the core-private `lyrics_lookup_queue` (one row per `lyrics_lookup_state` row, FK with ON DELETE CASCADE) and lyrics_lookup_queue_sync (below); the admin kind `lyrics_lookup_queue` fills rows that existed before the trigger.
 33. `0278_scd_install`: the generated SQL again: the queue is class P, its rows go when the state row is purged.
+34. `0279_subscriptions_star_since`: `subscriptions.star_since`, the start of the user's unbroken STAR coverage, written by pay through the admin upsert.
+35. `0280_scd_install`: the generated SQL again: the column is in the row group and in every publication list of the table.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

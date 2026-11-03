@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use crate::background_jobs::queue;
 use crate::error::AppResult;
 use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
+use crate::modules::subscriptions::service::PremiumStatus;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::sync_queue::mirror::FOLLOWINGS as FOLLOWINGS_MIRROR;
 pub struct MeService {
@@ -110,6 +111,6 @@ fn owned_tracks_job(subject_id: String) -> AppResult<wt::EnqueuedJob> {
     queue::job(JobKind::CatalogCollection, payload.dedup_key(), payload, 5)
 }
 
-pub fn premium_response(premium: bool) -> Value {
-    json!({ "premium": premium })
+pub fn premium_response(status: PremiumStatus) -> Value {
+    json!({ "premium": status.premium, "starSince": status.star_since })
 }

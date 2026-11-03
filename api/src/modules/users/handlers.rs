@@ -197,8 +197,8 @@ async fn get_subscription(
             cache_key: None,
         },
         || async {
-            let premium = st.subscriptions.is_premium(&user_urn).await?;
-            Ok(premium_response(premium))
+            let status = st.subscriptions.status(&user_urn).await?;
+            Ok(premium_response(status))
         },
     )
     .await

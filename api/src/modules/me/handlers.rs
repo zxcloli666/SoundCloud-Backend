@@ -96,8 +96,8 @@ fn retry_target(body: &[u8]) -> AppResult<Option<String>> {
 }
 
 async fn get_subscription(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
-    let premium = st.subscriptions.is_premium(&ctx.sc_user_id).await?;
-    Ok(Json(premium_response(premium)))
+    let status = st.subscriptions.status(&ctx.sc_user_id).await?;
+    Ok(Json(premium_response(status)))
 }
 
 async fn get_liked_tracks(
