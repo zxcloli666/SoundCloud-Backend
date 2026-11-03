@@ -90,6 +90,10 @@ fn config(redis: &str) -> AppConfig {
             room_list: limit,
             room_create: limit,
             room_join: limit,
+            voice_link_code: limit,
+            voice_code_try: limit,
+            voice_utterance: limit,
+            voice_resolve: limit,
             diag_bundle: limit,
             diag_events: limit,
             diag_bytes: AdmissionLimitCfg {
@@ -110,6 +114,20 @@ fn config(redis: &str) -> AppConfig {
         storage: StorageCfg { url: String::new() },
         subscriptions: SubscriptionsCfg {
             always_premium: true,
+        },
+        voice: crate::config::VoiceCfg {
+            assistant_name: "Лоля".to_owned(),
+            skill_name: "Лоля".to_owned(),
+            alice_skill_id: "skill-1".to_owned(),
+            salut_token: "salut-token".to_owned().into(),
+            alice_wait: Duration::from_millis(800),
+            salut_wait: Duration::from_millis(800),
+            oauth_clients: vec![crate::config::OAuthClient {
+                id: "yandex".to_owned(),
+                provider: backend_contracts::remote::LinkProvider::Alice,
+                secret_sha256: <sha2::Sha256 as sha2::Digest>::digest(b"s3cret").to_vec(),
+                redirect_uris: vec!["https://social.yandex.net/broker/redirect".to_owned()],
+            }],
         },
         soundwave: SoundwaveCfg {
             popularity_boost: 0.0,
@@ -293,6 +311,12 @@ pub(super) async fn state(
         recommendations,
         sync_queue,
         rooms,
+        remote: crate::modules::remote::RemoteHub::new(
+            None,
+            redis_pool.clone(),
+            &format!("remote-test-{}", Uuid::now_v7()),
+        ),
+        links: crate::modules::remote::LinksService::new(pg.clone()),
         pg,
     })
 }

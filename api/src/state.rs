@@ -69,4 +69,6 @@ pub struct AppState {
     pub discover: Arc<DiscoverService>,
     pub sync_queue: Arc<SyncQueueService>,
     pub rooms: Arc<RoomsService>,
+    pub remote: Arc<crate::modules::remote::RemoteHub>,
+    pub links: Arc<crate::modules::remote::LinksService>,
 }

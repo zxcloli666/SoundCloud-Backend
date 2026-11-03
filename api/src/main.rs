@@ -289,6 +289,11 @@ async fn main() {
     let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
+    let remote =
+        crate::modules::remote::RemoteHub::new(Some(nats.clone()), redis_pool.clone(), "remote");
+    remote.start().await;
+    let links = crate::modules::remote::LinksService::new(pg.clone());
+
     let port = config.port;
     let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
     let state = AppState {
@@ -327,6 +332,8 @@ async fn main() {
         discover,
         sync_queue: sync_queue.clone(),
         rooms,
+        remote,
+        links,
     };
 
     let app = router::build(state);

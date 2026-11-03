@@ -231,6 +231,12 @@ tables:
     groups: {row: {version: row_v, cols: rest}}
     local: [last_used_at]
     note: "last_used_at is per-node LRU state; seed moves to a migration; delete is core (B5c), so core can refuse a delete that would orphan connections and re-send the row"
+  remote_grants:
+    class: A
+    delete: tombstone
+    unique: {remote_grants_code_uq: random, remote_grants_access_uq: random, remote_grants_refresh_uq: random}
+    groups: {row: {version: row_v, cols: rest}}
+  remote_link_codes: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   repl_tombstones:
     class: A
     delete: core

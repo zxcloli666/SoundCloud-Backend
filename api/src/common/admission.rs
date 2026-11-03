@@ -82,6 +82,10 @@ pub enum Endpoint {
     RoomList,
     RoomCreate,
     RoomJoin,
+    VoiceLinkCode,
+    VoiceCodeTry,
+    VoiceUtterance,
+    VoiceResolve,
     DiagBundle,
     DiagEvents,
     DiagBytes,
@@ -145,6 +149,30 @@ impl PublicAdmission {
             }),
             Decision::Unavailable => Err(AdmissionRejection::Unavailable),
         }
+    }
+
+    pub async fn check_key(
+        &self,
+        endpoint: Endpoint,
+        identity: &str,
+    ) -> Result<(), AdmissionRejection> {
+        match self.check(endpoint, key_identity(identity), 1).await {
+            Decision::Allowed => Ok(()),
+            Decision::Limited {
+                retry_after_seconds,
+            } => Err(AdmissionRejection::Limited {
+                retry_after_seconds,
+            }),
+            Decision::Unavailable => Err(AdmissionRejection::Unavailable),
+        }
+    }
+
+    pub fn client_key(&self, address: SocketAddr, headers: &HeaderMap) -> String {
+        client_identity(client_address(
+            address.ip(),
+            headers,
+            &self.config.trusted_proxies,
+        ))
     }
 
     async fn check(&self, endpoint: Endpoint, identity: String, cost: u32) -> Decision {
@@ -259,6 +287,8 @@ impl PublicAdmission {
             Endpoint::Login
             | Endpoint::LinkCreate
             | Endpoint::Resolve
+            | Endpoint::VoiceCodeTry
+            | Endpoint::VoiceUtterance
             | Endpoint::DiagBundle
             | Endpoint::DiagEvents
             | Endpoint::DiagBytes => &self.in_flight,
@@ -266,7 +296,9 @@ impl PublicAdmission {
             | Endpoint::CatalogMiss
             | Endpoint::RoomList
             | Endpoint::RoomCreate
-            | Endpoint::RoomJoin => &self.session_in_flight,
+            | Endpoint::RoomJoin
+            | Endpoint::VoiceLinkCode
+            | Endpoint::VoiceResolve => &self.session_in_flight,
         }
     }
 
@@ -287,6 +319,10 @@ impl PublicAdmission {
             Endpoint::RoomList => self.config.room_list,
             Endpoint::RoomCreate => self.config.room_create,
             Endpoint::RoomJoin => self.config.room_join,
+            Endpoint::VoiceLinkCode => self.config.voice_link_code,
+            Endpoint::VoiceCodeTry => self.config.voice_code_try,
+            Endpoint::VoiceUtterance => self.config.voice_utterance,
+            Endpoint::VoiceResolve => self.config.voice_resolve,
             Endpoint::DiagBundle => self.config.diag_bundle,
             Endpoint::DiagEvents => self.config.diag_events,
             Endpoint::DiagBytes => self.config.diag_bytes,
@@ -328,6 +364,10 @@ impl Endpoint {
             Self::RoomList => "rooms-list",
             Self::RoomCreate => "rooms-create",
             Self::RoomJoin => "rooms-join",
+            Self::VoiceLinkCode => "voice-link-code",
+            Self::VoiceCodeTry => "voice-code-try",
+            Self::VoiceUtterance => "voice-utterance",
+            Self::VoiceResolve => "voice-resolve",
             Self::DiagBundle => "diag-bundle",
             Self::DiagEvents => "diag-events",
             Self::DiagBytes => "diag-bytes",
@@ -344,6 +384,10 @@ impl Endpoint {
             Self::RoomList => "/rooms/public",
             Self::RoomCreate => "/rooms",
             Self::RoomJoin => "/rooms/{code}/members",
+            Self::VoiceLinkCode => "/remote/link-code",
+            Self::VoiceCodeTry => "voice link code",
+            Self::VoiceUtterance => "voice skill",
+            Self::VoiceResolve => "/search/resolve",
             Self::DiagBundle => "/diag/bundles",
             Self::DiagEvents => "/diag/events",
             Self::DiagBytes => "/diag/*",
@@ -532,6 +576,10 @@ fn client_identity(address: IpAddr) -> String {
         }
     }
     hex::encode(hash.finalize())
+}
+
+fn key_identity(key: &str) -> String {
+    hex::encode(Sha256::digest(key.as_bytes()))
 }
 
 fn session_identity(session: Uuid) -> String {

@@ -3,6 +3,10 @@ use std::time::Duration;
 use stream_ticket::StreamTicketKey;
 use url::Url;
 
+mod voice;
+
+pub use voice::{OAuthClient, VoiceCfg};
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub port: u16,
@@ -18,6 +22,7 @@ pub struct AppConfig {
     pub qdrant: QdrantCfg,
     pub storage: StorageCfg,
     pub subscriptions: SubscriptionsCfg,
+    pub voice: VoiceCfg,
     pub soundwave: SoundwaveCfg,
     pub collab_trigger: CollabTriggerCfg,
     pub cold: ColdCfg,
@@ -142,6 +147,10 @@ pub struct AdmissionCfg {
     pub room_list: AdmissionLimitCfg,
     pub room_create: AdmissionLimitCfg,
     pub room_join: AdmissionLimitCfg,
+    pub voice_link_code: AdmissionLimitCfg,
+    pub voice_code_try: AdmissionLimitCfg,
+    pub voice_utterance: AdmissionLimitCfg,
+    pub voice_resolve: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
     pub diag_events: AdmissionLimitCfg,
     pub diag_bytes: AdmissionLimitCfg,
@@ -179,6 +188,10 @@ impl AdmissionCfg {
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
+        let voice_link_code = admission_limit("VOICE_LINK_CODE", 10, 600);
+        let voice_code_try = admission_limit("VOICE_CODE_TRY", 10, 200);
+        let voice_utterance = admission_limit("VOICE_UTTERANCE", 30, 6000);
+        let voice_resolve = admission_limit("VOICE_RESOLVE", 120, 6000);
         let diag_bundle = admission_limit("DIAG_BUNDLE", 10, 20000);
         let diag_events = admission_limit("DIAG_EVENTS", 120, 60000);
         let diag_bytes = admission_limit("DIAG_BYTES", 2 * 1024 * 1024, 200 * 1024 * 1024);
@@ -201,6 +214,10 @@ impl AdmissionCfg {
             room_list,
             room_create,
             room_join,
+            voice_link_code,
+            voice_code_try,
+            voice_utterance,
+            voice_resolve,
             diag_bundle,
             diag_events,
             diag_bytes,
@@ -410,6 +427,8 @@ impl AppConfig {
             subscriptions: SubscriptionsCfg {
                 always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false") == "true",
             },
+
+            voice: VoiceCfg::from_env(),
 
             soundwave: SoundwaveCfg {
                 popularity_boost: env_f64("SOUNDWAVE_POPULARITY_BOOST", 0.0),
