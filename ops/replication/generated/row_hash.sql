@@ -463,7 +463,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.claim_token, t.created_at, t.error, t.expires_at, t.id, t.mode, t.row_v, t.source_session_id, t.status, t.target_session_id)::text) FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.bind_v, t.chat_bind, t.claim_token, t.created_at, t.error, t.expires_at, t.id, t.mode, t.row_v, t.source_session_id, t.status, t.target_session_id)::text) FROM public.link_requests t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_listening_history(k jsonb)
@@ -487,7 +487,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.code_verifier, t.created_at, t.error, t.expires_at, t.id, t.oauth_app_id, t.profile_ok, t.redirect_url, t.result_session_id, t.retry_count, t.row_v, t.state, t.status, t.step, t.target_session_id, t.username)::text) FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.chat_bind, t.code_verifier, t.created_at, t.error, t.expires_at, t.id, t.oauth_app_id, t.profile_ok, t.redirect_url, t.result_session_id, t.retry_count, t.row_v, t.state, t.status, t.step, t.target_session_id, t.username)::text) FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_lyrics_cache(k jsonb)
@@ -823,7 +823,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.created_at, t.id, t.row_v, t.soundcloud_connection_id, t.updated_at)::text) FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.bind_v, t.chat_bind, t.created_at, t.id, t.row_v, t.soundcloud_connection_id, t.updated_at)::text) FROM public.sessions t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_soundcloud_connections(k jsonb)

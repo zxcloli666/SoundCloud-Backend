@@ -2260,6 +2260,10 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF NEW.bind_v < OLD.bind_v OR (core AND NEW.bind_v = OLD.bind_v) THEN
+            NEW.chat_bind := OLD.chat_bind;
+            NEW.bind_v := OLD.bind_v;
+        END IF;
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.claim_token := OLD.claim_token;
             NEW.created_at := OLD.created_at;
@@ -2276,9 +2280,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.link_requests t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+            IF NEW.bind_v > o.bind_v OR NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.link_requests t SET
+                    chat_bind = CASE WHEN NEW.bind_v > o.bind_v THEN NEW.chat_bind ELSE o.chat_bind END,
+                    bind_v = greatest(o.bind_v, NEW.bind_v),
                     claim_token = CASE WHEN NEW.row_v > o.row_v THEN NEW.claim_token ELSE o.claim_token END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
@@ -2302,8 +2308,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.link_requests (claim_token, created_at, error, expires_at, id, mode, row_v, source_session_id, status, target_session_id)
-        VALUES (NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.mode, NEW.row_v, NEW.source_session_id, NEW.status, NEW.target_session_id)
+        INSERT INTO public.link_requests (bind_v, chat_bind, claim_token, created_at, error, expires_at, id, mode, row_v, source_session_id, status, target_session_id)
+        VALUES (NEW.bind_v, NEW.chat_bind, NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.mode, NEW.row_v, NEW.source_session_id, NEW.status, NEW.target_session_id)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -2362,8 +2368,14 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        NEW.bind_v := public.scd_hlc(NEW.bind_v);
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
+    END IF;
+    IF NEW.chat_bind IS DISTINCT FROM OLD.chat_bind THEN
+        NEW.bind_v := public.scd_hlc(greatest(OLD.bind_v, NEW.bind_v));
+    ELSE
+        NEW.bind_v := greatest(OLD.bind_v, NEW.bind_v);
     END IF;
     IF (NEW.claim_token, NEW.created_at, NEW.error, NEW.expires_at, NEW.mode, NEW.source_session_id, NEW.status, NEW.target_session_id) IS DISTINCT FROM (OLD.claim_token, OLD.created_at, OLD.error, OLD.expires_at, OLD.mode, OLD.source_session_id, OLD.status, OLD.target_session_id) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
@@ -2464,6 +2476,7 @@ BEGIN
     END IF;
     IF TG_OP = 'UPDATE' THEN
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.chat_bind := OLD.chat_bind;
             NEW.code_verifier := OLD.code_verifier;
             NEW.created_at := OLD.created_at;
             NEW.error := OLD.error;
@@ -2488,6 +2501,7 @@ BEGIN
             IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.login_requests t SET
+                    chat_bind = CASE WHEN NEW.row_v > o.row_v THEN NEW.chat_bind ELSE o.chat_bind END,
                     code_verifier = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_verifier ELSE o.code_verifier END,
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     error = CASE WHEN NEW.row_v > o.row_v THEN NEW.error ELSE o.error END,
@@ -2517,8 +2531,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.login_requests (code_verifier, created_at, error, expires_at, id, oauth_app_id, profile_ok, redirect_url, result_session_id, retry_count, row_v, state, status, step, target_session_id, username)
-        VALUES (NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.row_v, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username)
+        INSERT INTO public.login_requests (chat_bind, code_verifier, created_at, error, expires_at, id, oauth_app_id, profile_ok, redirect_url, result_session_id, retry_count, row_v, state, status, step, target_session_id, username)
+        VALUES (NEW.chat_bind, NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.id, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.row_v, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -2580,7 +2594,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
     END IF;
-    IF (NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username) IS DISTINCT FROM (OLD.code_verifier, OLD.created_at, OLD.error, OLD.expires_at, OLD.oauth_app_id, OLD.profile_ok, OLD.redirect_url, OLD.result_session_id, OLD.retry_count, OLD.state, OLD.status, OLD.step, OLD.target_session_id, OLD.username) THEN
+    IF (NEW.chat_bind, NEW.code_verifier, NEW.created_at, NEW.error, NEW.expires_at, NEW.oauth_app_id, NEW.profile_ok, NEW.redirect_url, NEW.result_session_id, NEW.retry_count, NEW.state, NEW.status, NEW.step, NEW.target_session_id, NEW.username) IS DISTINCT FROM (OLD.chat_bind, OLD.code_verifier, OLD.created_at, OLD.error, OLD.expires_at, OLD.oauth_app_id, OLD.profile_ok, OLD.redirect_url, OLD.result_session_id, OLD.retry_count, OLD.state, OLD.status, OLD.step, OLD.target_session_id, OLD.username) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);
@@ -4164,6 +4178,10 @@ BEGIN
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE' THEN
+        IF NEW.bind_v < OLD.bind_v OR (core AND NEW.bind_v = OLD.bind_v) THEN
+            NEW.chat_bind := OLD.chat_bind;
+            NEW.bind_v := OLD.bind_v;
+        END IF;
         IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
             NEW.created_at := OLD.created_at;
             NEW.soundcloud_connection_id := OLD.soundcloud_connection_id;
@@ -4175,9 +4193,11 @@ BEGIN
     FOR attempt IN 1..3 LOOP
         SELECT t.* INTO o FROM public.sessions t WHERE t.id = NEW.id;
         IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+            IF NEW.bind_v > o.bind_v OR NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
                 PERFORM pg_catalog.set_config('scd.merging', 'on', true);
                 UPDATE public.sessions t SET
+                    chat_bind = CASE WHEN NEW.bind_v > o.bind_v THEN NEW.chat_bind ELSE o.chat_bind END,
+                    bind_v = greatest(o.bind_v, NEW.bind_v),
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     soundcloud_connection_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.soundcloud_connection_id ELSE o.soundcloud_connection_id END,
                     updated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.updated_at ELSE o.updated_at END,
@@ -4196,8 +4216,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.sessions (created_at, id, row_v, soundcloud_connection_id, updated_at)
-        VALUES (NEW.created_at, NEW.id, NEW.row_v, NEW.soundcloud_connection_id, NEW.updated_at)
+        INSERT INTO public.sessions (bind_v, chat_bind, created_at, id, row_v, soundcloud_connection_id, updated_at)
+        VALUES (NEW.bind_v, NEW.chat_bind, NEW.created_at, NEW.id, NEW.row_v, NEW.soundcloud_connection_id, NEW.updated_at)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -4270,8 +4290,14 @@ LANGUAGE plpgsql
 AS $f$
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        NEW.bind_v := public.scd_hlc(NEW.bind_v);
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
+    END IF;
+    IF NEW.chat_bind IS DISTINCT FROM OLD.chat_bind THEN
+        NEW.bind_v := public.scd_hlc(greatest(OLD.bind_v, NEW.bind_v));
+    ELSE
+        NEW.bind_v := greatest(OLD.bind_v, NEW.bind_v);
     END IF;
     IF (NEW.created_at, NEW.soundcloud_connection_id, NEW.updated_at) IS DISTINCT FROM (OLD.created_at, OLD.soundcloud_connection_id, OLD.updated_at) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
