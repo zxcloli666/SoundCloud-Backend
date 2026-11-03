@@ -215,7 +215,7 @@ tables:
     class: A
     delete: tombstone
     unique: {link_requests_claim_token_uq: random}
-    groups: {row: {version: row_v, cols: rest}}
+    groups: {row: {version: row_v, cols: rest}, bind: {version: bind_v, cols: [chat_bind]}}
   listening_history: {class: A, delete: tombstone, insert_only: true, note: "random id, so the tombstone blocks unconditionally"}
   login_requests:
     class: A
@@ -240,7 +240,11 @@ tables:
     columns: {tbl: text, pk: jsonb, v: "bigint NOT NULL DEFAULT 0", at: "timestamptz NOT NULL DEFAULT now()"}
     note: "one immutable row per delete, keyed by its HLC; core purges after 7 days"
   sc_egress_health: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}, note: "breaker rows, every node writes"}
-  sessions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
+  sessions:
+    class: A
+    delete: tombstone
+    groups: {row: {version: row_v, cols: rest}, bind: {version: bind_v, cols: [chat_bind]}}
+    note: "chat_bind has its own version, so a touch on another node never puts back an older bind"
   subscriptions: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   track_artist_blocks: {class: A, delete: tombstone, groups: {row: {version: row_v, cols: rest}}}
   user_auras: {class: A, delete: none, groups: {row: {version: row_v, cols: rest}}}

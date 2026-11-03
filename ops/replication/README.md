@@ -100,6 +100,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 33. `0278_scd_install`: the generated SQL again: the queue is class P, its rows go when the state row is purged.
 34. `0279_subscriptions_star_since`: `subscriptions.star_since`, the start of the user's unbroken STAR coverage, written by pay through the admin upsert.
 35. `0280_scd_install`: the generated SQL again: the column is in the row group and in every publication list of the table.
+36. `0281_chat`: the `chat` schema, node-local on every node (not in ownership.yaml, no trigger, no publication); `chat_bind` on `login_requests`, `link_requests` and `sessions`, `bind_v` on the last two.
+37. `0282_scd_install`: the generated SQL again: `login_requests.chat_bind` rides the row group; `sessions` and `link_requests` keep `chat_bind` in their own `bind` group (`bind_v`), so a touch on another node never puts back an older bind. Run `scd_sync_publications()` on core, main and star only after all three have 0282.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

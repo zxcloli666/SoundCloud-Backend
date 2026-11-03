@@ -957,6 +957,8 @@
   },
   "link_requests": {
    "columns": [
+    {"default": "0", "generated": false, "name": "bind_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "chat_bind", "notnull": false, "type": "bytea"},
     {"default": null, "generated": false, "name": "claim_token", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "error", "notnull": false, "type": "text"},
@@ -1008,6 +1010,7 @@
   },
   "login_requests": {
    "columns": [
+    {"default": null, "generated": false, "name": "chat_bind", "notnull": false, "type": "bytea"},
     {"default": null, "generated": false, "name": "code_verifier", "notnull": true, "type": "text"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "error", "notnull": false, "type": "text"},
@@ -1823,6 +1826,8 @@
   },
   "sessions": {
    "columns": [
+    {"default": "0", "generated": false, "name": "bind_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "chat_bind", "notnull": false, "type": "bytea"},
     {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp without time zone"},
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
