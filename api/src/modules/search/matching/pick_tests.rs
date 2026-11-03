@@ -22,8 +22,14 @@ fn urn(n: i64) -> Option<String> {
 
 #[test]
 fn the_first_close_hit_wins() {
-    let hits = [hit(1, "Umbrella", "x", 200_000), hit(2, "Umbrella", "y", 200_500)];
-    assert_eq!(combined(&wanted("Rihanna", "Umbrella", Some(200_000)), &hits), urn(1));
+    let hits = [
+        hit(1, "Umbrella", "x", 200_000),
+        hit(2, "Umbrella", "y", 200_500),
+    ];
+    assert_eq!(
+        combined(&wanted("Rihanna", "Umbrella", Some(200_000)), &hits),
+        urn(1)
+    );
 }
 
 #[test]
@@ -67,7 +73,10 @@ fn a_different_title_is_never_returned() {
 #[test]
 fn titles_match_either_way_around_ignoring_noise() {
     let w = wanted("Rihanna", "Umbrella (Official Video)", None);
-    assert_eq!(combined(&w, &[hit(1, "Rihanna - Umbrella ft. Jay-Z", "x", 0)]), urn(1));
+    assert_eq!(
+        combined(&w, &[hit(1, "Rihanna - Umbrella ft. Jay-Z", "x", 0)]),
+        urn(1)
+    );
     let w = wanted("Rihanna", "Rihanna - Umbrella", None);
     assert_eq!(combined(&w, &[hit(1, "Umbrella", "x", 0)]), urn(1));
 }
@@ -85,7 +94,10 @@ fn variants_are_skipped_unless_asked_for() {
         hit(1, "Umbrella (Sped Up)", "x", 0),
         hit(2, "Umbrella", "y", 0),
     ];
-    assert_eq!(combined(&wanted("Rihanna", "Umbrella", None), &hits), urn(2));
+    assert_eq!(
+        combined(&wanted("Rihanna", "Umbrella", None), &hits),
+        urn(2)
+    );
     assert_eq!(
         combined(&wanted("Rihanna", "Umbrella (Sped Up)", None), &hits),
         urn(1)
@@ -108,13 +120,22 @@ fn the_uploader_search_wants_the_artist_title_and_duration() {
         hit(2, "Hello", "Adele", 900_000),
         hit(3, "Hello", "Adele - Official", 200_000),
     ];
-    assert_eq!(by_uploader(&wanted("Adele", "Hello", Some(200_000)), &hits), urn(3));
-    assert_eq!(by_uploader(&wanted("Lizer", "Hello", Some(200_000)), &hits), None);
+    assert_eq!(
+        by_uploader(&wanted("Adele", "Hello", Some(200_000)), &hits),
+        urn(3)
+    );
+    assert_eq!(
+        by_uploader(&wanted("Lizer", "Hello", Some(200_000)), &hits),
+        None
+    );
 }
 
 #[test]
 fn uploader_names_follow_the_desktop_rules() {
-    assert!(uploaded_by(&hit(1, "t", "Boris Brejcha - Official", 0), "boris brejcha"));
+    assert!(uploaded_by(
+        &hit(1, "t", "Boris Brejcha - Official", 0),
+        "boris brejcha"
+    ));
     assert!(uploaded_by(&hit(1, "t", "MØ", 0), "mø"));
     assert!(!uploaded_by(&hit(1, "t", "Kamø", 0), "MØ"));
     assert!(!uploaded_by(&hit(1, "t", "U2 Tribute Band", 0), "U2"));

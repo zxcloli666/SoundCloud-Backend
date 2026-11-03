@@ -87,7 +87,12 @@ async fn the_title_search_finds_the_artists_upload_the_combined_one_missed(
 async fn an_empty_title_or_unknown_song_is_a_miss(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &[song(1, "Umbrella", "Rihanna", 1_000)]).await?;
     let search = service(&pool)?;
-    for (artist, title) in [("Rihanna", ""), ("Rihanna", "!!!"), ("", ""), ("Nobody", "Nothing at all")] {
+    for (artist, title) in [
+        ("Rihanna", ""),
+        ("Rihanna", "!!!"),
+        ("", ""),
+        ("Nobody", "Nothing at all"),
+    ] {
         let wanted = Wanted::new(artist, title, None);
         assert_eq!(find(&search, &wanted).await?, None, "{artist} / {title}");
     }

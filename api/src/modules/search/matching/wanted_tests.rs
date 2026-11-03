@@ -24,7 +24,10 @@ fn bracketed_noise_is_dropped_from_titles() {
         ("Umbrella [Official Audio]", "Umbrella"),
         ("Положение (Премьера клипа)", "Положение"),
         ("Halo (Lyrics)", "Halo"),
-        ("Nothing Else Matters (Remastered 2021)", "Nothing Else Matters"),
+        (
+            "Nothing Else Matters (Remastered 2021)",
+            "Nothing Else Matters",
+        ),
         ("Waterloo (feat. Someone)", "Waterloo"),
         ("Song Name | Official Channel", "Song Name"),
         ("Song - 2011 Remaster", "Song"),

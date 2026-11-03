@@ -16,10 +16,10 @@ static NOISE: LazyLock<Regex> = LazyLock::new(|| {
 static REMASTER_TAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\s+[-–—]\s+(?:\d{4}\s+)?remaster(?:ed)?\b.*$").expect("remaster tail")
 });
-static PIPE_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*[|｜].*$").expect("pipe tail"));
-static FEAT_TAIL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\s+(?:feat\.?|ft\.|featuring)\s+.*$").expect("feat tail")
-});
+static PIPE_TAIL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*[|｜].*$").expect("pipe tail"));
+static FEAT_TAIL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.|featuring)\s+.*$").expect("feat tail"));
 
 #[derive(Debug, Clone)]
 pub struct Wanted {

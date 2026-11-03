@@ -73,7 +73,12 @@ async fn a_hundred_items_pass_and_a_hundred_and_one_do_not(pool: PgPool) -> anyh
 async fn malformed_or_empty_requests_are_rejected(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session(&pool).await?;
-    for body in [json!({"items": []}), json!({}), json!({"items": "x"}), json!([1])] {
+    for body in [
+        json!({"items": []}),
+        json!({}),
+        json!({"items": "x"}),
+        json!([1]),
+    ] {
         let (status, _) = post(&app, session, body.clone()).await?;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }

@@ -50,8 +50,9 @@ async fn match_tracks(
     _ctx: SessionCtx,
     body: Bytes,
 ) -> AppResult<Json<MatchResponse>> {
-    let request: MatchRequest = serde_json::from_slice(&body)
-        .map_err(|_| AppError::bad_request("Body must be {\"items\":[{artist,title,duration_ms}]}"))?;
+    let request: MatchRequest = serde_json::from_slice(&body).map_err(|_| {
+        AppError::bad_request("Body must be {\"items\":[{artist,title,duration_ms}]}")
+    })?;
     if request.items.is_empty() || request.items.len() > MAX_ITEMS {
         return Err(AppError::bad_request("items must hold 1 to 100 entries"));
     }
