@@ -13,7 +13,7 @@ teardown
 say "migrate a template database"
 fresh scd_b1_tpl
 fresh scd_b1_ops
-for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -c "SET client_min_messages = error" -f - < "$f"; done
+for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -c "SET client_min_messages = error" -f - < "$f" > /dev/null; done
 for f in "$root"/api/migrations-ops/*.sql; do sql -d scd_b1_ops -c "SET client_min_messages = error" -f - < "$f"; done
 
 say "schema.json matches the migrations"

@@ -241,6 +241,8 @@ DECLARE
     state_id uuid;
     wake record;
 BEGIN
+    PERFORM 1 FROM public.tracks AS t WHERE t.sc_track_id = track FOR KEY SHARE;
+
     INSERT INTO public.lyrics_lookup_state (
         track_id, sc_track_id, priority, next_run_at, input_title, input_artist, input_duration_ms,
         input_genius_song_id, input_genius_url, input_release_date, input_sc_created_at,

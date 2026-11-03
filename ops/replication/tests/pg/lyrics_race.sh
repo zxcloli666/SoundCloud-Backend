@@ -97,7 +97,7 @@ $(race_query lookup_due_wakes.sql expired);
 EOF
 }
 
-say "lyrics lookup race: claims, settles, releases, wakes and track updates at once, ${race_seconds}s on $race_clients clients"
+say "lyrics lookup race: a fresh database with $race_tracks tracks and $race_clients leased jobs"
 fresh "$race_db" scd_b1_tpl
 sql -d "$race_db" -c "INSERT INTO public.tracks (id, urn, sc_track_id, title, title_normalized, duration_ms)
     SELECT gen_random_uuid(), 'urn:race:' || n, 'race' || n, 'Race ' || n, 'race ' || n, 1000 FROM generate_series(1, $race_tracks) AS n" \
@@ -105,13 +105,31 @@ sql -d "$race_db" -c "INSERT INTO public.tracks (id, urn, sc_track_id, title, ti
     SELECT gen_random_uuid(), 'lyrics.lookup', 'core_bulk', 'race-' || n, '{}'::jsonb, gen_random_uuid(), 1, 'race', now() + interval '1 day'
     FROM generate_series(0, $race_clients - 1) AS n" > /dev/null
 want "every track has a state row and a queue row" "$(only lyrics_race "SELECT count(*) FROM public.lyrics_lookup_state JOIN public.lyrics_lookup_queue USING (track_id)")" "$race_tracks"
+
+say "lyrics lookup race: a wake waits for the track before it locks the state row"
+sql -d "$race_db" -c "UPDATE public.lyrics_lookup_state SET status = 'not_found', next_run_at = now() - interval '1 minute' WHERE sc_track_id = 'race1'" > /dev/null
+sql -d "$race_db" -c "SET application_name = 'race_settle'" -c "BEGIN" -c "SELECT 1 FROM public.tracks WHERE sc_track_id = 'race1' FOR UPDATE" \
+  -c "SELECT pg_sleep(600)" -c "COMMIT" > /dev/null 2>&1 &
+race_holder=$!
+wait_for "$race_db" "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'race_settle' AND wait_event = 'PgSleep')" "a settle holds the track row of race1"
+sql -d "$race_db" -c "SET application_name = 'race_wake'" -c "SELECT public.scd_cmd_lyrics_wake(jsonb_build_object('sc_track_id', 'race1', 'at', now()))" > "$tmp/race_wake.out" 2>&1 &
+race_waker=$!
+wait_for "$race_db" "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = 'race_wake' AND wait_event_type = 'Lock')" "the wake on race1 waits"
+want "the state row of race1 is still free" "$(val "$race_db" "SELECT sc_track_id FROM public.lyrics_lookup_state WHERE sc_track_id = 'race1' FOR UPDATE NOWAIT" 2>&1)" race1
+val "$race_db" "SELECT count(*) FROM (SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE application_name = 'race_settle') AS x" > /dev/null
+wait "$race_holder" || true
+wait "$race_waker" || { echo "FAIL the wake on race1 failed: $(cat "$tmp/race_wake.out")"; exit 1; }
+want "the wake on race1 reopened it after the settle" "$(only lyrics_race "SELECT status = 'pending' AND priority = 0 AND wake_message_id IS NOT NULL FROM public.lyrics_lookup_state WHERE sc_track_id = 'race1'")" t
+
+say "lyrics lookup race: claims, settles, releases, wakes and track updates at once, ${race_seconds}s on $race_clients clients"
 race_script > "$tmp/race.sql"
-if ! $pgbench_cmd -n -M prepared -c "$race_clients" -j 4 -T "$race_seconds" -P 60 --failures-detailed -D tracks="$race_tracks" -f - "$race_db" < "$tmp/race.sql" > "$tmp/race.log" 2>&1; then
+if ! $pgbench_cmd -n -M prepared -c "$race_clients" -j 4 -T "$race_seconds" -P 60 --failures-detailed --verbose-errors -D tracks="$race_tracks" -f - "$race_db" < "$tmp/race.sql" > "$tmp/race.log" 2>&1; then
   echo "FAIL pgbench stopped with an error"
   grep -v '^progress' "$tmp/race.log" | head -20
   exit 1
 fi
 grep -E '^(number of|tps|progress)' "$tmp/race.log" | sed 's/^/   /'
+grep -i -m 5 'deadlock detected' -A 3 "$tmp/race.log" | sed 's/^/   /' || true
 want "pgbench failed no transaction" "$(sed -n 's/^number of failed transactions: \([0-9]*\).*/\1/p' "$tmp/race.log")" 0
 want "pgbench saw no deadlock" "$(sed -n 's/^number of deadlock failures: \([0-9]*\).*/\1/p' "$tmp/race.log")" 0
 wait_for postgres "SELECT NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE datname = '$race_db')" "every pgbench session is gone"
