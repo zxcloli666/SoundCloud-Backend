@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/search/db/albums", get(albums))
         .route("/search/vibe", get(vibe))
         .route("/search/lyrics", get(lyrics))
+        .merge(super::matching::router())
 }
 
 #[derive(Debug, Deserialize)]

@@ -214,6 +214,10 @@ mod router_diag_tests;
 mod router_projection_tests;
 
 #[cfg(test)]
+#[path = "router_match_tests.rs"]
+mod router_match_tests;
+
+#[cfg(test)]
 #[path = "router_rooms_tests.rs"]
 mod router_rooms_tests;
 
