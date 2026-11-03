@@ -28,8 +28,9 @@ val scd_b1_keep "SELECT count(*) FROM (SELECT pg_catalog.pg_terminate_backend(pi
 wait "$keep_holder" || true
 
 say "scd_install: a re-run makes a missing trigger and restores a replica trigger's state"
-plain="$(sed -n "s/^SELECT public\.scd_keep_trigger('\([^']*\)', '\([^']*\)', false, .*/\1 \2/p" "$keep_install" | head -1)"
-replica="$(sed -n "s/^SELECT public\.scd_keep_trigger('\([^']*\)', '\([^']*\)', true, .*/\1 \2/p" "$keep_install" | head -1)"
+keep_first() { awk -F"'" -v replica="$1" 'index($0, "SELECT public.scd_keep_trigger(") == 1 && index($5, ", " replica ", ") == 1 { print $2, $4; exit }' "$keep_install"; }
+plain="$(keep_first false)"
+replica="$(keep_first true)"
 sql -d scd_b1_keep -c "DROP TRIGGER ${plain#* } ON ${plain% *}" -c "ALTER TABLE ${replica% *} ENABLE TRIGGER ${replica#* }" > /dev/null
 want "${plain#* } is gone and ${replica#* } fires on every write" "$(only keep "SELECT count(*) FILTER (WHERE tgname = '${plain#* }') || ' ' || string_agg(tgenabled::text, '') FILTER (WHERE tgname = '${replica#* }') FROM pg_catalog.pg_trigger WHERE tgrelid IN ('${plain% *}'::regclass, '${replica% *}'::regclass)")" "0 O"
 sql -d scd_b1_keep -c "SET client_min_messages = warning" -f - < "$keep_install" > /dev/null
