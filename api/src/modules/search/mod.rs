@@ -25,6 +25,9 @@ mod plan_tests;
 mod stampede_tests;
 
 #[cfg(test)]
+mod terms_cache_tests;
+
+#[cfg(test)]
 mod terms_tests;
 
 #[cfg(test)]

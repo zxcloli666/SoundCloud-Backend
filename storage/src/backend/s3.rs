@@ -2,10 +2,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use aws_credential_types::Credentials;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Region;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream as AwsByteStream;
-use aws_sdk_s3::Client;
 use tokio_util::io::ReaderStream;
 use tracing::warn;
 
@@ -67,22 +67,27 @@ impl S3Backend {
     }
 
     pub async fn put_file(&self, key: &str, src: &Path) -> Result<(), BackendError> {
-        let body = AwsByteStream::from_path(src)
-            .await
-            .map_err(|e| BackendError::Other(format!("read tmp: {e}")))?;
+        super::s3_trace::s3("put", async {
+            let size = tokio::fs::metadata(src).await.map(|m| m.len()).unwrap_or(0);
+            let body = AwsByteStream::from_path(src)
+                .await
+                .map_err(|e| BackendError::Other(format!("read tmp: {e}")))?;
 
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .body(body)
-            .content_type(super::content_type_for(key))
-            .send()
-            .await
-            .map_err(|e| BackendError::Other(format!("put_object {key}: {e}")))?;
+            self.client
+                .put_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .body(body)
+                .content_type(super::content_type_for(key))
+                .send()
+                .await
+                .map_err(|e| BackendError::Other(format!("put_object {key}: {e}")))?;
 
-        let _ = tokio::fs::remove_file(src).await;
-        Ok(())
+            super::s3_trace::bytes(size);
+            let _ = tokio::fs::remove_file(src).await;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn delete_file(&self, key: &str) -> Result<bool, BackendError> {
@@ -91,73 +96,89 @@ impl S3Backend {
         if !existed {
             return Ok(false);
         }
-        self.client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|e| BackendError::Other(format!("delete_object {key}: {e}")))?;
+        super::s3_trace::s3("delete", async {
+            self.client
+                .delete_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .send()
+                .await
+                .map_err(|e| BackendError::Other(format!("delete_object {key}: {e}")))
+        })
+        .await?;
         Ok(true)
     }
 
     pub async fn head(&self, key: &str) -> Result<Option<ObjectInfo>, BackendError> {
-        match self
-            .client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-        {
-            Ok(out) => Ok(Some(ObjectInfo {
-                size: out.content_length().unwrap_or(0) as u64,
-                content_type: out
-                    .content_type()
-                    .map(|s| s.to_string())
-                    .or_else(|| Some(super::content_type_for(key).to_string())),
-            })),
-            Err(err) => {
-                let service_err = err.into_service_error();
-                if service_err.is_not_found() {
-                    Ok(None)
-                } else {
-                    warn!("[s3] head_object {key} failed: {service_err}");
-                    Err(BackendError::Other(format!(
-                        "head_object {key}: {service_err}"
-                    )))
+        super::s3_trace::s3("head", async {
+            match self
+                .client
+                .head_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .send()
+                .await
+            {
+                Ok(out) => {
+                    super::s3_trace::bytes(out.content_length().unwrap_or(0) as u64);
+                    Ok(Some(ObjectInfo {
+                        size: out.content_length().unwrap_or(0) as u64,
+                        content_type: out
+                            .content_type()
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(super::content_type_for(key).to_string())),
+                    }))
+                }
+                Err(err) => {
+                    let service_err = err.into_service_error();
+                    if service_err.is_not_found() {
+                        Ok(None)
+                    } else {
+                        warn!("[s3] head_object {key} failed: {service_err}");
+                        Err(BackendError::Other(format!(
+                            "head_object {key}: {service_err}"
+                        )))
+                    }
                 }
             }
-        }
+        })
+        .await
     }
 
     pub async fn stream(&self, key: &str) -> Result<(ObjectInfo, ByteStream), BackendError> {
-        let out = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|err| {
-                let service_err = err.into_service_error();
-                if service_err.is_no_such_key() {
-                    BackendError::NotFound
-                } else {
-                    BackendError::Other(format!("get_object {key}: {service_err}"))
-                }
-            })?;
+        super::s3_trace::s3("get", async {
+            let out = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .send()
+                .await
+                .map_err(|err| {
+                    let service_err = err.into_service_error();
+                    if service_err.is_no_such_key() {
+                        BackendError::NotFound
+                    } else {
+                        BackendError::Other(format!("get_object {key}: {service_err}"))
+                    }
+                })?;
 
-        let size = out.content_length().unwrap_or(0) as u64;
-        let content_type = out
-            .content_type()
-            .map(|s| s.to_string())
-            .or_else(|| Some(super::content_type_for(key).to_string()));
+            let size = out.content_length().unwrap_or(0) as u64;
+            super::s3_trace::bytes(size);
+            let content_type = out
+                .content_type()
+                .map(|s| s.to_string())
+                .or_else(|| Some(super::content_type_for(key).to_string()));
 
-        let reader = out.body.into_async_read();
-        let stream = ReaderStream::new(reader);
+            let reader = out.body.into_async_read();
+            let stream = ReaderStream::new(reader);
 
-        Ok((ObjectInfo { size, content_type }, Box::pin(stream)))
+            Ok((
+                ObjectInfo { size, content_type },
+                Box::pin(stream) as ByteStream,
+            ))
+        })
+        .await
     }
 
     pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<String, BackendError> {

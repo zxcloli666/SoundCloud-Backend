@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use tracing::{debug, warn};
 
 use crate::background_jobs::{BackgroundJob, BackgroundJobs, IndexingJobs};
 use crate::cache::{LocalTtlCache, SingleFlight};
 use crate::error::AppResult;
+use crate::modules::tracks::TrackPriority;
 use crate::modules::tracks::normalize::ScTrackFields;
-use crate::modules::tracks::{TrackPriority, TrackRepository};
 use backend_contracts::{JobKind, LyricsLookupPayload};
 
 #[derive(Debug, Clone, Serialize)]
@@ -25,7 +25,6 @@ pub struct IndexingService {
     pg: PgPool,
     background_jobs: Arc<BackgroundJobs>,
     indexing_jobs: Arc<IndexingJobs>,
-    tracks: TrackRepository,
     max_track_duration_ms: i32,
     stats_cache: LocalTtlCache<IndexingStats>,
     stats_flight: SingleFlight,
@@ -38,12 +37,10 @@ impl IndexingService {
         indexing_jobs: Arc<IndexingJobs>,
         max_track_duration_ms: i32,
     ) -> Arc<Self> {
-        let tracks = TrackRepository::new(pg.clone());
         Arc::new(Self {
             pg,
             background_jobs,
             indexing_jobs,
-            tracks,
             max_track_duration_ms,
             stats_cache: LocalTtlCache::new(STATS_TTL),
             stats_flight: SingleFlight::new(),
@@ -56,45 +53,106 @@ impl IndexingService {
         priority: TrackPriority,
         observation: catalog_ingest::Observation,
     ) -> AppResult<()> {
-        let Some(fields) = ScTrackFields::from_sc(payload) else {
-            debug!(
-                urn = payload.get("urn").and_then(|v| v.as_str()).unwrap_or(""),
-                title = payload.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-                "ingest skipped: ScTrackFields::from_sc returned None"
-            );
+        let Some(fields) = track_fields(payload) else {
             return Ok(());
         };
-        let result = self
-            .tracks
-            .upsert_from_sc(&fields, priority, priority, observation)
-            .await?;
-        if result.metadata_applied
-            && self.max_track_duration_ms > 0
-            && fields.duration_ms > self.max_track_duration_ms
-        {
-            self.tracks.mark_too_long(&fields.sc_track_id).await?;
-            return Ok(());
-        }
-        if result.was_new {
+        let kick = wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            let kick = self
+                .ingest_in(&mut transaction, &fields, priority, observation)
+                .await?;
+            transaction.commit().await.map(|()| kick)
+        })
+        .await?;
+        if kick {
             self.kick_pipeline(&fields.sc_track_id).await;
         }
         Ok(())
     }
 
-    pub async fn release_held(&self, sc_track_id: &str) -> AppResult<bool> {
-        let Some(duration_ms) =
-            sqlx::query_file_scalar!("queries/indexing/service/release_held.sql", sc_track_id)
-                .fetch_optional(&self.pg)
-                .await?
-        else {
-            return Ok(false);
-        };
-        if self.max_track_duration_ms > 0 && duration_ms > self.max_track_duration_ms {
-            self.tracks.mark_too_long(sc_track_id).await?;
-        } else {
-            self.kick_pipeline(sc_track_id).await;
+    pub async fn ingest_upload(
+        self: &Arc<Self>,
+        payload: &Value,
+        owned: &wt::OwnedInsert,
+        observation: catalog_ingest::Observation,
+    ) -> AppResult<()> {
+        let fields = track_fields(payload);
+        let kick = wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            let kick = match &fields {
+                Some(fields) => {
+                    self.ingest_in(
+                        &mut transaction,
+                        fields,
+                        TrackPriority::FreshDrop,
+                        observation,
+                    )
+                    .await?
+                }
+                None => false,
+            };
+            wt::call(&mut transaction, owned).await?;
+            transaction.commit().await.map(|()| kick)
+        })
+        .await?;
+        if kick {
+            self.kick_pipeline(&owned.sc_track_id).await;
         }
-        Ok(true)
+        Ok(())
+    }
+
+    async fn ingest_in(
+        &self,
+        connection: &mut PgConnection,
+        fields: &ScTrackFields,
+        priority: TrackPriority,
+        observation: catalog_ingest::Observation,
+    ) -> Result<bool, sqlx::Error> {
+        let result =
+            catalog_ingest::upsert_track_in(connection, fields, priority, priority, observation)
+                .await?;
+        if result.metadata_applied && self.is_too_long(fields.duration_ms) {
+            mark_too_long(connection, &fields.sc_track_id).await?;
+            return Ok(false);
+        }
+        Ok(result.was_new)
+    }
+
+    pub async fn release_held(&self, sc_track_id: &str) -> AppResult<bool> {
+        let held = sqlx::query_file_scalar!("queries/indexing/service/is_held.sql", sc_track_id)
+            .fetch_one(&self.pg)
+            .await?;
+        if !held {
+            return Ok(false);
+        }
+        let release = wt::TrackReleaseHeld {
+            sc_track_id: sc_track_id.to_owned(),
+            at: wt::now(),
+        };
+        let released = wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            let Some(duration_ms) = wt::call(&mut transaction, &release).await? else {
+                return Ok(None);
+            };
+            let too_long = self.is_too_long(duration_ms);
+            if too_long {
+                mark_too_long(&mut transaction, sc_track_id).await?;
+            }
+            transaction.commit().await.map(|()| Some(too_long))
+        })
+        .await?;
+        match released {
+            None => Ok(false),
+            Some(true) => Ok(true),
+            Some(false) => {
+                self.kick_pipeline(sc_track_id).await;
+                Ok(true)
+            }
+        }
+    }
+
+    fn is_too_long(&self, duration_ms: i32) -> bool {
+        self.max_track_duration_ms > 0 && duration_ms > self.max_track_duration_ms
     }
 
     async fn kick_pipeline(&self, sc_track_id: &str) {
@@ -139,6 +197,26 @@ impl IndexingService {
             )
             .await
     }
+}
+
+fn track_fields(payload: &Value) -> Option<ScTrackFields> {
+    let fields = ScTrackFields::from_sc(payload);
+    if fields.is_none() {
+        debug!(
+            urn = payload.get("urn").and_then(|v| v.as_str()).unwrap_or(""),
+            title = payload.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+            "ingest skipped: ScTrackFields::from_sc returned None"
+        );
+    }
+    fields
+}
+
+async fn mark_too_long(connection: &mut PgConnection, sc_track_id: &str) -> sqlx::Result<bool> {
+    let too_long = wt::TrackTooLong {
+        sc_track_id: sc_track_id.to_owned(),
+        at: wt::now(),
+    };
+    wt::call(connection, &too_long).await
 }
 
 #[cfg(test)]

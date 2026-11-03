@@ -9,7 +9,11 @@ use crate::http::ExternalFetcher;
 use crate::throttle::Throttle;
 
 const MB_BASE: &str = "https://musicbrainz.org/ws/2";
-const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+const IDENTIFYING_USER_AGENT: &str = concat!(
+    "scnative-catalog/",
+    env!("CARGO_PKG_VERSION"),
+    " ( https://getsoundcloud.app )"
+);
 
 #[derive(Debug, Clone)]
 pub struct MbArtist {
@@ -83,7 +87,7 @@ impl MbClient {
 
     async fn fetch<T: for<'de> Deserialize<'de>>(&self, url: &str) -> SourceResult<Option<T>> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(BROWSER_USER_AGENT));
+        headers.insert(USER_AGENT, HeaderValue::from_static(IDENTIFYING_USER_AGENT));
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
         let bytes = match self.fetcher.get_api(url, headers, &self.throttle).await {
@@ -541,7 +545,7 @@ mod tests {
         let headers = headers.as_ref().unwrap();
         assert_eq!(
             headers.get("user-agent").map(String::as_str),
-            Some(BROWSER_USER_AGENT)
+            Some(IDENTIFYING_USER_AGENT)
         );
         assert_eq!(
             headers.get("accept-language").map(String::as_str),

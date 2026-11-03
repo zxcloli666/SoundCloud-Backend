@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::admission::PublicAdmission;
-use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService};
 use crate::modules::chat::ChatState;
 use crate::modules::chat::caller::Callers;
 use crate::modules::chat::channel::ock::OckRing;
@@ -67,6 +67,7 @@ pub async fn build(config: &RtConfig) -> RtState {
         sc,
         OAuthAppsService::new(pg.clone()),
         AuthHealthService::with_database(music_redis, pg.clone()),
+        CoreRpc::unreachable(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
     let rooms = RoomsService::new(redis_rt.clone(), RoomHub::new(None));

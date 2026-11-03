@@ -100,13 +100,16 @@ impl CatalogWorkHandler {
         let mut merged = 0i64;
         let mut superseded = 0i64;
         for group in &groups {
-            let outcome = sqlx::query_file!(
-                "queries/catalog/merge_recording_group.sql",
-                group.primary_artist_id,
-                group.recording_key,
-                Uuid::now_v7()
-            )
-            .fetch_one(&self.pool)
+            let canonical = Uuid::now_v7();
+            let outcome = crate::db::retry_conflicts(|| {
+                sqlx::query_file!(
+                    "queries/catalog/merge_recording_group.sql",
+                    group.primary_artist_id,
+                    group.recording_key,
+                    canonical
+                )
+                .fetch_one(&self.pool)
+            })
             .await
             .map_err(JobError::retryable)?;
             if outcome.superseded > 0 {
@@ -136,11 +139,12 @@ impl CatalogWorkHandler {
     }
 
     async fn release_hidden_winners(&self) -> JobResult {
-        let released =
+        let released = crate::db::retry_conflicts(|| {
             sqlx::query_file_scalar!("queries/catalog/release_hidden_winners.sql", RELEASE_BATCH)
                 .fetch_one(&self.pool)
-                .await
-                .map_err(JobError::retryable)?;
+        })
+        .await
+        .map_err(JobError::retryable)?;
         if released > 0 {
             info!(
                 released,
@@ -165,30 +169,31 @@ impl CatalogWorkHandler {
             return Ok(0);
         }
 
-        let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        sqlx::query_file!(
-            "queries/catalog/store_track_keys.sql",
-            &batch.ids,
-            &batch.work_keys,
-            &batch.recording_keys,
-            NORMALIZER_VERSION
-        )
-        .execute(&mut *transaction)
-        .await
-        .map_err(JobError::retryable)?;
-        sqlx::query_file!("queries/catalog/clear_track_aliases.sql", &batch.ids)
+        crate::db::retry_conflicts(|| async {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::query_file!(
+                "queries/catalog/store_track_keys.sql",
+                &batch.ids,
+                &batch.work_keys,
+                &batch.recording_keys,
+                NORMALIZER_VERSION
+            )
             .execute(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
-        sqlx::query_file!(
-            "queries/catalog/store_track_aliases.sql",
-            &batch.alias_ids,
-            &batch.alias_keys
-        )
-        .execute(&mut *transaction)
+            .await?;
+            sqlx::query_file!("queries/catalog/clear_track_aliases.sql", &batch.ids)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query_file!(
+                "queries/catalog/store_track_aliases.sql",
+                &batch.alias_ids,
+                &batch.alias_keys
+            )
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await
+        })
         .await
         .map_err(JobError::retryable)?;
-        transaction.commit().await.map_err(JobError::retryable)?;
         Ok(batch.ids.len())
     }
 

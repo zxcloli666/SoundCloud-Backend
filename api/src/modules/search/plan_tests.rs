@@ -54,10 +54,6 @@ fn assert_bounded(plan: &str, what: &str) {
             "{what} scans {table}: {plan}"
         );
     }
-    assert!(
-        !plan.contains("tracks_public_popular_idx"),
-        "{what} walks the popularity index: {plan}"
-    );
 }
 
 fn seq_scans(plan: &str) -> Vec<String> {

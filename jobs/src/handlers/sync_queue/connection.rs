@@ -1,3 +1,4 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::Engine;
@@ -9,6 +10,7 @@ use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 
 use super::client::{RefreshedToken, SoundCloudError, TokenRefreshClient};
 use super::model::Connection;
+use super::read_limit::AppReadLimits;
 
 const REFRESH_LEASE_SECONDS: i32 = 60;
 const REJECTED_TOKEN_RETRY_SECONDS: i32 = 5 * 60;
@@ -18,6 +20,8 @@ const RATE_LIMIT_RETRY_SECONDS: i32 = 5 * 60;
 const APP_CREDENTIALS_RETRY_SECONDS: i64 = 30 * 60;
 const BAN_RETRY_SECONDS: i64 = 30 * 60;
 const APP_TOKEN_MIN_LIFETIME_SECONDS: i64 = 30;
+
+static READ_LIMITS: LazyLock<AppReadLimits> = LazyLock::new(AppReadLimits::default);
 
 #[derive(Clone, Debug)]
 pub struct AccessToken {
@@ -89,22 +93,26 @@ impl ConnectionManager {
         self.refresh(client, self.load(user_id).await?).await
     }
 
-    pub async fn penalize_app(
-        &self,
-        oauth_app_id: Uuid,
-        minimum_seconds: i64,
-    ) -> Result<i64, ConnectionError> {
-        Ok(self
-            .cooldowns
-            .penalize(oauth_app_id, minimum_seconds)
-            .await?)
+    pub fn pause_reads(&self, oauth_app_id: Uuid, seconds: i64) -> i64 {
+        let seconds = READ_LIMITS.limited(oauth_app_id, seconds);
+        tracing::warn!(%oauth_app_id, seconds, "soundcloud app reads paused");
+        seconds
     }
 
-    pub async fn app_retry_after_seconds(
+    pub async fn read_retry_after_seconds(
         &self,
         oauth_app_id: Uuid,
     ) -> Result<Option<i64>, ConnectionError> {
-        Ok(self.cooldowns.retry_after_seconds(oauth_app_id).await?)
+        if let Some(seconds) = self.cooldowns.retry_after_seconds(oauth_app_id).await? {
+            return Ok(Some(seconds));
+        }
+        Ok(READ_LIMITS.admit(oauth_app_id))
+    }
+
+    pub fn reads_answered(&self, oauth_app_id: Option<Uuid>) {
+        if let Some(oauth_app_id) = oauth_app_id {
+            READ_LIMITS.answered(oauth_app_id);
+        }
     }
 
     pub async fn app_tokens(&self) -> Result<Vec<AppToken>, ConnectionError> {
@@ -129,7 +137,7 @@ impl ConnectionManager {
 
     pub async fn reject_app_token(&self, token: &AppToken) -> Result<(), ConnectionError> {
         sqlx::query_file!(
-            "../api/queries/oauth_apps/token_service/reject_generation.sql",
+            "queries/sync_queue/reject_app_token.sql",
             token.oauth_app_id,
             token.generation
         )
@@ -148,6 +156,19 @@ impl ConnectionManager {
             .await
     }
 
+    pub async fn load_by_id(
+        &self,
+        connection_id: Uuid,
+    ) -> Result<Option<Connection>, ConnectionError> {
+        Ok(sqlx::query_file_as!(
+            Connection,
+            "queries/sync_queue/connection/load_by_id.sql",
+            connection_id
+        )
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     async fn load(&self, user_id: &str) -> Result<Connection, ConnectionError> {
         let canonical_user_id = extract_sc_id(user_id);
         sqlx::query_file_as!(
@@ -160,7 +181,7 @@ impl ConnectionManager {
         .ok_or(ConnectionError::ReauthorizationRequired)
     }
 
-    async fn refresh(
+    pub async fn refresh(
         &self,
         client: &TokenRefreshClient,
         connection: Connection,
@@ -208,7 +229,7 @@ impl ConnectionManager {
         .fetch_optional(&self.pool)
         .await?;
         let Some(refresh_generation) = refresh_generation else {
-            let current = self.load(&connection.soundcloud_user_id).await?;
+            let current = self.reload(connection.id).await?;
             if current.token_is_usable() && current.access_token != connection.access_token {
                 return Ok(access_token(&current));
             }
@@ -358,7 +379,7 @@ impl ConnectionManager {
         message: &str,
     ) -> Result<(), ConnectionError> {
         sqlx::query_file!(
-            "../api/queries/auth/service/fail_connection_refresh_reauth.sql",
+            "queries/sync_queue/connection/fail_reauthorization.sql",
             connection.id,
             lease_id,
             refresh_generation,
@@ -373,7 +394,7 @@ impl ConnectionManager {
         &self,
         previous: &Connection,
     ) -> Result<AccessToken, ConnectionError> {
-        let current = self.load(&previous.soundcloud_user_id).await?;
+        let current = self.reload(previous.id).await?;
         if current.token_is_usable()
             && (current.refresh_generation != previous.refresh_generation
                 || current.access_token != previous.access_token)
@@ -403,7 +424,13 @@ impl ConnectionManager {
         })
     }
 
-    async fn mark_rejected(
+    async fn reload(&self, connection_id: Uuid) -> Result<Connection, ConnectionError> {
+        self.load_by_id(connection_id)
+            .await?
+            .ok_or(ConnectionError::ReauthorizationRequired)
+    }
+
+    pub async fn mark_rejected(
         &self,
         connection: &Connection,
         rejected_token: &str,
@@ -440,7 +467,7 @@ fn app_wide_retry_seconds(error: &SoundCloudError, transient_seconds: i64) -> Op
         SoundCloudError::Transport(_) | SoundCloudError::ResponseTooLarge => {
             Some(transient_seconds)
         }
-        SoundCloudError::InvalidTokenResponse => None,
+        SoundCloudError::InvalidTokenResponse | SoundCloudError::Paused(_) => None,
         SoundCloudError::Api { .. } => None,
     }
 }
@@ -514,3 +541,7 @@ mod tests {
         assert_eq!(app_wide_retry_seconds(&invalid_grant, 30), None);
     }
 }
+
+#[cfg(test)]
+#[path = "connection_lease_tests.rs"]
+mod lease_tests;

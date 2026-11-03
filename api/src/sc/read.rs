@@ -16,7 +16,7 @@ const CALL_BUDGET: Duration = Duration::from_secs(20);
 const SEARCH_CHUNK: i64 = 20;
 const SEARCH_RELAY_WAIT: Duration = Duration::from_secs(3);
 const SEARCH_BUDGET: Duration = Duration::from_secs(8);
-const SHORT_LINK_BUDGET: Duration = Duration::from_secs(5);
+const SHORT_LINK_BUDGET: Duration = Duration::from_secs(8);
 
 pub struct ScReadService {
     sc: ScClient,

@@ -231,9 +231,10 @@ async fn playlist_delete_cancels_metadata_and_prevents_metadata_resurrection(
             .await?;
     assert!(deleted);
     assert_eq!(sharing, "private");
-    let actions: Vec<String> = sqlx::query_scalar("SELECT action_type FROM sync_queue")
-        .fetch_all(&pool)
-        .await?;
+    let actions: Vec<String> =
+        sqlx::query_scalar("SELECT action_type FROM sync_queue WHERE NOT cancelled")
+            .fetch_all(&pool)
+            .await?;
     assert_eq!(actions, ["playlist_delete"]);
     let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM user_owned_playlists")
         .fetch_one(&pool)

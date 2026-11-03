@@ -9,7 +9,7 @@ use crate::qdrant::collections;
 
 use super::clusters::{ClusterBuilder, ClusterNeighbor, ClusterResponse};
 use super::home_wave::merge_audio_pools;
-use super::mmr::{greedy_pick, max_cosine_to_selected};
+use super::mmr::{greedy_pick_off_thread, max_cosine_to_selected};
 use super::service::RecommendationsService;
 use super::smart_wave::{self, SmartWaveSeed};
 
@@ -440,10 +440,11 @@ async fn build_deep_cluster(
     let pool_vecs: Vec<Vec<f32>> = work.iter().map(|(_, v, _)| v.clone()).collect();
     let relevances: Vec<f32> = work.iter().map(|(_, _, r)| *r).collect();
     let centroid_owned = centroid.to_vec();
-    let picks = greedy_pick(&pool_vecs, limit, |cand, selected, pool_vecs| {
-        let rel_to_centroid = cosine(&pool_vecs[cand], &centroid_owned);
-        let diversity_term = 1.0 - max_cosine_to_selected(cand, selected, pool_vecs);
+    let picks = greedy_pick_off_thread(pool_vecs, limit, move |cand, selected, vecs| {
+        let rel_to_centroid = cosine(&vecs[cand], &centroid_owned);
+        let diversity_term = 1.0 - max_cosine_to_selected(cand, selected, vecs);
         lambda * rel_to_centroid + (1.0 - lambda) * diversity_term + 0.1 * relevances[cand]
-    });
+    })
+    .await;
     picks.into_iter().map(|i| work[i].0.clone()).collect()
 }

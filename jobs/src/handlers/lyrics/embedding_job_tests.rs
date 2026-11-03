@@ -66,6 +66,16 @@ async fn a_queued_row_opens_one_request_over_text_without_timestamps(
         )
     );
     assert_eq!(cache_state(&pool).await?.as_deref(), Some("pending"));
+    let mirrored = sqlx::query_scalar::<_, bool>(
+        "SELECT cache.embedding_request_id = wire.request_message_id
+            AND cache.embedding_request_created_at = wire.lyrics_created_at
+         FROM lyrics_cache AS cache
+         JOIN lyrics_embedding_wire_state AS wire USING (sc_track_id)
+         WHERE cache.sc_track_id = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(mirrored);
     Ok(())
 }
 

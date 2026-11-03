@@ -50,13 +50,13 @@ pub struct PlaylistsDeps {
     pub sync_queue: Arc<SyncQueueService>,
     pub cold_refresh: Arc<ColdRefreshService>,
     pub tokens: Arc<TokenProvider>,
-    pub background_jobs: Arc<crate::background_jobs::BackgroundJobs>,
+    pub redis: deadpool_redis::Pool,
     pub miss: Arc<CatalogMiss>,
 }
 
 impl PlaylistsService {
     pub fn new(deps: PlaylistsDeps) -> Arc<Self> {
-        let membership = PlaylistMembership::new(deps.pg.clone(), deps.background_jobs);
+        let membership = PlaylistMembership::new(deps.pg.clone(), deps.redis);
         let journal = PlaylistJournal::new(deps.pg.clone());
         let mutations =
             super::mutations::PlaylistMutations::new(deps.pg.clone(), deps.sync_queue.clone());

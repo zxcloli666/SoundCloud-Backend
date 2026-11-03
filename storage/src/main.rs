@@ -3,10 +3,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
+use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::Method;
 use axum::routing::{delete, get, post};
-use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
@@ -16,6 +16,7 @@ mod config;
 mod pipeline;
 mod quality;
 mod routes;
+mod spool;
 mod transcode;
 
 use backend::{Backend, GdriveBackend, LocalBackend, S3Backend};
@@ -54,12 +55,11 @@ impl AppState {
 #[tokio::main]
 async fn main() {
     tls_common::init_crypto();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "storage=info,tower_http=info".parse().unwrap()),
-        )
-        .init();
+    let _telemetry = telemetry::init(
+        "storage",
+        "storage=info,tower_http=info",
+        &["storage", "telemetry", "tls_common"],
+    );
 
     let config = Config::from_env();
     transcode::validate_binaries(&config.ffmpeg_bin, &config.ffprobe_bin)
@@ -136,7 +136,7 @@ async fn main() {
     );
 
     let config = Arc::new(config);
-    let bus = BusClient::connect(&config.nats_url).await;
+    let bus = BusClient::connect(&config.nats_url, &config.event_spool_path).await;
     if bus.enabled() && config.event_base_url.is_empty() {
         warn!("NATS connected but EVENT_BASE_URL is empty — track_uploaded events will be skipped");
     }
@@ -172,6 +172,7 @@ async fn main() {
             get(routes::files::serve).head(routes::files::head),
         )
         .layer(cors)
+        .layer(axum::middleware::from_fn(telemetry::trace_requests))
         .with_state(state);
 
     if let Some(tls_cfg) = tls_common::TlsConfig::from_env() {

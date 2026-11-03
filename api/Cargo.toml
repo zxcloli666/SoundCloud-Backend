@@ -12,7 +12,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures = "0.3"
 
-catalog-match = { path = "../utils/catalog-match" }
 sc-fingerprint = { path = "../utils/sc-fingerprint" }
 wreq = { version = "0.16.1", features = ["json", "stream", "gzip", "brotli"] }
 
@@ -48,6 +47,8 @@ uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 bytes = "1"
 
 sha2 = "0.10"
+hmac = "0.12"
+regex = "1"
 base64 = "0.22"
 rand = "0.8"
 hex = "0.4"
@@ -65,6 +66,7 @@ qdrant-client = "1"
 
 urlencoding = "2"
 url = "2"
+ipnet = "2"
 rand_distr = "0.4"
 backend-contracts = { version = "1.0.0", path = "../backend-contracts" }
 catalog-ingest = { version = "0.1.0", path = "../utils/catalog-ingest" }
@@ -74,10 +76,16 @@ sc-transport = { version = "0.1.0", path = "../utils/sc-transport", features = [
 catalog-sources = { version = "0.1.0", path = "../utils/catalog-sources" }
 stream-ticket = { version = "1.0.0", path = "../utils/stream-ticket" }
 redact = { version = "0.1.0", path = "../utils/redact" }
+telemetry = { version = "0.1.0", path = "../utils/telemetry" }
+wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
+repl-verify = { version = "0.1.0", path = "../utils/repl-verify" }
 sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }
+sourcemap = "9.3.2"
+tar = "0.4.46"
+flate2 = "1.1.10"
 
 [dev-dependencies]
 sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1", features = ["vectors"] }

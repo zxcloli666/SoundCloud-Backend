@@ -12,7 +12,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::failure::{self, Shed, search_busy, search_timeout};
-use super::terms::{self, Shape};
+use super::terms::{self, Shape, TermsCache};
 use crate::cache::cache_service::CacheScope;
 use crate::cache::{CacheService, KeyedCoalesce, ListPageResult, build_list_cache_key};
 use crate::error::{AppError, AppResult};
@@ -23,6 +23,7 @@ use crate::modules::users::{UserRow, project_to_sc_shape as project_user};
 use catalog_normalize::normalize_name;
 
 const TTL_SECONDS: u64 = 60;
+const TRACKS_TTL_SECONDS: u64 = 300;
 const MIN_QUERY_LEN: usize = 2;
 const MAX_QUERY_LEN: usize = 128;
 pub const MAX_PAGE: i64 = 24;
@@ -37,6 +38,7 @@ pub struct SearchService {
     pub(super) pg: PgPool,
     cache: Arc<CacheService>,
     flights: KeyedCoalesce<Result<String, Shed>>,
+    pub(super) terms: TermsCache,
     pub(super) permits: Semaphore,
 }
 
@@ -113,6 +115,7 @@ impl SearchService {
             pg,
             cache,
             flights: KeyedCoalesce::new(),
+            terms: TermsCache::new(),
             permits: Semaphore::new(PERMITS),
         })
     }
@@ -123,11 +126,22 @@ impl SearchService {
         F: FnOnce() -> Fut,
         Fut: Future<Output = AppResult<T>>,
     {
+        self.cached_for(key, TTL_SECONDS, compute).await
+    }
+
+    async fn cached_for<T, F, Fut>(&self, key: &str, ttl: u64, compute: F) -> AppResult<T>
+    where
+        T: Serialize + DeserializeOwned,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = AppResult<T>>,
+    {
         if let Ok(Some(raw)) = self.cache.get_raw(key).await
             && let Ok(value) = serde_json::from_str::<T>(&raw)
         {
+            crate::metrics::record_cache("search_response", true);
             return Ok(value);
         }
+        crate::metrics::record_cache("search_response", false);
         let json = self
             .flights
             .run(key, || async {
@@ -139,7 +153,7 @@ impl SearchService {
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 let _ = self
                     .cache
-                    .set_raw(key, &json, TTL_SECONDS, None, CacheScope::Shared, None)
+                    .set_raw(key, &json, ttl, None, CacheScope::Shared, None)
                     .await;
                 Ok::<_, AppError>(Ok(json))
             })
@@ -188,9 +202,9 @@ impl SearchService {
             return Ok(request.empty());
         };
         let key = request.key("search-db-v2-tracks", &q, owner.as_deref());
-        self.cached(&key, || async {
+        self.cached_for(&key, TRACKS_TTL_SECONDS, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Tracks).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Tracks).await? else {
                 return Ok(request.empty());
             };
             let ids = sqlx::query_file_scalar!(
@@ -232,7 +246,8 @@ impl SearchService {
         let key = request.key("search-db-v2-playlists", &q, owner.as_deref());
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -263,7 +278,8 @@ impl SearchService {
         let key = request.key("search-db-v2-users", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -297,7 +313,8 @@ impl SearchService {
         let key = request.key("search-db-v2-artists", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(
@@ -326,7 +343,8 @@ impl SearchService {
         let key = request.key("search-db-v2-albums", &q, None);
         self.cached(&key, || async {
             let mut tx = self.begin().await?;
-            let Some(terms) = terms::resolve(&mut tx, &q, Shape::Entities).await? else {
+            let Some(terms) = terms::resolve(&self.terms, &mut tx, &q, Shape::Entities).await?
+            else {
                 return Ok(request.empty());
             };
             let rows = sqlx::query_file_as!(

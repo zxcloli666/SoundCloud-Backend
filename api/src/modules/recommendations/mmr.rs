@@ -34,6 +34,23 @@ where
     selected
 }
 
+pub async fn greedy_pick_off_thread<F>(
+    pool_vecs: Vec<Vec<f32>>,
+    limit: usize,
+    score: F,
+) -> Vec<usize>
+where
+    F: FnMut(usize, &[usize], &[Vec<f32>]) -> f32 + Send + 'static,
+{
+    match tokio::task::spawn_blocking(move || greedy_pick(&pool_vecs, limit, score)).await {
+        Ok(picks) => picks,
+        Err(error) => {
+            tracing::error!(%error, "diversity pick did not finish");
+            Vec::new()
+        }
+    }
+}
+
 pub fn max_cosine_to_selected(cand: usize, selected: &[usize], pool_vecs: &[Vec<f32>]) -> f32 {
     let mut m: f32 = 0.0;
     for &si in selected {

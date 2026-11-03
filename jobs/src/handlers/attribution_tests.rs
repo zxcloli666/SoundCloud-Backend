@@ -16,6 +16,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
          );
          CREATE TABLE tracks (
              id uuid PRIMARY KEY,
+             sc_track_id text NOT NULL UNIQUE DEFAULT gen_random_uuid()::text,
              uploader_sc_user_id text,
              primary_artist_id uuid REFERENCES artists(id) ON DELETE SET NULL,
              enrich_state varchar(16) NOT NULL DEFAULT 'done',

@@ -31,7 +31,7 @@ GROUP BY ta.artist_id
 SELECT COALESCE (la.artist_id, pa.artist_id) AS artist_id, (COALESCE (la.lc, 0) + 0.5 * COALESCE (pa.pc, 0)) AS score
 FROM like_art la FULL OUTER JOIN play_art pa
 ON pa.artist_id = la.artist_id
-ORDER BY score DESC
+ORDER BY score DESC, artist_id
     LIMIT $2
     ),
     ranked AS (
@@ -57,4 +57,4 @@ FROM ranked r
          JOIN top_artists tt ON tt.artist_id = r.artist_id
 WHERE r.rn = 1
   AND a.merged_into IS NULL
-ORDER BY tt.score DESC
+ORDER BY tt.score DESC, a.id

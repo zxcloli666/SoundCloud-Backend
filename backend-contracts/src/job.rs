@@ -33,6 +33,15 @@ pub struct AdminMaintenancePayload {
     pub run_id: uuid::Uuid,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplReplayPayload {
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub id: Option<uuid::Uuid>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncQueueFlushPayload {
     #[serde(default)]
@@ -89,7 +98,9 @@ pub const INDEX_TRACK_PRIORITY: i16 = 5;
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     AdminCatalogRenormalize,
+    AdminLyricsLookupQueue,
     AdminMusicBrainzNames,
+    AdminWantedAliases,
     ArtistAttributionRevalidate,
     AuthCleanupLinkRequests,
     AuthCleanupLoginRequests,
@@ -100,9 +111,13 @@ pub enum JobKind {
     CatalogCollection,
     CatalogWorkReconcile,
     CleanupJobReceipts,
+    DiagCleanup,
     CrawlArtist,
     DiscoverAccounts,
     DiscoverAggregates,
+    DiscoverAlbumAggregates,
+    DiscoverArtistPopularity,
+    DiscoverArtistTags,
     DiscoverCatalogGenius,
     DiscoverCatalogMusicBrainz,
     DiscoverInterest,
@@ -126,6 +141,8 @@ pub enum JobKind {
     RecommendationQualityTrain,
     RecommendationWavePriority,
     RecordHardNegative,
+    ReplReplayDead,
+    ReplRetention,
     ResolveDurations,
     ResolveWantedTracks,
     SearchTermsRefresh,
@@ -139,7 +156,9 @@ pub enum JobKind {
 impl JobKind {
     pub const ALL: &'static [Self] = &[
         Self::AdminCatalogRenormalize,
+        Self::AdminLyricsLookupQueue,
         Self::AdminMusicBrainzNames,
+        Self::AdminWantedAliases,
         Self::ArtistAttributionRevalidate,
         Self::AuthCleanupLinkRequests,
         Self::AuthCleanupLoginRequests,
@@ -150,9 +169,13 @@ impl JobKind {
         Self::CatalogCollection,
         Self::CatalogWorkReconcile,
         Self::CleanupJobReceipts,
+        Self::DiagCleanup,
         Self::CrawlArtist,
         Self::DiscoverAccounts,
         Self::DiscoverAggregates,
+        Self::DiscoverAlbumAggregates,
+        Self::DiscoverArtistPopularity,
+        Self::DiscoverArtistTags,
         Self::DiscoverCatalogGenius,
         Self::DiscoverCatalogMusicBrainz,
         Self::DiscoverInterest,
@@ -176,6 +199,8 @@ impl JobKind {
         Self::RecommendationQualityTrain,
         Self::RecommendationWavePriority,
         Self::RecordHardNegative,
+        Self::ReplReplayDead,
+        Self::ReplRetention,
         Self::ResolveDurations,
         Self::ResolveWantedTracks,
         Self::SearchTermsRefresh,
@@ -189,7 +214,9 @@ impl JobKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AdminCatalogRenormalize => "admin.renormalize_catalog",
+            Self::AdminLyricsLookupQueue => "admin.lyrics_lookup_queue",
             Self::AdminMusicBrainzNames => "admin.reconcile_musicbrainz_names",
+            Self::AdminWantedAliases => "admin.wanted_aliases",
             Self::ArtistAttributionRevalidate => "enrich.revalidate_attribution",
             Self::AuthCleanupLinkRequests => "auth.cleanup_link_requests",
             Self::AuthCleanupLoginRequests => "auth.cleanup_login_requests",
@@ -199,10 +226,14 @@ impl JobKind {
             Self::CatalogRefresh => "catalog.refresh",
             Self::CatalogCollection => "catalog.collection",
             Self::CatalogWorkReconcile => "catalog.reconcile_works",
+            Self::DiagCleanup => "diag.cleanup",
             Self::CleanupJobReceipts => "jobs.cleanup_receipts",
             Self::CrawlArtist => "crawl.artist",
             Self::DiscoverAccounts => "discover.accounts",
             Self::DiscoverAggregates => "discover.aggregates",
+            Self::DiscoverAlbumAggregates => "discover.album_aggregates",
+            Self::DiscoverArtistPopularity => "discover.artist_popularity",
+            Self::DiscoverArtistTags => "discover.artist_tags",
             Self::DiscoverCatalogGenius => "discover.catalog_genius",
             Self::DiscoverCatalogMusicBrainz => "discover.catalog_musicbrainz",
             Self::DiscoverInterest => "discover.interest",
@@ -226,6 +257,8 @@ impl JobKind {
             Self::RecommendationQualityTrain => "recommendations.quality_train",
             Self::RecommendationWavePriority => "recommendations.wave_priority",
             Self::RecordHardNegative => "telemetry.hard_negative",
+            Self::ReplReplayDead => "repl.replay_dead",
+            Self::ReplRetention => "repl.retention",
             Self::ResolveDurations => "indexing.resolve_durations",
             Self::ResolveWantedTracks => "enrich.resolve_wanted",
             Self::SearchTermsRefresh => "search.refresh_terms",
@@ -242,10 +275,12 @@ impl JobKind {
             Self::AuthCleanupLinkRequests
             | Self::AuthCleanupLoginRequests
             | Self::CleanupJobReceipts
+            | Self::DiagCleanup
             | Self::DispatchAudioIndex
             | Self::DispatchTranscription
             | Self::LyricsEmbed
             | Self::OAuthAppsRefresh
+            | Self::ReplReplayDead
             | Self::SyncQueueFlush
             | Self::SyncQueueHeal => JobLane::CoreFast,
             Self::RecordHardNegative | Self::SearchTermsRefresh | Self::SweepHardNegatives => {
@@ -258,6 +293,9 @@ impl JobKind {
             | Self::CollabTrain
             | Self::DiscoverAccounts
             | Self::DiscoverAggregates
+            | Self::DiscoverAlbumAggregates
+            | Self::DiscoverArtistPopularity
+            | Self::DiscoverArtistTags
             | Self::DiscoverCatalogGenius
             | Self::DiscoverCatalogMusicBrainz
             | Self::DiscoverInterest
@@ -273,12 +311,15 @@ impl JobKind {
             | Self::RecommendationQualityBackfill
             | Self::RecommendationQualityTrain
             | Self::RecommendationWavePriority
+            | Self::ReplRetention
             | Self::ResolveDurations
             | Self::ResolveWantedTracks
             | Self::StarTrackTiers
             | Self::SubscriptionsSnapshot => JobLane::Maintenance,
             Self::AdminCatalogRenormalize
+            | Self::AdminLyricsLookupQueue
             | Self::AdminMusicBrainzNames
+            | Self::AdminWantedAliases
             | Self::CatalogRefresh
             | Self::CatalogCollection
             | Self::CrawlArtist
@@ -301,7 +342,9 @@ impl FromStr for JobKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let kind = match value {
             "admin.renormalize_catalog" => Self::AdminCatalogRenormalize,
+            "admin.lyrics_lookup_queue" => Self::AdminLyricsLookupQueue,
             "admin.reconcile_musicbrainz_names" => Self::AdminMusicBrainzNames,
+            "admin.wanted_aliases" => Self::AdminWantedAliases,
             "enrich.revalidate_attribution" => Self::ArtistAttributionRevalidate,
             "auth.cleanup_link_requests" => Self::AuthCleanupLinkRequests,
             "auth.cleanup_login_requests" => Self::AuthCleanupLoginRequests,
@@ -312,9 +355,13 @@ impl FromStr for JobKind {
             "catalog.collection" => Self::CatalogCollection,
             "catalog.reconcile_works" => Self::CatalogWorkReconcile,
             "jobs.cleanup_receipts" => Self::CleanupJobReceipts,
+            "diag.cleanup" => Self::DiagCleanup,
             "crawl.artist" => Self::CrawlArtist,
             "discover.accounts" => Self::DiscoverAccounts,
             "discover.aggregates" => Self::DiscoverAggregates,
+            "discover.album_aggregates" => Self::DiscoverAlbumAggregates,
+            "discover.artist_popularity" => Self::DiscoverArtistPopularity,
+            "discover.artist_tags" => Self::DiscoverArtistTags,
             "discover.catalog_genius" => Self::DiscoverCatalogGenius,
             "discover.catalog_musicbrainz" => Self::DiscoverCatalogMusicBrainz,
             "discover.interest" => Self::DiscoverInterest,
@@ -338,6 +385,8 @@ impl FromStr for JobKind {
             "recommendations.quality_train" => Self::RecommendationQualityTrain,
             "recommendations.wave_priority" => Self::RecommendationWavePriority,
             "telemetry.hard_negative" => Self::RecordHardNegative,
+            "repl.replay_dead" => Self::ReplReplayDead,
+            "repl.retention" => Self::ReplRetention,
             "indexing.resolve_durations" => Self::ResolveDurations,
             "enrich.resolve_wanted" => Self::ResolveWantedTracks,
             "search.refresh_terms" => Self::SearchTermsRefresh,
@@ -388,6 +437,7 @@ mod tests {
         let legacy = [
             JobKind::AdminCatalogRenormalize,
             JobKind::AdminMusicBrainzNames,
+            JobKind::AdminWantedAliases,
             JobKind::ArtistAttributionRevalidate,
             JobKind::AuthCleanupLinkRequests,
             JobKind::AuthCleanupLoginRequests,
@@ -395,6 +445,7 @@ mod tests {
             JobKind::CollabTrain,
             JobKind::CatalogWorkReconcile,
             JobKind::CleanupJobReceipts,
+            JobKind::DiagCleanup,
             JobKind::CrawlArtist,
             JobKind::DiscoverAccounts,
             JobKind::DiscoverAggregates,
@@ -434,7 +485,7 @@ mod tests {
         let names: std::collections::HashSet<&str> =
             kinds.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(names.len(), kinds.len());
-        assert_eq!(kinds.len(), 46);
+        assert_eq!(kinds.len(), 54);
     }
 
     #[test]

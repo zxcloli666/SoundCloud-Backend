@@ -119,6 +119,17 @@ impl<K: Clone + Eq + Hash> WritePauses<K> {
         }
     }
 
+    pub fn blocked(&self, key: &K, own_probe: bool) -> Option<i64> {
+        let now = Instant::now();
+        let paused = self.paused.lock().unwrap_or_else(PoisonError::into_inner);
+        let pause = paused.get(key)?;
+        let remaining = pause.until.saturating_duration_since(now);
+        if remaining.is_zero() || (own_probe && pause.probing) {
+            return None;
+        }
+        Some(whole_seconds(remaining))
+    }
+
     pub fn remaining_seconds(&self, key: &K) -> Option<i64> {
         match self.admit(key) {
             Admission::Paused(seconds) => Some(seconds),
@@ -305,6 +316,22 @@ mod tests {
         expire(&pauses, &"likes");
         assert_eq!(pauses.admit(&"likes"), Admission::Open);
         assert_eq!(pauses.pause_longer_each_time("likes", 60).0, 60);
+    }
+
+    #[test]
+    fn blocked_reports_a_hold_without_taking_the_probe() {
+        let pauses = WritePauses::default();
+        assert_eq!(pauses.blocked(&"likes", false), None);
+        pauses.pause_longer_each_time("likes", 60);
+
+        assert!(pauses.blocked(&"likes", false).is_some());
+        expire(&pauses, &"likes");
+        assert_eq!(pauses.blocked(&"likes", false), None);
+        assert_eq!(pauses.admit(&"likes"), Admission::Probe);
+        assert!(pauses.blocked(&"likes", false).is_some());
+        assert_eq!(pauses.blocked(&"likes", true), None);
+        pauses.pause_longer_each_time("likes", 60);
+        assert!(pauses.blocked(&"likes", true).is_some());
     }
 
     #[test]

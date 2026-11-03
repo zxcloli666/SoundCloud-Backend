@@ -1,6 +1,9 @@
 use std::env;
 
 use stream_ticket::{StreamTicketKey, StreamTicketKeys};
+use tracing::warn;
+
+const DEFAULT_REGIONS: &str = "geo-us,geo-de,geo-ru,geo-fr,geo-nl";
 
 pub struct Config {
     pub port: u16,
@@ -16,6 +19,7 @@ pub struct Config {
     pub database_acquire_timeout_secs: u64,
     pub sc_proxy_url: String,
     pub sc_proxy_fallback: bool,
+    pub egress_regions: Vec<String>,
     pub sc_oauth_fallback_sessions: usize,
     pub free_hq_fetches: usize,
     pub sc_cookies: Vec<String>,
@@ -25,12 +29,14 @@ pub struct Config {
     pub storage_upload_url: String,
     pub storage_token: String,
     pub internal_token: String,
+    pub metrics_token: String,
     pub stream_ticket_keys: StreamTicketKeys,
     pub decrypt_device: Option<String>,
     pub edge_wvd_dir: Option<String>,
     pub edge_wvd_token: Option<String>,
     pub edge_wvd_url: Option<String>,
     pub ready_canary_track: Option<String>,
+    pub hq_upgrade: bool,
 }
 
 impl Config {
@@ -74,6 +80,9 @@ impl Config {
             sc_proxy_fallback: env::var("SC_PROXY_FALLBACK")
                 .map(|v| v == "true")
                 .unwrap_or(false),
+            egress_regions: crate::stream::egress::parse_regions(
+                &env::var("SC_EGRESS_REGIONS").unwrap_or_else(|_| DEFAULT_REGIONS.to_owned()),
+            ),
             sc_oauth_fallback_sessions: env::var("SC_OAUTH_FALLBACK_SESSIONS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -91,6 +100,7 @@ impl Config {
             storage_upload_url,
             storage_token: env::var("STORAGE_TOKEN").unwrap_or_default(),
             internal_token: env::var("INTERNAL_TOKEN").unwrap_or_default(),
+            metrics_token: env::var("METRICS_TOKEN").unwrap_or_default(),
             stream_ticket_keys: stream_ticket_keys(),
             decrypt_device: env::var("SC_DECRYPT_DEVICE").ok().filter(|s| !s.is_empty()),
             edge_wvd_dir: env::var("SC_EDGE_WVD_DIR").ok().filter(|s| !s.is_empty()),
@@ -100,6 +110,7 @@ impl Config {
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            hq_upgrade: hq_upgrade_from_env(env::var("STREAMING_HQ_UPGRADE").ok().as_deref()),
         }
     }
 
@@ -193,6 +204,17 @@ fn pool_max_from_env(raw: Option<&str>) -> usize {
         .min(MAX_POOL_MAX)
 }
 
+fn hq_upgrade_from_env(raw: Option<&str>) -> bool {
+    match raw.map(str::trim) {
+        None | Some("") | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            warn!("STREAMING_HQ_UPGRADE={other} is neither on nor off, the node role decides");
+            true
+        }
+    }
+}
+
 fn acquire_timeout_from_env(raw: Option<&str>) -> u64 {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
@@ -261,6 +283,26 @@ mod tests {
                 acquire_timeout_from_env(Some(raw)),
                 DEFAULT_ACQUIRE_TIMEOUT_SECS,
                 "{raw} must not disable the wait budget"
+            );
+        }
+    }
+
+    #[test]
+    fn hq_upgrades_stop_only_where_they_were_switched_off() {
+        assert!(!hq_upgrade_from_env(Some("off")));
+        assert!(!hq_upgrade_from_env(Some(" off\n")));
+        for raw in [
+            None,
+            Some(""),
+            Some("on"),
+            Some(" on "),
+            Some("OFF"),
+            Some("false"),
+            Some("0"),
+        ] {
+            assert!(
+                hq_upgrade_from_env(raw),
+                "{raw:?} must leave HQ upgrades to the node role, never stop them"
             );
         }
     }

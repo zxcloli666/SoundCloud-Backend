@@ -3,12 +3,12 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::header::{CACHE_CONTROL, PRAGMA, REFERRER_POLICY, VARY};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
+use tower_http::CompressionLevel;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Instrument;
 
@@ -16,6 +16,7 @@ use crate::modules;
 use crate::state::AppState;
 
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
+const COMPRESSION_QUALITY: i32 = 4;
 
 pub fn body_limit() -> axum::extract::DefaultBodyLimit {
     axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES)
@@ -43,12 +44,20 @@ pub fn build(state: AppState) -> Router {
         .max_age(Duration::from_secs(3600));
 
     let http_layer = from_fn_with_state(state.clone(), track_http);
+    let database = &state.config.database;
+    let shed = crate::common::shed::Shed::new(
+        state.pg.options().get_max_connections(),
+        database.shed_factor,
+        database.shed_wait,
+    );
+    let shed_layer = from_fn_with_state(shed, crate::common::shed::shed);
     let premium_layer =
         from_fn_with_state(state.clone(), crate::common::premium_gate::premium_gate);
 
     let router = Router::new()
         .merge(modules::health::router())
         .merge(modules::admin::router())
+        .merge(modules::diag::router(state.admission.clone()))
         .merge(modules::auth::router(state.admission.clone()))
         .merge(modules::me::router())
         .merge(modules::legacy_clients::router())
@@ -82,30 +91,27 @@ pub fn build(state: AppState) -> Router {
     let router = router.merge(crate::profiling::router());
 
     router
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::GATEWAY_TIMEOUT,
-            Duration::from_secs(60),
-        ))
+        .layer(axum::middleware::from_fn(crate::common::shed::deadline))
         .merge(modules::tracks::upload_router())
         .with_state(state)
         .layer(body_limit())
-        .layer(CompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
-            }),
-        )
+        .layer(CompressionLayer::new().quality(CompressionLevel::Precise(COMPRESSION_QUALITY)))
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &Request| tracing::debug_span!("http_request", method = %request.method()),
+        ))
         .layer(http_layer)
         .layer(premium_layer)
+        .layer(shed_layer)
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
 }
 
-pub const CAPABILITY_HEADERS: &[&str] = &["x-session-id", "x-admin-token", "authorization"];
+pub const CAPABILITY_HEADERS: &[&str] = &[
+    "x-session-id",
+    "x-admin-token",
+    "x-diag-token",
+    "authorization",
+];
 
 async fn protect_sensitive_responses(req: Request, next: Next) -> Response {
     let sensitive = is_sensitive_path(req.uri().path()) || carries_capability(req.headers());
@@ -120,7 +126,7 @@ async fn protect_sensitive_responses(req: Request, next: Next) -> Response {
         headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
         headers.insert(
             VARY,
-            HeaderValue::from_static("x-session-id, x-admin-token"),
+            HeaderValue::from_static("x-session-id, x-admin-token, x-diag-token"),
         );
     }
     response
@@ -138,7 +144,7 @@ fn hands_out_capability(headers: &HeaderMap) -> bool {
 
 fn is_sensitive_path(path: &str) -> bool {
     let path = path.trim_end_matches('/');
-    if path == "/auth" || path.starts_with("/auth/") {
+    if path == "/auth" || path.starts_with("/auth/") || path.starts_with("/admin/diag/") {
         return true;
     }
     path.starts_with("/tracks/") && path.ends_with("/stream")
@@ -147,21 +153,21 @@ fn is_sensitive_path(path: &str) -> bool {
 async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = crate::common::http_metrics::method_label(req.method());
     let path = crate::common::http_metrics::route_label(req.extensions().get::<MatchedPath>());
-    let request_id = crate::common::request_id::accept_or_mint(
-        req.headers()
-            .get(crate::common::request_id::HEADER)
-            .and_then(|value| value.to_str().ok()),
-    );
+    let span = telemetry::root_span(&req);
+    let request_id = match telemetry::trace_id(&span, req.headers()) {
+        Some(trace) => trace,
+        None => crate::common::request_id::accept_or_mint(
+            req.headers()
+                .get(crate::common::request_id::HEADER)
+                .and_then(|value| value.to_str().ok()),
+        ),
+    };
+    span.record("request_id", request_id.as_str());
     let key = format!("{method} {path}");
     let start = std::time::Instant::now();
-    let span = tracing::info_span!(
-        "request",
-        request_id = %request_id,
-        method,
-        route = %path,
-    );
-    let mut resp = next.run(req).instrument(span).await;
+    let mut resp = next.run(req).instrument(span.clone()).await;
     let elapsed = start.elapsed();
+    telemetry::finish(&span, resp.status().as_u16());
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         resp.headers_mut().insert(
             HeaderName::from_static(crate::common::request_id::HEADER),
@@ -200,6 +206,10 @@ mod router_search_tests;
 mod router_identity_tests;
 
 #[cfg(test)]
+#[path = "router_diag_tests.rs"]
+mod router_diag_tests;
+
+#[cfg(test)]
 #[path = "router_projection_tests.rs"]
 mod router_projection_tests;
 
@@ -214,6 +224,10 @@ mod router_likes_order_tests;
 #[cfg(test)]
 #[path = "router_likes_rank_tests.rs"]
 mod router_likes_rank_tests;
+
+#[cfg(test)]
+#[path = "router_mutation_tests.rs"]
+mod router_mutation_tests;
 
 #[cfg(test)]
 #[path = "router_superlikes_tests.rs"]

@@ -6,6 +6,10 @@ mod tests;
 #[path = "result_live_tests.rs"]
 mod live_tests;
 
+#[cfg(test)]
+#[path = "result_lock_tests.rs"]
+mod lock_tests;
+
 use anyhow::{Context, anyhow, ensure};
 use backend_contracts::pipeline::{AudioIndexRequest, AudioIndexResult};
 use backend_contracts::reasons::{WorkerReason, WorkerStatus, outcome_rank};
@@ -43,6 +47,51 @@ struct AudioIndex {
     mert: Vec<f32>,
     clap: Vec<f32>,
     fingerprint: Option<String>,
+}
+
+struct Committed {
+    already_settled: bool,
+    committed: bool,
+    invalidated: bool,
+    demoted: bool,
+}
+
+struct FingerprintLocks {
+    track_id: Uuid,
+    track_canonical: Option<Uuid>,
+    neighbour: Option<Neighbour>,
+}
+
+impl FingerprintLocks {
+    fn neighbour_moved(&self) -> bool {
+        self.neighbour
+            .as_ref()
+            .is_some_and(|neighbour| !neighbour.unchanged)
+    }
+
+    fn neighbour_written_first(&self) -> Option<Uuid> {
+        self.neighbour
+            .as_ref()
+            .filter(|neighbour| {
+                neighbour.unchanged && neighbour.first && neighbour.canonical.is_none()
+            })
+            .map(|neighbour| neighbour.id)
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct LockedTrack {
+    id: Uuid,
+    sc_track_id: String,
+    canonical_track_id: Option<Uuid>,
+    prefix: Option<String>,
+}
+
+struct Neighbour {
+    id: Uuid,
+    canonical: Option<Uuid>,
+    unchanged: bool,
+    first: bool,
 }
 
 struct AudioOutcome {
@@ -131,7 +180,7 @@ impl AudioIndexResultHandler {
         Ok(settled.is_some())
     }
 
-    async fn index(&self, index: AudioIndex, delivery: DeliveryContext) -> JobResult {
+    async fn index(&self, mut index: AudioIndex, delivery: DeliveryContext) -> JobResult {
         let stream_sequence = i64::try_from(delivery.stream_sequence)
             .map_err(|_| JobError::permanent(anyhow!("NATS sequence is out of range")))?;
         let lease_id = match self.claim(&index, stream_sequence, &delivery).await? {
@@ -149,72 +198,123 @@ impl AudioIndexResultHandler {
             ResultClaim::Owned { lease_id } => lease_id,
         };
 
-        let AudioIndex {
-            sc_track_id,
-            point_id,
-            upload_generation,
-            attempt,
-            mert,
-            clap,
-            fingerprint,
-        } = index;
         self.qdrant
-            .upsert_audio(point_id, upload_generation, mert, clap, None)
+            .upsert_audio(
+                index.point_id,
+                index.upload_generation,
+                std::mem::take(&mut index.mert),
+                std::mem::take(&mut index.clap),
+                None,
+            )
             .await
             .map_err(JobError::retryable)?;
 
-        let prefix = fingerprint.as_ref().map(|fingerprint| {
-            fingerprint
-                .chars()
-                .take(FINGERPRINT_PREFIX_CHARS)
-                .collect::<String>()
-        });
-        let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
-        if let Some(prefix) = prefix.as_deref() {
-            lock_fingerprint(&mut transaction, prefix).await?;
-        }
-        let outcome = sqlx::query_file!(
-            "queries/indexing/result/commit.sql",
-            &delivery.consumer,
-            &delivery.stream,
-            stream_sequence,
-            delivery.published_at,
-            &sc_track_id,
-            upload_generation,
-            lease_id,
-            attempt
-        )
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(JobError::retryable)?;
-        if outcome.committed && (!outcome.indexed || !outcome.accepted) {
-            transaction.rollback().await.map_err(JobError::retryable)?;
-            return Err(JobError::retryable(anyhow!(
-                "audio index commit did not settle track {sc_track_id}"
-            )));
-        }
-        if outcome.committed
-            && let (Some(fingerprint), Some(prefix)) = (fingerprint.as_deref(), prefix.as_deref())
-        {
-            apply_fingerprint(&mut transaction, &sc_track_id, fingerprint, prefix).await?;
-        }
-        transaction.commit().await.map_err(JobError::retryable)?;
+        let outcome = self
+            .commit(&index, stream_sequence, &delivery, lease_id)
+            .await?;
         if outcome.already_settled || outcome.committed {
             return Ok(());
         }
         if outcome.invalidated {
             tracing::warn!(
-                track = %sc_track_id,
-                generation = upload_generation,
-                attempt,
+                track = %index.sc_track_id,
+                generation = index.upload_generation,
+                attempt = index.attempt,
                 demoted = outcome.demoted,
                 "audio index result was written after its epoch closed and was invalidated"
             );
             return Ok(());
         }
         Err(JobError::retryable(anyhow!(
-            "audio index result lost its lease before commit for track {sc_track_id}"
+            "audio index result lost its lease before commit for track {}",
+            index.sc_track_id
         )))
+    }
+
+    async fn commit(
+        &self,
+        index: &AudioIndex,
+        stream_sequence: i64,
+        delivery: &DeliveryContext,
+        lease_id: Uuid,
+    ) -> JobResult<Committed> {
+        let sc_track_id = index.sc_track_id.as_str();
+        let fingerprint = index.fingerprint.as_deref();
+        let prefix = fingerprint.map(|fingerprint| {
+            fingerprint
+                .chars()
+                .take(FINGERPRINT_PREFIX_CHARS)
+                .collect::<String>()
+        });
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
+            let locks = match prefix.as_deref() {
+                Some(prefix) => {
+                    lock_fingerprint_rows(&mut transaction, sc_track_id, prefix).await?
+                }
+                None => None,
+            };
+            if tries == 1
+                && locks
+                    .as_ref()
+                    .is_some_and(FingerprintLocks::neighbour_moved)
+            {
+                transaction.rollback().await.map_err(JobError::retryable)?;
+                continue;
+            }
+            if let Some(neighbour) = locks
+                .as_ref()
+                .and_then(FingerprintLocks::neighbour_written_first)
+            {
+                sqlx::query(include_str!(
+                    "../../../queries/indexing/result/write_neighbour_first.sql"
+                ))
+                .bind(neighbour)
+                .execute(&mut *transaction)
+                .await
+                .map_err(JobError::retryable)?;
+            }
+            let outcome = sqlx::query_file!(
+                "queries/indexing/result/commit.sql",
+                &delivery.consumer,
+                &delivery.stream,
+                stream_sequence,
+                delivery.published_at,
+                sc_track_id,
+                index.upload_generation,
+                lease_id,
+                index.attempt
+            )
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
+            if outcome.committed && (!outcome.indexed || !outcome.accepted) {
+                transaction.rollback().await.map_err(JobError::retryable)?;
+                return Err(JobError::retryable(anyhow!(
+                    "audio index commit did not settle track {sc_track_id}"
+                )));
+            }
+            if outcome.committed
+                && let (Some(fingerprint), Some(locks)) = (fingerprint, locks.as_ref())
+            {
+                if locks.neighbour_moved() {
+                    tracing::warn!(
+                        track = %sc_track_id,
+                        "fingerprint neighbour moved twice before its lock, no canonical link"
+                    );
+                }
+                apply_fingerprint(&mut transaction, fingerprint, locks).await?;
+            }
+            transaction.commit().await.map_err(JobError::retryable)?;
+            return Ok(Committed {
+                already_settled: outcome.already_settled,
+                committed: outcome.committed,
+                invalidated: outcome.invalidated,
+                demoted: outcome.demoted,
+            });
+        }
     }
 
     async fn claim(
@@ -271,10 +371,11 @@ impl AudioIndexResultHandler {
     }
 }
 
-async fn lock_fingerprint(
+async fn lock_fingerprint_rows(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sc_track_id: &str,
     prefix: &str,
-) -> JobResult {
+) -> JobResult<Option<FingerprintLocks>> {
     sqlx::query(include_str!(
         "../../../queries/indexing/result/lock_fingerprint.sql"
     ))
@@ -282,54 +383,71 @@ async fn lock_fingerprint(
     .execute(&mut **transaction)
     .await
     .map_err(JobError::retryable)?;
-    Ok(())
-}
-
-async fn apply_fingerprint(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    sc_track_id: &str,
-    fingerprint: &str,
-    prefix: &str,
-) -> JobResult {
-    let current = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(include_str!(
-        "../../../queries/indexing/result/find_track.sql"
+    let seen = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(include_str!(
+        "../../../queries/indexing/result/find_neighbour.sql"
     ))
+    .bind(prefix)
     .bind(sc_track_id)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(JobError::retryable)?;
-    let Some((track_id, current_canonical)) = current else {
-        return Ok(());
+    let locked = sqlx::query_as::<_, LockedTrack>(include_str!(
+        "../../../queries/indexing/result/lock_pair.sql"
+    ))
+    .bind(sc_track_id)
+    .bind(seen.map(|(id, _)| id))
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(JobError::retryable)?;
+    let Some(track) = locked.iter().find(|row| row.sc_track_id == sc_track_id) else {
+        return Ok(None);
     };
+    let neighbour = seen.map(|(id, canonical)| Neighbour {
+        id,
+        canonical,
+        unchanged: locked.iter().any(|row| {
+            row.id == id
+                && row.canonical_track_id == canonical
+                && row.prefix.as_deref() == Some(prefix)
+        }),
+        first: locked.first().is_some_and(|row| row.id == id),
+    });
+    Ok(Some(FingerprintLocks {
+        track_id: track.id,
+        track_canonical: track.canonical_track_id,
+        neighbour,
+    }))
+}
 
+async fn apply_fingerprint(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    fingerprint: &str,
+    locks: &FingerprintLocks,
+) -> JobResult {
     sqlx::query(include_str!(
         "../../../queries/indexing/result/set_fingerprint.sql"
     ))
-    .bind(track_id)
+    .bind(locks.track_id)
     .bind(fingerprint)
     .execute(&mut **transaction)
     .await
     .map_err(JobError::retryable)?;
-    let neighbour = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(include_str!(
-        "../../../queries/indexing/result/find_neighbour.sql"
-    ))
-    .bind(prefix)
-    .bind(track_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(JobError::retryable)?;
-    let Some((neighbour_id, neighbour_canonical)) = neighbour else {
+    let Some(neighbour) = locks
+        .neighbour
+        .as_ref()
+        .filter(|neighbour| neighbour.unchanged)
+    else {
         return Ok(());
     };
-    let Some(canonical_id) = joined_canonical_id(current_canonical, neighbour_canonical) else {
+    let Some(canonical_id) = joined_canonical_id(locks.track_canonical, neighbour.canonical) else {
         return Ok(());
     };
     sqlx::query(include_str!(
         "../../../queries/indexing/result/link_canonical.sql"
     ))
     .bind(canonical_id)
-    .bind(track_id)
-    .bind(neighbour_id)
+    .bind(locks.track_id)
+    .bind(neighbour.id)
     .execute(&mut **transaction)
     .await
     .map_err(JobError::retryable)?;

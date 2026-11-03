@@ -20,6 +20,7 @@ pub struct UploadResponse {
     pub filename: String,
     pub path: String,
     pub duration_secs: f64,
+    pub quality: &'static str,
 }
 
 /// RAII guard — any reserved tmp bytes get released on drop, even on panic / early return.
@@ -316,6 +317,7 @@ pub async fn upload(
         filename: filename.clone(),
         path: format!("{filename}.m4a"),
         duration_secs: output.duration_secs,
+        quality: output.quality,
     }))
 }
 

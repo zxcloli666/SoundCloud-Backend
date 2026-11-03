@@ -3,6 +3,7 @@ mod error;
 mod genius;
 mod identity;
 mod musicbrainz;
+mod page;
 mod socials;
 
 #[cfg(test)]

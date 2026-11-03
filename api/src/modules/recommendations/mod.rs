@@ -4,8 +4,10 @@ mod artist_wave_live_tests;
 pub mod bandits;
 pub mod clusters;
 pub mod cold_start;
+pub mod compare_reads;
 pub mod debias;
 pub mod handlers;
+pub mod home_artists;
 pub mod home_wave;
 #[cfg(test)]
 mod home_wave_live_tests;

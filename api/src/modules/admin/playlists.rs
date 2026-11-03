@@ -1,10 +1,13 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::response::Response;
+use backend_contracts::admin_catalog::AdminCommand;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::forward::{RequestKey, forward};
 use crate::common::admin::AdminAuth;
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::state::AppState;
 
 const DRAINABLE: &[&str] = &["equal", "remote_superset", "order_only"];
@@ -51,14 +54,6 @@ pub struct LegacyIntentsPage {
     pub page: i64,
     pub limit: i64,
     pub by_classification: Vec<ClassificationCount>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AbandonResult {
-    pub archive_id: Uuid,
-    pub playlist_urn: String,
-    pub playlist_unblocked: bool,
 }
 
 #[tracing::instrument(skip_all)]
@@ -119,26 +114,13 @@ pub async fn list_legacy(
 pub async fn abandon_legacy(
     _: AdminAuth,
     State(state): State<AppState>,
+    key: RequestKey,
     Path(archive_id): Path<Uuid>,
-) -> AppResult<Json<AbandonResult>> {
-    let mut transaction = state.pg.begin().await?;
-    let playlist_urn =
-        sqlx::query_file_scalar!("queries/admin/playlists/legacy_abandon.sql", archive_id)
-            .fetch_optional(&mut *transaction)
-            .await?
-            .ok_or_else(|| {
-                AppError::not_found("legacy playlist intent not found or already resolved")
-            })?;
-    let unblocked = sqlx::query_file!("queries/admin/playlists/legacy_wake.sql", &playlist_urn)
-        .execute(&mut *transaction)
-        .await?
-        .rows_affected()
-        > 0;
-    transaction.commit().await?;
-
-    Ok(Json(AbandonResult {
-        archive_id,
-        playlist_urn,
-        playlist_unblocked: unblocked,
-    }))
+) -> AppResult<Response> {
+    forward(
+        &state,
+        key,
+        AdminCommand::LegacyPlaylistAbandon { archive_id },
+    )
+    .await
 }

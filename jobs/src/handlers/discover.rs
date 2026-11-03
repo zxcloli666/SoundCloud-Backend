@@ -7,6 +7,7 @@ use crate::queue::{JobError, JobResult};
 
 mod stage;
 
+pub(crate) use stage::Group;
 use stage::{Shards, Stage};
 
 const ARTIST_LOCK_RETRY: Duration = Duration::from_secs(60);
@@ -44,14 +45,15 @@ impl DiscoverHandler {
         Self::hour(now).rem_euclid(self.interest_shards)
     }
 
-    pub async fn refresh_aggregates(&self) -> JobResult {
+    pub async fn refresh_aggregates(&self, group: Group) -> JobResult {
         let started = std::time::Instant::now();
         let shards = Shards::at(self.artist_plays_shards, Self::hour(chrono::Utc::now()));
-        for stage in Stage::plan(self.always_premium) {
+        for stage in group.plan(self.always_premium) {
             self.run(stage, shards).await?;
         }
 
         info!(
+            group = group.name(),
             elapsed_ms = started.elapsed().as_millis() as u64,
             artist_plays_shard = shards.current,
             artist_plays_shards = shards.count,

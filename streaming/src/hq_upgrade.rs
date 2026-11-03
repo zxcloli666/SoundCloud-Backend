@@ -1,10 +1,11 @@
+#[cfg(test)]
+mod gate_tests;
 mod tiers;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::db::postgres::PgPool;
@@ -84,6 +85,44 @@ pub fn spawn_hq_upgrade_task(
     });
 }
 
+async fn pick_on_core(pg: &PgPool, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
+    match pg.is_core().await {
+        Ok(true) => pick(pg, stored, tiers).await,
+        Ok(false) => {
+            debug!("[hq-upgrade] this database is not core, core upgrades the tracks");
+            Vec::new()
+        }
+        Err(e) => {
+            warn!("[hq-upgrade] node role unknown, nothing picked: {e}");
+            Vec::new()
+        }
+    }
+}
+
+async fn pick(pg: &PgPool, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
+    let mut urns: Vec<String> = Vec::new();
+    let mut round = Vec::new();
+    for &tier in tiers {
+        let left = BATCH - urns.len() as i64;
+        match pg
+            .pick_upgrade_candidates(stored, tier, left, RETRY_COOLDOWN_SEC)
+            .await
+        {
+            Ok(pick) => {
+                round.push(tiers::Picked {
+                    tier,
+                    count: pick.urns.len(),
+                    waiting_seconds: pick.waiting_seconds,
+                });
+                urns.extend(pick.urns);
+            }
+            Err(e) => warn!("[hq-upgrade] pick {stored} {} failed: {e}", tier.label()),
+        }
+    }
+    tiers::report(stored, &round);
+    urns
+}
+
 struct Upgrader {
     pg: PgPool,
     anon: Arc<AnonClient>,
@@ -107,7 +146,7 @@ impl Upgrader {
             );
             return;
         }
-        for urn in self.pick(stored, tiers).await {
+        for urn in pick_on_core(&self.pg, stored, tiers).await {
             if !self.storage.has_room_for_background_uploads() {
                 debug!(
                     stored,
@@ -130,31 +169,6 @@ impl Upgrader {
         }
     }
 
-    async fn pick(&self, stored: &'static str, tiers: &[UpgradeTier]) -> Vec<String> {
-        let mut urns: Vec<String> = Vec::new();
-        let mut round = Vec::new();
-        for &tier in tiers {
-            let left = BATCH - urns.len() as i64;
-            match self
-                .pg
-                .pick_upgrade_candidates(stored, tier, left, RETRY_COOLDOWN_SEC)
-                .await
-            {
-                Ok(pick) => {
-                    round.push(tiers::Picked {
-                        tier,
-                        count: pick.urns.len(),
-                        waiting_seconds: pick.waiting_seconds,
-                    });
-                    urns.extend(pick.urns);
-                }
-                Err(e) => warn!("[hq-upgrade] pick {stored} {} failed: {e}", tier.label()),
-            }
-        }
-        tiers::report(stored, &round);
-        urns
-    }
-
     async fn upgrade_one(&self, track_urn: &str, stored: &'static str) -> UpgradeOutcome {
         if self.uq_live()
             && let Some(pool) = &self.cookies
@@ -167,7 +181,13 @@ impl Upgrader {
         }
 
         if let Some(src) = self.restricted_source(track_urn).await {
-            let data = self.decrypt_all(&src).await?;
+            let data = crate::stream::decrypt_fetch::decrypt_whole(
+                &self.engine,
+                &self.http_client,
+                &self.sc_proxy_url,
+                &src,
+            )
+            .await?;
             return Ok(self.upload(track_urn, data, src.quality));
         }
 
@@ -206,28 +226,6 @@ impl Upgrader {
                 None
             }
         }
-    }
-
-    async fn decrypt_all(
-        &self,
-        src: &RestrictedSource,
-    ) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
-        let fetcher: Arc<dyn decrypt::Fetcher> =
-            Arc::new(crate::stream::decrypt_fetch::ProxyFetcher {
-                client: self.http_client.clone(),
-                proxy_url: self.sc_proxy_url.clone(),
-            });
-        let mut stream = self
-            .engine
-            .process_stream(&src.manifest, &src.token, fetcher)
-            .await?;
-
-        let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024 * 1024);
-        while let Some(chunk) = stream.next().await {
-            buf.extend_from_slice(&chunk?);
-        }
-        buf.shrink_to_fit();
-        Ok(Bytes::from(buf))
     }
 
     fn upload(&self, track_urn: &str, data: Bytes, quality: &'static str) -> bool {

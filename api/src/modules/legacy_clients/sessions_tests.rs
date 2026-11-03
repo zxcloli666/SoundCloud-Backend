@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::refresh::answer;
 use crate::modules::auth::handlers::refresh_response;
-use crate::modules::auth::{AuthHealthService, AuthService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
 
@@ -234,5 +234,6 @@ fn auth(pool: &PgPool) -> anyhow::Result<Arc<AuthService>> {
         sc,
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis, pool.clone()),
+        CoreRpc::unreachable(),
     ))
 }

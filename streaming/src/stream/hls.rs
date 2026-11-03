@@ -9,7 +9,7 @@ use url::Url;
 use wreq::Client;
 
 use super::proxy::{BodyValidator, fetch_direct_validated, fetch_get_validated};
-use super::validate::{is_valid_audio, is_valid_m3u8};
+use super::validate::{is_encrypted_mp4, is_valid_audio, is_valid_m3u8};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
@@ -128,6 +128,7 @@ pub async fn download_progressive(
         && audio
             .first()
             .is_some_and(|b| !matches!(b, b'{' | b'[' | b'<' | b' '))
+        && !is_encrypted_mp4(&audio)
     {
         return Ok((Bytes::from(audio), mime_to_content_type(mime_type)));
     }
@@ -177,7 +178,7 @@ pub async fn download_hls(
             audio_validator(),
         )
         .await?;
-        if data.windows(4).any(|w| w == b"enca") {
+        if is_encrypted_mp4(&data) {
             return Err("unsupported stream".into());
         }
         buf.extend_from_slice(&data);

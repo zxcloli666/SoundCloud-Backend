@@ -287,6 +287,7 @@ mod live_tests {
             grpc_url: std::env::var("QDRANT_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:6334".to_owned()),
             api_key: String::new().into(),
+            tls: None,
         })
         .expect("the client builds")
     }

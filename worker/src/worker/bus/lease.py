@@ -11,6 +11,7 @@ import nats.errors
 from nats.aio.msg import Msg
 
 from worker.bus.connection import Connection, race
+from worker.bus.pace import LanePace
 from worker.contract import LaneSpec
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.outcome import LeaseDropped, Status
@@ -54,13 +55,14 @@ class Lease:
         clock: Clock,
         max_deliver: Callable[[], int],
         msg_id_header: str,
+        deadline_s: float,
     ) -> None:
         self.lane = lane
         self.payload = payload
         self.correlation = correlation
         self.stream_seq = msg.metadata.sequence.stream
         self.msg_id = (msg.headers or {}).get(msg_id_header)
-        self.deadline = Deadline.after(lane.deadline_s, clock.now)
+        self.deadline = Deadline.after(deadline_s, clock.now)
         self.settled: asyncio.Future[Settled] = asyncio.get_running_loop().create_future()
         self._msg = msg
         self._connection = connection
@@ -243,6 +245,7 @@ class Leases:
         self._clock = clock
         self._max_deliver = max_deliver
         self._msg_id_header = msg_id_header
+        self.pace = LanePace(lane)
         self._active: dict[int, Lease] = {}
 
     def attach(self, msg: Msg, payload: Mapping[str, object], correlation: str) -> Attached:
@@ -262,6 +265,7 @@ class Leases:
             self._clock,
             self._max_deliver,
             self._msg_id_header,
+            self.pace.deadline_s(),
         )
         self._active[seq] = lease
         lease.settled.add_done_callback(lambda _: self._forget(seq, lease))

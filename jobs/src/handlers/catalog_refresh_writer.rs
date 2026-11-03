@@ -55,6 +55,14 @@ impl CatalogWriter {
         observation: catalog_ingest::Observation,
     ) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
+        self.persist_in(
+            &mut transaction,
+            payload,
+            value,
+            TrackPriority::Discovery,
+            observation,
+        )
+        .await?;
         let fence = sqlx::query_file_scalar!(
             "queries/catalog_refresh/fence.sql",
             job.id,
@@ -67,14 +75,6 @@ impl CatalogWriter {
         if fence.is_none() {
             return Ok(());
         }
-        self.persist_in(
-            &mut transaction,
-            payload,
-            value,
-            TrackPriority::Discovery,
-            observation,
-        )
-        .await?;
         transaction.commit().await.map_err(JobError::retryable)
     }
 
@@ -101,13 +101,13 @@ impl CatalogWriter {
                 .await
                 .map_err(JobError::retryable)?;
                 if result.metadata_applied && fields.duration_ms > self.max_track_duration_ms {
-                    sqlx::query_file!(
-                        "../api/queries/tracks/mark_too_long.sql",
-                        &fields.sc_track_id
-                    )
-                    .execute(&mut **connection)
-                    .await
-                    .map_err(JobError::retryable)?;
+                    let too_long = wt::TrackTooLong {
+                        sc_track_id: fields.sc_track_id.clone(),
+                        at: wt::now(),
+                    };
+                    wt::call(connection, &too_long)
+                        .await
+                        .map_err(JobError::retryable)?;
                 } else if result.was_new {
                     let tier = star_priority::of_track(&mut **connection, &fields.sc_track_id)
                         .await

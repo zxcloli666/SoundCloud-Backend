@@ -343,6 +343,7 @@ class QueueHandler:
         return outcome
 
     async def _process(self, lease: Lease, abort: asyncio.Event) -> Outcome:
+        started = self._clock.now()
         work = asyncio.ensure_future(self._processor.process(lease.payload, lease.deadline))
         stop = asyncio.ensure_future(abort.wait())
         try:
@@ -355,10 +356,24 @@ class QueueHandler:
         stop.cancel()
         await asyncio.gather(stop, return_exceptions=True)
         if work in done:
-            return work.result()
+            seconds = self._clock.now() - started
+            try:
+                outcome = work.result()
+            except TransientFailure as failure:
+                if failure.reason is Reason.DEADLINE_EXCEEDED:
+                    self._leases.pace.expired(seconds)
+                raise
+            self._learn_pace(outcome, seconds)
+            return outcome
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
         raise Aborted
+
+    def _learn_pace(self, outcome: Outcome, seconds: float) -> None:
+        if outcome.status is Status.OK:
+            self._leases.pace.finished(seconds)
+        elif outcome.reason is Reason.DEADLINE_EXCEEDED:
+            self._leases.pace.expired(seconds)
 
     async def _abort_outcome(self, lease: Lease) -> Outcome | None:
         max_deliver = self._watch.max_deliver

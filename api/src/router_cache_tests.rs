@@ -81,7 +81,7 @@ async fn an_answer_to_a_request_that_showed_a_capability_is_never_stored_by_a_sh
         );
         assert_eq!(
             headers.get(VARY).and_then(|value| value.to_str().ok()),
-            Some("x-session-id, x-admin-token"),
+            Some("x-session-id, x-admin-token, x-diag-token"),
             "a cache that stores the answer anyway must at least not serve it to another holder"
         );
     }

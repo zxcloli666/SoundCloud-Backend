@@ -32,9 +32,11 @@ pub async fn overview(
         return Ok(Json(cached));
     }
 
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
     let row = sqlx::query_file!("queries/admin/auth_overview/overview.sql")
-        .fetch_one(&state.pg)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     let resp = AuthOverview {
         total: row.total,
@@ -83,9 +85,12 @@ pub async fn oauth_health(
         return Ok(Json(cached));
     }
 
-    let rows = sqlx::query_file!("queries/admin/auth_overview/oauth_health.sql")
-        .fetch_all(&state.pg)
-        .await?
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
+    let fetched = sqlx::query_file!("queries/admin/auth_overview/oauth_health.sql")
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let rows = fetched
         .into_iter()
         .map(|r| OAuthAppHealth {
             id: r.id,

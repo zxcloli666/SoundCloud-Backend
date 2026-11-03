@@ -18,6 +18,8 @@ use crate::bus::advisory::AdvisoryReaper;
 use crate::bus::{Bus, BusConsumers};
 use crate::config::JobsConfig;
 use crate::db::Databases;
+use crate::handlers::admin_rpc::AdminCatalogRpc;
+use crate::handlers::auth_rpc::AuthRpc;
 use crate::handlers::taste::{TasteHandler, TasteResult};
 use crate::handlers::{
     CORE_BULK_KINDS, CORE_FAST_KINDS, JobHandlers, MAINTENANCE_KINDS, OPS_KINDS, accepts_ingress,
@@ -88,6 +90,7 @@ pub async fn run() -> anyhow::Result<()> {
     let taste_results = bus.taste_results(&config.nats).await?;
     let taste = Arc::new(TasteHandler::new(
         databases.maintenance.clone(),
+        databases.analytics.clone(),
         bus.clone(),
         qdrant.clone(),
         config.taste.clone(),
@@ -187,6 +190,16 @@ pub async fn run() -> anyhow::Result<()> {
         AdvisoryReaper::new(bus.clone(), handlers.clone()).run(cancellation.clone()),
     );
     supervisor.spawn(
+        "auth RPC",
+        Arc::new(AuthRpc::new(databases.main.fast.clone(), &config.oauth)?)
+            .serve(bus.clone(), cancellation.clone()),
+    );
+    supervisor.spawn(
+        "admin catalog RPC",
+        Arc::new(AdminCatalogRpc::new(databases.main.fast.clone()))
+            .serve(bus.clone(), cancellation.clone()),
+    );
+    supervisor.spawn(
         "dependency health monitor",
         crate::health::monitor_dependencies(
             databases.clone(),
@@ -231,6 +244,12 @@ pub async fn run() -> anyhow::Result<()> {
             },
         ),
     );
+    let wake_handlers = handlers.clone();
+    let wake_cancellation = cancellation.clone();
+    supervisor.spawn("lyrics wake listener", async move {
+        wake_handlers.listen_lyrics_wakes(wake_cancellation).await;
+        Ok::<(), anyhow::Error>(())
+    });
     let indexing_handlers = handlers.clone();
     supervisor.spawn(
         "audio index result consumer",
@@ -318,6 +337,17 @@ pub async fn run() -> anyhow::Result<()> {
         maintenance_worker.run(cancellation.clone()),
     );
     supervisor.spawn("ops worker", ops_worker.run(cancellation.clone()));
+    supervisor.spawn(
+        "replication resend sweeper",
+        repl_verify::Sweeper::new(databases.main.fast.clone()).run(cancellation.clone()),
+    );
+    if config.repl_verify != repl_verify::Mode::Off {
+        supervisor.spawn(
+            "replication verify",
+            repl_verify::Verifier::new(databases.main.fast.clone(), config.repl_verify)
+                .run(cancellation.clone()),
+        );
+    }
 
     health.mark_ready();
     let result = supervisor.run_until_signal().await;
@@ -375,8 +405,7 @@ fn queue_delivery_error(error: QueueError) -> JobError {
 
 async fn indexing_schema_ready(pool: &sqlx::PgPool) -> sqlx::Result<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT to_regclass('tracks_indexing_stuck_idx') IS NOT NULL
-             AND to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL
+        "SELECT to_regclass('tracks_storage_failed_retry_idx') IS NOT NULL
              AND EXISTS (
                  SELECT 1
                  FROM pg_index
@@ -468,6 +497,11 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
              AND to_regclass('user_likes_tracks_sync_heal_idx') IS NOT NULL
              AND to_regclass('user_likes_playlists_sync_heal_idx') IS NOT NULL
              AND to_regclass('user_followings_sync_heal_idx') IS NOT NULL
+             AND to_regclass('sync_queue_cancelled_idx') IS NOT NULL
+             AND to_regclass('sync_queue_fresh_idx') IS NOT NULL
+             AND to_regclass('user_likes_tracks_intent_idx') IS NOT NULL
+             AND to_regclass('user_likes_playlists_intent_idx') IS NOT NULL
+             AND to_regclass('user_followings_intent_idx') IS NOT NULL
              AND (SELECT count(*) = 6
                   FROM information_schema.columns
                   WHERE table_schema = current_schema()

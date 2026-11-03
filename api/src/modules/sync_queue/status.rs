@@ -117,14 +117,24 @@ impl SyncQueueService {
     ) -> AppResult<i64> {
         let sc_user_id = crate::common::sc_ids::extract_sc_id(sc_user_id);
         let variants = crate::common::sc_ids::user_id_variants(sc_user_id);
+        let revive = wt::SyncQueueRevive {
+            user_ids: variants.clone(),
+            target_urn: target_urn.map(str::to_owned),
+            dropped_targets: reread_memberships.to_vec(),
+            at: wt::now(),
+        };
+        let mut transaction = self.pg.begin().await?;
         let revived = sqlx::query_file_scalar!(
-            "queries/sync_queue/service/revive_dead.sql",
+            "queries/sync_queue/service/revivable_count.sql",
             &variants,
             target_urn,
-            reread_memberships
+            reread_memberships,
+            revive.at
         )
-        .fetch_one(&self.pg)
+        .fetch_one(&mut *transaction)
         .await?;
+        wt::call(&mut transaction, &revive).await?;
+        transaction.commit().await?;
         self.forget_counts(&status_key(sc_user_id)).await;
         Ok(revived)
     }

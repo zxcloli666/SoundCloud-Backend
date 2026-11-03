@@ -13,10 +13,10 @@ use crate::cache::CacheService;
 use crate::common::admission::PublicAdmission;
 use crate::config::{
     AdminCfg, AdmissionCfg, AdmissionLimitCfg, AppConfig, ColdCfg, CollabTriggerCfg, DatabaseCfg,
-    DbSslCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg, StreamingCfg,
-    SubscriptionsCfg,
+    DbSslCfg, DiagCfg, NatsCfg, QdrantCfg, RedisCfg, SoundcloudCfg, SoundwaveCfg, StorageCfg,
+    StreamingCfg, SubscriptionsCfg,
 };
-use crate::modules::auth::{AuthHealthService, AuthService, LinkService, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::sc::read_tests::SearchRelay;
 use crate::sc::{ScClient, ScReadService};
@@ -49,6 +49,11 @@ fn config(redis: &str) -> AppConfig {
             },
             pool_max: 4,
             acquire_timeout: Duration::from_secs(5),
+            statement_timeout: Duration::from_secs(15),
+            idle_in_transaction_timeout: Duration::from_secs(15),
+            min_connections: 0,
+            shed_factor: 4,
+            shed_wait: Duration::from_millis(1500),
         },
         streaming: StreamingCfg {
             service_url: url::Url::parse("http://127.0.0.1:1").expect("a streaming url"),
@@ -59,6 +64,16 @@ fn config(redis: &str) -> AppConfig {
         },
         admin: AdminCfg {
             token: String::new().into(),
+            metrics_token: String::new().into(),
+            diag_token: String::new().into(),
+        },
+        diag: DiagCfg {
+            host: "test".to_owned(),
+            code_slot: 0,
+            max_bytes: 1 << 30,
+            origin_key: "test-origin-key".to_owned().into(),
+            jaeger_url: String::new(),
+            sourcemaps_dir: String::new(),
         },
         redis: RedisCfg {
             url: redis.to_owned(),
@@ -75,13 +90,22 @@ fn config(redis: &str) -> AppConfig {
             room_list: limit,
             room_create: limit,
             room_join: limit,
+            diag_bundle: limit,
+            diag_events: limit,
+            diag_bytes: AdmissionLimitCfg {
+                per_client: 64 * 1024 * 1024,
+                global: 1 << 30,
+            },
+            trusted_proxies: Vec::new(),
         },
         nats: NatsCfg {
             url: "nats://127.0.0.1:1".to_owned(),
+            tls: None,
         },
         qdrant: QdrantCfg {
             grpc_url: "http://127.0.0.1:1".to_owned(),
             api_key: String::new().into(),
+            tls: None,
         },
         storage: StorageCfg { url: String::new() },
         subscriptions: SubscriptionsCfg {
@@ -108,6 +132,7 @@ fn config(redis: &str) -> AppConfig {
         max_track_duration_ms: 420_000,
         premium_reserve: false,
         reserve_backend: false,
+        api_background: true,
     }
 }
 
@@ -137,6 +162,7 @@ pub(super) async fn state(
         sc.clone(),
         oauth_apps.clone(),
         AuthHealthService::with_database(redis_pool.clone(), pg.clone()),
+        CoreRpc::unreachable(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
     let tokens = TokenProvider::new(auth.clone(), OAuthAppTokenService::new(pg.clone()));
@@ -170,6 +196,7 @@ pub(super) async fn state(
         wreq::Client::new(),
         String::new(),
         pg.clone(),
+        true,
     );
     let worker =
         crate::modules::lyrics::WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());
@@ -178,7 +205,7 @@ pub(super) async fn state(
         qdrant,
         pg.clone(),
         nats,
-        redis_pool,
+        redis_pool.clone(),
         worker,
         s3,
         collab_vector.clone(),
@@ -214,7 +241,7 @@ pub(super) async fn state(
             sync_queue: sync_queue.clone(),
             cold_refresh: cold_refresh.clone(),
             tokens,
-            background_jobs: background_jobs.clone(),
+            redis: redis_pool.clone(),
             miss: miss.clone(),
         },
     );
@@ -224,6 +251,8 @@ pub(super) async fn state(
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
     events.install_dislikes(dislikes.clone());
     Ok(AppState {
+        core: CoreRpc::unreachable(),
+        diag: crate::modules::diag::DiagService::new(pg.clone(), &config.diag),
         http_metrics: Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         search: crate::modules::search::SearchService::new(pg.clone(), cache.clone()),
         soundcloud_search: crate::modules::soundcloud_search::SoundCloudSearch::new(
@@ -238,11 +267,7 @@ pub(super) async fn state(
         ),
         history: crate::modules::history::HistoryService::new(pg.clone()),
         featured: crate::modules::featured::FeaturedService::new(pg.clone()),
-        lyrics: crate::modules::lyrics::LyricsService::new(
-            pg.clone(),
-            background_jobs.clone(),
-            false,
-        ),
+        lyrics: crate::modules::lyrics::LyricsService::new(pg.clone(), false),
         discover: crate::modules::discover::DiscoverService::new(pg.clone(), cache.clone()),
         config,
         background_jobs,

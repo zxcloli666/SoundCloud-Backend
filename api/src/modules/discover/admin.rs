@@ -35,11 +35,21 @@ pub async fn admin_refresh(
     _: AdminAuth,
     State(st): State<AppState>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let job = BackgroundJob::coalescing(JobKind::DiscoverAggregates, "schedule", EmptyPayload {})?
-        .with_priority(10)
-        .with_max_attempts(4)?;
-    let job_id = st.background_jobs.enqueue(&job).await?;
-    Ok(Json(serde_json::json!({ "ok": true, "jobId": job_id })))
+    let mut job_ids = Vec::new();
+    for kind in [
+        JobKind::DiscoverAggregates,
+        JobKind::DiscoverArtistPopularity,
+        JobKind::DiscoverArtistTags,
+        JobKind::DiscoverAlbumAggregates,
+    ] {
+        let job = BackgroundJob::coalescing(kind, "schedule", EmptyPayload {})?
+            .with_priority(10)
+            .with_max_attempts(4)?;
+        job_ids.push(st.background_jobs.enqueue(&job).await?);
+    }
+    Ok(Json(
+        serde_json::json!({ "ok": true, "jobId": job_ids[0], "jobIds": job_ids }),
+    ))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

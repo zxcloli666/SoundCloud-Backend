@@ -7,6 +7,10 @@ use crate::state::AppState;
 
 pub struct AdminAuth;
 
+pub struct MetricsAuth;
+
+pub struct DiagAuth;
+
 impl FromRequestParts<AppState> for AdminAuth {
     type Rejection = AppError;
 
@@ -14,18 +18,58 @@ impl FromRequestParts<AppState> for AdminAuth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let expected = state.config.admin.token.expose();
-        if expected.is_empty() {
-            return Err(AppError::unauthorized("Invalid admin token"));
-        }
-        let provided = parts
-            .headers
-            .get("x-admin-token")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
+        let provided = header(parts, "x-admin-token");
+        if !token_matches(provided, state.config.admin.token.expose()) {
             return Err(AppError::unauthorized("Invalid admin token"));
         }
         Ok(AdminAuth)
     }
+}
+
+impl FromRequestParts<AppState> for MetricsAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let bearer = header(parts, "authorization")
+            .strip_prefix("Bearer ")
+            .unwrap_or("");
+        if token_matches(bearer, state.config.admin.metrics_token.expose()) {
+            return Ok(MetricsAuth);
+        }
+        AdminAuth::from_request_parts(parts, state).await?;
+        Ok(MetricsAuth)
+    }
+}
+
+impl FromRequestParts<AppState> for DiagAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        if token_matches(
+            header(parts, "x-diag-token"),
+            state.config.admin.diag_token.expose(),
+        ) {
+            return Ok(DiagAuth);
+        }
+        AdminAuth::from_request_parts(parts, state).await?;
+        Ok(DiagAuth)
+    }
+}
+
+fn header<'a>(parts: &'a Parts, name: &str) -> &'a str {
+    parts
+        .headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+}
+
+fn token_matches(provided: &str, expected: &str) -> bool {
+    !expected.is_empty() && provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
 }

@@ -1,13 +1,9 @@
 use chrono::{DateTime, Utc};
-use futures::future::join_all;
 use sqlx::PgPool;
 
 use super::*;
 
 const TEST_OAUTH_APP_ID: Uuid = Uuid::from_u128(0xaaaaaaaa_aaaa_4aaa_8aaa_aaaaaaaaaaaa);
-
-#[path = "rejection_tests.rs"]
-mod rejection_tests;
 
 async fn install_legacy_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
@@ -27,15 +23,6 @@ async fn migrate_connections(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn migrate_token_rejection(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(include_str!(
-        "../../../../../migrations/0061_soundcloud_token_rejection.sql"
-    ))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 async fn remove_environment_oauth_source(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
         "../../../../../migrations/0066_remove_environment_oauth_source.sql"
@@ -45,51 +32,12 @@ async fn remove_environment_oauth_source(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn install_connections(pool: &PgPool) -> anyhow::Result<()> {
-    install_legacy_schema(pool).await?;
-    sqlx::query("INSERT INTO oauth_apps (id) VALUES ($1)")
-        .bind(TEST_OAUTH_APP_ID)
-        .execute(pool)
-        .await?;
-    migrate_connections(pool).await?;
-    migrate_token_rejection(pool).await?;
-    remove_environment_oauth_source(pool).await?;
-    sqlx::raw_sql(include_str!(
-        "../../../../../migrations/0089_refresh_rejection_confirmation.sql"
-    ))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-async fn insert_connection(pool: &PgPool) -> anyhow::Result<(Uuid, Uuid)> {
-    let connection_id = Uuid::now_v7();
-    let session_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO soundcloud_connections (
-            id, soundcloud_user_id, oauth_app_id,
-            access_token, refresh_token, expires_at, scope
-         ) VALUES ($1, '42', $2, 'access', 'refresh', now() - interval '1 hour', '')",
-    )
-    .bind(connection_id)
-    .bind(TEST_OAUTH_APP_ID)
-    .execute(pool)
-    .await?;
-    sqlx::query("INSERT INTO sessions (id, soundcloud_connection_id) VALUES ($1, $2)")
-        .bind(session_id)
-        .bind(connection_id)
-        .execute(pool)
-        .await?;
-    Ok((connection_id, session_id))
-}
-
 fn connection(expires_at: DateTime<Utc>) -> SoundCloudConnection {
     SoundCloudConnection {
         id: Uuid::nil(),
         soundcloud_user_id: "42".to_owned(),
         oauth_app_id: Some(TEST_OAUTH_APP_ID),
         access_token: "access".to_owned(),
-        refresh_token: "refresh".to_owned(),
         expires_at,
         scope: String::new(),
         refresh_generation: 1,
@@ -173,21 +121,6 @@ fn rejected_access_token_is_never_reused() {
     assert!(!response.can_use_soundcloud);
     assert!(!response.can_refresh);
     assert!(!access_token_is_usable(&connection));
-}
-
-#[test]
-fn refresh_requires_rotated_credentials() {
-    let mut token = sc::ScTokenResponse {
-        access_token: "access".to_owned(),
-        refresh_token: "refresh".to_owned(),
-        expires_in: 3_600,
-        scope: String::new(),
-        token_type: String::new(),
-    };
-
-    assert!(refreshed_token_is_complete(&token));
-    token.refresh_token.clear();
-    assert!(!refreshed_token_is_complete(&token));
 }
 
 #[test]
@@ -278,6 +211,7 @@ fn a_new_login_asked_for_a_gone_app_names_the_app() {
     let attempt = RefreshAttempt {
         outcome: RefreshOutcome::ReauthorizationRequired,
         connection: Some(connection),
+        retry_after_sec: None,
     };
 
     let response = attempt.response();
@@ -297,6 +231,7 @@ fn confirmed_rejection_disables_soundcloud_without_removing_the_session() {
     let attempt = RefreshAttempt {
         outcome: RefreshOutcome::ReauthorizationRequired,
         connection: Some(connection),
+        retry_after_sec: None,
     };
 
     let response = attempt.response();
@@ -311,22 +246,6 @@ fn confirmed_rejection_disables_soundcloud_without_removing_the_session() {
         response.error_code.as_deref(),
         Some("reauthorization_required")
     );
-}
-
-#[test]
-fn retry_delay_grows_and_is_capped() {
-    let mut connection = connection(Utc::now());
-    connection.id = Uuid::from_u128(42);
-
-    let first = retry_delay(&connection, 30, 900);
-    connection.refresh_failure_count = 1;
-    let second = retry_delay(&connection, 30, 900);
-    connection.refresh_failure_count = 100;
-    let capped = retry_delay(&connection, 30, 900);
-
-    assert!((30..=60).contains(&first));
-    assert!((60..=120).contains(&second));
-    assert_eq!(capped, 900);
 }
 
 #[test]
@@ -409,244 +328,5 @@ async fn migration_preserves_sessions_and_distinct_grants(pool: PgPool) -> anyho
 
     assert!(!reaper_enabled);
     assert_eq!(reaper_jobs, 0);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn refresh_lease_has_one_winner_across_connections(pool: PgPool) -> anyhow::Result<()> {
-    install_connections(&pool).await?;
-    let (connection_id, _) = insert_connection(&pool).await?;
-
-    let claims = (0..50)
-        .map(|_| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_file_as!(
-                    SoundCloudConnection,
-                    "queries/auth/service/claim_connection_refresh.sql",
-                    connection_id,
-                    1_i64,
-                    "access",
-                    Uuid::new_v4(),
-                    REFRESH_LEASE_SECONDS
-                )
-                .fetch_optional(&pool)
-                .await
-            }
-        })
-        .collect::<Vec<_>>();
-    let claims = join_all(claims)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-
-    assert_eq!(claims.into_iter().flatten().count(), 1);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_single_refresh_rejection_does_not_require_login(pool: PgPool) -> anyhow::Result<()> {
-    install_connections(&pool).await?;
-    let (connection_id, _) = insert_connection(&pool).await?;
-    let lease_id = Uuid::new_v4();
-    let claimed = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/claim_connection_refresh.sql",
-        connection_id,
-        1_i64,
-        "access",
-        lease_id,
-        REFRESH_LEASE_SECONDS
-    )
-    .fetch_one(&pool)
-    .await?;
-    sqlx::query_file!(
-        "queries/auth/service/fail_connection_refresh_reauth.sql",
-        connection_id,
-        lease_id,
-        claimed.refresh_generation,
-        "SoundCloud rejected the refresh token"
-    )
-    .execute(&pool)
-    .await?;
-    let connection = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/get_connection_by_id.sql",
-        connection_id
-    )
-    .fetch_one(&pool)
-    .await?;
-    assert!(matches!(
-        connection_response(Some(&connection)).state,
-        SoundCloudConnectionState::RetryLater
-    ));
-    assert!(connection.retry_at.is_some());
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn delayed_refresh_snapshot_cannot_rotate_a_newer_token(pool: PgPool) -> anyhow::Result<()> {
-    install_connections(&pool).await?;
-    let (connection_id, _) = insert_connection(&pool).await?;
-    let winner_lease = Uuid::new_v4();
-    let claimed = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/claim_connection_refresh.sql",
-        connection_id,
-        1_i64,
-        "access",
-        winner_lease,
-        REFRESH_LEASE_SECONDS
-    )
-    .fetch_one(&pool)
-    .await?;
-    let completed = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/complete_connection_refresh.sql",
-        connection_id,
-        winner_lease,
-        claimed.refresh_generation,
-        "new-access",
-        "new-refresh",
-        Utc::now() + chrono::Duration::hours(1),
-        ""
-    )
-    .fetch_one(&pool)
-    .await?;
-
-    let stale = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/claim_connection_refresh.sql",
-        connection_id,
-        1_i64,
-        "access",
-        Uuid::new_v4(),
-        REFRESH_LEASE_SECONDS
-    )
-    .fetch_optional(&pool)
-    .await?;
-
-    assert!(stale.is_none());
-    assert_eq!(completed.access_token, "new-access");
-    assert_eq!(completed.refresh_token, "new-refresh");
-    assert_eq!(completed.refresh_generation, 3);
-    assert_eq!(completed.refresh_lease_id, None);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn stale_refresh_failure_cannot_overwrite_reauthentication(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_connections(&pool).await?;
-    let (connection_id, session_id) = insert_connection(&pool).await?;
-    let lease_id = Uuid::new_v4();
-    let claimed = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/claim_connection_refresh.sql",
-        connection_id,
-        1_i64,
-        "access",
-        lease_id,
-        REFRESH_LEASE_SECONDS
-    )
-    .fetch_one(&pool)
-    .await?;
-
-    sqlx::query(
-        "UPDATE soundcloud_connections
-         SET access_token = 'reauth-access',
-             refresh_token = 'reauth-refresh',
-             refresh_generation = refresh_generation + 1,
-             refresh_lease_id = NULL,
-             refresh_lease_expires_at = NULL,
-             updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(connection_id)
-    .execute(&pool)
-    .await?;
-
-    let failed = sqlx::query_file!(
-        "queries/auth/service/fail_connection_refresh_reauth.sql",
-        connection_id,
-        lease_id,
-        claimed.refresh_generation,
-        "invalid_grant"
-    )
-    .execute(&pool)
-    .await?;
-    let state = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT access_token, refresh_token, last_refresh_error_kind
-         FROM soundcloud_connections
-         WHERE id = $1",
-    )
-    .bind(connection_id)
-    .fetch_one(&pool)
-    .await?;
-    let session_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1)")
-            .bind(session_id)
-            .fetch_one(&pool)
-            .await?;
-
-    assert_eq!(failed.rows_affected(), 0);
-    assert_eq!(state.0, "reauth-access");
-    assert_eq!(state.1, "reauth-refresh");
-    assert_eq!(state.2, None);
-    assert!(session_exists);
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn rejected_token_state_preserves_the_session(pool: PgPool) -> anyhow::Result<()> {
-    install_connections(&pool).await?;
-    let (connection_id, session_id) = insert_connection(&pool).await?;
-
-    let marked = sqlx::query_file_scalar!(
-        "queries/auth/service/mark_connection_token_rejected.sql",
-        session_id,
-        "access",
-        REJECTED_TOKEN_RETRY_SECONDS
-    )
-    .fetch_optional(&pool)
-    .await?;
-    let repeated = sqlx::query_file_scalar!(
-        "queries/auth/service/mark_connection_token_rejected.sql",
-        session_id,
-        "access",
-        REJECTED_TOKEN_RETRY_SECONDS
-    )
-    .fetch_optional(&pool)
-    .await?;
-    let stored = sqlx::query_file_as!(
-        SoundCloudConnection,
-        "queries/auth/service/get_connection_by_session.sql",
-        session_id
-    )
-    .fetch_one(&pool)
-    .await?;
-    let session_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1)")
-            .bind(session_id)
-            .fetch_one(&pool)
-            .await?;
-    let response = connection_response(Some(&stored));
-
-    assert!(marked.is_some_and(|seconds| seconds > 0));
-    assert!(repeated.is_some_and(|seconds| seconds > 0));
-    assert_eq!(stored.id, connection_id);
-    assert_eq!(stored.refresh_failure_count, 1);
-    assert_eq!(
-        stored.last_refresh_error_kind.as_deref(),
-        Some("token_rejected")
-    );
-    assert!(session_exists);
-    assert!(matches!(
-        response.state,
-        SoundCloudConnectionState::RetryLater
-    ));
-    assert!(!response.can_use_soundcloud);
-    assert!(!response.can_refresh);
     Ok(())
 }

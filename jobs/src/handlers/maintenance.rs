@@ -1,16 +1,28 @@
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use sqlx::PgPool;
 
 use crate::queue::{JobError, JobResult};
 
 const CLEANUP_BATCH: i64 = 1_000;
+const RECEIPT_BATCH: u64 = 10_000;
+const RECEIPT_SWEEP_BATCHES: usize = 100;
+const RECEIPTS_FULL_SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+const PURGE_BATCH: i64 = 500;
+const PURGE_ROUNDS: usize = 20;
 
 pub struct MaintenanceHandler {
     pool: PgPool,
+    receipts_swept_at: Mutex<Option<Instant>>,
 }
 
 impl MaintenanceHandler {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            receipts_swept_at: Mutex::new(None),
+        }
     }
 
     pub async fn cleanup_login_requests(&self) -> JobResult {
@@ -22,6 +34,44 @@ impl MaintenanceHandler {
         .await
         .map_err(JobError::retryable)?;
         Ok(())
+    }
+
+    pub async fn cleanup_diag(&self) -> JobResult {
+        loop {
+            let bundles = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_bundles.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let events =
+                sqlx::query_file!("queries/maintenance/cleanup_diag_events.sql", CLEANUP_BATCH)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(JobError::retryable)?;
+            let days = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_issue_days.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let origins = sqlx::query_file!(
+                "queries/maintenance/cleanup_diag_issue_origins.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            let removed = bundles.rows_affected()
+                + events.rows_affected()
+                + days.rows_affected()
+                + origins.rows_affected();
+            if removed == 0 {
+                return Ok(());
+            }
+        }
     }
 
     pub async fn cleanup_link_requests(&self) -> JobResult {
@@ -36,15 +86,25 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_job_receipts(&self) -> JobResult {
+        let full_sweep = self.receipts_swept_at.lock().map_or(true, |swept_at| {
+            swept_at.is_none_or(|at| at.elapsed() >= RECEIPTS_FULL_SWEEP_EVERY)
+        });
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         sqlx::query_file!("queries/maintenance/cleanup_job_failures.sql")
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
-        sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql")
-            .execute(&mut *transaction)
-            .await
-            .map_err(JobError::retryable)?;
+        for _ in 0..RECEIPT_SWEEP_BATCHES {
+            let removed =
+                sqlx::query_file!("queries/maintenance/cleanup_job_receipts.sql", full_sweep)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(JobError::retryable)?
+                    .rows_affected();
+            if !full_sweep || removed < RECEIPT_BATCH {
+                break;
+            }
+        }
         sqlx::query_file!("queries/maintenance/cleanup_pipeline_event_receipts.sql")
             .execute(&mut *transaction)
             .await
@@ -54,11 +114,18 @@ impl MaintenanceHandler {
             .await
             .map_err(JobError::retryable)?;
         transaction.commit().await.map_err(JobError::retryable)?;
+        if full_sweep && let Ok(mut swept_at) = self.receipts_swept_at.lock() {
+            *swept_at = Some(Instant::now());
+        }
         Ok(())
     }
 
     pub async fn heal_sync_queue(&self) -> JobResult {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
+        sqlx::query_file_scalar!("queries/sync_queue/as_mirror.sql")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
         sqlx::query_file!("queries/maintenance/heal_track_likes.sql")
             .execute(&mut *transaction)
             .await
@@ -71,7 +138,45 @@ impl MaintenanceHandler {
             .execute(&mut *transaction)
             .await
             .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_track_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
+        sqlx::query_file!("queries/maintenance/heal_playlist_edits.sql")
+            .execute(&mut *transaction)
+            .await
+            .map_err(JobError::retryable)?;
         transaction.commit().await.map_err(JobError::retryable)?;
+        self.purge_served_unwanted()
+            .await
+            .map_err(JobError::retryable)?;
+        Ok(())
+    }
+
+    async fn purge_served_unwanted(&self) -> Result<(), sqlx::Error> {
+        for _ in 0..PURGE_ROUNDS {
+            let purged = sqlx::query_file_scalar!(
+                "queries/maintenance/purge_unliked_tracks.sql",
+                PURGE_BATCH
+            )
+            .fetch_one(&self.pool)
+            .await?
+                + sqlx::query_file_scalar!(
+                    "queries/maintenance/purge_unliked_playlists.sql",
+                    PURGE_BATCH
+                )
+                .fetch_one(&self.pool)
+                .await?
+                + sqlx::query_file_scalar!(
+                    "queries/maintenance/purge_unfollowed_users.sql",
+                    PURGE_BATCH
+                )
+                .fetch_one(&self.pool)
+                .await?;
+            if purged < PURGE_BATCH {
+                break;
+            }
+        }
         Ok(())
     }
 }
@@ -123,3 +228,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "maintenance_diag_tests.rs"]
+mod diag_tests;

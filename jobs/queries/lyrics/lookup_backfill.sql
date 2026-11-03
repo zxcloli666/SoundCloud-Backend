@@ -78,7 +78,9 @@ WITH progress AS MATERIALIZED (
         completed = NOT EXISTS (SELECT 1 FROM page),
         updated_at = now()
     WHERE state.singleton
+      AND NOT state.completed
     RETURNING state.completed
 )
-SELECT completed AS "completed!"
-FROM updated
+SELECT COALESCE(updated.completed, progress.completed) AS "completed!"
+FROM progress
+         LEFT JOIN updated ON true

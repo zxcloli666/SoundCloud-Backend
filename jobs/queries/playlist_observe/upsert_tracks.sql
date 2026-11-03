@@ -3,6 +3,7 @@ WITH payload AS (
     FROM jsonb_array_elements($1::jsonb)
 )
 INSERT INTO tracks (
+    id,
     sc_track_id,
     urn,
     title,
@@ -34,7 +35,8 @@ INSERT INTO tracks (
     sc_synced_at,
     sc_observation
 )
-SELECT track->>'sc_track_id',
+SELECT public.scd_uuid('tracks', track->>'urn'),
+       track->>'sc_track_id',
        track->>'urn',
        track->>'title',
        track->>'title_normalized',
@@ -67,6 +69,7 @@ SELECT track->>'sc_track_id',
        clock_timestamp(),
        $2
 FROM payload
+ORDER BY track->>'sc_track_id'
 ON CONFLICT (sc_track_id) DO UPDATE SET
    urn = EXCLUDED.urn,
    title = EXCLUDED.title,

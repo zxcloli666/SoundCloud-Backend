@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::TrackPriority;
 use crate::release_date;
 
 #[derive(Debug, Clone)]
@@ -42,7 +43,7 @@ pub struct ScTrackFields {
 }
 
 impl ScTrackFields {
-    pub(crate) fn row(&self) -> Value {
+    pub(crate) fn row(&self, index: TrackPriority, storage: TrackPriority) -> Value {
         serde_json::json!({
             "sc_track_id": self.sc_track_id,
             "urn": self.urn,
@@ -74,6 +75,8 @@ impl ScTrackFields {
             "needs_duration_resolve": self.needs_duration_resolve,
             "is_cover": self.is_cover,
             "sc_metadata": self.sc_metadata,
+            "index_priority": index.as_i16(),
+            "storage_priority": storage.as_i16(),
         })
     }
 

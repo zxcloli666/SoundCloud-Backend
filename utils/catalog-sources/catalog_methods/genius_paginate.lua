@@ -1,4 +1,3 @@
-local browser_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 local kind = inputs.kind
 local id = tonumber(inputs.id)
 local page = tonumber(inputs.start_page) or 1
@@ -46,13 +45,15 @@ for _ = 1, max_pages do
     headers = {
       ["Accept-Encoding"] = "identity",
       ["Accept"] = "application/json",
-      ["Accept-Language"] = "en-US,en;q=0.9",
-      ["User-Agent"] = browser_ua
+      ["Accept-Language"] = "en-US,en;q=0.9"
     }
   })
   if response.status == 404 or response.status == 410 then
     complete = true
     break
+  end
+  if response.status == 403 then
+    return { kind = "blocked", complete = false, next_page = page, __verdict = "soft_negative" }
   end
   if response.status ~= 200 then
     error("genius pagination status " .. tostring(response.status))
@@ -75,7 +76,7 @@ for _ = 1, max_pages do
       break
     end
     page = page + 1
-  elseif remote_next == nil then
+  elseif type(remote_next) ~= "number" and type(remote_next) ~= "string" then
     complete = true
     break
   else
@@ -90,7 +91,6 @@ end
 if #items == 0 and complete then
   return {
     kind = "empty",
-    items = {},
     complete = true,
     next_page = next_page,
     __verdict = "terminal"
@@ -99,7 +99,7 @@ end
 
 return {
   kind = "found",
-  items = items,
+  items = #items > 0 and items or nil,
   complete = complete,
   next_page = next_page
 }

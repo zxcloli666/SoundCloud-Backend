@@ -46,6 +46,7 @@ pub struct Request {
     pub method: String,
     pub headers: HashMap<String, String>,
     pub body: Bytes,
+    pub background: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -299,7 +299,7 @@ impl RecommendationsService {
         if !counts.is_empty()
             && let Err(error) = bandits::record_shows(&self.pg, &sc_user_id, &counts).await
         {
-            tracing::warn!(user = %sc_user_id, %error, "bandit show counts were not recorded");
+            tracing::warn!(%error, "bandit show counts were not recorded");
         }
 
         self.record_impressions(&sc_user_id, ImpressionSource::Home, &response)
@@ -596,66 +596,6 @@ impl RecommendationsService {
         .fetch_all(&self.pg)
         .await?;
         Ok(rows.into_iter().collect())
-    }
-
-    async fn load_top_artists_cluster(
-        &self,
-        sc_user_id: &str,
-        exclude: &HashSet<String>,
-        limit: i64,
-    ) -> Vec<ClusterNeighbor> {
-        let exclude_vec: Vec<String> = exclude.iter().cloned().collect();
-        let ids = user_id_variants(sc_user_id);
-        let rows = match sqlx::query_file!(
-            "queries/recommendations/home_wave/top_artists_cluster.sql",
-            &ids,
-            limit,
-            &exclude_vec
-        )
-        .fetch_all(&self.pg)
-        .await
-        {
-            Ok(v) => v,
-            Err(_) => return Vec::new(),
-        };
-        rows.into_iter()
-            .map(|r| ClusterNeighbor {
-                track_id: r.sc_track_id,
-                artist_id: r.artist_id,
-                artist_name: r.artist_name,
-                avatar_url: r.avatar_url,
-            })
-            .collect()
-    }
-
-    async fn load_adjacent_artists_cluster(
-        &self,
-        sc_user_id: &str,
-        exclude: &HashSet<String>,
-        limit: i64,
-    ) -> Vec<ClusterNeighbor> {
-        let exclude_vec: Vec<String> = exclude.iter().cloned().collect();
-        let ids = user_id_variants(sc_user_id);
-        let rows = match sqlx::query_file!(
-            "queries/recommendations/home_wave/adjacent_artists_cluster.sql",
-            &ids,
-            limit,
-            &exclude_vec
-        )
-        .fetch_all(&self.pg)
-        .await
-        {
-            Ok(v) => v,
-            Err(_) => return Vec::new(),
-        };
-        rows.into_iter()
-            .map(|r| ClusterNeighbor {
-                track_id: r.sc_track_id,
-                artist_id: r.artist_id,
-                artist_name: r.artist_name,
-                avatar_url: r.avatar_url,
-            })
-            .collect()
     }
 
     async fn load_fresh_drops(

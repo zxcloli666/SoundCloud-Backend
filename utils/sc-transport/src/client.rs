@@ -11,9 +11,9 @@ use regex::Regex;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
+use tracing::Instrument;
 use wreq::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
-    USER_AGENT,
 };
 use wreq::{Client, Method};
 
@@ -61,8 +61,6 @@ impl RelayTransport for RelayClient {
 const API_BASE: &str = "https://api.soundcloud.com";
 const AUTH_BASE: &str = "https://secure.soundcloud.com";
 const SC_HOME: &str = "https://soundcloud.com";
-const SC_WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                         (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const ANON_CID_TTL: Duration = Duration::from_secs(1800);
 const ANON_CID_RETRY_BASE: Duration = Duration::from_secs(5);
 const ANON_CID_RETRY_MAX: Duration = Duration::from_secs(300);
@@ -88,6 +86,7 @@ pub struct ScClient {
 
 struct Inner {
     http: Client,
+    auth_base: String,
     api_base: String,
     home_base: String,
     proxy_url: String,
@@ -153,6 +152,7 @@ impl ScClient {
         Ok(Self {
             inner: Arc::new(Inner {
                 http,
+                auth_base: AUTH_BASE.to_owned(),
                 api_base: cfg.api_base.clone().unwrap_or_else(|| API_BASE.to_owned()),
                 home_base: cfg.home_base.clone().unwrap_or_else(|| SC_HOME.to_owned()),
                 proxy_url: cfg.proxy_url.clone(),
@@ -164,9 +164,26 @@ impl ScClient {
         })
     }
 
+    pub fn with_auth_base(self, auth_base: &str) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                http: self.inner.http.clone(),
+                auth_base: auth_base.trim_end_matches('/').to_owned(),
+                api_base: self.inner.api_base.clone(),
+                home_base: self.inner.home_base.clone(),
+                proxy_url: self.inner.proxy_url.clone(),
+                proxy_fallback: self.inner.proxy_fallback,
+                relay: self.inner.relay.clone(),
+                anon_client_id: RwLock::new(AnonClientId::default()),
+                anon_refresh: Mutex::new(()),
+            }),
+        }
+    }
+
     pub fn with_relay(self, relay: Arc<dyn RelayTransport>) -> Self {
         let inner = Arc::new(Inner {
             http: self.inner.http.clone(),
+            auth_base: self.inner.auth_base.clone(),
             api_base: self.inner.api_base.clone(),
             home_base: self.inner.home_base.clone(),
             proxy_url: self.inner.proxy_url.clone(),
@@ -184,7 +201,7 @@ impl ScClient {
     }
 
     pub fn auth_base_url(&self) -> &str {
-        AUTH_BASE
+        &self.inner.auth_base
     }
 
     #[cfg(feature = "upload")]
@@ -237,7 +254,7 @@ impl ScClient {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
 
-        let url = format!("{AUTH_BASE}/oauth/token");
+        let url = format!("{}/oauth/token", self.inner.auth_base);
         let bytes = self
             .send_direct_limited(
                 Method::POST,
@@ -250,18 +267,16 @@ impl ScClient {
         decode_json(&bytes)
     }
 
-    pub async fn refresh_access_token(
+    pub async fn client_credentials_token(
         &self,
-        refresh_token: &str,
         creds: &OAuthCredentials,
     ) -> ScResult<ScTokenResponse> {
-        let body = serde_urlencoded::to_string([
-            ("grant_type", "refresh_token"),
-            ("client_id", creds.client_id.as_str()),
-            ("client_secret", creds.client_secret.as_str()),
-            ("refresh_token", refresh_token),
-        ])
-        .map_err(|e| ScError::invalid(format!("urlencode: {e}")))?;
+        let body = serde_urlencoded::to_string([("grant_type", "client_credentials")])
+            .map_err(|e| ScError::invalid(format!("urlencode: {e}")))?;
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", creds.client_id, creds.client_secret));
+        let authorization = HeaderValue::from_str(&format!("Basic {basic}"))
+            .map_err(|_| ScError::invalid("client credentials are not a valid header"))?;
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -272,8 +287,9 @@ impl ScClient {
             ACCEPT,
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
+        headers.insert(AUTHORIZATION, authorization);
 
-        let url = format!("{AUTH_BASE}/oauth/token");
+        let url = format!("{}/oauth/token", self.inner.auth_base);
         let bytes = self
             .send_direct_limited(
                 Method::POST,
@@ -331,8 +347,8 @@ impl ScClient {
     pub async fn redirect_location(&self, url: &str) -> ScResult<String> {
         let proxy_set = !self.inner.proxy_url.is_empty();
         let relay_set = self.inner.relay.is_some();
-        let chain: &[Channel] = if self.inner.proxy_fallback || (!proxy_set && !relay_set) {
-            &[Channel::Direct, Channel::Proxy, Channel::Relay]
+        let chain: &[Channel] = if !proxy_set && !relay_set {
+            &[Channel::Direct]
         } else {
             &[Channel::Relay, Channel::Proxy]
         };
@@ -341,7 +357,18 @@ impl ScClient {
             let found = match channel {
                 Channel::Direct => self.location_direct(url, false).await,
                 Channel::Proxy if proxy_set => self.location_direct(url, true).await,
-                Channel::Relay if relay_set => self.location_relay(url).await,
+                Channel::Relay if relay_set => match self.location_relay_lua(url).await {
+                    Some(found) => found,
+                    None => {
+                        tokio::time::timeout(RELAY_REDIRECT_RAW_BUDGET, self.location_relay(url))
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(ScError::Unreachable(
+                                    "relay short link timed out".to_owned(),
+                                ))
+                            })
+                    }
+                },
                 Channel::Proxy | Channel::Relay => continue,
             };
             match found {
@@ -355,7 +382,6 @@ impl ScClient {
 
     async fn location_direct(&self, target_url: &str, via_proxy: bool) -> ScResult<String> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
         let url = if via_proxy {
             let encoded = base64::engine::general_purpose::STANDARD.encode(target_url);
             headers.insert(
@@ -384,6 +410,24 @@ impl ScClient {
         redirect_target(response.status().as_u16(), location)
     }
 
+    async fn location_relay_lua(&self, url: &str) -> Option<ScResult<String>> {
+        let inputs = serde_json::to_vec(&serde_json::json!({ "url": url })).ok()?;
+        let answer = tokio::time::timeout(
+            RELAY_REDIRECT_LUA_BUDGET,
+            self.call_relay_method("sc.redirect", crate::lua_methods::REDIRECT, inputs),
+        )
+        .await
+        .ok()??;
+        if answer.get("ok").and_then(Value::as_bool) == Some(true) {
+            return answer
+                .get("location")
+                .and_then(Value::as_str)
+                .map(|location| Ok(location.to_owned()));
+        }
+        (answer.get("reason").and_then(Value::as_str) == Some("gone"))
+            .then(|| Err(api_error(404, &[], None)))
+    }
+
     async fn location_relay(&self, target_url: &str) -> ScResult<String> {
         let relay = self
             .inner
@@ -393,8 +437,9 @@ impl ScClient {
         let request = RelayRequest {
             url: target_url.to_owned(),
             method: Method::GET.as_str().to_owned(),
-            headers: HashMap::from([(USER_AGENT.as_str().to_owned(), SC_WEB_UA.to_owned())]),
+            headers: HashMap::new(),
             body: Bytes::new(),
+            background: false,
         };
         let response = relay
             .fetch(&request)
@@ -561,10 +606,15 @@ impl ScClient {
     ) -> Option<Value> {
         let relay = self.inner.relay.as_ref()?;
         let inputs = self.inject_client_id(inputs).await;
-        let out = match relay
+        let span = crate::trace::upstream(method_id, "relay");
+        let called = relay
             .call_method_rotated(method_id, script, Bytes::from(inputs), region_rotation)
-            .await
-        {
+            .instrument(span.clone())
+            .await;
+        if let Err(error) = &called {
+            crate::trace::record::<()>(&span, &Err(ScError::unreachable(error.to_string())));
+        }
+        let out = match called {
             Ok(b) => b,
             Err(e) => {
                 if !e.is_disabled() {
@@ -613,10 +663,8 @@ impl ScClient {
                 return None;
             }
         }
-        let mut h = HeaderMap::new();
-        h.insert(USER_AGENT, HeaderValue::from_static(SC_WEB_UA));
         let fetched = self
-            .anon_get_via_relay_proxy(&self.inner.home_base, h)
+            .anon_get_via_relay_proxy(&self.inner.home_base, HeaderMap::new())
             .await
             .ok()
             .and_then(|bytes| extract_anon_client_id(&String::from_utf8_lossy(&bytes)));
@@ -809,7 +857,13 @@ impl ScClient {
         headers: HeaderMap,
         body: Option<Bytes>,
     ) -> ScResult<Bytes> {
-        self.send(method, target_url, headers, body, false).await
+        let span = crate::trace::upstream("soundcloud", "direct");
+        let result = self
+            .send(method, target_url, headers, body, false)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
     }
 
     async fn send_proxy(
@@ -819,10 +873,32 @@ impl ScClient {
         headers: HeaderMap,
         body: Option<Bytes>,
     ) -> ScResult<Bytes> {
-        self.send(method, target_url, headers, body, true).await
+        let span = crate::trace::upstream("soundcloud", "proxy");
+        let result = self
+            .send(method, target_url, headers, body, true)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
     }
 
     async fn send_relay(
+        &self,
+        method: Method,
+        target_url: String,
+        headers: HeaderMap,
+        body: Option<Bytes>,
+    ) -> ScResult<Bytes> {
+        let span = crate::trace::upstream("soundcloud", "relay");
+        let result = self
+            .fetch_through_relay(method, target_url, headers, body)
+            .instrument(span.clone())
+            .await;
+        crate::trace::record(&span, &result);
+        result
+    }
+
+    async fn fetch_through_relay(
         &self,
         method: Method,
         target_url: String,
@@ -845,6 +921,7 @@ impl ScClient {
             method: method.as_str().to_string(),
             headers: h,
             body: body.unwrap_or_default(),
+            background: false,
         };
         let resp = relay
             .fetch(&req)
@@ -978,6 +1055,9 @@ pub(crate) async fn collect_capped(response: wreq::Response, max_bytes: usize) -
 fn is_semantic_miss(error: &ScError) -> bool {
     matches!(error.status(), Some(404 | 410))
 }
+
+const RELAY_REDIRECT_LUA_BUDGET: Duration = Duration::from_millis(2500);
+const RELAY_REDIRECT_RAW_BUDGET: Duration = Duration::from_secs(2);
 
 fn redirect_target(status: u16, location: Option<String>) -> ScResult<String> {
     match (status, location) {
@@ -1152,6 +1232,33 @@ mod size_tests {
             let _ = stream.shutdown().await;
         });
         Ok((format!("http://{address}/probe"), server))
+    }
+
+    #[tokio::test]
+    async fn a_short_link_is_never_opened_from_our_own_address_once_a_proxy_is_set() -> TestResult {
+        let (short_link, _direct) = serve(
+            "HTTP/1.1 302 Found\r\nLocation: https://soundcloud.com/direct\r\nContent-Length: 0\r\n\r\n"
+                .to_owned(),
+            Vec::new(),
+        )
+        .await?;
+        let (proxy, _proxy) = serve(
+            "HTTP/1.1 302 Found\r\nLocation: https://soundcloud.com/proxied\r\nContent-Length: 0\r\n\r\n"
+                .to_owned(),
+            Vec::new(),
+        )
+        .await?;
+        let client = ScClient::new(&ScConfig {
+            proxy_url: proxy,
+            proxy_fallback: true,
+            api_base: None,
+            home_base: None,
+        })?;
+        assert_eq!(
+            client.redirect_location(&short_link).await?,
+            "https://soundcloud.com/proxied"
+        );
+        Ok(())
     }
 
     fn client(api_base: &str) -> ScClient {
@@ -1421,6 +1528,35 @@ mod size_tests {
         .expect("builds")
         .with_relay(relay);
         (sc, calls)
+    }
+
+    #[tokio::test]
+    async fn a_short_link_takes_the_relay_lua_answer_first() -> TestResult {
+        let (sc, calls) = relayed(Some(
+            r#"{"ok":true,"location":"https://soundcloud.com/forss/flickermood"}"#,
+        ));
+
+        let location = sc
+            .redirect_location("https://on.soundcloud.com/AbCdEf")
+            .await?;
+
+        assert_eq!(location, "https://soundcloud.com/forss/flickermood");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_short_link_the_relay_calls_gone_is_a_miss() {
+        let (sc, _) = relayed(Some(r#"{"ok":false,"reason":"gone"}"#));
+
+        let missing = sc
+            .redirect_location("https://on.soundcloud.com/AbCdEf")
+            .await;
+
+        assert!(
+            matches!(missing, Err(ScError::Api { status: 404, .. })),
+            "{missing:?}"
+        );
     }
 
     #[tokio::test]

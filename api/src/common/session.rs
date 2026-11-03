@@ -41,7 +41,7 @@ where
             .ok_or_else(|| AppError::unauthorized("Missing or malformed x-session-id header"))?;
 
         let session = auth
-            .get_session(session_id)
+            .find_session_cached(session_id)
             .await?
             .ok_or_else(|| AppError::unauthorized("Session not found"))?;
 
@@ -76,7 +76,7 @@ where
         let Some(session_id) = parse_uuid(&raw) else {
             return Ok(OptionalSession(None));
         };
-        let Ok(Some(session)) = auth.get_session(session_id).await else {
+        let Ok(Some(session)) = auth.get_session_cached(session_id).await else {
             return Ok(OptionalSession(None));
         };
         let Some(raw) = session.soundcloud_user_id else {

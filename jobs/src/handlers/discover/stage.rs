@@ -20,7 +20,7 @@ impl Shards {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Stage {
+pub(crate) enum Stage {
     ArtistCounts,
     ArtistPlays,
     ArtistPopularity,
@@ -33,25 +33,44 @@ pub(super) enum Stage {
     AlbumStar,
 }
 
-impl Stage {
-    pub(super) fn plan(always_premium: bool) -> [Self; 9] {
-        [
-            Self::ArtistCounts,
-            Self::ArtistPlays,
-            Self::ArtistPopularity,
-            Self::ArtistTags,
-            Self::TagCounts,
-            if always_premium {
-                Self::ArtistStarPremium
-            } else {
-                Self::ArtistStarActive
-            },
-            Self::AlbumMeta,
-            Self::AlbumPopularity,
-            Self::AlbumStar,
-        ]
+#[derive(Clone, Copy)]
+pub(crate) enum Group {
+    Summary,
+    ArtistPopularity,
+    ArtistTags,
+    Albums,
+}
+
+impl Group {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::ArtistPopularity => "artist_popularity",
+            Self::ArtistTags => "artist_tags",
+            Self::Albums => "albums",
+        }
     }
 
+    pub(crate) fn plan(self, always_premium: bool) -> Vec<Stage> {
+        match self {
+            Self::Summary => vec![
+                Stage::ArtistCounts,
+                Stage::ArtistPlays,
+                if always_premium {
+                    Stage::ArtistStarPremium
+                } else {
+                    Stage::ArtistStarActive
+                },
+                Stage::AlbumStar,
+            ],
+            Self::ArtistPopularity => vec![Stage::ArtistPopularity],
+            Self::ArtistTags => vec![Stage::ArtistTags, Stage::TagCounts],
+            Self::Albums => vec![Stage::AlbumMeta, Stage::AlbumPopularity],
+        }
+    }
+}
+
+impl Stage {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::ArtistCounts => "artist_counts",

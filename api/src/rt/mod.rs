@@ -14,6 +14,9 @@ pub async fn run() {
     let config = config::RtConfig::from_env();
     info!(port = config.port, "chat-api starting");
     let state = state::build(&config).await;
+    chat::sync::incarnation::current(&state.chat)
+        .await
+        .expect("chat.meta must hold the incarnation");
     chat::sweeps::spawn(state.chat.clone());
     tokio::spawn(chat::moderation::task::run(state.chat.clone()));
     let shutdown = state.chat.shutdown.clone();

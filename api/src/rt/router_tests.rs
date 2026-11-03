@@ -37,6 +37,10 @@ fn admission(redis_url: &str) -> Arc<PublicAdmission> {
         room_list: limit,
         room_create: limit,
         room_join: limit,
+        diag_bundle: limit,
+        diag_events: limit,
+        diag_bytes: limit,
+        trusted_proxies: Vec::new(),
     };
     PublicAdmission::new(
         crate::redis::connect_admission_url(redis_url, 16).expect("an admission pool"),
@@ -96,17 +100,20 @@ async fn sealed_answer(app: &axum::Router, case: &Value) -> (InnerResponse, Valu
     (inner, body)
 }
 
-#[tokio::test]
-async fn health_answers_on_rt() {
-    let response = offline_app(true)
-        .oneshot(
-            Request::get("/health")
-                .body(Body::empty())
-                .expect("a request"),
-        )
-        .await
-        .expect("an answer");
+#[sqlx::test(migrations = false)]
+async fn health_answers_on_rt_from_its_database(pool: PgPool) -> anyhow::Result<()> {
+    let redis = crate::redis::connect_url("redis://127.0.0.1:1")?;
+    let app = app(chat_state(pool, redis, true), "redis://127.0.0.1:1");
+    let response = app
+        .clone()
+        .oneshot(Request::get("/health").body(Body::empty())?)
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
+    let live = app
+        .oneshot(Request::get("/health/live").body(Body::empty())?)
+        .await?;
+    assert_eq!(live.status(), StatusCode::OK);
+    Ok(())
 }
 
 #[tokio::test]

@@ -79,11 +79,12 @@ pub async fn get_stats(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<SyncQueueStats>> {
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
     let counts = sqlx::query_file!("queries/admin/sync_queue/stats_counts.sql")
-        .fetch_one(&state.pg)
+        .fetch_one(&mut *tx)
         .await?;
     let rows = sqlx::query_file!("queries/admin/sync_queue/stats_by_action.sql")
-        .fetch_all(&state.pg)
+        .fetch_all(&mut *tx)
         .await?;
     let by_action = rows
         .into_iter()
@@ -94,8 +95,9 @@ pub async fn get_stats(
         .collect();
     let recent_errors: Vec<String> =
         sqlx::query_file_scalar!("queries/admin/sync_queue/recent_errors.sql")
-            .fetch_all(&state.pg)
+            .fetch_all(&mut *tx)
             .await?;
+    tx.commit().await?;
 
     Ok(Json(SyncQueueStats {
         pending: counts.pending,
@@ -148,11 +150,21 @@ pub async fn purge(
     if q.min_retries < 1 {
         return Err(AppError::bad_request("min_retries must be >= 1"));
     }
-    let res = sqlx::query_file!("queries/admin/sync_queue/purge.sql", q.min_retries)
-        .execute(&state.pg)
-        .await?;
+    let purge = wt::SyncQueuePurge {
+        min_retries: q.min_retries,
+        at: wt::now(),
+    };
+    let mut transaction = crate::db::begin_admin(&state.pg).await?;
+    let purged = sqlx::query_file_scalar!(
+        "queries/admin/sync_queue/purgeable_count.sql",
+        q.min_retries
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    wt::call(&mut transaction, &purge).await?;
+    transaction.commit().await?;
     Ok(Json(PurgeResponse {
-        purged: res.rows_affected(),
+        purged: u64::try_from(purged).unwrap_or_default(),
         min_retries: q.min_retries,
     }))
 }

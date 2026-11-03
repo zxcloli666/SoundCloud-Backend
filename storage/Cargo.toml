@@ -29,6 +29,7 @@ sc-fingerprint = { path = "../utils/sc-fingerprint" }
 wreq = { version = "0.16.1", features = ["json", "form", "stream", "multipart"] }
 tls-common = { path = "../utils/tls-common" }
 entity-ref = { version = "0.1.0", path = "../utils/entity-ref" }
+telemetry = { version = "0.1.0", path = "../utils/telemetry" }
 
 [profile.release]
 lto = true

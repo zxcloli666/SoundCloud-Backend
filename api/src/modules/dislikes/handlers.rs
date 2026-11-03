@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::dislikes::service::{DislikesPage, StatusResult};
+use crate::modules::recommendations::smart_wave::graph::forget_user_affinity;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -37,6 +38,7 @@ async fn add(
         .dislikes
         .add(&ctx.sc_user_id, &sc_track_id, track_data.as_ref())
         .await?;
+    forget_user_affinity(&st.recommendations.redis, &ctx.sc_user_id).await;
     Ok((StatusCode::OK, Json(result)))
 }
 
@@ -45,9 +47,9 @@ async fn remove(
     ctx: SessionCtx,
     Path(sc_track_id): Path<String>,
 ) -> AppResult<Json<StatusResult>> {
-    Ok(Json(
-        st.dislikes.remove(&ctx.sc_user_id, &sc_track_id).await?,
-    ))
+    let result = st.dislikes.remove(&ctx.sc_user_id, &sc_track_id).await?;
+    forget_user_affinity(&st.recommendations.redis, &ctx.sc_user_id).await;
+    Ok(Json(result))
 }
 
 async fn status(

@@ -21,7 +21,7 @@ local base = "https://api-v2.soundcloud.com"
 
 local function get_playlist(id)
   local url = base .. "/playlists/" .. urlencode(tostring(id)) .. "?client_id=" .. urlencode(cid)
-  if inputs.secret_token ~= nil and inputs.secret_token ~= "" then
+  if type(inputs.secret_token) == "string" and inputs.secret_token ~= "" then
     url = url .. "&secret_token=" .. urlencode(tostring(inputs.secret_token))
   end
   local resp = http({ url = url, method = "GET" })

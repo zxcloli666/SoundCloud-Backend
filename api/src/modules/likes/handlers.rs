@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::LikesOrderRequest;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
+use crate::modules::recommendations::smart_wave::graph::forget_user_affinity;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -31,6 +32,7 @@ async fn like_track(
     _body: Option<Json<Value>>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
     let v = st.likes.like_track(&ctx.sc_user_id, &track_urn).await?;
+    forget_user_affinity(&st.recommendations.redis, &ctx.sc_user_id).await;
     Ok((StatusCode::OK, Json(v)))
 }
 
@@ -40,6 +42,7 @@ async fn unlike_track(
     Path(track_urn): Path<String>,
 ) -> AppResult<Json<Value>> {
     let v = st.likes.unlike_track(&ctx.sc_user_id, &track_urn).await?;
+    forget_user_affinity(&st.recommendations.redis, &ctx.sc_user_id).await;
     Ok(Json(v))
 }
 

@@ -24,6 +24,7 @@ pub struct TracksService {
     miss: Arc<CatalogMiss>,
     mutations: super::mutations::TrackMutations,
     uploads: super::upload::UploadGate,
+    read_stamps: super::read_stamp::ReadStamps,
 }
 
 pub(crate) struct TracksServiceDependencies {
@@ -55,6 +56,7 @@ impl TracksService {
             miss,
             mutations,
             uploads: super::upload::UploadGate::new(),
+            read_stamps: super::read_stamp::ReadStamps::new(),
         })
     }
 
@@ -115,9 +117,7 @@ impl TracksService {
                     .is_some_and(|owner| extract_sc_id(owner) == extract_sc_id(sc_user_id))
         });
         let verified_secret = if let Some(row) = local {
-            let _ = sqlx::query_file!("queries/tracks/service/touch_last_read.sql", sc_track_id)
-                .execute(&self.pg)
-                .await;
+            self.read_stamps.touch(&self.pg, &row.urn).await;
             self.opened(sc_track_id).await;
             if self.cold_refresh.is_track_stale(Some(row.sc_synced_at))
                 && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
@@ -288,13 +288,18 @@ impl TracksService {
         let sc_track_id = self.readable_sc_track_id(sc_user_id, track_urn).await?;
         let comment = super::comments::submitted(body)?;
         let target = super::mutations::target_urn(track_urn)?;
-        let mut transaction = self.pg.begin().await?;
-        self.sync_queue
-            .enqueue_on(&mut transaction, sc_user_id, "comment", &target, Some(body))
-            .await?;
-        super::comments::record_pending(&mut transaction, &sc_track_id, sc_user_id, &comment)
-            .await?;
-        transaction.commit().await?;
+        let (queued, sc_track_id, comment) = (&target, &sc_track_id, &comment);
+        crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            self.sync_queue
+                .enqueue_on(&mut transaction, sc_user_id, "comment", queued, Some(body))
+                .await?;
+            super::comments::record_pending(&mut transaction, sc_track_id, sc_user_id, comment)
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await?;
         Ok(json!({ "status": "queued", "actionType": "comment", "targetUrn": target }))
     }
 

@@ -48,7 +48,12 @@ pub struct QdrantProvisioner {
 
 impl QdrantProvisioner {
     pub fn connect(config: &JobsQdrantConfig) -> anyhow::Result<Self> {
-        let mut client_config = QdrantConfig::from_url(&config.grpc_url)
+        let url = match tls_common::ClientIdentity::from_env("QDRANT") {
+            Some(tls) => tls_common::tunnel_url(&config.grpc_url, tls)
+                .context("Qdrant mTLS tunnel failed to start")?,
+            None => config.grpc_url.clone(),
+        };
+        let mut client_config = QdrantConfig::from_url(&url)
             .timeout(Duration::from_secs(5))
             .connect_timeout(Duration::from_secs(5))
             .skip_compatibility_check();

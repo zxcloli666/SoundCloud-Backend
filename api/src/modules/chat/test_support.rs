@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::modules::auth::{AuthHealthService, AuthService, LinkService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService};
 use crate::modules::chat::caller::{Callers, ChatCaller};
 use crate::modules::chat::channel::ock::OckRing;
 use crate::modules::chat::config::{Access, ModerationConfig};
@@ -89,6 +89,7 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
         sc,
         OAuthAppsService::new(pg.clone()),
         AuthHealthService::with_database(redis.clone(), pg.clone()),
+        CoreRpc::unreachable(),
     );
     let config = config(enabled);
     Arc::new(ChatState {

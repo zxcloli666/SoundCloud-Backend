@@ -48,6 +48,16 @@ waiting AS MATERIALIZED (
                   OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
               )
               AND NOT ((usable.app || ':' || queued.action_type) = ANY ($3::text[]))
+              AND NOT (
+                  queued.cancelled
+                  AND queued.lease_id IS NULL
+                  AND queued.remote_attempted_generation IS NULL
+                  AND queued.remote_completed_generation IS NULL
+              )
+              AND NOT (
+                  queued.exec_generation IS DISTINCT FROM queued.generation
+                  AND (queued.exec_generation IS NOT NULL OR queued.intent_v > 0)
+              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM sync_queue AS earlier
@@ -102,11 +112,22 @@ candidates AS (
           queued.lease_id IS NULL
           OR queued.locked_at < now() - $1::bigint * interval '1 millisecond'
       )
+      AND NOT (
+          queued.cancelled
+          AND queued.lease_id IS NULL
+          AND queued.remote_attempted_generation IS NULL
+          AND queued.remote_completed_generation IS NULL
+      )
+      AND NOT (
+          queued.exec_generation IS DISTINCT FROM queued.generation
+          AND (queued.exec_generation IS NOT NULL OR queued.intent_v > 0)
+      )
     FOR UPDATE OF queued SKIP LOCKED
 )
 UPDATE sync_queue AS queued
 SET lease_id = gen_random_uuid(),
     lease_generation = queued.generation,
+    exec_generation = queued.generation,
     locked_at = now()
 FROM candidates
 WHERE queued.id = candidates.id
@@ -123,4 +144,14 @@ RETURNING queued.id,
           queued.remote_completed_generation,
           queued.remote_result,
           queued.created_at,
-          (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!"
+          (SELECT due.star FROM due WHERE due.id = queued.id) AS "star!",
+          CASE queued.action_type
+              WHEN 'track_update' THEN (
+                  SELECT track.sc_desired FROM tracks AS track
+                  WHERE track.urn = queued.target_urn AND track.deleted_at IS NULL
+              )
+              WHEN 'playlist_update' THEN (
+                  SELECT playlist.sc_desired FROM playlists AS playlist
+                  WHERE playlist.urn = queued.target_urn AND playlist.deleted_at IS NULL
+              )
+          END AS desired

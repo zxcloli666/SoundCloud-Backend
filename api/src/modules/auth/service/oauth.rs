@@ -183,18 +183,24 @@ impl AuthService {
             self.health
                 .app_penalties_for_apps_fail_open(&app_identities)
         );
-        let available = active
+        let unpenalized = active
             .iter()
             .filter(|app| !penalties.contains_key(&app.id))
             .collect::<Vec<_>>();
-        if available.is_empty() {
-            let retry_after = active
+        if unpenalized.is_empty() {
+            let soonest = active
                 .iter()
                 .filter_map(|app| penalties.get(&app.id).copied())
                 .min()
                 .unwrap_or(1);
-            return Err(AppError::soundcloud_refresh_rate_limited(retry_after));
+            let ids = active
+                .iter()
+                .filter(|app| penalties.get(&app.id).is_some_and(|left| *left == soonest))
+                .map(|app| app.id)
+                .collect::<Vec<_>>();
+            return self.oauth_apps.pick_lru_from(&ids).await;
         }
+        let available = unpenalized;
 
         let preferred = available
             .iter()
@@ -254,6 +260,9 @@ pub(super) fn public_error_message(error: &AppError, fallback: &str) -> String {
 }
 
 pub(super) fn oauth_app_failure_cooldown(error: &AppError) -> Option<u64> {
+    if matches!(error, AppError::SoundCloudRefreshRateLimited { .. }) {
+        return None;
+    }
     if crate::sc::is_ban_error(error) {
         return Some(30 * 60);
     }

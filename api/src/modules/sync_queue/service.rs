@@ -25,11 +25,14 @@ impl SyncQueueService {
         target_urn: &str,
         payload: Option<&Value>,
     ) -> AppResult<()> {
-        let mut transaction = self.pg.begin().await?;
-        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, payload)
-            .await?;
-        transaction.commit().await?;
-        Ok(())
+        crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            self.enqueue_on(&mut transaction, user_id, action_type, target_urn, payload)
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn set_wanted(
@@ -40,18 +43,21 @@ impl SyncQueueService {
         action_type: &str,
         target_urn: &str,
     ) -> AppResult<()> {
-        let mut transaction = self.pg.begin().await?;
-        self.set_wanted_on(
-            &mut transaction,
-            mirror,
-            user_id,
-            mirror_key,
-            action_type,
-            target_urn,
-        )
-        .await?;
-        transaction.commit().await?;
-        Ok(())
+        crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            self.set_wanted_on(
+                &mut transaction,
+                mirror,
+                user_id,
+                mirror_key,
+                action_type,
+                target_urn,
+            )
+            .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) async fn set_wanted_on(
@@ -63,12 +69,10 @@ impl SyncQueueService {
         action_type: &str,
         target_urn: &str,
     ) -> AppResult<bool> {
-        if !mirror::set_wanted(&mut *connection, mirror, user_id, mirror_key).await? {
-            return Ok(false);
-        }
+        let flipped = mirror::set_wanted(&mut *connection, mirror, user_id, mirror_key).await?;
         self.enqueue_on(connection, user_id, action_type, target_urn, None)
             .await?;
-        Ok(true)
+        Ok(flipped)
     }
 
     pub async fn clear_wanted(
@@ -79,12 +83,15 @@ impl SyncQueueService {
         action_type: &str,
         target_urn: &str,
     ) -> AppResult<()> {
-        let mut transaction = self.pg.begin().await?;
-        mirror::clear_wanted(&mut transaction, mirror, user_id, mirror_key).await?;
-        self.enqueue_on(&mut transaction, user_id, action_type, target_urn, None)
-            .await?;
-        transaction.commit().await?;
-        Ok(())
+        crate::db::retry_conflicts(|| async move {
+            let mut transaction = self.pg.begin().await?;
+            mirror::clear_wanted(&mut transaction, mirror, user_id, mirror_key).await?;
+            self.enqueue_on(&mut transaction, user_id, action_type, target_urn, None)
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) async fn enqueue_on(
@@ -97,20 +104,6 @@ impl SyncQueueService {
     ) -> AppResult<()> {
         let user_id = crate::common::sc_ids::extract_sc_id(user_id);
         let target_urn = canonical_target(action_type, target_urn);
-        if let Some(inverse) = inverse(action_type) {
-            let cancelled = sqlx::query_file!(
-                "queries/sync_queue/service/cancel_inverse.sql",
-                user_id,
-                inverse,
-                &target_urn
-            )
-            .execute(&mut *connection)
-            .await?;
-            if cancelled.rows_affected() > 0 {
-                return Ok(());
-            }
-        }
-
         if action_type == "comment" {
             sqlx::query(
                 "INSERT INTO sync_queue (user_id, action_type, target_urn, payload)
@@ -122,19 +115,90 @@ impl SyncQueueService {
             .bind(payload)
             .execute(&mut *connection)
             .await?;
-        } else {
-            sqlx::query(include_str!(
-                "../../../queries/sync_queue/service/enqueue.sql"
-            ))
-            .bind(user_id)
-            .bind(action_type)
-            .bind(&target_urn)
-            .bind(payload)
-            .execute(&mut *connection)
-            .await?;
+            return Ok(());
         }
-        Ok(())
+        let Some(inverse) = inverse(action_type) else {
+            return upsert(
+                connection,
+                user_id,
+                action_type,
+                &target_urn,
+                payload,
+                false,
+            )
+            .await;
+        };
+        let pair = sqlx::query_file!(
+            "queries/sync_queue/service/lock_pair.sql",
+            user_id,
+            action_type,
+            inverse,
+            &target_urn
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        if pair.own_first {
+            upsert(
+                connection,
+                user_id,
+                action_type,
+                &target_urn,
+                payload,
+                pair.annuls,
+            )
+            .await?;
+            cancel(connection, user_id, inverse, &target_urn).await
+        } else {
+            cancel(connection, user_id, inverse, &target_urn).await?;
+            upsert(
+                connection,
+                user_id,
+                action_type,
+                &target_urn,
+                payload,
+                pair.annuls,
+            )
+            .await
+        }
     }
+}
+
+async fn upsert(
+    connection: &mut PgConnection,
+    user_id: &str,
+    action_type: &str,
+    target_urn: &str,
+    payload: Option<&Value>,
+    annuls: bool,
+) -> AppResult<()> {
+    sqlx::query(include_str!(
+        "../../../queries/sync_queue/service/enqueue.sql"
+    ))
+    .bind(user_id)
+    .bind(action_type)
+    .bind(target_urn)
+    .bind(payload)
+    .bind(annuls)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn cancel(
+    connection: &mut PgConnection,
+    user_id: &str,
+    inverse: &str,
+    target_urn: &str,
+) -> AppResult<()> {
+    sqlx::query_file!(
+        "queries/sync_queue/service/cancel_inverse.sql",
+        user_id,
+        inverse,
+        target_urn
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 fn inverse(action_type: &str) -> Option<&'static str> {

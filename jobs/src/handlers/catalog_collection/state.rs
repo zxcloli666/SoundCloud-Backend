@@ -80,16 +80,6 @@ pub(super) async fn begin(
         .execute(&mut *tx)
         .await
         .map_err(JobError::retryable)?;
-        sqlx::query_file!(
-            "queries/catalog_collection/clear_seen.sql",
-            &payload.subject_id,
-            payload.collection.as_str(),
-            payload.scope(),
-            proposed
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(JobError::retryable)?;
     }
     tx.commit().await.map_err(JobError::retryable)?;
     Ok(Some(snapshot))
@@ -140,6 +130,24 @@ pub(super) async fn advance(
         keys.len() as i64,
         next.is_none(),
         verified
+    )
+    .execute(connection)
+    .await
+    .map_err(JobError::retryable)?;
+    Ok(())
+}
+
+pub(super) async fn sweep_seen(
+    connection: &mut PgConnection,
+    payload: &CatalogCollectionPayload,
+    snapshot: &Snapshot,
+) -> JobResult {
+    sqlx::query_file!(
+        "queries/catalog_collection/sweep_seen.sql",
+        &payload.subject_id,
+        payload.collection.as_str(),
+        payload.scope(),
+        snapshot.snapshot_id
     )
     .execute(connection)
     .await

@@ -16,6 +16,7 @@ use crate::handlers::star_priority::Turns;
 use super::SyncQueueHandler;
 use super::client::{SoundCloudClient, TokenRefreshClient};
 use super::connection::ConnectionManager;
+use super::pause_group::AppReports;
 use super::repository::SyncQueueRepository;
 use super::storage::TrackStorage;
 use super::write_pause::WritePauses;
@@ -181,12 +182,15 @@ pub(super) fn handler(
         token_client: Arc::new(TokenRefreshClient::new(&oauth)?),
         storage: TrackStorage::new(&config)?,
         write_pauses: WritePauses::default(),
+        spacings: WritePauses::default(),
         account_pauses: WritePauses::default(),
+        app_reports: AppReports::default(),
         like_interval: config.like_interval,
         pauses_restored: tokio::sync::OnceCell::new(),
         concurrency: 1,
         claim_batch: 1,
         turns: Turns::default(),
+        before_write: std::sync::Mutex::default(),
     })
 }
 
@@ -198,7 +202,8 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(FakeSoundCloud, SyncQueueHandle
         "17",
         "playlist_create",
         "new:7d4c4c56-8c0f-4c2e-9a37-1b0e8a4f3e21",
-        &json!({"playlist": {"title": "Mix", "sharing": "private"}})
+        &json!({"playlist": {"title": "Mix", "sharing": "private"}}),
+        false
     )
     .execute(pool)
     .await?;
@@ -212,6 +217,7 @@ pub(super) async fn run(pool: &PgPool, handler: &SyncQueueHandler) -> anyhow::Re
     sqlx::query("UPDATE sync_queue SET next_run_at = now()")
         .execute(pool)
         .await?;
+    handler.repository.adopt().await?;
     let mutation = handler
         .repository
         .claim(1)

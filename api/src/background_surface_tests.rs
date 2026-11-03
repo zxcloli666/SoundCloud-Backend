@@ -20,6 +20,14 @@ const DETACHED: &[&str] = &[
     "JoinSet::new",
 ];
 
+const AWAITED_BLOCKING_WORK: &[&str] = &[
+    "src/modules/diag/report/sourcemaps.rs",
+    "src/modules/recommendations/mmr.rs",
+];
+const RUNTIME_PROBE: &str = "src/metrics.rs";
+
+const NODE_REPLICATION_SWEEPER: (&str, &str) = ("src/main.rs", "repl_verify::Sweeper::new");
+
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -108,7 +116,13 @@ fn the_serving_process_starts_no_work_of_its_own() {
         }
         for (number, line) in body.lines().enumerate() {
             for pattern in DETACHED {
-                if line.contains(pattern) {
+                let awaited =
+                    *pattern == "spawn_blocking" && AWAITED_BLOCKING_WORK.contains(&file.as_str());
+                let probe = *pattern == "tokio::spawn" && file == RUNTIME_PROBE;
+                let node_local = *pattern == "tokio::spawn"
+                    && file == NODE_REPLICATION_SWEEPER.0
+                    && line.contains(NODE_REPLICATION_SWEEPER.1);
+                if line.contains(pattern) && !awaited && !probe && !node_local {
                     detached.push(format!("{file}:{}: {}", number + 1, line.trim()));
                 }
             }

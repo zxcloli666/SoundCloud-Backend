@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use super::apply;
 use crate::handlers::enrich::resolver::{
-    ArtistCandidate, CreditEvidence, LocalSignals, ResolveResult, ResolveSource, TrackContext,
+    AlbumCandidate, ArtistCandidate, CreditEvidence, LocalSignals, ResolveResult, ResolveSource,
+    TrackContext,
 };
 
 const Z2_HOME: &str = "1211580634";
@@ -71,12 +72,7 @@ fn heuristic(title: &str, uploader: &Uploader) -> ResolveResult {
     LocalSignals::build_with_dictionary(&context, &HashSet::new()).heuristic(&context)
 }
 
-async fn enrich(
-    pool: &PgPool,
-    title: &str,
-    uploader: &Uploader,
-    resolved: &ResolveResult,
-) -> anyhow::Result<Uuid> {
+async fn insert_track(pool: &PgPool, title: &str, uploader: &Uploader) -> anyhow::Result<Uuid> {
     let Uploader(id, name) = *uploader;
     let track_id: Uuid = sqlx::query_scalar(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms,
@@ -90,6 +86,17 @@ async fn enrich(
     .bind(name)
     .fetch_one(pool)
     .await?;
+    Ok(track_id)
+}
+
+async fn enrich(
+    pool: &PgPool,
+    title: &str,
+    uploader: &Uploader,
+    resolved: &ResolveResult,
+) -> anyhow::Result<Uuid> {
+    let Uploader(id, name) = *uploader;
+    let track_id = insert_track(pool, title, uploader).await?;
     apply(pool, track_id, resolved, Some(id), Some(name)).await?;
     Ok(track_id)
 }
@@ -423,5 +430,230 @@ async fn two_ideographs_are_a_full_name_and_one_is_short(pool: PgPool) -> anyhow
 
     assert_eq!(roles_of(&pool, faye_track, faye).await?, ["primary"]);
     assert!(roles_of(&pool, arashi_track, arashi).await?.is_empty());
+    Ok(())
+}
+
+fn named(name: &str, mb_id: Option<&str>, genius_id: Option<&str>) -> ResolveResult {
+    ResolveResult {
+        source: ResolveSource::Mb,
+        confidence: 0.9,
+        primary: vec![
+            ArtistCandidate {
+                name: name.to_owned(),
+                mb_id: mb_id.map(str::to_owned),
+                genius_id: genius_id.map(str::to_owned),
+                ..Default::default()
+            }
+            .attributed(ResolveSource::Mb, 0.9, CreditEvidence::ExternalId),
+        ],
+        ..Default::default()
+    }
+}
+
+async fn wait_for_lock_waiter(pool: &PgPool) -> anyhow::Result<()> {
+    for _ in 0..500 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database()
+               AND pid <> pg_backend_pid()
+               AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if waiting > 0 {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("no statement is waiting on a lock")
+}
+
+fn persist_in_background(
+    pool: &PgPool,
+    track: Uuid,
+    resolved: ResolveResult,
+    uploader: &'static Uploader,
+) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let Uploader(id, name) = *uploader;
+        apply(&pool, track, &resolved, Some(id), Some(name)).await?;
+        Ok(())
+    })
+}
+
+static STRANGER: Uploader = Uploader("1072135747", "owari");
+
+async fn count_of(pool: &PgPool, table: &str) -> anyhow::Result<i64> {
+    let count = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_loser_of_a_new_artist_race_reuses_the_winners_row(pool: PgPool) -> anyhow::Result<()> {
+    let name = "Nova Quill";
+    let mut winner = pool.begin().await?;
+    let winner_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, source) VALUES ($1, $2, 'mb') RETURNING id",
+    )
+    .bind(name)
+    .bind(normalize_name(name))
+    .fetch_one(&mut *winner)
+    .await?;
+    let track = insert_track(&pool, "night", &STRANGER).await?;
+
+    let loser = persist_in_background(&pool, track, named(name, None, None), &STRANGER);
+    wait_for_lock_waiter(&pool).await?;
+    winner.commit().await?;
+    loser.await??;
+
+    assert_eq!(count_of(&pool, "artists").await?, 1);
+    assert_eq!(roles_of(&pool, track, winner_id).await?, ["primary"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_loser_of_an_mb_artist_race_reuses_the_winners_row(pool: PgPool) -> anyhow::Result<()> {
+    let mut winner = pool.begin().await?;
+    let winner_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO artists (name, normalized_name, mb_artist_id, source)
+         VALUES ('Nova Quill', 'nova quill', 'mb-nova', 'mb') RETURNING id",
+    )
+    .fetch_one(&mut *winner)
+    .await?;
+    let track = insert_track(&pool, "night", &STRANGER).await?;
+
+    let loser = persist_in_background(
+        &pool,
+        track,
+        named("Nova Quill Band", Some("mb-nova"), None),
+        &STRANGER,
+    );
+    wait_for_lock_waiter(&pool).await?;
+    winner.commit().await?;
+    loser.await??;
+
+    assert_eq!(count_of(&pool, "artists").await?, 1);
+    assert_eq!(roles_of(&pool, track, winner_id).await?, ["primary"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn the_loser_of_an_album_race_reuses_the_winners_album(pool: PgPool) -> anyhow::Result<()> {
+    let artist = seed_artist(&pool, "Nova Quill").await?;
+    let mut winner = pool.begin().await?;
+    let winner_album: Uuid = sqlx::query_scalar(
+        "INSERT INTO albums (title, normalized_title, mb_release_id, source)
+         VALUES ('Night Drive', 'night drive', 'mb-release-1', 'mb') RETURNING id",
+    )
+    .fetch_one(&mut *winner)
+    .await?;
+    let track = insert_track(&pool, "night", &STRANGER).await?;
+    let mut resolved = named("Nova Quill", None, None);
+    resolved.album = Some(AlbumCandidate {
+        title: "Night Drive".to_owned(),
+        year: Some(2024),
+        mb_id: Some("mb-release-1".to_owned()),
+        genius_id: None,
+        cover_url: None,
+        release_type: None,
+        primary_artist: None,
+    });
+
+    let loser = persist_in_background(&pool, track, resolved, &STRANGER);
+    wait_for_lock_waiter(&pool).await?;
+    winner.commit().await?;
+    loser.await??;
+
+    assert_eq!(count_of(&pool, "albums").await?, 1);
+    let linked: Option<Uuid> = sqlx::query_scalar("SELECT album_id FROM tracks WHERE id = $1")
+        .bind(track)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(linked, Some(winner_album));
+    assert_eq!(roles_of(&pool, track, artist).await?, ["primary"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn an_mb_artist_never_takes_a_genius_id_held_by_another(pool: PgPool) -> anyhow::Result<()> {
+    let found = seed_artist(&pool, "Nova Quill").await?;
+    sqlx::query("UPDATE artists SET mb_artist_id = 'mb-nova' WHERE id = $1")
+        .bind(found)
+        .execute(&pool)
+        .await?;
+    let holder = seed_artist(&pool, "Quill Nova").await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '777' WHERE id = $1")
+        .bind(holder)
+        .execute(&pool)
+        .await?;
+
+    let track = enrich(
+        &pool,
+        "night",
+        &STRANGER,
+        &named("Nova Quill", Some("mb-nova"), Some("777")),
+    )
+    .await?;
+
+    assert_eq!(roles_of(&pool, track, found).await?, ["primary"]);
+    assert_eq!(genius_id_of(&pool, found).await?, None);
+    assert_eq!(genius_id_of(&pool, holder).await?.as_deref(), Some("777"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_genius_id_taken_mid_persist_leaves_the_link_and_the_id_alone(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let found = seed_artist(&pool, "Nova Quill").await?;
+    sqlx::query("UPDATE artists SET mb_artist_id = 'mb-nova' WHERE id = $1")
+        .bind(found)
+        .execute(&pool)
+        .await?;
+    let holder = seed_artist(&pool, "Quill Nova").await?;
+    let mut taking = pool.begin().await?;
+    sqlx::query("UPDATE artists SET genius_artist_id = '888' WHERE id = $1")
+        .bind(holder)
+        .execute(&mut *taking)
+        .await?;
+    let track = insert_track(&pool, "night", &STRANGER).await?;
+
+    let racing = persist_in_background(
+        &pool,
+        track,
+        named("Nova Quill", Some("mb-nova"), Some("888")),
+        &STRANGER,
+    );
+    wait_for_lock_waiter(&pool).await?;
+    taking.commit().await?;
+    racing.await??;
+
+    assert_eq!(roles_of(&pool, track, found).await?, ["primary"]);
+    assert_eq!(genius_id_of(&pool, found).await?, None);
+    assert_eq!(genius_id_of(&pool, holder).await?.as_deref(), Some("888"));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn credits_of_a_new_artist_pair_persist_in_one_stable_order(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let mut first = named("Zeta Wolf", None, None);
+    first.featured = named("Alpha Fox", None, None).primary;
+    let mut second = named("Alpha Fox", None, None);
+    second.featured = named("Zeta Wolf", None, None).primary;
+    let first_track = insert_track(&pool, "one", &STRANGER).await?;
+    let second_track = insert_track(&pool, "two", &STRANGER).await?;
+
+    let one = persist_in_background(&pool, first_track, first, &STRANGER);
+    let two = persist_in_background(&pool, second_track, second, &STRANGER);
+    one.await??;
+    two.await??;
+
+    assert_eq!(count_of(&pool, "artists").await?, 2);
+    assert_eq!(count_of(&pool, "track_artists").await?, 4);
     Ok(())
 }

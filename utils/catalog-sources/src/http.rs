@@ -25,6 +25,7 @@ pub(crate) type RelayFuture<'a, T> = Pin<Box<dyn Future<Output = SourceResult<T>
 #[derive(Clone)]
 pub struct ExternalFetcher {
     inner: Arc<Inner>,
+    background: bool,
 }
 
 struct Inner {
@@ -111,6 +112,14 @@ impl ExternalFetcher {
                 relay_sem: Arc::new(Semaphore::new(RELAY_MAX_CONCURRENT)),
                 proxy_sem: Arc::new(Semaphore::new(PROXY_MAX_CONCURRENT)),
             }),
+            background: false,
+        })
+    }
+
+    pub fn background(&self) -> Arc<Self> {
+        Arc::new(Self {
+            inner: self.inner.clone(),
+            background: true,
         })
     }
 
@@ -164,27 +173,8 @@ impl ExternalFetcher {
         headers: HeaderMap,
         max_bytes: usize,
     ) -> SourceResult<Bytes> {
-        let relay_error = match self
-            .send_relay(
-                Method::GET,
-                url.to_owned(),
-                headers.clone(),
-                None,
-                max_bytes,
-            )
+        self.get_relay_then_proxy(url, headers, max_bytes, None)
             .await
-        {
-            Ok(bytes) => return Ok(bytes),
-            Err(error) => error,
-        };
-        match self
-            .send_proxy(Method::GET, url, headers, None, max_bytes)
-            .await
-        {
-            Ok(bytes) => Ok(bytes),
-            Err(SourceError::NotConfigured(_)) => Err(relay_error),
-            Err(error) => Err(error),
-        }
     }
 
     pub async fn get_api(
@@ -199,7 +189,8 @@ impl ExternalFetcher {
                 .send_proxy(Method::GET, url, headers, None, DEFAULT_JSON_LIMIT)
                 .await;
         }
-        self.get_bytes(url, headers).await
+        self.get_relay_then_proxy(url, headers, DEFAULT_JSON_LIMIT, Some(throttle))
+            .await
     }
 
     pub async fn get_scrape(
@@ -208,22 +199,35 @@ impl ExternalFetcher {
         headers: HeaderMap,
         throttle: &Throttle,
     ) -> SourceResult<Bytes> {
+        self.get_relay_then_proxy(url, headers, 4 * 1024 * 1024, Some(throttle))
+            .await
+    }
+
+    async fn get_relay_then_proxy(
+        &self,
+        url: &str,
+        headers: HeaderMap,
+        max_bytes: usize,
+        throttle: Option<&Throttle>,
+    ) -> SourceResult<Bytes> {
         let relay_error = match self
             .send_relay(
                 Method::GET,
                 url.to_owned(),
                 headers.clone(),
                 None,
-                4 * 1024 * 1024,
+                max_bytes,
             )
             .await
         {
             Ok(bytes) => return Ok(bytes),
             Err(error) => error,
         };
-        throttle.wait().await;
+        if let Some(throttle) = throttle {
+            throttle.wait().await;
+        }
         match self
-            .send_proxy(Method::GET, url, headers, None, 4 * 1024 * 1024)
+            .send_proxy(Method::GET, url, headers, None, max_bytes)
             .await
         {
             Ok(bytes) => Ok(bytes),
@@ -311,6 +315,7 @@ impl ExternalFetcher {
             method: method.as_str().to_owned(),
             headers: relay_headers,
             body: body.unwrap_or_default(),
+            background: self.background,
         };
         let response = tokio::time::timeout(OPERATION_TIMEOUT, relay.fetch(request))
             .await
@@ -395,6 +400,86 @@ fn parse_retry_after(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use axum::Router;
+    use axum::routing::any;
+
+    async fn proxy_stub() -> String {
+        let app = Router::new().route("/", any(|| async { "{}" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{address}/")
+    }
+
+    #[derive(Default)]
+    struct RecordingRelay {
+        background: std::sync::Mutex<Vec<bool>>,
+    }
+
+    impl RelayTransport for RecordingRelay {
+        fn call_method(
+            &self,
+            _method_id: String,
+            _script: String,
+            _inputs: Bytes,
+        ) -> RelayFuture<'_, Bytes> {
+            Box::pin(async { Ok(Bytes::new()) })
+        }
+
+        fn fetch(&self, request: RelayRequest) -> RelayFuture<'_, RelayReply> {
+            self.background.lock().unwrap().push(request.background);
+            Box::pin(async {
+                Ok(RelayReply {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: Bytes::from_static(b"{}"),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_background_view_marks_its_relay_requests() {
+        let relay = Arc::new(RecordingRelay::default());
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new_with_transport(http, String::new(), relay.clone());
+
+        fetcher
+            .get_bytes("https://genius.com/api/search/multi?q=x", HeaderMap::new())
+            .await
+            .unwrap();
+        fetcher
+            .background()
+            .get_bytes("https://musicbrainz.org/ws/2/x", HeaderMap::new())
+            .await
+            .unwrap();
+
+        assert_eq!(*relay.background.lock().unwrap(), [false, true]);
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_api_calls_are_spaced_before_the_proxy() {
+        let http = sc_fingerprint::builder(None).build().unwrap();
+        let fetcher = ExternalFetcher::new(http, proxy_stub().await, None);
+        let throttle = Throttle::new(Duration::from_millis(400));
+        let started = std::time::Instant::now();
+
+        for _ in 0..2 {
+            fetcher
+                .get_api(
+                    "https://musicbrainz.org/ws/2/x",
+                    HeaderMap::new(),
+                    &throttle,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert!(started.elapsed() >= Duration::from_millis(380));
+    }
 
     #[test]
     fn retry_after_accepts_seconds_and_http_dates() {

@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 
-use crate::common::admin::AdminAuth;
+use crate::common::admin::{AdminAuth, MetricsAuth};
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -150,6 +150,7 @@ pub async fn index_usage(
     _: AdminAuth,
     State(state): State<AppState>,
 ) -> AppResult<Json<IndexUsageReport>> {
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
     let indexes = sqlx::query_as::<_, IndexUsage>(
         "SELECT relname AS \"table\", indexrelname AS \"index\", \
                 idx_scan::int8 AS idx_scan, \
@@ -158,13 +159,14 @@ pub async fn index_usage(
          FROM pg_stat_user_indexes JOIN pg_index USING (indexrelid) \
          ORDER BY idx_scan ASC, pg_relation_size(indexrelid) DESC",
     )
-    .fetch_all(&state.pg)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(Json(IndexUsageReport { indexes }))
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn metrics(_: AdminAuth, State(state): State<AppState>) -> axum::response::Response {
+pub async fn metrics(_: MetricsAuth, State(state): State<AppState>) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 

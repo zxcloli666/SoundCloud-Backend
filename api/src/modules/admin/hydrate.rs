@@ -265,7 +265,7 @@ pub async fn hydrate(
                     .upsert_from_sc(&v, observation)
                     .await
                 {
-                    tracing::warn!(user = %id, %error, "hydrated user could not be persisted");
+                    tracing::warn!(%error, "hydrated user could not be persisted");
                 }
                 card_from_sc_user(&id, &v)
             }

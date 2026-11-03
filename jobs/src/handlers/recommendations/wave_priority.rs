@@ -11,12 +11,14 @@ pub(super) fn shard_for(shards: i64, now: chrono::DateTime<Utc>) -> i64 {
 pub(super) async fn bump(pool: &PgPool, shards: i64) -> JobResult<u64> {
     let shards = shards.max(1);
     let shard = shard_for(shards, Utc::now());
-    let result = sqlx::query_file!(
-        "queries/recommendations/wave_priority/bump.sql",
-        shards,
-        shard
-    )
-    .execute(pool)
+    let result = crate::db::retry_conflicts(|| {
+        sqlx::query_file!(
+            "queries/recommendations/wave_priority/bump.sql",
+            shards,
+            shard
+        )
+        .execute(pool)
+    })
     .await
     .map_err(JobError::retryable)?;
     Ok(result.rows_affected())

@@ -417,15 +417,15 @@ async fn a_session_without_a_bind_reaches_only_the_config(pool: PgPool) -> anyho
     let session = session_for(&pool, "4102", None).await?;
     let app: Router = routes::public(beta_for(chat_state(pool.clone(), redis()?, true), "4102"));
     let device = Device::new();
-    let incarnation: Uuid = sqlx::query_scalar("SELECT incarnation FROM chat.meta")
-        .fetch_one(&pool)
-        .await?;
 
     let config = seal(
         from_device(call("GET", "/chat/config", ""), session, &device),
         &device.seed,
     );
     let (status, view) = exchange(&app, &config).await;
+    let incarnation: Uuid = sqlx::query_scalar("SELECT incarnation FROM chat.meta")
+        .fetch_one(&pool)
+        .await?;
     assert_eq!(status, 200, "{view}");
     assert_eq!(view["user_id"], "4102");
     assert_eq!(view["enabled"], true);

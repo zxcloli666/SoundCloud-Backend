@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use sqlx::PgPool;
 
-use crate::config::OAuthAppBootstrap;
+use crate::config::{OAuthAppBootstrap, ScdNode};
 
 const CORE_LOCK: i64 = 0x5343_445F_4D49;
 const OPS_LOCK: i64 = 0x5343_445F_4D4F;
@@ -40,6 +40,37 @@ pub(crate) async fn run_core(
     }
     .await;
     finish(&mut connection, CORE_LOCK, migration).await
+}
+
+pub(crate) async fn configure_node(
+    pool: &PgPool,
+    node: &ScdNode,
+) -> Result<Vec<String>, MigrationError> {
+    let mut connection = pool.acquire().await?;
+    let mut changes = sqlx::query_file_scalar!("queries/migrations/scd_grant_repl.sql")
+        .fetch_all(&mut *connection)
+        .await?;
+    if node.split() {
+        let problems = sqlx::query_file_scalar!("queries/migrations/scd_repl_problems.sql")
+            .fetch_all(&mut *connection)
+            .await?;
+        if !problems.is_empty() {
+            return Err(MigrationError::SplitNotReady {
+                problems: problems.join("; "),
+            });
+        }
+    }
+    changes.extend(
+        sqlx::query_file_scalar!(
+            "queries/migrations/scd_configure.sql",
+            node.node,
+            node.role,
+            node.mode
+        )
+        .fetch_all(&mut *connection)
+        .await?,
+    );
+    Ok(changes)
 }
 
 async fn preflight_oauth_app_identities(
@@ -200,6 +231,9 @@ pub enum MigrationError {
         "{groups} invalid OAuth client identity groups require repair before migration: {sample}"
     )]
     InvalidOAuthAppIdentities { groups: i64, sample: String },
+
+    #[error("SCD_MODE=split refused, replication grants are incomplete: {problems}")]
+    SplitNotReady { problems: String },
 }
 
 #[cfg(test)]

@@ -9,6 +9,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "admin-catalog"
+version = "0.1.0"
+dependencies = [
+ "backend-contracts",
+ "catalog-match",
+ "catalog-normalize",
+ "chrono",
+ "entity-ref",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "write-through",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -415,6 +431,7 @@ dependencies = [
 name = "backend-contracts"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "hex",
  "schemars",
  "serde",
@@ -595,6 +612,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -606,6 +624,7 @@ dependencies = [
  "sqlx",
  "url",
  "uuid",
+ "write-through",
 ]
 
 [[package]]
@@ -1901,6 +1920,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 name = "jobs"
 version = "1.0.0"
 dependencies = [
+ "admin-catalog",
  "anyhow",
  "async-nats",
  "axum 0.8.9",
@@ -1917,6 +1937,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "qdrant-client",
  "redact",
+ "repl-verify",
  "sc-fingerprint",
  "sc-transport",
  "serde",
@@ -1936,6 +1957,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wreq",
+ "write-through",
 ]
 
 [[package]]
@@ -2836,6 +2858,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "repl-verify"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+ "sqlx",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2950,9 +2983,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -3707,7 +3740,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3852,6 +3885,7 @@ dependencies = [
  "socket2 0.6.5",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower 0.5.3",
@@ -4742,6 +4776,17 @@ dependencies = [
  "typed-builder",
  "wreq",
  "zstd",
+]
+
+[[package]]
+name = "write-through"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
 ]
 
 [[package]]

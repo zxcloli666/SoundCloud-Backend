@@ -46,6 +46,15 @@ impl TokenSnapshot {
         self.replace_at(tokens, Instant::now());
     }
 
+    pub fn invalidate(&self) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        state.loaded_at = None;
+        state.reload_after = None;
+    }
+
     pub fn reject(&self, rejected: PublicTokenId) {
         let mut state = self
             .state

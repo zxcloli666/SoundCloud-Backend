@@ -14,6 +14,8 @@ use wreq::{Client, Method, StatusCode};
 use crate::config::{OAuthConfig, SyncQueueConfig};
 use crate::handlers::apiv1_pace;
 
+use super::write_gate::{WriteGate, WriteHold};
+
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub struct SoundCloudClient {
@@ -38,6 +40,9 @@ pub enum SoundCloudError {
         body: Value,
         retry_after_seconds: Option<i64>,
     },
+
+    #[error("SoundCloud write held back before it was sent")]
+    Paused(WriteHold),
 
     #[error("SoundCloud response exceeded the size limit")]
     ResponseTooLarge,
@@ -71,29 +76,19 @@ impl SoundCloudClient {
     }
 
     pub async fn get(&self, path: &str, access_token: &str) -> Result<Value, SoundCloudError> {
-        self.send_api(Method::GET, path, access_token, None).await
+        self.send_api(Method::GET, path, access_token, None, None)
+            .await
     }
 
-    pub async fn post(
+    pub(super) async fn send_gated(
         &self,
+        method: Method,
         path: &str,
         access_token: &str,
         body: Option<&Value>,
+        gate: &WriteGate<'_>,
     ) -> Result<Value, SoundCloudError> {
-        self.send_api(Method::POST, path, access_token, body).await
-    }
-
-    pub async fn put(
-        &self,
-        path: &str,
-        access_token: &str,
-        body: Option<&Value>,
-    ) -> Result<Value, SoundCloudError> {
-        self.send_api(Method::PUT, path, access_token, body).await
-    }
-
-    pub async fn delete(&self, path: &str, access_token: &str) -> Result<Value, SoundCloudError> {
-        self.send_api(Method::DELETE, path, access_token, None)
+        self.send_api(method, path, access_token, body, Some(gate))
             .await
     }
 
@@ -103,6 +98,7 @@ impl SoundCloudClient {
         path: &str,
         access_token: &str,
         body: Option<&Value>,
+        gate: Option<&WriteGate<'_>>,
     ) -> Result<Value, SoundCloudError> {
         let target = self
             .api_url
@@ -114,8 +110,11 @@ impl SoundCloudClient {
             apiv1_pace::Use::Write
         };
         apiv1_pace::wait_for_turn(usage).await;
+        if let Some(gate) = gate {
+            gate.check()?;
+        }
         let result = self.send_routed(method, &target, access_token, body).await;
-        apiv1_pace::record(usage, false);
+        apiv1_pace::answered(usage);
         result
     }
 
@@ -193,7 +192,9 @@ fn retries_direct(method: &Method, error: &SoundCloudError) -> bool {
     match error {
         SoundCloudError::Transport(_) => true,
         SoundCloudError::Api { status, .. } => status.is_server_error(),
-        SoundCloudError::ResponseTooLarge | SoundCloudError::InvalidTokenResponse => false,
+        SoundCloudError::ResponseTooLarge
+        | SoundCloudError::InvalidTokenResponse
+        | SoundCloudError::Paused(_) => false,
     }
 }
 

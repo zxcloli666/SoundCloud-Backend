@@ -67,6 +67,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   `x-admin-token` vs `config.admin.token`, fail-closed). There is **no** global auth layer in `router.rs` — a new admin
   handler MUST take `_: AdminAuth` as its **first** argument or the route is open to the world (this is how
   `/admin/collab/*` leaked). Body extractors (`Json`, `Option<Json<…>>`) are `FromRequest` and must stay **last**.
+- **Admin catalog writes run on core.** Edits of artists, credits, albums, wanted tracks, legacy playlist intents and enrich resets live in `utils/admin-catalog`, which only `jobs` links. The api admin handlers keep `_: AdminAuth` first, take a `RequestKey` (`Idempotency-Key` header or a fresh UUID) and `forward` an `AdminCommand` over `admin.catalog.v1` (10 s, core down is 503 with Retry-After). Admin reads stay local. A new admin write is a new variant in `backend-contracts/src/admin_catalog.rs` and a function in the crate, never SQL in the api.
 - **Комментариев в коде нет** — ни `//`, ни `///`, ни `//!`, ни в SQL, TOML, Dockerfile и CI. Смысл несут имена, типы и структура; объяснения идут в `docs/` и в чат.
 
 ## Gotchas (verified in prod)
@@ -227,7 +228,10 @@ SC-пути запрашивают токен через `ctx.with_access_token(
 
 **Проверка подключения отделена от профиля.** `GET /auth/soundcloud` читает
 состояние из PostgreSQL без SC-запроса. Явное обновление — `POST /auth/soundcloud/refresh`.
-Общая аренда в `soundcloud_connections` защищает обновления из API и jobs.
+Токен пользователя обновляет только jobs на core: API шлёт `auth.refresh.v1` по NATS и ждёт 5 с,
+сам refresh-группу `soundcloud_connections` не пишет. Core недоступен ⇒ временная ошибка, без записи в БД.
+Повторный вход в тот же аккаунт пишет пару через kind `connection.login`: строка подключения та же, побеждает
+вход с большим `login_v`, результат обновления, начатого до входа, отбрасывается.
 
 **Одиночный `invalid_grant` не требует входа.** Миграция 0089 и общий SQL записи
 отказа требуют минимум три отказа за период не менее 15 минут, последнего успеха
@@ -241,7 +245,7 @@ SC-пути запрашивают токен через `ctx.with_access_token(
 `error_code` `oauth_app_unavailable`. Поэтому `oauth_apps.active = false` значит новый вход для всех
 пользователей приложения в течение часа; переждать 429 можно только паузой в `oauth_app_request_cooldowns`.
 Без единого активного приложения — 502 `soundcloud_temporarily_unavailable` с Retry-After 1800.
-Запрос токена ждёт чужую аренду обновления до 12 с. Загрузка трека берёт токен до приёма файла и
+Запрос токена ждёт идущее на core обновление до 12 с. Загрузка трека берёт токен до приёма файла и
 обновляет его заранее, если до истечения меньше 5 минут; если приложение подключения ушло, сразу 409.
 
 Контракт фронтенда: [docs/frontend-api-rewrite.md](../docs/frontend-api-rewrite.md).

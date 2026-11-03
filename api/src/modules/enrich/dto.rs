@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
+use mini_moka::sync::Cache;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -69,6 +72,74 @@ pub struct AlbumDto {
     pub primary_artist: Option<ArtistDto>,
 }
 
+const PARTICIPANTS_TTL: Duration = Duration::from_secs(60);
+const PARTICIPANTS_KEPT: u64 = 200_000;
+const PARTICIPANTS_CACHE: &str = "track_participants";
+
+static PARTICIPANTS: LazyLock<Cache<Uuid, Arc<Vec<ParticipantDto>>>> = LazyLock::new(|| {
+    Cache::builder()
+        .max_capacity(PARTICIPANTS_KEPT)
+        .time_to_live(PARTICIPANTS_TTL)
+        .build()
+});
+
+async fn participants_of(
+    pg: &PgPool,
+    track_ids: &[Uuid],
+) -> AppResult<HashMap<Uuid, Arc<Vec<ParticipantDto>>>> {
+    let mut found = HashMap::with_capacity(track_ids.len());
+    let mut missing = Vec::new();
+    for track_id in track_ids {
+        match PARTICIPANTS.get(track_id) {
+            Some(participants) => {
+                crate::metrics::record_cache(PARTICIPANTS_CACHE, true);
+                found.insert(*track_id, participants);
+            }
+            None => {
+                crate::metrics::record_cache(PARTICIPANTS_CACHE, false);
+                missing.push(*track_id);
+            }
+        }
+    }
+    if missing.is_empty() {
+        return Ok(found);
+    }
+    missing.sort_unstable();
+    missing.dedup();
+    let rows = sqlx::query_file!("queries/enrich/dto/lookup_participants.sql", &missing)
+        .fetch_all(pg)
+        .await?;
+    let mut loaded: HashMap<Uuid, Vec<ParticipantDto>> =
+        missing.iter().map(|id| (*id, Vec::new())).collect();
+    for p in rows {
+        let verified = artist_verified(&p.artist_source, p.artist_identity);
+        loaded.entry(p.track_id).or_default().push(ParticipantDto {
+            artist: ArtistDto {
+                id: p.artist_id,
+                name: p.artist_name,
+                avatar_url: p.artist_avatar_url,
+                sc_user_id: p.artist_sc_user_id,
+                source: p.artist_source,
+                confidence: p.artist_confidence,
+                verified,
+            },
+            role: p.role,
+            confidence: p.ta_confidence,
+        });
+    }
+    for (track_id, participants) in loaded {
+        let participants = Arc::new(participants);
+        PARTICIPANTS.insert(track_id, participants.clone());
+        found.insert(track_id, participants);
+    }
+    crate::metrics::set_cache_size(
+        PARTICIPANTS_CACHE,
+        PARTICIPANTS.entry_count(),
+        PARTICIPANTS.weighted_size(),
+    );
+    Ok(found)
+}
+
 pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, EnrichmentDto>> {
     let sc_ids: Vec<String> = urns
         .iter()
@@ -87,30 +158,7 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
     }
 
     let track_ids: Vec<Uuid> = rows.iter().map(|r| r.track_id).collect();
-    let participants = sqlx::query_file!("queries/enrich/dto/lookup_participants.sql", &track_ids)
-        .fetch_all(pg)
-        .await?;
-
-    let mut by_track: HashMap<Uuid, Vec<ParticipantDto>> = HashMap::new();
-    for p in participants {
-        let verified = artist_verified(&p.artist_source, p.artist_identity);
-        by_track
-            .entry(p.track_id)
-            .or_default()
-            .push(ParticipantDto {
-                artist: ArtistDto {
-                    id: p.artist_id,
-                    name: p.artist_name,
-                    avatar_url: p.artist_avatar_url,
-                    sc_user_id: p.artist_sc_user_id,
-                    source: p.artist_source,
-                    confidence: p.artist_confidence,
-                    verified,
-                },
-                role: p.role,
-                confidence: p.ta_confidence,
-            });
-    }
+    let mut by_track = participants_of(pg, &track_ids).await?;
 
     let mut out: HashMap<String, EnrichmentDto> = HashMap::with_capacity(rows.len());
     for r in rows {
@@ -156,7 +204,10 @@ pub async fn lookup(pg: &PgPool, urns: &[String]) -> AppResult<HashMap<String, E
             }),
             _ => None,
         };
-        let mut participants = by_track.remove(&r.track_id).unwrap_or_default();
+        let mut participants = by_track
+            .remove(&r.track_id)
+            .map(|cached| cached.as_ref().clone())
+            .unwrap_or_default();
         if let Some(pa) = primary_artist.as_ref() {
             participants.retain(|p| !(p.role == "primary" && p.artist.id == pa.id));
         }
@@ -277,4 +328,53 @@ pub async fn apply_to_tracks(pg: &PgPool, tracks: &mut [Value]) -> AppResult<()>
 
 pub async fn apply_to_track(pg: &PgPool, track: &mut Value) -> AppResult<()> {
     apply_to_tracks(pg, std::slice::from_mut(track)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn credit(pool: &PgPool, role: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO artists (id, name, normalized_name, source)
+             VALUES ($1, 'featured', 'featured', 'test') ON CONFLICT DO NOTHING",
+        )
+        .bind(Uuid::from_u128(7))
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO track_artists (track_id, artist_id, role, source)
+             SELECT id, $1, $2, 'test' FROM tracks WHERE sc_track_id = '4242'",
+        )
+        .bind(Uuid::from_u128(7))
+        .bind(role)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn participants_are_served_from_the_cache_until_it_expires(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+             VALUES ('4242', 'soundcloud:tracks:4242', 'T', 't', 1000)",
+        )
+        .execute(&pool)
+        .await?;
+        let urns = vec!["soundcloud:tracks:4242".to_owned()];
+        let before = lookup(&pool, &urns).await?;
+        assert!(before["4242"].participants.is_empty());
+
+        credit(&pool, "featured").await?;
+        let within = lookup(&pool, &urns).await?;
+        assert!(within["4242"].participants.is_empty());
+
+        PARTICIPANTS.invalidate_all();
+        let after = lookup(&pool, &urns).await?;
+        assert_eq!(after["4242"].participants.len(), 1);
+        assert_eq!(after["4242"].participants[0].role, "featured");
+        Ok(())
+    }
 }

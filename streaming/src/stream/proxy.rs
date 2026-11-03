@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, warn};
 use wreq::Client;
 
 const MAX_RETRIES: usize = 3;
@@ -93,6 +93,10 @@ pub async fn get_track_via_relay(
     let audio = base64::engine::general_purpose::STANDARD
         .decode(v.get("audio_b64")?.as_str()?)
         .ok()?;
+    if super::validate::is_encrypted_mp4(&audio) {
+        warn!(id, "relay sc.get_track answered with still encrypted audio");
+        return None;
+    }
     let ct = v
         .get("content_type")
         .and_then(|x| x.as_str())
@@ -134,7 +138,12 @@ async fn audio_via_relay(method_id: &str, script: &str, url: &str) -> Option<Vec
         return None;
     }
     let b64 = v.get("audio_b64")?.as_str()?;
-    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+    let audio = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    if super::validate::is_encrypted_mp4(&audio) {
+        warn!("relay sc.hls_decrypt answered with still encrypted audio");
+        return None;
+    }
+    Some(audio)
 }
 
 pub async fn hls_decrypt_via_relay(
@@ -222,9 +231,10 @@ async fn http_get_bytes(
     url: &str,
     headers: &HashMap<String, String>,
     validate: &BodyValidator,
+    retries: usize,
 ) -> FetchResult {
     let mut last_err: Option<BoxErr> = None;
-    for attempt in 0..=MAX_RETRIES {
+    for attempt in 0..=retries {
         let mut req = client.get(url);
         for (k, v) in headers {
             req = req.header(k.as_str(), v.as_str());
@@ -263,7 +273,7 @@ async fn http_get_bytes(
             }
             Err(e) => last_err = Some(Box::new(e.without_uri())),
         }
-        if attempt < MAX_RETRIES {
+        if attempt < retries {
             tokio::time::sleep(Duration::from_millis(
                 RETRY_DELAYS.get(attempt).copied().unwrap_or(2000),
             ))
@@ -281,7 +291,18 @@ async fn via_proxy(
     validate: &BodyValidator,
 ) -> FetchResult {
     let (url, headers) = proxy_target(proxy_url, target_url, extra);
-    http_get_bytes(client, &url, &headers, validate).await
+    http_get_bytes(client, &url, &headers, validate, MAX_RETRIES).await
+}
+
+async fn via_one_region(
+    client: &Client,
+    proxy_url: &str,
+    target_url: &str,
+    extra: HashMap<String, String>,
+    validate: &BodyValidator,
+) -> FetchResult {
+    let (url, headers) = proxy_target(proxy_url, target_url, extra);
+    http_get_bytes(client, &url, &headers, validate, 0).await
 }
 
 async fn via_direct(
@@ -290,7 +311,7 @@ async fn via_direct(
     extra: HashMap<String, String>,
     validate: &BodyValidator,
 ) -> FetchResult {
-    http_get_bytes(client, target_url, &extra, validate).await
+    http_get_bytes(client, target_url, &extra, validate, MAX_RETRIES).await
 }
 
 async fn via_relay(
@@ -306,6 +327,7 @@ async fn via_relay(
             method: "GET".to_string(),
             headers: extra.clone(),
             body: Bytes::new(),
+            background: false,
         };
         match relay.fetch(&req).await {
             Ok(resp) if (200..400).contains(&resp.status) => {
@@ -382,16 +404,20 @@ pub async fn fetch_get_validated(
     client: &Client,
     proxy_url: &str,
     target_url: &str,
-    extra: HashMap<String, String>,
+    mut extra: HashMap<String, String>,
     allow_direct: bool,
     validate: BodyValidator,
 ) -> FetchResult {
+    let proxy_set = !proxy_url.is_empty();
+    let steered = super::egress::keeps_tag(&mut extra, target_url, proxy_set);
     let relay = RELAY
         .get()
         .cloned()
-        .filter(|_| !carries_credentials(&extra));
-    let proxy_set = !proxy_url.is_empty();
+        .filter(|_| !carries_credentials(&extra) && !steered);
 
+    if steered {
+        return via_one_region(client, proxy_url, target_url, extra, &validate).await;
+    }
     if proxy_set {
         if let Some(r) = relay {
             return race_relay_proxy(client, r, proxy_url, target_url, extra, validate).await;
@@ -431,6 +457,7 @@ async fn via_relay_post(
             method: "POST".to_string(),
             headers: extra.clone(),
             body: Bytes::from(body.clone()),
+            background: false,
         };
         match relay.fetch(&req).await {
             Ok(resp) if (200..400).contains(&resp.status) => {
@@ -498,9 +525,10 @@ pub async fn fetch_post_bytes(
     client: &Client,
     proxy_url: &str,
     target_url: &str,
-    extra: HashMap<String, String>,
+    mut extra: HashMap<String, String>,
     body: Vec<u8>,
 ) -> FetchResult {
+    super::egress::keeps_tag(&mut extra, target_url, false);
     let validate = accept_non_empty();
     let relay = RELAY
         .get()

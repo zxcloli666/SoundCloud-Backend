@@ -1,5 +1,6 @@
 mod collab;
 mod indexing;
+pub mod queue;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,6 @@ pub use indexing::IndexingJobs;
 
 const DEFAULT_MAX_ATTEMPTS: i16 = 8;
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
-const OPPORTUNISTIC_PUBLISH_TIMEOUT: Duration = Duration::from_millis(150);
 
 pub struct BackgroundJobs {
     nats: Arc<NatsService>,
@@ -42,16 +42,6 @@ impl BackgroundJobs {
 
     pub async fn enqueue(&self, job: &BackgroundJob) -> AppResult<Uuid> {
         self.publish(job, PUBLISH_TIMEOUT).await
-    }
-
-    pub async fn enqueue_opportunistic(&self, job: &BackgroundJob) -> bool {
-        match self.publish(job, OPPORTUNISTIC_PUBLISH_TIMEOUT).await {
-            Ok(_) => true,
-            Err(error) => {
-                tracing::debug!(%error, kind = %job.kind, "background job enqueue skipped");
-                false
-            }
-        }
     }
 
     async fn publish(&self, job: &BackgroundJob, timeout: Duration) -> AppResult<Uuid> {
@@ -78,11 +68,6 @@ impl BackgroundJob {
 
     pub fn with_priority(mut self, priority: i16) -> Self {
         self.priority = priority;
-        self
-    }
-
-    pub fn with_id(mut self, id: Uuid) -> Self {
-        self.id = id;
         self
     }
 

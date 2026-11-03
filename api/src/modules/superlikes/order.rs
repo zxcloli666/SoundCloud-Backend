@@ -32,7 +32,7 @@ pub(super) enum Target<'a> {
 pub async fn apply(pg: &PgPool, sc_user_id: &str, request: LikesOrderRequest) -> AppResult<()> {
     let owner = extract_sc_id(sc_user_id);
     let variants = user_id_variants(sc_user_id);
-    let mut tx = pg.begin().await?;
+    let mut tx = crate::db::begin_long(pg).await?;
     sqlx::query_file_scalar!("queries/superlikes/lock_user.sql", owner)
         .fetch_one(&mut *tx)
         .await?;

@@ -1,10 +1,14 @@
-WITH recent AS (SELECT sc_track_id, created_at
-                FROM user_likes_tracks
-                WHERE user_id = ANY ($1)
-                  AND wanted_state = true
-                  AND created_at > now() - make_interval(days => $2::int)
-                ORDER BY created_at DESC, ctid DESC
-    LIMIT 200
+WITH recent AS (SELECT l.sc_track_id, l.created_at
+                FROM unnest($1::text[]) AS u(id)
+                         CROSS JOIN LATERAL (SELECT sc_track_id, created_at
+                                             FROM user_likes_tracks
+                                             WHERE user_id = u.id
+                                               AND wanted_state = true
+                                               AND created_at > now() - make_interval(days => $2::int)
+                                             ORDER BY created_at DESC, sc_track_id DESC
+                                             LIMIT 200) l
+                ORDER BY l.created_at DESC, l.sc_track_id DESC
+                LIMIT 200
     )
    , superliked AS (SELECT s.sc_track_id, GREATEST(s.created_at, l.created_at) AS created_at
                     FROM user_superlikes s

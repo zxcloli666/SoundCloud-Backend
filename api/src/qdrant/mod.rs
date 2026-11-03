@@ -25,7 +25,12 @@ pub struct QdrantService {
 
 impl QdrantService {
     pub fn connect(cfg: &QdrantCfg) -> AppResult<Arc<Self>> {
-        let mut qcfg = QdrantConfig::from_url(&cfg.grpc_url)
+        let url = match &cfg.tls {
+            Some(tls) => tls_common::tunnel_url(&cfg.grpc_url, tls.clone())
+                .map_err(|e| AppError::internal(format!("qdrant mtls: {e}")))?,
+            None => cfg.grpc_url.clone(),
+        };
+        let mut qcfg = QdrantConfig::from_url(&url)
             .timeout(Duration::from_secs(5))
             .connect_timeout(Duration::from_secs(5))
             .skip_compatibility_check();
@@ -107,4 +112,49 @@ pub struct StoredQueryVector {
 
 fn query_point_id(hash: &str) -> PointId {
     PointId::from(backend_contracts::vector_store::query_point_uuid(hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QdrantService;
+    use crate::config::QdrantCfg;
+
+    fn cfg(url: &str, tls: Option<tls_common::ClientIdentity>) -> QdrantCfg {
+        QdrantCfg {
+            grpc_url: url.to_owned(),
+            api_key: String::new().into(),
+            tls,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_client_builds_and_validation_fails_softly_while_the_server_is_down() {
+        let service = QdrantService::connect(&cfg("http://127.0.0.1:1", None)).unwrap();
+        assert!(service.prepare_required_collections().await.is_err());
+        assert!(
+            service
+                .get_query_vector("query_vec_mulan", "h")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs QDRANT_URL (https) and QDRANT_TLS_CA, QDRANT_TLS_CERT, QDRANT_TLS_KEY of a verify-client server"]
+    async fn mtls_reaches_a_verifying_server_and_plain_tls_does_not() {
+        tls_common::init_crypto();
+        let url = std::env::var("QDRANT_URL").expect("QDRANT_URL");
+        let identity = tls_common::ClientIdentity::from_env("QDRANT").expect("QDRANT_TLS_* paths");
+
+        let with_cert = QdrantService::connect(&cfg(&url, Some(identity))).unwrap();
+        with_cert
+            .raw()
+            .health_check()
+            .await
+            .expect("health over mTLS");
+        assert!(with_cert.raw().list_collections().await.is_ok());
+
+        let without_cert = QdrantService::connect(&cfg(&url, None)).unwrap();
+        assert!(without_cert.raw().health_check().await.is_err());
+    }
 }

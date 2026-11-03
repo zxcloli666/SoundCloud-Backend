@@ -35,6 +35,12 @@ impl IntoResponse for AppError {
             AppError::Upstream => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
         };
+        if matches!(
+            self,
+            AppError::NoStream | AppError::Timeout | AppError::FreeHqBusy(_)
+        ) {
+            telemetry::fail(&tracing::Span::current(), &self.to_string());
+        }
         let mut response = (status, serde_json::json!({"error": msg}).to_string()).into_response();
         if let AppError::FreeHqBusy(wait) = self {
             response
@@ -53,6 +59,6 @@ impl From<crate::db::postgres::PgError> for AppError {
 
 impl From<wreq::Error> for AppError {
     fn from(e: wreq::Error) -> Self {
-        AppError::Internal(format!("http: {e}"))
+        AppError::Internal(format!("http: {}", e.without_uri()))
     }
 }

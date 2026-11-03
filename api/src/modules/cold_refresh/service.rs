@@ -214,13 +214,11 @@ impl ColdRefreshService {
             ));
         };
         if !public {
-            sqlx::query_file!(
-                "queries/cold_refresh/audience_clear.sql",
-                &subject,
-                crate::common::sc_ids::extract_sc_id(&subject),
-                &coll.sibling_relations()
-            )
-            .execute(&self.pg)
+            self.clear(wt::ColdRefreshClear::Audience {
+                subject_id: crate::common::sc_ids::extract_sc_id(&subject).to_owned(),
+                subject_urn: subject.clone(),
+                relations: coll.sibling_relations(),
+            })
             .await?;
             return Ok(super::collection::CollectionPage::empty(
                 ready(),
@@ -262,9 +260,10 @@ impl ColdRefreshService {
             ));
         };
         if !public {
-            sqlx::query_file!("queries/cold_refresh/comments_clear.sql", sc_track_id)
-                .execute(&self.pg)
-                .await?;
+            self.clear(wt::ColdRefreshClear::Comments {
+                sc_track_id: sc_track_id.to_owned(),
+            })
+            .await?;
             return Ok(super::collection::CollectionPage::empty(
                 ready(),
                 page,
@@ -282,6 +281,16 @@ impl ColdRefreshService {
         let page =
             crate::modules::tracks::comments::read_page(&self.pg, sc_track_id, page, limit).await?;
         Ok(super::collection::CollectionPage::new(page, sync))
+    }
+
+    async fn clear(&self, clear: wt::ColdRefreshClear) -> AppResult<()> {
+        wt::retry(|| async {
+            let mut transaction = self.pg.begin().await?;
+            wt::call(&mut transaction, &clear).await?;
+            transaction.commit().await
+        })
+        .await?;
+        Ok(())
     }
 
     async fn subject_is_public(

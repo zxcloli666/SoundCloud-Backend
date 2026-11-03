@@ -147,9 +147,9 @@ impl OAuthAppsService {
             Ok(u) => u,
             Err(_) => return Ok(()),
         };
-        sqlx::query_file!("queries/oauth_apps/service/delete_by_id.sql", uuid)
-            .execute(&self.pool)
-            .await?;
+        let mut transaction = self.pool.begin().await?;
+        wt::call(&mut transaction, &wt::OauthAppDelete { app_id: uuid }).await?;
+        transaction.commit().await?;
         Ok(())
     }
 }

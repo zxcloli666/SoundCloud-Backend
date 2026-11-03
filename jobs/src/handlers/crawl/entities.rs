@@ -57,14 +57,21 @@ pub async fn artist_id(
             {
                 return Ok(None);
             }
-            sqlx::query_file!(
+            let attached = sqlx::query_file!(
                 "queries/crawl/update_artist_external_ids.sql",
                 id,
                 mb_artist_id,
                 genius_artist_id
             )
             .execute(pool)
-            .await?;
+            .await;
+            if let Err(error) = attached
+                && !error
+                    .as_database_error()
+                    .is_some_and(|error| error.is_unique_violation())
+            {
+                return Err(error.into());
+            }
         }
         return Ok(Some(id));
     }

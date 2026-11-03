@@ -82,7 +82,7 @@ async fn the_first_dispatch_claims_attempt_one_with_the_whole_reference(
             sc_track_id: "42".to_owned(),
             upload_generation: 3,
             attempt: 1,
-            audio_url: "https://storage.example/api/redirect/soundcloud_tracks_42.m4a".to_owned(),
+            audio_url: "https://storage.example/api/soundcloud_tracks_42.m4a".to_owned(),
             reference_text: "first line\n\n[Chorus]\nsecond line".to_owned(),
             reference_lines_total: 3,
             language: Some("en".to_owned()),

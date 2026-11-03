@@ -97,6 +97,7 @@ pub struct Config {
     /// Должен совпадать с `STORAGE_PUBLIC_URL` в стриминге/бэке (обычно публичный домен сервиса).
     /// Пусто = публикация события skip'ается (нет читаемого URL для воркера).
     pub event_base_url: String,
+    pub event_spool_path: String,
     pub ready_canary_key: Option<String>,
 }
 
@@ -207,6 +208,12 @@ impl Config {
             None
         };
 
+        let tmp_path = env::var("TMP_PATH").unwrap_or_else(|_| "/tmp/storage".into());
+        let event_spool_path = env::var("EVENT_SPOOL_PATH")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| format!("{tmp_path}/events"));
+
         Self {
             port: env::var("PORT")
                 .ok()
@@ -214,7 +221,7 @@ impl Config {
                 .unwrap_or(3000),
             admin_token: env::var("ADMIN_TOKEN").expect("ADMIN_TOKEN is required"),
             storage_path: env::var("STORAGE_PATH").unwrap_or_else(|_| "/data/storage".into()),
-            tmp_path: env::var("TMP_PATH").unwrap_or_else(|_| "/tmp/storage".into()),
+            tmp_path,
             ffmpeg_bin: env::var("FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into()),
             ffprobe_bin: env::var("FFPROBE_BIN").unwrap_or_else(|_| "ffprobe".into()),
             max_transcodes: parse_env_usize(
@@ -258,6 +265,7 @@ impl Config {
                 .unwrap_or_default()
                 .trim_end_matches('/')
                 .to_string(),
+            event_spool_path,
             ready_canary_key: env::var("READY_CANARY_KEY")
                 .ok()
                 .map(|v| v.trim().to_string())

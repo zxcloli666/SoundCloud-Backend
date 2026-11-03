@@ -115,7 +115,7 @@ async fn session(
     let Some(session_id) = raw.as_deref().and_then(parse_uuid) else {
         return Ok(no_store_json(unauthenticated_session()));
     };
-    let Some(session) = state.auth.get_auth_session(session_id).await? else {
+    let Some(session) = state.auth.find_auth_session(session_id).await? else {
         return Ok(no_store_json(unauthenticated_session()));
     };
     let Some(soundcloud_user_id) = session.soundcloud_user_id else {

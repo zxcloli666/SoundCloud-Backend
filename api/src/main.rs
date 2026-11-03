@@ -38,20 +38,22 @@ mod sc_surface_tests;
 #[path = "secret_surface_tests.rs"]
 mod secret_surface_tests;
 mod state;
-mod telemetry;
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod telemetry_tests;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::bus::nats::NatsService;
 use crate::cache::CacheService;
 use crate::common::admission::PublicAdmission;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
-use crate::modules::auth::{AuthService, LinkService, TokenProvider};
+use crate::modules::auth::{AuthService, CoreRpc, LinkService, TokenProvider};
 use crate::modules::cold_refresh::ColdRefreshService;
 use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
@@ -63,7 +65,7 @@ use crate::modules::indexing::IndexingService;
 use crate::modules::likes::LikesService;
 use crate::modules::lyrics::{LyricsService, WorkerClient};
 use crate::modules::me::MeService;
-use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
+use crate::modules::oauth_apps::{AppTokenFallback, OAuthAppTokenService, OAuthAppsService};
 use crate::modules::playlists::{PlaylistsDeps, PlaylistsService};
 use crate::modules::recommendations::{RecommendationsService, S3VerifierService};
 use crate::modules::search::SearchService;
@@ -78,8 +80,24 @@ use crate::state::AppState;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     tls_common::init_crypto();
-    telemetry::init();
+    if std::env::args().nth(1).as_deref() == Some("compare-reads") {
+        let code =
+            modules::recommendations::compare_reads::run(std::env::args().skip(2).collect()).await;
+        std::process::exit(code);
+    }
+    let _telemetry = telemetry::init(
+        "api",
+        "info,api=debug,tower_http=info,sqlx=warn",
+        &[
+            "api",
+            "telemetry",
+            "call_relay",
+            "sc_transport",
+            "tls_common",
+        ],
+    );
     metrics::init();
+    metrics::spawn_runtime_probe();
 
     if rt::role() == rt::Role::Rt {
         rt::run().await;
@@ -96,6 +114,9 @@ async fn main() {
             "reserve mode ON: background pipelines disabled"
         );
     }
+    if !config.api_background {
+        info!("API_BACKGROUND=off: s3 verdicts stay in this process, another node writes them");
+    }
 
     let pg = db::connect(&config)
         .await
@@ -103,6 +124,7 @@ async fn main() {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before API");
+    db::warm_up(&pg, config.database.min_connections).await;
     let recommendations_pg = db::connect_recommendations(&config)
         .await
         .expect("Failed to connect to PostgreSQL for recommendations");
@@ -116,24 +138,25 @@ async fn main() {
     info!("Redis pool ready");
 
     let shutdown = CancellationToken::new();
+    tokio::spawn(repl_verify::Sweeper::new(pg.clone()).run(shutdown.clone()));
 
-    let nats = NatsService::connect(&config.nats.url, shutdown.clone())
-        .await
-        .expect("Failed to connect to NATS");
-    info!("NATS connected");
+    let nats =
+        NatsService::connect_with(&config.nats.url, config.nats.tls.as_ref(), shutdown.clone())
+            .await
+            .expect("Failed to configure NATS");
+    info!("NATS client started");
 
-    let qdrant = match QdrantService::connect(&config.qdrant) {
-        Ok(qdrant) => qdrant,
-        Err(error) => {
-            error!(%error, "Qdrant client initialization failed");
-            std::process::exit(1);
-        }
-    };
-    if let Err(error) = qdrant.prepare_required_collections().await {
-        error!(%error, "Qdrant startup validation failed");
-        std::process::exit(1);
+    let qdrant = QdrantService::connect(&config.qdrant).expect("Failed to configure Qdrant");
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        qdrant.prepare_required_collections(),
+    )
+    .await
+    {
+        Ok(Ok(())) => info!("Qdrant ready"),
+        Ok(Err(error)) => warn!(%error, "Qdrant is not ready; vector features degrade"),
+        Err(_) => warn!("Qdrant validation timed out; vector features degrade"),
     }
-    info!("Qdrant ready");
 
     let http_client = sc_fingerprint::builder(None)
         .tcp_keepalive(Duration::from_secs(60))
@@ -165,10 +188,21 @@ async fn main() {
 
     let auth_health =
         crate::modules::auth::AuthHealthService::with_database(redis_pool.clone(), pg.clone());
-    let auth = AuthService::new(pg.clone(), sc.clone(), oauth_apps.clone(), auth_health);
+    let core = CoreRpc::new(nats.clone());
+    let state_core = core.clone();
+    let auth = AuthService::new(
+        pg.clone(),
+        sc.clone(),
+        oauth_apps.clone(),
+        auth_health,
+        core.clone(),
+    );
     let link = LinkService::new(pg.clone(), auth.clone());
 
-    let oauth_app_tokens = OAuthAppTokenService::new(pg.clone());
+    let oauth_app_tokens = OAuthAppTokenService::with_fallback(
+        pg.clone(),
+        AppTokenFallback::new(pg.clone(), redis_pool.clone(), sc.clone(), core),
+    );
     let tokens = TokenProvider::new(auth.clone(), oauth_app_tokens.clone());
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
 
@@ -186,8 +220,12 @@ async fn main() {
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
     let cold_refresh = ColdRefreshService::new(pg.clone(), config.cold.clone());
     let me = MeService::new(pg.clone(), sync_queue.clone(), cold_refresh.clone());
-    let s3_verifier =
-        S3VerifierService::new(http_client.clone(), config.storage.url.clone(), pg.clone());
+    let s3_verifier = S3VerifierService::new(
+        http_client.clone(),
+        config.storage.url.clone(),
+        pg.clone(),
+        config.api_background,
+    );
     let worker = WorkerClient::new(nats.clone(), cache.clone(), qdrant.clone());
     let collab_vector = CollabVectorService::new(qdrant.clone());
     let recommendations = RecommendationsService::new(
@@ -227,7 +265,7 @@ async fn main() {
         sync_queue: sync_queue.clone(),
         cold_refresh: cold_refresh.clone(),
         tokens: tokens.clone(),
-        background_jobs: background_jobs.clone(),
+        redis: redis_pool.clone(),
         miss: miss.clone(),
     });
     let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
@@ -240,7 +278,7 @@ async fn main() {
     );
     let history = HistoryService::new(pg.clone());
     let featured = FeaturedService::new(pg.clone());
-    let lyrics = LyricsService::new(pg.clone(), background_jobs.clone(), reserve);
+    let lyrics = LyricsService::new(pg.clone(), reserve);
 
     let likes = LikesService::new(pg.clone(), sync_queue.clone(), events.clone());
 
@@ -258,10 +296,13 @@ async fn main() {
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
     let port = config.port;
+    let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
     let state = AppState {
         config: config.clone(),
+        diag,
         pg,
         background_jobs,
+        core: state_core,
         http_metrics: std::sync::Arc::new(crate::common::http_metrics::HttpMetrics::new()),
         cache,
         auth,

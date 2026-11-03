@@ -30,6 +30,7 @@ pub struct EditBody {
     pub expected_projection_revision: Option<i64>,
 }
 
+#[derive(Clone)]
 pub enum TrackEdit {
     Add { track_id: String },
     Remove { track_id: String },
@@ -214,6 +215,7 @@ impl Operation {
     }
 }
 
+#[derive(Clone)]
 pub struct MembershipRequest {
     pub edit: TrackEdit,
     pub expected_projection_revision: Option<i64>,

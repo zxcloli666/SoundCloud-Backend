@@ -24,15 +24,9 @@ pub fn build(state: RtState) -> Router {
         ))
         .with_state(state)
         .layer(crate::router::body_limit())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &Request| {
-                tracing::debug_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = %request.uri().path()
-                )
-            }),
-        )
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &Request| tracing::debug_span!("http_request", method = %request.method()),
+        ))
         .layer(middleware::from_fn(track))
         .layer(middleware::map_response(private))
 }

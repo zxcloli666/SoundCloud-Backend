@@ -3,7 +3,7 @@ use std::str::FromStr;
 use anyhow::Context;
 use tracing::info;
 
-use crate::config::{DatabaseConfig, OAuthAppBootstrap};
+use crate::config::{DatabaseConfig, OAuthAppBootstrap, ScdNode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MigrationScope {
@@ -42,15 +42,37 @@ async fn migrate_core() -> anyhow::Result<()> {
         .context("core migration database configuration is invalid")?;
     let bootstrap_app =
         OAuthAppBootstrap::from_env().context("core migration OAuth configuration is invalid")?;
+    let scd_node = ScdNode::from_env().context("SCD_NODE, SCD_ROLE and SCD_MODE are invalid")?;
     let pool = crate::db::connect_migration(&database, "scd-jobs-migrate:core")
         .await
         .context("core migration database connection failed")?;
-    let result = crate::db::migrations::run_core(&pool, bootstrap_app.as_ref())
-        .await
-        .context("core migrations failed");
+    let result = migrate_core_on(&pool, bootstrap_app.as_ref(), scd_node.as_ref()).await;
     pool.close().await;
-    result?;
+    result
+}
+
+async fn migrate_core_on(
+    pool: &sqlx::PgPool,
+    bootstrap_app: Option<&OAuthAppBootstrap>,
+    scd_node: Option<&ScdNode>,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(pool, bootstrap_app)
+        .await
+        .context("core migrations failed")?;
     info!("core migrations applied");
+    let Some(node) = scd_node else {
+        return Ok(());
+    };
+    let changes = crate::db::migrations::configure_node(pool, node)
+        .await
+        .context("scd node configuration failed")?;
+    info!(
+        node = %node.node,
+        role = %node.role,
+        mode = %node.mode,
+        changes = ?changes,
+        "scd node configured"
+    );
     Ok(())
 }
 

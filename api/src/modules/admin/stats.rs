@@ -29,9 +29,11 @@ pub async fn get_stats(
         return Ok(Json(cached));
     }
 
+    let mut tx = crate::db::begin_admin(&state.pg).await?;
     let row = sqlx::query_file!("queries/admin/stats/sessions.sql")
-        .fetch_one(&state.pg)
+        .fetch_one(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     let resp = StatsResponse {
         active_24h: row.active_24h,

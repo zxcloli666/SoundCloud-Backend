@@ -9,6 +9,9 @@ mod storage_events;
 mod storage_uploaded;
 #[cfg(test)]
 mod test_schema;
+mod upload_repair;
+#[cfg(test)]
+mod upload_repair_live_tests;
 
 use anyhow::anyhow;
 use backend_contracts::pipeline::STORAGE_TRACK_UPLOADED;
@@ -58,6 +61,7 @@ pub struct IndexingHandler {
     backlog: WorkerBacklog,
     audio_backlog: i64,
     turns: Turns,
+    repair_pause: std::sync::Mutex<upload_repair::RepairPause>,
 }
 
 #[derive(Default)]
@@ -95,6 +99,7 @@ impl IndexingHandler {
             backlog: WorkerBacklog::new(bus),
             audio_backlog,
             turns: Turns::default(),
+            repair_pause: std::sync::Mutex::new(upload_repair::RepairPause::starting_now()),
         })
     }
 
@@ -273,7 +278,7 @@ impl IndexingHandler {
             let tier = tiers.get(&sc_track_id).copied().unwrap_or(Tier::Rest);
             self.enqueue(sc_track_id, tier).await?;
         }
-        Ok(())
+        self.repair_lost_uploads().await
     }
 
     async fn finish_cached(&self, sc_track_id: &str) -> JobResult {
@@ -297,7 +302,7 @@ impl IndexingHandler {
     fn stored_upload(&self, sc_track_id: &str) -> JobResult<serde_json::Value> {
         Ok(json!({
             "sc_track_id": sc_track_id,
-            "storage_url": self.storage_redirect_url(sc_track_id)?,
+            "storage_url": self.storage_audio_url(sc_track_id)?,
         }))
     }
 
@@ -306,11 +311,11 @@ impl IndexingHandler {
         self.queue.enqueue(&job).await.map_err(queue_error)
     }
 
-    fn storage_redirect_url(&self, sc_track_id: &str) -> JobResult<String> {
+    fn storage_audio_url(&self, sc_track_id: &str) -> JobResult<String> {
         let key = catalog_ingest::track_object_key(sc_track_id).ok_or_else(|| {
             JobError::permanent(anyhow::anyhow!("indexing has an invalid track id"))
         })?;
-        append_path(self.storage_url.clone(), &["redirect", &key]).map(Into::into)
+        append_path(self.storage_url.clone(), &[&key]).map(Into::into)
     }
 }
 

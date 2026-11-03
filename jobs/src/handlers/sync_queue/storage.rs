@@ -88,9 +88,9 @@ fn is_private_track(mutation: &ClaimedMutation) -> bool {
     mutation.action_type == "track_delete"
         || (mutation.action_type == "track_update"
             && mutation
-                .payload
+                .desired
                 .as_ref()
-                .and_then(|payload| payload.pointer("/track/sharing"))
+                .and_then(|desired| desired.get("sharing"))
                 .and_then(serde_json::Value::as_str)
                 == Some("private"))
 }
@@ -101,26 +101,27 @@ mod tests {
 
     #[test]
     fn private_track_mutations_are_selected() {
-        let mut mutation = mutation(Some(
-            serde_json::json!({ "track": { "sharing": "private" } }),
-        ));
+        let mut mutation = mutation(Some(serde_json::json!({ "sharing": "private" })));
         assert!(is_private_track(&mutation));
 
-        mutation.payload = Some(serde_json::json!({ "track": { "sharing": "public" } }));
+        mutation.desired = Some(serde_json::json!({ "sharing": "public" }));
+        assert!(!is_private_track(&mutation));
+
+        mutation.payload = Some(serde_json::json!({ "track": { "sharing": "private" } }));
         assert!(!is_private_track(&mutation));
 
         mutation.action_type = "track_delete".into();
-        mutation.payload = None;
+        mutation.desired = None;
         assert!(is_private_track(&mutation));
     }
 
-    fn mutation(payload: Option<serde_json::Value>) -> ClaimedMutation {
+    fn mutation(desired: Option<serde_json::Value>) -> ClaimedMutation {
         ClaimedMutation {
             id: uuid::Uuid::nil(),
             user_id: "user".to_owned(),
             action_type: "track_update".to_owned(),
             target_urn: "soundcloud:tracks:42".to_owned(),
-            payload,
+            payload: None,
             retry_count: 0,
             generation: 1,
             lease_id: uuid::Uuid::nil(),
@@ -130,6 +131,7 @@ mod tests {
             remote_result: None,
             created_at: chrono::Utc::now(),
             star: false,
+            desired,
         }
     }
 

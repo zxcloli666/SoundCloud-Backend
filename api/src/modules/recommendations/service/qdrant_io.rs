@@ -93,10 +93,13 @@ impl RecommendationsService {
             .iter()
             .filter_map(|p| value_to_u64(&point_id_to_value(p.id.clone())).map(|n| n.to_string()))
             .collect();
-        let (public, lyrics_eligibility) = tokio::join!(
-            self.public_track_ids(&ids),
-            self.lyrics_vector_eligibility_for(collection, &ids)
-        );
+        let (public, lyrics_eligibility) =
+            if collection == crate::qdrant::collections::TRACKS_LYRICS {
+                let (public, eligibility) = load_public_and_eligibility(&self.pg, &ids).await;
+                (public, Some(eligibility))
+            } else {
+                (self.public_track_ids(&ids).await, None)
+            };
         raw.into_iter()
             .filter_map(|p| {
                 let id = point_id_to_value(p.id);
@@ -156,14 +159,39 @@ impl RecommendationsService {
     ) -> LyricsVectorEligibility {
         load_eligibility(&self.pg, ids).await
     }
+}
 
-    async fn lyrics_vector_eligibility_for(
-        &self,
-        collection: &str,
-        ids: &[String],
-    ) -> Option<LyricsVectorEligibility> {
-        eligibility_for(&self.pg, collection, ids).await
+async fn load_public_and_eligibility(
+    pool: &sqlx::PgPool,
+    ids: &[String],
+) -> (HashSet<String>, LyricsVectorEligibility) {
+    if ids.is_empty() {
+        return (HashSet::new(), LyricsVectorEligibility::default());
     }
+    let rows = match sqlx::query_file!(
+        "queries/recommendations/service/qdrant_io/public_and_lyrics_eligibility.sql",
+        ids
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            debug!(%error, "public tracks and lyrics eligibility could not be loaded");
+            return (HashSet::new(), LyricsVectorEligibility::default());
+        }
+    };
+    let mut public = HashSet::new();
+    let mut requests = HashMap::new();
+    for row in rows {
+        if row.is_public {
+            public.insert(row.sc_track_id.clone());
+        }
+        if let Some(request_id) = row.request_id {
+            requests.insert(row.sc_track_id, request_id);
+        }
+    }
+    (public, LyricsVectorEligibility { requests })
 }
 
 async fn load_eligibility(pool: &sqlx::PgPool, ids: &[String]) -> LyricsVectorEligibility {
@@ -448,26 +476,17 @@ mod tests {
                  sc_track_id text PRIMARY KEY,
                  embedded_at timestamptz,
                  embedding_state varchar(16),
-                 created_at timestamp NOT NULL
-             );
-             CREATE TABLE lyrics_embedding_wire_state (
-                 sc_track_id text PRIMARY KEY,
-                 lyrics_created_at timestamp,
-                 request_message_id varchar(128)
+                 created_at timestamp NOT NULL,
+                 embedding_request_id varchar(128),
+                 embedding_request_created_at timestamp
              );
              INSERT INTO lyrics_cache VALUES
-                 ('1', now(), 'done', timestamp '2025-01-01'),
-                 ('2', now(), 'legacy', timestamp '2025-01-02'),
-                 ('3', now(), 'done', timestamp '2025-01-03'),
-                 ('4', NULL, 'dispatched', timestamp '2025-01-04'),
-                 ('5', now(), 'skipped', timestamp '2025-01-05'),
-                 ('6', now(), 'done', timestamp '2025-01-06');
-             INSERT INTO lyrics_embedding_wire_state VALUES
-                 ('1', timestamp '2025-01-01', 'lyr:1:1'),
-                 ('3', timestamp '2025-01-03', NULL),
-                 ('4', timestamp '2025-01-04', 'lyr:4:1'),
-                 ('5', timestamp '2025-01-05', 'lyr:5:1'),
-                 ('6', timestamp '2025-01-01', 'lyr:6:1')",
+                 ('1', now(), 'done', timestamp '2025-01-01', 'lyr:1:1', timestamp '2025-01-01'),
+                 ('2', now(), 'legacy', timestamp '2025-01-02', NULL, NULL),
+                 ('3', now(), 'done', timestamp '2025-01-03', NULL, timestamp '2025-01-03'),
+                 ('4', NULL, 'dispatched', timestamp '2025-01-04', 'lyr:4:1', timestamp '2025-01-04'),
+                 ('5', now(), 'skipped', timestamp '2025-01-05', 'lyr:5:1', timestamp '2025-01-05'),
+                 ('6', now(), 'done', timestamp '2025-01-06', 'lyr:6:1', timestamp '2025-01-01')",
         )
         .execute(pool)
         .await?;

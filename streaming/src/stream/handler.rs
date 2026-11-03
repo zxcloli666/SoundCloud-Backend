@@ -59,7 +59,7 @@ pub async fn resolve_track(
     match state.anon.resolve_url(&query.url).await {
         Ok(track) => Ok(Json(track)),
         Err(error) => {
-            warn!("[resolve] {} failed: {error}", query.url);
+            warn!("[resolve] failed: {error}");
             Err(AppError::NotFound)
         }
     }
@@ -234,8 +234,16 @@ async fn stream_tier(req: &StreamRequest<'_>, tier: &'static str) -> Result<Resp
     }
 
     info!("{tag} {track_urn} → nothing at {tier}");
-    crate::metrics::record_source("none", "exhausted");
+    crate::metrics::record_source("none", missed(tier));
     Err(AppError::NoStream)
+}
+
+fn missed(tier: &str) -> &'static str {
+    match tier {
+        quality::UQ => "missed_uq",
+        quality::HQ => "missed_hq",
+        _ => "exhausted",
+    }
 }
 
 async fn stream_any(req: &StreamRequest<'_>, hq: bool) -> Result<Response, AppError> {
@@ -476,12 +484,15 @@ async fn from_storage(req: &StreamRequest<'_>, tag: &str) -> Option<Response> {
         ..
     } = *req;
     let shown = stored_quality.unwrap_or("?");
+    let tier = stored_quality.unwrap_or("sq");
     if headers.contains_key("x-session-id") {
-        let response = state.storage.try_proxy(track_urn, stored_quality).await?;
+        let proxied = state.storage.try_proxy(track_urn, stored_quality);
+        let response = super::trace::source("storage", tier, proxied).await?;
         served(tag, track_urn, "cdn_proxy", shown);
         return Some(response);
     }
-    let cdn_url = state.storage.try_serve(track_urn).await?;
+    let serving = state.storage.try_serve(track_urn);
+    let cdn_url = super::trace::source("storage", tier, serving).await?;
     served(tag, track_urn, "cdn_redirect", shown);
     Some(Redirect::temporary(&cdn_url).into_response())
 }
@@ -731,6 +742,18 @@ mod tests {
         assert_eq!(granted_tier(Some("hq"), true), Some(quality::HQ));
         assert_eq!(granted_tier(Some("lossless"), true), None);
         assert_eq!(granted_tier(None, false), None);
+    }
+
+    #[test]
+    fn only_the_last_tier_counts_as_a_play_without_sound() {
+        assert_eq!(
+            missed(quality::HQ),
+            "missed_hq",
+            "the desktop asks hq and uq first and steps down to stored sq, its own anon and \
+             streaming sq; counted as exhausted they made the dashboard show 77% plays without sound"
+        );
+        assert_eq!(missed(quality::UQ), "missed_uq");
+        assert_eq!(missed(quality::SQ), "exhausted");
     }
 
     #[test]

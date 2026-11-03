@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
-use crate::modules::auth::{AuthHealthService, AuthService, TokenKind, TokenProvider};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, TokenKind, TokenProvider};
 use crate::modules::oauth_apps::{OAuthAppTokenService, OAuthAppsService};
 use crate::sc::{ScClient, ScReadService};
 use sc_transport::{Bytes, RelayTransport};
@@ -89,6 +89,7 @@ fn read_service(pool: &PgPool, relay: Arc<ScriptedRelay>) -> anyhow::Result<Arc<
         sc.clone(),
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis, pool.clone()),
+        CoreRpc::unreachable(),
     );
     let tokens = TokenProvider::new(auth, OAuthAppTokenService::new(pool.clone()));
     Ok(ScReadService::new(sc, tokens, pool.clone()))
@@ -349,6 +350,7 @@ pub(crate) fn search_service(
         sc.clone(),
         OAuthAppsService::new(pool.clone()),
         AuthHealthService::with_database(redis, pool.clone()),
+        CoreRpc::unreachable(),
     );
     let tokens = TokenProvider::new(auth, OAuthAppTokenService::new(pool.clone()));
     Ok(ScReadService::new(sc, tokens, pool.clone()))

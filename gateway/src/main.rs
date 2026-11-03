@@ -68,7 +68,7 @@ fn main() {
                 email: cfg.acme_email.clone(),
                 cache_dir: cfg.acme_cache_dir.clone(),
                 staging: cfg.acme_staging,
-                alpn: vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+                alpn: cfg.alpn.clone(),
             }))
         } else {
             None

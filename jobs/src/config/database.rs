@@ -121,6 +121,15 @@ fn long_statement_session() -> SessionLimits {
     }
 }
 
+pub fn read_database_from_env(
+    mtls_by_default: bool,
+) -> Result<Option<DatabaseConfig>, ConfigError> {
+    if env::optional("JOBS_READ_DATABASE_URL").is_none() {
+        return Ok(None);
+    }
+    DatabaseConfig::from_env("JOBS_READ_", mtls_by_default).map(Some)
+}
+
 pub fn maintenance_pool_from_env() -> Result<PoolConfig, ConfigError> {
     let pool = PoolConfig {
         minimum: env::parse("PG_MAINTENANCE_POOL_MIN", "0")?,

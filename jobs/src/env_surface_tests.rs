@@ -14,10 +14,11 @@ const READERS: &[&str] = &[
     "std::env::var",
     "schedule_interval(",
     "stream_bytes(",
+    "jetstream_domains(",
     "worker_backlog(",
 ];
 
-const DATABASE_PREFIXES: &[&str] = &["", "OPS_"];
+const DATABASE_PREFIXES: &[&str] = &["", "OPS_", "JOBS_READ_"];
 const LANE_PREFIXES: &[&str] = &[
     "JOBS_CORE_FAST",
     "JOBS_CORE_BULK",
@@ -38,6 +39,12 @@ const READ_BY_A_LIBRARY: &[&str] = &[
     "DATABASE_SSL_CA",
     "DATABASE_SSL_CERT",
     "DATABASE_SSL_KEY",
+    "NATS_TLS_CA",
+    "NATS_TLS_CERT",
+    "NATS_TLS_KEY",
+    "QDRANT_TLS_CA",
+    "QDRANT_TLS_CERT",
+    "QDRANT_TLS_KEY",
     "OPS_DATABASE_HOST",
     "OPS_DATABASE_PORT",
     "OPS_DATABASE_NAME",
@@ -47,6 +54,18 @@ const READ_BY_A_LIBRARY: &[&str] = &[
     "OPS_DATABASE_SSL_CA",
     "OPS_DATABASE_SSL_CERT",
     "OPS_DATABASE_SSL_KEY",
+    "JOBS_READ_DATABASE_HOST",
+    "JOBS_READ_DATABASE_PORT",
+    "JOBS_READ_DATABASE_NAME",
+    "JOBS_READ_DATABASE_USERNAME",
+    "JOBS_READ_DATABASE_PASSWORD",
+    "JOBS_READ_DATABASE_SSL_MODE",
+    "JOBS_READ_DATABASE_SSL_CA",
+    "JOBS_READ_DATABASE_SSL_CERT",
+    "JOBS_READ_DATABASE_SSL_KEY",
+    "JOBS_READ_PG_POOL_MIN",
+    "JOBS_READ_PG_POOL_MAX",
+    "JOBS_READ_PG_ACQUIRE_TIMEOUT_MS",
 ];
 
 fn crate_root() -> PathBuf {

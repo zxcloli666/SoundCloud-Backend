@@ -1,6 +1,7 @@
 pub mod auth_overview;
 pub mod catalog;
 pub mod credits;
+pub mod forward;
 pub mod hydrate;
 pub mod infra;
 pub mod maintenance;
@@ -33,8 +34,16 @@ pub fn router() -> Router<AppState> {
             post(maintenance::renormalize),
         )
         .route(
+            "/admin/maintenance/lyrics-lookup-queue",
+            post(maintenance::lyrics_lookup_queue),
+        )
+        .route(
             "/admin/maintenance/mb-artist-names",
             post(maintenance::mb_artist_names),
+        )
+        .route(
+            "/admin/maintenance/wanted-aliases",
+            post(maintenance::wanted_aliases),
         )
         .route("/admin/maintenance/status", get(maintenance::status))
         .route("/admin/playlists/legacy", get(playlists::list_legacy))

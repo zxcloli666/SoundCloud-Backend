@@ -30,9 +30,6 @@ impl CollectionWriter {
     ) -> JobResult<bool> {
         let mut more = page.next.is_some();
         let mut tx = self.pool.begin().await.map_err(JobError::retryable)?;
-        if !state::fence(&mut tx, job).await? {
-            return Ok(more);
-        }
         let current = state::load(&mut tx, job, payload).await?;
         if current.snapshot_id != snapshot.snapshot_id
             || current.page_count != snapshot.page_count
@@ -54,6 +51,7 @@ impl CollectionWriter {
             | CatalogCollection::TrackComments => TrackPriority::Discovery,
         };
         let comments = payload.collection.item() == CollectionItem::Comment;
+        let mut entities = Vec::with_capacity(page.items.len());
         for item in &page.items {
             let entity_json = if comments {
                 item.get("user").ok_or_else(|| {
@@ -73,9 +71,6 @@ impl CollectionWriter {
                 sc_id: catalog_ingest::extract_sc_id(urn).to_owned(),
                 owner_id: payload.owner.then(|| payload.subject_id.clone()),
             };
-            self.entities
-                .persist_in(&mut tx, &entity, entity_json, priority, observation)
-                .await?;
             let key = if comments {
                 item.get("id")
                     .and_then(serde_json::Value::as_str)
@@ -87,13 +82,20 @@ impl CollectionWriter {
                 payload.collection,
                 CatalogCollection::LikedTracks | CatalogCollection::OwnedTracks
             ) {
-                entity.sc_id
+                entity.sc_id.clone()
             } else {
                 urn.to_owned()
             };
             if !keys.contains(&key) {
                 keys.push(key);
             }
+            entities.push((entity, entity_json));
+        }
+        entities.sort_by(|(a, _), (b, _)| a.sc_id.cmp(&b.sc_id));
+        for (entity, entity_json) in &entities {
+            self.entities
+                .persist_in(&mut tx, entity, entity_json, priority, observation)
+                .await?;
         }
         if comments {
             mirror::persist_comments(&mut tx, payload, snapshot, &page.items).await?;
@@ -107,7 +109,7 @@ impl CollectionWriter {
                 .map(|urn| catalog_ingest::extract_sc_id(urn).to_owned())
                 .collect();
             sqlx::query_file!(
-                "../api/queries/me/service/enqueue_followed_uploads.sql",
+                "queries/catalog_collection/enqueue_followed_uploads.sql",
                 &subjects,
                 &payload.subject_id
             )
@@ -132,6 +134,12 @@ impl CollectionWriter {
             }
         } else if !more {
             mirror::reconcile(&mut tx, payload, snapshot).await?;
+        }
+        if !more {
+            state::sweep_seen(&mut tx, payload, snapshot).await?;
+        }
+        if !state::fence(&mut tx, job).await? {
+            return Ok(page.next.is_some());
         }
         sqlx::query_file!(
             "queries/catalog_collection/reset_attempts.sql",

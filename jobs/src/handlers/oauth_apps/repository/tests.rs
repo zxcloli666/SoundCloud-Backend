@@ -111,7 +111,9 @@ async fn configured_app_is_inserted_when_other_apps_already_exist(
 }
 
 #[sqlx::test(migrations = false)]
-async fn configured_app_reconciles_existing_credentials(pool: PgPool) -> anyhow::Result<()> {
+async fn configured_app_reconciles_credentials_but_stays_disabled(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let existing = insert_app(&pool, " configured-client ").await?;
     sqlx::query(
@@ -149,7 +151,7 @@ async fn configured_app_reconciles_existing_credentials(pool: PgPool) -> anyhow:
     assert_eq!(stored.1, "configured-client");
     assert_eq!(stored.2, "new-secret");
     assert_eq!(stored.3, "https://localhost/callback");
-    assert!(stored.4);
+    assert!(!stored.4, "an app disabled in the admin panel came back on");
     Ok(())
 }
 

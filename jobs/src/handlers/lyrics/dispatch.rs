@@ -202,7 +202,7 @@ fn audio_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("transcription dispatch has an invalid track id"))?;
     url.path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?
-        .extend(["redirect", filename.as_str()]);
+        .extend([filename.as_str()]);
     ensure!(
         matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()

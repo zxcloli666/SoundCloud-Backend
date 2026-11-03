@@ -371,7 +371,7 @@ fn canonical_storage_url(storage_url: &Url, sc_track_id: &str) -> anyhow::Result
     let mut path = url
         .path_segments_mut()
         .map_err(|_| anyhow::anyhow!("storage URL cannot contain path segments"))?;
-    path.extend(["redirect", filename.as_str()]);
+    path.extend([filename.as_str()]);
     drop(path);
     validate_storage_url(url.as_str())
 }

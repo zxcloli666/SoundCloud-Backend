@@ -7,6 +7,7 @@ pub mod centroids;
 pub mod chat;
 pub mod cold_refresh;
 pub mod collab;
+pub mod diag;
 pub mod discover;
 pub mod dislikes;
 pub mod enrich;

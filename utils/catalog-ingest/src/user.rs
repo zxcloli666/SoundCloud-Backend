@@ -1,25 +1,53 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
+use wt::{Mode, ObserveProfile, ObserveUsers};
 
 use crate::Observation;
 use crate::sc_payload::{parse_dt, string_field, without_nul};
+
+const REPLACED_WHEN_PRESENT: [&str; 12] = [
+    "full_name",
+    "first_name",
+    "last_name",
+    "permalink",
+    "permalink_url",
+    "avatar_url",
+    "country",
+    "country_code",
+    "city",
+    "description",
+    "verified",
+    "kind",
+];
 
 pub async fn upsert_user_from_sc(
     pool: &PgPool,
     payload: &Value,
     observation: Observation,
 ) -> Result<bool, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let inserted = upsert_user_in(&mut transaction, payload, observation).await?;
-    transaction.commit().await?;
-    Ok(inserted)
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let inserted = upsert_user_in(&mut transaction, payload, observation).await?;
+        transaction.commit().await?;
+        Ok(inserted)
+    })
+    .await
 }
 
 pub async fn upsert_user_in(
-    connection: &mut sqlx::PgConnection,
+    connection: &mut PgConnection,
     payload: &Value,
     observation: Observation,
+) -> Result<bool, sqlx::Error> {
+    upsert_user_at(connection, payload, observation, wt::now()).await
+}
+
+pub(crate) async fn upsert_user_at(
+    connection: &mut PgConnection,
+    payload: &Value,
+    observation: Observation,
+    observed_at: DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
     let payload = &without_nul(payload);
     let Some(fields) = ScUserFields::from_sc(payload) else {
@@ -27,37 +55,22 @@ pub async fn upsert_user_in(
             "invalid SoundCloud user payload".into(),
         ));
     };
-    let row = sqlx::query_file!(
-        "queries/users/upsert.sql",
-        &fields.sc_user_id,
-        &fields.urn,
-        &fields.username,
-        &fields.username_normalized,
-        fields.full_name.as_deref(),
-        fields.first_name.as_deref(),
-        fields.last_name.as_deref(),
-        fields.permalink.as_deref(),
-        fields.permalink_url.as_deref(),
-        fields.avatar_url.as_deref(),
-        fields.country.as_deref(),
-        fields.city.as_deref(),
-        fields.description.as_deref(),
-        fields.verified,
-        fields.followers_count,
-        fields.followings_count,
-        fields.tracks_count,
-        fields.playlists_count,
-        fields.reposts_count,
-        fields.comments_count,
-        fields.kind.as_deref(),
-        fields.sc_created_at,
-        fields.sc_last_modified,
-        observation.sequence(),
-        payload
-    )
-    .fetch_optional(&mut *connection)
-    .await?;
-    Ok(row.map(|r| r.was_new).unwrap_or(false))
+    let mut row = fields.row();
+    row["keys"] = REPLACED_WHEN_PRESENT
+        .iter()
+        .filter(|key| payload.get(**key).is_some())
+        .map(|key| Value::from(*key))
+        .collect();
+    let upsert = ObserveUsers {
+        mode: Mode::Upsert,
+        observed_at,
+        observation: observation.sequence(),
+        rows: vec![row],
+    };
+    Ok(wt::call(connection, &upsert)
+        .await?
+        .first()
+        .is_some_and(|user| user.was_new))
 }
 
 pub async fn upsert_profile_in(
@@ -66,6 +79,16 @@ pub async fn upsert_profile_in(
     profile: &Value,
     observation: Observation,
 ) -> Result<(), sqlx::Error> {
+    upsert_profile_at(transaction, user_id, profile, observation, wt::now()).await
+}
+
+pub(crate) async fn upsert_profile_at(
+    connection: &mut PgConnection,
+    user_id: &str,
+    profile: &Value,
+    observation: Observation,
+    observed_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
     let profile = &without_nul(profile);
     if profile.get("urn").and_then(Value::as_str) != Some(crate::sc_ids::user_urn(user_id).as_str())
     {
@@ -73,42 +96,40 @@ pub async fn upsert_profile_in(
             "SoundCloud profile identity mismatch".into(),
         ));
     }
-    upsert_user_in(transaction, profile, observation).await?;
-    sqlx::query_file!(
-        "queries/users/upsert_profile.sql",
-        user_id,
-        profile,
-        observation.sequence()
-    )
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+    upsert_user_at(connection, profile, observation, observed_at).await?;
+    let observed = ObserveProfile {
+        user_id: user_id.to_owned(),
+        profile: profile.clone(),
+        observed_at,
+        observation: observation.sequence(),
+    };
+    wt::call(connection, &observed).await
 }
 
 pub(crate) struct ScUserFields {
-    sc_user_id: String,
-    urn: String,
-    username: String,
-    username_normalized: String,
-    full_name: Option<String>,
-    first_name: Option<String>,
-    last_name: Option<String>,
-    permalink: Option<String>,
-    permalink_url: Option<String>,
-    avatar_url: Option<String>,
-    country: Option<String>,
-    city: Option<String>,
-    description: Option<String>,
-    verified: bool,
-    followers_count: Option<i64>,
-    followings_count: Option<i64>,
-    tracks_count: Option<i64>,
-    playlists_count: Option<i64>,
-    reposts_count: Option<i64>,
-    comments_count: Option<i64>,
-    kind: Option<String>,
-    sc_created_at: Option<DateTime<Utc>>,
-    sc_last_modified: Option<DateTime<Utc>>,
+    pub(crate) sc_user_id: String,
+    pub(crate) urn: String,
+    pub(crate) username: String,
+    pub(crate) username_normalized: String,
+    pub(crate) full_name: Option<String>,
+    pub(crate) first_name: Option<String>,
+    pub(crate) last_name: Option<String>,
+    pub(crate) permalink: Option<String>,
+    pub(crate) permalink_url: Option<String>,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) country: Option<String>,
+    pub(crate) city: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) verified: bool,
+    pub(crate) followers_count: Option<i64>,
+    pub(crate) followings_count: Option<i64>,
+    pub(crate) tracks_count: Option<i64>,
+    pub(crate) playlists_count: Option<i64>,
+    pub(crate) reposts_count: Option<i64>,
+    pub(crate) comments_count: Option<i64>,
+    pub(crate) kind: Option<String>,
+    pub(crate) sc_created_at: Option<DateTime<Utc>>,
+    pub(crate) sc_last_modified: Option<DateTime<Utc>>,
 }
 
 impl ScUserFields {

@@ -17,7 +17,7 @@ const REACHES_SOUNDCLOUD: [&str; 13] = [
     "self.miss.",
 ];
 
-const ALLOWED: [(&str, &str); 7] = [
+const ALLOWED: [(&str, &str); 8] = [
     (
         "auth",
         "AUTH_CONTROL: login, token exchange, explicit refresh",
@@ -39,6 +39,10 @@ const ALLOWED: [(&str, &str); 7] = [
         "RESOLVE_MISS: a public profile opened before the catalog has it; SC_SEARCH: /users?q=",
     ),
     ("resolve", "RESOLVE_MISS: an unknown permalink or URN"),
+    (
+        "oauth_apps",
+        "APP_TOKEN_FALLBACK: after 5 min without core a node issues one client_credentials token per app",
+    ),
     (
         "admin",
         "RESOLVE_MISS: an operator resolves a link by hand behind AdminAuth",
@@ -118,7 +122,7 @@ fn only_the_documented_families_can_reach_soundcloud_from_a_request() {
     );
 }
 
-const CLASSIFIED_ROUTES: [&str; 75] = [
+const CLASSIFIED_ROUTES: [&str; 79] = [
     "/admin/albums",
     "/admin/artists",
     "/admin/artists/{artist_id}",
@@ -133,9 +137,11 @@ const CLASSIFIED_ROUTES: [&str; 75] = [
     "/admin/hydrate",
     "/admin/index-usage",
     "/admin/infra",
+    "/admin/maintenance/lyrics-lookup-queue",
     "/admin/maintenance/mb-artist-names",
     "/admin/maintenance/renormalize",
     "/admin/maintenance/status",
+    "/admin/maintenance/wanted-aliases",
     "/admin/metrics",
     "/admin/oauth-apps/health",
     "/admin/playlists/legacy",
@@ -168,6 +174,8 @@ const CLASSIFIED_ROUTES: [&str; 75] = [
     "/auth/session",
     "/auth/soundcloud",
     "/auth/soundcloud/refresh",
+    "/oauth-apps",
+    "/oauth-apps/{id}",
     "/playlists",
     "/playlists/{playlist_urn}",
     "/playlists/{playlist_urn}/reposters",

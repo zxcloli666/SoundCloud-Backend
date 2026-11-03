@@ -239,8 +239,10 @@ async fn fingerprint(pool: &PgPool, sc_track_id: &str, value: &str) -> anyhow::R
         .take(FINGERPRINT_PREFIX_CHARS)
         .collect::<String>();
     let mut transaction = pool.begin().await?;
-    lock_fingerprint(&mut transaction, &prefix).await?;
-    apply_fingerprint(&mut transaction, sc_track_id, value, &prefix).await?;
+    let locks = lock_fingerprint_rows(&mut transaction, sc_track_id, &prefix)
+        .await?
+        .context("the fingerprinted track is missing")?;
+    apply_fingerprint(&mut transaction, value, &locks).await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -292,7 +294,7 @@ fn settled(status: WorkerStatus, reason: WorkerReason) -> AudioIndexResult {
 fn lost_task(generation: i64, attempt: i64) -> anyhow::Result<Vec<u8>> {
     Ok(serde_json::to_vec(&AudioIndexRequest {
         sc_track_id: "42".to_owned(),
-        s3_url: "https://storage.example/redirect/soundcloud_tracks_42.m4a".to_owned(),
+        s3_url: "https://storage.example/soundcloud_tracks_42.m4a".to_owned(),
         upload_generation: generation,
         attempt,
     })?)

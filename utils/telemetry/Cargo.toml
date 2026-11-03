@@ -1,0 +1,27 @@
+[package]
+name = "telemetry"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Tracing subscriber setup, OTLP export and the W3C request root span for the serving services"
+
+[dependencies]
+axum = "0.8"
+tracing = "0.1"
+redact = { version = "0.1.0", path = "../redact" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = { version = "0.34", default-features = false }
+opentelemetry = "0.33"
+opentelemetry_sdk = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace"] }
+
+[dev-dependencies]
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "timeout"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+log = "0.4"
+tracing-log = "0.2"

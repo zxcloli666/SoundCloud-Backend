@@ -84,41 +84,6 @@ pub struct TrackRow {
     pub updated_at: DateTime<Utc>,
 }
 
-pub struct TrackRepository {
-    pg: PgPool,
-}
-
-impl TrackRepository {
-    pub fn new(pg: PgPool) -> Self {
-        Self { pg }
-    }
-
-    pub async fn upsert_from_sc(
-        &self,
-        fields: &catalog_ingest::ScTrackFields,
-        index_priority: catalog_ingest::TrackPriority,
-        storage_priority: catalog_ingest::TrackPriority,
-        observation: catalog_ingest::Observation,
-    ) -> AppResult<catalog_ingest::IngestResult> {
-        let result = catalog_ingest::upsert_from_sc(
-            &self.pg,
-            fields,
-            index_priority,
-            storage_priority,
-            observation,
-        )
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn mark_too_long(&self, sc_track_id: &str) -> AppResult<()> {
-        sqlx::query_file!("queries/tracks/mark_too_long.sql", sc_track_id)
-            .execute(&self.pg)
-            .await?;
-        Ok(())
-    }
-}
-
 pub fn project_to_sc_shape(row: &TrackRow, uploader_user: Option<&Value>) -> Value {
     let mut obj = row.sc_metadata.as_object().cloned().unwrap_or_default();
     obj.insert("kind".into(), Value::String("track".into()));

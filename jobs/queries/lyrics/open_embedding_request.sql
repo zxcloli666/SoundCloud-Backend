@@ -76,10 +76,12 @@ WITH lyrics AS MATERIALIZED (
         result_published_at = NULL,
         updated_at = now()
     WHERE lyrics_embedding_wire_state.status <> 'pending'
-    RETURNING sc_track_id
+    RETURNING sc_track_id, request_message_id, lyrics_created_at
 ), marked AS (
     UPDATE lyrics_cache AS cache
-    SET embedding_state = 'pending'
+    SET embedding_state = 'pending',
+        embedding_request_id = opened.request_message_id,
+        embedding_request_created_at = opened.lyrics_created_at
     FROM opened
     WHERE cache.sc_track_id = opened.sc_track_id
     RETURNING cache.sc_track_id

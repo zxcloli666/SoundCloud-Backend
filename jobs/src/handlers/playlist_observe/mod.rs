@@ -273,7 +273,7 @@ impl PlaylistObserveHandler {
         if let Some(app_id) = token.oauth_app_id
             && let Some(retry_after_seconds) = self
                 .connections
-                .app_retry_after_seconds(app_id)
+                .read_retry_after_seconds(app_id)
                 .await
                 .map_err(connection_job_error)?
         {
@@ -329,6 +329,7 @@ impl PlaylistObserveHandler {
                     .await;
             }
         };
+        self.connections.reads_answered(token.oauth_app_id);
         self.finish_success(capture, &snapshot, Authority::Owner, metadata_observation)
             .await
     }
@@ -359,7 +360,7 @@ impl PlaylistObserveHandler {
         for token in tokens.into_iter().take(PUBLIC_TOKEN_ATTEMPTS) {
             if let Some(retry_after_seconds) = self
                 .connections
-                .app_retry_after_seconds(token.oauth_app_id)
+                .read_retry_after_seconds(token.oauth_app_id)
                 .await
                 .map_err(connection_job_error)?
             {
@@ -368,6 +369,7 @@ impl PlaylistObserveHandler {
             }
             match self.reader.observe(urn, &token.value).await {
                 Ok(snapshot) => {
+                    self.connections.reads_answered(Some(token.oauth_app_id));
                     return self
                         .finish_success(capture, &snapshot, Authority::Public, metadata_observation)
                         .await;
@@ -402,12 +404,13 @@ impl PlaylistObserveHandler {
             .map_err(repository_job_error)?;
         match result {
             PersistResult::Applied => {
-                for track in &snapshot.hydrated_tracks {
-                    if let Err(error) =
-                        wake::enqueue(&self.pool, &self.queue, &track.sc_track_id).await
-                    {
-                        tracing::debug!(track = %track.sc_track_id, %error, "lyrics wake deferred to sweep");
-                    }
+                let tracks = snapshot
+                    .hydrated_tracks
+                    .iter()
+                    .map(|track| track.sc_track_id.clone())
+                    .collect::<Vec<_>>();
+                if let Err(error) = wake::enqueue_many(&self.pool, &self.queue, &tracks).await {
+                    tracing::debug!(%error, "lyrics wake deferred to sweep");
                 }
                 Ok(())
             }
@@ -467,12 +470,8 @@ impl PlaylistObserveHandler {
         let failure = read_failure(&error);
         if let Some(oauth_app_id) = oauth_app_id
             && let Some(minimum_seconds) = app_wide_cooldown(&failure)
-            && let Err(error) = self
-                .connections
-                .penalize_app(oauth_app_id, minimum_seconds)
-                .await
         {
-            tracing::warn!(%error, "playlist observation could not publish the oauth app cooldown");
+            self.connections.pause_reads(oauth_app_id, minimum_seconds);
         }
         self.finish_failure(capture, failure).await
     }
@@ -533,6 +532,9 @@ fn read_failure(error: &PlaylistObserveError) -> FailureObservation {
         PlaylistObserveError::Deadline => {
             transport_failure("soundcloud_playlist_deadline", TRANSPORT_RETRY)
         }
+        PlaylistObserveError::Read(PlaylistReadError::Paced {
+            retry_after_seconds,
+        }) => cooling_down_failure(seconds(*retry_after_seconds, TRANSPORT_RETRY)),
         PlaylistObserveError::Read(PlaylistReadError::Api { status, .. })
             if status.is_server_error() =>
         {
@@ -779,3 +781,7 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+#[path = "lock_order_tests.rs"]
+mod lock_order_tests;

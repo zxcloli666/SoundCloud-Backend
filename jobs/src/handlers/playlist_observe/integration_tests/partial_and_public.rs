@@ -50,6 +50,22 @@ async fn seed_foreign_playlist(pool: &PgPool, sharing: &str) -> anyhow::Result<(
     Ok(())
 }
 
+async fn viewed(pool: &PgPool, stamped: &str, read: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE playlists SET last_read_at = now() - $2::interval WHERE urn = $1")
+        .bind(FOREIGN)
+        .bind(stamped)
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO entity_reads (entity_urn, last_read_at) VALUES ($1, now() - $2::interval)",
+    )
+    .bind(FOREIGN)
+    .bind(read)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 fn metadata() -> String {
     json!({
         "id": 404,
@@ -218,10 +234,7 @@ async fn a_public_playlist_nobody_viewed_this_week_is_not_read_on_app_tokens(
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     seed_foreign_playlist(&pool, "public").await?;
-    sqlx::query("UPDATE playlists SET last_read_at = now() - interval '8 days' WHERE urn = $1")
-        .bind(FOREIGN)
-        .execute(&pool)
-        .await?;
+    viewed(&pool, "8 days", "8 days").await?;
     let (api_url, requests, server) = serve_foreign_playlist(vec![track(11)]).await?;
 
     observe_foreign(&pool, api_url).await?;
@@ -232,6 +245,26 @@ async fn a_public_playlist_nobody_viewed_this_week_is_not_read_on_app_tokens(
         "an unviewed stranger's playlist was crawled on the shared app tokens"
     );
     assert_eq!(foreign_state(&pool).await?.0, "auth_required");
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_view_on_any_api_node_this_week_counts_as_viewed(pool: PgPool) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_foreign_playlist(&pool, "public").await?;
+    viewed(&pool, "8 days", "2 hours").await?;
+    let (api_url, requests, server) =
+        serve_foreign_playlist(vec![track(11), track(12), track(11)]).await?;
+
+    observe_foreign(&pool, api_url).await?;
+    server.await??;
+
+    assert_eq!(
+        requests.lock().await.len(),
+        3,
+        "a playlist viewed only through entity_reads was treated as unviewed"
+    );
+    assert_eq!(foreign_state(&pool).await?, ("clean".to_owned(), None));
     Ok(())
 }
 

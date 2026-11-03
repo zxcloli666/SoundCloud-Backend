@@ -44,7 +44,8 @@ pub struct LyricsHandler {
 impl LyricsHandler {
     pub fn new(
         databases: &Databases,
-        sources: Arc<LyricsSources>,
+        on_demand: Arc<LyricsSources>,
+        background: Arc<LyricsSources>,
         config: &JobsConfig,
         bus: Bus,
         qdrant: QdrantProvisioner,
@@ -56,12 +57,12 @@ impl LyricsHandler {
             embedding_results: EmbeddingResultHandler::new(fast_pool.clone(), Arc::new(qdrant)),
             lookup: LyricsLookupHandler::new(
                 databases.main.bulk.clone(),
-                sources.clone(),
+                on_demand,
                 config.lyrics.clone(),
             ),
             sweep: LyricsLookupHandler::new(
                 databases.main.bulk.clone(),
-                sources,
+                background,
                 config.lyrics.clone(),
             ),
             reaper: LyricsReaper::new(fast_pool.clone(), dispatch),
@@ -120,6 +121,10 @@ impl LyricsHandler {
 
     pub async fn lookup(&self, job: &LeasedJob, payload: LyricsLookupPayload) -> JobResult {
         self.lookup.run_targeted(job, payload).await
+    }
+
+    pub async fn listen_wakes(&self, cancellation: tokio_util::sync::CancellationToken) {
+        self.sweep.listen_wakes(cancellation).await
     }
 
     pub async fn sweep_lookups(&self, job: &LeasedJob) -> JobResult {

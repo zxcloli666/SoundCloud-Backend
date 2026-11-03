@@ -22,6 +22,7 @@ pub struct Config {
     pub acme_email: String,
     pub acme_cache_dir: PathBuf,
     pub acme_staging: bool,
+    pub alpn: Vec<Vec<u8>>,
     pub shards: usize,
     pub worker_threads: usize,
     pub connect_timeout: Duration,
@@ -67,6 +68,7 @@ impl Config {
             acme_email,
             acme_cache_dir: PathBuf::from(env_str("ACME_CACHE_DIR", "/var/cache/acme")),
             acme_staging: env_bool("ACME_STAGING", false),
+            alpn: alpn_list(&env_str("GATEWAY_ALPN", "h2,http/1.1"))?,
             shards: env_usize("GATEWAY_SHARDS", par).max(1),
             worker_threads: env_usize("WORKER_THREADS", par).max(1),
             connect_timeout: Duration::from_millis(env_u64("UPSTREAM_CONNECT_TIMEOUT_MS", 5000)),
@@ -79,6 +81,21 @@ impl Config {
     pub fn acme_domains(&self) -> Vec<String> {
         self.routes.hostnames()
     }
+}
+
+fn alpn_list(raw: &str) -> Result<Vec<Vec<u8>>, String> {
+    let protocols: Vec<Vec<u8>> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| p.as_bytes().to_vec())
+        .collect();
+    if protocols.is_empty() || protocols.iter().any(|p| p != b"h2" && p != b"http/1.1") {
+        return Err(format!(
+            "GATEWAY_ALPN must list h2 and/or http/1.1, got {raw:?}"
+        ));
+    }
+    Ok(protocols)
 }
 
 fn env_opt(key: &str) -> Option<String> {

@@ -19,7 +19,6 @@ WITH input AS MATERIALIZED (
         client_id = input.client_id,
         client_secret = $4,
         redirect_uri = $5,
-        active = true,
         updated_at = now()
     FROM existing
     CROSS JOIN input

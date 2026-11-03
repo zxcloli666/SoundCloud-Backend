@@ -1,6 +1,7 @@
 WITH owned_state AS MATERIALIZED (
     SELECT state.track_id,
-           state.sc_track_id
+           state.sc_track_id,
+           ($9::boolean AND state.failure_streak < $10::integer) AS recheck
     FROM tracks AS track
     JOIN lyrics_lookup_state AS state ON state.track_id = track.id
     JOIN background_jobs AS job
@@ -85,24 +86,45 @@ WITH owned_state AS MATERIALIZED (
         embedding_state = NULL,
         content_generation = lyrics_cache.content_generation + 1,
         updated_at = now()
+    WHERE NOT $9::boolean
+       OR lyrics_cache.plain_text IS NULL
+       OR lyrics_cache.source NOT IN ('lrclib', 'musixmatch', 'genius', 'netease')
     RETURNING lyrics_cache.sc_track_id,
               lyrics_cache.synced_lrc,
               lyrics_cache.plain_text,
               lyrics_cache.source
+), rescheduled AS (
+    UPDATE lyrics_lookup_state AS state
+    SET status = 'retry',
+        next_run_at = now() + interval '24 hours',
+        failure_streak = state.failure_streak + 1,
+        last_outcome = 'recheck',
+        last_error = NULL,
+        retry_after_at = NULL,
+        wake_message_id = NULL,
+        wake_generation = NULL,
+        wake_durable_at = NULL,
+        claim_job_id = NULL,
+        claim_job_generation = NULL,
+        claim_job_lease_id = NULL,
+        claim_state_generation = NULL,
+        claim_expires_at = NULL,
+        updated_at = now()
+    FROM owned_state
+    WHERE state.track_id = owned_state.track_id
+      AND owned_state.recheck
+    RETURNING state.track_id
 ), removed AS (
     DELETE FROM lyrics_lookup_state AS state
-    USING upserted
-    WHERE state.track_id = $4
-      AND state.generation = $5
-      AND state.claim_job_id = $1
-      AND state.claim_job_generation = $2
-      AND state.claim_job_lease_id = $3
-      AND state.claim_state_generation = $5
+    USING owned_state
+    WHERE state.track_id = owned_state.track_id
+      AND NOT owned_state.recheck
     RETURNING state.track_id
 )
-SELECT upserted.sc_track_id,
+SELECT owned_state.sc_track_id AS "sc_track_id!",
        upserted.synced_lrc,
        upserted.plain_text,
        upserted.source,
-       EXISTS (SELECT 1 FROM removed) AS "settled!"
-FROM upserted
+       (EXISTS (SELECT 1 FROM removed) OR EXISTS (SELECT 1 FROM rescheduled)) AS "settled!"
+FROM owned_state
+         LEFT JOIN upserted ON true

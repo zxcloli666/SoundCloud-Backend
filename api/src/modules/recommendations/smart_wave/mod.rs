@@ -1,3 +1,4 @@
+pub mod artist_tracks;
 pub mod blocked;
 pub mod cursor;
 pub mod graph;
@@ -153,14 +154,16 @@ pub async fn build(
         session.steer_artists(&session_meta, seed_artist, &mut affinity, &mut disliked_set);
 
     let top_artists = top_affinity_artists(&affinity, GRAPH_ARTISTS);
-    let graph_tracks = graph::collect_artist_tracks(
-        &svc.pg,
-        &top_artists,
-        &exclude,
-        GRAPH_PER_ARTIST,
-        GRAPH_TRACKS_TOTAL,
-    )
-    .await;
+    let graph_tracks = svc
+        .artist_tracks
+        .collect(
+            &svc.pg,
+            &top_artists,
+            &exclude,
+            GRAPH_PER_ARTIST,
+            GRAPH_TRACKS_TOTAL,
+        )
+        .await;
 
     let pool_ids: Vec<u64> = mert.iter().map(|c| c.sc_track_id).collect();
     let meta = load_track_meta(&svc.pg, &pool_ids).await;

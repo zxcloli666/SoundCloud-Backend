@@ -58,7 +58,7 @@ impl CatalogRemote {
         for candidate in candidates.into_iter().take(8) {
             if let Some(seconds) = self
                 .connections
-                .app_retry_after_seconds(candidate.oauth_app_id)
+                .read_retry_after_seconds(candidate.oauth_app_id)
                 .await
                 .map_err(connection_error)?
             {
@@ -69,7 +69,11 @@ impl CatalogRemote {
                 continue;
             }
             match self.owner.get_path(path, &candidate.value).await {
-                Ok(response) => return Ok(response.value),
+                Ok(response) => {
+                    self.connections
+                        .reads_answered(Some(candidate.oauth_app_id));
+                    return Ok(response.value);
+                }
                 Err(error) if error.is_unauthorized() => {
                     self.connections
                         .reject_app_token(&candidate)
@@ -78,9 +82,9 @@ impl CatalogRemote {
                     failure = postpone(60, error);
                 }
                 Err(error) => {
-                    let missing = matches!(&error, PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::NOT_FOUND);
+                    let last = error.is_not_found() || error.is_paced();
                     let classified = self.owner_error(error, Some(candidate.oauth_app_id)).await;
-                    if missing {
+                    if last {
                         return Err(classified);
                     }
                     failure = classified;
@@ -99,7 +103,7 @@ impl CatalogRemote {
         if let Some(app_id) = token.oauth_app_id
             && let Some(seconds) = self
                 .connections
-                .app_retry_after_seconds(app_id)
+                .read_retry_after_seconds(app_id)
                 .await
                 .map_err(connection_error)?
         {
@@ -109,7 +113,10 @@ impl CatalogRemote {
             ));
         }
         match self.owner.get_path(path, &token.value).await {
-            Ok(response) => Ok(response.value),
+            Ok(response) => {
+                self.connections.reads_answered(token.oauth_app_id);
+                Ok(response.value)
+            }
             Err(error) if error.is_unauthorized() => {
                 let refreshed = self
                     .connections
@@ -117,7 +124,10 @@ impl CatalogRemote {
                     .await
                     .map_err(connection_error)?;
                 match self.owner.get_path(path, &refreshed.value).await {
-                    Ok(response) => Ok(response.value),
+                    Ok(response) => {
+                        self.connections.reads_answered(refreshed.oauth_app_id);
+                        Ok(response.value)
+                    }
                     Err(error) => {
                         if error.is_unauthorized() {
                             self.connections
@@ -152,10 +162,9 @@ impl CatalogRemote {
             _ => None,
         };
         if let (Some(app_id), Some(seconds)) = (app_id, app_pause) {
-            match self.connections.penalize_app(app_id, seconds).await {
-                Ok(_) if forbidden => {}
-                Ok(seconds) => return postpone(seconds, error),
-                Err(error) => return connection_error(error),
+            let seconds = self.connections.pause_reads(app_id, seconds);
+            if !forbidden {
+                return postpone(seconds, error);
             }
         }
         owner_error(error)
@@ -193,6 +202,9 @@ pub(super) fn owner_error(error: PlaylistReadError) -> JobError {
         PlaylistReadError::Api { status, .. } if *status == wreq::StatusCode::UNAUTHORIZED => {
             postpone(300, error)
         }
+        PlaylistReadError::Paced {
+            retry_after_seconds,
+        } => postpone(*retry_after_seconds, error),
         _ => JobError::retryable(error),
     }
 }

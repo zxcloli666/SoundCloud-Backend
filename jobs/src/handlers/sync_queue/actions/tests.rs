@@ -37,6 +37,7 @@ fn mutation(action_type: &str, target_urn: &str, payload: Option<Value>) -> Clai
         remote_result: None,
         created_at: chrono::Utc::now(),
         star: false,
+        desired: None,
     }
 }
 
@@ -74,15 +75,16 @@ async fn a_like_or_follow_of_a_missing_target_is_done_but_a_missing_playlist_edi
             ("like_playlist", "soundcloud:playlists:404"),
             ("follow_user", "soundcloud:users:410"),
         ] {
-            let done = execute_remote(&client, &mutation(action, target, None), "token").await?;
+            let done = execute_remote(&client, &mutation(action, target, None), "token", &WriteGate::open()).await?;
             assert!(matches!(done, Remote::TargetMissing), "{action} {target}");
         }
-        let edit = mutation(
+        let mut edit = mutation(
             "playlist_update",
             "soundcloud:playlists:404",
             Some(serde_json::json!({"playlist": {"title": "Renamed"}})),
         );
-        let failed = execute_remote(&client, &edit, "token").await;
+        edit.desired = Some(serde_json::json!({"title": "Renamed", "title_normalized": "renamed"}));
+        let failed = execute_remote(&client, &edit, "token", &WriteGate::open()).await;
         assert!(matches!(
             failed,
             Err(ActionError::SoundCloud(SoundCloudError::Api { status, .. })) if status.as_u16() == 404
@@ -122,14 +124,14 @@ async fn remote_deletion_accepts_absence_but_preserves_authorization_and_server_
     });
     let client = SoundCloudClient::new(&config(address)?)?;
     let result: anyhow::Result<()> = async {
-        let deleted = execute_remote(&client, &mutation("track_delete", "204", None), "token").await?;
+        let deleted = execute_remote(&client, &mutation("track_delete", "204", None), "token", &WriteGate::open()).await?;
         assert!(matches!(deleted, Remote::Written(Value::Null)));
         for status in ["404", "410"] {
-            let missing = execute_remote(&client, &mutation("track_delete", status, None), "token").await?;
+            let missing = execute_remote(&client, &mutation("track_delete", status, None), "token", &WriteGate::open()).await?;
             assert!(matches!(missing, Remote::TargetMissing), "{status}");
         }
         for status in [401, 429, 503] {
-            let error = execute_remote(&client, &mutation("track_delete", &status.to_string(), None), "token").await;
+            let error = execute_remote(&client, &mutation("track_delete", &status.to_string(), None), "token", &WriteGate::open()).await;
             assert!(matches!(error, Err(ActionError::SoundCloud(SoundCloudError::Api { status: actual, .. })) if actual.as_u16() == status));
         }
         Ok(())

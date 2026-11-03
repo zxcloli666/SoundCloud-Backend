@@ -53,12 +53,17 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     tls_common::init_crypto();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "streaming=info,tower_http=info".parse().unwrap()),
-        )
-        .init();
+    let _telemetry = telemetry::init(
+        "streaming",
+        "streaming=info,tower_http=info",
+        &[
+            "streaming",
+            "telemetry",
+            "call_relay",
+            "sc_transport",
+            "tls_common",
+        ],
+    );
 
     metrics::init();
 
@@ -97,10 +102,10 @@ async fn main() {
         .build()
         .expect("Failed to build storage passthrough HTTP client");
 
-    let anon = Arc::new(AnonClient::new(
-        http_client.clone(),
-        config.sc_proxy_url.clone(),
-    ));
+    let anon = Arc::new(
+        AnonClient::new(http_client.clone(), config.sc_proxy_url.clone())
+            .with_regions(config.egress_regions.clone()),
+    );
 
     let cookies = if config.cookies_enabled() {
         let pool = Arc::new(CookiesPool::new(
@@ -150,15 +155,19 @@ async fn main() {
 
     let config = Arc::new(config);
 
-    hq_upgrade::spawn_hq_upgrade_task(
-        pg.clone(),
-        anon.clone(),
-        cookies.clone(),
-        storage.clone(),
-        decryptor.clone(),
-        http_client.clone(),
-        config.sc_proxy_url.clone(),
-    );
+    if config.hq_upgrade {
+        hq_upgrade::spawn_hq_upgrade_task(
+            pg.clone(),
+            anon.clone(),
+            cookies.clone(),
+            storage.clone(),
+            decryptor.clone(),
+            http_client.clone(),
+            config.sc_proxy_url.clone(),
+        );
+    } else {
+        info!("[hq-upgrade] STREAMING_HQ_UPGRADE=off, this node never upgrades");
+    }
 
     let state = AppState {
         config: config.clone(),
@@ -194,6 +203,7 @@ async fn main() {
         .layer(cors)
         .layer(axum::middleware::from_fn(protect_sensitive_responses))
         .layer(axum::middleware::from_fn(track_request))
+        .layer(axum::middleware::from_fn(telemetry::trace_requests))
         .with_state(state);
 
     if config.premium_only {
@@ -222,9 +232,9 @@ async fn serve_metrics(
     state: axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    if let Err((status, message)) =
-        stream::internal::check_auth(&headers, &state.config.internal_token)
-    {
+    let allowed = stream::internal::check_auth(&headers, &state.config.metrics_token)
+        .or_else(|_| stream::internal::check_auth(&headers, &state.config.internal_token));
+    if let Err((status, message)) = allowed {
         return (status, message).into_response();
     }
     let status = state.pg.status();

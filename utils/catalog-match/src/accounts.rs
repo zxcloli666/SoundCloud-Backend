@@ -1,6 +1,7 @@
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
+use wt::MatchScAccount;
 
 const VERIFIED_IDENTITY_INDEX: &str = "artist_sc_accounts_verified_identity_uq";
 
@@ -43,26 +44,42 @@ pub async fn upsert_account(
     source: &str,
     verified: bool,
 ) -> Result<(), sqlx::Error> {
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        upsert_account_in(
+            &mut transaction,
+            artist_id,
+            sc_user_id,
+            role,
+            source,
+            verified,
+        )
+        .await?;
+        transaction.commit().await
+    })
+    .await
+}
+
+pub async fn upsert_account_in(
+    connection: &mut PgConnection,
+    artist_id: Uuid,
+    sc_user_id: &str,
+    role: AccountRole,
+    source: &str,
+    verified: bool,
+) -> Result<(), sqlx::Error> {
     if sc_user_id.is_empty() {
         return Ok(());
     }
-    sqlx::query_file!(
-        "queries/upsert_account.sql",
+    let upsert = MatchScAccount::Upsert {
         artist_id,
-        sc_user_id,
-        role.as_str(),
-        source,
-        verified
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query_file!(
-        "queries/backfill_artist_sc_user_id.sql",
-        artist_id,
-        sc_user_id
-    )
-    .execute(pool)
-    .await?;
+        sc_user_id: sc_user_id.to_owned(),
+        role: role.as_str().to_owned(),
+        source: source.to_owned(),
+        verified,
+        at: wt::now(),
+    };
+    wt::call(connection, &upsert).await?;
     Ok(())
 }
 
@@ -71,10 +88,25 @@ pub async fn delete_account(
     artist_id: Uuid,
     sc_user_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let deleted = sqlx::query_file!("queries/delete_account.sql", artist_id, sc_user_id)
-        .execute(pool)
-        .await?;
-    Ok(deleted.rows_affected() > 0)
+    wt::retry(|| async {
+        let mut transaction = pool.begin().await?;
+        let deleted = delete_account_in(&mut transaction, artist_id, sc_user_id).await?;
+        transaction.commit().await?;
+        Ok(deleted)
+    })
+    .await
+}
+
+pub async fn delete_account_in(
+    connection: &mut PgConnection,
+    artist_id: Uuid,
+    sc_user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let delete = MatchScAccount::Delete {
+        artist_id,
+        sc_user_id: sc_user_id.to_owned(),
+    };
+    wt::call(connection, &delete).await
 }
 
 pub fn claims_another_artist(error: &sqlx::Error) -> bool {

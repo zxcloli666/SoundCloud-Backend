@@ -36,6 +36,9 @@ async fn a_retry_keeps_every_dead_edit_when_the_playlist_re_read_is_not_queued(
 ) -> anyhow::Result<()> {
     let app = app(&pool, "redis://127.0.0.1:1").await?;
     let session = session(&pool).await?;
+    sqlx::query("ALTER TABLE background_jobs ADD CHECK (kind <> 'playlists.observe_shadow')")
+        .execute(&pool)
+        .await?;
     sqlx::query(
         "INSERT INTO sync_queue (user_id, action_type, target_urn, payload, dead, failed_at, retry_count)
          VALUES ($1, 'playlist_membership', 'soundcloud:playlists:77',

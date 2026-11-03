@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub database: DatabaseCfg,
     pub streaming: StreamingCfg,
     pub admin: AdminCfg,
+    pub diag: DiagCfg,
     pub redis: RedisCfg,
     pub admission: AdmissionCfg,
     pub nats: NatsCfg,
@@ -23,6 +24,7 @@ pub struct AppConfig {
     pub max_track_duration_ms: i32,
     pub premium_reserve: bool,
     pub reserve_backend: bool,
+    pub api_background: bool,
 }
 
 impl AppConfig {
@@ -65,6 +67,11 @@ pub struct DatabaseCfg {
     pub ssl: DbSslCfg,
     pub pool_max: u32,
     pub acquire_timeout: Duration,
+    pub statement_timeout: Duration,
+    pub idle_in_transaction_timeout: Duration,
+    pub min_connections: u32,
+    pub shed_factor: u32,
+    pub shed_wait: Duration,
 }
 
 impl std::fmt::Debug for DatabaseCfg {
@@ -74,6 +81,9 @@ impl std::fmt::Debug for DatabaseCfg {
             .field("ssl", &self.ssl)
             .field("pool_max", &self.pool_max)
             .field("acquire_timeout", &self.acquire_timeout)
+            .field("statement_timeout", &self.statement_timeout)
+            .field("min_connections", &self.min_connections)
+            .field("shed_factor", &self.shed_factor)
             .finish()
     }
 }
@@ -95,6 +105,18 @@ pub struct StreamingCfg {
 #[derive(Clone, Debug)]
 pub struct AdminCfg {
     pub token: redact::Secret<String>,
+    pub metrics_token: redact::Secret<String>,
+    pub diag_token: redact::Secret<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiagCfg {
+    pub host: String,
+    pub code_slot: u8,
+    pub max_bytes: u64,
+    pub origin_key: redact::Secret<String>,
+    pub jaeger_url: String,
+    pub sourcemaps_dir: String,
 }
 
 #[derive(Clone)]
@@ -129,6 +151,31 @@ pub struct AdmissionCfg {
     pub room_list: AdmissionLimitCfg,
     pub room_create: AdmissionLimitCfg,
     pub room_join: AdmissionLimitCfg,
+    pub diag_bundle: AdmissionLimitCfg,
+    pub diag_events: AdmissionLimitCfg,
+    pub diag_bytes: AdmissionLimitCfg,
+    pub trusted_proxies: Vec<ipnet::IpNet>,
+}
+
+impl DiagCfg {
+    fn from_env() -> Self {
+        let host = env_opt("SCD_HOST");
+        let origin_key = env_str("DIAG_ORIGIN_KEY", "");
+        assert!(
+            host.is_none() || !origin_key.is_empty(),
+            "SCD_HOST is set, so DIAG_ORIGIN_KEY must hold the key shared by every host"
+        );
+        let code_slot = env_u32("DIAG_CODE_SLOT", 0);
+        assert!(code_slot < 32, "DIAG_CODE_SLOT must be below 32");
+        Self {
+            host: host.unwrap_or_else(|| "local".to_owned()),
+            code_slot: code_slot as u8,
+            max_bytes: env_u64("DIAG_MAX_BYTES", 2 * 1024 * 1024 * 1024),
+            origin_key: origin_key.into(),
+            jaeger_url: env_str("JAEGER_QUERY_URL", "http://jaeger:16686/jaeger"),
+            sourcemaps_dir: env_str("DIAG_SOURCEMAPS_DIR", "/tmp/scd-sourcemaps"),
+        }
+    }
 }
 
 impl AdmissionCfg {
@@ -141,6 +188,14 @@ impl AdmissionCfg {
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
+        let diag_bundle = admission_limit("DIAG_BUNDLE", 10, 20000);
+        let diag_events = admission_limit("DIAG_EVENTS", 120, 60000);
+        let diag_bytes = admission_limit("DIAG_BYTES", 2 * 1024 * 1024, 200 * 1024 * 1024);
+        let trusted_proxies = trusted_proxies();
+        assert!(
+            !trusted_proxies.is_empty() || env_opt("SCD_HOST").is_none(),
+            "SCD_HOST is set, so TRUSTED_PROXIES or TRUSTED_PROXIES_FILE must list the proxies in front of this host"
+        );
 
         Self {
             window: Duration::from_secs(admission_value("ADMISSION_WINDOW_SECONDS", 60)),
@@ -155,8 +210,37 @@ impl AdmissionCfg {
             room_list,
             room_create,
             room_join,
+            diag_bundle,
+            diag_events,
+            diag_bytes,
+            trusted_proxies,
         }
     }
+}
+
+fn trusted_proxies() -> Vec<ipnet::IpNet> {
+    let mut entries: Vec<String> = env_str("TRUSTED_PROXIES", "")
+        .split(',')
+        .map(|entry| entry.trim().to_owned())
+        .collect();
+    if let Some(path) = env_opt("TRUSTED_PROXIES_FILE") {
+        let listed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("TRUSTED_PROXIES_FILE {path} is unreadable: {error}"));
+        entries.extend(listed.lines().map(|line| {
+            let line = line.split_once('#').map_or(line, |(entry, _)| entry);
+            line.trim().to_owned()
+        }));
+    }
+    entries
+        .into_iter()
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<ipnet::IpNet>()
+                .or_else(|_| entry.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                .unwrap_or_else(|_| panic!("TRUSTED_PROXIES has a bad entry: {entry}"))
+        })
+        .collect()
 }
 
 fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimitCfg {
@@ -174,12 +258,14 @@ fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimit
 #[derive(Clone)]
 pub struct NatsCfg {
     pub url: String,
+    pub tls: Option<tls_common::ClientIdentity>,
 }
 
 impl std::fmt::Debug for NatsCfg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NatsCfg")
             .field("url", &redact::url(&self.url))
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -188,6 +274,7 @@ impl std::fmt::Debug for NatsCfg {
 pub struct QdrantCfg {
     pub grpc_url: String,
     pub api_key: redact::Secret<String>,
+    pub tls: Option<tls_common::ClientIdentity>,
 }
 
 #[derive(Clone, Debug)]
@@ -247,6 +334,14 @@ pub(crate) fn database_from_env(prefix: &str, default_host: Option<&str>) -> Opt
         },
         pool_max: env_u32(&key("PG_POOL_MAX"), if prefix.is_empty() { 20 } else { 10 }),
         acquire_timeout: Duration::from_secs(env_u64(&key("PG_ACQUIRE_TIMEOUT_SECS"), 10)),
+        statement_timeout: Duration::from_secs(env_u64(&key("PG_STATEMENT_TIMEOUT_SECS"), 15)),
+        idle_in_transaction_timeout: Duration::from_secs(env_u64(
+            &key("PG_IDLE_IN_TRANSACTION_TIMEOUT_SECS"),
+            15,
+        )),
+        min_connections: env_u32(&key("PG_MIN_CONNECTIONS"), 7),
+        shed_factor: env_u32(&key("PG_SHED_FACTOR"), 4),
+        shed_wait: Duration::from_millis(env_u64(&key("PG_SHED_WAIT_MS"), 1500)),
     })
 }
 
@@ -291,7 +386,11 @@ impl AppConfig {
 
             admin: AdminCfg {
                 token: env_str("ADMIN_TOKEN", "").into(),
+                metrics_token: env_str("METRICS_TOKEN", "").into(),
+                diag_token: env_str("DIAG_TOKEN", "").into(),
             },
+
+            diag: DiagCfg::from_env(),
 
             redis: RedisCfg {
                 url: env_str("REDIS_URL", "redis://localhost:6379"),
@@ -301,11 +400,13 @@ impl AppConfig {
 
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),
+                tls: tls_common::ClientIdentity::from_env("NATS"),
             },
 
             qdrant: QdrantCfg {
                 grpc_url: env_str("QDRANT_URL", "http://localhost:6334"),
                 api_key: env_str("QDRANT_API_KEY", "").into(),
+                tls: tls_common::ClientIdentity::from_env("QDRANT"),
             },
 
             storage: StorageCfg {
@@ -340,6 +441,7 @@ impl AppConfig {
             max_track_duration_ms: (env_u64("MAX_TRACK_DURATION_SEC", 420) * 1000) as i32,
             premium_reserve: env_str("PREMIUM_RESERVE", "false") == "true",
             reserve_backend: env_str("RESERVE_BACKEND", "false") == "true",
+            api_background: env_str("API_BACKGROUND", "on") != "off",
         }
     }
 }
@@ -428,6 +530,11 @@ mod tests {
             ssl: DbSslCfg::default(),
             pool_max: 1,
             acquire_timeout: Duration::from_secs(1),
+            statement_timeout: Duration::from_secs(15),
+            idle_in_transaction_timeout: Duration::from_secs(15),
+            min_connections: 0,
+            shed_factor: 4,
+            shed_wait: Duration::from_millis(1500),
         };
         let rendered = format!("{cfg:?}");
         assert!(!rendered.contains("s3cr3t"), "{rendered}");
@@ -438,16 +545,20 @@ mod tests {
     fn no_configured_secret_can_reach_a_log_through_a_derived_debug() {
         let admin = AdminCfg {
             token: "s3cr3t-admin-token".to_owned().into(),
+            metrics_token: "s3cr3t-metrics-token".to_owned().into(),
+            diag_token: "s3cr3t-diag-token".to_owned().into(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),
             api_key: "s3cr3t-qdrant-key".to_owned().into(),
+            tls: None,
         };
         let redis = RedisCfg {
             url: "redis://user:s3cr3t-redis-pw@cache:6379".to_owned(),
         };
         let nats = NatsCfg {
             url: "nats://user:s3cr3t-nats-pw@bus:4222".to_owned(),
+            tls: None,
         };
 
         for rendered in [

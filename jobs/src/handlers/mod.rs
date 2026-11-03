@@ -1,9 +1,11 @@
 mod account_walk;
 mod admin_maintenance;
+pub(crate) mod admin_rpc;
 mod ai_store;
 mod apiv1_pace;
 mod artist_names;
 mod attribution;
+pub(crate) mod auth_rpc;
 mod catalog;
 mod catalog_collection;
 mod catalog_credits;
@@ -33,6 +35,7 @@ mod playlist_legacy;
 mod playlist_legacy_tests;
 mod playlist_observe;
 mod recommendations;
+mod repl;
 mod search_terms;
 mod secret_link;
 pub(crate) mod star_priority;
@@ -47,8 +50,8 @@ use std::sync::Arc;
 
 use backend_contracts::{
     AdminMaintenancePayload, CollabTrainPayload, CrawlArtistPayload, EmptyPayload, ImpressionBatch,
-    IndexTrackPayload, JobKind, PlaylistObservePayload, StoredAudioDispatchPayload,
-    SyncQueueFlushPayload, Versioned,
+    IndexTrackPayload, JobKind, PlaylistObservePayload, ReplReplayPayload,
+    StoredAudioDispatchPayload, SyncQueueFlushPayload, Versioned,
 };
 use serde::de::DeserializeOwned;
 
@@ -66,7 +69,7 @@ use self::catalog_credits::CatalogCreditHandler;
 use self::catalog_read::PublicCatalogReader;
 use self::collab::{CollabHandler, CollabResult};
 use self::crawl::CrawlHandler;
-use self::discover::DiscoverHandler;
+use self::discover::{DiscoverHandler, Group as DiscoverGroup};
 use self::encode::EncodeResultHandler;
 use self::enrich::EnrichHandler;
 use self::external::ExternalSources;
@@ -78,6 +81,7 @@ use self::playlist_legacy::PlaylistLegacyHandler;
 use self::playlist_observe::PlaylistObserveHandler;
 use self::recommendations::RecommendationHandler;
 use self::recommendations::quality::QualityHandler;
+use self::repl::ReplHandler;
 use self::search_terms::SearchTermsHandler;
 use self::star_priority::StarTiersHandler;
 use self::subscriptions::SubscriptionSnapshotHandler;
@@ -89,17 +93,21 @@ pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::AuthCleanupLinkRequests,
     JobKind::AuthCleanupLoginRequests,
     JobKind::CleanupJobReceipts,
+    JobKind::DiagCleanup,
     JobKind::DispatchAudioIndex,
     JobKind::DispatchTranscription,
     JobKind::LyricsEmbed,
     JobKind::OAuthAppsRefresh,
+    JobKind::ReplReplayDead,
     JobKind::SyncQueueFlush,
     JobKind::SyncQueueHeal,
 ];
 
 pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::AdminCatalogRenormalize,
+    JobKind::AdminLyricsLookupQueue,
     JobKind::AdminMusicBrainzNames,
+    JobKind::AdminWantedAliases,
     JobKind::CatalogRefresh,
     JobKind::CatalogCollection,
     JobKind::CrawlArtist,
@@ -116,6 +124,9 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::CollabTrain,
     JobKind::DiscoverAccounts,
     JobKind::DiscoverAggregates,
+    JobKind::DiscoverAlbumAggregates,
+    JobKind::DiscoverArtistPopularity,
+    JobKind::DiscoverArtistTags,
     JobKind::DiscoverCatalogGenius,
     JobKind::DiscoverCatalogMusicBrainz,
     JobKind::DiscoverInterest,
@@ -131,6 +142,7 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::RecommendationQualityBackfill,
     JobKind::RecommendationQualityTrain,
     JobKind::RecommendationWavePriority,
+    JobKind::ReplRetention,
     JobKind::ResolveDurations,
     JobKind::ResolveWantedTracks,
     JobKind::StarTrackTiers,
@@ -147,18 +159,24 @@ pub(crate) fn accepts_ingress(kind: JobKind) -> bool {
     matches!(
         kind,
         JobKind::AdminCatalogRenormalize
+            | JobKind::AdminLyricsLookupQueue
             | JobKind::AdminMusicBrainzNames
+            | JobKind::AdminWantedAliases
             | JobKind::CollabTrain
             | JobKind::CatalogRefresh
             | JobKind::CatalogCollection
             | JobKind::CrawlArtist
             | JobKind::DiscoverAggregates
+            | JobKind::DiscoverAlbumAggregates
+            | JobKind::DiscoverArtistPopularity
+            | JobKind::DiscoverArtistTags
             | JobKind::DispatchTranscription
             | JobKind::IndexTrack
             | JobKind::LyricsEmbed
             | JobKind::LyricsLookup
             | JobKind::PlaylistObserveShadow
             | JobKind::RecordHardNegative
+            | JobKind::ReplReplayDead
             | JobKind::SyncQueueFlush
     )
 }
@@ -191,6 +209,7 @@ pub struct JobHandlers {
     playlist_observe: PlaylistObserveHandler,
     quality: QualityHandler,
     recommendations: RecommendationHandler,
+    repl: ReplHandler,
     search_terms: SearchTermsHandler,
     star_tiers: StarTiersHandler,
     subscriptions: SubscriptionSnapshotHandler,
@@ -209,7 +228,7 @@ impl JobHandlers {
     ) -> Result<Self, crate::ClientBuildError> {
         let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
             proxy_url: config.enrich.proxy_url.clone(),
-            proxy_fallback: true,
+            proxy_fallback: false,
             api_base: None,
             home_base: None,
         })?;
@@ -292,6 +311,7 @@ impl JobHandlers {
             )?,
             lyrics: LyricsHandler::new(
                 databases,
+                sources.lyrics_on_demand.clone(),
                 sources.lyrics.clone(),
                 config,
                 bus.clone(),
@@ -313,6 +333,7 @@ impl JobHandlers {
                 databases.maintenance.clone(),
                 config.schedules.recommendation_wave_priority_shards,
             ),
+            repl: ReplHandler::new(databases.main.fast.clone()),
             search_terms: SearchTermsHandler::new(databases.main.bulk.clone()),
             star_tiers: StarTiersHandler::new(
                 databases.maintenance.clone(),
@@ -343,6 +364,10 @@ impl JobHandlers {
 
     pub async fn finish_collab(&self, result: CollabResult) -> JobResult {
         self.collab.finish(result).await
+    }
+
+    pub async fn listen_lyrics_wakes(&self, cancellation: tokio_util::sync::CancellationToken) {
+        self.lyrics.listen_wakes(cancellation).await
     }
 
     pub async fn finish_lyrics_embedding(
@@ -436,6 +461,10 @@ impl JobHandlers {
                 empty_payload(job)?;
                 self.maintenance.cleanup_link_requests().await
             }
+            JobKind::DiagCleanup => {
+                empty_payload(job)?;
+                self.maintenance.cleanup_diag().await
+            }
             JobKind::AuthCleanupLoginRequests => {
                 empty_payload(job)?;
                 self.maintenance.cleanup_login_requests().await
@@ -446,10 +475,22 @@ impl JobHandlers {
                     .renormalize_catalog(job, payload)
                     .await
             }
+            JobKind::AdminLyricsLookupQueue => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .backfill_lyrics_lookup_queue(job, payload)
+                    .await
+            }
             JobKind::AdminMusicBrainzNames => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;
                 self.admin_maintenance
                     .reconcile_musicbrainz_names(job, payload)
+                    .await
+            }
+            JobKind::AdminWantedAliases => {
+                let payload = payload::<AdminMaintenancePayload>(job)?;
+                self.admin_maintenance
+                    .rebuild_wanted_aliases(job, payload)
                     .await
             }
             JobKind::ArtistAttributionRevalidate => {
@@ -500,7 +541,27 @@ impl JobHandlers {
             }
             JobKind::DiscoverAggregates => {
                 empty_payload(job)?;
-                self.discover.refresh_aggregates().await
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Summary)
+                    .await
+            }
+            JobKind::DiscoverArtistPopularity => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistPopularity)
+                    .await
+            }
+            JobKind::DiscoverArtistTags => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::ArtistTags)
+                    .await
+            }
+            JobKind::DiscoverAlbumAggregates => {
+                empty_payload(job)?;
+                self.discover
+                    .refresh_aggregates(DiscoverGroup::Albums)
+                    .await
             }
             JobKind::CrawlArtist => {
                 let payload = payload::<CrawlArtistPayload>(job)?;
@@ -565,6 +626,14 @@ impl JobHandlers {
             JobKind::LyricsReapTranscriptions => {
                 empty_payload(job)?;
                 self.lyrics.reap_transcriptions().await
+            }
+            JobKind::ReplReplayDead => {
+                let payload = payload::<ReplReplayPayload>(job)?;
+                self.repl.replay(payload).await
+            }
+            JobKind::ReplRetention => {
+                empty_payload(job)?;
+                self.repl.retain().await
             }
             JobKind::ResolveDurations => {
                 empty_payload(job)?;

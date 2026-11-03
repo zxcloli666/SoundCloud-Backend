@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::DiscoverHandler;
+use super::{DiscoverHandler, Group};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
@@ -418,4 +418,53 @@ async fn an_artist_whose_account_holds_star_now_is_marked_with_its_aura(
         ]
     );
     Ok(())
+}
+
+#[test]
+fn the_aggregate_groups_cover_every_stage_once() {
+    for always_premium in [false, true] {
+        let mut names: Vec<&str> = [
+            Group::Summary,
+            Group::ArtistPopularity,
+            Group::ArtistTags,
+            Group::Albums,
+        ]
+        .into_iter()
+        .flat_map(|group| group.plan(always_premium))
+        .map(|stage| stage.name())
+        .collect();
+        names.sort_unstable();
+
+        let mut expected = vec![
+            "album_meta",
+            "album_popularity",
+            "album_star",
+            "artist_counts",
+            "artist_plays",
+            "artist_popularity",
+            "artist_tags",
+            if always_premium {
+                "artist_star_premium"
+            } else {
+                "artist_star_active"
+            },
+            "tag_counts",
+        ];
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+    }
+}
+
+#[test]
+fn a_stage_runs_after_the_stage_it_reads_from() {
+    let position = |group: Group, name: &str| {
+        group
+            .plan(false)
+            .iter()
+            .position(|stage| stage.name() == name)
+    };
+    assert!(position(Group::ArtistTags, "artist_tags") < position(Group::ArtistTags, "tag_counts"));
+    assert!(
+        position(Group::Summary, "artist_star_active") < position(Group::Summary, "album_star")
+    );
 }

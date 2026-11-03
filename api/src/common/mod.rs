@@ -10,4 +10,5 @@ pub mod response;
 pub mod sc_ids;
 pub mod sc_payload;
 pub mod session;
+pub mod shed;
 pub mod uuid;

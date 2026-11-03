@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use backend_contracts::JobKind;
+use backend_contracts::{JobKind, JobLane};
 
 use super::{JobRepository, duration_milliseconds};
 use crate::queue::model::{ClaimOrder, LeasedJob, LeasedJobRow, QueueError};
@@ -17,29 +17,13 @@ impl JobRepository {
             return Ok(Vec::new());
         }
 
-        let lane = supported_kinds[0].lane();
-        if supported_kinds.iter().any(|kind| kind.lane() != lane) {
-            return Err(QueueError::MixedLanes);
-        }
-
+        let lane = single_lane(supported_kinds)?;
         let limit = i64::try_from(limit).map_err(|_| QueueError::BatchTooLarge)?;
         let lease_milliseconds = duration_milliseconds(lease_duration)?;
         let supported_kinds = supported_kinds
             .iter()
             .map(|kind| kind.as_str().to_owned())
             .collect::<Vec<_>>();
-        let mut transaction = self.pool.begin().await?;
-
-        if !matches!(order, ClaimOrder::Kind(_)) {
-            sqlx::query_file!(
-                "queries/queue/release_expired.sql",
-                limit,
-                &supported_kinds,
-                lane.as_str()
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
 
         let rows = match order {
             ClaimOrder::Priority => {
@@ -52,7 +36,7 @@ impl JobRepository {
                     lease_milliseconds,
                     lane.as_str()
                 )
-                .fetch_all(&mut *transaction)
+                .fetch_all(&self.pool)
                 .await?
             }
             ClaimOrder::Kind(kind) => {
@@ -64,7 +48,7 @@ impl JobRepository {
                     self.worker_id.as_str(),
                     lease_milliseconds
                 )
-                .fetch_all(&mut *transaction)
+                .fetch_all(&self.pool)
                 .await?
             }
             ClaimOrder::Oldest => {
@@ -77,16 +61,47 @@ impl JobRepository {
                     lease_milliseconds,
                     lane.as_str()
                 )
-                .fetch_all(&mut *transaction)
+                .fetch_all(&self.pool)
                 .await?
             }
         };
-        let jobs = rows
-            .into_iter()
+        rows.into_iter()
             .map(LeasedJob::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        transaction.commit().await?;
-        Ok(jobs)
+            .collect::<Result<Vec<_>, _>>()
     }
+
+    pub async fn release_expired(
+        &self,
+        supported_kinds: &[JobKind],
+        limit: usize,
+    ) -> Result<u64, QueueError> {
+        if supported_kinds.is_empty() || limit == 0 {
+            return Ok(0);
+        }
+
+        let lane = single_lane(supported_kinds)?;
+        let limit = i64::try_from(limit).map_err(|_| QueueError::BatchTooLarge)?;
+        let supported_kinds = supported_kinds
+            .iter()
+            .map(|kind| kind.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let result = sqlx::query_file!(
+            "queries/queue/release_expired.sql",
+            limit,
+            &supported_kinds,
+            lane.as_str()
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+fn single_lane(supported_kinds: &[JobKind]) -> Result<JobLane, QueueError> {
+    let lane = supported_kinds[0].lane();
+    if supported_kinds.iter().any(|kind| kind.lane() != lane) {
+        return Err(QueueError::MixedLanes);
+    }
+    Ok(lane)
 }

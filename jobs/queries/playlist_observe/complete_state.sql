@@ -4,7 +4,19 @@ SET baseline_generation = baseline_generation + 1,
     latest_observation_id = $2,
     projection_revision = projection_revision + CASE WHEN $3 THEN 1 ELSE 0 END,
     projection_track_count = $4,
-    committed_operation_sequence = GREATEST(committed_operation_sequence, $10),
+    committed_operation_sequence = GREATEST(
+        committed_operation_sequence,
+        $10,
+        COALESCE(
+            (
+                SELECT min(operation.sequence) - 1
+                FROM playlist_membership_operations AS operation
+                WHERE operation.playlist_urn = $1
+                  AND operation.resolved_at IS NULL
+            ),
+            last_operation_sequence
+        )
+    ),
     reconcile_failure_streak = CASE
         WHEN $6 = 'catalog_incomplete' THEN least(reconcile_failure_streak + 1, 12)
         ELSE 0

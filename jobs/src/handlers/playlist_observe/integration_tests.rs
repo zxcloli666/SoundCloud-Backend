@@ -13,8 +13,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::config::{OAuthConfig, PlaylistReconcileConfig, SyncQueueConfig};
+use crate::handlers::catalog_remote::CatalogRemote;
+use crate::handlers::oauth_cooldowns::OAuthAppCooldowns;
 use crate::handlers::star_priority::Turns;
-use crate::queue::JobRepository;
+use crate::queue::{JobError, JobRepository};
 
 use super::super::catalog_read::PublicCatalogReader;
 use super::client::PlaylistReadClient;
@@ -152,6 +154,10 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              last_read_at timestamptz,
              updated_at timestamptz NOT NULL DEFAULT now()
          );
+         CREATE TABLE entity_reads (
+             entity_urn text PRIMARY KEY,
+             last_read_at timestamptz NOT NULL
+         );
          CREATE TABLE playlist_tracks (
              playlist_urn text NOT NULL,
              position integer NOT NULL,
@@ -175,11 +181,21 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
              remote_attempted_generation bigint,
              remote_completed_generation bigint,
              remote_result jsonb,
-             dead boolean NOT NULL DEFAULT false
+             dead boolean NOT NULL DEFAULT false,
+             intent_v bigint NOT NULL DEFAULT 1
          );
          CREATE UNIQUE INDEX sync_queue_target_uq
              ON sync_queue (user_id, action_type, target_urn)
              WHERE action_type <> 'comment';
+         CREATE FUNCTION scd_purge_intent(tbl text, k jsonb, seen bigint)
+         RETURNS boolean
+         LANGUAGE sql
+         AS $f$
+         WITH gone AS (
+             DELETE FROM sync_queue WHERE id = (k ->> 'id')::uuid AND intent_v = seen RETURNING id
+         )
+         SELECT EXISTS (SELECT 1 FROM gone)
+         $f$;
          CREATE TABLE user_owned_playlists (
              user_id text NOT NULL,
              playlist_urn text NOT NULL,
@@ -247,6 +263,16 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0174_scd_core_functions.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0204_scd_uuid_v5.sql"
+    ))
+    .execute(pool)
+    .await?;
     seed_legacy_playlist(pool).await?;
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0077_playlist_membership_shadow.sql"
@@ -285,6 +311,11 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     .await?;
     sqlx::raw_sql(include_str!(
         "../../../../api/migrations/0139_playlist_operations_without_baseline.sql"
+    ))
+    .execute(pool)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../../api/migrations/0239_oauth_app_tokens_local.sql"
     ))
     .execute(pool)
     .await?;
@@ -398,8 +429,8 @@ async fn seed_legacy_playlist(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<()> {
-    let oauth_app_id = Uuid::from_u128(1);
+async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<Uuid> {
+    let oauth_app_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO oauth_apps (id, client_id, client_secret)
          VALUES ($1, 'client-id', 'client-secret')",
@@ -418,7 +449,7 @@ async fn seed_playlist_and_connection(pool: &PgPool) -> anyhow::Result<()> {
     .bind(oauth_app_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(oauth_app_id)
 }
 
 async fn single_connection_pool(source: &PgPool) -> anyhow::Result<PgPool> {
@@ -1231,23 +1262,20 @@ async fn deleting_a_playlist_finishes_inflight_observation_without_rescheduling(
     let observation = catalog_ingest::Observation::begin(&pool).await?;
 
     let mut transaction = pool.begin().await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/lock_membership.sql",
-        RECONCILABLE
+    sqlx::query(
+        "UPDATE playlist_membership_state
+         SET next_reconcile_at = NULL, reconcile_generation = reconcile_generation + 1
+         WHERE playlist_urn = $1",
     )
-    .fetch_one(&mut *transaction)
+    .bind(RECONCILABLE)
+    .execute(&mut *transaction)
     .await?;
-    sqlx::query_file_scalar!(
-        "../api/queries/playlists/service/apply_delete.sql",
-        RECONCILABLE,
-        RECONCILABLE_OWNER
+    sqlx::query(
+        "UPDATE playlists SET sharing = 'private', sc_desired = '{}', deleted_at = clock_timestamp()
+         WHERE urn = $1 AND owner_sc_user_id = $2",
     )
-    .fetch_one(&mut *transaction)
-    .await?;
-    sqlx::query_file!(
-        "../api/queries/playlists/service/retire_membership.sql",
-        RECONCILABLE
-    )
+    .bind(RECONCILABLE)
+    .bind(RECONCILABLE_OWNER)
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
@@ -1511,11 +1539,11 @@ async fn observe_state(
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_rate_limited_read_defers_to_its_retry_after_and_cools_the_whole_app(
+async fn a_rate_limited_read_pauses_reads_and_leaves_token_requests_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
-    seed_playlist_and_connection(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
     let (api_url, methods, server) =
         scripted_soundcloud("429 Too Many Requests", "Retry-After: 900\r\n").await?;
     let handler = observe_handler(&pool, api_url)?;
@@ -1553,13 +1581,39 @@ async fn a_rate_limited_read_defers_to_its_retry_after_and_cools_the_whole_app(
         "a deferred playlist was still due: {claimed:?}"
     );
 
-    let cooldown = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
-        "SELECT retry_at FROM oauth_app_request_cooldowns WHERE oauth_app_id = $1",
-    )
-    .bind(Uuid::from_u128(1))
-    .fetch_one(&pool)
-    .await?;
-    assert!(cooldown > chrono::Utc::now());
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_app_request_cooldowns")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(rows, 0, "a read failure wrote an app-wide cooldown");
+    let token_requests = OAuthAppCooldowns::new(pool.clone());
+    assert_eq!(token_requests.retry_after_seconds(app).await?, None);
+    let paused = handler.connections.read_retry_after_seconds(app).await?;
+    assert!(paused.is_some_and(|seconds| seconds > 290));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_read_pause_set_by_playlist_observation_holds_catalog_reads(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
+    let (api_url, _, server) = scripted_soundcloud("200 OK", "").await?;
+    let handler = observe_handler(&pool, api_url)?;
+    let catalog = CatalogRemote::offline(pool.clone())?;
+    handler.connections.pause_reads(app, 600);
+
+    let error = catalog
+        .owner_get("42", "/me")
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("a paused app was read anyway"))?;
+    server.abort();
+
+    assert!(matches!(
+        error,
+        JobError::Postponed { delay, .. } if delay > Duration::from_secs(590)
+    ));
     Ok(())
 }
 
@@ -1568,12 +1622,12 @@ async fn a_cooling_application_is_not_asked_again_before_its_cooldown_expires(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
-    seed_playlist_and_connection(&pool).await?;
+    let app = seed_playlist_and_connection(&pool).await?;
     sqlx::query(
         "INSERT INTO oauth_app_request_cooldowns (oauth_app_id, retry_at)
          VALUES ($1, now() + interval '20 minutes')",
     )
-    .bind(Uuid::from_u128(1))
+    .bind(app)
     .execute(&pool)
     .await?;
     let (api_url, methods, server) = scripted_soundcloud("200 OK", "").await?;
@@ -1603,7 +1657,7 @@ async fn a_cooling_application_is_not_asked_again_before_its_cooldown_expires(
     let failures = sqlx::query_scalar::<_, i32>(
         "SELECT failure_count FROM oauth_app_request_cooldowns WHERE oauth_app_id = $1",
     )
-    .bind(Uuid::from_u128(1))
+    .bind(app)
     .fetch_one(&pool)
     .await?;
     assert_eq!(

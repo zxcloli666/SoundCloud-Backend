@@ -2,18 +2,21 @@
 mod connection_discipline_tests;
 pub(crate) mod migrations;
 mod pool;
+mod retry;
 
 use sqlx::PgPool;
 
 use crate::config::JobsConfig;
 
 pub use pool::DatabaseError;
+pub use retry::retry_conflicts;
 
 #[derive(Clone)]
 pub struct Databases {
     pub main: DatabasePools,
     pub queue: PgPool,
     pub maintenance: PgPool,
+    pub analytics: PgPool,
     pub ops: DatabasePools,
 }
 
@@ -37,11 +40,18 @@ impl Databases {
             &maintenance_name,
         );
         let ops = DatabasePools::connect(&config.ops_database, &ops_name);
-        let (main, queue, maintenance, ops) = tokio::try_join!(main, queue, maintenance, ops)?;
+        let analytics = connect_analytics(config);
+        let (main, queue, maintenance, ops, analytics) =
+            tokio::try_join!(main, queue, maintenance, ops, analytics)?;
+        if let Some(read) = &analytics {
+            pool::ensure_same_scd_node(&main.fast, read).await?;
+        }
+        let analytics = analytics.unwrap_or_else(|| maintenance.clone());
         Ok(Self {
             main,
             queue,
             maintenance,
+            analytics,
             ops,
         })
     }
@@ -51,9 +61,18 @@ impl Databases {
             self.main.close(),
             self.queue.close(),
             self.maintenance.close(),
+            self.analytics.close(),
             self.ops.close()
         );
     }
+}
+
+async fn connect_analytics(config: &JobsConfig) -> Result<Option<PgPool>, DatabaseError> {
+    let Some(read) = &config.read_database else {
+        return Ok(None);
+    };
+    let name = format!("scd-jobs:{}:read", config.instance_id);
+    pool::connect(read, &read.bulk_pool, &name).await.map(Some)
 }
 
 pub(crate) async fn connect_migration(

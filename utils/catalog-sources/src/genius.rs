@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tracing::warn;
-use wreq::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
+use wreq::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 
 use crate::error::{SourceError, SourceResult};
 use crate::http::ExternalFetcher;
@@ -22,7 +22,6 @@ pub struct GeniusCfg {
 
 const GENIUS_API: &str = "https://api.genius.com";
 const GENIUS_WEB_API: &str = "https://genius.com/api";
-const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
 const API_THROTTLE_MS: u64 = 0;
 const WEB_DIRECT_THROTTLE_MS: u64 = 0;
@@ -305,6 +304,7 @@ struct PaginationInput<'a> {
 #[derive(Deserialize)]
 struct PaginationEnvelope<T> {
     kind: String,
+    #[serde(default = "Vec::new")]
     items: Vec<T>,
     complete: bool,
     next_page: u32,
@@ -336,13 +336,22 @@ impl GeniusService {
         })
     }
 
+    pub fn with_fetcher(&self, fetcher: Arc<ExternalFetcher>) -> Arc<Self> {
+        Arc::new(Self {
+            fetcher,
+            cfg: self.cfg.clone(),
+            api_throttle: self.api_throttle.clone(),
+            web_throttle: self.web_throttle.clone(),
+            scrape_sem: self.scrape_sem.clone(),
+        })
+    }
+
     fn has_token(&self) -> bool {
         !self.cfg.access_token.is_empty()
     }
 
     fn json_headers(&self, with_bearer: bool) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(UA));
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         if with_bearer
             && self.has_token()
@@ -350,12 +359,6 @@ impl GeniusService {
         {
             headers.insert(AUTHORIZATION, value);
         }
-        headers
-    }
-
-    fn html_headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(UA));
         headers
     }
 
@@ -406,14 +409,13 @@ impl GeniusService {
         let _permit = self.scrape_sem.acquire().await.ok();
         let bytes = self
             .fetcher
-            .get_scrape(url, self.html_headers(), &self.web_throttle)
+            .get_scrape(url, HeaderMap::new(), &self.web_throttle)
             .await?;
         let html = String::from_utf8(bytes.to_vec())
             .map_err(|error| SourceError::Invalid(format!("genius html utf8: {error}")))?;
         let lowercase = html.to_lowercase();
-        if lowercase.contains("cf-challenge")
-            || lowercase.contains("captcha")
-            || lowercase.contains("just a moment")
+        if !lowercase.contains("data-lyrics-container")
+            && (lowercase.contains("cf-challenge") || lowercase.contains("just a moment"))
         {
             return Err(SourceError::Invalid(
                 "genius returned a challenge page".to_owned(),
@@ -452,6 +454,11 @@ impl GeniusService {
             .await?;
         let envelope: PaginationEnvelope<T> = serde_json::from_slice(&output)
             .map_err(|error| SourceError::Invalid(format!("genius pagination output: {error}")))?;
+        if envelope.kind == "blocked" {
+            return Err(SourceError::Unreachable(
+                "genius pagination is blocked in every relay region".to_owned(),
+            ));
+        }
         if !matches!(envelope.kind.as_str(), "found" | "empty") {
             return Err(SourceError::Invalid(
                 "genius pagination returned an unknown outcome".to_owned(),
@@ -1162,6 +1169,18 @@ mod tests {
                 max_concurrent_scrapes: 50,
             },
         )
+    }
+
+    #[test]
+    fn a_copy_with_another_fetcher_shares_throttles_and_scrape_slots() {
+        let genius = build_client();
+        let fetcher = genius.fetcher.background();
+        let copy = genius.with_fetcher(fetcher.clone());
+
+        assert!(Arc::ptr_eq(&copy.fetcher, &fetcher));
+        assert!(Arc::ptr_eq(&copy.api_throttle, &genius.api_throttle));
+        assert!(Arc::ptr_eq(&copy.web_throttle, &genius.web_throttle));
+        assert!(Arc::ptr_eq(&copy.scrape_sem, &genius.scrape_sem));
     }
 
     #[tokio::test]

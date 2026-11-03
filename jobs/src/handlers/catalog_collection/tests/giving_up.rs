@@ -112,6 +112,10 @@ fn a_rate_limited_collection_never_gives_up() {
     ] {
         assert_eq!(delay_of(&give_up_or_wait(&old, limited)), Some(60));
     }
+    let paced = owner_error(PlaylistReadError::Paced {
+        retry_after_seconds: 7,
+    });
+    assert_eq!(delay_of(&give_up_or_wait(&old, paced)), Some(7));
     let next_page = postpone(1, anyhow::anyhow!("collection has another page"));
     assert_eq!(delay_of(&give_up_or_wait(&old, next_page)), Some(1));
     let unreachable = public_error(sc_transport::ScError::unreachable("connection reset"));

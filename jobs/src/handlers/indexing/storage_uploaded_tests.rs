@@ -190,7 +190,7 @@ fn upload_validation_accepts_real_and_synthetic_events() -> anyhow::Result<()> {
     ] {
         validate_upload(StorageTrackUploaded {
             sc_track_id: "soundcloud:tracks:42".to_owned(),
-            storage_url: "https://storage.example/redirect/42.m4a".to_owned(),
+            storage_url: "https://storage.example/42.m4a".to_owned(),
             quality,
         })?;
     }
@@ -202,7 +202,7 @@ fn upload_validation_rejects_unsafe_values() {
     let invalid = [
         StorageTrackUploaded {
             sc_track_id: "042".to_owned(),
-            storage_url: "https://storage.example/redirect/42.m4a".to_owned(),
+            storage_url: "https://storage.example/42.m4a".to_owned(),
             quality: None,
         },
         StorageTrackUploaded {
@@ -535,7 +535,7 @@ fn an_audio_index_task_names_its_generation_and_attempt() -> anyhow::Result<()> 
         serde_json::to_value(&request)?,
         serde_json::json!({
             "sc_track_id": "42",
-            "s3_url": "https://storage.example/redirect/soundcloud_tracks_42.m4a",
+            "s3_url": "https://storage.example/soundcloud_tracks_42.m4a",
             "upload_generation": 3,
             "attempt": 2,
         })

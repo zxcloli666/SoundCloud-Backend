@@ -6,6 +6,9 @@ pub mod cookies;
 pub mod cookies_pool;
 pub mod decrypt_fetch;
 pub mod download;
+pub mod egress;
+#[cfg(test)]
+mod egress_tests;
 pub mod free_hq;
 pub mod handler;
 pub mod hls;
@@ -17,5 +20,6 @@ pub mod restricted;
 mod sources;
 pub mod storage;
 pub mod target;
+mod trace;
 mod upload_slots;
 pub mod validate;

@@ -54,16 +54,15 @@ pub async fn record_pending(
     sc_user_id: &str,
     comment: &SubmittedComment,
 ) -> AppResult<()> {
-    sqlx::query_file!(
-        "queries/tracks/comments/insert_pending.sql",
-        Uuid::now_v7(),
-        sc_track_id,
-        backend_contracts::CatalogEntity::User.urn(extract_sc_id(sc_user_id)),
-        &comment.body,
-        comment.track_position_ms
-    )
-    .execute(connection)
-    .await?;
+    let post = wt::CommentPost {
+        id: Uuid::now_v7(),
+        sc_track_id: sc_track_id.to_owned(),
+        user_urn: backend_contracts::CatalogEntity::User.urn(extract_sc_id(sc_user_id)),
+        body: comment.body.clone(),
+        track_position_ms: comment.track_position_ms,
+        at: wt::now(),
+    };
+    wt::call(connection, &post).await?;
     Ok(())
 }
 

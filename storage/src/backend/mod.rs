@@ -7,6 +7,7 @@ use futures::Stream;
 pub mod gdrive;
 pub mod local;
 pub mod s3;
+mod s3_trace;
 
 pub use gdrive::GdriveBackend;
 pub use local::LocalBackend;

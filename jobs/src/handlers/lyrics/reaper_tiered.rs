@@ -120,13 +120,28 @@ async fn embedding_pass(
             .await
         }
         Pass::Liked => {
+            let window = sqlx::query_file_scalar!(
+                "queries/lyrics/reap_embeddings_liked_window.sql",
+                LIKED_SCAN_WINDOW
+            )
+            .fetch_all(&mut **transaction)
+            .await?;
+            let liked = sqlx::query_file_scalar!(
+                "queries/lyrics/reap_embeddings_liked_tracks.sql",
+                &window,
+                LIKED_PRIORITY
+            )
+            .fetch_all(&mut **transaction)
+            .await?;
+            if liked.is_empty() {
+                return Ok(Vec::new());
+            }
             sqlx::query_file_as!(
                 EmbeddingCandidate,
                 "queries/lyrics/reap_embeddings_liked.sql",
                 limit,
-                LIKED_PRIORITY,
                 taken,
-                LIKED_SCAN_WINDOW
+                &liked
             )
             .fetch_all(&mut **transaction)
             .await
