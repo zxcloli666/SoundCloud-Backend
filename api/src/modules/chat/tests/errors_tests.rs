@@ -67,6 +67,7 @@ fn every_code_is_prefixed_and_unique() {
         ChatError::Replay,
         ChatError::DeviceRevoked,
         ChatError::ReloginRequired,
+        ChatError::SessionNotReplicated,
         ChatError::SessionBoundOther,
         ChatError::TooYoung,
         ChatError::Disabled,

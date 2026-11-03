@@ -95,7 +95,7 @@ pub async fn create(
     ChatJson(input): ChatJson<CreateConversation>,
 ) -> ChatResult<Json<ConversationView>> {
     let user = caller.user_id.as_str();
-    let wanted = create::wanted(user, input, chat.config.loadtest)?;
+    let wanted = create::wanted(user, input, chat.config.loadtest_open())?;
     limits::admit(&chat, Bucket::Create, user).await?;
     if wanted != Wanted::Saved {
         users::check(&chat, user, Scope::All).await?;

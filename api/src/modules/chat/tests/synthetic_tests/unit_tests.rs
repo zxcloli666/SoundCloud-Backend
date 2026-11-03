@@ -1,4 +1,7 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+use chrono::{DateTime, TimeZone, Utc};
 
 use axum::http::StatusCode;
 use rand::SeedableRng;
@@ -8,7 +11,7 @@ use sc_chat_wire::prost::Message;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::support::{admin, state};
+use super::support::{admin, state, state_until};
 use crate::modules::chat::conversations::keys::valid_user_id;
 use crate::modules::chat::moderation::testing::offline_redis;
 use crate::modules::chat::synthetic::layout::{
@@ -180,4 +183,37 @@ fn purge_scans_only_synthetic_keys() {
             "chat:lim:*:lt:*".to_owned(),
         ]
     );
+}
+
+static CLOCK_SECS: AtomicI64 = AtomicI64::new(0);
+
+fn clock() -> DateTime<Utc> {
+    Utc.timestamp_opt(CLOCK_SECS.load(Ordering::SeqCst), 0)
+        .single()
+        .expect("a valid time")
+}
+
+fn until() -> DateTime<Utc> {
+    Utc.timestamp_opt(1_000, 0).single().expect("a valid time")
+}
+
+#[tokio::test]
+async fn the_load_test_stops_at_the_until_time_even_with_the_flag_left_on() {
+    let chat = state_until(lazy_pg(), offline_redis(), until(), clock);
+    let body = json!({"users": 2, "devices_per_user": 1, "groups": 1});
+
+    CLOCK_SECS.store(1_001, Ordering::SeqCst);
+    assert!(!chat.config.loadtest_open());
+    assert!(!chat.config.opens_for("lt:1"));
+    let found = session(&chat, Uuid::now_v7()).await;
+    assert!(matches!(found, Ok(None)), "{found:?}");
+    for path in ["/chat-admin/loadtest/seed", "/chat-admin/loadtest/purge"] {
+        let (status, answer) = admin(&chat, path, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(answer, json!({"error": "chat_not_found"}), "{path}");
+    }
+
+    CLOCK_SECS.store(999, Ordering::SeqCst);
+    assert!(chat.config.loadtest_open());
+    assert!(chat.config.opens_for("lt:1"));
 }

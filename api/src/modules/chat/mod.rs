@@ -17,6 +17,7 @@ pub mod invites;
 pub mod kek;
 pub mod keys;
 pub mod limits;
+pub mod media;
 pub mod members;
 pub mod messages;
 pub mod model;

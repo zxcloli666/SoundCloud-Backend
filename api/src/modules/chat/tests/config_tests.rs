@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use super::{Access, MODEL_TIMEOUT_DEFAULT, ModelChoice, access, beta_users, models};
+use chrono::{TimeZone, Utc};
+
+use super::{
+    Access, MODEL_TIMEOUT_DEFAULT, ModelChoice, access, beta_users, loadtest_until, models,
+};
 
 #[test]
 fn anything_but_all_keeps_chat_in_beta() {
@@ -51,4 +55,27 @@ fn a_missing_or_bad_timeout_falls_back_to_thirty_seconds() {
         models("a,,c", "1,2,3"),
         vec![choice("a", 1), choice("c", 3)]
     );
+}
+
+#[test]
+fn the_load_test_deadline_takes_rfc_3339_or_epoch_seconds() {
+    let at = Utc.timestamp_opt(1_793_400_000, 0).single();
+    assert_eq!(
+        loadtest_until("2026-10-31T00:00:00Z"),
+        Utc.with_ymd_and_hms(2026, 10, 31, 0, 0, 0).single()
+    );
+    assert_eq!(loadtest_until("1793400000"), at);
+    assert_eq!(loadtest_until(" 1793400000 "), at);
+    assert_eq!(
+        loadtest_until("2026-11-04T01:00:00+03:00"),
+        loadtest_until("2026-11-03T22:00:00Z")
+    );
+    assert_eq!(loadtest_until(""), None);
+    assert_eq!(loadtest_until("  "), None);
+}
+
+#[test]
+#[should_panic(expected = "CHAT_LOADTEST_UNTIL")]
+fn a_garbled_load_test_deadline_stops_the_boot() {
+    loadtest_until("tomorrow");
 }

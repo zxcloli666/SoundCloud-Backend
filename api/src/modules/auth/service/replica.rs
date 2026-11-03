@@ -12,7 +12,7 @@ use super::AuthService;
 
 const SESSION_WAIT: Duration = Duration::from_millis(1500);
 const SESSION_POLL: Duration = Duration::from_millis(250);
-const SESSION_RETRY_AFTER_SECONDS: i64 = 5;
+pub const SESSION_RETRY_AFTER_SECONDS: i64 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Feed {
@@ -48,7 +48,7 @@ impl AuthService {
         })
     }
 
-    async fn replicated<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
+    pub(crate) async fn replicated<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = AppResult<Option<T>>>,
@@ -73,10 +73,12 @@ impl AuthService {
     }
 }
 
+pub const NOT_REPLICATED: &str = "session_not_replicated";
+
 fn session_not_replicated() -> AppError {
     AppError::coded(
         StatusCode::SERVICE_UNAVAILABLE,
-        "session_not_replicated",
+        NOT_REPLICATED,
         "This server has not received the session yet, retry shortly",
     )
     .with_retry_after(SESSION_RETRY_AFTER_SECONDS)

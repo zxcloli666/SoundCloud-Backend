@@ -84,7 +84,7 @@ pub async fn add(
         .await?
         .active()?
         .admin()?;
-    let wanted = group_members(user, &input.users, chat.config.loadtest)?;
+    let wanted = group_members(user, &input.users, chat.config.loadtest_open())?;
     users::check(&chat, user, Scope::All).await?;
     let open = contacts::unblocked(&chat, user, wanted).await?;
     let placed = contacts::placements(&chat.pg, user, &open).await?;

@@ -22,7 +22,7 @@ pub struct NewSession<'a> {
 }
 
 pub async fn session(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionEntry>> {
-    if !chat.config.loadtest {
+    if !chat.config.loadtest_open() {
         return Ok(None);
     }
     let raw: Option<String> = {

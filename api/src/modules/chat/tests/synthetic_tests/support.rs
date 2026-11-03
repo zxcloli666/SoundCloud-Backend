@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sc_chat_wire::prost::Message;
 use sc_chat_wire::proto::{Inner, InnerResponse, Tier};
 use sc_chat_wire::seal::{RequestSealer, SealedRequest};
@@ -68,6 +68,19 @@ pub async fn flushed(db: u8) -> deadpool_redis::Pool {
 pub fn state(pg: PgPool, redis: deadpool_redis::Pool, loadtest: bool) -> Arc<ChatState> {
     let mut chat = Arc::into_inner(state_with(pg, redis, None)).expect("a fresh state");
     chat.config.loadtest = loadtest;
+    Arc::new(chat)
+}
+
+pub fn state_until(
+    pg: PgPool,
+    redis: deadpool_redis::Pool,
+    until: DateTime<Utc>,
+    clock: fn() -> DateTime<Utc>,
+) -> Arc<ChatState> {
+    let mut chat = Arc::into_inner(state_with(pg, redis, None)).expect("a fresh state");
+    chat.config.loadtest = true;
+    chat.config.loadtest_until = Some(until);
+    chat.config.clock = clock;
     Arc::new(chat)
 }
 

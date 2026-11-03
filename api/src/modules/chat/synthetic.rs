@@ -39,7 +39,7 @@ pub async fn seed(
     State(chat): State<Arc<ChatState>>,
     body: Bytes,
 ) -> ChatResult<Json<Seeded>> {
-    if !chat.config.loadtest {
+    if !chat.config.loadtest_open() {
         return Err(ChatError::NotFound);
     }
     let input: Seed = serde_json::from_slice(&body).map_err(|_| ChatError::Invalid)?;
@@ -58,7 +58,7 @@ pub async fn purge(
     admin: ChatAdmin,
     State(chat): State<Arc<ChatState>>,
 ) -> ChatResult<Json<Purged>> {
-    if !chat.config.loadtest {
+    if !chat.config.loadtest_open() {
         return Err(ChatError::NotFound);
     }
     let purged = purge::run(&chat).await?;

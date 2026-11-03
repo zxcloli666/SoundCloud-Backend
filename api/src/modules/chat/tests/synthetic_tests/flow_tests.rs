@@ -1,16 +1,20 @@
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+use chrono::{DateTime, TimeZone, Utc};
 
 use redis::AsyncCommands;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::support::{Device, call, count, flushed, seed, state};
+use super::support::{Device, call, count, flushed, seed, state, state_until};
 use crate::modules::chat::rt_keys;
 
 const SEED_DB: u8 = 5;
 const SECOND_DB: u8 = 6;
 const FLAG_DB: u8 = 7;
+const UNTIL_DB: u8 = 9;
 
 fn devices(seeded: &Value) -> Vec<Device> {
     seeded["devices"]
@@ -228,5 +232,38 @@ async fn a_synthetic_session_is_never_resolved_once_the_flag_is_off(
     .await;
     assert_eq!(refused.status, 401, "{}", refused.body);
     assert_eq!(refused.body["error"], "chat_relogin_required");
+    Ok(())
+}
+
+static CLOCK_SECS: AtomicI64 = AtomicI64::new(0);
+
+fn clock() -> DateTime<Utc> {
+    Utc.timestamp_opt(CLOCK_SECS.load(Ordering::SeqCst), 0)
+        .single()
+        .expect("a valid time")
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_synthetic_session_stops_resolving_at_the_until_time_cache_included(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let redis = flushed(UNTIL_DB).await;
+    let until = Utc.timestamp_opt(1_000, 0).single().expect("a valid time");
+    CLOCK_SECS.store(999, Ordering::SeqCst);
+    let chat = state_until(pg, redis, until, clock);
+    let seeded = seed(&chat, 2, 1, 1).await;
+    let device = &devices(&seeded)[0];
+    let sync = json!({"max_bytes": 4096});
+
+    let open = call(&chat, device, "POST", "/chat/sync", Some(sync.clone())).await;
+    assert_eq!(open.status, 200, "{}", open.body);
+    let cached = call(&chat, device, "POST", "/chat/sync", Some(sync.clone())).await;
+    assert_eq!(cached.status, 200, "{}", cached.body);
+
+    CLOCK_SECS.store(1_000, Ordering::SeqCst);
+    let closed = call(&chat, device, "POST", "/chat/sync", Some(sync)).await;
+    assert_eq!(closed.status, 401, "{}", closed.body);
+    assert_eq!(closed.body["error"], "chat_relogin_required");
     Ok(())
 }

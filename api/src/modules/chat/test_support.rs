@@ -68,11 +68,14 @@ pub fn config(enabled: bool) -> ChatConfig {
         kek_current: 1,
         reports_kek_current: 1,
         loadtest: false,
+        loadtest_until: None,
+        clock: chrono::Utc::now,
         moderation: ModerationConfig {
             enabled: false,
             url: None,
             models: Vec::new(),
         },
+        media: Default::default(),
     }
 }
 

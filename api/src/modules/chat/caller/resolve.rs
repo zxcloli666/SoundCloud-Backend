@@ -2,6 +2,8 @@ use sc_chat_wire::proto::Inner;
 use sc_chat_wire::sign::verify_request;
 use uuid::Uuid;
 
+use crate::error::{AppError, AppResult};
+use crate::modules::auth::service::replica::NOT_REPLICATED;
 use crate::modules::chat::caller::{CallerBind, CallerDevice, ChatCaller, SessionEntry};
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::{ChatError, ChatResult, ChatState, devices, synthetic};
@@ -44,15 +46,36 @@ async fn session_entry(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionE
             if let Some(synthetic) = synthetic::session(chat, id).await? {
                 return Ok(Some(synthetic));
             }
-            let row = sqlx::query_file!("queries/auth/service/get_session_bind.sql", id)
-                .fetch_optional(&chat.pg)
-                .await?;
-            Ok(row.map(|row| SessionEntry {
-                user_id: row.soundcloud_user_id,
-                bind: row.chat_bind.as_deref().and_then(CallerBind::decode),
-            }))
+            chat.auth
+                .replicated(|| stored_session(chat, id))
+                .await
+                .map_err(not_replicated)
         })
         .await
+}
+
+async fn stored_session(chat: &ChatState, id: Uuid) -> AppResult<Option<SessionEntry>> {
+    let row = sqlx::query_file!("queries/auth/service/get_session_bind.sql", id)
+        .fetch_optional(&chat.pg)
+        .await?;
+    Ok(row.map(|row| SessionEntry {
+        user_id: row.soundcloud_user_id,
+        bind: row.chat_bind.as_deref().and_then(CallerBind::decode),
+    }))
+}
+
+fn not_replicated(error: AppError) -> ChatError {
+    match error {
+        AppError::Coded {
+            code: NOT_REPLICATED,
+            ..
+        } => ChatError::SessionNotReplicated,
+        AppError::Db(error) => ChatError::from(error),
+        other => {
+            tracing::error!(code = other.public_code(), "chat session lookup failed");
+            ChatError::Internal
+        }
+    }
 }
 
 async fn signed_session(
@@ -63,6 +86,7 @@ async fn signed_session(
     enc: &[u8; 32],
 ) -> ChatResult<(SessionEntry, Option<CallerBind>)> {
     if let Some(cached) = chat.callers.session(session_id)
+        && (!synthetic::is_synthetic(&cached.user_id) || chat.config.loadtest_open())
         && let Ok(Some(bind)) = signed_by(&cached, device_id, inner, enc)
     {
         return Ok((cached, Some(bind)));
@@ -137,3 +161,7 @@ fn max_bytes(tier: Tier, asked: u32) -> u32 {
 fn parse(raw: Option<&str>) -> Option<Uuid> {
     Uuid::parse_str(raw?).ok()
 }
+
+#[cfg(test)]
+#[path = "../tests/resolve_tests.rs"]
+mod tests;

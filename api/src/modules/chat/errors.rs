@@ -3,11 +3,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use crate::modules::auth::service::replica::SESSION_RETRY_AFTER_SECONDS;
+
 pub type ChatResult<T> = Result<T, ChatError>;
 
 pub const BUSY_TOTAL: &str = "chat_busy_total";
 pub const BUSY_RETRY_MS: u64 = 1_000;
 pub const BUSY_JITTER_MS: u64 = 2_000;
+pub const SESSION_RETRY_MS: i64 = SESSION_RETRY_AFTER_SECONDS * 1_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatError {
@@ -24,6 +27,7 @@ pub enum ChatError {
     Replay,
     DeviceRevoked,
     ReloginRequired,
+    SessionNotReplicated,
     SessionBoundOther,
     TooYoung,
     Disabled,
@@ -62,6 +66,7 @@ impl ChatError {
             ChatError::Replay => "chat_replay",
             ChatError::DeviceRevoked => "chat_device_revoked",
             ChatError::ReloginRequired => "chat_relogin_required",
+            ChatError::SessionNotReplicated => "chat_session_not_replicated",
             ChatError::SessionBoundOther => "chat_session_bound_other",
             ChatError::TooYoung => "chat_too_young",
             ChatError::Disabled => "chat_disabled",
@@ -89,9 +94,10 @@ impl ChatError {
             ChatError::Clock { .. } | ChatError::DeviceRevoked | ChatError::ReloginRequired => {
                 StatusCode::UNAUTHORIZED
             }
-            ChatError::Busy { .. } | ChatError::Disabled | ChatError::SendPaused => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            ChatError::Busy { .. }
+            | ChatError::SessionNotReplicated
+            | ChatError::Disabled
+            | ChatError::SendPaused => StatusCode::SERVICE_UNAVAILABLE,
             ChatError::Invalid => StatusCode::BAD_REQUEST,
             ChatError::NotFound => StatusCode::NOT_FOUND,
             ChatError::Unimplemented => StatusCode::NOT_IMPLEMENTED,
@@ -107,6 +113,7 @@ impl ChatError {
                 body["retry_ms"] = json!(retry_ms)
             }
             ChatError::Clock { server_now } => body["server_now"] = json!(server_now),
+            ChatError::SessionNotReplicated => body["retry_ms"] = json!(SESSION_RETRY_MS),
             _ => {}
         }
         body
