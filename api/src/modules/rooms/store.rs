@@ -1,3 +1,5 @@
+mod transfer;
+
 use deadpool_redis::Pool;
 use redis::{AsyncCommands, Script};
 use uuid::Uuid;
@@ -38,6 +40,8 @@ redis.call('DEL', KEYS[1])
 redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[6])
 return 1
 ";
+
+pub use transfer::{Moved, PAGE_MAX, Page};
 
 pub struct RoomStore {
     redis: Pool,

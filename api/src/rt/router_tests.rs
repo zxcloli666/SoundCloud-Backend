@@ -11,51 +11,14 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::build;
-use crate::common::admission::PublicAdmission;
-use crate::config::{AdmissionCfg, AdmissionLimitCfg};
 use crate::modules::chat::ChatState;
 use crate::modules::chat::test_support::{
     chat_state, hex_field, offline_chat_state, request_vector,
 };
-use crate::rt::state::RtState;
-
-fn admission(redis_url: &str) -> Arc<PublicAdmission> {
-    let limit = AdmissionLimitCfg {
-        per_client: 1_000,
-        global: 1_000_000,
-    };
-    let config = AdmissionCfg {
-        window: Duration::from_secs(60),
-        timeout: Duration::from_millis(500),
-        max_in_flight: 16,
-        login: limit,
-        link_create: limit,
-        resolve: limit,
-        sc_search: limit,
-        catalog_miss: limit,
-        room_list: limit,
-        room_create: limit,
-        room_join: limit,
-        diag_bundle: limit,
-        diag_events: limit,
-        diag_bytes: limit,
-        trusted_proxies: Vec::new(),
-    };
-    PublicAdmission::new(
-        crate::redis::connect_admission_url(redis_url, 16).expect("an admission pool"),
-        config,
-    )
-}
+use crate::rt::test_support::{self, call, expired_session_for, session_for};
 
 fn app(chat: Arc<ChatState>, redis_url: &str) -> axum::Router {
-    build(RtState {
-        pg: chat.pg.clone(),
-        auth: chat.auth.clone(),
-        admission: admission(redis_url),
-        rooms: chat.rooms.clone(),
-        chat,
-    })
+    test_support::app(chat, redis_url, None)
 }
 
 fn offline_app(chat_enabled: bool) -> axum::Router {
@@ -100,19 +63,38 @@ async fn sealed_answer(app: &axum::Router, case: &Value) -> (InnerResponse, Valu
     (inner, body)
 }
 
+async fn status_of(app: &axum::Router, uri: &str) -> StatusCode {
+    app.clone()
+        .oneshot(Request::get(uri).body(Body::empty()).expect("a request"))
+        .await
+        .expect("an answer")
+        .status()
+}
+
 #[sqlx::test(migrations = false)]
-async fn health_answers_on_rt_from_its_database(pool: PgPool) -> anyhow::Result<()> {
+async fn the_deep_check_lives_on_its_own_path_and_the_edge_path_asks_redis(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let redis = crate::redis::connect_url("redis://127.0.0.1:1")?;
     let app = app(chat_state(pool, redis, true), "redis://127.0.0.1:1");
-    let response = app
-        .clone()
-        .oneshot(Request::get("/health").body(Body::empty())?)
-        .await?;
-    assert_eq!(response.status(), StatusCode::OK);
-    let live = app
-        .oneshot(Request::get("/health/live").body(Body::empty())?)
-        .await?;
-    assert_eq!(live.status(), StatusCode::OK);
+    assert_eq!(
+        status_of(&app, "/health").await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(status_of(&app, "/health/db").await, StatusCode::OK);
+    assert_eq!(status_of(&app, "/health/live").await, StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn the_edge_health_check_stays_up_while_postgres_is_down() -> anyhow::Result<()> {
+    let pg = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(300))
+        .connect_lazy("postgres://scd@127.0.0.1:1/none")?;
+    let redis = crate::redis::connect_url(&redis_url())?;
+    let app = app(chat_state(pg, redis, true), &redis_url());
+    assert_eq!(status_of(&app, "/health").await, StatusCode::OK);
     Ok(())
 }
 
@@ -192,50 +174,6 @@ fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
-async fn session_for(pool: &PgPool, user: &str) -> anyhow::Result<Uuid> {
-    let connection = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO soundcloud_connections
-            (id, soundcloud_user_id, username, access_token, refresh_token, expires_at, scope)
-         VALUES ($1, $2, $2, 'access', 'refresh', now() + interval '1 hour', '')",
-    )
-    .bind(connection)
-    .bind(user)
-    .execute(pool)
-    .await?;
-    let session = Uuid::now_v7();
-    sqlx::query("INSERT INTO sessions (id, soundcloud_connection_id) VALUES ($1, $2)")
-        .bind(session)
-        .bind(connection)
-        .execute(pool)
-        .await?;
-    Ok(session)
-}
-
-async fn call(
-    app: &axum::Router,
-    session: Uuid,
-    method: &str,
-    uri: &str,
-    body: Option<Value>,
-) -> anyhow::Result<(StatusCode, Value)> {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("x-session-id", session.to_string());
-    if body.is_some() {
-        request = request.header(header::CONTENT_TYPE, "application/json");
-    }
-    let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
-    let response = app.clone().oneshot(request.body(body)?).await?;
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await?;
-    Ok((
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    ))
-}
-
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
 async fn plain_rooms_run_on_rt_with_the_generic_session(pool: PgPool) -> anyhow::Result<()> {
@@ -284,5 +222,34 @@ async fn plain_rooms_run_on_rt_with_the_generic_session(pool: PgPool) -> anyhow:
 
     let (status, _) = call(&app, Uuid::now_v7(), "GET", "/rooms/public", None).await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn rooms_need_no_fresh_soundcloud_token_so_rt_never_asks_core_for_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let redis = crate::redis::connect_url(&redis_url())?;
+    let app = app(chat_state(pool.clone(), redis, true), &redis_url());
+    let host = expired_session_for(&pool, "9301").await?;
+    let guest = expired_session_for(&pool, "9402").await?;
+
+    let (status, room) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;
+    assert_eq!(status, StatusCode::CREATED, "{room}");
+    let code = room["code"].as_str().unwrap_or_default().to_owned();
+    let (status, room) = call(
+        &app,
+        guest,
+        "POST",
+        &format!("/rooms/{code}/members"),
+        Some(json!({"name": "Guest"})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{room}");
+    let (status, _) = call(&app, guest, "GET", "/rooms/public", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(&app, host, "GET", &format!("/rooms/{code}"), None).await?;
+    assert_eq!(status, StatusCode::OK);
     Ok(())
 }

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -10,13 +11,19 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::common::http_metrics::{method_label, route_label};
-use crate::modules::{chat, health, rooms};
+use crate::modules::{chat, rooms};
+use crate::rt::health;
+use crate::rt::rooms::Proxy;
 use crate::rt::state::RtState;
 
-pub fn build(state: RtState) -> Router {
+pub fn build(state: RtState, rooms_proxy: Option<Arc<Proxy>>) -> Router {
+    let rooms = match rooms_proxy {
+        Some(proxy) => crate::rt::rooms::router(proxy),
+        None => rooms::router(),
+    };
     Router::new()
         .merge(health::router())
-        .merge(rooms::router())
+        .merge(rooms)
         .merge(chat::routes::public(state.chat.clone()))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,

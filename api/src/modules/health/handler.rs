@@ -50,7 +50,7 @@ pub async fn live(State(pg): State<PgPool>) -> (StatusCode, Json<HealthResponse>
     answer(stalled(&pg, crate::db::core_pool_quiet_for()).await)
 }
 
-fn answer(verdict: Verdict) -> (StatusCode, Json<HealthResponse>) {
+pub fn answer(verdict: Verdict) -> (StatusCode, Json<HealthResponse>) {
     let (code, status) = match verdict {
         Ok(()) => (StatusCode::OK, "ok"),
         Err(reason) => (StatusCode::SERVICE_UNAVAILABLE, reason),

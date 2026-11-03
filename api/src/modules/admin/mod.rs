@@ -6,6 +6,7 @@ pub mod hydrate;
 pub mod infra;
 pub mod maintenance;
 pub mod playlists;
+pub mod rooms;
 pub mod stats;
 pub mod sync_queue;
 pub mod wanted;
@@ -18,6 +19,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/stats", get(stats::get_stats))
+        .route("/admin/rooms/handoff", post(rooms::handoff))
         .route("/admin/sync-queue", get(sync_queue::get_stats))
         .route("/admin/sync-queue/items", get(sync_queue::list_items))
         .route("/admin/sync-queue/flush", post(sync_queue::flush))

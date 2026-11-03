@@ -368,6 +368,18 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     ))
 }
 
+pub(crate) async fn app_with_admin(
+    pool: &PgPool,
+    redis: &str,
+    token: &str,
+) -> anyhow::Result<axum::Router> {
+    let mut state = state(pool, soundcloud_hits(), redis).await?;
+    let mut config = (*state.config).clone();
+    config.admin.token = token.to_owned().into();
+    state.config = Arc::new(config);
+    Ok(crate::router::build(state))
+}
+
 pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {
     for id in ids {
         sqlx::query(

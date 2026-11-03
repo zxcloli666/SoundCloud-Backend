@@ -6,6 +6,7 @@ mod end;
 mod handoff;
 mod moderation;
 mod preview;
+mod transfer;
 mod view;
 
 use std::sync::{Arc, OnceLock, Weak};
