@@ -109,6 +109,8 @@ SELECT v.cls FROM (VALUES
     ('playlist_track_projection', 'C'),
     ('playlists', 'C'),
     ('recommendation_quality_models', 'P'),
+    ('remote_grants', 'A'),
+    ('remote_link_codes', 'A'),
     ('repl_checksums', 'K'),
     ('repl_purges', 'X'),
     ('repl_repair', 'X'),
@@ -263,6 +265,10 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlist_track_projection', jsonb_build_object('playlist_urn', t.playlist_urn, 'position', t."position") FROM public.playlist_track_projection t ON CONFLICT DO NOTHING;
         WHEN 'playlists' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlists', jsonb_build_object('urn', t.urn) FROM public.playlists t ON CONFLICT DO NOTHING;
+        WHEN 'remote_grants' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_grants', jsonb_build_object('id', t.id) FROM public.remote_grants t ON CONFLICT DO NOTHING;
+        WHEN 'remote_link_codes' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_link_codes', jsonb_build_object('id', t.id) FROM public.remote_link_codes t ON CONFLICT DO NOTHING;
         WHEN 'repl_checksums' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'repl_checksums', jsonb_build_object('node', t.node, 'tbl', t.tbl, 'range', t.range) FROM public.repl_checksums t ON CONFLICT DO NOTHING;
         WHEN 'repl_tombstones' THEN
@@ -385,6 +391,8 @@ BEGIN
         ('playlist_remote_snapshots', 'C'),
         ('playlist_track_projection', 'C'),
         ('playlists', 'C'),
+        ('remote_grants', 'A'),
+        ('remote_link_codes', 'A'),
         ('repl_checksums', 'K'),
         ('repl_tombstones', 'A'),
         ('sc_egress_health', 'A'),

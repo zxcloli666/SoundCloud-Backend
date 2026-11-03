@@ -754,6 +754,30 @@ AS $f$
 SELECT pg_catalog.to_jsonb(t) FROM public.recommendation_quality_models t WHERE t.version = (k ->> 'version')::bigint
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_json_remote_grants(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_remote_link_codes(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_json_repl_checksums(k jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE
@@ -1414,6 +1438,10 @@ BEGIN
             RETURN public.scd_row_json_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_json_recommendation_quality_models(k);
+        WHEN 'remote_grants' THEN
+            RETURN public.scd_row_json_remote_grants(k);
+        WHEN 'remote_link_codes' THEN
+            RETURN public.scd_row_json_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_json_repl_checksums(k);
         WHEN 'repl_tombstones' THEN

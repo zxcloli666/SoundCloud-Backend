@@ -3738,6 +3738,274 @@ ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zzz_suppress;
 
 CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.recommendation_quality_models FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_recommendation_quality_models', 'cmd', 'migration', 'repl');
 
+CREATE OR REPLACE FUNCTION public.scd_merge_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.access_expires_at := OLD.access_expires_at;
+            NEW.access_hash := OLD.access_hash;
+            NEW.client_id := OLD.client_id;
+            NEW.code_expires_at := OLD.code_expires_at;
+            NEW.code_hash := OLD.code_hash;
+            NEW.code_redirect_uri := OLD.code_redirect_uri;
+            NEW.created_at := OLD.created_at;
+            NEW.external_id := OLD.external_id;
+            NEW.last_used_at := OLD.last_used_at;
+            NEW.provider := OLD.provider;
+            NEW.refresh_expires_at := OLD.refresh_expires_at;
+            NEW.refresh_hash := OLD.refresh_hash;
+            NEW.sc_user_id := OLD.sc_user_id;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.remote_grants t WHERE t.id = NEW.id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.remote_grants t SET
+                    access_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_expires_at ELSE o.access_expires_at END,
+                    access_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_hash ELSE o.access_hash END,
+                    client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                    code_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_expires_at ELSE o.code_expires_at END,
+                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
+                    code_redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_redirect_uri ELSE o.code_redirect_uri END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    external_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.external_id ELSE o.external_id END,
+                    last_used_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_used_at ELSE o.last_used_at END,
+                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
+                    refresh_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_expires_at ELSE o.refresh_expires_at END,
+                    refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_hash ELSE o.refresh_hash END,
+                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.id = o.id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, provider, refresh_expires_at, refresh_hash, row_v, sc_user_id)
+        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.row_v, NEW.sc_user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.remote_grants still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_grants();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('remote_grants', jsonb_build_object('id', OLD.id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_grants();
+CREATE OR REPLACE FUNCTION public.scd_erase_remote_grants(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_grants();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.sc_user_id) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_grants();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zzz_suppress;
+
+CREATE OR REPLACE FUNCTION public.scd_merge_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.code_hash := OLD.code_hash;
+            NEW.created_at := OLD.created_at;
+            NEW.expires_at := OLD.expires_at;
+            NEW.provider := OLD.provider;
+            NEW.sc_user_id := OLD.sc_user_id;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.remote_link_codes t WHERE t.id = NEW.id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.remote_link_codes t SET
+                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
+                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
+                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.id = o.id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.remote_link_codes (code_hash, created_at, expires_at, id, provider, row_v, sc_user_id)
+        VALUES (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.id, NEW.provider, NEW.row_v, NEW.sc_user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.remote_link_codes still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_link_codes();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('remote_link_codes', jsonb_build_object('id', OLD.id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_link_codes();
+CREATE OR REPLACE FUNCTION public.scd_erase_remote_link_codes(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_link_codes();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.provider, NEW.sc_user_id) IS DISTINCT FROM (OLD.code_hash, OLD.created_at, OLD.expires_at, OLD.provider, OLD.sc_user_id) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_link_codes();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zzz_suppress;
+
 CREATE OR REPLACE FUNCTION public.scd_max_repl_checksums()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -3800,6 +4068,10 @@ BEGIN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'remote_grants' THEN
+            PERFORM 1 FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'remote_link_codes' THEN
+            PERFORM 1 FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'sc_egress_health' THEN
             PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
         WHEN 'sessions' THEN
@@ -3839,6 +4111,10 @@ BEGIN
             PERFORM public.scd_erase_listening_history(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
+        WHEN 'remote_grants' THEN
+            PERFORM public.scd_erase_remote_grants(k, upto);
+        WHEN 'remote_link_codes' THEN
+            PERFORM public.scd_erase_remote_link_codes(k, upto);
         WHEN 'sc_egress_health' THEN
             PERFORM public.scd_erase_sc_egress_health(k, upto);
         WHEN 'sessions' THEN
@@ -7519,6 +7795,16 @@ BEGIN
             ('playlists', 'zz_owner'),
             ('playlists', 'zzz_suppress'),
             ('recommendation_quality_models', 'zz_guard'),
+            ('remote_grants', 'zz_merge'),
+            ('remote_grants', 'zz_tomb'),
+            ('remote_grants', 'zz_tomb_check'),
+            ('remote_grants', 'zz_ver'),
+            ('remote_grants', 'zzz_suppress'),
+            ('remote_link_codes', 'zz_merge'),
+            ('remote_link_codes', 'zz_tomb'),
+            ('remote_link_codes', 'zz_tomb_check'),
+            ('remote_link_codes', 'zz_ver'),
+            ('remote_link_codes', 'zzz_suppress'),
             ('repl_checksums', 'zz_max'),
             ('repl_checksums', 'zzz_suppress'),
             ('repl_tombstones', 'zz_erase'),

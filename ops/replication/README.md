@@ -102,6 +102,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 35. `0280_scd_install`: the generated SQL again: the column is in the row group and in every publication list of the table.
 36. `0281_chat`: the `chat` schema, node-local on every node (not in ownership.yaml, no trigger, no publication); `chat_bind` on `login_requests`, `link_requests` and `sessions`, `bind_v` on the last two.
 37. `0282_scd_install`: the generated SQL again: `login_requests.chat_bind` rides the row group; `sessions` and `link_requests` keep `chat_bind` in their own `bind` group (`bind_v`), so a touch on another node never puts back an older bind. Run `scd_sync_publications()` on core, main and star only after all three have 0282.
+38. `0283_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes, Salut `sub` bindings).
+39. `0284_scd_install`: the generated SQL again: the two tables get their triggers and publication lists.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
