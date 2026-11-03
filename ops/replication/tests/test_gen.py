@@ -28,6 +28,7 @@ class Generated(unittest.TestCase):
         cls.m = model.load()
         cls.files = gen.render(cls.m)
         cls.install = gen_install.render(cls.m)
+        cls.shipped = gen_install.render(cls.m, gen_install.previous(gen.MIGRATIONS, gen_install.latest(gen.MIGRATIONS)))
 
     def test_deterministic(self):
         self.assertEqual(gen.render(model.load()), self.files)
@@ -339,7 +340,37 @@ class Generated(unittest.TestCase):
             self.assertEqual(gen.check_install(self.install, d), 1)
 
     def test_checked_in_install_is_current(self):
-        self.assertEqual(gen.check_install(self.install, gen.MIGRATIONS), 0)
+        self.assertEqual(gen.check_install(self.shipped, gen.MIGRATIONS), 0)
+
+    def test_install_keeps_a_trigger_the_previous_install_already_made(self):
+        units = gen_install.UNIT.findall(self.install)
+        kept = gen_install.render(self.m, self.install)
+        self.assertNotRegex(kept, r"(?m)^CREATE OR REPLACE TRIGGER ")
+        self.assertNotRegex(kept, r"(?m)^ALTER TABLE \S+ ENABLE REPLICA TRIGGER ")
+        self.assertEqual(len(gen_install.KEPT.findall(kept)), len(units))
+        self.assertEqual(kept.count("', true, $t$"), len(re.findall(r"(?m)^ALTER TABLE \S+ ENABLE REPLICA TRIGGER ", self.install)))
+        self.assertEqual(gen_install.render(self.m, kept), kept)
+        self.assertIn("CREATE OR REPLACE FUNCTION public.scd_keep_trigger(rel text, trig text, replica boolean, ddl text)", kept)
+        head = kept[:kept.index("COMMIT;\n")]
+        self.assertIn("public.scd_keep_trigger(", head)
+        self.assertEqual(kept.replace("SELECT public.scd_keep_trigger(", "").count("public.scd_keep_trigger("), 1)
+
+    def test_install_remakes_a_trigger_whose_text_changed(self):
+        unit = next(gen_install.UNIT.finditer(self.install)).group(0)
+        older = self.install.replace(unit, unit.replace(" EXECUTE FUNCTION ", " EXECUTE FUNCTION public.old_"), 1)
+        mixed = gen_install.render(self.m, older)
+        self.assertIn("\n" + unit, mixed)
+        self.assertEqual(len(gen_install.KEPT.findall(mixed)), len(gen_install.UNIT.findall(self.install)) - 1)
+
+    def test_install_keeps_against_the_install_before_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in (("0001_scd_install.sql", "a"), ("0003_scd_install.sql", "c")):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(text)
+            self.assertEqual(gen_install.previous(d, os.path.join(d, "0003_scd_install.sql")), "a")
+            self.assertEqual(gen_install.previous(d, os.path.join(d, "0004_scd_install.sql")), "c")
+            self.assertEqual(gen_install.previous(d, os.path.join(d, "0001_scd_install.sql")), "")
+            self.assertEqual(gen_install.previous(d, None), "")
 
     def test_bad_yaml_fails_the_generator(self):
         with tempfile.TemporaryDirectory() as d:

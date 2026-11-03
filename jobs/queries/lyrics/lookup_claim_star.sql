@@ -15,28 +15,30 @@ WITH owned_job AS MATERIALIZED (
     ORDER BY tiered.tiered_at, tiered.sc_track_id
     LIMIT $7
 ), candidates AS MATERIALIZED (
-    SELECT state.track_id
+    SELECT queue.track_id
     FROM star
     JOIN lyrics_lookup_state AS state
       ON state.sc_track_id = star.sc_track_id
+    JOIN lyrics_lookup_queue AS queue
+      ON queue.track_id = state.track_id
     JOIN owned_job ON true
-    WHERE state.next_run_at <= now()
-      AND state.claim_job_id IS NULL
+    WHERE queue.next_run_at <= now()
+      AND queue.claim_job_id IS NULL
     ORDER BY star.tiered_at, star.sc_track_id
-    FOR UPDATE OF state SKIP LOCKED
+    FOR UPDATE OF queue SKIP LOCKED
     LIMIT $4
 ), claimed AS (
-    UPDATE lyrics_lookup_state AS state
+    UPDATE lyrics_lookup_queue AS queue
     SET claim_job_id = $1,
         claim_job_generation = $2,
         claim_job_lease_id = $3,
         claim_state_generation = state.generation,
         claim_expires_at = now() + $5::bigint * interval '1 second',
-        attempts = state.attempts + 1,
-        last_attempt_at = now(),
-        updated_at = now()
+        attempts = queue.attempts + 1,
+        last_attempt_at = now()
     FROM candidates
-    WHERE state.track_id = candidates.track_id
+    JOIN lyrics_lookup_state AS state ON state.track_id = candidates.track_id
+    WHERE queue.track_id = candidates.track_id
     RETURNING state.track_id,
               state.sc_track_id,
               state.generation,

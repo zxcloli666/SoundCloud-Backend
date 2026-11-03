@@ -63,9 +63,11 @@ WITH due AS MATERIALIZED (
     LEFT JOIN LATERAL (
         SELECT state.sc_track_id
         FROM lyrics_lookup_state AS state
+        JOIN lyrics_lookup_queue AS queue
+          ON queue.track_id = state.track_id
         WHERE state.sc_track_id = star.sc_track_id
-          AND state.next_run_at <= now()
-          AND state.claim_job_id IS NULL
+          AND queue.next_run_at <= now()
+          AND queue.claim_job_id IS NULL
         LIMIT 1
     ) AS lookup ON true
     LEFT JOIN LATERAL (

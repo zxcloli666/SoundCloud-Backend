@@ -8,25 +8,27 @@ WITH owned_job AS MATERIALIZED (
       AND lease_id = $3
       AND lease_expires_at > now()
 ), candidate AS MATERIALIZED (
-    SELECT state.track_id
+    SELECT queue.track_id
     FROM lyrics_lookup_state AS state
+    JOIN lyrics_lookup_queue AS queue
+      ON queue.track_id = state.track_id
     JOIN owned_job ON true
     WHERE state.sc_track_id = $4
-      AND state.next_run_at <= now()
-      AND state.claim_job_id IS NULL
-    FOR UPDATE OF state SKIP LOCKED
+      AND queue.next_run_at <= now()
+      AND queue.claim_job_id IS NULL
+    FOR UPDATE OF queue SKIP LOCKED
 ), claimed AS (
-    UPDATE lyrics_lookup_state AS state
+    UPDATE lyrics_lookup_queue AS queue
     SET claim_job_id = $1,
         claim_job_generation = $2,
         claim_job_lease_id = $3,
         claim_state_generation = state.generation,
         claim_expires_at = now() + $5::bigint * interval '1 second',
-        attempts = state.attempts + 1,
-        last_attempt_at = now(),
-        updated_at = now()
+        attempts = queue.attempts + 1,
+        last_attempt_at = now()
     FROM candidate
-    WHERE state.track_id = candidate.track_id
+    JOIN lyrics_lookup_state AS state ON state.track_id = candidate.track_id
+    WHERE queue.track_id = candidate.track_id
     RETURNING state.track_id,
               state.sc_track_id,
               state.generation,

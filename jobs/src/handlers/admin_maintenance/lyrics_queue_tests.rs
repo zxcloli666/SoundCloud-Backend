@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::super::LYRICS_LOOKUP_QUEUE;
 use super::super::tests::handler;
-use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob};
+use crate::queue::{ClaimOrder, Completion, JobRepository, LeasedJob, NewJob};
 
 const DRIFT: &str = "SELECT (
         SELECT count(*)
@@ -22,27 +22,8 @@ const DRIFT: &str = "SELECT (
                CASE
                    WHEN state.wake_message_id IS NOT NULL AND state.wake_durable_at IS NULL
                        THEN state.updated_at
-               END,
-               state.attempts,
-               state.last_attempt_at,
-               state.claim_job_id,
-               state.claim_job_generation,
-               state.claim_job_lease_id,
-               state.claim_state_generation,
-               state.claim_expires_at
-           ) IS DISTINCT FROM (
-               queue.priority,
-               queue.next_run_at,
-               queue.created_at,
-               queue.wake_at,
-               queue.attempts,
-               queue.last_attempt_at,
-               queue.claim_job_id,
-               queue.claim_job_generation,
-               queue.claim_job_lease_id,
-               queue.claim_state_generation,
-               queue.claim_expires_at
-           )
+               END
+           ) IS DISTINCT FROM (queue.priority, queue.next_run_at, queue.created_at, queue.wake_at)
     ) + (
         SELECT count(*)
         FROM lyrics_lookup_queue AS queue
@@ -210,6 +191,14 @@ async fn every_state_delete_takes_the_queue_row_with_it(pool: PgPool) -> anyhow:
     sqlx::query("UPDATE tracks SET index_priority = 4 WHERE sc_track_id = 'q2'")
         .execute(&pool)
         .await?;
+    assert_eq!(queued(&pool, q2).await?.priority, 4);
+    assert_eq!(drift(&pool).await?, 0);
+    sqlx::raw_sql(
+        "UPDATE lyrics_cache SET synced_lrc = '[00:01.00] words' WHERE sc_track_id = 'q2';
+         UPDATE tracks SET index_priority = 3 WHERE sc_track_id = 'q2';",
+    )
+    .execute(&pool)
+    .await?;
     assert!(queued_row(&pool, q2).await?.is_none());
     assert_eq!(drift(&pool).await?, 0);
 
@@ -231,8 +220,6 @@ async fn the_backfill_fills_an_empty_queue_and_the_check_repairs_wrong_rows(
     seed(&pool, 1, 1500).await?;
     sqlx::raw_sql(
         "UPDATE lyrics_lookup_state SET wake_durable_at = now() WHERE sc_track_id LIKE 'q1%';
-         UPDATE lyrics_lookup_state SET attempts = 3, last_attempt_at = now() - interval '1 hour'
-         WHERE sc_track_id LIKE 'q2%';
          INSERT INTO lyrics_lookup_queue (track_id, priority, next_run_at, created_at, attempts)
          SELECT track_id, priority, next_run_at, created_at, 99
          FROM lyrics_lookup_state
@@ -309,6 +296,85 @@ async fn the_backfill_races_live_writers_and_ends_with_no_drift(
     Ok(())
 }
 
+#[sqlx::test(migrations = "../api/migrations")]
+async fn each_continuation_waits_its_delay_and_the_last_one_ends_the_job_once(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool, 1, 20).await?;
+    let run_id = Uuid::now_v7();
+    let queue = JobRepository::new(pool.clone(), "lyrics-queue-finish-test".to_owned());
+    queue
+        .enqueue_if_absent(&NewJob {
+            id: Uuid::now_v7(),
+            kind: JobKind::AdminLyricsLookupQueue,
+            dedup_key: Some(LYRICS_LOOKUP_QUEUE.to_owned()),
+            payload: serde_json::json!({
+                "version": "1",
+                "payload": { "run_id": run_id }
+            }),
+            priority: 20,
+            max_attempts: 8,
+            available_at: chrono::Utc::now(),
+        })
+        .await?;
+    let handler = handler(&pool);
+    let kinds = [JobKind::AdminLyricsLookupQueue];
+    let claim = || queue.claim(&kinds, ClaimOrder::Priority, 1, Duration::from_secs(600));
+
+    let mut completions = Vec::new();
+    for _ in 0..10 {
+        let job = claim()
+            .await?
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("the continuation was not claimable"))?;
+        handler
+            .backfill_lyrics_lookup_queue(&job, AdminMaintenancePayload { run_id })
+            .await?;
+        let completion = queue.complete(&job).await?;
+        completions.push(completion);
+        if completion == Completion::Completed {
+            break;
+        }
+        assert!(
+            claim().await?.is_empty(),
+            "a continuation ran before its delay"
+        );
+        let waiting: bool =
+            sqlx::query_scalar("SELECT available_at > now() FROM background_jobs WHERE id = $1")
+                .bind(job.id)
+                .fetch_one(&pool)
+                .await?;
+        assert!(waiting);
+        sqlx::query("UPDATE background_jobs SET available_at = now() WHERE id = $1")
+            .bind(job.id)
+            .execute(&pool)
+            .await?;
+    }
+
+    assert_eq!(
+        completions,
+        [
+            Completion::Superseded,
+            Completion::Superseded,
+            Completion::Superseded,
+            Completion::Completed
+        ]
+    );
+    assert!(claim().await?.is_empty());
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE dedup_key = $1")
+        .bind(LYRICS_LOOKUP_QUEUE)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0);
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM admin_maintenance_runs WHERE kind = $1")
+            .bind(LYRICS_LOOKUP_QUEUE)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(status, "completed");
+    Ok(())
+}
+
 async fn claims(pool: PgPool, job: LeasedJob, stop: Arc<AtomicBool>) -> anyhow::Result<u64> {
     let mut rounds = 0;
     while !stop.load(Ordering::Relaxed) {
@@ -371,7 +437,7 @@ async fn rollbacks(pool: PgPool, stop: Arc<AtomicBool>) -> anyhow::Result<u64> {
         let mut transaction = pool.begin().await?;
         sqlx::query(
             "UPDATE lyrics_lookup_state
-             SET attempts = attempts + 1, updated_at = now()
+             SET miss_streak = miss_streak + 1, updated_at = now()
              WHERE sc_track_id = ANY($1)",
         )
         .bind(&ids)

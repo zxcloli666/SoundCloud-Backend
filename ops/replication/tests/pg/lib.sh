@@ -1,4 +1,5 @@
 psql_cmd="${PSQL:-psql}"
+pgbench_cmd="${PGBENCH:-pgbench}"
 socket="${PG_SOCKET:-/var/run/postgresql}"
 nodes="core main star"
 
@@ -15,7 +16,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lyrics_race scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
