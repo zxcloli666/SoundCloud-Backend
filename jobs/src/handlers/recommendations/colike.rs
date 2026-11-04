@@ -82,8 +82,13 @@ async fn build_fresh(connection: &mut PgConnection) -> Result<(u64, DateTime<Utc
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    sqlx::raw_sql(include_str!(
+    sqlx::query(include_str!(
         "../../../queries/recommendations/colike/index_fresh.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(include_str!(
+        "../../../queries/recommendations/colike/analyze_fresh.sql"
     ))
     .execute(&mut *transaction)
     .await?;
