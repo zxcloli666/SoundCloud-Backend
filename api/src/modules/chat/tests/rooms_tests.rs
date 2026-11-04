@@ -298,7 +298,7 @@ async fn system_types(chat: &ChatState, conversation: Uuid) -> anyhow::Result<Ve
         .collect())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_is_moderated_through_the_sealed_routes(pg: PgPool) -> anyhow::Result<()> {
     let (chat, router) = bench(pg)?;
@@ -479,7 +479,7 @@ async fn room_keys(
     .await
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn room_keys_follow_the_seats_of_the_room(pg: PgPool) -> anyhow::Result<()> {
     let (chat, _) = bench(pg.clone())?;

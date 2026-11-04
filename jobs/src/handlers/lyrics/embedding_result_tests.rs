@@ -157,7 +157,7 @@ fn result(status: WorkerStatus, reason: Option<WorkerReason>) -> LyricsEmbedding
     }
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_vector_is_stored_under_its_request_and_the_lyrics_become_embedded(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -183,7 +183,7 @@ async fn a_vector_is_stored_under_its_request_and_the_lyrics_become_embedded(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_result_for_another_request_leaves_the_open_one_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -199,7 +199,7 @@ async fn a_result_for_another_request_leaves_the_open_one_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn replaced_lyrics_quarantine_the_result_and_stay_free_for_a_new_request(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -229,7 +229,7 @@ async fn replaced_lyrics_quarantine_the_result_and_stay_free_for_a_new_request(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn text_that_no_longer_matches_the_request_hash_is_released_for_reembedding(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -248,7 +248,7 @@ async fn text_that_no_longer_matches_the_request_hash_is_released_for_reembeddin
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn empty_text_is_skipped_with_the_worker_language(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 
@@ -271,7 +271,7 @@ async fn empty_text_is_skipped_with_the_worker_language(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_engine_restart_reopens_the_request_until_the_budget_is_spent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -317,7 +317,7 @@ async fn an_engine_restart_reopens_the_request_until_the_budget_is_spent(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_terminal_failure_is_recorded_without_a_vector(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 
@@ -368,7 +368,7 @@ impl Fixture {
     }
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lost_worker_reopens_the_request_so_the_lyrics_are_embedded_again(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -392,7 +392,7 @@ async fn a_lost_worker_reopens_the_request_so_the_lyrics_are_embedded_again(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lost_worker_fails_the_request_once_the_reopen_budget_is_spent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -415,7 +415,7 @@ async fn a_lost_worker_fails_the_request_once_the_reopen_budget_is_spent(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lost_worker_leaves_another_request_and_an_arrived_result_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -438,7 +438,7 @@ async fn a_lost_worker_leaves_another_request_and_an_arrived_result_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lost_worker_closes_a_request_whose_lyrics_were_replaced_and_frees_the_new_lyrics(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -471,7 +471,7 @@ async fn a_lost_worker_closes_a_request_whose_lyrics_were_replaced_and_frees_the
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lost_task_that_is_not_an_embedding_request_is_refused(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -514,7 +514,7 @@ impl LyricsVectorStore for UnavailableStore {
     }
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_vector_waits_while_the_vector_store_is_unavailable(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 
@@ -589,7 +589,7 @@ async fn quarantine(pool: &PgPool, sequence: u64, lease_id: Uuid) -> anyhow::Res
     Ok((outcome.owned, outcome.accepted))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn concurrent_results_of_one_rank_have_one_claim_owner(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 
@@ -602,7 +602,7 @@ async fn concurrent_results_of_one_rank_have_one_claim_owner(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_vector_takes_the_claim_from_a_weaker_result_and_not_the_reverse(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -618,7 +618,7 @@ async fn a_vector_takes_the_claim_from_a_weaker_result_and_not_the_reverse(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_late_vector_replaces_an_earlier_failure_of_the_same_request(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -650,7 +650,7 @@ async fn a_late_vector_replaces_an_earlier_failure_of_the_same_request(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_earlier_failure_does_not_replace_a_vector(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 
@@ -667,7 +667,7 @@ async fn an_earlier_failure_does_not_replace_a_vector(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_result_published_before_the_request_was_recorded_is_still_applied(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -687,7 +687,7 @@ async fn a_result_published_before_the_request_was_recorded_is_still_applied(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn active_claim_is_busy_and_expired_claim_is_reclaimed(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
     let first_lease = Uuid::now_v7();
@@ -714,7 +714,7 @@ async fn active_claim_is_busy_and_expired_claim_is_reclaimed(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn same_delivery_cannot_change_result_kind(pool: PgPool) -> anyhow::Result<()> {
     let fixture = Fixture::new(pool).await?;
 

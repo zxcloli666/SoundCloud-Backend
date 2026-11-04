@@ -39,7 +39,7 @@ pub(super) async fn send(
     ))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_bare_stream_id_is_forwarded_as_its_canonical_urn(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["42"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -65,7 +65,7 @@ async fn a_bare_stream_id_is_forwarded_as_its_canonical_urn(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn history_is_written_canonical_and_read_back_with_a_urn(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO listening_history (soundcloud_user_id, sc_track_id, title, artist_name, duration, played_at)
@@ -124,7 +124,7 @@ async fn history_is_written_canonical_and_read_back_with_a_urn(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn history_stats_count_legacy_and_canonical_plays(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO listening_history (soundcloud_user_id, sc_track_id, title, artist_name, duration, played_at)
@@ -155,7 +155,7 @@ async fn history_stats_count_legacy_and_canonical_plays(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn dislike_ids_also_come_as_urns(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, NO_REDIS).await?;
     let session = session(&pool).await?;
@@ -181,7 +181,7 @@ async fn dislike_ids_also_come_as_urns(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn likes_are_keyed_by_one_canonical_form(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, NO_REDIS).await?;
     let session = session(&pool).await?;
@@ -221,7 +221,7 @@ async fn likes_are_keyed_by_one_canonical_form(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn dislikes_are_read_back_from_the_catalog_not_from_the_posted_body(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -284,7 +284,7 @@ async fn dislikes_are_read_back_from_the_catalog_not_from_the_posted_body(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_like_body_never_becomes_catalog_data(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5"]).await?;
     sqlx::query("UPDATE tracks SET index_priority = 5, storage_priority = 5")
@@ -324,7 +324,7 @@ async fn a_like_body_never_becomes_catalog_data(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_user_path_of_another_kind_is_refused_before_any_lookup(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -342,7 +342,7 @@ async fn a_user_path_of_another_kind_is_refused_before_any_lookup(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn history_stats_are_cached_until_the_next_play(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session(&pool).await?;

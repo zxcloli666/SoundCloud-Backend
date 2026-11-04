@@ -65,7 +65,7 @@ struct Totals {
     skipped: i64,
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn claims_settles_and_releases_keep_the_queue_equal_to_the_state(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -107,7 +107,7 @@ async fn claims_settles_and_releases_keep_the_queue_equal_to_the_state(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn input_wake_and_priority_changes_keep_the_queue_equal_and_equal_rows_are_not_written(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -172,7 +172,7 @@ async fn input_wake_and_priority_changes_keep_the_queue_equal_and_equal_rows_are
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_state_delete_takes_the_queue_row_with_it(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, 1, 3).await?;
     let job = leased(&pool, JobKind::LyricsLookup).await?;
@@ -210,7 +210,7 @@ async fn every_state_delete_takes_the_queue_row_with_it(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_backfill_fills_an_empty_queue_and_the_check_repairs_wrong_rows(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -247,7 +247,7 @@ async fn the_backfill_fills_an_empty_queue_and_the_check_repairs_wrong_rows(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_backfill_races_live_writers_and_ends_with_no_drift(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -296,7 +296,7 @@ async fn the_backfill_races_live_writers_and_ends_with_no_drift(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn each_continuation_waits_its_delay_and_the_last_one_ends_the_job_once(
     pool: PgPool,
 ) -> anyhow::Result<()> {

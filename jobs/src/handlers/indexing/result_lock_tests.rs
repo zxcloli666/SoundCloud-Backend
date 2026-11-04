@@ -143,7 +143,7 @@ async fn rows(pool: &PgPool) -> anyhow::Result<Vec<TrackRow>> {
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_indexing_result_and_a_sorted_s3_batch_never_deadlock(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -167,7 +167,7 @@ async fn an_indexing_result_and_a_sorted_s3_batch_never_deadlock(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_neighbour_regrouped_before_its_lock_links_to_the_new_group(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -193,7 +193,7 @@ async fn a_neighbour_regrouped_before_its_lock_links_to_the_new_group(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_neighbour_that_stops_matching_before_its_lock_is_not_linked(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -256,7 +256,7 @@ async fn tracks_written_by_commit(pool: &PgPool) -> anyhow::Result<Vec<String>> 
     )
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_neighbour_the_link_changes_is_written_first_when_it_sorts_first(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -276,7 +276,7 @@ async fn a_neighbour_the_link_changes_is_written_first_when_it_sorts_first(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_neighbour_already_in_the_group_is_never_written(pool: PgPool) -> anyhow::Result<()> {
     let group = Uuid::now_v7();
     seed(&pool, Some(group)).await?;

@@ -166,7 +166,7 @@ async fn exported(pool: &PgPool) -> anyhow::Result<Vec<(String, i64, EventKind, 
         .collect())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_export_follows_the_signal_rules_of_the_design(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
 
@@ -221,7 +221,7 @@ async fn the_export_follows_the_signal_rules_of_the_design(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_imported_like_with_a_soundcloud_like_time_is_a_timed_like(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -294,7 +294,7 @@ async fn an_imported_like_with_a_soundcloud_like_time_is_a_timed_like(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_superliked_like_weighs_three_likes_while_the_like_lives(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -365,7 +365,7 @@ fn axis(index: usize) -> Vec<f32> {
     vector
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn only_listeners_with_a_positive_get_a_vector(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let items: HashMap<u64, Vec<f32>> = (101..=111)
@@ -405,7 +405,7 @@ async fn record(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn activating_a_version_retires_the_previous_one_and_resets_the_refresh_mark(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -464,7 +464,7 @@ async fn mark(pool: &PgPool, version: &str) -> anyhow::Result<Option<i64>> {
     Ok(mark.map(|mark| mark.and_utc().timestamp_micros()))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_older_model_finishing_late_never_takes_over(pool: PgPool) -> anyhow::Result<()> {
     let older = "taste-202609201200-00000001";
     let newer = "taste-202609241200-00000002";
@@ -491,7 +491,7 @@ async fn an_older_model_finishing_late_never_takes_over(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_late_refresh_of_the_retired_model_leaves_the_new_mark_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -524,7 +524,7 @@ async fn a_late_refresh_of_the_retired_model_leaves_the_new_mark_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_rolled_back_model_catches_up_from_where_it_stopped(pool: PgPool) -> anyhow::Result<()> {
     let restored = "taste-202609201200-00000001";
     let dropped = "taste-202609241200-00000002";
@@ -638,7 +638,7 @@ fn a_result_that_cannot_be_applied_leaves_its_unrecorded_model_to_be_removed() {
     assert_eq!(ResultOutcome::Invalid.as_str(), "invalid");
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn stored_vectors_are_replaced_per_user_and_leave_with_their_version(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -677,7 +677,7 @@ async fn stored_vectors_are_replaced_per_user_and_leave_with_their_version(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_second_delivery_of_the_same_input_changes_nothing(pool: PgPool) -> anyhow::Result<()> {
     record(&pool, VERSION, "taste-input-a", 0).await?;
     sqlx::query_file!("queries/taste/mark_applied.sql", VERSION)
@@ -708,7 +708,7 @@ async fn a_second_delivery_of_the_same_input_changes_nothing(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn only_versions_beyond_the_kept_ones_are_stale(pool: PgPool) -> anyhow::Result<()> {
     for (day, version) in [
         (4, "taste-202609201200-00000001"),

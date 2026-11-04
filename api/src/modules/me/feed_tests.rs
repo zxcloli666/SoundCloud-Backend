@@ -45,7 +45,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn local_feed_filters_before_pagination_and_prefers_current_follow_intent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -69,7 +69,7 @@ async fn local_feed_filters_before_pagination_and_prefers_current_follow_intent(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn feed_and_follow_changes_work_with_external_services_unavailable(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -106,7 +106,7 @@ async fn feed_and_follow_changes_work_with_external_services_unavailable(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn follow_and_upload_refresh_enqueue_commit_together(pool: PgPool) -> anyhow::Result<()> {
     let me = service(&pool).await?;
     sqlx::raw_sql(

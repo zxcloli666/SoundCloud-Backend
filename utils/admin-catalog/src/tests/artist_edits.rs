@@ -14,7 +14,7 @@ fn create(name: &str) -> AdminCommand {
     })
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_created_artist_is_manual_and_a_namesake_is_refused(pool: PgPool) {
     let created = send(&pool, create("  Kavinsky  ")).await;
     assert_eq!(created.status, 200);
@@ -29,7 +29,7 @@ async fn a_created_artist_is_manual_and_a_namesake_is_refused(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_update_changes_only_the_given_fields(pool: PgPool) {
     let id = artist(&pool, "Old Name").await;
     let reply = send(
@@ -54,7 +54,7 @@ async fn an_update_changes_only_the_given_fields(pool: PgPool) {
     assert_eq!(reply.body["confidence"], json!(0.5));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn updating_a_missing_artist_is_not_found(pool: PgPool) {
     let reply = send(
         &pool,
@@ -74,7 +74,7 @@ async fn updating_a_missing_artist_is_not_found(pool: PgPool) {
     assert_eq!(reply.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_merge_moves_credits_and_primary_artist_to_the_target(pool: PgPool) {
     let src = artist(&pool, "Source").await;
     let dst = artist(&pool, "Target").await;
@@ -112,7 +112,7 @@ async fn a_merge_moves_credits_and_primary_artist_to_the_target(pool: PgPool) {
     assert_eq!(merged_into, Some(dst));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn merging_an_artist_into_itself_is_refused(pool: PgPool) {
     let id = artist(&pool, "Same").await;
     let reply = send(
@@ -126,7 +126,7 @@ async fn merging_an_artist_into_itself_is_refused(pool: PgPool) {
     assert_eq!(reply.status, 400);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn retrying_a_crawl_resets_the_failure_state(pool: PgPool) {
     let id = artist(&pool, "Crawled").await;
     sqlx::query("UPDATE artists SET crawl_dead = true, crawl_fail_count = 7 WHERE id = $1")

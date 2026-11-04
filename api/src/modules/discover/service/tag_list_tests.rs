@@ -23,7 +23,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_tag_list_reads_the_aggregate_instead_of_the_artist_table(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -46,7 +46,7 @@ async fn the_tag_list_reads_the_aggregate_instead_of_the_artist_table(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_tag_list_returns_the_widest_tags_first(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO discover_tag_counts (tag, artist_count)

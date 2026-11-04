@@ -149,6 +149,8 @@ cargo check --all-targets        # macros are validated against this schema
 ```
 
 CI and `docker build` do the same automatically (spin up an ephemeral Postgres → apply migrations → build online).
+
+**Tests that need the schema** take `#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]` (jobs: `"crate::db::migrations::TEST_CORE"`). Never `migrations = "./migrations"`: that form inlines all 13 MB of migrations into every test and made the test build 17 min of macro expansion; CI rejects it. In CI each migrated test database is a clone of one template (`scripts/ci-sqlx-template.patch`), so a test costs ~0.2 s of setup, not a full migration run.
 Nothing to commit, nothing to keep in sync.
 
 **Keep on runtime `sqlx::query(...)`** — these CANNOT be macros; the reason is always one of:

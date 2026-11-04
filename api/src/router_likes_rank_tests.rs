@@ -32,7 +32,7 @@ async fn set_like_date(pool: &PgPool, id: &str, days_ago: i32) -> anyhow::Result
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_like_with_a_new_date_comes_back_unranked_at_the_top(pool: PgPool) -> anyhow::Result<()> {
     like_oldest_first(&pool, &["1", "2", "3", "4"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -66,7 +66,7 @@ async fn a_like_with_a_new_date_comes_back_unranked_at_the_top(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn likes_added_between_moves_keep_their_place(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["1", "2", "3", "4", "5"]).await?;
     for (id, days) in [("1", 10), ("2", 9), ("3", 8)] {
@@ -101,7 +101,7 @@ async fn likes_added_between_moves_keep_their_place(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn liking_a_liked_track_again_keeps_its_place(pool: PgPool) -> anyhow::Result<()> {
     like_oldest_first(&pool, &["1", "2", "3"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -118,7 +118,7 @@ async fn liking_a_liked_track_again_keeps_its_place(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn likes_under_the_legacy_user_urn_are_ordered_and_paged(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["1", "2", "3", "4", "5"]).await?;
     let legacy = "soundcloud:users:17";
