@@ -5,7 +5,7 @@ rc_blocks() { only "$1" "SELECT n FROM public.scd_counters WHERE counter = 'purg
 rc_node_batch() { only "$1" "SELECT deleted || '|' || coalesce(held, '') FROM public.scd_node_retention_batch('repl_purges'${2:+, keep => interval '$2'})"; }
 rc_old() { only "$1" "SELECT count(*) FROM public.repl_purges WHERE at < now() - interval '7 days'"; }
 rc_errors() { val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats"; }
-rc_acts() { awk -v u="\"$2\"" 'index($0, u) {printf "%s %s;", $(NF-1), $NF}' "$1"; }
+rc_acts() { awk -v u="\"$2\"" 'index($0, u) && !seen[$(NF-1) " " $NF]++ {printf "%s %s;", $(NF-1), $NF}' "$1"; }
 rc_mirror() {
   sql -d scd_b1_core -c "SET scd.writer = 'mirror'" -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id, progress, synced_at, created_at, wanted_state, wanted_v, synced_for_v)
     SELECT '$1', 't1', false, now(), now(), true, f.v, f.v FROM (SELECT public.scd_purge_floor('user_likes_tracks', '$(rc_pk "$1")') AS v) AS f" > /dev/null
