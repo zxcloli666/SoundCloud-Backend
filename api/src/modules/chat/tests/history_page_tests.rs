@@ -106,7 +106,7 @@ mod stored {
         page.messages.iter().map(|message| message.seq).collect()
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn pages_walk_both_ways_in_seq_order(pool: PgPool) -> ChatResult<()> {
         let id = dm(&pool, "101", "202", MemberState::Active).await;
         for _ in 0..7 {
@@ -132,7 +132,7 @@ mod stored {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn history_never_serves_an_expired_row(pool: PgPool) -> ChatResult<()> {
         let id = dm(&pool, "101", "202", MemberState::Active).await;
         for _ in 0..3 {
@@ -152,7 +152,7 @@ mod stored {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_cleared_chat_starts_after_the_clear(pool: PgPool) -> ChatResult<()> {
         let id = dm(&pool, "101", "202", MemberState::Active).await;
         post(&pool, id, "101").await;
@@ -178,7 +178,7 @@ mod stored {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn hidden_group_history_starts_at_the_join(pool: PgPool) -> ChatResult<()> {
         let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
         post(&pool, id, "101").await;
@@ -206,7 +206,7 @@ mod stored {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_stored_page_stays_under_the_pro_cap(pool: PgPool) -> ChatResult<()> {
         let id = dm(&pool, "101", "202", MemberState::Active).await;
         for _ in 0..120 {

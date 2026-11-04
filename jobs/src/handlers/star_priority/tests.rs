@@ -52,7 +52,7 @@ fn expected(pairs: &[(&str, i16)]) -> BTreeMap<String, i16> {
         .collect()
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_refresh_follows_the_current_star_users_only(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
 
@@ -67,7 +67,7 @@ async fn the_refresh_follows_the_current_star_users_only(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_refresh_marks_which_pipelines_still_wait_for_each_star_track(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -146,7 +146,7 @@ async fn seed_uploaded_star_tracks(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_refresh_marks_audio_and_alignment_by_the_wire_state_of_the_current_upload(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -177,7 +177,7 @@ async fn the_refresh_marks_audio_and_alignment_by_the_wire_state_of_the_current_
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_lapsed_star_user_drops_out_at_the_next_refresh(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
     let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
@@ -192,7 +192,7 @@ async fn a_lapsed_star_user_drops_out_at_the_next_refresh(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_star_like_is_marked_at_once_and_other_likes_are_not(pool: PgPool) -> anyhow::Result<()> {
     seed_star_library(&pool).await?;
     let mut connection = pool.acquire().await?;
@@ -207,7 +207,7 @@ async fn a_star_like_is_marked_at_once_and_other_likes_are_not(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_track_tier_puts_star_likes_before_likes_before_star_listening(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -235,7 +235,7 @@ async fn a_track_tier_puts_star_likes_before_likes_before_star_listening(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_refresh_marks_star_tracks_claimable_for_artist_links_and_a_better_copy(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -311,7 +311,7 @@ async fn marks(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     )
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn writes_after_a_sweep_reach_the_flags_through_their_marks(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -359,7 +359,7 @@ async fn writes_after_a_sweep_reach_the_flags_through_their_marks(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_sweep_fixes_and_counts_a_change_no_mark_reached(pool: PgPool) -> anyhow::Result<()> {
     seed_uploaded_star_tracks(&pool).await?;
     let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
@@ -387,7 +387,7 @@ async fn the_sweep_fixes_and_counts_a_change_no_mark_reached(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_flag_that_turns_with_time_is_rechecked_without_a_mark(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -432,7 +432,7 @@ async fn a_flag_that_turns_with_time_is_rechecked_without_a_mark(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn writes_mark_star_tracks_only_while_a_refresh_watches(pool: PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
@@ -473,7 +473,7 @@ async fn apply_index_state(pool: &PgPool, settings: &str, state: &str) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_legacy(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -529,7 +529,7 @@ async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_leg
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_queue_change_of_the_due_time_or_the_claim_marks_the_star_track(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -612,7 +612,7 @@ async fn full_pass(pool: &PgPool) -> anyhow::Result<i64> {
         .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
     pool: PgPool,
 ) -> anyhow::Result<()> {

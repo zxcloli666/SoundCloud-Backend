@@ -17,17 +17,15 @@ static VARIANT: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn combined(wanted: &Wanted, hits: &[Value]) -> Option<String> {
-    let fits: Vec<&Value> = hits.iter().filter(|hit| fits(wanted, hit)).collect();
-    fits.iter()
-        .find(|hit| official(hit, &wanted.artist))
-        .or(fits.first())
-        .and_then(|hit| urn(hit))
+    by_artist(wanted, hits).or_else(|| hits.iter().find(|hit| fits(wanted, hit)).and_then(urn))
 }
 
 pub fn by_artist(wanted: &Wanted, hits: &[Value]) -> Option<String> {
-    hits.iter()
-        .find(|hit| fits(wanted, hit) && official(hit, &wanted.artist))
-        .and_then(urn)
+    let fits: Vec<&Value> = hits.iter().filter(|hit| fits(wanted, hit)).collect();
+    fits.iter()
+        .find(|hit| uploaded_by(hit, &wanted.artist))
+        .or_else(|| fits.iter().find(|hit| official(hit, &wanted.artist)))
+        .and_then(|hit| urn(hit))
 }
 
 fn urn(hit: &Value) -> Option<String> {

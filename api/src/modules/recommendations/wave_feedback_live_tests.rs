@@ -172,7 +172,7 @@ fn least_heard_on(first: &[u64], unchanged: &[u64]) -> anyhow::Result<u64> {
         .context("the first page holds only tracks the listener already liked")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn skipping_a_sound_takes_it_off_the_next_river_page(pg: PgPool) -> anyhow::Result<()> {
     let service = listener_with_history(&pg, SMALL_CROWD).await?;
@@ -206,7 +206,7 @@ async fn skipping_a_sound_takes_it_off_the_next_river_page(pg: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_full_listen_pulls_the_next_river_page_toward_its_sound(
     pg: PgPool,
@@ -229,7 +229,7 @@ async fn a_full_listen_pulls_the_next_river_page_toward_its_sound(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_full_listen_pulls_an_artist_wave_toward_its_sound(pg: PgPool) -> anyhow::Result<()> {
     let service = listener_with_history(&pg, SMALL_CROWD).await?;
@@ -255,7 +255,7 @@ async fn a_full_listen_pulls_an_artist_wave_toward_its_sound(pg: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn feedback_keeps_a_track_wave_going_where_it_was(pg: PgPool) -> anyhow::Result<()> {
     let service = listener_with_history(&pg, SMALL_CROWD).await?;
@@ -274,7 +274,7 @@ async fn feedback_keeps_a_track_wave_going_where_it_was(pg: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_run_of_skips_sinks_their_artists_on_the_next_track_wave_page(
     pg: PgPool,
@@ -320,7 +320,7 @@ async fn a_run_of_skips_sinks_their_artists_on_the_next_track_wave_page(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_dislike_takes_its_artist_off_the_next_river_page(pg: PgPool) -> anyhow::Result<()> {
     let service = listener_with_history(&pg, SMALL_CROWD).await?;
@@ -377,7 +377,7 @@ async fn home_shelf(service: &RecommendationsService) -> anyhow::Result<(Vec<u64
     Ok((ids, cursor))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn the_river_goes_on_from_the_home_wave_shelf_and_learns_from_it(
     pg: PgPool,
@@ -443,7 +443,7 @@ async fn track_wave_after_dislikes(
     Ok((pages, disliked, next))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_dislike_of_the_seed_artist_keeps_the_track_wave_full(pg: PgPool) -> anyhow::Result<()> {
     let seed_artist = artist_of(FIRST + 3, SMALL_CROWD);
@@ -472,7 +472,7 @@ async fn a_dislike_of_the_seed_artist_keeps_the_track_wave_full(pg: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn disliking_half_a_page_takes_its_artists_off_a_full_track_wave_page(
     pg: PgPool,
@@ -511,7 +511,7 @@ async fn disliking_half_a_page_takes_its_artists_off_a_full_track_wave_page(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn a_track_wave_opened_again_after_a_run_of_skips_still_fills(
     pg: PgPool,
@@ -533,7 +533,7 @@ async fn a_track_wave_opened_again_after_a_run_of_skips_still_fills(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant and Redis"]
 async fn skipping_a_sound_sinks_it_on_the_next_artist_wave_page(pg: PgPool) -> anyhow::Result<()> {
     let service = listener_with_history(&pg, SMALL_CROWD).await?;

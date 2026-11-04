@@ -2,7 +2,7 @@ use super::*;
 use axum::response::IntoResponse;
 use serde_json::json;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn web_profiles_cold_miss_deduplicates_and_preserves_job_cooldown(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -47,7 +47,7 @@ async fn web_profiles_cold_miss_deduplicates_and_preserves_job_cooldown(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn web_profiles_serve_stale_links_and_distinguish_confirmed_empty_snapshots(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -64,7 +64,7 @@ async fn web_profiles_serve_stale_links_and_distinguish_confirmed_empty_snapshot
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn web_profiles_reject_invalid_ids_before_reading_or_enqueuing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -90,7 +90,7 @@ async fn web_profiles_reject_invalid_ids_before_reading_or_enqueuing(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_star_reader_lifts_the_refresh_it_triggers(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO subscriptions (user_urn, exp_date) VALUES

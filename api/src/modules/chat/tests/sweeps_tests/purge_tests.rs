@@ -58,7 +58,7 @@ async fn everything(pg: &PgPool, id: Uuid) -> anyhow::Result<[i64; 5]> {
     ])
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_deleted_conversation_goes_with_all_it_owns(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());
@@ -98,7 +98,7 @@ async fn a_deleted_conversation_goes_with_all_it_owns(pg: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_purge_cut_short_by_its_budget_resumes(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());
@@ -117,7 +117,7 @@ async fn a_purge_cut_short_by_its_budget_resumes(pg: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_live_conversation_is_never_purged(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());

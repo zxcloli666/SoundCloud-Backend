@@ -27,7 +27,7 @@ async fn handler(pool: &PgPool) -> anyhow::Result<AccountWalkHandler> {
     Ok(AccountWalkHandler::new(pool.clone(), reader, config))
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn account_walk_stores_an_upload_with_nul_text_without_the_nul(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -82,7 +82,7 @@ async fn link_account(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn account_walk_drops_a_gone_unverified_account_and_keeps_a_verified_one(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -111,7 +111,7 @@ async fn account_walk_drops_a_gone_unverified_account_and_keeps_a_verified_one(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn name_matched_accounts_never_feed_the_walk_or_the_avatar(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -163,7 +163,7 @@ async fn seed_walkable_artist(
     Ok(artist_id)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn star_artists_are_walked_first_and_the_others_keep_every_fourth_run(
     pool: PgPool,
 ) -> anyhow::Result<()> {

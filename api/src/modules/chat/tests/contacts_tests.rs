@@ -51,7 +51,7 @@ fn an_unknown_policy_reads_as_the_default() {
     assert_eq!(DmPolicy::parse("strange"), DmPolicy::Following);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_accepted_direct_or_group_chats_and_follows_make_a_contact(pool: sqlx::PgPool) {
     use crate::modules::chat::moderation::testing::conversation;
     conversation(&pool, "direct", &[("1", true), ("2", false)]).await;
@@ -70,7 +70,7 @@ async fn only_accepted_direct_or_group_chats_and_follows_make_a_contact(pool: sq
     assert!(!relation(&pool, "4", "3").await.expect("read").follows);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_block_either_way_closes_the_dm_and_self_is_always_open(pool: sqlx::PgPool) {
     let chat = crate::modules::chat::moderation::testing::state(pool.clone(), None);
     sqlx::query("INSERT INTO chat.users (user_id, dm_policy) VALUES ('2', 'everyone')")
