@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/stats", get(stats::get_stats))
         .route("/admin/rooms/handoff", post(rooms::handoff))
+        .route("/admin/rooms/handoff/ack", post(rooms::handoff_ack))
         .route("/admin/sync-queue", get(sync_queue::get_stats))
         .route("/admin/sync-queue/items", get(sync_queue::list_items))
         .route("/admin/sync-queue/flush", post(sync_queue::flush))

@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Query, State};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::common::admin::AdminAuth;
-use crate::error::AppResult;
+use crate::common::admin::HandoffAuth;
+use crate::error::{AppError, AppResult};
 use crate::modules::rooms::RoomsService;
 use crate::modules::rooms::store::{PAGE_MAX, Page};
 
@@ -26,9 +26,32 @@ fn default_count() -> usize {
 }
 
 pub async fn handoff(
-    _: AdminAuth,
+    _: HandoffAuth,
     State(rooms): State<Arc<RoomsService>>,
     Query(query): Query<HandoffQuery>,
 ) -> AppResult<Json<Page>> {
-    Ok(Json(rooms.take_page(&query.cursor, query.count).await?))
+    Ok(Json(rooms.peek_page(&query.cursor, query.count).await?))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AckBody {
+    keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Acked {
+    removed: usize,
+}
+
+pub async fn handoff_ack(
+    _: HandoffAuth,
+    State(rooms): State<Arc<RoomsService>>,
+    Json(body): Json<AckBody>,
+) -> AppResult<Json<Acked>> {
+    if body.keys.len() > PAGE_MAX {
+        return Err(AppError::bad_request("Too many keys in one ack"));
+    }
+    Ok(Json(Acked {
+        removed: rooms.ack_page(&body.keys).await?,
+    }))
 }

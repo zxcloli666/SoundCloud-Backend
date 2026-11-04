@@ -107,6 +107,7 @@ pub struct AdminCfg {
     pub token: redact::Secret<String>,
     pub metrics_token: redact::Secret<String>,
     pub diag_token: redact::Secret<String>,
+    pub handoff_token: redact::Secret<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -388,6 +389,7 @@ impl AppConfig {
                 token: env_str("ADMIN_TOKEN", "").into(),
                 metrics_token: env_str("METRICS_TOKEN", "").into(),
                 diag_token: env_str("DIAG_TOKEN", "").into(),
+                handoff_token: env_str("ROOMS_HANDOFF_TOKEN", "").into(),
             },
 
             diag: DiagCfg::from_env(),
@@ -547,6 +549,7 @@ mod tests {
             token: "s3cr3t-admin-token".to_owned().into(),
             metrics_token: "s3cr3t-metrics-token".to_owned().into(),
             diag_token: "s3cr3t-diag-token".to_owned().into(),
+            handoff_token: "s3cr3t-handoff-token".to_owned().into(),
         };
         let qdrant = QdrantCfg {
             grpc_url: "http://vectors:6334".to_owned(),

@@ -11,12 +11,13 @@ mod test_support;
 
 pub use config::{Role, role};
 
+use anyhow::Context;
 use tracing::{info, warn};
 
 use crate::config::env_str;
 use crate::modules::chat;
 
-pub async fn run() {
+pub async fn run() -> anyhow::Result<()> {
     let config = config::RtConfig::from_env();
     info!(port = config.port, "chat-api starting");
     let state = state::build(&config).await;
@@ -27,7 +28,7 @@ pub async fn run() {
     if let Some(api) = config.rooms.handoff_api() {
         let moved = rooms::hand_off(api, &config.rooms.token, &state.rooms)
             .await
-            .expect("the rooms handoff must finish before chat-api listens");
+            .context("the rooms handoff must finish before chat-api listens")?;
         info!(moved, "rooms handed off from the api");
     }
     chat::sync::incarnation::current(&state.chat)
@@ -52,4 +53,5 @@ pub async fn run() {
         .await
         .expect("Server error");
     info!("chat-api stopped");
+    Ok(())
 }

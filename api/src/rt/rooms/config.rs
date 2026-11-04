@@ -21,7 +21,7 @@ impl RoomsConfig {
         Self::parse(
             &env_str("ROOMS_MODE", "local"),
             env_opt("ROOMS_API").as_deref(),
-            &env_str("INTERNAL_TOKEN", ""),
+            &env_str("ROOMS_HANDOFF_TOKEN", ""),
         )
     }
 
@@ -45,7 +45,7 @@ impl RoomsConfig {
         );
         assert!(
             mode != Mode::Local || api.is_none() || !token.trim().is_empty(),
-            "ROOMS_API is set, so INTERNAL_TOKEN must hold the admin token for the handoff"
+            "ROOMS_API is set, so ROOMS_HANDOFF_TOKEN is needed for the handoff"
         );
         Self {
             mode,

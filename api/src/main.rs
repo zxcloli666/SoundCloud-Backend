@@ -100,7 +100,10 @@ async fn main() {
     metrics::spawn_runtime_probe();
 
     if rt::role() == rt::Role::Rt {
-        rt::run().await;
+        if let Err(error) = rt::run().await {
+            tracing::error!(error = %format!("{error:#}"), "chat-api stopped at boot");
+            std::process::exit(1);
+        }
         return;
     }
 

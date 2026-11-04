@@ -47,7 +47,7 @@ fn proxy_without_an_api_stops_the_boot() {
 }
 
 #[test]
-#[should_panic(expected = "INTERNAL_TOKEN")]
+#[should_panic(expected = "ROOMS_HANDOFF_TOKEN")]
 fn a_handoff_without_the_token_stops_the_boot() {
     RoomsConfig::parse("local", Some(API), "");
 }
