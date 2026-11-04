@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::wanted::{Wanted, clean_title, simplify};
+use super::wanted::{Wanted, clean_title, core_key, simplify};
 
 const NEAR_MS: i64 = 15_000;
 const MIN_PARTIAL_LEN: usize = 3;
@@ -19,14 +19,14 @@ static VARIANT: LazyLock<Regex> = LazyLock::new(|| {
 pub fn combined(wanted: &Wanted, hits: &[Value]) -> Option<String> {
     let fits: Vec<&Value> = hits.iter().filter(|hit| fits(wanted, hit)).collect();
     fits.iter()
-        .find(|hit| uploaded_by(hit, &wanted.artist))
+        .find(|hit| official(hit, &wanted.artist))
         .or(fits.first())
         .and_then(|hit| urn(hit))
 }
 
-pub fn by_uploader(wanted: &Wanted, hits: &[Value]) -> Option<String> {
+pub fn by_artist(wanted: &Wanted, hits: &[Value]) -> Option<String> {
     hits.iter()
-        .find(|hit| fits(wanted, hit) && uploaded_by(hit, &wanted.artist))
+        .find(|hit| fits(wanted, hit) && official(hit, &wanted.artist))
         .and_then(urn)
 }
 
@@ -50,29 +50,52 @@ fn close_duration(hit: &Value, wanted: Option<i64>) -> bool {
 
 fn title_matches(wanted: &Wanted, hit: &Value) -> bool {
     let raw = hit["title"].as_str().unwrap_or_default();
-    let want = wanted.title_key();
-    let have = simplify(&clean_title(raw));
+    let wants_variant = VARIANT.is_match(&wanted.raw_title);
+    if VARIANT.is_match(raw) && !wants_variant {
+        return false;
+    }
+    let title = clean_title(raw);
+    overlaps(&wanted.title_key(), &simplify(&title))
+        || (!wants_variant && same_core(wanted, &title))
+}
+
+fn same_core(wanted: &Wanted, title: &str) -> bool {
+    let core = core_key(&wanted.title);
+    !core.is_empty() && core == core_key(title)
+}
+
+fn overlaps(want: &str, have: &str) -> bool {
     if want.is_empty() || have.is_empty() {
         return false;
     }
-    if VARIANT.is_match(raw) && !VARIANT.is_match(&wanted.raw_title) {
-        return false;
-    }
     let (short, long) = if want.len() <= have.len() {
-        (&want, &have)
+        (want, have)
     } else {
-        (&have, &want)
+        (have, want)
     };
     if short.chars().count() < MIN_FUZZY_TITLE_LEN {
         return short == long;
     }
-    long.contains(short.as_str())
+    long.contains(short)
+}
+
+fn official(hit: &Value, artist: &str) -> bool {
+    uploaded_by(hit, artist)
+        || named(
+            hit["publisher_metadata"]["artist"]
+                .as_str()
+                .unwrap_or_default(),
+            artist,
+        )
 }
 
 pub fn uploaded_by(hit: &Value, artist: &str) -> bool {
+    named(hit["user"]["username"].as_str().unwrap_or_default(), artist)
+}
+
+fn named(name: &str, artist: &str) -> bool {
     let artist = simplify(artist);
-    let uploader = simplify(hit["user"]["username"].as_str().unwrap_or_default());
+    let name = simplify(name);
     !artist.is_empty()
-        && (uploader == artist
-            || (artist.chars().count() >= MIN_PARTIAL_LEN && uploader.contains(&artist)))
+        && (name == artist || (artist.chars().count() >= MIN_PARTIAL_LEN && name.contains(&artist)))
 }

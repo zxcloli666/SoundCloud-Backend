@@ -112,7 +112,8 @@ max_batch = 1
 max_wait_ms = 0
 
 [audio]
-download_timeout_s = 90
+download_timeout_s = 240
+download_idle_s = 20
 max_download_mib = 96
 min_duration_s = 5.0
 max_duration_s = 450.0

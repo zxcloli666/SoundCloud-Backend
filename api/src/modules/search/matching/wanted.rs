@@ -9,7 +9,7 @@ static CHANNEL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\s*(?:-\s*topic|vevo)\s*$").expect("channel"));
 static NOISE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\s*[(\[【][^)\]】]*\b(?:official|video|audio|lyrics?|visuali[sz]er|mv|m/v|hd|hq|4k|clip|клип|премьера|текст|remaster(?:ed)?|feat|ft|featuring)\b[^)\]】]*[)\]】]",
+        r"(?i)\s*[(\[【][^)\]】]*\b(?:official|video|audio|lyrics?|visuali[sz]er|mv|m/v|hd|hq|4k|clip|клип|премьера|текст|remaster(?:ed)?|feat|ft|featuring|prod|produced)\b[^)\]】]*[)\]】]",
     )
     .expect("noise")
 });
@@ -20,6 +20,8 @@ static PIPE_TAIL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*[|｜].*$").expect("pipe tail"));
 static FEAT_TAIL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.|featuring)\s+.*$").expect("feat tail"));
+static BRACKETS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*[(\[【][^)\]】]*[)\]】]").expect("brackets"));
 
 #[derive(Debug, Clone)]
 pub struct Wanted {
@@ -75,6 +77,10 @@ pub fn clean_title(raw: &str) -> String {
     } else {
         title.to_owned()
     }
+}
+
+pub fn core_key(title: &str) -> String {
+    simplify(&BRACKETS.replace_all(title, ""))
 }
 
 pub fn simplify(raw: &str) -> String {

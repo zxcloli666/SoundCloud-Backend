@@ -11,6 +11,9 @@ from worker.domain.outcome import Failure, PermanentFailure, Reason, TransientFa
 from worker.observability.counters import Counters
 
 CHUNK_BYTES = 256 * 1024
+ATTEMPTS = 2
+RETRY_PAUSE_S = 1.0
+CONNECT_TIMEOUT_S = 10.0
 NOT_FOUND_STATUSES = frozenset({404, 410})
 FORBIDDEN_STATUSES = frozenset({401, 403})
 
@@ -23,35 +26,42 @@ class AudioSource:
         session: aiohttp.ClientSession,
         *,
         timeout_s: float,
+        idle_s: float,
         max_bytes: int,
         counters: Counters,
     ) -> None:
         self._session = session
         self._timeout_s = timeout_s
+        self._idle_s = idle_s
         self._max_bytes = max_bytes
         self._counters = counters
 
     async def fetch(self, url: str, into: Path, deadline: Deadline) -> int:
         deadline.check("download")
-        try:
-            return await self._stream(url, into, deadline)
-        except Failure as failure:
-            self._failed(failure.reason.value, failure.detail)
-            raise
-        except (aiohttp.ClientError, TimeoutError) as error:
-            if deadline.expired():
-                self._failed("deadline", repr(error))
-                raise TransientFailure(Reason.DEADLINE_EXCEEDED, "stage=download") from error
-            self._failed(type(error).__name__, repr(error))
-            raise TransientFailure(
-                Reason.DOWNLOAD_FAILED, f"{type(error).__name__}: {error}"
-            ) from error
+        attempt = 1
+        while True:
+            try:
+                return await self._stream(url, into, deadline)
+            except Failure as failure:
+                self._failed(failure.reason.value, failure.detail)
+                raise
+            except (aiohttp.ClientError, TimeoutError) as error:
+                if deadline.expired():
+                    self._failed("deadline", describe(error))
+                    raise TransientFailure(Reason.DEADLINE_EXCEEDED, "stage=download") from error
+                self._failed(type(error).__name__, describe(error))
+                if attempt == ATTEMPTS:
+                    raise TransientFailure(Reason.DOWNLOAD_FAILED, describe(error)) from error
+                attempt += 1
+                await asyncio.sleep(RETRY_PAUSE_S)
 
     async def _stream(self, url: str, into: Path, deadline: Deadline) -> int:
         budget = deadline.budget(self._timeout_s)
         if budget <= 0:
             raise TransientFailure(Reason.DEADLINE_EXCEEDED, "stage=download")
-        timeout = aiohttp.ClientTimeout(total=budget)
+        timeout = aiohttp.ClientTimeout(
+            total=budget, sock_connect=CONNECT_TIMEOUT_S, sock_read=self._idle_s
+        )
         async with self._session.get(url, timeout=timeout) as response:
             check_status(response.status)
             declared = response.content_length
@@ -69,6 +79,10 @@ class AudioSource:
     def _failed(self, kind: str, detail: str | None) -> None:
         self._counters.inc("download_failures_total", kind=kind)
         log.warning("audio download failed", extra={"kind": kind, "detail": detail})
+
+
+def describe(error: BaseException) -> str:
+    return f"{type(error).__name__}: {str(error) or 'no message'}"
 
 
 def check_status(status: int) -> None:

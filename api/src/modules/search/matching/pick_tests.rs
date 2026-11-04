@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::pick::{by_uploader, combined, uploaded_by};
+use super::pick::{by_artist, combined, uploaded_by};
 use super::wanted::Wanted;
 
 fn hit(n: i64, title: &str, uploader: &str, duration: i64) -> Value {
@@ -10,6 +10,11 @@ fn hit(n: i64, title: &str, uploader: &str, duration: i64) -> Value {
         "duration": duration,
         "user": {"username": uploader},
     })
+}
+
+fn credited(mut hit: Value, artist: &str) -> Value {
+    hit["publisher_metadata"] = json!({"artist": artist});
+    hit
 }
 
 fn wanted(artist: &str, title: &str, duration: Option<i64>) -> Wanted {
@@ -67,7 +72,7 @@ fn a_different_title_is_never_returned() {
     ];
     let w = wanted("Metallica", "Nothing Else Matters", Some(200_000));
     assert_eq!(combined(&w, &hits), None);
-    assert_eq!(by_uploader(&w, &hits), None);
+    assert_eq!(by_artist(&w, &hits), None);
 }
 
 #[test]
@@ -114,6 +119,44 @@ fn a_hit_uploaded_by_the_artist_beats_an_earlier_one() {
 }
 
 #[test]
+fn a_label_upload_credited_to_the_artist_counts_as_theirs() {
+    let hits = [
+        hit(1, "Hello", "random reposter", 0),
+        credited(hit(2, "Hello", "XL Recordings", 0), "Adele"),
+    ];
+    let w = wanted("Adele", "Hello", None);
+    assert_eq!(combined(&w, &hits), urn(2));
+    assert_eq!(by_artist(&w, &hits), urn(2));
+}
+
+#[test]
+fn different_brackets_on_both_sides_match_only_when_the_rest_is_equal() {
+    let w = wanted(
+        "Travis Scott, Grand Theft Auto VI",
+        "RHYNO (from GTAVI: The Album)",
+        Some(180_000),
+    );
+    let edit = hit(
+        1,
+        "Travis Scott - RHYNO (JYTTRO EDIT) - FREE DL",
+        "JYTTRO",
+        185_316,
+    );
+    let label = credited(
+        hit(2, "RHYNO (GTA VI Soundtrack)", "Atlantic Records", 180_000),
+        "Travis Scott",
+    );
+    assert_eq!(combined(&w, &[edit.clone(), label]), urn(2));
+    assert_eq!(combined(&w, &[edit]), None);
+}
+
+#[test]
+fn brackets_never_mix_up_two_remixes() {
+    let w = wanted("A", "Song (Night Remix)", None);
+    assert_eq!(combined(&w, &[hit(1, "Song (Day Remix)", "x", 0)]), None);
+}
+
+#[test]
 fn the_uploader_search_wants_the_artist_title_and_duration() {
     let hits = [
         hit(1, "Hello", "reposter", 200_000),
@@ -121,11 +164,11 @@ fn the_uploader_search_wants_the_artist_title_and_duration() {
         hit(3, "Hello", "Adele - Official", 200_000),
     ];
     assert_eq!(
-        by_uploader(&wanted("Adele", "Hello", Some(200_000)), &hits),
+        by_artist(&wanted("Adele", "Hello", Some(200_000)), &hits),
         urn(3)
     );
     assert_eq!(
-        by_uploader(&wanted("Lizer", "Hello", Some(200_000)), &hits),
+        by_artist(&wanted("Lizer", "Hello", Some(200_000)), &hits),
         None
     );
 }

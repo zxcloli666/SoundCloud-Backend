@@ -383,6 +383,7 @@ class Node:
         source = AudioSource(
             audio_session,
             timeout_s=settings.audio.download_timeout_s,
+            idle_s=settings.audio.download_idle_s,
             max_bytes=settings.audio.max_download_mib << 20,
             counters=self.counters,
         )
