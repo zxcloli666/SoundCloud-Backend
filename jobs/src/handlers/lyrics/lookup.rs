@@ -22,7 +22,8 @@ use uuid::Uuid;
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
 use crate::queue::{
-    JobError, JobRepository, JobResult, LeasedJob, LentSlot, NewJob, QueueError, WriteGovernor,
+    Borrower, JobError, JobRepository, JobResult, LeasedJob, LentSlot, NewJob, QueueError,
+    WriteGovernor,
 };
 
 use super::embedding_queue;
@@ -122,37 +123,35 @@ impl LyricsLookupHandler {
 
         super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
 
+        let borrower = governor.borrower(job.kind);
         let claims = tiered::claim(
             &self.pool,
             job,
-            sweep_size(
-                self.config.batch,
-                self.config.concurrency,
-                governor.spare() + 1,
-            ),
+            sweep_size(self.config.batch, self.config.concurrency, borrower.slots()),
             self.config.claim_seconds,
             self.turns.next(),
         )
         .await
         .map_err(JobError::retryable)?;
-        self.process_batch(job, claims, governor).await
+        self.process_batch(job, claims, &borrower).await
     }
 
     async fn process_batch(
         &self,
         job: &LeasedJob,
         claims: Vec<LookupClaim>,
-        governor: &Arc<WriteGovernor>,
+        borrower: &Borrower,
     ) -> JobResult {
         let concurrency = self.config.concurrency.max(1);
         let mut queue = claims.into_iter();
         let mut running = FuturesUnordered::new();
         let mut own_slot_free = true;
         loop {
-            while running.len() < concurrency {
+            borrower.want((queue.len() + running.len()).min(concurrency));
+            while running.len() < concurrency && !queue.as_slice().is_empty() {
                 let lent = if own_slot_free {
                     None
-                } else if let Some(lent) = governor.lend() {
+                } else if let Some(lent) = borrower.lend() {
                     Some(lent)
                 } else {
                     break;
@@ -163,11 +162,17 @@ impl LyricsLookupHandler {
                 own_slot_free = false;
                 running.push(self.process_in_slot(job, claim, lent));
             }
-            let Some((own_slot, result)) = running.next().await else {
-                break;
-            };
-            own_slot_free |= own_slot;
-            result?;
+            let waiting = running.len() < concurrency && !queue.as_slice().is_empty();
+            tokio::select! {
+                finished = running.next() => {
+                    let Some((own_slot, result)) = finished else {
+                        break;
+                    };
+                    own_slot_free |= own_slot;
+                    result?;
+                }
+                _ = borrower.freed(), if waiting => {}
+            }
         }
         Ok(())
     }

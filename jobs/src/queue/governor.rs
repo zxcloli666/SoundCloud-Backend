@@ -2,9 +2,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use backend_contracts::JobKind;
 use sqlx::PgPool;
+use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
+
+use super::worker::claim_limit;
 
 const FLOOR: usize = 2;
 const CHECK_EVERY: Duration = Duration::from_secs(5);
@@ -24,21 +28,78 @@ pub(crate) struct WriteGovernor {
     limit: AtomicUsize,
     ceiling: usize,
     lane: Mutex<LaneUse>,
+    freed: Notify,
 }
 
 #[derive(Default)]
 struct LaneUse {
     running: usize,
-    lent: usize,
     idle: bool,
+    due_kinds: Vec<JobKind>,
+    lent: usize,
+    reserved: usize,
 }
 
 impl LaneUse {
+    fn held(&self) -> usize {
+        self.lent.max(self.reserved)
+    }
+
+    fn share(&self, limit: usize, kind: JobKind) -> usize {
+        let others = self.due_kinds.iter().filter(|due| **due != kind).count();
+        (limit / (others + 1)).max(1)
+    }
+
     fn spare(&self, limit: usize) -> usize {
         if !self.idle {
             return 0;
         }
         limit.saturating_sub(self.running + self.lent + 1)
+    }
+
+    fn can_lend(&self, limit: usize) -> bool {
+        (self.lent < self.reserved && self.running + self.lent < limit) || self.spare(limit) > 0
+    }
+}
+
+pub(crate) struct Borrower {
+    governor: Arc<WriteGovernor>,
+    kind: JobKind,
+}
+
+impl Borrower {
+    pub(crate) fn slots(&self) -> usize {
+        let limit = self.governor.limit();
+        let lane = self.governor.lane();
+        lane.share(limit, self.kind).max(lane.spare(limit) + 1)
+    }
+
+    pub(crate) fn want(&self, slots: usize) {
+        let limit = self.governor.limit();
+        let mut lane = self.governor.lane();
+        lane.reserved = slots.min(lane.share(limit, self.kind)).saturating_sub(1);
+    }
+
+    pub(crate) fn lend(&self) -> Option<LentSlot> {
+        let limit = self.governor.limit();
+        let mut lane = self.governor.lane();
+        if !lane.can_lend(limit) {
+            return None;
+        }
+        lane.lent += 1;
+        Some(LentSlot {
+            governor: self.governor.clone(),
+        })
+    }
+
+    pub(crate) async fn freed(&self) {
+        self.governor.freed.notified().await;
+    }
+}
+
+impl Drop for Borrower {
+    fn drop(&mut self) {
+        self.governor.lane().reserved = 0;
     }
 }
 
@@ -93,6 +154,7 @@ impl WriteGovernor {
             limit: AtomicUsize::new(FLOOR.min(ceiling)),
             ceiling,
             lane: Mutex::new(LaneUse::default()),
+            freed: Notify::new(),
         })
     }
 
@@ -100,32 +162,34 @@ impl WriteGovernor {
         self.limit.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn lane_busy(&self, running: usize) -> usize {
+    pub(crate) fn claim_room(&self, running: usize, concurrency: usize, batch: usize) -> usize {
+        let limit = self.limit();
         let mut lane = self.lane();
-        lane.running = running;
+        let room = claim_limit(limit.min(concurrency), running + lane.held(), batch);
+        lane.running = running + room;
         lane.idle = false;
-        running + lane.lent
+        self.wake_borrower(&lane, limit);
+        room
     }
 
     pub(crate) fn lane_idle(&self, running: usize) {
         let mut lane = self.lane();
         lane.running = running;
         lane.idle = true;
+        self.wake_borrower(&lane, self.limit());
     }
 
-    pub(crate) fn spare(&self) -> usize {
-        self.lane().spare(self.limit())
-    }
-
-    pub(crate) fn lend(self: &Arc<Self>) -> Option<LentSlot> {
+    pub(crate) fn lane_round(&self, due_kinds: &[JobKind]) {
         let mut lane = self.lane();
-        if lane.spare(self.limit()) == 0 {
-            return None;
-        }
-        lane.lent += 1;
-        Some(LentSlot {
+        lane.due_kinds.clear();
+        lane.due_kinds.extend_from_slice(due_kinds);
+    }
+
+    pub(crate) fn borrower(self: &Arc<Self>, kind: JobKind) -> Borrower {
+        Borrower {
             governor: self.clone(),
-        })
+            kind,
+        }
     }
 
     #[cfg(test)]
@@ -176,6 +240,7 @@ impl WriteGovernor {
             return false;
         }
         self.limit.store(next, Ordering::Relaxed);
+        self.wake_borrower(&self.lane(), next);
         tracing::info!(
             from = current,
             to = next,
@@ -185,6 +250,12 @@ impl WriteGovernor {
             "bulk concurrency adjusted to the database pressure"
         );
         true
+    }
+
+    fn wake_borrower(&self, lane: &LaneUse, limit: usize) {
+        if lane.can_lend(limit) {
+            self.freed.notify_one();
+        }
     }
 
     fn lane(&self) -> MutexGuard<'_, LaneUse> {
@@ -270,37 +341,89 @@ mod tests {
         assert_eq!(next_limit(10, 32, pressure(10, 20), SETTLED), 10);
     }
 
+    const FOUR_KINDS: &[JobKind] = &[
+        JobKind::CatalogCollection,
+        JobKind::IndexTrack,
+        JobKind::LyricsLookup,
+        JobKind::LyricsLookupSweep,
+    ];
+
     #[test]
-    fn a_busy_lane_lends_nothing_and_an_idle_one_keeps_a_slot_for_itself() {
+    fn a_busy_lane_keeps_the_borrower_its_share_of_the_limit() {
         let governor = WriteGovernor::new(32);
-        governor.hold_at(6);
-        assert!(governor.lend().is_none());
+        governor.hold_at(32);
+        governor.lane_round(FOUR_KINDS);
+        let borrower = governor.borrower(JobKind::LyricsLookupSweep);
+        assert_eq!(governor.claim_room(32, 32, 64), 0);
+        assert_eq!(borrower.slots(), 8);
 
-        governor.lane_idle(1);
-        let lent: Vec<_> = std::iter::from_fn(|| governor.lend()).collect();
+        borrower.want(64);
+        assert!(borrower.lend().is_none());
+        assert_eq!(governor.claim_room(25, 32, 64), 0);
+        let lent: Vec<_> = std::iter::from_fn(|| borrower.lend()).collect();
 
-        assert_eq!(lent.len(), 4);
-        assert_eq!(governor.lane_busy(1), 5);
-        assert!(governor.lend().is_none());
-        assert_eq!(governor.spare(), 0);
+        assert_eq!(lent.len(), 7);
+        assert_eq!(governor.claim_room(24, 32, 64), 1);
+        governor.lane_round(&FOUR_KINDS[..3]);
+        assert_eq!(borrower.slots(), 8);
     }
 
     #[test]
-    fn lent_slots_hold_the_lane_under_a_lowered_limit_until_they_come_back() {
+    fn a_lowered_limit_shrinks_the_share_as_lent_slots_come_back() {
         let governor = WriteGovernor::new(32);
-        governor.hold_at(6);
-        governor.lane_idle(1);
-        let mut lent: Vec<_> = std::iter::from_fn(|| governor.lend()).collect();
-        governor.hold_at(2);
+        governor.hold_at(32);
+        governor.lane_round(FOUR_KINDS);
+        let borrower = governor.borrower(JobKind::LyricsLookupSweep);
+        borrower.want(64);
+        assert_eq!(governor.claim_room(25, 32, 64), 0);
+        let mut lent: Vec<_> = std::iter::from_fn(|| borrower.lend()).collect();
+        governor.hold_at(8);
+        borrower.want(64);
 
-        lent.truncate(3);
-        assert!(governor.lend().is_none());
-        assert_eq!(governor.lane_busy(1), 4);
+        assert_eq!(governor.claim_room(6, 32, 64), 0);
+        lent.truncate(1);
+        assert!(borrower.lend().is_none());
+        assert_eq!(governor.claim_room(6, 32, 64), 1);
 
         lent.clear();
-        assert_eq!(governor.lane_busy(1), 1);
+        let last = borrower.lend();
+        assert!(last.is_some());
+        assert!(borrower.lend().is_none());
+    }
+
+    #[test]
+    fn an_idle_lane_also_lends_its_spare_slots_but_keeps_one_to_poll() {
+        let governor = WriteGovernor::new(32);
+        governor.hold_at(8);
+        governor.lane_round(FOUR_KINDS);
+        let borrower = governor.borrower(JobKind::LyricsLookupSweep);
+        borrower.want(64);
         governor.lane_idle(1);
-        assert!(governor.lend().is_none());
+        assert_eq!(borrower.slots(), 7);
+
+        let lent: Vec<_> = std::iter::from_fn(|| borrower.lend()).collect();
+
+        assert_eq!(lent.len(), 6);
+        assert_eq!(governor.claim_room(1, 32, 64), 1);
+        assert!(borrower.lend().is_none());
+    }
+
+    #[test]
+    fn a_claim_books_its_room_and_a_finished_borrower_hands_its_share_back() {
+        let governor = WriteGovernor::new(32);
+        governor.hold_at(8);
+        governor.lane_round(FOUR_KINDS);
+        let borrower = governor.borrower(JobKind::LyricsLookupSweep);
+        borrower.want(64);
+
+        assert_eq!(governor.claim_room(1, 32, 64), 6);
+        let lent = borrower.lend();
+        assert!(lent.is_some());
+        assert!(borrower.lend().is_none());
+
+        drop(lent);
+        drop(borrower);
+        assert_eq!(governor.claim_room(7, 32, 64), 1);
     }
 
     #[test]

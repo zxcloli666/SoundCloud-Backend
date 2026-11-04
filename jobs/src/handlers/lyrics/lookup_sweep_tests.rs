@@ -16,8 +16,14 @@ use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{Tier, Turn};
 use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob, WriteGovernor};
 
-const TRACKS: usize = 16;
+const TRACKS: usize = 24;
 const MUSIXMATCH: &str = "https://apic-desktop.musixmatch.com/ws/1.1";
+const DUE_KINDS: &[JobKind] = &[
+    JobKind::CatalogCollection,
+    JobKind::IndexTrack,
+    JobKind::LyricsLookup,
+    JobKind::LyricsLookupSweep,
+];
 
 #[derive(Clone)]
 struct Gate {
@@ -119,8 +125,8 @@ async fn gated_handler(
         pool.clone(),
         sources,
         LyricsConfig {
-            batch: 16,
-            concurrency: 8,
+            batch: 24,
+            concurrency: 16,
             claim_seconds: 900,
             backfill_batch: 100,
             musixmatch_base: MUSIXMATCH.to_owned(),
@@ -172,7 +178,7 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<LeasedJob> {
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
-async fn sweep_lookups_borrow_only_idle_bulk_slots_and_shrink_with_the_governor_limit(
+async fn sweep_lookups_take_their_share_of_a_busy_lane_and_shrink_with_the_governor_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     due_tracks(&pool).await?;
@@ -189,36 +195,44 @@ async fn sweep_lookups_borrow_only_idle_bulk_slots_and_shrink_with_the_governor_
     let gate = Gate::new();
     let (handler, server) = gated_handler(&pool, gate.clone()).await?;
     let governor = WriteGovernor::new(32);
-    governor.hold_at(6);
+    governor.hold_at(32);
+    governor.lane_round(DUE_KINDS);
+    assert_eq!(governor.claim_room(32, 32, 64), 0);
+    let borrower = governor.borrower(JobKind::LyricsLookupSweep);
+    let within = |lane: usize, limit: usize| {
+        let total = lane + gate.waiting().saturating_sub(1);
+        anyhow::ensure!(
+            total <= limit,
+            "lane jobs and sweep lookups hold {total} slots over the limit {limit}"
+        );
+        Ok(())
+    };
 
     let phases = async {
         let checked = async {
             gate.holds(1).await?;
 
+            anyhow::ensure!(governor.claim_room(25, 32, 64) == 0);
+            gate.holds(8).await?;
+            anyhow::ensure!(governor.claim_room(25, 32, 64) == 0);
+            within(25, 32)?;
+
+            governor.hold_at(8);
+            anyhow::ensure!(governor.claim_room(6, 32, 64) == 0);
+            gate.release(8);
+            gate.holds(2).await?;
+            anyhow::ensure!(governor.claim_room(6, 32, 64) == 1);
+            within(7, 8)?;
+
             governor.lane_idle(1);
-            gate.release(1);
-            gate.holds(5).await?;
-
-            anyhow::ensure!(
-                governor.lane_busy(1) == 5,
-                "the lane should see 5 slots in use"
-            );
-            gate.release(5);
-            gate.holds(1).await?;
-
-            governor.lane_idle(1);
-            gate.release(1);
-            gate.holds(5).await?;
-
-            governor.hold_at(2);
-            gate.release(5);
-            gate.holds(1).await
+            gate.holds(7).await?;
+            within(1, 8)
         }
         .await;
         gate.release(TRACKS);
         checked
     };
-    let (swept, checked) = tokio::join!(handler.process_batch(&job, claims, &governor), phases);
+    let (swept, checked) = tokio::join!(handler.process_batch(&job, claims, &borrower), phases);
     server.abort();
     checked?;
     swept?;
