@@ -1,10 +1,19 @@
 use backend_contracts::remote::{BUFFER_SECS, RemoteCommand};
 use deadpool_redis::Pool;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Script};
 
 use crate::error::AppResult;
 
 const MICROS: i64 = 1_000_000;
+const SEQ_TTL_SECS: i64 = 7 * 24 * 3600;
+
+const NEXT_SEQ: &str = r#"
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local next = tonumber(ARGV[1])
+if current + 1 > next then next = current + 1 end
+redis.call('SET', KEYS[1], next, 'EX', ARGV[2])
+return next
+"#;
 
 pub struct Buffer {
     redis: Pool,
@@ -21,6 +30,17 @@ impl Buffer {
 
     fn key(&self, user: &str) -> String {
         format!("{}:buf:{user}", self.prefix)
+    }
+
+    pub async fn next_seq(&self, user: &str, floor: i64) -> AppResult<i64> {
+        let mut conn = self.redis.get().await?;
+        let next: i64 = Script::new(NEXT_SEQ)
+            .key(format!("{}:seq:{user}", self.prefix))
+            .arg(floor)
+            .arg(SEQ_TTL_SECS)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(next)
     }
 
     pub async fn push(&self, command: &RemoteCommand) -> AppResult<()> {

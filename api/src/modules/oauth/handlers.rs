@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Query, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, LOCATION, PRAGMA};
+use axum::http::header::{
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, LOCATION, PRAGMA,
+    X_FRAME_OPTIONS,
+};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -12,10 +15,14 @@ use serde_json::json;
 
 use super::page::{self, PageFields};
 use super::request::{
-    AuthorizeForm, AuthorizeParams, TokenForm, basic_credentials, known_target, redirect_with_code,
+    AuthorizeForm, AuthorizeParams, StatusParams, TokenForm, basic_credentials, known_target,
+    redirect_with_code,
 };
 use crate::common::admission::{AdmissionRejection, Endpoint};
-use crate::modules::remote::secrets::{normalize_code, secret_matches};
+use crate::error::AppError;
+use crate::modules::remote::confirm::{PageTicket, Status};
+use crate::modules::remote::linking::{self, Found, Pairing};
+use crate::modules::remote::secrets::{normalize_code, random_token, secret_matches};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -24,6 +31,7 @@ pub fn router() -> Router<AppState> {
             "/oauth/authorize",
             get(authorize_page).post(authorize_submit),
         )
+        .route("/oauth/authorize/status", get(authorize_status))
         .route("/oauth/token", post(token))
 }
 
@@ -37,6 +45,11 @@ fn html(status: StatusCode, body: String) -> Response {
             ),
             (CACHE_CONTROL, HeaderValue::from_static("no-store")),
             (PRAGMA, HeaderValue::from_static("no-cache")),
+            (X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+            (
+                CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("frame-ancestors 'none'"),
+            ),
         ],
         body,
     )
@@ -54,11 +67,23 @@ fn target_name(provider: LinkProvider) -> &'static str {
     }
 }
 
+const TICKET_TTL_SECS: u64 = 600;
+const PAGE_WAIT_SECS: u64 = 60;
+const PENDING_TTL_SECS: u64 = 90;
+
 async fn authorize_page(
     State(st): State<AppState>,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
     let voice = &st.config.voice;
+    if !voice.enabled {
+        return AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_disabled",
+            "Voice is not configured",
+        )
+        .into_response();
+    }
     let Some(client) = known_target(voice, &params.client_id, &params.redirect_uri) else {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -87,12 +112,47 @@ async fn authorize_page(
     )
 }
 
+fn busy_form(fields: &PageFields<'_>) -> Response {
+    html(
+        StatusCode::SERVICE_UNAVAILABLE,
+        page::form(fields, Some("Сервис занят. Попробуйте ещё раз.")),
+    )
+}
+
+fn limited_form(fields: &PageFields<'_>) -> Response {
+    html(
+        StatusCode::TOO_MANY_REQUESTS,
+        page::form(fields, Some("Слишком много попыток. Подождите минуту.")),
+    )
+}
+
+async fn within_limit(
+    st: &AppState,
+    endpoint: Endpoint,
+    identity: &str,
+    fields: &PageFields<'_>,
+) -> Option<Response> {
+    match st.admission.check_key(endpoint, identity).await {
+        Ok(()) => None,
+        Err(AdmissionRejection::Limited { .. }) => Some(limited_form(fields)),
+        Err(AdmissionRejection::Unavailable) => Some(busy_form(fields)),
+    }
+}
+
 async fn authorize_submit(
     State(st): State<AppState>,
     parts: Parts,
     Form(form): Form<AuthorizeForm>,
 ) -> Response {
     let voice = &st.config.voice;
+    if !voice.enabled {
+        return AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_disabled",
+            "Voice is not configured",
+        )
+        .into_response();
+    }
     let Some(client) = known_target(voice, &form.client_id, &form.redirect_uri) else {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -107,31 +167,19 @@ async fn authorize_submit(
         assistant: &voice.skill_name,
         target: target_name(client.provider),
     };
-    let identity = match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(address)) => format!(
-            "oauth:{}",
-            st.admission.client_key(*address, &parts.headers)
-        ),
-        None => "oauth:unknown".to_owned(),
+    let address = match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+        Some(ConnectInfo(address)) => st.admission.client_key(*address, &parts.headers),
+        None => "unknown".to_owned(),
     };
-    match st
-        .admission
-        .check_key(Endpoint::VoiceCodeTry, &identity)
-        .await
+    if let Some(refusal) =
+        within_limit(&st, Endpoint::VoicePageIp, &format!("oauth:{address}"), &fields).await
     {
-        Ok(()) => {}
-        Err(AdmissionRejection::Limited { .. }) => {
-            return html(
-                StatusCode::TOO_MANY_REQUESTS,
-                page::form(&fields, Some("Слишком много попыток. Подождите минуту.")),
-            );
-        }
-        Err(AdmissionRejection::Unavailable) => {
-            return html(
-                StatusCode::SERVICE_UNAVAILABLE,
-                page::form(&fields, Some("Сервис занят. Попробуйте ещё раз.")),
-            );
-        }
+        return refusal;
+    }
+    if let Some(refusal) =
+        within_limit(&st, Endpoint::VoicePageClient, &client.id, &fields).await
+    {
+        return refusal;
     }
     let Some(code) = normalize_code(&form.code) else {
         return html(
@@ -139,9 +187,9 @@ async fn authorize_submit(
             page::form(&fields, Some("Нужны шесть цифр.")),
         );
     };
-    let user = match st.links.take_code(client.provider, &code).await {
-        Ok(Some(user)) => user,
-        Ok(None) => {
+    let pairing = match linking::find(&st, client.provider, &code).await {
+        Ok(Found::Ready(pairing)) => pairing,
+        Ok(Found::NoCode) => {
             return html(
                 StatusCode::BAD_REQUEST,
                 page::form(
@@ -150,38 +198,163 @@ async fn authorize_submit(
                 ),
             );
         }
-        Err(error) => {
-            tracing::warn!(%error, "link code lookup failed");
+        Ok(Found::InUse) => {
             return html(
-                StatusCode::SERVICE_UNAVAILABLE,
-                page::form(&fields, Some("Сервис занят. Попробуйте ещё раз.")),
+                StatusCode::CONFLICT,
+                page::form(
+                    &fields,
+                    Some("Этот код уже проверяется. Подождите минуту или возьмите новый."),
+                ),
             );
         }
+        Ok(Found::Capped) => {
+            return html(
+                StatusCode::TOO_MANY_REQUESTS,
+                page::form(
+                    &fields,
+                    Some("На сегодня слишком много запросов на подтверждение."),
+                ),
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "link code lookup failed");
+            return busy_form(&fields);
+        }
     };
-    let issued = st
-        .links
-        .issue_auth_code(&user, client.provider, &client.id, &form.redirect_uri)
-        .await;
-    let Ok(auth_code) = issued else {
-        return html(
-            StatusCode::SERVICE_UNAVAILABLE,
-            page::form(&fields, Some("Сервис занят. Попробуйте ещё раз.")),
-        );
+    let ticket = random_token();
+    let record = PageTicket {
+        status: Status::Pending,
+        client_id: client.id.clone(),
+        redirect_uri: form.redirect_uri.clone(),
+        state: form.state.clone(),
+        scope: form.scope.clone(),
+        location: String::new(),
     };
-    let Some(location) = redirect_with_code(&form.redirect_uri, &auth_code, &form) else {
-        return refused(StatusCode::BAD_REQUEST, "Ссылка не подходит.");
-    };
-    let Ok(location) = HeaderValue::from_str(&location) else {
-        return refused(StatusCode::BAD_REQUEST, "Ссылка не подходит.");
-    };
-    (
-        StatusCode::FOUND,
-        [
-            (LOCATION, location),
-            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
-        ],
+    if let Err(error) = st
+        .confirm
+        .put(&format!("ticket:{ticket}"), &record, PENDING_TTL_SECS)
+        .await
+    {
+        tracing::warn!(%error, "link ticket was not stored");
+        st.confirm.release(pairing.code_id).await;
+        return busy_form(&fields);
+    }
+    tokio::spawn(settle_page(st.clone(), pairing, ticket.clone(), record));
+    html(StatusCode::OK, page::pending(&ticket, &voice.skill_name))
+}
+
+async fn settle_page(st: AppState, pairing: Pairing, ticket: String, mut record: PageTicket) {
+    let asked = tokio::time::timeout(
+        std::time::Duration::from_secs(PAGE_WAIT_SECS + 5),
+        linking::ask_desktop(&st, &pairing),
     )
-        .into_response()
+    .await;
+    record.status = asked.unwrap_or(Status::Silent);
+    if record.status == Status::Approved {
+        let issued = st
+            .links
+            .issue_auth_code(
+                &pairing.user,
+                pairing.provider,
+                &record.client_id,
+                &record.redirect_uri,
+            )
+            .await;
+        match issued {
+            Ok(code) => {
+                match redirect_with_code(
+                    &record.redirect_uri,
+                    &code,
+                    &record.state,
+                    &record.client_id,
+                    &record.scope,
+                ) {
+                    Some(location) => record.location = location,
+                    None => record.status = Status::Failed,
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "auth code was not issued after the confirmation");
+                record.status = Status::Failed;
+            }
+        }
+    }
+    if let Err(error) = st
+        .confirm
+        .put(&format!("ticket:{ticket}"), &record, TICKET_TTL_SECS)
+        .await
+    {
+        tracing::warn!(%error, "link ticket result was not stored");
+    }
+}
+
+fn outcome_text(status: Status) -> &'static str {
+    match status {
+        Status::Denied => "Связывание отклонено на компьютере.",
+        Status::Offline => "Компьютер не отвечает. Откройте SoundCloud Desktop и возьмите новый код.",
+        Status::Silent => "Компьютер не ответил вовремя. Возьмите новый код в приложении.",
+        _ => "Не получилось. Возьмите новый код в приложении.",
+    }
+}
+
+async fn authorize_status(
+    State(st): State<AppState>,
+    Query(params): Query<StatusParams>,
+) -> Response {
+    let voice = &st.config.voice;
+    let key = format!("ticket:{}", params.ticket);
+    let record = if params.ticket.len() == 43 {
+        st.confirm.get::<PageTicket>(&key).await
+    } else {
+        Ok(None)
+    };
+    let record = match record {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return refused(
+                StatusCode::BAD_REQUEST,
+                "Время вышло. Начните связывание заново.",
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "link ticket lookup failed");
+            return refused(StatusCode::SERVICE_UNAVAILABLE, "Сервис занят. Обновите страницу.");
+        }
+    };
+    if record.status == Status::Pending {
+        return html(
+            StatusCode::OK,
+            page::pending(&params.ticket, &voice.skill_name),
+        );
+    }
+    let _ = st.confirm.take::<PageTicket>(&key).await;
+    if record.status == Status::Approved
+        && let Ok(location) = HeaderValue::from_str(&record.location)
+    {
+        return (
+            StatusCode::FOUND,
+            [
+                (LOCATION, location),
+                (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+        )
+            .into_response();
+    }
+    let Some(client) = known_target(voice, &record.client_id, &record.redirect_uri) else {
+        return refused(StatusCode::BAD_REQUEST, "Ссылка не подходит.");
+    };
+    let fields = PageFields {
+        client_id: &client.id,
+        redirect_uri: &record.redirect_uri,
+        state: &record.state,
+        scope: &record.scope,
+        assistant: &voice.skill_name,
+        target: target_name(client.provider),
+    };
+    html(
+        StatusCode::OK,
+        page::form(&fields, Some(outcome_text(record.status))),
+    )
 }
 
 fn oauth_error(status: StatusCode, code: &'static str) -> Response {

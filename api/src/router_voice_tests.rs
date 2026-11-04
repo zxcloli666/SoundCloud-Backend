@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::router_search_tests::{app, redis_url};
+use super::router_search_tests::{app, app_without_star, redis_url};
 
 const REDIRECT: &str = "https://social.yandex.net/broker/redirect";
 
@@ -122,7 +122,7 @@ async fn new_code(app: &axum::Router, session: Uuid, provider: &str) -> anyhow::
 }
 
 async fn authorize(app: &axum::Router, code: &str, state: &str) -> anyhow::Result<Reply> {
-    send(
+    let mut reply = send(
         app,
         "POST",
         "/oauth/authorize",
@@ -135,7 +135,73 @@ async fn authorize(app: &axum::Router, code: &str, state: &str) -> anyhow::Resul
             ("code", code),
         ])),
     )
-    .await
+    .await?;
+    for _ in 0..200 {
+        let text = reply.text();
+        let Some(at) = text.find("/oauth/authorize/status?ticket=") else {
+            return Ok(reply);
+        };
+        let ticket: String = text[at + "/oauth/authorize/status?ticket=".len()..]
+            .chars()
+            .take_while(|c| *c != '"')
+            .collect();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        reply = send(
+            app,
+            "GET",
+            &format!("/oauth/authorize/status?ticket={ticket}"),
+            &[],
+            None,
+        )
+        .await?;
+    }
+    Ok(reply)
+}
+
+async fn confirming_desktop(
+    app: &axum::Router,
+    session: Uuid,
+    device: &'static str,
+    yes: bool,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    let handshake = json_call(
+        app,
+        session,
+        "GET",
+        &format!("/remote/wait?device={device}&active=5&since="),
+        None,
+    )
+    .await?
+    .json();
+    let mut cursor = handshake["cursor"].as_i64().unwrap_or_default();
+    let app = app.clone();
+    Ok(tokio::spawn(async move {
+        loop {
+            let waited = json_call(
+                &app,
+                session,
+                "GET",
+                &format!("/remote/wait?device={device}&active=5&since={cursor}"),
+                None,
+            )
+            .await
+            .map(|reply| reply.json())
+            .unwrap_or(Value::Null);
+            cursor = waited["cursor"].as_i64().unwrap_or(cursor);
+            for command in waited["commands"].as_array().cloned().unwrap_or_default() {
+                if command["kind"] == "link_confirm" {
+                    let _ = json_call(
+                        &app,
+                        session,
+                        "POST",
+                        "/remote/reply",
+                        Some(json!({"id": command["id"], "ok": yes, "text": "done", "state": "done"})),
+                    )
+                    .await;
+                }
+            }
+        }
+    }))
 }
 
 fn auth_code_of(reply: &Reply) -> String {
@@ -159,8 +225,10 @@ async fn token_call(app: &axum::Router, pairs: &[(&str, &str)]) -> anyhow::Resul
 }
 
 async fn link_alice(app: &axum::Router, session: Uuid) -> anyhow::Result<(String, String)> {
+    let confirmer = confirming_desktop(app, session, "confirm-pc", true).await?;
     let code = new_code(app, session, "alice").await?;
     let redirect = authorize(app, &code, "st").await?;
+    confirmer.abort();
     let auth_code = auth_code_of(&redirect);
     let tokens = token_call(
         app,
@@ -338,6 +406,7 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     .await?;
     assert_eq!(wrong_target.status, StatusCode::BAD_REQUEST);
 
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
     let code = new_code(&app, session, "alice").await?;
     assert_eq!(code.len(), 6);
 
@@ -354,6 +423,7 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     let auth_code = auth_code_of(&granted);
     assert!(!auth_code.is_empty());
 
+    confirmer.abort();
     let reused = authorize(&app, &code, "xyz").await?;
     assert_eq!(
         reused.status,
@@ -420,7 +490,7 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     assert_ne!(next["refresh_token"], tokens["refresh_token"]);
     assert_ne!(next["access_token"], tokens["access_token"]);
 
-    let rotated_away = token_call(
+    let retried = token_call(
         &app,
         &[
             ("grant_type", "refresh_token"),
@@ -430,8 +500,51 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
         ],
     )
     .await?;
-    assert_eq!(rotated_away.status, StatusCode::BAD_REQUEST);
+    assert_eq!(retried.status, StatusCode::OK, "{}", retried.text());
+    assert_eq!(
+        retried.json(),
+        next,
+        "a retry inside the grace returns the same pair"
+    );
 
+    sqlx::query("UPDATE remote_grants SET rotated_at = now() - interval '2 minutes'")
+        .execute(&pool)
+        .await?;
+    let reused = token_call(
+        &app,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &old_refresh),
+            ("client_id", "yandex"),
+            ("client_secret", "s3cret"),
+        ],
+    )
+    .await?;
+    assert_eq!(reused.status, StatusCode::BAD_REQUEST);
+    let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(gone, 0, "reuse after the grace revokes the whole grant");
+    let current = token_call(
+        &app,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", next["refresh_token"].as_str().unwrap_or_default()),
+            ("client_id", "yandex"),
+            ("client_secret", "s3cret"),
+        ],
+    )
+    .await?;
+    assert_eq!(current.status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_linked_account_is_listed(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    link_alice(&app, session).await?;
     let listed = json_call(&app, session, "GET", "/remote/links", None)
         .await?
         .json();
@@ -636,19 +749,46 @@ async fn salut_links_by_voice_and_then_relays_commands(pool: PgPool) -> anyhow::
         .map(|c| c.to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    let linked = salut_call(
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let asked = salut_call(
         &app,
         Some("salut-token"),
         salut_body(sub, &spoken, &spoken, 9),
     )
     .await?
     .json();
-    assert_eq!(linked["messageId"], 9);
+    assert_eq!(asked["messageId"], 9);
+    assert!(
+        asked["payload"]["pronounceText"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Подтвердите на компьютере")
+    );
+    let mut linked = Value::Null;
+    for attempt in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        linked = salut_call(
+            &app,
+            Some("salut-token"),
+            salut_body(sub, "ну что", "ну что", 20 + attempt),
+        )
+        .await?
+        .json();
+        if linked["payload"]["pronounceText"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("аккаунт связан")
+        {
+            break;
+        }
+    }
+    confirmer.abort();
     assert!(
         linked["payload"]["pronounceText"]
             .as_str()
             .unwrap_or_default()
-            .contains("аккаунт связан")
+            .contains("аккаунт связан"),
+        "{linked}"
     );
 
     let offline = salut_call(
@@ -783,5 +923,322 @@ async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow:
     )
     .await?;
     assert_eq!(empty.status, StatusCode::OK);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn the_link_page_refuses_framing_and_waits_for_the_desktop(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id=yandex&redirect_uri={}&state=s",
+        urlencoding::encode(REDIRECT)
+    );
+    let page = send(&app, "GET", &uri, &[], None).await?;
+    assert_eq!(page.headers["x-frame-options"], "DENY");
+    assert!(
+        page.headers["content-security-policy"]
+            .to_str()?
+            .contains("frame-ancestors 'none'")
+    );
+
+    let _confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let code = new_code(&app, session, "alice").await?;
+    let posted = send(
+        &app,
+        "POST",
+        "/oauth/authorize",
+        &[],
+        Some(form(&[
+            ("client_id", "yandex"),
+            ("redirect_uri", REDIRECT),
+            ("state", "s"),
+            ("code", &code),
+        ])),
+    )
+    .await?;
+    assert_eq!(posted.status, StatusCode::OK);
+    assert!(posted.text().contains("Подтвердите на компьютере"));
+    assert!(posted.text().contains("http-equiv=\"refresh\""));
+    assert_eq!(posted.headers["x-frame-options"], "DENY");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_no_from_the_desktop_issues_nothing_and_burns_the_code(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let confirmer = confirming_desktop(&app, session, "pc", false).await?;
+    let code = new_code(&app, session, "alice").await?;
+    let denied = authorize(&app, &code, "s").await?;
+    assert_eq!(denied.status, StatusCode::OK);
+    assert!(denied.text().contains("отклонено"), "{}", denied.text());
+    let codes: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(codes, 0, "no auth code without a yes");
+    let again = authorize(&app, &code, "s").await?;
+    assert_eq!(again.status, StatusCode::BAD_REQUEST);
+    confirmer.abort();
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn without_a_desktop_the_link_is_not_made_and_the_code_survives(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let code = new_code(&app, session, "alice").await?;
+    let offline = authorize(&app, &code, "s").await?;
+    assert!(offline.text().contains("не отвечает"), "{}", offline.text());
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(grants, 0);
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let retry = authorize(&app, &code, "s").await?;
+    assert_eq!(retry.status, StatusCode::FOUND, "{}", retry.text());
+    confirmer.abort();
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "303").await?;
+    let sub = "11111111-2222-3333-4444-555555555555";
+    let confirmer = confirming_desktop(&app, session, "pc", false).await?;
+    let code = new_code(&app, session, "salut").await?;
+    let spoken = code.chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
+    let first = salut_call(&app, Some("salut-token"), salut_body(sub, &spoken, &spoken, 1))
+        .await?
+        .json();
+    assert!(
+        first["payload"]["pronounceText"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Подтвердите")
+    );
+    let mut text = String::new();
+    for n in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let next = salut_call(&app, Some("salut-token"), salut_body(sub, "а", "а", 2 + n))
+            .await?
+            .json();
+        text = next["payload"]["pronounceText"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if !text.contains("Подтвердите") {
+            break;
+        }
+    }
+    confirmer.abort();
+    assert!(text.contains("отклонена"), "{text}");
+    let bound: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants WHERE external_id IS NOT NULL")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(bound, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn five_unanswered_asks_burn_a_code(pool: PgPool) -> anyhow::Result<()> {
+    let redis = deadpool_redis::Config::from_url(redis_url())
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+    let confirm = crate::modules::remote::LinkConfirm::new(redis, format!("voice-test-{}", Uuid::now_v7()));
+    let links = crate::modules::remote::LinksService::new(pool.clone());
+    let issued = links
+        .create_code("101", backend_contracts::remote::LinkProvider::Alice)
+        .await?;
+    let found = links
+        .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
+        .await?
+        .expect("the code exists");
+    for expected in 1..5 {
+        let misses = crate::modules::remote::linking::note_miss(&links, &confirm, found.id).await;
+        assert_eq!(misses, expected);
+        assert!(
+            links
+                .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
+                .await?
+                .is_some()
+        );
+    }
+    crate::modules::remote::linking::note_miss(&links, &confirm, found.id).await;
+    assert!(
+        links
+            .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
+            .await?
+            .is_none(),
+        "the fifth miss invalidates the code"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let first = json_call(&app, session, "GET", "/remote/wait?since=&device=pc&active=", None).await?;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text());
+    assert!(first.json()["cursor"].as_i64().unwrap_or_default() > 0);
+    let bad = json_call(&app, session, "GET", "/remote/wait?since=abc", None).await?;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+
+    let (access, _) = link_alice(&app, session).await?;
+    let desktop = tokio::spawn({
+        let app = app.clone();
+        async move {
+            let waited = json_call(
+                &app,
+                session,
+                "GET",
+                &format!("/remote/wait?device=pc&active=1&since={}", first.json()["cursor"]),
+                None,
+            )
+            .await
+            .map(|reply| reply.json())
+            .unwrap_or(Value::Null);
+            if let Some(command) = waited["commands"].get(0) {
+                let _ = json_call(
+                    &app,
+                    session,
+                    "POST",
+                    "/remote/reply",
+                    Some(json!({"id": command["id"], "ok": true, "text": "Из поля text", "state": "done"})),
+                )
+                .await;
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let answered = alice_call(&app, Some(&access), alice_body("пауза", true))
+        .await?
+        .json();
+    desktop.await?;
+    assert_eq!(answered["response"]["text"], "Из поля text");
+    let links = json_call(&app, session, "GET", "/remote/links", None).await?.json();
+    assert!(links["links"].is_array());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn waits_per_user_are_capped_and_a_repeat_replaces_the_first(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let cursor = json_call(&app, session, "GET", "/remote/wait?device=a", None)
+        .await?
+        .json()["cursor"]
+        .as_i64()
+        .unwrap_or_default();
+    let wait = |device: &'static str| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            json_call(
+                &app,
+                session,
+                "GET",
+                &format!("/remote/wait?device={device}&active=1&since={cursor}"),
+                None,
+            )
+            .await
+        })
+    };
+    let first_a = wait("a");
+    let _b = wait("b");
+    let _c = wait("c");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let fourth = json_call(
+        &app,
+        session,
+        "GET",
+        &format!("/remote/wait?device=d&active=1&since={cursor}"),
+        None,
+    )
+    .await?;
+    assert_eq!(fourth.status, StatusCode::TOO_MANY_REQUESTS);
+    let second_a = wait("a");
+    let replaced = tokio::time::timeout(Duration::from_secs(2), first_a).await??;
+    assert_eq!(replaced?.status, StatusCode::OK);
+    assert!(!second_a.is_finished());
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn reply_is_capped_and_needs_star(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let big = json!({"id": Uuid::now_v7(), "ok": true, "state": "x".repeat(20_000)});
+    let refused = json_call(&app, session, "POST", "/remote/reply", Some(big)).await?;
+    assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
+    let small = json!({"id": Uuid::now_v7(), "ok": true});
+    let fine = json_call(&app, session, "POST", "/remote/reply", Some(small.clone())).await?;
+    assert_eq!(fine.status, StatusCode::NO_CONTENT);
+
+    let free = app_without_star(&pool, &redis_url()).await?;
+    let no_star = json_call(&free, session, "POST", "/remote/reply", Some(small)).await?;
+    assert_eq!(no_star.status, StatusCode::FORBIDDEN);
+    let resolve = json_call(
+        &free,
+        session,
+        "POST",
+        "/search/resolve",
+        Some(json!({"variants": ["x"]})),
+    )
+    .await?;
+    assert_eq!(resolve.status, StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn resolve_survives_a_hostile_body(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let started = std::time::Instant::now();
+    let reply = json_call(
+        &app,
+        session,
+        "POST",
+        "/search/resolve",
+        Some(json!({
+            "variants": (0..500).map(|n| format!("{}{n}", "я".repeat(300))).collect::<Vec<_>>(),
+            "kinds": vec!["track"; 30_000],
+        })),
+    )
+    .await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(started.elapsed() < Duration::from_secs(3));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn alice_answers_inside_its_budget_when_the_desktop_is_silent(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let (access, _) = link_alice(&app, session).await?;
+    json_call(&app, session, "GET", "/remote/wait?device=quiet&active=9", None).await?;
+    let started = std::time::Instant::now();
+    let reply = alice_call(&app, Some(&access), alice_body("пауза", true))
+        .await?
+        .json();
+    let took = started.elapsed();
+    assert!(reply["response"]["text"].as_str().unwrap_or_default().contains("не отвечает"));
+    assert!(took >= Duration::from_millis(600) && took < Duration::from_millis(1000), "{took:?}");
     Ok(())
 }

@@ -71,17 +71,29 @@ pub fn basic_credentials(header: Option<&str>) -> Option<(String, String)> {
     ))
 }
 
-pub fn redirect_with_code(redirect_uri: &str, code: &str, form: &AuthorizeForm) -> Option<String> {
+#[derive(Debug, Deserialize)]
+pub struct StatusParams {
+    #[serde(default)]
+    pub ticket: String,
+}
+
+pub fn redirect_with_code(
+    redirect_uri: &str,
+    code: &str,
+    state: &str,
+    client_id: &str,
+    scope: &str,
+) -> Option<String> {
     let mut url = url::Url::parse(redirect_uri).ok()?;
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("code", code);
-        if !form.state.is_empty() {
-            query.append_pair("state", &form.state);
+        if !state.is_empty() {
+            query.append_pair("state", state);
         }
-        query.append_pair("client_id", &form.client_id);
-        if !form.scope.is_empty() {
-            query.append_pair("scope", &form.scope);
+        query.append_pair("client_id", client_id);
+        if !scope.is_empty() {
+            query.append_pair("scope", scope);
         }
     }
     Some(url.into())
@@ -104,14 +116,14 @@ mod tests {
 
     #[test]
     fn the_redirect_carries_code_state_client_and_scope() {
-        let form = AuthorizeForm {
-            client_id: "yandex".into(),
-            redirect_uri: "https://social.yandex.net/broker/redirect".into(),
-            state: "abc 1".into(),
-            scope: "read".into(),
-            code: "123456".into(),
-        };
-        let url = redirect_with_code(&form.redirect_uri, "AUTH", &form).unwrap();
+        let url = redirect_with_code(
+            "https://social.yandex.net/broker/redirect",
+            "AUTH",
+            "abc 1",
+            "yandex",
+            "read",
+        )
+        .unwrap();
         assert_eq!(
             url,
             "https://social.yandex.net/broker/redirect?code=AUTH&state=abc+1&client_id=yandex&scope=read"

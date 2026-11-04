@@ -1,13 +1,15 @@
 use std::time::Duration;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use backend_contracts::remote::{
-    LinkCodeRequest, LinkCodeResponse, LinksResponse, RemoteReply, WAIT_HOLD_SECS, WaitResponse,
+    LinkCodeRequest, LinkCodeResponse, LinksResponse, MAX_REPLY_BYTES, RemoteReply, WAIT_HOLD_SECS,
+    WaitResponse,
 };
 use serde::Deserialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::common::admission::{AdmissionRejection, Endpoint};
@@ -20,7 +22,10 @@ const MAX_DEVICE_LEN: usize = 64;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/remote/wait", get(wait))
-        .route("/remote/reply", post(reply))
+        .route(
+            "/remote/reply",
+            post(reply).layer(DefaultBodyLimit::max(MAX_REPLY_BYTES)),
+        )
         .route("/remote/link-code", post(link_code))
         .route("/remote/links", get(links))
         .route("/remote/links/{id}", delete(revoke))
@@ -29,11 +34,54 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 struct WaitQuery {
     #[serde(default)]
-    since: Option<i64>,
+    since: Option<String>,
     #[serde(default)]
     device: Option<String>,
     #[serde(default)]
-    active: Option<i64>,
+    active: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplyBody {
+    id: Uuid,
+    ok: bool,
+    #[serde(default)]
+    speech: String,
+    #[serde(default)]
+    display: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    state: Option<Value>,
+}
+
+fn number(raw: Option<String>, name: &str) -> AppResult<Option<i64>> {
+    match raw.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(text) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| AppError::bad_request(format!("{name} is not a number"))),
+    }
+}
+
+pub fn admission_error(rejection: AdmissionRejection, code: &'static str, what: &str) -> AppError {
+    match rejection {
+        AdmissionRejection::Limited {
+            retry_after_seconds,
+        } => AppError::coded(
+            StatusCode::TOO_MANY_REQUESTS,
+            code,
+            format!("Too many {what} requests"),
+        )
+        .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(60)),
+        AdmissionRejection::Unavailable => AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_busy",
+            format!("{what} is busy, try again shortly"),
+        )
+        .with_retry_after(1),
+    }
 }
 
 pub fn star_required() -> AppError {
@@ -57,32 +105,64 @@ async fn wait(
     ctx: SessionCtx,
     Query(q): Query<WaitQuery>,
 ) -> AppResult<Json<WaitResponse>> {
+    let since = number(q.since, "since")?;
+    let active = number(q.active, "active")?.unwrap_or(0);
     require_star(&st, &ctx).await?;
+    if since.is_none() {
+        st.admission
+            .check_session(Endpoint::VoiceRemote, ctx.session_id)
+            .await
+            .map_err(|rejection| admission_error(rejection, "voice_remote_limited", "remote"))?;
+    }
     let device: String = q
         .device
         .unwrap_or_default()
         .chars()
         .take(MAX_DEVICE_LEN)
         .collect();
-    Ok(Json(
-        st.remote
-            .wait(
-                &ctx.sc_user_id,
-                &device,
-                q.active.unwrap_or(0),
-                q.since,
-                Duration::from_secs(WAIT_HOLD_SECS),
-            )
-            .await,
-    ))
+    let hold = Duration::from_secs(WAIT_HOLD_SECS);
+    match st
+        .remote
+        .wait(&ctx.sc_user_id, &device, active, since, hold)
+        .await
+    {
+        Some(response) => Ok(Json(response)),
+        None => Err(AppError::coded(
+            StatusCode::TOO_MANY_REQUESTS,
+            "voice_too_many_devices",
+            "Too many devices are waiting for this account",
+        )
+        .with_retry_after(20)),
+    }
 }
 
 async fn reply(
     State(st): State<AppState>,
     ctx: SessionCtx,
-    Json(body): Json<RemoteReply>,
+    Json(body): Json<ReplyBody>,
 ) -> AppResult<StatusCode> {
-    st.remote.reply(&ctx.sc_user_id, body).await;
+    st.admission
+        .check_session(Endpoint::VoiceRemote, ctx.session_id)
+        .await
+        .map_err(|rejection| admission_error(rejection, "voice_remote_limited", "remote"))?;
+    require_star(&st, &ctx).await?;
+    let display = if body.display.is_empty() {
+        body.text
+    } else {
+        body.display
+    };
+    st.remote
+        .reply(
+            &ctx.sc_user_id,
+            RemoteReply {
+                id: body.id,
+                ok: body.ok,
+                speech: body.speech,
+                display,
+                state: body.state,
+            },
+        )
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -95,22 +175,7 @@ async fn link_code(
     st.admission
         .check_session(Endpoint::VoiceLinkCode, ctx.session_id)
         .await
-        .map_err(|rejection| match rejection {
-            AdmissionRejection::Limited {
-                retry_after_seconds,
-            } => AppError::coded(
-                StatusCode::TOO_MANY_REQUESTS,
-                "voice_link_limited",
-                "Too many link codes requested",
-            )
-            .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(60)),
-            AdmissionRejection::Unavailable => AppError::coded(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "voice_link_busy",
-                "Link codes are busy, try again shortly",
-            )
-            .with_retry_after(1),
-        })?;
+        .map_err(|rejection| admission_error(rejection, "voice_link_limited", "link code"))?;
     Ok(Json(
         st.links.create_code(&ctx.sc_user_id, body.provider).await?,
     ))

@@ -35,6 +35,24 @@ pub fn random_token() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+pub fn random_seed() -> String {
+    random_token()
+}
+
+pub fn rotated_tokens(seed: &str, previous_refresh: &str) -> (String, String) {
+    let derive = |label: &str| {
+        let mut hash = Sha256::new();
+        hash.update(b"voice-rotation:");
+        hash.update(label.as_bytes());
+        hash.update(b":");
+        hash.update(seed.as_bytes());
+        hash.update(b":");
+        hash.update(previous_refresh.as_bytes());
+        URL_SAFE_NO_PAD.encode(hash.finalize())
+    };
+    (derive("access"), derive("refresh"))
+}
+
 pub fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
@@ -90,6 +108,16 @@ mod tests {
         assert_ne!(first, random_token());
         assert_eq!(token_hash(&first).len(), 64);
         assert_ne!(token_hash(&first), first);
+    }
+
+    #[test]
+    fn a_rotation_repeats_the_same_pair_only_for_the_same_seed_and_token() {
+        let first = rotated_tokens("seed", "old-refresh");
+        assert_eq!(first, rotated_tokens("seed", "old-refresh"));
+        assert_ne!(first, rotated_tokens("other", "old-refresh"));
+        assert_ne!(first, rotated_tokens("seed", "another-refresh"));
+        assert_ne!(first.0, first.1);
+        assert!(first.0.len() >= 43);
     }
 
     #[test]

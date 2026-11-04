@@ -1,5 +1,8 @@
 UPDATE remote_grants
-SET access_hash = $2,
+SET prev_refresh_hash = refresh_hash,
+    rotated_at = now(),
+    rotation_seed = $7,
+    access_hash = $2,
     access_expires_at = now() + ($3::int * INTERVAL '1 second'),
     refresh_hash = $4,
     refresh_expires_at = now() + ($5::int * INTERVAL '1 second'),

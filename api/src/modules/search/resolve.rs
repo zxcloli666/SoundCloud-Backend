@@ -7,10 +7,10 @@ use super::catalog::{Request, SearchService};
 use super::terms::{self, Shape, quote};
 use crate::error::AppResult;
 
-const MAX_VARIANTS: usize = 8;
+pub const MAX_VARIANTS: usize = 8;
 const MAX_TOKENS: usize = 6;
 const MIN_STEM_LEN: usize = 3;
-const PARALLEL_VARIANTS: usize = 3;
+pub const MAX_VARIANT_CHARS: usize = 80;
 pub const DEFAULT_PER_KIND: i64 = 5;
 pub const MAX_PER_KIND: i64 = 10;
 
@@ -100,6 +100,32 @@ pub fn merge(found: Vec<Resolved>, per_kind: usize) -> BTreeMap<Kind, Vec<Resolv
     grouped
 }
 
+pub fn clean_kinds(kinds: &[Kind]) -> Vec<Kind> {
+    if kinds.is_empty() {
+        return ALL_KINDS.to_vec();
+    }
+    ALL_KINDS
+        .into_iter()
+        .filter(|kind| kinds.contains(kind))
+        .collect()
+}
+
+pub fn clean_variants(variants: &[String]) -> Vec<String> {
+    let mut queries: Vec<String> = Vec::new();
+    for raw in variants.iter().take(MAX_VARIANTS * 2) {
+        let clipped: String = raw.chars().take(MAX_VARIANT_CHARS).collect();
+        if let Some(q) = Request::new(&clipped, 0, 1).q
+            && !queries.contains(&q)
+        {
+            queries.push(q);
+        }
+        if queries.len() == MAX_VARIANTS {
+            break;
+        }
+    }
+    queries
+}
+
 impl SearchService {
     pub async fn resolve(
         &self,
@@ -107,31 +133,17 @@ impl SearchService {
         kinds: &[Kind],
         per_kind: i64,
     ) -> AppResult<BTreeMap<Kind, Vec<Resolved>>> {
-        let mut queries: Vec<String> = Vec::new();
-        for raw in variants.iter().take(MAX_VARIANTS * 2) {
-            if let Some(q) = Request::new(raw, 0, 1).q
-                && !queries.contains(&q)
-            {
-                queries.push(q);
-            }
-            if queries.len() == MAX_VARIANTS {
-                break;
-            }
-        }
+        let queries = clean_variants(variants);
+        let kinds = clean_kinds(kinds);
         let per_kind = per_kind.clamp(1, MAX_PER_KIND);
         let found = self
             .guarded(|| async {
+                let mut tx = self.begin().await?;
                 let mut found = Vec::new();
-                let numbered: Vec<(usize, &String)> = queries.iter().enumerate().collect();
-                for chunk in numbered.chunks(PARALLEL_VARIANTS) {
-                    let parts = futures::future::try_join_all(
-                        chunk
-                            .iter()
-                            .map(|(index, q)| self.resolve_variant(*index, q, kinds, per_kind)),
-                    )
-                    .await?;
-                    found.extend(parts.into_iter().flatten());
+                for (index, q) in queries.iter().enumerate() {
+                    found.extend(self.resolve_variant(&mut tx, index, q, &kinds, per_kind).await?);
                 }
+                tx.commit().await?;
                 Ok::<Vec<Resolved>, crate::error::AppError>(found)
             })
             .await?;
@@ -140,18 +152,17 @@ impl SearchService {
 
     async fn resolve_variant(
         &self,
+        tx: &mut Transaction<'static, Postgres>,
         index: usize,
         q: &str,
         kinds: &[Kind],
         per_kind: i64,
     ) -> AppResult<Vec<Resolved>> {
-        let mut tx = self.begin().await?;
-        let Some(strict_terms) = terms::resolve(&self.terms, &mut tx, q, Shape::Tracks).await?
-        else {
+        let Some(strict_terms) = terms::resolve(&self.terms, tx, q, Shape::Tracks).await? else {
             return Ok(Vec::new());
         };
-        let entity_terms = terms::resolve(&self.terms, &mut tx, q, Shape::Entities).await?;
-        let stem = stem_for(&mut tx, q).await?;
+        let entity_terms = terms::resolve(&self.terms, tx, q, Shape::Entities).await?;
+        let stem = stem_for(tx, q).await?;
         let mut out = Vec::new();
         for kind in kinds {
             let (strict, loose) = match (kind, &entity_terms) {
@@ -170,7 +181,7 @@ impl SearchService {
                         stem.as_deref(),
                         per_kind * 3
                     )
-                    .fetch_all(&mut *tx)
+                    .fetch_all(&mut **tx)
                     .await?
                 }
                 Kind::Artist => {
@@ -183,7 +194,7 @@ impl SearchService {
                         stem.as_deref(),
                         per_kind
                     )
-                    .fetch_all(&mut *tx)
+                    .fetch_all(&mut **tx)
                     .await?
                 }
                 Kind::Album => {
@@ -196,7 +207,7 @@ impl SearchService {
                         stem.as_deref(),
                         per_kind
                     )
-                    .fetch_all(&mut *tx)
+                    .fetch_all(&mut **tx)
                     .await?
                 }
                 Kind::Playlist => {
@@ -209,7 +220,7 @@ impl SearchService {
                         stem.as_deref(),
                         per_kind
                     )
-                    .fetch_all(&mut *tx)
+                    .fetch_all(&mut **tx)
                     .await?
                 }
             };
@@ -224,12 +235,11 @@ impl SearchService {
                 tier: row.tier,
             }));
         }
-        tx.commit().await?;
         Ok(out)
     }
 }
 
-async fn stem_for(tx: &mut Transaction<'_, Postgres>, q: &str) -> AppResult<Option<String>> {
+async fn stem_for(tx: &mut Transaction<'static, Postgres>, q: &str) -> AppResult<Option<String>> {
     let tokens: Vec<String> = q
         .split_whitespace()
         .take(MAX_TOKENS)
@@ -261,6 +271,32 @@ mod tests {
             variant,
             tier,
         }
+    }
+
+    #[test]
+    fn kinds_are_deduplicated_to_the_four_known_ones() {
+        let many = vec![Kind::Track; 30_000];
+        assert_eq!(clean_kinds(&many), vec![Kind::Track]);
+        assert_eq!(
+            clean_kinds(&[Kind::Playlist, Kind::Track, Kind::Playlist]),
+            vec![Kind::Track, Kind::Playlist]
+        );
+        assert_eq!(clean_kinds(&[]), ALL_KINDS.to_vec());
+    }
+
+    #[test]
+    fn variants_are_capped_deduplicated_and_clipped() {
+        let long = "а".repeat(500);
+        let mut raw: Vec<String> = (0..40).map(|n| format!("запрос {n}")).collect();
+        raw.push(long);
+        raw.insert(0, "Запрос 0".to_owned());
+        let cleaned = clean_variants(&raw);
+        assert_eq!(cleaned.len(), MAX_VARIANTS);
+        assert!(cleaned.iter().all(|q| q.chars().count() <= MAX_VARIANT_CHARS));
+        let unique: std::collections::HashSet<&String> = cleaned.iter().collect();
+        assert_eq!(unique.len(), cleaned.len());
+        let only_long = clean_variants(&["б".repeat(500)]);
+        assert_eq!(only_long[0].chars().count(), MAX_VARIANT_CHARS);
     }
 
     #[test]

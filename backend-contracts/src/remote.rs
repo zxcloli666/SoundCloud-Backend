@@ -9,6 +9,10 @@ pub const WAIT_HOLD_SECS: u64 = 20;
 pub const BUFFER_SECS: u64 = 60;
 pub const LINK_CODE_DIGITS: usize = 6;
 pub const LINK_CODE_TTL_SECS: i64 = 600;
+pub const CONFIRM_HOLD_SECS: u64 = 60;
+pub const MAX_DEVICES_PER_USER: usize = 3;
+pub const MAX_REPLY_BYTES: usize = 8 * 1024;
+pub const MAX_UTTERANCE_CHARS: usize = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,10 +38,20 @@ impl LinkProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandKind {
+    #[default]
+    Utterance,
+    LinkConfirm,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteCommand {
     pub id: Uuid,
+    #[serde(default)]
+    pub kind: CommandKind,
     pub seq: i64,
     pub user: String,
     pub source: String,
@@ -126,6 +140,7 @@ mod tests {
     fn a_command_is_camel_case_on_the_wire() {
         let command = RemoteCommand {
             id: Uuid::nil(),
+            kind: CommandKind::Utterance,
             seq: 7,
             user: "101".into(),
             source: "alice".into(),
@@ -138,6 +153,17 @@ mod tests {
         assert_eq!(json["createdAt"], 1);
         let back: RemoteCommand = serde_json::from_value(json).unwrap();
         assert_eq!(back, command);
+    }
+
+    #[test]
+    fn a_command_without_a_kind_is_an_utterance_and_a_link_confirm_is_snake_case() {
+        let old: RemoteCommand = serde_json::from_str(
+            r#"{"id":"00000000-0000-0000-0000-000000000000","seq":1,"user":"1","source":"alice","text":"x","createdAt":1,"expiresAt":2}"#,
+        )
+        .unwrap();
+        assert_eq!(old.kind, CommandKind::Utterance);
+        let json = serde_json::to_value(CommandKind::LinkConfirm).unwrap();
+        assert_eq!(json, "link_confirm");
     }
 
     #[test]

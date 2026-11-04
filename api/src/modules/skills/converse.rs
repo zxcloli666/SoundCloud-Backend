@@ -1,13 +1,15 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use backend_contracts::remote::LinkProvider;
+use backend_contracts::remote::{CommandKind, LinkProvider};
 
 use super::phrases::Phrases;
-use super::speech::clip;
+use super::speech::{clip, clip_utterance};
 use crate::common::admission::{AdmissionRejection, Endpoint};
 use crate::modules::remote::Asked;
 use crate::modules::remote::links::Grant;
 use crate::state::AppState;
+
+const MIN_WAIT: Duration = Duration::from_millis(200);
 
 pub struct Said {
     pub text: String,
@@ -27,10 +29,12 @@ pub async fn run(
     st: &AppState,
     grant: &Grant,
     utterance: &str,
-    wait: Duration,
+    started: Instant,
+    budget: Duration,
     phrases: &Phrases<'_>,
 ) -> Said {
-    if utterance.trim().is_empty() {
+    let utterance = clip_utterance(utterance);
+    if utterance.is_empty() {
         return Said::plain(phrases.repeat());
     }
     let identity = format!("grant:{}", grant.id);
@@ -55,9 +59,19 @@ pub async fn run(
         LinkProvider::Alice => "alice",
         LinkProvider::Salut => "salut",
     };
+    let deadline = started + budget;
+    if deadline.saturating_duration_since(Instant::now()) < MIN_WAIT {
+        return Said::plain(phrases.busy());
+    }
     match st
         .remote
-        .dispatch(&grant.sc_user_id, source, utterance, wait)
+        .dispatch(
+            &grant.sc_user_id,
+            CommandKind::Utterance,
+            source,
+            &utterance,
+            deadline,
+        )
         .await
     {
         Asked::Offline | Asked::Silent => Said::plain(phrases.offline()),

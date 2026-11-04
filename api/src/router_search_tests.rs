@@ -91,7 +91,10 @@ fn config(redis: &str) -> AppConfig {
             room_create: limit,
             room_join: limit,
             voice_link_code: limit,
-            voice_code_try: limit,
+            voice_remote: limit,
+            voice_page_ip: limit,
+            voice_page_client: limit,
+            voice_salut_sub: limit,
             voice_utterance: limit,
             voice_resolve: limit,
             diag_bundle: limit,
@@ -128,6 +131,8 @@ fn config(redis: &str) -> AppConfig {
                 secret_sha256: <sha2::Sha256 as sha2::Digest>::digest(b"s3cret").to_vec(),
                 redirect_uris: vec!["https://social.yandex.net/broker/redirect".to_owned()],
             }],
+            enabled: true,
+            confirm_per_user_day: 20,
         },
         soundwave: SoundwaveCfg {
             popularity_boost: 0.0,
@@ -317,6 +322,10 @@ pub(super) async fn state(
             &format!("remote-test-{}", Uuid::now_v7()),
         ),
         links: crate::modules::remote::LinksService::new(pg.clone()),
+        confirm: std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
+            redis_pool.clone(),
+            format!("voice-test-{}", Uuid::now_v7()),
+        )),
         pg,
     })
 }
@@ -390,6 +399,12 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     Ok(crate::router::build(
         state(pool, soundcloud_hits(), redis).await?,
     ))
+}
+
+pub(super) async fn app_without_star(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {
+    let mut st = state(pool, soundcloud_hits(), redis).await?;
+    st.subscriptions = crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
+    Ok(crate::router::build(st))
 }
 
 pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {

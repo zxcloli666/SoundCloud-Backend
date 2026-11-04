@@ -62,6 +62,26 @@ impl Phrases<'_> {
         "Слишком много попыток. Подождите минуту."
     }
 
+    pub fn confirm_on_pc(&self) -> &'static str {
+        "Подтвердите на компьютере."
+    }
+
+    pub fn link_denied(&self) -> &'static str {
+        "Привязка отклонена на компьютере."
+    }
+
+    pub fn link_silent(&self) -> &'static str {
+        "Компьютер не ответил. Назовите код ещё раз, когда откроете приложение."
+    }
+
+    pub fn link_offline(&self) -> &'static str {
+        "Компьютер не отвечает. Откройте SoundCloud Desktop и назовите код ещё раз."
+    }
+
+    pub fn code_capped(&self) -> &'static str {
+        "На сегодня слишком много запросов на подтверждение. Попробуйте завтра."
+    }
+
     pub fn linked(&self) -> &'static str {
         "Готово, аккаунт связан. Что включить?"
     }

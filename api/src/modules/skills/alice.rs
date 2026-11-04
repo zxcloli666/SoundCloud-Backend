@@ -4,6 +4,7 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::response::{IntoResponse, Response};
+use std::time::Instant;
 use backend_contracts::remote::LinkProvider;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -100,10 +101,19 @@ pub async fn webhook(
     headers: HeaderMap,
     Json(request): Json<AliceRequest>,
 ) -> Response {
+    let started = Instant::now();
     if request.request.original_utterance.trim() == "ping" {
         return Json(pong()).into_response();
     }
     let voice = &st.config.voice;
+    if !voice.enabled {
+        return AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_disabled",
+            "Voice is not configured",
+        )
+        .into_response();
+    }
     if voice.alice_skill_id.is_empty() || request.session.skill_id != voice.alice_skill_id {
         return AppError::forbidden("Unknown skill").into_response();
     }
@@ -128,7 +138,7 @@ pub async fn webhook(
     let Some(grant) = grant else {
         return Json(start_linking(phrases.link_needed())).into_response();
     };
-    Json(answer(&st, &grant, &request, &utterance, &phrases).await).into_response()
+    Json(answer(&st, &grant, &request, &utterance, started, &phrases).await).into_response()
 }
 
 async fn answer(
@@ -136,6 +146,7 @@ async fn answer(
     grant: &Grant,
     request: &AliceRequest,
     utterance: &str,
+    started: Instant,
     phrases: &Phrases<'_>,
 ) -> Value {
     if utterance.is_empty() {
@@ -144,6 +155,14 @@ async fn answer(
     if wants_help(utterance) {
         return spoken(&Said::plain(&phrases.help()), false);
     }
-    let said = converse::run(st, grant, utterance, st.config.voice.alice_wait, phrases).await;
+    let said = converse::run(
+        st,
+        grant,
+        utterance,
+        started,
+        st.config.voice.alice_wait,
+        phrases,
+    )
+    .await;
     spoken(&said, request.session.new)
 }

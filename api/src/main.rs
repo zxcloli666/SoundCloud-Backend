@@ -293,6 +293,10 @@ async fn main() {
         crate::modules::remote::RemoteHub::new(Some(nats.clone()), redis_pool.clone(), "remote");
     remote.start().await;
     let links = crate::modules::remote::LinksService::new(pg.clone());
+    let confirm = std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
+        redis_pool.clone(),
+        "voice",
+    ));
 
     let port = config.port;
     let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
@@ -334,6 +338,7 @@ async fn main() {
         rooms,
         remote,
         links,
+        confirm,
     };
 
     let app = router::build(state);

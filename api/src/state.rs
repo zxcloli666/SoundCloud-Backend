@@ -71,4 +71,5 @@ pub struct AppState {
     pub rooms: Arc<RoomsService>,
     pub remote: Arc<crate::modules::remote::RemoteHub>,
     pub links: Arc<crate::modules::remote::LinksService>,
+    pub confirm: Arc<crate::modules::remote::LinkConfirm>,
 }

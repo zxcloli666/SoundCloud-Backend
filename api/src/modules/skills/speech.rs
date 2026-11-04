@@ -1,12 +1,27 @@
+use backend_contracts::remote::MAX_UTTERANCE_CHARS;
+
 const TEXT_LIMIT: usize = 1000;
 
 pub fn clip(text: &str) -> String {
+    clip_to(text, TEXT_LIMIT)
+}
+
+pub fn clip_to(text: &str, limit: usize) -> String {
     let trimmed = text.trim();
-    if trimmed.chars().count() <= TEXT_LIMIT {
+    if trimmed.chars().count() <= limit {
         return trimmed.to_owned();
     }
-    let cut: String = trimmed.chars().take(TEXT_LIMIT - 1).collect();
+    let cut: String = trimmed.chars().take(limit - 1).collect();
     format!("{}…", cut.trim_end())
+}
+
+pub fn clip_utterance(text: &str) -> String {
+    text.trim()
+        .chars()
+        .take(MAX_UTTERANCE_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 pub fn spoken_digits(text: &str) -> String {
@@ -48,6 +63,14 @@ mod tests {
         assert_eq!(spoken_digits("один два три четыре пять шесть"), "123456");
         assert_eq!(spoken_digits("ноль пять 7 8 девять два"), "057892");
         assert_eq!(spoken_digits("привет"), "");
+    }
+
+    #[test]
+    fn an_utterance_is_cut_to_three_hundred_characters_without_an_ellipsis() {
+        let cut = clip_utterance(&format!("  {}  ", "ю".repeat(900)));
+        assert_eq!(cut.chars().count(), 300);
+        assert!(!cut.ends_with('…'));
+        assert_eq!(clip_utterance(" пауза "), "пауза");
     }
 
     #[test]

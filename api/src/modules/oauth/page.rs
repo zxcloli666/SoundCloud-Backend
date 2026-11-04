@@ -38,6 +38,13 @@ pub fn form(fields: &PageFields<'_>, error: Option<&str>) -> String {
         .replace("__STYLE__", STYLE)
 }
 
+pub fn pending(ticket: &str, assistant: &str) -> String {
+    PENDING_TEMPLATE
+        .replace("__TICKET__", &escape(ticket))
+        .replace("__ASSISTANT__", &escape(assistant))
+        .replace("__STYLE__", STYLE)
+}
+
 pub fn failure(text: &str) -> String {
     FAILURE_TEMPLATE
         .replace("__MESSAGE__", &escape(text))
@@ -60,6 +67,9 @@ const STYLE: &str = r#"
     input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
     button { font-size: 17px; font-weight: 600; padding: 14px; border: 0; border-radius: 14px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
     .error { color: var(--error); margin-top: 14px; font-size: 15px; }
+    .spinner { width: 36px; height: 36px; margin: 22px auto 6px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 "#;
 
 const FORM_TEMPLATE: &str = r#"<!DOCTYPE html>
@@ -84,6 +94,26 @@ __ERROR__
 <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8" placeholder="000000" autofocus required>
 <button type="submit">Связать</button>
 </form>
+</main>
+</body>
+</html>
+"#;
+
+const PENDING_TEMPLATE: &str = r#"<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="refresh" content="2;url=/oauth/authorize/status?ticket=__TICKET__">
+<title>Подтвердите на компьютере</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<main role="status">
+<h1>Подтвердите на компьютере</h1>
+<div class="spinner" aria-hidden="true"></div>
+<p>Откройте SoundCloud Desktop и ответьте «Да». Страница обновится сама.</p>
 </main>
 </body>
 </html>

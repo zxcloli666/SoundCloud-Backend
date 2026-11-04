@@ -42,6 +42,11 @@ pub fn skips_core(method: &Method, path: &str) -> bool {
         || path == "/tracks/upload"
         || path.starts_with("/.well-known/")
         || is_room_poll(method, path)
+        || is_voice_hold(method, path)
+}
+
+fn is_voice_hold(method: &Method, path: &str) -> bool {
+    (method == Method::GET && path == "/remote/wait") || path.starts_with("/skills/")
 }
 
 fn is_room_poll(method: &Method, path: &str) -> bool {

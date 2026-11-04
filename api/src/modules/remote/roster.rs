@@ -2,8 +2,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use backend_contracts::remote::MAX_DEVICES_PER_USER;
+
 pub const DEVICE_TTL: Duration = Duration::from_secs(45);
 pub const POLL_TTL: Duration = Duration::from_secs(60);
+const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
 struct Seen {
     device: String,
@@ -11,20 +14,65 @@ struct Seen {
     at: Instant,
 }
 
-#[derive(Default)]
+struct Devices {
+    by_user: HashMap<String, Vec<Seen>>,
+    swept_at: Option<Instant>,
+}
+
+struct Polls {
+    by_user: HashMap<String, Instant>,
+    swept_at: Option<Instant>,
+}
+
 pub struct Roster {
-    devices: Mutex<HashMap<String, Vec<Seen>>>,
-    polls: Mutex<HashMap<String, Instant>>,
+    devices: Mutex<Devices>,
+    polls: Mutex<Polls>,
+}
+
+impl Default for Roster {
+    fn default() -> Self {
+        Self {
+            devices: Mutex::new(Devices {
+                by_user: HashMap::new(),
+                swept_at: None,
+            }),
+            polls: Mutex::new(Polls {
+                by_user: HashMap::new(),
+                swept_at: None,
+            }),
+        }
+    }
+}
+
+fn sweep_due(swept_at: &mut Option<Instant>, now: Instant) -> bool {
+    match swept_at {
+        Some(at) if now.duration_since(*at) < SWEEP_EVERY => false,
+        _ => {
+            *swept_at = Some(now);
+            true
+        }
+    }
 }
 
 impl Roster {
     pub fn note(&self, user: &str, device: &str, active: i64, now: Instant) {
         let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
-        if devices.len() > 4096 {
-            devices.retain(|_, seen| seen.iter().any(|s| now.duration_since(s.at) < DEVICE_TTL));
+        if sweep_due(&mut devices.swept_at, now) {
+            devices
+                .by_user
+                .retain(|_, seen| seen.iter().any(|s| now.duration_since(s.at) < DEVICE_TTL));
         }
-        let seen = devices.entry(user.to_owned()).or_default();
+        let seen = devices.by_user.entry(user.to_owned()).or_default();
         seen.retain(|s| now.duration_since(s.at) < DEVICE_TTL && s.device != device);
+        if seen.len() >= MAX_DEVICES_PER_USER
+            && let Some(oldest) = seen
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, s)| s.at)
+                .map(|(index, _)| index)
+        {
+            seen.swap_remove(oldest);
+        }
         seen.push(Seen {
             device: device.to_owned(),
             active,
@@ -35,6 +83,7 @@ impl Roster {
     pub fn winner(&self, user: &str, now: Instant) -> Option<String> {
         let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
         devices
+            .by_user
             .get(user)?
             .iter()
             .filter(|s| now.duration_since(s.at) < DEVICE_TTL)
@@ -51,15 +100,18 @@ impl Roster {
 
     pub fn mark_polled(&self, user: &str, now: Instant) {
         let mut polls = self.polls.lock().unwrap_or_else(|e| e.into_inner());
-        if polls.len() > 4096 {
-            polls.retain(|_, at| now.duration_since(*at) < POLL_TTL);
+        if sweep_due(&mut polls.swept_at, now) {
+            polls
+                .by_user
+                .retain(|_, at| now.duration_since(*at) < POLL_TTL);
         }
-        polls.insert(user.to_owned(), now);
+        polls.by_user.insert(user.to_owned(), now);
     }
 
     pub fn polled_recently(&self, user: &str, now: Instant) -> bool {
         let polls = self.polls.lock().unwrap_or_else(|e| e.into_inner());
         polls
+            .by_user
             .get(user)
             .is_some_and(|at| now.duration_since(*at) < POLL_TTL)
     }
@@ -97,6 +149,36 @@ mod tests {
     fn an_unknown_user_accepts_any_device() {
         let roster = Roster::default();
         assert!(roster.is_target("9", "any", Instant::now()));
+    }
+
+    #[test]
+    fn a_user_keeps_at_most_three_devices_and_the_stalest_goes_first() {
+        let roster = Roster::default();
+        let start = Instant::now();
+        for (index, device) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            roster.note("1", device, index as i64, start + Duration::from_secs(index as u64));
+        }
+        let now = start + Duration::from_secs(4);
+        assert_eq!(roster.winner("1", now).as_deref(), Some("d"));
+        let devices = roster.devices.lock().unwrap();
+        let names: Vec<&str> = devices.by_user["1"].iter().map(|s| s.device.as_str()).collect();
+        assert_eq!(names.len(), 3);
+        assert!(!names.contains(&"a"));
+    }
+
+    #[test]
+    fn expired_entries_are_swept_at_most_every_half_minute() {
+        let roster = Roster::default();
+        let start = Instant::now();
+        let seconds = Duration::from_secs;
+        roster.note("old", "pc", 1, start);
+        roster.note("a", "pc", 1, start + seconds(50));
+        assert!(!roster.devices.lock().unwrap().by_user.contains_key("old"));
+        roster.note("stale", "pc", 1, start);
+        roster.note("b", "pc", 1, start + seconds(60));
+        assert!(roster.devices.lock().unwrap().by_user.contains_key("stale"));
+        roster.note("c", "pc", 1, start + seconds(81));
+        assert!(!roster.devices.lock().unwrap().by_user.contains_key("stale"));
     }
 
     #[test]

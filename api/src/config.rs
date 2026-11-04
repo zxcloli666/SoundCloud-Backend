@@ -148,7 +148,10 @@ pub struct AdmissionCfg {
     pub room_create: AdmissionLimitCfg,
     pub room_join: AdmissionLimitCfg,
     pub voice_link_code: AdmissionLimitCfg,
-    pub voice_code_try: AdmissionLimitCfg,
+    pub voice_remote: AdmissionLimitCfg,
+    pub voice_page_ip: AdmissionLimitCfg,
+    pub voice_page_client: AdmissionLimitCfg,
+    pub voice_salut_sub: AdmissionLimitCfg,
     pub voice_utterance: AdmissionLimitCfg,
     pub voice_resolve: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
@@ -189,7 +192,10 @@ impl AdmissionCfg {
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
         let voice_link_code = admission_limit("VOICE_LINK_CODE", 10, 600);
-        let voice_code_try = admission_limit("VOICE_CODE_TRY", 10, 200);
+        let voice_remote = admission_limit("VOICE_REMOTE", 120, 12000);
+        let voice_page_ip = admission_limit("VOICE_PAGE_IP", 10, 200);
+        let voice_page_client = admission_limit("VOICE_PAGE_CLIENT", 100, 600);
+        let voice_salut_sub = admission_limit("VOICE_SALUT_SUB", 10, 200);
         let voice_utterance = admission_limit("VOICE_UTTERANCE", 30, 6000);
         let voice_resolve = admission_limit("VOICE_RESOLVE", 120, 6000);
         let diag_bundle = admission_limit("DIAG_BUNDLE", 10, 20000);
@@ -215,7 +221,10 @@ impl AdmissionCfg {
             room_create,
             room_join,
             voice_link_code,
-            voice_code_try,
+            voice_remote,
+            voice_page_ip,
+            voice_page_client,
+            voice_salut_sub,
             voice_utterance,
             voice_resolve,
             diag_bundle,

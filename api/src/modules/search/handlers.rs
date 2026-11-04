@@ -1,19 +1,19 @@
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::cache::ListPageResult;
-use crate::common::admission::{AdmissionRejection, Endpoint};
+use crate::common::admission::Endpoint;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::modules::likes::cold::apply_user_favorite_flag;
 use crate::modules::search::catalog::DEFAULT_LIMIT;
 use crate::modules::search::lyrics::LyricsSearchResponse;
-use crate::modules::search::resolve::{ALL_KINDS, DEFAULT_PER_KIND, Kind};
+use crate::modules::remote::handlers::{admission_error, star_required};
+use crate::modules::search::resolve::{DEFAULT_PER_KIND, Kind};
 use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
 
@@ -183,27 +183,11 @@ async fn resolve(
     st.admission
         .check_session(Endpoint::VoiceResolve, ctx.session_id)
         .await
-        .map_err(|rejection| match rejection {
-            AdmissionRejection::Limited {
-                retry_after_seconds,
-            } => AppError::coded(
-                StatusCode::TOO_MANY_REQUESTS,
-                "voice_resolve_limited",
-                "Too many resolve requests",
-            )
-            .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(60)),
-            AdmissionRejection::Unavailable => AppError::coded(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "voice_resolve_busy",
-                "Resolve is busy, try again shortly",
-            )
-            .with_retry_after(1),
-        })?;
-    let kinds = if body.kinds.is_empty() {
-        ALL_KINDS.to_vec()
-    } else {
-        body.kinds
-    };
+        .map_err(|rejection| admission_error(rejection, "voice_resolve_limited", "resolve"))?;
+    if !st.subscriptions.is_premium(&ctx.sc_user_id).await? {
+        return Err(star_required());
+    }
+    let kinds = body.kinds;
     let found = st
         .search
         .resolve(

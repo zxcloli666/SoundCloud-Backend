@@ -2,13 +2,14 @@ use backend_contracts::remote::{LINK_CODE_TTL_SECS, LinkCodeResponse, LinkInfo, 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::secrets::{code_hash, random_code, random_token, token_hash};
+use super::secrets::{code_hash, random_code, random_seed, random_token, rotated_tokens, token_hash};
 use crate::error::{AppError, AppResult};
 
 pub const AUTH_CODE_TTL_SECS: i32 = 300;
 pub const ACCESS_TTL_SECS: i32 = 24 * 60 * 60;
 pub const REFRESH_TTL_SECS: i32 = 365 * 24 * 60 * 60;
 const CODE_ATTEMPTS: usize = 8;
+pub const REFRESH_GRACE_SECS: i32 = 60;
 
 pub struct LinksService {
     pg: PgPool,
@@ -19,6 +20,12 @@ pub struct Grant {
     pub id: Uuid,
     pub sc_user_id: String,
     pub provider: LinkProvider,
+}
+
+#[derive(Debug, Clone)]
+pub struct FoundCode {
+    pub id: Uuid,
+    pub user: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,13 +83,28 @@ impl LinksService {
         Err(AppError::internal("no free link code"))
     }
 
-    pub async fn take_code(&self, provider: LinkProvider, code: &str) -> AppResult<Option<String>> {
+    pub async fn find_code(
+        &self,
+        provider: LinkProvider,
+        code: &str,
+    ) -> AppResult<Option<FoundCode>> {
         let hash = code_hash(provider, code);
         Ok(
-            sqlx::query_file_scalar!("queries/remote/take_code.sql", hash, provider.as_str())
+            sqlx::query_file!("queries/remote/find_code.sql", hash, provider.as_str())
                 .fetch_optional(&self.pg)
-                .await?,
+                .await?
+                .map(|row| FoundCode {
+                    id: row.id,
+                    user: row.sc_user_id,
+                }),
         )
+    }
+
+    pub async fn consume_code(&self, id: Uuid) -> AppResult<bool> {
+        Ok(sqlx::query_file!("queries/remote/consume_code.sql", id)
+            .fetch_optional(&self.pg)
+            .await?
+            .is_some())
     }
 
     pub async fn issue_auth_code(
@@ -143,8 +165,8 @@ impl LinksService {
         refresh_token: &str,
         client_id: &str,
     ) -> AppResult<Option<IssuedTokens>> {
-        let access_token = random_token();
-        let next_refresh = random_token();
+        let seed = random_seed();
+        let (access_token, next_refresh) = rotated_tokens(&seed, refresh_token);
         let row = sqlx::query_file!(
             "queries/remote/rotate_refresh.sql",
             token_hash(refresh_token),
@@ -152,11 +174,49 @@ impl LinksService {
             ACCESS_TTL_SECS,
             token_hash(&next_refresh),
             REFRESH_TTL_SECS,
-            client_id
+            client_id,
+            seed
         )
         .fetch_optional(&self.pg)
         .await?;
-        Ok(row.map(|_| IssuedTokens {
+        if row.is_some() {
+            return Ok(Some(IssuedTokens {
+                access_token,
+                refresh_token: next_refresh,
+                expires_in: ACCESS_TTL_SECS,
+            }));
+        }
+        self.repeat_rotation(refresh_token, client_id).await
+    }
+
+    async fn repeat_rotation(
+        &self,
+        refresh_token: &str,
+        client_id: &str,
+    ) -> AppResult<Option<IssuedTokens>> {
+        let Some(row) = sqlx::query_file!(
+            "queries/remote/find_rotated.sql",
+            token_hash(refresh_token),
+            client_id,
+            REFRESH_GRACE_SECS
+        )
+        .fetch_optional(&self.pg)
+        .await?
+        else {
+            return Ok(None);
+        };
+        if !row.fresh {
+            sqlx::query_file!("queries/remote/delete_grant.sql", row.id)
+                .fetch_optional(&self.pg)
+                .await?;
+            tracing::warn!(grant = %row.id, "a rotated refresh token was used again, the grant is revoked");
+            return Ok(None);
+        }
+        let (access_token, next_refresh) = rotated_tokens(&row.seed, refresh_token);
+        if token_hash(&next_refresh) != row.refresh_hash {
+            return Ok(None);
+        }
+        Ok(Some(IssuedTokens {
             access_token,
             refresh_token: next_refresh,
             expires_in: ACCESS_TTL_SECS,

@@ -83,7 +83,10 @@ pub enum Endpoint {
     RoomCreate,
     RoomJoin,
     VoiceLinkCode,
-    VoiceCodeTry,
+    VoiceRemote,
+    VoicePageIp,
+    VoicePageClient,
+    VoiceSalutSub,
     VoiceUtterance,
     VoiceResolve,
     DiagBundle,
@@ -287,7 +290,9 @@ impl PublicAdmission {
             Endpoint::Login
             | Endpoint::LinkCreate
             | Endpoint::Resolve
-            | Endpoint::VoiceCodeTry
+            | Endpoint::VoicePageIp
+            | Endpoint::VoicePageClient
+            | Endpoint::VoiceSalutSub
             | Endpoint::VoiceUtterance
             | Endpoint::DiagBundle
             | Endpoint::DiagEvents
@@ -298,6 +303,7 @@ impl PublicAdmission {
             | Endpoint::RoomCreate
             | Endpoint::RoomJoin
             | Endpoint::VoiceLinkCode
+            | Endpoint::VoiceRemote
             | Endpoint::VoiceResolve => &self.session_in_flight,
         }
     }
@@ -320,7 +326,10 @@ impl PublicAdmission {
             Endpoint::RoomCreate => self.config.room_create,
             Endpoint::RoomJoin => self.config.room_join,
             Endpoint::VoiceLinkCode => self.config.voice_link_code,
-            Endpoint::VoiceCodeTry => self.config.voice_code_try,
+            Endpoint::VoiceRemote => self.config.voice_remote,
+            Endpoint::VoicePageIp => self.config.voice_page_ip,
+            Endpoint::VoicePageClient => self.config.voice_page_client,
+            Endpoint::VoiceSalutSub => self.config.voice_salut_sub,
             Endpoint::VoiceUtterance => self.config.voice_utterance,
             Endpoint::VoiceResolve => self.config.voice_resolve,
             Endpoint::DiagBundle => self.config.diag_bundle,
@@ -365,7 +374,10 @@ impl Endpoint {
             Self::RoomCreate => "rooms-create",
             Self::RoomJoin => "rooms-join",
             Self::VoiceLinkCode => "voice-link-code",
-            Self::VoiceCodeTry => "voice-code-try",
+            Self::VoiceRemote => "voice-remote",
+            Self::VoicePageIp => "voice-page-ip",
+            Self::VoicePageClient => "voice-page-client",
+            Self::VoiceSalutSub => "voice-salut-sub",
             Self::VoiceUtterance => "voice-utterance",
             Self::VoiceResolve => "voice-resolve",
             Self::DiagBundle => "diag-bundle",
@@ -385,7 +397,10 @@ impl Endpoint {
             Self::RoomCreate => "/rooms",
             Self::RoomJoin => "/rooms/{code}/members",
             Self::VoiceLinkCode => "/remote/link-code",
-            Self::VoiceCodeTry => "voice link code",
+            Self::VoiceRemote => "/remote/reply",
+            Self::VoicePageIp => "voice link page by address",
+            Self::VoicePageClient => "voice link page by client",
+            Self::VoiceSalutSub => "voice link by salut sub",
             Self::VoiceUtterance => "voice skill",
             Self::VoiceResolve => "/search/resolve",
             Self::DiagBundle => "/diag/bundles",

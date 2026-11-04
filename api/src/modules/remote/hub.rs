@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use backend_contracts::remote::{
-    COMMAND_SUBJECT, PRESENCE_SUBJECT, Presence, RemoteCommand, RemoteReply, ReplyEnvelope,
-    WaitResponse, reply_subject, reply_subject_filter,
+    COMMAND_SUBJECT, CONFIRM_HOLD_SECS, CommandKind, LinkProvider, PRESENCE_SUBJECT, Presence,
+    RemoteCommand, RemoteReply, ReplyEnvelope, WaitResponse, reply_subject, reply_subject_filter,
 };
 use bytes::Bytes;
 use deadpool_redis::Pool;
@@ -17,16 +17,36 @@ use uuid::Uuid;
 
 use super::buffer::Buffer;
 use super::roster::Roster;
+use super::waits::Waits;
 use crate::bus::nats::NatsService;
 
 const CHANNEL_CAPACITY: usize = 256;
 const PUBLISH_BUDGET: Duration = Duration::from_millis(250);
 const EXPIRY_MARGIN_MS: i64 = 1000;
+const RESUBSCRIBE_MIN: Duration = Duration::from_millis(500);
+const RESUBSCRIBE_MAX: Duration = Duration::from_secs(30);
 
 pub enum Asked {
     Reply(RemoteReply),
     Offline,
     Silent,
+}
+
+#[derive(Clone, Copy)]
+enum Topic {
+    Commands,
+    Presence,
+    Replies,
+}
+
+impl Topic {
+    fn subject(self) -> String {
+        match self {
+            Self::Commands => COMMAND_SUBJECT.to_owned(),
+            Self::Presence => PRESENCE_SUBJECT.to_owned(),
+            Self::Replies => reply_subject_filter(),
+        }
+    }
 }
 
 struct Pending {
@@ -38,6 +58,7 @@ pub struct RemoteHub {
     nats: Option<Arc<NatsService>>,
     buffer: Buffer,
     roster: Roster,
+    waits: Arc<Waits>,
     commands: broadcast::Sender<Arc<RemoteCommand>>,
     pending: Mutex<HashMap<Uuid, Pending>>,
     seen: Cache<Uuid, ()>,
@@ -59,6 +80,7 @@ impl RemoteHub {
             nats,
             buffer: Buffer::new(redis, prefix),
             roster: Roster::default(),
+            waits: Arc::new(Waits::default()),
             commands,
             pending: Mutex::new(HashMap::new()),
             seen: Cache::builder()
@@ -70,50 +92,74 @@ impl RemoteHub {
     }
 
     pub async fn start(self: &Arc<Self>) {
-        let Some(nats) = &self.nats else { return };
-        match nats.subscribe(COMMAND_SUBJECT).await {
-            Ok(mut stream) => {
-                let hub = self.clone();
-                tokio::spawn(async move {
-                    while let Some(message) = stream.next().await {
-                        if let Ok(command) = serde_json::from_slice(&message.payload) {
-                            hub.receive(command).await;
-                        }
-                    }
-                });
-            }
-            Err(error) => warn!(%error, "remote commands are local only"),
-        }
-        match nats.subscribe(PRESENCE_SUBJECT).await {
-            Ok(mut stream) => {
-                let hub = self.clone();
-                tokio::spawn(async move {
-                    while let Some(message) = stream.next().await {
-                        if let Ok(seen) = serde_json::from_slice::<Presence>(&message.payload) {
-                            hub.roster
-                                .note(&seen.user, &seen.device, seen.active, Instant::now());
-                        }
-                    }
-                });
-            }
-            Err(error) => warn!(%error, "remote presence is local only"),
-        }
-        match nats.subscribe(&reply_subject_filter()).await {
-            Ok(mut stream) => {
-                let hub = self.clone();
-                tokio::spawn(async move {
-                    while let Some(message) = stream.next().await {
-                        if let Ok(envelope) = serde_json::from_slice(&message.payload) {
-                            hub.deliver_reply(envelope);
-                        }
-                    }
-                });
-            }
-            Err(error) => warn!(%error, "remote replies are local only"),
+        let Some(nats) = self.nats.clone() else {
+            return;
+        };
+        for topic in [Topic::Commands, Topic::Presence, Topic::Replies] {
+            let first = match nats.subscribe(&topic.subject()).await {
+                Ok(stream) => Some(stream),
+                Err(error) => {
+                    warn!(%error, "remote subscription failed, retrying");
+                    None
+                }
+            };
+            let hub = self.clone();
+            let nats = nats.clone();
+            tokio::spawn(async move { hub.follow(nats, topic, first).await });
         }
     }
 
-    fn next_seq(&self) -> i64 {
+    async fn follow(
+        self: Arc<Self>,
+        nats: Arc<NatsService>,
+        topic: Topic,
+        mut ready: Option<async_nats::Subscriber>,
+    ) {
+        let mut delay = RESUBSCRIBE_MIN;
+        loop {
+            let stream = match ready.take() {
+                Some(stream) => stream,
+                None => match nats.subscribe(&topic.subject()).await {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        warn!(%error, "remote subscription failed, retrying");
+                        tokio::time::sleep(delay).await;
+                        delay = (delay * 2).min(RESUBSCRIBE_MAX);
+                        continue;
+                    }
+                },
+            };
+            delay = RESUBSCRIBE_MIN;
+            self.pump(stream, topic).await;
+            warn!("remote subscription ended, subscribing again");
+            tokio::time::sleep(RESUBSCRIBE_MIN).await;
+        }
+    }
+
+    async fn pump(&self, mut stream: async_nats::Subscriber, topic: Topic) {
+        while let Some(message) = stream.next().await {
+            match topic {
+                Topic::Commands => {
+                    if let Ok(command) = serde_json::from_slice(&message.payload) {
+                        self.receive(command).await;
+                    }
+                }
+                Topic::Presence => {
+                    if let Ok(seen) = serde_json::from_slice::<Presence>(&message.payload) {
+                        self.roster
+                            .note(&seen.user, &seen.device, seen.active, Instant::now());
+                    }
+                }
+                Topic::Replies => {
+                    if let Ok(envelope) = serde_json::from_slice(&message.payload) {
+                        self.deliver_reply(envelope);
+                    }
+                }
+            }
+        }
+    }
+
+    fn local_seq(&self) -> i64 {
         loop {
             let previous = self.last_seq.load(Ordering::Relaxed);
             let next = now_micros().max(previous + 1);
@@ -123,6 +169,16 @@ impl RemoteHub {
                 .is_ok()
             {
                 return next;
+            }
+        }
+    }
+
+    async fn next_seq(&self, user: &str) -> i64 {
+        match self.buffer.next_seq(user, now_micros()).await {
+            Ok(seq) => seq.max(self.local_seq()),
+            Err(error) => {
+                warn!(%error, "remote sequence fell back to the local clock");
+                self.local_seq()
             }
         }
     }
@@ -150,19 +206,34 @@ impl RemoteHub {
         let _ = self.commands.send(Arc::new(command));
     }
 
-    pub async fn dispatch(&self, user: &str, source: &str, text: &str, wait: Duration) -> Asked {
+    pub async fn confirm_link(&self, user: &str, provider: LinkProvider) -> Asked {
+        let deadline = Instant::now() + Duration::from_secs(CONFIRM_HOLD_SECS);
+        self.dispatch(user, CommandKind::LinkConfirm, provider.as_str(), "", deadline)
+            .await
+    }
+
+    pub async fn dispatch(
+        &self,
+        user: &str,
+        kind: CommandKind,
+        source: &str,
+        text: &str,
+        deadline: Instant,
+    ) -> Asked {
         if self.roster.winner(user, Instant::now()).is_none() {
             return Asked::Offline;
         }
         let created_at = now_ms();
+        let budget = deadline.saturating_duration_since(Instant::now());
         let command = RemoteCommand {
             id: Uuid::now_v7(),
-            seq: self.next_seq(),
+            kind,
+            seq: self.next_seq(user).await,
             user: user.to_owned(),
             source: source.to_owned(),
             text: text.to_owned(),
             created_at,
-            expires_at: created_at + wait.as_millis() as i64 + EXPIRY_MARGIN_MS,
+            expires_at: created_at + budget.as_millis() as i64 + EXPIRY_MARGIN_MS,
         };
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -180,7 +251,8 @@ impl RemoteHub {
         }
         let id = command.id;
         self.receive(command).await;
-        match tokio::time::timeout(wait, rx).await {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remaining, rx).await {
             Ok(Ok(reply)) => Asked::Reply(reply),
             _ => {
                 self.pending
@@ -236,15 +308,19 @@ impl RemoteHub {
         active: i64,
         since: Option<i64>,
         hold: Duration,
-    ) -> WaitResponse {
+    ) -> Option<WaitResponse> {
+        let slot = match since {
+            Some(_) => Some(self.waits.enter(user, device)?),
+            None => None,
+        };
         self.roster.mark_polled(user, Instant::now());
         self.announce(user, device, active).await;
-        let Some(since) = since else {
-            return WaitResponse {
+        let (Some(since), Some(slot)) = (since, slot) else {
+            return Some(WaitResponse {
                 cursor: now_micros(),
                 commands: Vec::new(),
                 active_device: self.active_device(user),
-            };
+            });
         };
         let mut incoming = self.commands.subscribe();
         let deadline = tokio::time::Instant::now() + hold;
@@ -262,6 +338,13 @@ impl RemoteHub {
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
+                () = slot.replaced.notified() => {
+                    return Some(WaitResponse {
+                        cursor: since,
+                        commands: Vec::new(),
+                        active_device: self.active_device(user),
+                    });
+                }
                 () = tokio::time::sleep_until(deadline) => break,
             }
         }
@@ -275,11 +358,11 @@ impl RemoteHub {
             }
         }
         ready.sort_by_key(|command| command.seq);
-        WaitResponse {
+        Some(WaitResponse {
             cursor: ready.last().map_or(since, |command| command.seq),
             commands: ready,
             active_device: self.active_device(user),
-        }
+        })
     }
 
     fn deliverable(&self, command: &RemoteCommand, device: &str) -> bool {
