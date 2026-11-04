@@ -36,7 +36,7 @@ impl SearchTermsHandler {
             .await
             .map_err(JobError::retryable)?
         else {
-            info!("search terms refresh skipped, another refresh holds the lock");
+            info!("search terms refresh skipped because another refresh holds the lock");
             return Ok(());
         };
         info!(
