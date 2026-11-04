@@ -62,7 +62,7 @@ async fn pause(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn sync_status_is_local_and_scoped_to_the_session_account(pg: PgPool) -> anyhow::Result<()> {
     let service = service(&pg)?;
     service
@@ -99,7 +99,7 @@ async fn sync_status_is_local_and_scoped_to_the_session_account(pg: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn postponed_writes_report_when_soundcloud_will_be_retried(pg: PgPool) -> anyhow::Result<()> {
     let service = service(&pg)?;
     service.enqueue("7", "like_track", "1", None).await?;
@@ -127,7 +127,7 @@ async fn postponed_writes_report_when_soundcloud_will_be_retried(pg: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn writes_held_by_the_app_pause_are_delayed_until_the_pause_ends(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -151,7 +151,7 @@ async fn writes_held_by_the_app_pause_are_delayed_until_the_pause_ends(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn dead_playlist_edits_count_as_dead_dead_likes_as_failing_dead_comments_nowhere(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -174,7 +174,7 @@ async fn dead_playlist_edits_count_as_dead_dead_likes_as_failing_dead_comments_n
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn edits_that_died_over_a_month_ago_count_neither_as_dead_nor_as_failing(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -195,7 +195,7 @@ async fn edits_that_died_over_a_month_ago_count_neither_as_dead_nor_as_failing(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_like_that_died_over_a_month_ago_still_counts_as_failing(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -214,7 +214,7 @@ async fn a_like_that_died_over_a_month_ago_still_counts_as_failing(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn needs_relogin_only_when_a_new_login_can_help(pg: PgPool) -> anyhow::Result<()> {
     let service = service(&pg)?;
     let retired = oauth_app(&pg, false).await?;
@@ -234,7 +234,7 @@ async fn needs_relogin_only_when_a_new_login_can_help(pg: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_writer_is_the_good_app_even_when_the_refused_one_was_refreshed_later(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -256,7 +256,7 @@ async fn the_writer_is_the_good_app_even_when_the_refused_one_was_refreshed_late
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn playlist_creates_are_newest_first_with_state_and_truncate_at_100(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -318,7 +318,7 @@ async fn dead_rows(pg: &PgPool) -> anyhow::Result<Vec<(String, bool)>> {
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_month(
     pg: PgPool,
 ) -> anyhow::Result<()> {
@@ -368,7 +368,7 @@ async fn retry_revives_only_dead_rows_counted_as_dead_between_two_minutes_and_a_
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn retry_drops_only_the_stale_membership_rows_whose_fresh_read_was_queued(
     pg: PgPool,
 ) -> anyhow::Result<()> {

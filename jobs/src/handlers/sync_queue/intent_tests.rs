@@ -193,7 +193,7 @@ async fn complete(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_undone_before_any_claim_sends_only_the_unlike_the_mirror_wants(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -219,7 +219,7 @@ async fn a_like_undone_before_any_claim_sends_only_the_unlike_the_mirror_wants(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn like_unlike_like_before_a_claim_still_sends_the_last_like(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -246,7 +246,7 @@ async fn like_unlike_like_before_a_claim_still_sends_the_last_like(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unlike_that_annulled_a_like_core_already_claimed_runs_after_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -298,7 +298,7 @@ async fn an_unlike_that_annulled_a_like_core_already_claimed_runs_after_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unlike_that_annulled_a_like_core_already_sent_and_purged_is_still_sent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -360,7 +360,7 @@ async fn an_unlike_that_annulled_a_like_core_already_sent_and_purged_is_still_se
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_after_an_unlike_that_was_sent_and_requeued_is_not_annulled_away(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -394,7 +394,7 @@ async fn a_like_after_an_unlike_that_was_sent_and_requeued_is_not_annulled_away(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_new_intent_on_a_dead_row_is_adopted_before_the_claim(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -419,7 +419,7 @@ async fn a_new_intent_on_a_dead_row_is_adopted_before_the_claim(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_served_unlike_is_purged_after_a_week_and_a_new_like_lands_above_the_receipt(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -472,7 +472,7 @@ async fn a_served_unlike_is_purged_after_a_week_and_a_new_like_lands_above_the_r
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn heal_brings_back_a_lost_like_above_its_queue_receipt(pool: PgPool) -> anyhow::Result<()> {
     let repository = setup(&pool).await?;
     tap(&pool, true).await?;
@@ -516,7 +516,7 @@ async fn heal_brings_back_a_lost_like_above_its_queue_receipt(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_older_unlike_that_reaches_core_after_a_newer_like_ran_is_dropped_unsent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -536,7 +536,7 @@ async fn an_older_unlike_that_reaches_core_after_a_newer_like_ran_is_dropped_uns
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_older_than_the_purge_of_its_unlike_is_dropped_and_a_newer_one_runs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -571,7 +571,7 @@ async fn a_like_older_than_the_purge_of_its_unlike_is_dropped_and_a_newer_one_ru
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_cancelled_by_a_lagging_node_below_its_attempt_is_dropped_and_the_unlike_runs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -589,7 +589,7 @@ async fn a_like_cancelled_by_a_lagging_node_below_its_attempt_is_dropped_and_the
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_retapped_by_a_lagging_node_below_its_attempt_is_still_sent(
     pool: PgPool,
 ) -> anyhow::Result<()> {

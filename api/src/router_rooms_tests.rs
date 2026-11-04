@@ -63,7 +63,7 @@ fn playing(urn: &str) -> Value {
     })
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_host_and_a_guest_share_one_room(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -165,7 +165,7 @@ async fn a_host_and_a_guest_share_one_room(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_waiting_guest_wakes_up_on_the_next_change(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -207,7 +207,7 @@ async fn a_waiting_guest_wakes_up_on_the_next_change(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn malformed_codes_are_unknown_rooms(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, "redis://127.0.0.1:1").await?;
     let guest = session_for(&pool, "505").await?;
@@ -230,7 +230,7 @@ fn hosts(list: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -304,7 +304,7 @@ async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_born_public_changes_its_code_when_it_goes_private(
     pool: PgPool,
@@ -393,7 +393,7 @@ async fn a_room_born_public_changes_its_code_when_it_goes_private(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_named_by_its_host_is_listed_by_that_name(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -443,7 +443,7 @@ async fn a_room_named_by_its_host_is_listed_by_that_name(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_host_leaving_hands_the_room_to_the_guest(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;

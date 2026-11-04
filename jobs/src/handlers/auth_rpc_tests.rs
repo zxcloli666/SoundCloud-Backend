@@ -124,7 +124,7 @@ fn token_of(reply: &RefreshReply) -> Option<&str> {
         .map(|connection| connection.access_token.as_str())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn parallel_refreshes_spend_the_refresh_token_once(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
     let connection_id = connection(&pool, "old-access", "-1 minute").await?;
@@ -150,7 +150,7 @@ async fn parallel_refreshes_spend_the_refresh_token_once(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_rejected_token_is_replaced_once(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
     let connection_id = connection(&pool, "old-access", "1 hour").await?;
@@ -166,7 +166,7 @@ async fn a_rejected_token_is_replaced_once(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_fresh_token_is_returned_without_a_refresh(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
     let connection_id = connection(&pool, "old-access", "1 hour").await?;
@@ -179,7 +179,7 @@ async fn a_fresh_token_is_returned_without_a_refresh(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn hold_marks_the_token_and_names_the_retry(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
     let connection_id = connection(&pool, "old-access", "1 hour").await?;
@@ -200,7 +200,7 @@ async fn hold_marks_the_token_and_names_the_retry(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn one_rejected_refresh_token_is_not_a_logout(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::InvalidGrant).await?;
     let connection_id = connection(&pool, "old-access", "-1 minute").await?;
@@ -223,7 +223,7 @@ async fn one_rejected_refresh_token_is_not_a_logout(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unknown_connection_is_retried_not_disconnected(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
 
@@ -235,7 +235,7 @@ async fn an_unknown_connection_is_retried_not_disconnected(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_app_token_is_cores_live_token(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, _) = rpc(&pool, Answer::NewPair).await?;
     let app_id = Uuid::now_v7();
@@ -291,7 +291,7 @@ async fn app_cooldown(pool: &PgPool, app_id: Uuid) -> anyhow::Result<Option<bool
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_read_pause_does_not_hold_back_a_token_refresh(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::NewPair).await?;
     let connection_id = connection(&pool, "old-access", "-1 minute").await?;
@@ -307,7 +307,7 @@ async fn a_read_pause_does_not_hold_back_a_token_refresh(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_rate_limited_refresh_pauses_the_app_in_the_database(pool: PgPool) -> anyhow::Result<()> {
     let (rpc, calls) = rpc(&pool, Answer::RateLimited).await?;
     let connection_id = connection(&pool, "old-access", "-1 minute").await?;

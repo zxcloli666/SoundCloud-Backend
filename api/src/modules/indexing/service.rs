@@ -239,7 +239,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn stats_count_indexed_and_pending_in_one_pass(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool, 3, 5).await?;
 
@@ -252,7 +252,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn repeated_stats_reads_do_not_rescan_the_track_table(
         pool: PgPool,
     ) -> anyhow::Result<()> {

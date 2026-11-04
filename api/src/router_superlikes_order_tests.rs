@@ -44,7 +44,7 @@ async fn ranked(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_superlikes_order_survives_moves_new_superlikes_removals_and_reset(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -90,7 +90,7 @@ async fn the_superlikes_order_survives_moves_new_superlikes_removals_and_reset(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_move_of_a_track_that_is_no_superlike_is_a_coded_404(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["1", "2"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -113,7 +113,7 @@ async fn a_move_of_a_track_that_is_no_superlike_is_a_coded_404(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn pages_follow_the_order_through_the_offset_link(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["1", "2", "3"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -134,7 +134,7 @@ async fn pages_follow_the_order_through_the_offset_link(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_old_cursor_link_ends_the_list_instead_of_repeating_the_first_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {

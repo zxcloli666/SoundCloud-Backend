@@ -58,7 +58,7 @@ async fn wire(pool: &PgPool) -> anyhow::Result<(String, i64, i64, Option<String>
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_first_dispatch_claims_attempt_one_with_the_whole_reference(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -95,7 +95,7 @@ async fn the_first_dispatch_claims_attempt_one_with_the_whole_reference(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_wire_payload_has_no_initial_prompt(pool: PgPool) -> anyhow::Result<()> {
     seed_stored_track(&pool, 1).await?;
     seed_lyrics(&pool, "only line").await?;
@@ -127,7 +127,7 @@ async fn the_wire_payload_has_no_initial_prompt(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_retry_of_the_same_generation_reuses_the_claimed_attempt(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -150,7 +150,7 @@ async fn a_retry_of_the_same_generation_reuses_the_claimed_attempt(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_long_reference_is_cut_between_lines_and_still_counts_every_line(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -169,7 +169,7 @@ async fn a_long_reference_is_cut_between_lines_and_still_counts_every_line(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_reference_without_a_whole_line_under_the_limit_is_quarantined(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -196,7 +196,7 @@ async fn a_reference_without_a_whole_line_under_the_limit_is_quarantined(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_stale_generation_or_synced_lyrics_claim_nothing(pool: PgPool) -> anyhow::Result<()> {
     seed_stored_track(&pool, 2).await?;
     seed_lyrics(&pool, "only line").await?;
@@ -216,7 +216,7 @@ async fn a_stale_generation_or_synced_lyrics_claim_nothing(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_finished_attempt_is_not_dispatched_again(pool: PgPool) -> anyhow::Result<()> {
     seed_stored_track(&pool, 1).await?;
     seed_lyrics(&pool, "only line").await?;
@@ -236,7 +236,7 @@ async fn a_finished_attempt_is_not_dispatched_again(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unpublished_dispatch_is_released_and_reclaimed_by_its_retry(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -266,7 +266,7 @@ async fn an_unpublished_dispatch_is_released_and_reclaimed_by_its_retry(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_new_upload_reclaims_a_transcription_its_predecessor_quarantined(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -314,7 +314,7 @@ async fn waits(pool: &PgPool, generation: i64, room: i64) -> anyhow::Result<bool
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_upload_without_transcription_room_is_left_for_the_align_reaper(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -350,7 +350,7 @@ async fn an_upload_without_transcription_room_is_left_for_the_align_reaper(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_attempt_already_claimed_for_the_generation_dispatches_without_room(
     pool: PgPool,
 ) -> anyhow::Result<()> {

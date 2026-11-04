@@ -15,7 +15,7 @@ fn only_off_an_hour_a_day_and_a_week_are_timers() {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn any_dm_member_sets_the_timer_and_a_system_row_says_so(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let row = set(&pool, &access_of(&pool, id, "202").await, Some(86_400))
@@ -36,7 +36,7 @@ async fn any_dm_member_sets_the_timer_and_a_system_row_says_so(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_same_timer_twice_writes_one_row(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let access = access_of(&pool, id, "101").await;
@@ -51,7 +51,7 @@ async fn the_same_timer_twice_writes_one_row(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn in_a_group_only_admins_set_the_timer(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     assert_eq!(
@@ -68,7 +68,7 @@ async fn in_a_group_only_admins_set_the_timer(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn saved_messages_and_requests_take_no_timer(pool: PgPool) -> ChatResult<()> {
     let saved = create::saved(&pool, "101").await?.id;
     assert_eq!(
@@ -87,7 +87,7 @@ async fn saved_messages_and_requests_take_no_timer(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_timer_applies_only_to_posts_sent_after_it(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let before = post(&pool, id, "101").await;

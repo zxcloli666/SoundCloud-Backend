@@ -32,7 +32,7 @@ async fn evidence(pg: &PgPool, id: Uuid) -> anyhow::Result<(bool, bool, bool)> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn evidence_goes_once_its_retention_ends(pg: PgPool) -> anyhow::Result<()> {
     let chat = chat_state(
         pg.clone(),

@@ -91,7 +91,7 @@ async fn queued(pool: &PgPool) -> anyhow::Result<i64> {
         .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_limits(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -125,7 +125,7 @@ async fn a_written_like_lifts_every_subscription_mark_of_its_app_and_keeps_rate_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_closed_on_a_missing_track_leaves_every_mark_in_place(
     pool: PgPool,
 ) -> anyhow::Result<()> {

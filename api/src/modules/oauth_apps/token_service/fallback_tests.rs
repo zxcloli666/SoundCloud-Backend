@@ -76,7 +76,7 @@ async fn local_tokens(pool: &PgPool, app: Uuid) -> anyhow::Result<i64> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn racing_processes_issue_one_token_per_app(pool: PgPool) -> anyhow::Result<()> {
     let (auth_base, calls) = token_endpoint().await?;
     let apps = [app(&pool).await?, app(&pool).await?];
@@ -116,7 +116,7 @@ async fn racing_processes_issue_one_token_per_app(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_short_core_outage_issues_nothing(pool: PgPool) -> anyhow::Result<()> {
     let (auth_base, calls) = token_endpoint().await?;
     let app = app(&pool).await?;
@@ -130,7 +130,7 @@ async fn a_short_core_outage_issues_nothing(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_live_shared_token_needs_no_fallback(pool: PgPool) -> anyhow::Result<()> {
     let (auth_base, calls) = token_endpoint().await?;
     let app = app(&pool).await?;

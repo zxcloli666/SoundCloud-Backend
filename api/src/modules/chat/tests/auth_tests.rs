@@ -126,7 +126,7 @@ async fn finish(
         .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_sealed_login_copies_its_bind_into_the_new_session(pool: PgPool) -> anyhow::Result<()> {
     oauth_app(&pool).await?;
     let chat = state(&pool)?;
@@ -163,7 +163,7 @@ async fn a_sealed_login_copies_its_bind_into_the_new_session(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_relogin_into_the_same_user_keeps_the_session_and_takes_the_new_bind(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -184,7 +184,7 @@ async fn a_relogin_into_the_same_user_keeps_the_session_and_takes_the_new_bind(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_relogin_into_another_user_gets_a_new_session_and_leaves_the_old_one_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -212,7 +212,7 @@ async fn a_relogin_into_another_user_gets_a_new_session_and_leaves_the_old_one_a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_plain_relogin_into_another_user_cannot_take_over_a_bound_session(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -236,7 +236,7 @@ async fn a_plain_relogin_into_another_user_cannot_take_over_a_bound_session(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_plain_login_still_works_unchanged(pool: PgPool) -> anyhow::Result<()> {
     oauth_app(&pool).await?;
     let chat = state(&pool)?;
@@ -275,7 +275,7 @@ async fn bound_of(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<Vec<u8>
     Ok(session_state(pool, session).await?.1)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_pull_link_claimed_by_the_bound_source_gives_the_new_session_the_asking_bind(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -312,7 +312,7 @@ async fn a_pull_link_claimed_by_the_bound_source_gives_the_new_session_the_askin
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_pull_link_claimed_by_a_session_id_alone_leaves_the_new_session_unbound(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -353,7 +353,7 @@ async fn a_pull_link_claimed_by_a_session_id_alone_leaves_the_new_session_unboun
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_push_link_from_the_bound_source_gives_the_new_session_the_claiming_bind(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -384,7 +384,7 @@ async fn a_push_link_from_the_bound_source_gives_the_new_session_the_claiming_bi
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_push_link_from_a_session_id_alone_leaves_the_new_session_unbound(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -419,7 +419,7 @@ async fn a_push_link_from_a_session_id_alone_leaves_the_new_session_unbound(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_push_link_is_not_bound_once_the_source_was_bound_again(
     pool: PgPool,
 ) -> anyhow::Result<()> {

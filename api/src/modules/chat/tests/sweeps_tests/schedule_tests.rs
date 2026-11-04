@@ -10,7 +10,7 @@ use crate::modules::chat::test_support::chat_state;
 const MESSAGES: &str = "SELECT count(*) FROM chat.messages WHERE conversation_id = $1";
 const SCHEDULE_DB: u8 = 10;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn sweeps_run_only_while_this_process_leads(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), SCHEDULE_DB);
@@ -44,7 +44,7 @@ async fn sweeps_run_only_while_this_process_leads(pg: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_failed_startup_is_retried_and_does_not_hold_the_sweeps_back(
     pg: PgPool,

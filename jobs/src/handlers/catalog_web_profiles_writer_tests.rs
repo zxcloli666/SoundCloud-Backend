@@ -14,7 +14,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<(CatalogWriter, LeasedJob, Catal
     ))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn web_profiles_snapshot_ordering_preserves_new_links_until_confirmed_removal(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -44,7 +44,7 @@ async fn web_profiles_snapshot_ordering_preserves_new_links_until_confirmed_remo
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn web_profiles_malformed_responses_and_lost_leases_cannot_replace_the_snapshot(
     pool: PgPool,
 ) -> anyhow::Result<()> {

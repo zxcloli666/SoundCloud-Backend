@@ -136,7 +136,7 @@ async fn writes(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     Ok(tables)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_track_edit_and_delete_reach_the_catalog_and_the_queue_together(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -220,7 +220,7 @@ async fn a_track_edit_and_delete_reach_the_catalog_and_the_queue_together(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_membership_edit_is_journalled_once_per_idempotency_key(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -283,7 +283,7 @@ async fn a_membership_edit_is_journalled_once_per_idempotency_key(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_playlist_edit_and_delete_reach_the_catalog_and_retire_the_membership(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -325,7 +325,7 @@ async fn a_playlist_edit_and_delete_reach_the_catalog_and_retire_the_membership(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_edit_writes_the_state_or_catalog_row_first_and_the_queue_last(
     pool: PgPool,
 ) -> anyhow::Result<()> {

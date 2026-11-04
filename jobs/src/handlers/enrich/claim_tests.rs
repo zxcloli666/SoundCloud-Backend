@@ -40,7 +40,7 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
     ids
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_star_turn_links_star_likes_then_likes_then_star_tracks_then_the_rest(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -54,7 +54,7 @@ async fn a_star_turn_links_star_likes_then_likes_then_star_tracks_then_the_rest(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_rest_turn_keeps_the_old_order(pool: PgPool) -> anyhow::Result<()> {
     seed_unlinked_tracks(&pool).await?;
 
@@ -64,7 +64,7 @@ async fn a_rest_turn_keeps_the_old_order(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_claimed_track_is_not_claimed_again_while_its_lease_holds(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -77,7 +77,7 @@ async fn a_claimed_track_is_not_claimed_again_while_its_lease_holds(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_star_track_the_refresh_found_linked_waits_with_the_rest(
     pool: PgPool,
 ) -> anyhow::Result<()> {

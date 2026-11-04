@@ -52,7 +52,7 @@ fn linked_accounts_keep_the_user_first_and_drop_junk() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn block_list_and_unblock_round_trip(pool: PgPool) -> anyhow::Result<()> {
     block(
         &pool,
@@ -90,7 +90,7 @@ async fn block_list_and_unblock_round_trip(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn blocklist_is_capped(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO user_blocked_artists (sc_user_id, kind, target_id, name)
@@ -108,7 +108,7 @@ async fn blocklist_is_capped(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn wave_drops_blocked_uploads_and_artists(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO artists (id, name, normalized_name, source) VALUES ($1::uuid, 'A', 'a', 'test'),

@@ -751,7 +751,7 @@ async fn node_settings(pool: &PgPool) -> anyhow::Result<String> {
     Ok(settings)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn node_configuration_reaches_new_sessions_once(pool: PgPool) -> anyhow::Result<()> {
     run_core(&pool, None).await?;
     assert_eq!(node_settings(&pool).await?, "core/core/legacy");
@@ -773,7 +773,7 @@ async fn node_configuration_reaches_new_sessions_once(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn split_mode_is_refused_before_it_is_stored_while_grants_are_missing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -799,7 +799,7 @@ async fn split_mode_is_refused_before_it_is_stored_while_grants_are_missing(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn scd_uuid_equals_rust_uuid_v5_of_the_same_name(pool: PgPool) -> anyhow::Result<()> {
     run_core(&pool, None).await?;
     let namespace = Uuid::parse_str("e5f6011f-72fa-46e1-ad97-55586f6f1f83")?;

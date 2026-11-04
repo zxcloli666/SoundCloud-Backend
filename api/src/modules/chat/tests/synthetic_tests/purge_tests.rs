@@ -36,7 +36,7 @@ async fn real_group_with(pg: &PgPool, synthetic: &str) -> anyhow::Result<Uuid> {
     Ok(id)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn purge_removes_every_synthetic_row_and_key_and_keeps_real_chats(
     pg: PgPool,
