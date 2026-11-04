@@ -1,0 +1,1 @@
+ALTER TABLE public.lyrics_lookup_state VALIDATE CONSTRAINT lyrics_lookup_state_generation_valid;

@@ -67,10 +67,8 @@ for n in $nodes; do
 done
 echo "ok publication column lists = planned columns that exist"
 
-subscribe() {
-  val "scd_b1_$2" "SELECT pg_catalog.pg_create_logical_replication_slot('scd_b1_$1_from_$2', 'pgoutput')" > /dev/null
-  sql -d "scd_b1_$1" -c "CREATE SUBSCRIPTION $1_from_$2 CONNECTION 'host=$socket dbname=scd_b1_$2 user=scd' PUBLICATION $3 WITH ($4, create_slot = false, slot_name = 'scd_b1_$1_from_$2', copy_data = false)"
-}
+. "$here/lyrics_drop.sh"
+
 subscribe core main "scd_api_pub, scd_cmd_pub" "origin = none"
 subscribe core star "scd_api_pub, scd_cmd_pub" "origin = none"
 subscribe main core scd_core_pub "origin = any, disable_on_error = false, streaming = parallel"
@@ -171,6 +169,6 @@ for n in $nodes; do
   wait_for "scd_b1_$n" "SELECT bool_and(pid IS NOT NULL) FROM pg_catalog.pg_stat_subscription WHERE relid IS NULL AND leader_pid IS NULL" "no apply worker died on $n"
 done
 errors="$(val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats")"
-[ "$errors" = 0 ] || { echo "FAIL apply errors: $errors"; exit 1; }
+[ "$errors" = 0 ] || { echo "FAIL apply errors: $errors ($(val postgres "SELECT string_agg(subname || '=' || apply_error_count, ' ') FROM pg_catalog.pg_stat_subscription_stats WHERE apply_error_count > 0"))"; exit 1; }
 echo "ok no apply errors"
 say "all checks passed"

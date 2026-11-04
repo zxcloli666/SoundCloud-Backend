@@ -418,6 +418,11 @@ async fn indexing_schema_ready(pool: &sqlx::PgPool) -> sqlx::Result<bool> {
 }
 
 async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
+    validate_core_schema(&databases.main.fast).await?;
+    validate_ops_schema(&databases.ops.fast).await
+}
+
+async fn validate_core_schema(core: &sqlx::PgPool) -> anyhow::Result<()> {
     let core_ready = sqlx::query_scalar::<_, bool>(
         "SELECT to_regclass('background_jobs') IS NOT NULL
              AND to_regclass('background_job_enqueues') IS NOT NULL
@@ -425,7 +430,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
              AND to_regclass('background_schedules') IS NOT NULL
              AND to_regclass('subscription_snapshot_state') IS NOT NULL",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("core schema validation failed")?;
     ensure!(
@@ -444,7 +449,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
            AND column_name = 'lane'
            AND is_nullable = 'NO'",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("core queue lane validation failed")?;
     let core_indexes_ready = sqlx::query_scalar::<_, bool>(
@@ -485,7 +490,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                   AND pg_get_indexdef(indexrelid, 1, true) = 'failed_at'
             )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("core queue index validation failed")?;
     ensure!(
@@ -517,7 +522,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                  WHERE version = 76 AND success
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("sync queue schema validation failed")?;
     ensure!(
@@ -547,7 +552,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND column_name IN ('desired_rev', 'synced_rev', 'tracks_synced_at')
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("playlist shadow schema validation failed")?;
     ensure!(
@@ -592,7 +597,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
              AND to_regclass('oauth_app_token_issuance_client_window_idx') IS NOT NULL
              AND to_regclass('oauth_app_token_issuance_egress_window_idx') IS NOT NULL",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("OAuth token schema validation failed")?;
     ensure!(
@@ -603,7 +608,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         "SELECT to_regclass('user_events_created_type_cover_idx') IS NOT NULL
              AND to_regclass('user_likes_tracks_user_created_key_idx') IS NOT NULL",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("recommendation jobs schema validation failed")?;
     ensure!(
@@ -613,14 +618,14 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
     let discover_interest_ready = sqlx::query_scalar::<_, bool>(
         "SELECT to_regclass('artists_positive_interest_idx') IS NOT NULL",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("discover interest schema validation failed")?;
     ensure!(
         discover_interest_ready,
         "discover interest schema is incomplete; apply migration 0065"
     );
-    let indexing_ready = indexing_schema_ready(&databases.main.fast)
+    let indexing_ready = indexing_schema_ready(core)
         .await
         .context("indexing jobs schema validation failed")?;
     ensure!(
@@ -643,7 +648,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND indpred IS NOT NULL
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("duration resolver schema validation failed")?;
     ensure!(
@@ -679,7 +684,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND pg_get_indexdef(indexrelid, 1, true) = 'processed_at'
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("pipeline receipt schema validation failed")?;
     ensure!(
@@ -705,7 +710,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND pg_get_indexdef(indexrelid, 1, true) = 'sc_track_id'
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("storage event state schema validation failed")?;
     ensure!(
@@ -731,7 +736,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND pg_get_indexdef(indexrelid, 1, true) = 'sc_track_id'
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("transcription wire schema validation failed")?;
     ensure!(
@@ -790,7 +795,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND indisvalid AND indisready
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("lyrics recovery schema validation failed")?;
     ensure!(
@@ -801,7 +806,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
         "SELECT EXISTS (
                  SELECT 1
                  FROM _sqlx_migrations
-                 WHERE version = 283 AND success
+                 WHERE version = 292 AND success
              )
              AND (SELECT count(*) = 25
                   FROM information_schema.columns
@@ -849,14 +854,17 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                    AND NOT tgisinternal
              )",
     )
-    .fetch_one(&databases.main.fast)
+    .fetch_one(core)
     .await
     .context("lyrics lookup schema validation failed")?;
     ensure!(
         lyrics_lookup_ready,
-        "lyrics lookup schema is incomplete; apply migrations through 0283"
+        "lyrics lookup schema is incomplete; apply migrations through 0292"
     );
+    Ok(())
+}
 
+async fn validate_ops_schema(ops: &sqlx::PgPool) -> anyhow::Result<()> {
     let ops_columns_ready = sqlx::query_scalar::<_, bool>(
         "SELECT count(*) = 4
          FROM information_schema.columns
@@ -871,7 +879,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                )
            )",
     )
-    .fetch_one(&databases.ops.fast)
+    .fetch_one(ops)
     .await
     .context("ops schema validation failed")?;
     let ops_indexes_ready = sqlx::query_scalar::<_, bool>(
@@ -909,7 +917,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
                   AND (indoption[2] & 1) = 1
             )",
     )
-    .fetch_one(&databases.ops.fast)
+    .fetch_one(ops)
     .await
     .context("ops index validation failed")?;
     ensure!(
@@ -918,7 +926,7 @@ async fn validate_schema(databases: &Databases) -> anyhow::Result<()> {
     );
     let hard_negative_sweep_ready =
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('rec_hard_negative_sweep') IS NOT NULL")
-            .fetch_one(&databases.ops.fast)
+            .fetch_one(ops)
             .await
             .context("ops hard negative sweep validation failed")?;
     ensure!(
