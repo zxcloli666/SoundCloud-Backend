@@ -79,6 +79,19 @@ impl Backend {
             Backend::Gdrive(b) => b.stream(key).await,
         }
     }
+
+    pub async fn stream_range(
+        &self,
+        key: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<(ObjectInfo, ByteStream), BackendError> {
+        match self {
+            Backend::Local(b) => b.stream_range(key, start, end).await,
+            Backend::S3(b) => b.stream_range(key, start, end).await,
+            Backend::Gdrive(b) => b.stream_range(key, start, end).await,
+        }
+    }
 }
 
 pub fn key_for(filename: &str) -> String {

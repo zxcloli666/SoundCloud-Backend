@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header, response};
 use axum::response::{IntoResponse, Redirect, Response};
 use futures::StreamExt;
 use subtle::ConstantTimeEq;
@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 use crate::AppState;
 use crate::backend::{Backend, BackendError, ByteStream, ObjectInfo};
+use crate::routes::byte_range::ByteRange;
 
 const REDIRECT_PRESIGN_EXPIRES: Duration = Duration::from_secs(15 * 60);
 
@@ -31,19 +32,73 @@ fn object_path(path: &str) -> String {
 /// GET /{path} — stream bytes to client (never redirect, even for S3 backend).
 pub async fn serve(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
     let path = validate_path(&path)?;
 
-    let (info, stream) = match with_first_bytes(|| state.backend.stream(&path)).await {
-        Ok(v) => v,
-        Err(BackendError::NotFound) => return Err(StatusCode::NOT_FOUND),
+    let requested = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(ByteRange::parse);
+
+    let Some(requested) = requested else {
+        let (info, stream) = open_full(&state, &path).await?;
+        return Ok(object_response(&info)
+            .body(Body::from_stream(stream))
+            .unwrap());
+    };
+
+    let info = match state.backend.head(&path).await {
+        Ok(Some(info)) => info,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
         Err(e) => {
-            warn!("[files] stream {path} failed: {e}");
+            warn!("[files] head {path} failed: {e}");
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
+    let Some((start, end)) = requested.resolve(info.size) else {
+        return Ok(Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{}", info.size))
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(Body::empty())
+            .unwrap());
+    };
+
+    let stream = match with_first_bytes(|| state.backend.stream_range(&path, start, end)).await {
+        Ok((_, stream)) => stream,
+        Err(BackendError::NotFound) => return Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            warn!("[files] stream {path} {start}-{end} failed: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    Ok(object_response(&info)
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{}", info.size),
+        )
+        .header(header::CONTENT_LENGTH, end - start + 1)
+        .body(Body::from_stream(stream))
+        .unwrap())
+}
+
+async fn open_full(state: &AppState, path: &str) -> Result<(ObjectInfo, ByteStream), StatusCode> {
+    match with_first_bytes(|| state.backend.stream(path)).await {
+        Ok(v) => Ok(v),
+        Err(BackendError::NotFound) => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            warn!("[files] stream {path} failed: {e}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+fn object_response(info: &ObjectInfo) -> response::Builder {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(
@@ -57,8 +112,7 @@ pub async fn serve(
     if info.size > 0 {
         builder = builder.header(header::CONTENT_LENGTH, info.size);
     }
-
-    Ok(builder.body(Body::from_stream(stream)).unwrap())
+    builder
 }
 
 const OPEN_ATTEMPTS: usize = 2;
@@ -90,6 +144,7 @@ where
 /// Local backend: stream bytes from storage itself.
 pub async fn redirect(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(path): Path<String>,
 ) -> Result<Response, StatusCode> {
     let path = validate_path(&path)?;
@@ -110,7 +165,7 @@ pub async fn redirect(
                 Err(StatusCode::INTERNAL_SERVER_ERROR)
             }
         },
-        Backend::Local(_) => serve(State(state), Path(path)).await,
+        Backend::Local(_) => serve(State(state), headers, Path(path)).await,
     }
 }
 
@@ -130,21 +185,7 @@ pub async fn head(
         }
     };
 
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            info.content_type
-                .as_deref()
-                .unwrap_or("application/octet-stream"),
-        )
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .header(header::ACCEPT_RANGES, "bytes");
-    if info.size > 0 {
-        builder = builder.header(header::CONTENT_LENGTH, info.size);
-    }
-
-    Ok(builder.body(Body::empty()).unwrap())
+    Ok(object_response(&info).body(Body::empty()).unwrap())
 }
 
 /// DELETE /files/{filename} — delete the single m4a track
