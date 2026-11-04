@@ -122,7 +122,7 @@ async fn state_of(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<(String, O
     )
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_walk_retires_an_exhausted_track_and_does_not_return_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -142,7 +142,7 @@ async fn the_walk_retires_an_exhausted_track_and_does_not_return_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_star_walk_retires_an_exhausted_track_and_does_not_return_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -160,7 +160,7 @@ async fn the_star_walk_retires_an_exhausted_track_and_does_not_return_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_track_below_the_cap_is_claimed_and_one_inside_its_lease_is_left_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -172,7 +172,7 @@ async fn a_track_below_the_cap_is_claimed_and_one_inside_its_lease_is_left_alone
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_repair_migration_resets_lost_attempts_and_leaves_live_work(
     pool: PgPool,
 ) -> anyhow::Result<()> {
