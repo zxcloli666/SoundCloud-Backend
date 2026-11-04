@@ -7,7 +7,7 @@ start() {
         docker run -d --name postgres -p 5432:5432 --tmpfs /var/lib/postgresql/data \
             -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
             mirror.gcr.io/library/postgres:17-alpine \
-            -c fsync=off -c full_page_writes=off -c max_connections=500
+            -c fsync=off -c full_page_writes=off -c max_connections=500 -c autovacuum=off
         ;;
     redis)
         docker run -d --name redis -p 6379:6379 mirror.gcr.io/library/redis:7-alpine

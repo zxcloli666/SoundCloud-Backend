@@ -22,6 +22,7 @@ const PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct BackgroundJobs {
     nats: Arc<NatsService>,
+    publish_timeout: Duration,
 }
 
 pub struct BackgroundJob {
@@ -37,11 +38,22 @@ pub struct BackgroundJob {
 
 impl BackgroundJobs {
     pub fn new(nats: Arc<NatsService>) -> Arc<Self> {
-        Arc::new(Self { nats })
+        Arc::new(Self {
+            nats,
+            publish_timeout: PUBLISH_TIMEOUT,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn offline(nats: Arc<NatsService>) -> Arc<Self> {
+        Arc::new(Self {
+            nats,
+            publish_timeout: Duration::from_millis(100),
+        })
     }
 
     pub async fn enqueue(&self, job: &BackgroundJob) -> AppResult<Uuid> {
-        self.publish(job, PUBLISH_TIMEOUT).await
+        self.publish(job, self.publish_timeout).await
     }
 
     async fn publish(&self, job: &BackgroundJob, timeout: Duration) -> AppResult<Uuid> {

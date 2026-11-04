@@ -11,7 +11,7 @@ async fn indexing(pool: &PgPool) -> anyhow::Result<Arc<IndexingService>> {
         tokio_util::sync::CancellationToken::new(),
     )
     .await?;
-    let background = crate::background_jobs::BackgroundJobs::new(nats);
+    let background = crate::background_jobs::BackgroundJobs::offline(nats);
     Ok(IndexingService::new(
         pool.clone(),
         background.clone(),
