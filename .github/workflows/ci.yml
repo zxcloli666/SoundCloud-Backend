@@ -18,7 +18,7 @@ env:
   CARGO_INCREMENTAL: 1
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   DATABASE_URL: postgres://scd:dev@localhost:5432/scd
-  SAVE_TARGETS: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/fast' }}
+  SAVE_TARGETS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   changes:
