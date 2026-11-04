@@ -557,19 +557,19 @@ impl ScClient {
         &self,
         url: &str,
         region_rotation: i32,
-    ) -> Option<Value> {
-        let inputs = serde_json::to_vec(&serde_json::json!({ "url": url })).ok()?;
-        let v = self
+    ) -> crate::RelayRead<Value> {
+        let Ok(inputs) = serde_json::to_vec(&serde_json::json!({ "url": url })) else {
+            return crate::RelayRead::Unavailable;
+        };
+        let answer = self
             .call_relay_method_rotated(
                 "sc.apiv2_get",
                 crate::lua_methods::APIV2_GET,
                 inputs,
                 region_rotation,
             )
-            .await?;
-        (v.get("ok").and_then(Value::as_bool) == Some(true))
-            .then(|| v.get("data").cloned())
-            .flatten()
+            .await;
+        relay_apiv2(answer)
     }
 
     pub async fn user_collection_page_via_relay(
@@ -1156,6 +1156,22 @@ pub(crate) fn decode_json<T: DeserializeOwned>(bytes: &Bytes) -> ScResult<T> {
     })
 }
 
+fn relay_apiv2(answer: Option<Value>) -> crate::RelayRead<Value> {
+    let Some(answer) = answer else {
+        return crate::RelayRead::Unavailable;
+    };
+    if answer.get("ok").and_then(Value::as_bool) == Some(true) {
+        return match answer.get("data") {
+            Some(data) => crate::RelayRead::Found(data.clone()),
+            None => crate::RelayRead::Unavailable,
+        };
+    }
+    if answer.get("reason").and_then(Value::as_str) == Some("gone") {
+        return crate::RelayRead::Missing;
+    }
+    crate::RelayRead::Unavailable
+}
+
 fn relay_entity(answer: Option<Value>, field: &str) -> crate::RelayRead<Value> {
     let Some(value) = answer else {
         return crate::RelayRead::Unavailable;
@@ -1607,6 +1623,35 @@ mod size_tests {
             "a relay that answered but refused is still an answer, not an outage"
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_apiv2_read_the_relay_calls_gone_is_a_miss_and_a_bad_body_is_an_outage() {
+        let url = "https://api-v2.soundcloud.com/tracks/42";
+
+        let (gone, _) = relayed(Some(r#"{"ok":false,"reason":"gone"}"#));
+        assert!(matches!(
+            gone.apiv2_get_via_relay_rotated(url, 1).await,
+            crate::RelayRead::Missing
+        ));
+
+        let (bad, _) = relayed(Some(r#"{"ok":false,"reason":"bad_body"}"#));
+        assert!(matches!(
+            bad.apiv2_get_via_relay_rotated(url, 1).await,
+            crate::RelayRead::Unavailable
+        ));
+
+        let (found, _) = relayed(Some(r#"{"ok":true,"data":{"id":42}}"#));
+        assert!(matches!(
+            found.apiv2_get_via_relay_rotated(url, 1).await,
+            crate::RelayRead::Found(value) if value["id"] == 42
+        ));
+
+        let (silent, _) = relayed(None);
+        assert!(matches!(
+            silent.apiv2_get_via_relay_rotated(url, 1).await,
+            crate::RelayRead::Unavailable
+        ));
     }
 
     #[tokio::test]

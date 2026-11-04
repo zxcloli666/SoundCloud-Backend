@@ -18,6 +18,9 @@ mod follower_tests;
 #[cfg(test)]
 mod audience_tests;
 
+#[cfg(test)]
+mod entity_tests;
+
 pub use read::{read_audience_page, read_collection_page};
 pub use service::{
     AudienceCollection, ColdRefreshService, FOLLOWERS, FOLLOWINGS, LIKED_PLAYLISTS, LIKED_TRACKS,

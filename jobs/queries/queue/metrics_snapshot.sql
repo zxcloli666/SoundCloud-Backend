@@ -17,6 +17,7 @@ WITH lanes AS (
 ), failures AS (
     SELECT lane, count(*)::bigint AS dead_letters
     FROM background_job_failures
+    WHERE split_part(last_error, ':', 1) NOT IN ('auth_required', 'not_found', 'forbidden')
     GROUP BY lane
 )
 SELECT lanes.lane AS "lane!",

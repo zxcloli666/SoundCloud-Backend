@@ -168,7 +168,7 @@ impl LinkService {
                 .map(<[u8]>::to_vec),
         };
 
-        let target_session_id = Uuid::new_v4();
+        let target_session_id = Uuid::now_v7();
         sqlx::query_file!(
             "queries/auth/link_service/insert_target_session.sql",
             target_session_id,
