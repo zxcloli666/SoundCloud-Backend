@@ -113,7 +113,7 @@ async fn restore_saved(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn one_users_429_pauses_only_that_users_action(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
 
@@ -128,7 +128,7 @@ async fn one_users_429_pauses_only_that_users_action(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_account_paused_like_takes_no_spacing_slot(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
     assert!(attempt(&pool, &handler, &calls, "21", "like_track", "9").await?);
@@ -140,7 +140,7 @@ async fn an_account_paused_like_takes_no_spacing_slot(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn three_users_with_a_429_and_no_success_pause_the_app_action_only(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -164,7 +164,7 @@ async fn three_users_with_a_429_and_no_success_pause_the_app_action_only(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_that_goes_through_keeps_the_429s_per_account(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
 
@@ -185,7 +185,7 @@ async fn a_like_that_goes_through_keeps_the_429s_per_account(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_spaces_only_its_own_action(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
 
@@ -198,7 +198,7 @@ async fn a_like_spaces_only_its_own_action(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_restored_likes_group_row_pauses_all_four_like_actions(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -219,7 +219,7 @@ async fn a_restored_likes_group_row_pauses_all_four_like_actions(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_restored_action_row_pauses_that_action_only(pool: PgPool) -> anyhow::Result<()> {
     let (app, handler, calls) = setup(&pool).await?;
 

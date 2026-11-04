@@ -16,6 +16,17 @@ mod retry;
 #[cfg(test)]
 pub(crate) static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+#[cfg(test)]
+pub(crate) async fn insert_replicated(pool: &PgPool, sql: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::raw_sql(sql).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA_VERSION: i64 = 282;

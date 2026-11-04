@@ -6,7 +6,8 @@ use super::terms::TermRow;
 const BIG_TABLES: &[&str] = &["tracks", "users", "playlists", "lyrics_cache"];
 
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::raw_sql(
+    crate::db::insert_replicated(
+        pool,
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist, uploader_username,
                              uploader_sc_user_id, duration_ms, play_count_sc, sharing)
          SELECT n::text, 'soundcloud:tracks:' || n,
@@ -14,8 +15,11 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
                 (ARRAY['love', 'night', 'drive', 'rain', 'fire'])[1 + n % 5] || ' song ' || n,
                 'artist' || (n % 700), 'user' || (n % 900), (n % 900)::text,
                 100000 + n, n, CASE WHEN n % 50 = 0 THEN 'private' ELSE 'public' END
-         FROM generate_series(1, 60000) n;
-         INSERT INTO users (sc_user_id, urn, username, username_normalized, full_name, followers_count)
+         FROM generate_series(1, 60000) n",
+    )
+    .await?;
+    sqlx::raw_sql(
+        "INSERT INTO users (sc_user_id, urn, username, username_normalized, full_name, followers_count)
          SELECT n::text, 'soundcloud:users:' || n, 'user' || n, 'user' || n, 'Name ' || n, n
          FROM generate_series(1, 20000) n;
          INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, owner_username)

@@ -114,7 +114,8 @@ mod tests {
     use sqlx::PgPool;
 
     async fn seed(pool: &PgPool) -> anyhow::Result<()> {
-        sqlx::query(
+        crate::db::insert_replicated(
+            pool,
             "INSERT INTO tracks (
                  sc_track_id, urn, title, title_normalized, duration_ms, sharing, language
              )
@@ -122,7 +123,6 @@ mod tests {
                     (ARRAY['en', 'en', 'en', 'en', 'ru', 'es', 'de', 'fr', 'pt', 'ja'])[1 + n % 10]
              FROM generate_series(1, 20000) AS n",
         )
-        .execute(pool)
         .await?;
         sqlx::query(
             "INSERT INTO sc_track_counters (sc_track_id, play_count, fetched_at)
