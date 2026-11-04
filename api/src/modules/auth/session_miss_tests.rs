@@ -4,8 +4,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
-use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{Connection, PgConnection, PgPool};
 use uuid::{NoContext, Timestamp, Uuid};
 
 use super::{Feed, SESSION_IN_FLIGHT, SESSION_POLL, SESSION_WAIT, in_flight};
@@ -191,6 +191,63 @@ async fn a_split_node_with_replication_switched_off_asks_for_a_retry(
     };
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
     Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_apply_worker_that_never_heard_from_its_publisher_reads_as_stalled(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "CREATE SUBSCRIPTION auth_feed_unheard
+         CONNECTION 'host=127.0.0.1 port=1 dbname=none' PUBLICATION none
+         WITH (connect = false, slot_name = 'auth_feed_unheard', create_slot = false, enabled = false);
+         ALTER SUBSCRIPTION auth_feed_unheard ENABLE;",
+    )
+    .execute(&pool)
+    .await?;
+    let mut holder = PgConnection::connect_with(&pool.connect_options()).await?;
+    let mut held = holder.begin().await?;
+    sqlx::query("ALTER SUBSCRIPTION auth_feed_unheard SET (binary = true)")
+        .execute(&mut *held)
+        .await?;
+
+    let started = unheard_worker_started(&pool).await;
+    let feed = auth(&pool)?.feed().await;
+    held.rollback().await?;
+    holder.close().await?;
+    sqlx::raw_sql(
+        "ALTER SUBSCRIPTION auth_feed_unheard DISABLE;
+         ALTER SUBSCRIPTION auth_feed_unheard SET (slot_name = NONE);
+         DROP SUBSCRIPTION auth_feed_unheard;",
+    )
+    .execute(&pool)
+    .await?;
+
+    started?;
+    assert_eq!(feed?, Feed::Stalled);
+    Ok(())
+}
+
+async fn unheard_worker_started(pool: &PgPool) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM pg_catalog.pg_stat_subscription AS worker
+                 JOIN pg_catalog.pg_stat_activity AS activity ON activity.pid = worker.pid
+                 WHERE worker.subname = 'auth_feed_unheard'
+                   AND activity.wait_event_type = 'Lock'
+             )",
+        )
+        .fetch_one(pool)
+        .await?;
+        if waiting {
+            return Ok(());
+        }
+        anyhow::ensure!(Instant::now() < deadline, "the apply worker never started");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 fn minted_at(at: SystemTime) -> Uuid {
