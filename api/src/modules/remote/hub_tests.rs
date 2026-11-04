@@ -1,12 +1,15 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use backend_contracts::remote::{CommandKind, RemoteReply, WaitResponse};
+use backend_contracts::remote::{
+    CommandKind, LinkProvider, RemoteCommand, RemoteReply, WaitResponse,
+};
 use deadpool_redis::{Config, Pool, Runtime};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::hub::{Asked, RemoteHub};
+use super::buffer::Buffer;
+use super::hub::{Asked, RemoteHub, now_micros, now_ms};
 use crate::bus::nats::NatsService;
 
 impl RemoteHub {
@@ -302,7 +305,6 @@ async fn two_hosts_on_one_redis_number_a_users_commands_in_order() {
 #[tokio::test]
 #[ignore = "requires a local Redis"]
 async fn a_link_confirmation_is_a_command_of_its_own_kind() {
-    use backend_contracts::remote::LinkProvider;
     let hub = local_hub();
     let user = Uuid::now_v7().to_string();
     hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
@@ -460,12 +462,12 @@ async fn a_stuck_redis_does_not_hold_back_live_delivery() {
     };
     tokio::time::sleep(Duration::from_millis(200)).await;
     let held = pool.get().await.expect("the only connection");
-    let now = super::hub::now_ms();
+    let now = now_ms();
     let started = Instant::now();
     hub.receive(backend_contracts::remote::RemoteCommand {
         id: Uuid::now_v7(),
         kind: CommandKind::Utterance,
-        seq: super::hub::now_micros(),
+        seq: now_micros(),
         user: user.clone(),
         source: "alice".to_owned(),
         text: "пауза".to_owned(),
@@ -482,4 +484,169 @@ async fn a_stuck_redis_does_not_hold_back_live_delivery() {
         started.elapsed()
     );
     drop(held);
+}
+
+const SKEW_MICROS: i64 = 5_000_000;
+
+fn hub_and_buffer() -> (Arc<RemoteHub>, Buffer) {
+    let prefix = format!("remote-test-{}", Uuid::now_v7());
+    (
+        RemoteHub::new(None, redis(), &prefix),
+        Buffer::new(redis(), prefix),
+    )
+}
+
+fn command_numbered(user: &str, seq: i64, text: &str) -> RemoteCommand {
+    let now = now_ms();
+    RemoteCommand {
+        id: Uuid::now_v7(),
+        kind: CommandKind::Utterance,
+        seq,
+        user: user.to_owned(),
+        source: "alice".to_owned(),
+        text: text.to_owned(),
+        hint: None,
+        created_at: now,
+        expires_at: now + 5_000,
+    }
+}
+
+fn texts(response: &WaitResponse) -> Vec<&str> {
+    response
+        .commands
+        .iter()
+        .map(|command| command.text.as_str())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_host_with_a_slow_clock_still_reaches_a_desktop_that_just_started() {
+    let (hub, buffer) = hub_and_buffer();
+    let user = Uuid::now_v7().to_string();
+    let handshake = hub
+        .poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
+
+    let seq = buffer
+        .next_seq(&user, now_micros() - SKEW_MICROS)
+        .await
+        .expect("a sequence");
+    buffer
+        .push(&command_numbered(&user, seq, "пауза"))
+        .await
+        .expect("buffered");
+
+    let caught = hub
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_millis(50),
+        )
+        .await;
+    assert_eq!(texts(&caught), ["пауза"]);
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_command_numbered_by_a_fast_clock_before_the_start_is_not_delivered() {
+    let (hub, buffer) = hub_and_buffer();
+    let user = Uuid::now_v7().to_string();
+    let seq = buffer
+        .next_seq(&user, now_micros() + SKEW_MICROS)
+        .await
+        .expect("a sequence");
+    buffer
+        .push(&command_numbered(&user, seq, "старая команда"))
+        .await
+        .expect("buffered");
+
+    let handshake = hub
+        .poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
+    assert_eq!(handshake.cursor, seq);
+    let quiet = hub
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_millis(50),
+        )
+        .await;
+    assert!(quiet.commands.is_empty());
+
+    let _ = hub
+        .ask(&user, "alice", "новая команда", Duration::from_millis(30))
+        .await;
+    let caught = hub
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_millis(50),
+        )
+        .await;
+    assert_eq!(texts(&caught), ["новая команда"]);
+    assert!(caught.cursor > seq);
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn an_answered_link_confirm_never_reaches_a_desktop_that_takes_over_on_another_host() {
+    let prefix = format!("remote-test-{}", Uuid::now_v7());
+    let first = RemoteHub::new(None, redis(), &prefix);
+    let second = RemoteHub::new(None, redis(), &prefix);
+    let user = Uuid::now_v7().to_string();
+    let laptop = second
+        .poll(&user, "laptop", 1, None, Duration::from_millis(10))
+        .await;
+    let desktop = first
+        .poll(&user, "desktop", 5, None, Duration::from_millis(10))
+        .await;
+
+    let asking = {
+        let first = first.clone();
+        let user = user.clone();
+        tokio::spawn(async move { first.confirm_link(&user, LinkProvider::Alice, "47").await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let shown = first
+        .poll(
+            &user,
+            "desktop",
+            5,
+            Some(desktop.cursor),
+            Duration::from_secs(1),
+        )
+        .await;
+    let command = &shown.commands[0];
+    assert_eq!(command.kind, CommandKind::LinkConfirm);
+    first.reply(&user, spoken(command.id, "")).await;
+    assert!(matches!(asking.await.expect("asker"), Asked::Reply(_)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let taken_over = second
+        .poll(
+            &user,
+            "laptop",
+            9,
+            Some(laptop.cursor),
+            Duration::from_millis(50),
+        )
+        .await;
+    assert!(taken_over.commands.is_empty(), "{:?}", texts(&taken_over));
+    let same_host = first
+        .poll(
+            &user,
+            "desktop",
+            9,
+            Some(desktop.cursor),
+            Duration::from_millis(50),
+        )
+        .await;
+    assert!(same_host.commands.is_empty());
 }

@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use backend_contracts::remote::{
-    COMMAND_SUBJECT, CONFIRM_HOLD_SECS, CommandKind, LinkProvider, PRESENCE_SUBJECT, Presence,
-    RemoteCommand, RemoteReply, ReplyEnvelope, WaitResponse, reply_subject, reply_subject_filter,
+    BUFFER_SECS, COMMAND_SUBJECT, CONFIRM_HOLD_SECS, CommandKind, LinkProvider, PRESENCE_SUBJECT,
+    Presence, RemoteCommand, RemoteReply, ReplyEnvelope, WaitResponse, reply_subject,
+    reply_subject_filter,
 };
 use bytes::Bytes;
 use deadpool_redis::Pool;
@@ -85,6 +86,7 @@ pub struct RemoteHub {
     commands: broadcast::Sender<Arc<RemoteCommand>>,
     pending: Mutex<HashMap<Uuid, Pending>>,
     seen: Cache<Uuid, ()>,
+    answered: Cache<(String, Uuid), ()>,
     published: Cache<(String, String), (i64, Instant)>,
     last_seq: AtomicI64,
 }
@@ -110,6 +112,10 @@ impl RemoteHub {
             seen: Cache::builder()
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(180))
+                .build(),
+            answered: Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(Duration::from_secs(BUFFER_SECS + 10))
                 .build(),
             published: Cache::builder()
                 .max_capacity(PRESENCE_CAPACITY)
@@ -202,11 +208,26 @@ impl RemoteHub {
     }
 
     async fn next_seq(&self, user: &str) -> i64 {
-        match self.buffer.next_seq(user, now_micros()).await {
-            Ok(seq) => seq.max(self.local_seq()),
+        let floor = self.local_seq();
+        match self.buffer.next_seq(user, floor).await {
+            Ok(seq) => {
+                self.last_seq.fetch_max(seq, Ordering::Relaxed);
+                seq
+            }
             Err(error) => {
                 warn!(%error, "remote sequence fell back to the local clock");
-                self.local_seq()
+                floor
+            }
+        }
+    }
+
+    async fn handshake_cursor(&self, user: &str) -> i64 {
+        let floor = self.local_seq();
+        match self.buffer.handshake_seq(user, floor).await {
+            Ok(seq) => seq,
+            Err(error) => {
+                warn!(%error, "remote handshake cursor fell back to the local clock");
+                floor
             }
         }
     }
@@ -319,13 +340,23 @@ impl RemoteHub {
             user: user.to_owned(),
             reply,
         };
-        let subject = reply_subject(envelope.reply.id);
+        let id = envelope.reply.id;
+        let subject = reply_subject(id);
         let payload = serde_json::to_vec(&envelope).unwrap_or_default();
         self.deliver_reply(envelope);
         self.publish(subject, payload).await;
+        let buffer = self.buffer.clone();
+        let user = user.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = buffer.mark_answered(&user, id).await {
+                warn!(%error, "remote answer was not recorded");
+            }
+        });
     }
 
     fn deliver_reply(&self, envelope: ReplyEnvelope) {
+        self.answered
+            .insert((envelope.user.clone(), envelope.reply.id), ());
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         let owned = pending
             .get(&envelope.reply.id)
@@ -385,7 +416,7 @@ impl RemoteHub {
         self.announce(user, device, active).await;
         let (Some(since), Some(slot)) = (since, slot) else {
             return Some(WaitResponse {
-                cursor: now_micros(),
+                cursor: self.handshake_cursor(user).await,
                 commands: Vec::new(),
                 active_device: self.active_device(user),
             });
@@ -435,6 +466,9 @@ impl RemoteHub {
 
     fn deliverable(&self, command: &RemoteCommand, device: &str) -> bool {
         command.expires_at > now_ms()
+            && !self
+                .answered
+                .contains_key(&(command.user.clone(), command.id))
             && self.roster.is_target(&command.user, device, Instant::now())
     }
 
