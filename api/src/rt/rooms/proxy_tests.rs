@@ -1,4 +1,6 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -11,7 +13,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use url::Url;
 
-use super::{Proxy, router, upstream_headers};
+use super::{Proxy, climbs, router, upstream_headers};
 
 async fn serve(app: Router) -> Url {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -180,4 +182,82 @@ fn hop_by_hop_headers_and_the_host_are_not_forwarded() {
     assert_eq!(names.len(), 2, "{names:?}");
     assert_eq!(sent["x-session-id"], "abc");
     assert_eq!(sent["accept-encoding"], "gzip");
+}
+
+#[tokio::test]
+async fn a_path_that_climbs_is_refused_before_it_is_forwarded() {
+    let api = serve(Router::new().fallback(echo)).await;
+    let app = router::<()>(Proxy::new(&api));
+    for uri in [
+        "/rooms/../admin/rooms/handoff",
+        "/rooms/%2e%2e/admin",
+        "/rooms/%2E%2E/admin",
+        "/rooms/.%2e/admin",
+        "/rooms/%2e./admin",
+        "/rooms/ABC/%2E%2e",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).expect("a request"))
+            .await
+            .expect("an answer");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(seen(response).await["error"], "rooms_bad_path", "{uri}");
+    }
+}
+
+#[test]
+fn only_a_whole_dot_dot_segment_climbs() {
+    assert!(climbs("/rooms/../x"));
+    assert!(climbs("/rooms/%2e%2E"));
+    assert!(!climbs("/rooms/a..b"));
+    assert!(!climbs("/rooms/ABC123/members"));
+    assert!(!climbs("/rooms/%2e/x"));
+}
+
+#[tokio::test]
+async fn hundreds_of_parked_requests_all_complete_through_one_proxy() {
+    let parked_now = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let upstream = {
+        let (parked_now, peak) = (parked_now.clone(), peak.clone());
+        Router::new().fallback(move || {
+            let (parked_now, peak) = (parked_now.clone(), peak.clone());
+            async move {
+                let now = parked_now.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(1_500)).await;
+                parked_now.fetch_sub(1, Ordering::SeqCst);
+                StatusCode::OK
+            }
+        })
+    };
+    let api = serve(upstream).await;
+    let app = router::<()>(Proxy::new(&api));
+
+    let mut parked = tokio::task::JoinSet::new();
+    for member in 0..300 {
+        if member % 25 == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let app = app.clone();
+        parked.spawn(async move {
+            app.oneshot(
+                Request::get(format!("/rooms/ABC123?member={member}"))
+                    .body(Body::empty())
+                    .expect("a request"),
+            )
+            .await
+            .expect("an answer")
+            .status()
+        });
+    }
+    let mut done = 0;
+    while let Some(status) = parked.join_next().await {
+        assert_eq!(status.expect("a task"), StatusCode::OK);
+        done += 1;
+    }
+
+    assert_eq!(done, 300);
+    assert_eq!(peak.load(Ordering::SeqCst), 300);
 }

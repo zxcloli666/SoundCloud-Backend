@@ -15,6 +15,9 @@ use url::Url;
 
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 pub const BODY_MAX: usize = 1024 * 1024;
+pub const POOL_MAX: usize = 8192;
+pub const POOL_IDLE_PER_HOST: usize = 1024;
+pub const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 const HOP_BY_HOP: [HeaderName; 8] = [
     header::CONNECTION,
@@ -51,6 +54,10 @@ impl Proxy {
         let http = wreq::Client::builder()
             .timeout(timeout)
             .connect_timeout(Duration::from_secs(5))
+            .http1_only()
+            .pool_max_size(POOL_MAX)
+            .pool_max_idle_per_host(POOL_IDLE_PER_HOST)
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .redirect(wreq::redirect::Policy::none())
             .no_gzip()
             .no_brotli()
@@ -72,6 +79,9 @@ async fn forward(
     request: Request,
 ) -> Response {
     let (parts, body) = request.into_parts();
+    if climbs(parts.uri.path()) {
+        return refusal(StatusCode::BAD_REQUEST, "rooms_bad_path");
+    }
     let Ok(body) = to_bytes(body, BODY_MAX).await else {
         return refusal(StatusCode::PAYLOAD_TOO_LARGE, "rooms_body_too_large");
     };
@@ -118,6 +128,11 @@ async fn forward(
             refusal(StatusCode::BAD_GATEWAY, "rooms_unavailable")
         }
     }
+}
+
+pub(super) fn climbs(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| segment.to_ascii_lowercase().replace("%2e", ".") == "..")
 }
 
 pub(super) fn upstream_headers(incoming: &HeaderMap, peer: Option<SocketAddr>) -> HeaderMap {
