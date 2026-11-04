@@ -14,6 +14,7 @@ SET auto_explain.log_nested_statements = on;
 SET auto_explain.log_analyze = on;
 SET auto_explain.log_buffers = on;
 SET auto_explain.log_timing = off;
+SET auto_explain.log_parameter_max_length = 0;
 SET auto_explain.log_level = notice;
 SET scd.mode = 'split';
 SET scd.role = 'api';
