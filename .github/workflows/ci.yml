@@ -103,8 +103,8 @@ jobs:
 
       - name: Utils
         run: |
-          cargo nextest run --profile ci --manifest-path utils/redact/Cargo.toml --all-targets --locked
-          cargo nextest run --profile ci --manifest-path utils/telemetry/Cargo.toml --all-targets --locked
+          cargo nextest run --manifest-path utils/redact/Cargo.toml --all-targets --locked
+          cargo nextest run --manifest-path utils/telemetry/Cargo.toml --all-targets --locked
 
       - name: Tests
         working-directory: api
@@ -112,7 +112,7 @@ jobs:
 
       - name: Ignored tests
         working-directory: api
-        run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --bin api --run-ignored only -E "$IGNORED"
+        run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --bin api --run-ignored only --no-tests warn -E "$IGNORED"
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'
@@ -227,7 +227,7 @@ jobs:
 
       - name: Contracts
         working-directory: backend-contracts
-        run: cargo nextest run --profile ci --all-targets --locked
+        run: cargo nextest run --all-targets --locked
 
       - name: Tests
         working-directory: jobs
@@ -235,7 +235,7 @@ jobs:
 
       - name: Live vector store
         working-directory: jobs
-        run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --lib --run-ignored only -E 'test(~indexing::result::live_tests)'
+        run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --lib --run-ignored only --no-tests warn -E 'test(~indexing::result::live_tests)'
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'
