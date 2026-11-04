@@ -99,7 +99,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: cmake clang libclang-dev pkg-config
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -173,7 +173,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: cmake clang libclang-dev pkg-config
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -237,7 +237,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: cmake clang libclang-dev pkg-config
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -304,7 +304,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: cmake clang libclang-dev pkg-config
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -417,7 +417,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: ffmpeg libchromaprint1
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -523,7 +523,7 @@ jobs:
         uses: ./.github/actions/apt-packages
         with:
           packages: protobuf-compiler cmake clang libclang-dev pkg-config
-          save: ${{ env.SAVE_TARGETS }}
+          save: ${{ env.SAVE_TARGETS == 'true' || github.head_ref == 'ci/fast' }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
