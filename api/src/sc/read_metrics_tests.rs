@@ -24,7 +24,7 @@ async fn every_tier_outcome_is_counted_under_its_own_labels() {
         Outcome::Error,
         Duration::from_millis(20),
     );
-    metrics::set_relay_breaker_open(true);
+    metrics::set_relay_breaker_open("relay_lua", true);
 
     let Some(body) = rendered() else {
         return;
@@ -84,7 +84,7 @@ async fn the_gauge_follows_the_shared_breaker_and_not_only_our_own_failures() {
         "the serving breaker must honour an outage another process already published"
     );
 
-    metrics::set_relay_breaker_open(health.is_open().await);
+    metrics::set_relay_breaker_open("relay_lua", health.is_open().await);
     let Some(body) = rendered() else {
         return;
     };

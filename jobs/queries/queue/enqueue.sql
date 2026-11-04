@@ -24,6 +24,11 @@ DO UPDATE SET
     generation = background_jobs.generation + 1,
     attempts = 0,
     max_attempts = EXCLUDED.max_attempts,
-    available_at = LEAST(background_jobs.available_at, EXCLUDED.available_at),
+    available_at = CASE
+        WHEN background_jobs.lease_id IS NOT NULL
+         AND background_jobs.lease_generation = background_jobs.generation
+            THEN EXCLUDED.available_at
+        ELSE LEAST(background_jobs.available_at, EXCLUDED.available_at)
+    END,
     last_error = NULL,
     updated_at = now()

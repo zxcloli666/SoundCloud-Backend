@@ -6,6 +6,7 @@ use tracing::debug;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::{TokenKind, TokenProvider, try_with_chain};
+use crate::sc::stall::StallWatch;
 use crate::sc::{EGRESS_APP, FetchStrategy, PgEgressHealth, hedge, race, within_budget};
 use sc_transport::{
     Apiv2Proxy, EGRESS_RELAY_LUA, EGRESS_RELAY_LUA_SEARCH, EgressHealth, ScClient, SearchType,
@@ -22,8 +23,8 @@ pub struct ScReadService {
     sc: ScClient,
     proxy: Apiv2Proxy,
     tokens: Arc<TokenProvider>,
-    lua_health: EgressHealth,
-    search_health: EgressHealth,
+    lua_health: Arc<EgressHealth>,
+    search_health: Arc<EgressHealth>,
     strategy: FetchStrategy,
 }
 
@@ -53,16 +54,16 @@ impl ScReadService {
             sc,
             proxy,
             tokens,
-            lua_health: EgressHealth::new(
+            lua_health: Arc::new(EgressHealth::new(
                 EGRESS_RELAY_LUA,
                 EGRESS_APP,
                 Some(PgEgressHealth::new(pg.clone())),
-            ),
-            search_health: EgressHealth::new(
+            )),
+            search_health: Arc::new(EgressHealth::new(
                 EGRESS_RELAY_LUA_SEARCH,
                 EGRESS_APP,
                 Some(PgEgressHealth::new(pg)),
-            ),
+            )),
             strategy: FetchStrategy::from_env(),
         })
     }
@@ -200,11 +201,20 @@ impl ScReadService {
             {
                 Ok(Some(page)) => Ok(page),
                 Ok(None) => Err(AppError::ScUnreachable("relay: no search result".into())),
-                Err(_) => Err(AppError::sc_deadline_exceeded()),
+                Err(_) => {
+                    crate::metrics::set_relay_breaker_open(
+                        EGRESS_RELAY_LUA,
+                        self.lua_health.record_stall().await,
+                    );
+                    Err(AppError::sc_deadline_exceeded())
+                }
             }
         };
         let answer = Self::timed("relay_lua", "search", call).await.ok();
-        self.search_health.record_answer(answer.is_some()).await;
+        crate::metrics::set_relay_breaker_open(
+            EGRESS_RELAY_LUA_SEARCH,
+            self.search_health.record_answer(answer.is_some()).await,
+        );
         let page = answer?;
         let items = page.get("collection").and_then(Value::as_array)?.clone();
         let next_href = page
@@ -245,8 +255,13 @@ impl ScReadService {
         &self,
         fut: impl std::future::Future<Output = sc_transport::RelayRead<Value>>,
     ) -> AppResult<Value> {
+        let watch = StallWatch::start(&self.lua_health, EGRESS_RELAY_LUA);
         let read = fut.await;
-        crate::metrics::set_relay_breaker_open(self.lua_health.observe(&read).await);
+        watch.finish();
+        crate::metrics::set_relay_breaker_open(
+            EGRESS_RELAY_LUA,
+            self.lua_health.observe(&read).await,
+        );
         match read {
             sc_transport::RelayRead::Found(mut v) => {
                 sc_transport::normalize_v2_to_v1(&mut v);
