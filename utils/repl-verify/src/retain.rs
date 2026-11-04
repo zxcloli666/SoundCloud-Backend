@@ -19,6 +19,7 @@ const DELETED: &str = "scd_repl_retention_deleted_total";
 const REDACTED: &str = "scd_repl_retention_redacted_total";
 const HELD: &str = "scd_repl_retention_held";
 const TABLES: [&str; 2] = ["cmd_outbox", "oauth_app_tokens_local"];
+const RECEIPTS: &str = "repl_purges";
 const BATCH: i32 = 1_000;
 const ROUNDS: u32 = 200;
 const PAUSE: Duration = Duration::from_millis(500);
@@ -41,6 +42,12 @@ impl Retention {
 
 pub async fn retain_once(pool: &PgPool, table: &str, batch: i32) -> Result<Retention, sqlx::Error> {
     sqlx::query_file_as!(Retention, "queries/node_retention.sql", table, batch)
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn api_node(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    sqlx::query_file_scalar!("queries/api_node.sql")
         .fetch_one(pool)
         .await
 }
@@ -82,12 +89,23 @@ impl Retainer {
                 () = stop.cancelled() => return Ok(()),
                 () = tokio::time::sleep(wait) => {}
             }
-            for table in TABLES {
+            let receipts = self.api_node().await.then_some(RECEIPTS);
+            for table in TABLES.into_iter().chain(receipts) {
                 if let Err(error) = self.retain(table, &stop).await {
                     warn!(%error, table, "scd node retention failed");
                 }
             }
             wait = self.pace;
+        }
+    }
+
+    async fn api_node(&self) -> bool {
+        match api_node(&self.pool).await {
+            Ok(api) => api,
+            Err(error) => {
+                warn!(%error, "scd node retention could not read the node role");
+                false
+            }
         }
     }
 

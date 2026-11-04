@@ -3,7 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use repl_verify::{Mode, Sweeper, Verifier, probe_once, repair_once, retain_once, sweep_once};
+use repl_verify::{
+    Mode, Sweeper, Verifier, api_node, probe_once, repair_once, retain_once, sweep_once,
+};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Connection, PgConnection, PgPool};
 use tokio::sync::OnceCell;
@@ -327,5 +329,128 @@ async fn an_api_node_without_its_core_stream_holds_node_retention() {
     assert_eq!(
         tokens.deleted, 1,
         "expired tokens are not replicated and go anyway"
+    );
+}
+
+const RV_T1: &str = "{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}";
+const RV_T2: &str = "{\"user_id\": \"rv\", \"sc_track_id\": \"t2\"}";
+const RV_T3: &str = "{\"user_id\": \"rv\", \"sc_track_id\": \"t3\"}";
+const OLD_RECEIPT: &str = "INSERT INTO public.repl_purges (tbl, pk, purged_v, at)
+    VALUES ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', 0, now() - interval '8 days')";
+
+#[tokio::test]
+async fn receipt_retention_runs_on_api_nodes_only_and_waits_for_the_core_stream() {
+    let cases = [
+        ("receipts_legacy", None, false, None),
+        ("receipts_core", Some(("core", "core")), false, None),
+        (
+            "receipts_api",
+            Some(("main", "api")),
+            true,
+            Some("slots: no slot for core; subscriptions: no subscription from core"),
+        ),
+    ];
+    for (case, configure, api, held) in cases {
+        let pool = node(case, configure).await;
+        sqlx::raw_sql(OLD_RECEIPT).execute(&pool).await.unwrap();
+        assert_eq!(api_node(&pool).await.unwrap(), api, "{case}");
+        let kept = retain_once(&pool, "repl_purges", 1000).await.unwrap();
+        assert_eq!(
+            (kept.deleted, kept.redacted, kept.held.as_deref()),
+            (0, 0, held),
+            "{case}"
+        );
+        assert_eq!(
+            count(&pool, "SELECT count(*) FROM public.repl_purges").await,
+            1,
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn core_sends_its_receipts_before_the_image_when_the_api_holds_others() {
+    let pool = node("receipts_settle", Some(("core", "core"))).await;
+    sqlx::raw_sql(
+        "INSERT INTO public.repl_purges (tbl, pk, purged_v, at) VALUES
+             ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t3\"}', 16, '2026-11-01 05:28:38.123456+00');
+         INSERT INTO public.user_likes_tracks (user_id, sc_track_id, wanted_state, wanted_v) VALUES
+             ('rv', 't1', true, 0), ('rv', 't2', true, 0), ('rv', 't3', true, 32);
+         INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
+         VALUES ('main', 'user_likes_tracks', gen_random_uuid()::text,
+                 jsonb_build_object('lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 0,
+                     'keys', jsonb_build_object(
+                         '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', NULL,
+                         '{\"user_id\": \"rv\", \"sc_track_id\": \"t2\"}', NULL,
+                         '{\"user_id\": \"rv\", \"sc_track_id\": \"t3\"}', NULL),
+                     'receipts', jsonb_build_object(
+                         '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}',
+                         jsonb_build_array(jsonb_build_object('purged_v', 0, 'at', '2026-11-01T05:28:38+00:00')),
+                         '{\"user_id\": \"rv\", \"sc_track_id\": \"t3\"}',
+                         jsonb_build_array(jsonb_build_object('purged_v', 16, 'at', '2026-11-01T08:28:38.123456+03:00'))))::text,
+                 now())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let rows = repair_once(&pool, true, 50).await.unwrap();
+    let acts: Vec<(&str, &str, i32)> = rows
+        .iter()
+        .map(|r| (r.k.as_deref().unwrap_or("-"), r.action.as_str(), r.attempt))
+        .collect();
+    assert_eq!(
+        acts,
+        [
+            (RV_T1, "receipts", 1),
+            (RV_T1, "row", 1),
+            (RV_T2, "row", 1),
+            (RV_T3, "row", 1),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_api_node_keeps_exactly_cores_receipts_for_a_repaired_key() {
+    let pool = node("receipts_take", Some(("main", "api"))).await;
+    sqlx::raw_sql(
+        "INSERT INTO public.repl_purges (tbl, pk, purged_v, at) VALUES
+             ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', 0, '2026-11-01 05:28:38+00'),
+             ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', 32, '2026-11-02 00:00:00+00'),
+             ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t2\"}', 0, '2026-11-01 05:28:38+00');
+         SELECT public.scd_repair_op(gen_random_uuid(), 'user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}',
+             '{\"scd_op\": \"receipts\", \"receipts\": [{\"purged_v\": 32, \"at\": \"2026-11-02T03:00:00+03:00\"}, {\"purged_v\": 48, \"at\": \"2026-11-03T00:00:00+00:00\"}]}');
+         SELECT public.scd_repair_op(gen_random_uuid(), 'artists', '{\"id\": \"00000000-0000-0000-0000-0000000000e1\"}',
+             '{\"scd_op\": \"receipts\", \"receipts\": []}');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let left: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT pk ->> 'sc_track_id', purged_v FROM public.repl_purges ORDER BY 1, 2",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        left,
+        [("t1", 32), ("t1", 48), ("t2", 0)]
+            .map(|(track, v)| (track.to_owned(), v))
+            .to_vec()
+    );
+
+    let core = node("receipts_take_core", Some(("core", "core"))).await;
+    sqlx::raw_sql(
+        "INSERT INTO public.repl_purges (tbl, pk, purged_v, at) VALUES
+             ('user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', 0, '2026-11-01 05:28:38+00');
+         SELECT public.scd_repair_op(gen_random_uuid(), 'user_likes_tracks', '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}',
+             '{\"scd_op\": \"receipts\", \"receipts\": []}');",
+    )
+    .execute(&core)
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&core, "SELECT count(*) FROM public.repl_purges").await,
+        1,
+        "core never takes receipts from a repair op"
     );
 }
