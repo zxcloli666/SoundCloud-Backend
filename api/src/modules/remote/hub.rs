@@ -5,8 +5,9 @@ use backend_contracts::remote::{
     CONFIRM_HOLD_SECS, CommandKind, LinkProvider, RemoteCommand, RemoteReply, ReplyEnvelope,
     WaitResponse,
 };
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use mini_moka::sync::Cache;
+use tokio::sync::Notify;
 use tracing::warn;
 use uuid::{Uuid, Version};
 
@@ -17,12 +18,13 @@ use crate::bus::nats::NatsService;
 
 const PUBLISH_BUDGET: Duration = Duration::from_secs(1);
 const ANNOUNCE_BUDGET: Duration = Duration::from_secs(1);
-const LATE_ANSWER_BUDGET: Duration = Duration::from_millis(250);
+const CONNECT_BUDGET: Duration = Duration::from_secs(2);
+const LATE_ANSWER_BUDGET: Duration = Duration::from_millis(50);
 const REOPEN_AFTER: Duration = Duration::from_secs(5);
 const RECHECK_AFTER: Duration = Duration::from_millis(50);
 const EXPIRY_MARGIN_MS: i64 = 1000;
 const REPLY_WINDOW_MARGIN_MS: i64 = 30_000;
-const REPLY_CLOCK_SKEW_MS: i64 = 5_000;
+const REPLY_CLOCK_SKEW_MS: i64 = 30_000;
 pub const PRESENCE_REFRESH: Duration = Duration::from_millis(DEVICE_TTL_MS as u64 / 2);
 const PRESENCE_CAPACITY: u64 = 100_000;
 
@@ -77,17 +79,19 @@ enum Cached {
     Unknown,
 }
 
-struct Scan {
-    from: u64,
-    ready: Vec<RemoteCommand>,
-    devices: Devices,
+pub(super) struct Scan {
+    pub(super) from: u64,
+    pub(super) ready: Vec<RemoteCommand>,
+    pub(super) devices: Devices,
+    pub(super) presence_ok: bool,
+    pub(super) deadline: tokio::time::Instant,
 }
 
 pub struct RemoteHub {
     nats: Option<Arc<NatsService>>,
     prefix: String,
-    slot: Mutex<Slot>,
-    opening: tokio::sync::Mutex<()>,
+    slot: Arc<Mutex<Slot>>,
+    opening: Arc<tokio::sync::Mutex<()>>,
     waits: Arc<Waits>,
     published: Cache<(String, String), (i64, Instant)>,
 }
@@ -121,8 +125,8 @@ impl RemoteHub {
         Arc::new(Self {
             nats,
             prefix: prefix.to_owned(),
-            slot: Mutex::new(Slot::default()),
-            opening: tokio::sync::Mutex::new(()),
+            slot: Arc::new(Mutex::new(Slot::default())),
+            opening: Arc::new(tokio::sync::Mutex::new(())),
             waits: Arc::new(Waits::default()),
             published: Cache::builder()
                 .max_capacity(PRESENCE_CAPACITY)
@@ -144,7 +148,7 @@ impl RemoteHub {
 
     pub(super) async fn store(&self) -> Option<Arc<Store>> {
         let nats = self.nats.as_ref()?;
-        if nats.disconnected() {
+        if !nats.connected() {
             return None;
         }
         match self.cached() {
@@ -152,27 +156,39 @@ impl RemoteHub {
             Cached::Failing => return None,
             Cached::Unknown => {}
         }
-        let _opening = self.opening.lock().await;
+        let opening = self.opening.clone().lock_owned().await;
         match self.cached() {
             Cached::Open(store) => return Some(store),
             Cached::Failing => return None,
             Cached::Unknown => {}
         }
-        let opened = Store::open(nats, &self.prefix).await;
-        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
-        match opened {
-            Ok(store) => {
-                let store = Arc::new(store);
-                slot.store = Some(store.clone());
-                slot.failed_at = None;
-                Some(store)
+        let nats = nats.clone();
+        let prefix = self.prefix.clone();
+        let slot = self.slot.clone();
+        let opened = tokio::spawn(async move {
+            let _opening = opening;
+            let opened = Store::open(&nats, &prefix).await;
+            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+            match opened {
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    slot.store = Some(store.clone());
+                    slot.failed_at = None;
+                    Some(store)
+                }
+                Err(error) => {
+                    warn!(%error, "remote store is unavailable");
+                    slot.failed_at = Some(Instant::now());
+                    None
+                }
             }
-            Err(error) => {
-                warn!(%error, "remote store is unavailable");
-                slot.failed_at = Some(Instant::now());
-                None
-            }
-        }
+        });
+        opened.await.ok().flatten()
+    }
+
+    #[cfg(test)]
+    pub fn open_failed(&self) -> bool {
+        matches!(self.cached(), Cached::Failing)
     }
 
     fn forget(&self, store: &Arc<Store>) {
@@ -201,6 +217,11 @@ impl RemoteHub {
     }
 
     pub async fn prepare(&self) -> bool {
+        if let Some(nats) = &self.nats
+            && !nats.wait_connected(CONNECT_BUDGET).await
+        {
+            return false;
+        }
         self.store().await.is_some()
     }
 
@@ -234,8 +255,13 @@ impl RemoteHub {
         }
     }
 
-    async fn publish(&self, store: &Arc<Store>, command: &RemoteCommand) -> Published {
-        match tokio::time::timeout(PUBLISH_BUDGET, store.publish(command)).await {
+    async fn publish(
+        &self,
+        store: &Arc<Store>,
+        command: &RemoteCommand,
+        until: Instant,
+    ) -> Published {
+        match tokio::time::timeout_at(until.into(), store.publish(command)).await {
             Ok(result) => match self.checked(store, "command publish", result) {
                 Some(()) => Published::Sent,
                 None => Published::Failed,
@@ -255,10 +281,10 @@ impl RemoteHub {
         text: &str,
         deadline: Instant,
     ) -> Asked {
-        let store = match self.reachable(user).await {
-            Ok(store) => store,
-            Err(Unreached::Offline) => return Asked::Offline,
-            Err(Unreached::Busy) => return Asked::Busy,
+        let store = match tokio::time::timeout_at(deadline.into(), self.reachable(user)).await {
+            Ok(Ok(store)) => store,
+            Ok(Err(Unreached::Offline)) => return Asked::Offline,
+            Ok(Err(Unreached::Busy)) | Err(_) => return Asked::Busy,
         };
         let draft = Draft {
             kind,
@@ -274,10 +300,12 @@ impl RemoteHub {
         ) else {
             return Asked::Busy;
         };
-        if let Published::Failed = self.publish(&store, &command).await {
+        let publish_until = (Instant::now() + PUBLISH_BUDGET).min(deadline);
+        if let Published::Failed = self.publish(&store, &command, publish_until).await {
             return Asked::Busy;
         }
-        let heard = tokio::time::timeout_at(deadline.into(), async {
+        let listen_until = deadline.checked_sub(LATE_ANSWER_BUDGET).unwrap_or(deadline);
+        let heard = tokio::time::timeout_at(listen_until.into(), async {
             while let Some(message) = replies.next().await {
                 if let Ok(envelope) = serde_json::from_slice::<ReplyEnvelope>(&message.payload)
                     && envelope.user == user
@@ -292,7 +320,7 @@ impl RemoteHub {
         if let Ok(Some(reply)) = heard {
             return Asked::Reply(reply);
         }
-        match tokio::time::timeout(LATE_ANSWER_BUDGET, self.answer(user, command.id)).await {
+        match tokio::time::timeout_at(deadline.into(), self.answer(user, command.id)).await {
             Ok(Some(reply)) => Asked::Reply(reply),
             _ => Asked::Silent,
         }
@@ -319,7 +347,11 @@ impl RemoteHub {
         let Some(store) = self.store().await else {
             return false;
         };
-        !matches!(self.publish(&store, command).await, Published::Failed)
+        let until = Instant::now() + PUBLISH_BUDGET;
+        !matches!(
+            self.publish(&store, command, until).await,
+            Published::Failed
+        )
     }
 
     pub async fn answer(&self, user: &str, id: Uuid) -> Option<RemoteReply> {
@@ -339,6 +371,11 @@ impl RemoteHub {
         let Some(store) = self.store().await else {
             return Replied::Busy;
         };
+        match self.checked(&store, "claim read", store.claimed(user, reply.id).await) {
+            Some(true) => {}
+            Some(false) => return Replied::Unknown,
+            None => return Replied::Busy,
+        }
         let envelope = ReplyEnvelope {
             user: user.to_owned(),
             reply,
@@ -363,9 +400,9 @@ impl RemoteHub {
         due
     }
 
-    async fn announce(&self, store: &Arc<Store>, user: &str, device: &str, active: i64) {
+    async fn announce(&self, store: &Arc<Store>, user: &str, device: &str, active: i64) -> bool {
         if !self.presence_due(user, device, active, Instant::now()) {
-            return;
+            return true;
         }
         let written = tokio::time::timeout(
             ANNOUNCE_BUDGET,
@@ -383,6 +420,7 @@ impl RemoteHub {
             self.published
                 .invalidate(&(user.to_owned(), device.to_owned()));
         }
+        noted
     }
 
     #[cfg(test)]
@@ -399,21 +437,25 @@ impl RemoteHub {
         devices.winner(now_ms()).map(str::to_owned)
     }
 
-    async fn deliverable(&self, store: &Arc<Store>, command: &RemoteCommand, device: &str) -> bool {
+    async fn deliverable(
+        &self,
+        store: &Arc<Store>,
+        command: &RemoteCommand,
+        device: &str,
+    ) -> Option<bool> {
         let answered = self.checked(
             store,
             "answer read",
             store.reply_for(&command.user, command.id).await,
-        );
-        if matches!(answered, Some(Some(_))) {
-            return false;
+        )?;
+        if answered.is_some() {
+            return Some(false);
         }
         self.checked(
             store,
             "command claim",
             store.claim(&command.user, command.id, device).await,
         )
-        .unwrap_or(false)
     }
 
     async fn scan_once(&self, store: &Arc<Store>, user: &str, device: &str, scan: &mut Scan) {
@@ -429,24 +471,59 @@ impl RemoteHub {
             };
             if let Some(command) = stored.command
                 && command.expires_at > now
-                && scan.devices.is_target(device, now)
-                && self.deliverable(store, &command, device).await
             {
-                scan.ready.push(command);
+                if scan.devices.is_target(device, now) {
+                    match self.deliverable(store, &command, device).await {
+                        Some(true) => scan.ready.push(command),
+                        Some(false) => {}
+                        None => return,
+                    }
+                } else if !scan.presence_ok {
+                    return;
+                }
             }
             scan.from = stored.seq;
         }
     }
 
-    async fn scan(
+    async fn scan(&self, store: &Arc<Store>, user: &str, device: &str, scan: &mut Scan) {
+        let deadline = scan.deadline;
+        let _ = tokio::time::timeout_at(deadline, self.scan_once(store, user, device, scan)).await;
+    }
+
+    pub(super) async fn settle<W: Stream + Unpin>(
         &self,
         store: &Arc<Store>,
         user: &str,
         device: &str,
         scan: &mut Scan,
-        deadline: tokio::time::Instant,
+        wake: &mut W,
+        replaced: &Notify,
     ) {
-        let _ = tokio::time::timeout_at(deadline, self.scan_once(store, user, device, scan)).await;
+        self.scan(store, user, device, scan).await;
+        let mut pause: Option<Duration> = None;
+        while scan.ready.is_empty() && tokio::time::Instant::now() < scan.deadline {
+            let recheck = pause.map_or(scan.deadline, |pause| {
+                (tokio::time::Instant::now() + pause).min(scan.deadline)
+            });
+            tokio::select! {
+                woke = wake.next() => match woke {
+                    Some(_) => {
+                        self.scan(store, user, device, scan).await;
+                        pause = Some(RECHECK_AFTER);
+                    }
+                    None => break,
+                },
+                () = replaced.notified() => break,
+                () = tokio::time::sleep_until(recheck) => match pause {
+                    Some(current) => {
+                        self.scan(store, user, device, scan).await;
+                        pause = Some(current * 2);
+                    }
+                    None => break,
+                },
+            }
+        }
     }
 
     pub async fn wait(
@@ -470,7 +547,7 @@ impl RemoteHub {
             ),
             None => None,
         };
-        self.announce(&store, user, device, active).await;
+        let presence_ok = self.announce(&store, user, device, active).await;
         let last = self
             .checked(&store, "cursor read", store.last_seq().await)
             .ok_or(Refused::Unavailable)?;
@@ -489,25 +566,11 @@ impl RemoteHub {
             from: since,
             ready: Vec::new(),
             devices: Devices::default(),
+            presence_ok,
+            deadline,
         };
-        self.scan(&store, user, device, &mut scan, deadline).await;
-        while scan.ready.is_empty() {
-            tokio::select! {
-                woke = wake.next() => match woke {
-                    Some(_) => {
-                        self.scan(&store, user, device, &mut scan, deadline).await;
-                        if scan.ready.is_empty() {
-                            let recheck = tokio::time::Instant::now() + RECHECK_AFTER;
-                            tokio::time::sleep_until(recheck.min(deadline)).await;
-                            self.scan(&store, user, device, &mut scan, deadline).await;
-                        }
-                    }
-                    None => break,
-                },
-                () = slot.replaced.notified() => break,
-                () = tokio::time::sleep_until(deadline) => break,
-            }
-        }
+        self.settle(&store, user, device, &mut scan, &mut wake, &slot.replaced)
+            .await;
         Ok(WaitResponse {
             cursor: scan.from as i64,
             commands: scan.ready,

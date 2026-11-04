@@ -16,11 +16,11 @@ use crate::bus::nats::NatsService;
 pub const COMMANDS_AGE: Duration = Duration::from_secs(120);
 const COMMANDS_PER_USER: i64 = 64;
 pub const SCAN_LIMIT: usize = COMMANDS_PER_USER as usize;
-const COMMANDS_BYTES: i64 = 64 * 1024 * 1024;
-const MAX_COMMAND_BYTES: i32 = 4 * 1024;
+pub const COMMANDS_BYTES: i64 = 64 * 1024 * 1024;
+pub const MAX_COMMAND_BYTES: i32 = 4 * 1024;
 const REPLIES_AGE: Duration = Duration::from_secs(600);
-const REPLIES_BYTES: i64 = 64 * 1024 * 1024;
-const MAX_REPLY_VALUE: i32 = 16 * 1024;
+pub const REPLIES_BYTES: i64 = 64 * 1024 * 1024;
+pub const MAX_REPLY_VALUE: i32 = 16 * 1024;
 const DEVICES_AGE: Duration = Duration::from_secs(90);
 const DEVICES_BYTES: i64 = 16 * 1024 * 1024;
 const MAX_DEVICES_VALUE: i32 = 4 * 1024;
@@ -309,6 +309,13 @@ impl Store {
             }
             Err(error) => Err(failed("claim", error)),
         }
+    }
+
+    pub async fn claimed(&self, user: &str, id: Uuid) -> StoreResult<bool> {
+        let holder = in_budget("claim read", self.claims.get(Self::command_key(user, id)))
+            .await?
+            .map_err(|error| failed("claim read", error))?;
+        Ok(holder.is_some())
     }
 
     pub async fn devices(&self, user: &str) -> StoreResult<Devices> {

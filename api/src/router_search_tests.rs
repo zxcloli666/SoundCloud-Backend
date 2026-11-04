@@ -37,6 +37,7 @@ pub(super) async fn remote_hub(
 ) -> anyhow::Result<Arc<crate::modules::remote::RemoteHub>> {
     let nats =
         NatsService::connect(&nats_url(), tokio_util::sync::CancellationToken::new()).await?;
+    nats.wait_connected(Duration::from_secs(2)).await;
     Ok(crate::modules::remote::RemoteHub::new(Some(nats), prefix))
 }
 

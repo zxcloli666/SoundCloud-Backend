@@ -7,17 +7,17 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use backend_contracts::remote::LinkProvider;
+use backend_contracts::remote::{CommandKind, LinkProvider};
 
 use super::router_search_tests::{
     app, app_with, app_without_star, config, redis_url, remote_hub, remote_prefix, soundcloud_hits,
     state,
 };
 use crate::bus::nats::NatsService;
-use crate::config::{AdmissionLimitCfg, AppConfig};
-use crate::modules::remote::LinkConfirm;
-use crate::modules::remote::confirm::{Confirming, SalutTicket};
+use crate::config::{AdmissionCfg, AdmissionLimitCfg, AppConfig};
+use crate::modules::remote::confirm::{Confirming, PageTicket, SalutTicket};
 use crate::modules::remote::hub::now_ms;
+use crate::modules::remote::{Asked, LinkConfirm};
 
 const REDIRECT: &str = "https://social.yandex.net/broker/redirect";
 const STATUS_PATH: &str = "/oauth/authorize/status?ticket=";
@@ -78,7 +78,11 @@ async fn send(
         }
         None => Body::empty(),
     };
-    let response = app.clone().oneshot(request.body(body)?).await?;
+    answer_to(app, request.body(body)?).await
+}
+
+async fn answer_to(app: &axum::Router, request: Request<Body>) -> anyhow::Result<Reply> {
+    let response = app.clone().oneshot(request).await?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = to_bytes(response.into_body(), 1024 * 1024).await?.to_vec();
@@ -1241,8 +1245,9 @@ async fn reply_is_capped_and_needs_star(pool: PgPool) -> anyhow::Result<()> {
     let refused = json_call(&app, session, "POST", "/remote/reply", Some(big)).await?;
     assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
     let small = json!({"id": Uuid::now_v7(), "ok": true});
-    let fine = json_call(&app, session, "POST", "/remote/reply", Some(small.clone())).await?;
-    assert_eq!(fine.status, StatusCode::NO_CONTENT);
+    let unknown = json_call(&app, session, "POST", "/remote/reply", Some(small.clone())).await?;
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    assert_eq!(unknown.json()["code"], "voice_reply_unknown");
 
     let free = app_without_star(&pool, &redis_url()).await?;
     let no_star = json_call(&free, session, "POST", "/remote/reply", Some(small)).await?;
@@ -1347,21 +1352,26 @@ fn hint_on(page: &str) -> String {
         .unwrap_or_default()
 }
 
+fn ticket_in(page: &str) -> Option<String> {
+    let at = page.find(STATUS_PATH)?;
+    Some(
+        page[at + STATUS_PATH.len()..]
+            .chars()
+            .take_while(|c| *c != '"')
+            .collect(),
+    )
+}
+
 async fn ticket_flow(app: &axum::Router, first: Reply) -> anyhow::Result<Reply> {
     let deadline = tokio::time::Instant::now() + SETTLE_BUDGET;
     let mut reply = first;
     loop {
-        let text = reply.text();
-        let Some(at) = text.find(STATUS_PATH) else {
+        let Some(ticket) = ticket_in(&reply.text()) else {
             return Ok(reply);
         };
         if tokio::time::Instant::now() >= deadline {
             return Ok(reply);
         }
-        let ticket: String = text[at + STATUS_PATH.len()..]
-            .chars()
-            .take_while(|c| *c != '"')
-            .collect();
         tokio::time::sleep(POLL_EVERY).await;
         reply = send(app, "GET", &format!("{STATUS_PATH}{ticket}"), &[], None).await?;
     }
@@ -1928,15 +1938,29 @@ async fn skill_call_from(
     request
         .extensions_mut()
         .insert(axum::extract::ConnectInfo(address));
-    let response = app.clone().oneshot(request).await?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = to_bytes(response.into_body(), 1024 * 1024).await?.to_vec();
-    Ok(Reply {
-        status,
-        headers,
-        body,
-    })
+    answer_to(app, request).await
+}
+
+async fn page_submit_from(
+    app: &axum::Router,
+    address: std::net::SocketAddr,
+    code: &str,
+) -> anyhow::Result<Reply> {
+    let (content_type, body) = form(&[
+        ("client_id", "yandex"),
+        ("redirect_uri", REDIRECT),
+        ("state", "s"),
+        ("code", code),
+    ]);
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/oauth/authorize")
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))?;
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(address));
+    answer_to(app, request).await
 }
 
 fn random_address() -> std::net::SocketAddr {
@@ -2226,14 +2250,18 @@ async fn remote_endpoints_answer_busy_when_nats_is_down_stays_fast(
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis and NATS"]
-async fn a_reply_to_an_old_or_foreign_id_is_refused(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+async fn a_reply_must_answer_a_command_a_device_of_this_account_took(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let st = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let remote = st.remote.clone();
+    let app = crate::router::build(st);
     let session = session_for(&pool, "101").await?;
     let at = |offset_ms: i64| {
         uuid::Builder::from_unix_timestamp_millis((now_ms() + offset_ms) as u64, &[3; 10])
             .into_uuid()
     };
-    for id in [at(-600_000), at(600_000), Uuid::new_v4()] {
+    for id in [at(-600_000), at(600_000), Uuid::new_v4(), at(-5_000)] {
         let refused = json_call(
             &app,
             session,
@@ -2245,15 +2273,129 @@ async fn a_reply_to_an_old_or_foreign_id_is_refused(pool: PgPool) -> anyhow::Res
         assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{id}");
         assert_eq!(refused.json()["code"], "voice_reply_unknown");
     }
-    let fresh = json_call(
+
+    let handshake = json_call(
+        &app,
+        session,
+        "GET",
+        "/remote/wait?device=pc&active=5",
+        None,
+    )
+    .await?
+    .json();
+    let asking = tokio::spawn(async move {
+        remote
+            .dispatch(
+                "101",
+                CommandKind::Utterance,
+                "alice",
+                "пауза",
+                std::time::Instant::now() + Duration::from_secs(5),
+            )
+            .await
+    });
+    let shown = json_call(
+        &app,
+        session,
+        "GET",
+        &format!(
+            "/remote/wait?device=pc&active=5&since={}",
+            handshake["cursor"]
+        ),
+        None,
+    )
+    .await?
+    .json();
+    let taken = json_call(
         &app,
         session,
         "POST",
         "/remote/reply",
-        Some(json!({"id": at(-5_000), "ok": true})),
+        Some(json!({"id": shown["commands"][0]["id"], "ok": true, "speech": "готово"})),
     )
     .await?;
-    assert_eq!(fresh.status, StatusCode::NO_CONTENT);
+    assert_eq!(taken.status, StatusCode::NO_CONTENT, "{}", taken.text());
+    assert!(matches!(asking.await?, Asked::Reply(reply) if reply.speech == "готово"));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_page_ticket_outlives_the_confirm_window_and_still_links(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let st = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let confirm = st.confirm.clone();
+    let remote = st.remote.clone();
+    let app = crate::router::build(st);
+    let session = session_for(&pool, "101").await?;
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let code = new_code(&app, session, "alice").await?;
+    let pending = submit_code(&app, &code).await?;
+    let ticket = ticket_in(&pending.text()).expect("a status link on the page");
+    let key = format!("ticket:{ticket}");
+    assert!(
+        confirm.ttl(&key).await? > 500,
+        "a pending page ticket outlives the 60 s confirmation"
+    );
+
+    let mut record: PageTicket = confirm.get(&key).await?.expect("a pending ticket");
+    let asked = record.confirming.clone().expect("a confirmation in flight");
+    let deadline = tokio::time::Instant::now() + SETTLE_BUDGET;
+    while remote.answer(&asked.user, asked.command).await.is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the desktop never answered"
+        );
+        tokio::time::sleep(POLL_EVERY).await;
+    }
+    confirmer.abort();
+    record.confirming = Some(Confirming {
+        deadline_ms: now_ms() - 30_000,
+        ..asked
+    });
+    confirm.put(&key, &record, 600).await?;
+
+    let approved = ticket_flow(&app, pending).await?;
+    assert_eq!(approved.status, StatusCode::FOUND, "{}", approved.text());
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn the_link_page_is_limited_per_address_with_the_shipped_limits(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let shipped = AdmissionCfg::from_env();
+    assert!(
+        shipped.voice_page_ip.global >= 1_000 * shipped.voice_page_ip.per_client
+            && shipped.voice_page_client.per_client >= 1_000 * shipped.voice_page_ip.per_client,
+        "the shared page limits are only a backstop far above one address"
+    );
+    let app = app_with(
+        &pool,
+        tuned(|config| {
+            config.admission.voice_page_ip = shipped.voice_page_ip;
+            config.admission.voice_page_client = shipped.voice_page_client;
+        }),
+        true,
+    )
+    .await?;
+    let guesser = random_address();
+    for _ in 0..shipped.voice_page_ip.per_client {
+        let tried = page_submit_from(&app, guesser, "x").await?;
+        assert_eq!(tried.status, StatusCode::BAD_REQUEST, "{}", tried.text());
+    }
+    let limited = page_submit_from(&app, guesser, "x").await?;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    for _ in 0..20 {
+        let neighbour = page_submit_from(&app, random_address(), "x").await?;
+        assert_eq!(
+            neighbour.status,
+            StatusCode::BAD_REQUEST,
+            "one address does not use up the page for the others"
+        );
+    }
     Ok(())
 }
 

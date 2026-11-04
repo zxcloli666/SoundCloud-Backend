@@ -10,6 +10,8 @@ pub mod waits;
 
 #[cfg(test)]
 mod hub_tests;
+#[cfg(test)]
+mod relay_tests;
 
 pub use confirm::LinkConfirm;
 pub use handlers::router;

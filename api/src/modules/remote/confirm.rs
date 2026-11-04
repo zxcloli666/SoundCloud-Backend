@@ -26,6 +26,7 @@ pub enum Status {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Confirming {
     pub code_id: Uuid,
+    #[serde(default)]
     pub holder: String,
     pub user: String,
     pub provider: LinkProvider,
@@ -252,5 +253,31 @@ mod tests {
 
         confirm.release(code, &fresh).await;
         assert!(confirm.claim(code).await.expect("redis").is_some());
+    }
+
+    #[test]
+    fn a_ticket_written_before_lock_holders_still_parses() {
+        let ticket = SalutTicket {
+            status: Status::Pending,
+            user: "101".to_owned(),
+            hint: "47".to_owned(),
+            confirming: Some(Confirming {
+                code_id: Uuid::now_v7(),
+                holder: "holder".to_owned(),
+                user: "101".to_owned(),
+                provider: LinkProvider::Salut,
+                command: Uuid::now_v7(),
+                deadline_ms: 1,
+            }),
+        };
+        let mut old = serde_json::to_value(&ticket).expect("a ticket");
+        old["confirming"]
+            .as_object_mut()
+            .expect("a confirmation")
+            .remove("holder");
+        let parsed: SalutTicket = serde_json::from_value(old).expect("an old ticket parses");
+        let confirming = parsed.confirming.expect("the confirmation is kept");
+        assert!(confirming.holder.is_empty());
+        assert_eq!(confirming.deadline_ms, 1);
     }
 }
