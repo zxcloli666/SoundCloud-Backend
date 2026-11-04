@@ -96,7 +96,10 @@ jobs:
 
       - name: System packages
         if: steps.targets.outputs.exact != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: cmake clang libclang-dev pkg-config
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -167,7 +170,10 @@ jobs:
 
       - name: System packages
         if: steps.targets.outputs.exact != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: cmake clang libclang-dev pkg-config
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -228,7 +234,10 @@ jobs:
 
       - name: System packages
         if: steps.targets.outputs.exact != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: cmake clang libclang-dev pkg-config
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -292,7 +301,10 @@ jobs:
 
       - name: System packages
         if: steps.targets.outputs.exact != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: cmake clang libclang-dev pkg-config
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait
@@ -394,7 +406,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
+      packages: write
     defaults:
       run:
         working-directory: worker
@@ -402,7 +414,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libchromaprint1
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: ffmpeg libchromaprint1
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -505,7 +520,10 @@ jobs:
           echo "$internal" > .ci-internal-sha
 
       - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler cmake clang libclang-dev pkg-config
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: protobuf-compiler cmake clang libclang-dev pkg-config
+          save: ${{ env.SAVE_TARGETS }}
 
       - name: Wait for services
         run: sh scripts/ci-db.sh wait

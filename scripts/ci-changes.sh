@@ -14,7 +14,7 @@ esac
 
 echo "changes since ${base:-no base, everything runs}" >&2
 
-shared='.github/workflows/ci.yml .github/actions/target-cache rust-toolchain.toml .cargo scripts/ci-changes.sh scripts/ci-mtime.sh scripts/ci-toolchain.sh scripts/ci-db.sh scripts/ci-sqlx-template.sh scripts/ci-sqlx-template.patch'
+shared='.github/workflows/ci.yml .github/actions/target-cache .github/actions/apt-packages rust-toolchain.toml .cargo scripts/ci-changes.sh scripts/ci-mtime.sh scripts/ci-toolchain.sh scripts/ci-db.sh scripts/ci-sqlx-template.sh scripts/ci-sqlx-template.patch'
 
 emit() {
     name=$1
