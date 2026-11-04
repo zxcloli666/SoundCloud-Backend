@@ -411,6 +411,36 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    async fn a_database_ahead_of_the_required_migration_still_boots(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::raw_sql(
+            "CREATE TABLE _sqlx_migrations (version bigint PRIMARY KEY, success boolean NOT NULL);
+             CREATE TABLE playlists (urn text PRIMARY KEY);
+             CREATE TABLE playlist_track_projection (playlist_urn text);
+             CREATE TABLE playlist_membership_state (
+                 playlist_urn text PRIMARY KEY,
+                 next_reconcile_at timestamptz,
+                 sync_status text NOT NULL
+             );
+             CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
+             CREATE INDEX playlist_membership_state_reconcile_due_idx
+                 ON playlist_membership_state (next_reconcile_at, playlist_urn)
+                 WHERE sync_status <> 'clean';",
+        )
+        .execute(&pool)
+        .await?;
+        for ahead in [REQUIRED_CORE_SCHEMA_VERSION, 283, 284, 290] {
+            sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES ($1, true)")
+                .bind(ahead)
+                .execute(&pool)
+                .await?;
+        }
+
+        verify_schema(&pool).await
+    }
+
+    #[sqlx::test(migrations = false)]
     async fn a_connection_dropped_mid_query_frees_its_pool_slot(
         _: PgPoolOptions,
         opts: PgConnectOptions,

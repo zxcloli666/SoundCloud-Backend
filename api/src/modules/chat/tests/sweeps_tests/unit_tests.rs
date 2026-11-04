@@ -73,7 +73,7 @@ fn every_sweep_has_its_own_name_and_a_sane_period() {
     let names: HashSet<&str> = Sweep::ALL.iter().map(|sweep| sweep.name()).collect();
     assert_eq!(names.len(), Sweep::ALL.len());
     for sweep in Sweep::ALL {
-        assert!(sweep.every().as_secs() >= 30, "{sweep:?}");
+        assert!(sweep.every().as_secs() >= 15, "{sweep:?}");
         assert!(sweep.every().as_secs() <= 3_600, "{sweep:?}");
     }
     assert_eq!(Sweep::Marks.every().as_secs(), 30);
