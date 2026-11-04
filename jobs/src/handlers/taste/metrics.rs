@@ -3,6 +3,7 @@ const EXPORTED: &str = "jobs_taste_exported_total";
 const RESULTS: &str = "jobs_taste_results_total";
 const USER_VECTORS: &str = "jobs_taste_user_vectors_written_total";
 const ORPHANS: &str = "jobs_taste_orphan_objects_removed_total";
+const FULL_HISTORY_READS: &str = "jobs_taste_full_history_reads_total";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExportSkip {
@@ -74,6 +75,7 @@ pub(crate) fn register_series_that_start_at_zero() {
     metrics::counter!(EXPORTED).increment(0);
     metrics::counter!(USER_VECTORS).increment(0);
     metrics::counter!(ORPHANS).increment(0);
+    metrics::counter!(FULL_HISTORY_READS).increment(0);
 }
 
 pub(crate) fn record_orphan_removed() {
@@ -94,4 +96,8 @@ pub(crate) fn record_result(outcome: ResultOutcome) {
 
 pub(crate) fn record_user_vectors(count: usize) {
     metrics::counter!(USER_VECTORS).increment(u64::try_from(count).unwrap_or(u64::MAX));
+}
+
+pub(crate) fn record_full_history_reads(count: usize) {
+    metrics::counter!(FULL_HISTORY_READS).increment(u64::try_from(count).unwrap_or(u64::MAX));
 }

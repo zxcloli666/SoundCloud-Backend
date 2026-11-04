@@ -87,6 +87,30 @@ mod tests {
         Ok(())
     }
 
+    #[sqlx::test(migrations = "../api/migrations")]
+    async fn only_taste_event_types_ask_for_a_refresh(pool: PgPool) -> anyhow::Result<()> {
+        sqlx::raw_sql(
+            "INSERT INTO user_events (sc_user_id, sc_track_id, event_type, weight, created_at) VALUES
+                 ('1', '1', 'skip', -0.8, now() AT TIME ZONE 'UTC'),
+                 ('2', '1', 'skip', 0.0, now() AT TIME ZONE 'UTC'),
+                 ('3', '1', 'dislike', -1.0, now() AT TIME ZONE 'UTC'),
+                 ('4', '1', 'play_complete', 0.3, now() AT TIME ZONE 'UTC'),
+                 ('5', '1', 'playlist_add', 0.9, now() AT TIME ZONE 'UTC'),
+                 ('6', '1', 'full_play', 0.3, now() AT TIME ZONE 'UTC'),
+                 ('soundcloud:users:7', '1', 'like', 1, now() AT TIME ZONE 'UTC');",
+        )
+        .execute(&pool)
+        .await?;
+        let until = chrono::Utc::now().naive_utc() + chrono::Duration::minutes(1);
+
+        let (star, mut regular) = users(&pool, until - chrono::Duration::hours(1), until).await?;
+        regular.sort();
+
+        assert!(star.is_empty());
+        assert_eq!(regular, ["1", "2", "3", "5", "6", "7"]);
+        Ok(())
+    }
+
     fn named(prefix: &str, count: usize) -> Vec<String> {
         (0..count).map(|index| format!("{prefix}{index}")).collect()
     }

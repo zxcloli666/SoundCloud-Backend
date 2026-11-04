@@ -571,6 +571,36 @@ async fn a_lost_worker_makes_the_current_attempt_reopenable(pool: PgPool) -> any
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_repeated_lost_worker_leaves_the_reopenable_row_as_it_was(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    seed_pending(&pool).await?;
+    let handler = TranscriptionResultHandler::new(pool.clone());
+    let lost = serde_json::to_vec(&worker_lost_request(1))?;
+    let version = "SELECT xmin::text, completed_at::text
+                   FROM transcription_wire_state
+                   WHERE sc_track_id = '42'";
+
+    handler.apply_worker_lost(9, &lost).await?;
+    let first: (String, String) = sqlx::query_as(version).fetch_one(&pool).await?;
+    handler.apply_worker_lost(10, &lost).await?;
+    let repeated: (String, String) = sqlx::query_as(version).fetch_one(&pool).await?;
+
+    assert_eq!(repeated, first);
+    assert_eq!(
+        wire(&pool).await?,
+        (
+            "reopenable".to_owned(),
+            Some("worker_lost".to_owned()),
+            Some(1),
+            1
+        )
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_worker_lost_payload_that_is_not_a_task_is_rejected(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
 

@@ -386,8 +386,8 @@ def trigger_problems(t):
     for d in t.derived:
         if t.exists and d not in t.triggers:
             out.append("%s: derived trigger %s does not exist" % (t.name, d))
-    if t.derived and t.cls not in ("C", "K"):
-        out.append("%s: derived triggers only on C and K tables" % t.name)
+    if t.derived and t.cls not in ("C", "K", "P"):
+        out.append("%s: derived triggers only on C, K and P tables" % t.name)
     for d in t.derived:
         info = t.trigger_info.get(d)
         if not info:

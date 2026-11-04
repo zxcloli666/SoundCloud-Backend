@@ -193,6 +193,28 @@ async fn keyset_backfill_is_bounded_and_restart_safe(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrations = "../api/migrations")]
+async fn a_finished_backfill_is_not_read_again(pool: PgPool) -> anyhow::Result<()> {
+    insert_track(&pool, "41", "First").await?;
+    let handler = offline_handler(&pool)?;
+
+    handler.backfill().await?;
+    handler.backfill().await?;
+    sqlx::raw_sql(
+        "UPDATE lyrics_lookup_backfill_state SET completed = false, cursor_id = NULL;
+         DELETE FROM lyrics_lookup_state;",
+    )
+    .execute(&pool)
+    .await?;
+    handler.backfill().await?;
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(count, 0);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
 async fn clean_source_empty_persists_negative_without_worker_jobs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1683,5 +1705,98 @@ async fn external_synced_lyrics_end_a_recheck_row_on_the_next_track_update(
         .fetch_one(&pool)
         .await?;
     assert_eq!(left, 0);
+    Ok(())
+}
+
+type WakeOutcome = (
+    String,
+    Option<bool>,
+    Option<i16>,
+    Option<String>,
+    Option<i16>,
+    Option<String>,
+    bool,
+);
+
+async fn wake_outcome(pool: &PgPool, prefix: &str) -> anyhow::Result<Vec<WakeOutcome>> {
+    Ok(sqlx::query_as::<_, WakeOutcome>(
+        "SELECT substr(state.sc_track_id, 2),
+                job.id = state.wake_message_id,
+                job.priority,
+                job.lane,
+                job.max_attempts,
+                replace(job.payload::text, state.sc_track_id, 'track'),
+                state.wake_durable_at IS NOT NULL
+         FROM lyrics_lookup_state AS state
+         LEFT JOIN background_jobs AS job
+           ON job.kind = 'lyrics.lookup' AND job.dedup_key = state.sc_track_id
+         WHERE state.sc_track_id LIKE $1 || '%'
+         ORDER BY 1",
+    )
+    .bind(prefix)
+    .fetch_all(pool)
+    .await?)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_batched_wake_leaves_the_rows_of_one_wake_per_track(pool: PgPool) -> anyhow::Result<()> {
+    let queue = JobRepository::new(pool.clone(), "wake-batch".to_owned());
+    for prefix in ["a", "b", "c"] {
+        for number in 1..=6 {
+            insert_track(&pool, &format!("{prefix}{number}"), "Track").await?;
+        }
+        sqlx::raw_sql(&format!(
+            "UPDATE lyrics_lookup_state SET wake_durable_at = now() WHERE sc_track_id = '{prefix}2';
+             UPDATE lyrics_lookup_state SET generation = generation + 1 WHERE sc_track_id = '{prefix}3';
+             INSERT INTO background_job_enqueues (id)
+             SELECT wake_message_id FROM lyrics_lookup_state WHERE sc_track_id = '{prefix}5';"
+        ))
+        .execute(&pool)
+        .await?;
+        queue
+            .enqueue(&crate::queue::NewJob {
+                id: uuid::Uuid::now_v7(),
+                kind: backend_contracts::JobKind::LyricsLookup,
+                dedup_key: Some(format!("{prefix}4")),
+                payload: serde_json::json!({}),
+                priority: 1,
+                max_attempts: 3,
+                available_at: chrono::Utc::now(),
+            })
+            .await?;
+    }
+    let ids = |prefix: &str| {
+        ["6", "1", "2", "3", "4", "5", "1", "missing"]
+            .map(|number| format!("{prefix}{number}"))
+            .to_vec()
+    };
+
+    super::super::wake::enqueue_many(&pool, &queue, &ids("a")).await?;
+    for id in ids("b") {
+        let mut transaction = pool.begin().await?;
+        super::super::wake::enqueue_in(&queue, &mut transaction, &id).await?;
+        transaction.commit().await?;
+    }
+    let mut transaction = pool.begin().await?;
+    super::super::wake::enqueue_all_in(&mut transaction, &ids("c")).await?;
+    transaction.commit().await?;
+
+    let per_track = wake_outcome(&pool, "b").await?;
+    assert_eq!(wake_outcome(&pool, "a").await?, per_track);
+    assert_eq!(wake_outcome(&pool, "c").await?, per_track);
+    assert_eq!(
+        per_track
+            .iter()
+            .map(|row| (row.0.as_str(), row.1, row.2, row.6))
+            .collect::<Vec<_>>(),
+        [
+            ("1", Some(true), Some(10), true),
+            ("2", None, None, true),
+            ("3", None, None, false),
+            ("4", Some(false), Some(10), true),
+            ("5", None, None, true),
+            ("6", Some(true), Some(10), true),
+        ]
+    );
     Ok(())
 }

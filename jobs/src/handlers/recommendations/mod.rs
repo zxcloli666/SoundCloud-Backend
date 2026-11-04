@@ -24,9 +24,12 @@ impl RecommendationHandler {
 
     pub async fn rebuild_colike(&self) -> JobResult {
         let started = Instant::now();
-        let edges = colike::rebuild(&self.pool).await?;
+        let rebuilt = colike::rebuild(&self.pool).await?;
         info!(
-            edges,
+            fresh = rebuilt.fresh,
+            batches = rebuilt.batches,
+            upserted = rebuilt.upserted,
+            removed = rebuilt.removed,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "recommendation colike rebuilt"
         );

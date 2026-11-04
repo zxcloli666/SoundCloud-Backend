@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::RecommendationHandler;
 
-async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
+pub(super) async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "CREATE TABLE artists (
              id uuid PRIMARY KEY,
@@ -52,7 +52,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn insert_artist_track(
+pub(super) async fn insert_artist_track(
     pool: &PgPool,
     artist_id: Uuid,
     track_id: Uuid,
@@ -354,8 +354,8 @@ async fn wave_priority_reads_active_users_from_the_covering_index(
 
     let sql = include_str!("../../../queries/recommendations/wave_priority/bump.sql");
     let plan: serde_json::Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}"))
-        .bind(1_i64)
-        .bind(0_i64)
+        .bind(16_i64)
+        .bind(3_i64)
         .fetch_one(&pool)
         .await?;
 
@@ -373,6 +373,10 @@ async fn wave_priority_reads_active_users_from_the_covering_index(
     assert!(
         condition.contains("created_at"),
         "the covering index must be walked by the recency window, not end to end: {plan}"
+    );
+    assert!(
+        scan.get("Filter").is_none(),
+        "the shard is picked per distinct user, not per event: {plan}"
     );
     assert!(
         !plan_contains(&plan, "Seq Scan", "Relation Name", "user_events"),
