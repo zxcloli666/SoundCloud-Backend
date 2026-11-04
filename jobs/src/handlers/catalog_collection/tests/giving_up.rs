@@ -52,7 +52,13 @@ fn owner_refusal(status: StatusCode) -> JobError {
 
 fn failure_of(error: &JobError) -> Option<CollectionFailure> {
     match error {
-        JobError::Permanent(error) => CollectionFailure::from_last_error(&error.to_string()),
+        JobError::Settled { failure, .. } => {
+            assert_eq!(
+                CollectionFailure::from_last_error(&error.to_string()),
+                Some(*failure)
+            );
+            Some(*failure)
+        }
         _ => None,
     }
 }
@@ -122,7 +128,7 @@ fn a_rate_limited_collection_never_gives_up() {
     assert!(give_up_or_wait(&old, unreachable).is_retryable());
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_owner_only_collection_of_a_signed_out_owner_fails_as_auth_required(
     pool: PgPool,
 ) -> anyhow::Result<()> {
