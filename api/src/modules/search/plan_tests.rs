@@ -15,23 +15,23 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
                 (ARRAY['love', 'night', 'drive', 'rain', 'fire'])[1 + n % 5] || ' song ' || n,
                 'artist' || (n % 700), 'user' || (n % 900), (n % 900)::text,
                 100000 + n, n, CASE WHEN n % 50 = 0 THEN 'private' ELSE 'public' END
-         FROM generate_series(1, 60000) n",
+         FROM generate_series(1, 20000) n",
     )
     .await?;
     sqlx::raw_sql(
         "INSERT INTO users (sc_user_id, urn, username, username_normalized, full_name, followers_count)
          SELECT n::text, 'soundcloud:users:' || n, 'user' || n, 'user' || n, 'Name ' || n, n
-         FROM generate_series(1, 20000) n;
+         FROM generate_series(1, 5000) n;
          INSERT INTO playlists (sc_playlist_id, urn, title, title_normalized, owner_sc_user_id, owner_username)
          SELECT n::text, 'soundcloud:playlists:' || n, 'mix ' || n, 'mix ' || n, (n % 900)::text, 'user' || (n % 900)
-         FROM generate_series(1, 20000) n;
+         FROM generate_series(1, 5000) n;
          INSERT INTO artists (name, normalized_name, source, track_count_primary)
-         SELECT 'artist' || n, 'artist' || n, 'test', 1 FROM generate_series(1, 5000) n;
+         SELECT 'artist' || n, 'artist' || n, 'test', 1 FROM generate_series(1, 2000) n;
          INSERT INTO albums (title, normalized_title, source, type, track_count)
-         SELECT 'record ' || n, 'record ' || n, 'test', 'album', 3 FROM generate_series(1, 5000) n;
+         SELECT 'record ' || n, 'record ' || n, 'test', 'album', 3 FROM generate_series(1, 2000) n;
          INSERT INTO lyrics_cache (sc_track_id, plain_text, source, plain_source)
          SELECT n::text, 'line one ' || n || E'\\nforever ' || (n % 100) || E' heart\\nwe are', 'lrclib', 'lrclib'
-         FROM generate_series(1, 20000) n",
+         FROM generate_series(1, 5000) n",
     )
     .execute(pool)
     .await?;
