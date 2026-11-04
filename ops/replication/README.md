@@ -113,8 +113,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 46. `0306_scd_install`: the generated SQL again: `star_due_marks` and `star_due_watch` are L, `star_track_tiers.recheck_at` joins the P row hash, and every trigger is kept (the star mark triggers of 0298-0304 are derived, so the install does not write them).
 47. `0307_background_jobs_lookup_lane`: the lane CHECK of `background_jobs` and `background_job_failures` takes `lookup`, NOT VALID, `lock_timeout` 5 s; `background_schedules` is small and is checked at once. Metadata only, no rows written.
 48. `0308_background_jobs_lookup_lane_validated`: VALIDATE of both, one table scan under SHARE UPDATE EXCLUSIVE while DML runs.
-49. `0310_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes with a rotation seed, Salut `sub` bindings).
-50. `0311_scd_install`: the generated SQL again, on top of 0306: the two tables get their triggers and publication lists.
+49. `0311_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes with a rotation seed, Salut `sub` bindings).
+50. `0312_scd_install`: the generated SQL again, on top of 0306: the two tables get their triggers and publication lists.
 
 Order for 0285-0292: core first. Migrate main and star only after they applied core's stream past core's 0285 commit: a change from before it still carries the 7 columns, and the apply on a node without them fails with "missing replicated columns". Keep jobs on core stopped until all three are at 0292: a claim batch reads the table for about 2 s, and a long jobs transaction replays as a long apply on main and star; both hold the table past the 200 ms lock tries of 0291. The B2 binary runs on this schema, so stopping is for the locks only.
 

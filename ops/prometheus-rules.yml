@@ -13,24 +13,28 @@ groups:
           description: "No api_* series for 10 minutes. The exporter emits every lane at zero rather than omitting it, so an absent series means a dead process or a broken scrape, never an idle one."
 
       - alert: ApiLatencyDegraded
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[5m]))) > 0.25
-        for: 10m
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="2.5",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) > 0.05
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) > 0.1
+        for: 15m
         labels:
           severity: warning
           service: api
         annotations:
-          summary: "p99 on {{ $labels.route }} is above 250ms"
-          description: "Measured release-build p99 on the stand is 15-22ms across read routes, auth burst and mixed load. 250ms is more than ten times that, so this is a regression rather than noise. Semantic search is excluded on purpose: a cold query waits for the encoder."
+          summary: "More than 5% of requests on {{ $labels.route }} take over 2.5s"
+          description: "Alloy keeps only the api buckets 0.1, 0.5, 1, 2.5, 5 and 10, so a p99 is an interpolation between far bounds and is not used. This is the share of requests slower than the 2.5s bound over 15m. Routes under 0.1 requests a second (90 in the window) are ignored, so five slow requests are needed before it can fire. Semantic search is excluded on purpose: a cold query waits for the encoder."
 
       - alert: ApiLatencyCritical
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[5m]))) > 1
-        for: 5m
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="5",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) > 0.02
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) > 0.2
+        for: 10m
         labels:
           severity: critical
           service: api
         annotations:
-          summary: "p99 on {{ $labels.route }} is above one second"
-          description: "The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so a second of p99 means the local path itself is stalling."
+          summary: "More than 2% of requests on {{ $labels.route }} take over 5s"
+          description: "Share of requests slower than the 5s bound over 10m, from the kept buckets. Routes under 0.2 requests a second (120 in the window) are ignored, so three slow requests are needed before it can fire. The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so five seconds for a tail means the local path itself is stalling."
 
       - alert: ApiRelayLuaStuck
         expr: sum by (host) (increase(api_sc_tier_calls_total{job="api",tier="relay_lua",outcome="error"}[5m])) > 0 unless sum by (host) (increase(api_sc_tier_calls_total{job="api",tier="relay_lua",outcome="ok"}[5m])) > 0
@@ -43,24 +47,28 @@ groups:
           description: "On 2026-11-03 after the 04:00 UTC relay reboot, api on main failed every relay_lua call for 18 minutes and SoundCloud search was down there, while star reconnected by itself. Until the relay client fix: restart api on that host (docker compose restart api)."
 
       - alert: ApiSemanticSearchStuck
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[5m]))) > 11
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="10",route=~"/search/(vibe|lyrics)"}[10m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) > 0.05
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) > 0.05
         for: 10m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "Semantic search on {{ $labels.route }} waits longer than its own poll loop"
-          description: "A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Above eleven seconds the wait is no longer the encoder but something behind it."
+          description: "More than 5% of requests slower than the 10s bound over 10m, from the kept buckets (the largest is 10, so a p99 above 11 could never be reached). A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Routes under 0.05 requests a second (30 in the window) are ignored, so two slow requests are needed."
 
       - alert: ApiSemanticSearchAlwaysCold
-        expr: histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[15m]))) > 5
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="5",route=~"/search/(vibe|lyrics)"}[15m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) > 0.5
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) > 0.02
         for: 30m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "Half of semantic searches on {{ $labels.route }} wait for the encoder"
-          description: "The vector cache and the query-vector collection should make repeat queries instant. A median above five seconds means the encoder is not answering or the cache is not being written."
+          description: "More than half of requests slower than the 5s bound over 15m, from the kept buckets. The vector cache and the query-vector collection should make repeat queries instant. Routes under 0.02 requests a second (18 in the window) are ignored."
 
       - alert: ApiServerErrors
         expr: (sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) - (sum(rate(api_session_miss_total{job="api",outcome="in_flight"}[5m])) or vector(0))) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.02
@@ -205,14 +213,17 @@ groups:
           description: "Every lane is reported at zero when empty, so an absent series means the process is gone, not that the queue is idle."
 
       - alert: JobsQueueStalling
-        expr: jobs_queue_oldest_due_seconds > 900
+        expr: |
+          jobs_queue_oldest_due_seconds{lane!~"core_bulk|lookup"} > 900
+            or (jobs_queue_oldest_due_seconds{lane=~"core_bulk|lookup"} > 900
+              unless on (lane) sum by (lane) (increase(jobs_executions_total[30m]) + on (kind) group_left (lane) (0 * max by (kind, lane) (jobs_queue_kind_oldest_due_seconds))) > 0)
         for: 15m
         labels:
           severity: warning
           service: jobs
         annotations:
           summary: "Lane {{ $labels.lane }} has work due for more than 15 minutes"
-          description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow."
+          description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow. Bulk lanes (core_bulk, lookup) carry a long backlog by design, so there it also needs zero executions of the lane kinds in 30 minutes."
 
       - alert: JobsMaintenanceStarving
         expr: max by (kind) (jobs_queue_kind_oldest_due_seconds{lane="maintenance"}) > 900
@@ -225,34 +236,34 @@ groups:
           description: "Reapers, sweeps and discovery run in their own maintenance lane with JOBS_MAINTENANCE_CONCURRENCY slots and at most one queued run per kind, so a long wait means the lane is saturated by long runs or nobody claims it."
 
       - alert: JobsQueueGrowing
-        expr: sum by (lane) (jobs_queue_depth{state="pending"}) > 50000 and sum by (lane) (delta(jobs_queue_depth{state="pending"}[2h])) > 0
+        expr: sum by (lane) (jobs_queue_depth{state="pending",lane!~"core_bulk|lookup"}) > 50000 and sum by (lane) (delta(jobs_queue_depth{state="pending",lane!~"core_bulk|lookup"}[2h])) > 0
         for: 2h
         labels:
           severity: warning
           service: jobs
         annotations:
           summary: "Lane {{ $labels.lane }} holds {{ $value }} pending jobs and keeps growing"
-          description: "Producers outpace the lane. Check jobs_queue_kind_depth for the kind that grows and the lane concurrency against the pool sizes."
+          description: "Producers outpace the lane. Check jobs_queue_kind_depth for the kind that grows and the lane concurrency against the pool sizes. Bulk lanes (core_bulk, lookup) are not covered: their backlog is long by design and JobsQueueStalling pages when they stop completing."
 
       - alert: JobsKindBacklogLarge
-        expr: jobs_queue_kind_depth{state="pending"} > 100000
+        expr: jobs_queue_kind_depth{state="pending",lane!~"core_bulk|lookup"} > 100000
         for: 1h
         labels:
           severity: warning
           service: jobs
         annotations:
           summary: "{{ $labels.kind }} has {{ $value }} pending jobs"
-          description: "One kind dominates its lane. A per-event kind that never drains usually retries something that will not succeed."
+          description: "One kind dominates its lane. A per-event kind that never drains usually retries something that will not succeed. Bulk lanes (core_bulk, lookup) are not covered: JobsQueueStalling pages when they stop completing."
 
       - alert: JobsKindOldestJobAged
-        expr: jobs_queue_kind_oldest_age_seconds > 2 * 86400
-        for: 1h
+        expr: jobs_queue_kind_oldest_due_seconds{lane!~"core_bulk|lookup"} > 6 * 3600
+        for: 30m
         labels:
           severity: warning
           service: jobs
         annotations:
-          summary: "The oldest {{ $labels.kind }} job is older than two days"
-          description: "Age is measured from creation, so retries that keep a job alive also show up here."
+          summary: "{{ $labels.kind }} has had work due for more than six hours"
+          description: "Measured from when the oldest job became due, not from its creation, so a long-lived retrying job does not count. Bulk lanes (core_bulk, lookup) are not covered: due work waits there for days by design and JobsQueueStalling pages when they stop completing."
 
       - alert: JobsLeasesExpiring
         expr: jobs_queue_depth{state="lease_expired"} > 0
@@ -265,14 +276,14 @@ groups:
           description: "The heartbeat renews a lease while the job runs, so an expired lease means the worker died mid-job or the database was unreachable."
 
       - alert: JobsDeadLetters
-        expr: increase(jobs_queue_dead_letters[1h]) > 0
-        for: 1m
+        expr: sum by (lane) (sum_over_time(clamp_min(jobs_queue_dead_letters - jobs_queue_dead_letters offset 5m, 0)[1h:5m])) > 5
+        for: 10m
         labels:
           severity: warning
           service: jobs
         annotations:
-          summary: "Lane {{ $labels.lane }} produced a dead letter"
-          description: "A job exhausted its retries. The payload stays in the queue for inspection."
+          summary: "Lane {{ $labels.lane }} produced {{ $value | printf \"%.0f\" }} dead letters in the last hour"
+          description: "Jobs exhausted their retries. jobs_queue_dead_letters is a gauge of rows, so the rule adds up the rises between 5 minute samples and ignores drops (a deploy, retention, or the settled codes auth_required, not_found and forbidden no longer being counted). The payloads stay in the queue for inspection."
 
       - alert: JobsFailingTerminally
         expr: sum(rate(jobs_executions_total{outcome="terminal"}[15m])) / sum(rate(jobs_executions_total[15m])) > 0.05

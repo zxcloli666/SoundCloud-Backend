@@ -197,3 +197,333 @@ tests:
             exp_annotations:
               summary: "More than 2% of answers are 5xx"
               description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new. The 503 for a young session that has not replicated to this node yet (api_session_miss_total outcome in_flight) is replication lag, not an error, and is not counted."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/tracks/{id}",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/tracks/{id}",le="2.5"}'
+        values: '0+540x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/tracks/{id}",le="5"}'
+        values: '0+570x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/users/{id}/likes",le="+Inf"}'
+        values: '0+3x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/users/{id}/likes",le="2.5"}'
+        values: '0+0x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/users/{id}/likes",le="5"}'
+        values: '0+0x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/health",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/health",le="2.5"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/health",le="5"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="2.5"}'
+        values: '0+0x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+0x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/albums/{id}",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/albums/{id}",le="2.5"}'
+        values: '0+576x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/albums/{id}",le="5"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="2.5"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="5"}'
+        values: '0+588x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ApiLatencyDegraded
+      - eval_time: 30m
+        alertname: ApiLatencyDegraded
+        exp_alerts:
+          - exp_labels:
+              route: /tracks/{id}
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "More than 5% of requests on /tracks/{id} take over 2.5s"
+              description: "Alloy keeps only the api buckets 0.1, 0.5, 1, 2.5, 5 and 10, so a p99 is an interpolation between far bounds and is not used. This is the share of requests slower than the 2.5s bound over 15m. Routes under 0.1 requests a second (90 in the window) are ignored, so five slow requests are needed before it can fire. Semantic search is excluded on purpose: a cold query waits for the encoder."
+      - eval_time: 30m
+        alertname: ApiLatencyCritical
+        exp_alerts:
+          - exp_labels:
+              route: /tracks/{id}
+              severity: critical
+              service: api
+            exp_annotations:
+              summary: "More than 2% of requests on /tracks/{id} take over 5s"
+              description: "Share of requests slower than the 5s bound over 10m, from the kept buckets. Routes under 0.2 requests a second (120 in the window) are ignored, so three slow requests are needed before it can fire. The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so five seconds for a tail means the local path itself is stalling."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="+Inf"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="2.5"}'
+        values: '0+600x40'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/playlists/{id}",le="5"}'
+        values: '0+576x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ApiLatencyDegraded
+      - eval_time: 30m
+        alertname: ApiLatencyCritical
+        exp_alerts:
+          - exp_labels:
+              route: /playlists/{id}
+              severity: critical
+              service: api
+            exp_annotations:
+              summary: "More than 2% of requests on /playlists/{id} take over 5s"
+              description: "Share of requests slower than the 5s bound over 10m, from the kept buckets. Routes under 0.2 requests a second (120 in the window) are ignored, so three slow requests are needed before it can fire. The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so five seconds for a tail means the local path itself is stalling."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_oldest_due_seconds{lane="core_fast"}'
+        values: '1000+0x70'
+      - series: 'jobs_queue_oldest_due_seconds{lane="lookup"}'
+        values: '1010000+0x70'
+      - series: 'jobs_queue_oldest_due_seconds{lane="core_bulk"}'
+        values: '1015000+0x70'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="lookup",kind="lyrics.lookup"}'
+        values: '1010000+0x70'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="core_bulk",kind="catalog.refresh"}'
+        values: '1015000+0x70'
+      - series: 'jobs_executions_total{kind="lyrics.lookup",outcome="ok"}'
+        values: '0+30x70'
+      - series: 'jobs_executions_total{kind="catalog.refresh",outcome="retryable"}'
+        values: '0+30x70'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: JobsQueueStalling
+        exp_alerts:
+          - exp_labels:
+              lane: core_fast
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane core_fast has work due for more than 15 minutes"
+              description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow. Bulk lanes (core_bulk, lookup) carry a long backlog by design, so there it also needs zero executions of the lane kinds in 30 minutes."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_oldest_due_seconds{lane="lookup"}'
+        values: '1010000+0x70'
+      - series: 'jobs_queue_oldest_due_seconds{lane="core_bulk"}'
+        values: '1015000+0x70'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="lookup",kind="lyrics.lookup"}'
+        values: '1010000+0x70'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="core_bulk",kind="catalog.refresh"}'
+        values: '1015000+0x70'
+      - series: 'jobs_executions_total{kind="lyrics.lookup",outcome="ok"}'
+        values: '900+0x70'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: JobsQueueStalling
+      - eval_time: 60m
+        alertname: JobsQueueStalling
+        exp_alerts:
+          - exp_labels:
+              lane: lookup
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane lookup has work due for more than 15 minutes"
+              description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow. Bulk lanes (core_bulk, lookup) carry a long backlog by design, so there it also needs zero executions of the lane kinds in 30 minutes."
+          - exp_labels:
+              lane: core_bulk
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane core_bulk has work due for more than 15 minutes"
+              description: "A job may run for up to JOBS_JOB_TIMEOUT_SECONDS (900s) with its lease renewed, so a due age above that means nobody is claiming, not that one job is slow. Bulk lanes (core_bulk, lookup) carry a long backlog by design, so there it also needs zero executions of the lane kinds in 30 minutes."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_depth{lane="lookup",state="pending"}'
+        values: '1900000+1000x200'
+      - series: 'jobs_queue_depth{lane="core_bulk",state="pending"}'
+        values: '1900000+1000x200'
+      - series: 'jobs_queue_depth{lane="core_fast",state="pending"}'
+        values: '60000+100x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: JobsQueueGrowing
+      - eval_time: 180m
+        alertname: JobsQueueGrowing
+        exp_alerts:
+          - exp_labels:
+              lane: core_fast
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane core_fast holds 78000 pending jobs and keeps growing"
+              description: "Producers outpace the lane. Check jobs_queue_kind_depth for the kind that grows and the lane concurrency against the pool sizes. Bulk lanes (core_bulk, lookup) are not covered: their backlog is long by design and JobsQueueStalling pages when they stop completing."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_kind_depth{lane="lookup",kind="lyrics.lookup",state="pending"}'
+        values: '1940000+0x100'
+      - series: 'jobs_queue_kind_depth{lane="core_bulk",kind="catalog.refresh",state="pending"}'
+        values: '1940000+0x100'
+      - series: 'jobs_queue_kind_depth{lane="core_fast",kind="player.sync",state="pending"}'
+        values: '150000+0x100'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: JobsKindBacklogLarge
+      - eval_time: 90m
+        alertname: JobsKindBacklogLarge
+        exp_alerts:
+          - exp_labels:
+              lane: core_fast
+              kind: player.sync
+              state: pending
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "player.sync has 150000 pending jobs"
+              description: "One kind dominates its lane. A per-event kind that never drains usually retries something that will not succeed. Bulk lanes (core_bulk, lookup) are not covered: JobsQueueStalling pages when they stop completing."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="lookup",kind="lyrics.lookup"}'
+        values: '1010000+0x100'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="core_bulk",kind="catalog.refresh"}'
+        values: '1015000+0x100'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="core_fast",kind="player.sync"}'
+        values: '30000+0x100'
+      - series: 'jobs_queue_kind_oldest_due_seconds{lane="ops",kind="admin.task"}'
+        values: '3600+0x100'
+      - series: 'jobs_queue_kind_oldest_age_seconds{lane="core_fast",kind="legacy.kind"}'
+        values: '300000+0x100'
+      - series: 'jobs_queue_kind_oldest_age_seconds{lane="lookup",kind="lyrics.lookup"}'
+        values: '300000+0x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: JobsKindOldestJobAged
+      - eval_time: 90m
+        alertname: JobsKindOldestJobAged
+        exp_alerts:
+          - exp_labels:
+              lane: core_fast
+              kind: player.sync
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "player.sync has had work due for more than six hours"
+              description: "Measured from when the oldest job became due, not from its creation, so a long-lived retrying job does not count. Bulk lanes (core_bulk, lookup) are not covered: due work waits there for days by design and JobsQueueStalling pages when they stop completing."
+
+  - interval: 1m
+    input_series:
+      - series: 'jobs_queue_dead_letters{lane="core_fast"}'
+        values: '100+0x20 40+0x80'
+      - series: 'jobs_queue_dead_letters{lane="lookup"}'
+        values: '5+0x40 8+0x40'
+      - series: 'jobs_queue_dead_letters{lane="ops"}'
+        values: '0+0x40 12+0x40'
+      - series: 'jobs_queue_dead_letters{lane="core_bulk"}'
+        values: '100+0x30 40+0x20 52+0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: JobsDeadLetters
+      - eval_time: 70m
+        alertname: JobsDeadLetters
+        exp_alerts:
+          - exp_labels:
+              lane: ops
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane ops produced 12 dead letters in the last hour"
+              description: "Jobs exhausted their retries. jobs_queue_dead_letters is a gauge of rows, so the rule adds up the rises between 5 minute samples and ignores drops (a deploy, retention, or the settled codes auth_required, not_found and forbidden no longer being counted). The payloads stay in the queue for inspection."
+          - exp_labels:
+              lane: core_bulk
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Lane core_bulk produced 12 dead letters in the last hour"
+              description: "Jobs exhausted their retries. jobs_queue_dead_letters is a gauge of rows, so the rule adds up the rises between 5 minute samples and ignores drops (a deploy, retention, or the settled codes auth_required, not_found and forbidden no longer being counted). The payloads stay in the queue for inspection."
+
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="10"}'
+        values: '0+54x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+59x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ApiSemanticSearchStuck
+      - eval_time: 40m
+        alertname: ApiSemanticSearchStuck
+        exp_alerts:
+          - exp_labels:
+              route: /search/vibe
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Semantic search on /search/vibe waits longer than its own poll loop"
+              description: "More than 5% of requests slower than the 10s bound over 10m, from the kept buckets (the largest is 10, so a p99 above 11 could never be reached). A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Routes under 0.05 requests a second (30 in the window) are ignored, so two slow requests are needed."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+2x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+0x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ApiSemanticSearchStuck
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+60x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+24x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="10"}'
+        values: '0+24x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+60x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+36x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+36x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ApiSemanticSearchAlwaysCold
+      - eval_time: 80m
+        alertname: ApiSemanticSearchAlwaysCold
+        exp_alerts:
+          - exp_labels:
+              route: /search/vibe
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Half of semantic searches on /search/vibe wait for the encoder"
+              description: "More than half of requests slower than the 5s bound over 15m, from the kept buckets. The vector cache and the query-vector collection should make repeat queries instant. Routes under 0.02 requests a second (18 in the window) are ignored."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+1x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ApiSemanticSearchAlwaysCold

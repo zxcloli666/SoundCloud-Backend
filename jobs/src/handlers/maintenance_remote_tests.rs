@@ -5,7 +5,7 @@ use super::MaintenanceHandler;
 #[sqlx::test(migrations = false)]
 async fn cleanup_deletes_expired_voice_grants_and_link_codes(pool: PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!(
-        "../../../api/migrations/0310_remote_voice.sql"
+        "../../../api/migrations/0311_remote_voice.sql"
     ))
     .execute(&pool)
     .await?;

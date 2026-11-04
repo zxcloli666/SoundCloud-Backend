@@ -61,7 +61,19 @@ async fn refresh(
     if !acquired {
         return Ok(None);
     }
+    let refreshed = refresh_under_lock(connection, chunk_rows).await;
+    let unlocked = sqlx::query_file_scalar!("queries/search/unlock_terms.sql")
+        .fetch_one(&mut *connection)
+        .await;
+    let refresh = refreshed?;
+    unlocked?;
+    Ok(Some(refresh))
+}
 
+async fn refresh_under_lock(
+    connection: &mut PgConnection,
+    chunk_rows: i64,
+) -> Result<Refresh, sqlx::Error> {
     let mut transaction = connection.begin().await?;
     let changed = sqlx::query_file!("queries/search/build_terms_delta.sql", chunk_rows)
         .execute(&mut *transaction)
@@ -86,5 +98,5 @@ async fn refresh(
         refresh.upserted += upserted;
         refresh.removed += removed;
     }
-    Ok(Some(refresh))
+    Ok(refresh)
 }

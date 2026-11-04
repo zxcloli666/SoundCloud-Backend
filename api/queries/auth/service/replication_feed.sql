@@ -3,6 +3,7 @@ SELECT count(*) FILTER (WHERE subscription.subenabled) AS "enabled!",
            WHERE subscription.subenabled
              AND (
                  worker.pid IS NULL
+                 OR worker.received_lsn IS NULL
                  OR worker.last_msg_receipt_time IS NULL
                  OR worker.last_msg_receipt_time < now() - interval '60 seconds'
              )
