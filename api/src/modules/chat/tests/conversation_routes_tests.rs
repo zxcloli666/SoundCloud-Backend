@@ -216,7 +216,7 @@ mod wired {
         }
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     #[ignore = "requires a local Redis"]
     async fn a_dm_timer_reaches_the_row_the_view_and_the_bump(pool: PgPool) -> anyhow::Result<()> {
         let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
@@ -256,7 +256,7 @@ mod wired {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     #[ignore = "requires a local Redis"]
     async fn member_routes_answer_their_shapes(pool: PgPool) -> anyhow::Result<()> {
         let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
@@ -333,7 +333,7 @@ mod wired {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     #[ignore = "requires a local Redis"]
     async fn deletes_answer_no_content_and_leave_a_trace(pool: PgPool) -> anyhow::Result<()> {
         let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
@@ -417,7 +417,7 @@ mod wired {
         id
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     #[ignore = "requires a local Redis"]
     async fn room_chats_take_their_seats_from_the_room(pool: PgPool) -> anyhow::Result<()> {
         let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);
@@ -513,7 +513,7 @@ mod wired {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     #[ignore = "requires a local Redis"]
     async fn a_dm_send_goes_through_every_gate_once(pool: PgPool) -> anyhow::Result<()> {
         let chat = chat_state(pool.clone(), crate::redis::connect_url(&redis_url())?, true);

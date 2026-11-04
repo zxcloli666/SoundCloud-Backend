@@ -159,7 +159,7 @@ async fn failures_answer_a_coded_503_an_old_desktop_never_takes_for_a_session_pr
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_blank_query_or_a_page_past_the_depth_never_goes_upstream(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -180,7 +180,7 @@ async fn a_blank_query_or_a_page_past_the_depth_never_goes_upstream(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn without_redis_a_search_is_busy_rather_than_unmetered(pool: PgPool) -> anyhow::Result<()> {
     let relay = chained(40);
     let search = search(&pool, relay.clone(), "redis://127.0.0.1:1", 10)?;
@@ -195,7 +195,7 @@ async fn without_redis_a_search_is_busy_rather_than_unmetered(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn pages_slice_soundcloud_order_across_chunks_and_follow_next_href(
     pool: PgPool,
@@ -237,7 +237,7 @@ async fn pages_slice_soundcloud_order_across_chunks_and_follow_next_href(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_depth_cap_ends_paging_at_three_hundred_items(pool: PgPool) -> anyhow::Result<()> {
     let relay = chained(10_000);
@@ -255,7 +255,7 @@ async fn the_depth_cap_ends_paging_at_three_hundred_items(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn concurrent_identical_misses_go_upstream_once(pool: PgPool) -> anyhow::Result<()> {
     let relay = chained(20);
@@ -280,7 +280,7 @@ async fn concurrent_identical_misses_go_upstream_once(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_failed_chunk_is_answered_from_its_marker_without_going_upstream(
     pool: PgPool,
@@ -310,7 +310,7 @@ async fn a_failed_chunk_is_answered_from_its_marker_without_going_upstream(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_query_soundcloud_rejects_is_an_empty_page(pool: PgPool) -> anyhow::Result<()> {
     for status in [400, 404, 422] {
@@ -325,7 +325,7 @@ async fn a_query_soundcloud_rejects_is_an_empty_page(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_session_past_its_budget_is_told_search_is_busy(pool: PgPool) -> anyhow::Result<()> {
     let relay = chained(20);
@@ -345,7 +345,7 @@ async fn a_session_past_its_budget_is_told_search_is_busy(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_refetched_first_chunk_makes_the_old_chain_stale(pool: PgPool) -> anyhow::Result<()> {
     let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));

@@ -30,7 +30,7 @@ fn the_related_window_is_bounded_and_never_asks_for_an_unreachable_offset() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn related_serves_public_neighbours_only_and_marks_the_viewers_likes(
     pool: PgPool,
 ) -> anyhow::Result<()> {

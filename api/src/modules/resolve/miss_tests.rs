@@ -129,7 +129,7 @@ fn only_a_soundcloud_404_means_gone() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn no_admission_means_no_soundcloud_call(pool: PgPool) -> anyhow::Result<()> {
     let relay = relay();
     let miss = miss_with(&pool, relay.clone(), "redis://127.0.0.1:1", 100).await?;
@@ -143,7 +143,7 @@ async fn no_admission_means_no_soundcloud_call(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_opened_entity_is_fetched_and_stored(pool: PgPool) -> anyhow::Result<()> {
     let miss = miss_with(&pool, relay(), &redis_url(), 100).await?;
@@ -177,7 +177,7 @@ async fn an_opened_entity_is_fetched_and_stored(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_playlist_write_adopts_at_most_twenty_five_unknown_tracks(
     pool: PgPool,
@@ -207,7 +207,7 @@ async fn a_playlist_write_adopts_at_most_twenty_five_unknown_tracks(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_exhausted_session_stops_adopting(pool: PgPool) -> anyhow::Result<()> {
     let relay = relay();
@@ -225,7 +225,7 @@ async fn an_exhausted_session_stops_adopting(pool: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyhow::Result<()> {
     let miss = miss_with(&pool, SearchRelay::stalled(), &redis_url(), 1000).await?;
@@ -248,7 +248,7 @@ async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_stalled_soundcloud_answers_an_opened_entity_as_unavailable_quickly(
     pool: PgPool,

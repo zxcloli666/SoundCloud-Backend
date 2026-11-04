@@ -56,7 +56,7 @@ async fn lyrics_state(pool: &PgPool, id: &str) -> anyhow::Result<bool> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_seen_track_is_only_stored_and_never_overwrites_a_richer_row(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -113,7 +113,7 @@ async fn a_seen_track_is_only_stored_and_never_overwrites_a_richer_row(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn opening_or_a_full_ingest_releases_a_held_track(pool: PgPool) -> anyhow::Result<()> {
     catalog_ingest::insert_absent_tracks(
         &pool,
@@ -148,7 +148,7 @@ async fn opening_or_a_full_ingest_releases_a_held_track(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_seen_playlist_is_stored_without_scheduling_a_reconcile(
     pool: PgPool,
 ) -> anyhow::Result<()> {

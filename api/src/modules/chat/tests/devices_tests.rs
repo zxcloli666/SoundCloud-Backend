@@ -33,7 +33,7 @@ fn error(answer: &Value) -> &str {
     answer["error"].as_str().unwrap_or_default()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
     let user = fresh_user();
@@ -53,7 +53,7 @@ async fn a_session_without_a_bind_must_log_in_again(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
     let user = fresh_user();
@@ -76,7 +76,7 @@ async fn a_forged_bind_signature_must_log_in_again(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_mismatched_bind_is_refused(pool: PgPool) {
     let user = fresh_user();
@@ -135,7 +135,7 @@ async fn a_mismatched_bind_is_refused(pool: PgPool) {
     assert_eq!(status_of(&pool, first.keys.id).await, "active");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
     let user = fresh_user();
@@ -177,7 +177,7 @@ async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
     let user = fresh_user();
@@ -203,7 +203,7 @@ async fn a_new_device_rekeys_every_live_conversation_of_its_user(pool: PgPool) {
     assert!(!rekey_pending(&pool, foreign).await);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_session_keeps_one_device(pool: PgPool) {
     let user = fresh_user();
@@ -230,7 +230,7 @@ async fn a_session_keeps_one_device(pool: PgPool) {
     assert_eq!(status_of(&pool, second.id).await, "active");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
     let user = fresh_user();
@@ -254,7 +254,7 @@ async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_malformed_device_description_is_refused(pool: PgPool) {
     let user = fresh_user();
@@ -284,7 +284,7 @@ async fn a_malformed_device_description_is_refused(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
     let user = fresh_user();
@@ -335,7 +335,7 @@ async fn a_young_device_cannot_remove_an_older_one(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
     let user = fresh_user();
@@ -371,7 +371,7 @@ async fn a_device_seasoned_for_72_hours_may_remove_an_older_one(pool: PgPool) {
     assert_eq!(status_of(&pool, older.keys.id).await, "revoked");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
     let user = fresh_user();
@@ -398,7 +398,7 @@ async fn not_me_revokes_a_newer_device_and_its_session(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
     let user = fresh_user();
@@ -464,7 +464,7 @@ async fn only_an_older_seasoned_device_confirms_a_new_one(pool: PgPool) {
     assert_eq!(newer_view["current"], json!(true));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
     let user = fresh_user();
@@ -532,7 +532,7 @@ async fn revoke_drops_the_device_from_caches_at_once(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
     let user = fresh_user();
@@ -549,7 +549,7 @@ async fn leaving_chat_without_a_device_is_a_no_op(pool: PgPool) {
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn another_users_device_is_not_found(pool: PgPool) {
     let user = fresh_user();
@@ -578,7 +578,7 @@ async fn another_users_device_is_not_found(pool: PgPool) {
     assert_eq!(status_of(&pool, theirs.keys.id).await, "active");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
     let user = fresh_user();
@@ -622,7 +622,7 @@ async fn devices_delta(chat: &ChatState, user: &str) -> Option<f64> {
         .expect("a score")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn every_device_change_moves_the_devices_delta(pool: PgPool) {
     let chat = state(&pool);
@@ -661,7 +661,7 @@ async fn every_device_change_moves_the_devices_delta(pool: PgPool) {
     assert!(disowned > confirmed);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn five_new_devices_a_day_and_a_relogin_is_not_one(pool: PgPool) {
     let chat = state(&pool);

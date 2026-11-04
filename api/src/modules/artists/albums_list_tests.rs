@@ -90,7 +90,7 @@ async fn listing(pool: &PgPool, artist_id: Uuid) -> anyhow::Result<Vec<(Uuid, St
     Ok(rows)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_listing_joins_primary_credited_and_wanted_albums_in_release_order(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -130,7 +130,7 @@ async fn the_listing_joins_primary_credited_and_wanted_albums_in_release_order(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_second_credit_on_the_same_album_does_not_duplicate_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -151,7 +151,7 @@ async fn a_second_credit_on_the_same_album_does_not_duplicate_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_listing_reaches_albums_through_indexes_instead_of_scanning_the_catalog(
     pool: PgPool,
 ) -> anyhow::Result<()> {

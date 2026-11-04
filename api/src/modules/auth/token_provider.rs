@@ -382,7 +382,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn public_unauthorized_marks_the_observed_token_due(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -408,7 +408,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn public_rate_limit_rotates_without_invalidating_token(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {

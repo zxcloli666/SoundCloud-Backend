@@ -174,7 +174,7 @@ fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn plain_rooms_run_on_rt_with_the_generic_session(pool: PgPool) -> anyhow::Result<()> {
     let redis = crate::redis::connect_url(&redis_url())?;
@@ -225,7 +225,7 @@ async fn plain_rooms_run_on_rt_with_the_generic_session(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn rooms_need_no_fresh_soundcloud_token_so_rt_never_asks_core_for_one(
     pool: PgPool,

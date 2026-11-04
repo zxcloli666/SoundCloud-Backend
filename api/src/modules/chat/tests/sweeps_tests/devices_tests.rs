@@ -52,7 +52,7 @@ async fn status(pg: &PgPool, id: Uuid) -> anyhow::Result<(String, bool)> {
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn devices_whose_session_is_gone_for_an_hour_are_revoked(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());

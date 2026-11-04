@@ -126,7 +126,7 @@ fn largest_gap(expected: &BTreeMap<String, Vec<f32>>, pooled: &BTreeMap<String, 
         .fold(0.0, f32::max)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_newest_events_pool_every_user_like_the_whole_history(
     pool: PgPool,
 ) -> anyhow::Result<()> {

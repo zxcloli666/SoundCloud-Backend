@@ -336,7 +336,7 @@ fn plan_contains(plan: &serde_json::Value, node_type: &str, field: &str, value: 
     find_node(plan, node_type, field, value).is_some()
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn wave_priority_reads_active_users_from_the_covering_index(
     pool: PgPool,
 ) -> anyhow::Result<()> {

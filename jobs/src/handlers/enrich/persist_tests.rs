@@ -145,7 +145,7 @@ async fn link_of(
     Ok(row)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn namesake_uploaders_stay_off_a_short_named_artist(pool: PgPool) -> anyhow::Result<()> {
     let z2 = seed_z2(&pool).await?;
     let namesakes = [
@@ -179,7 +179,7 @@ async fn namesake_uploaders_stay_off_a_short_named_artist(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_artists_own_account_keeps_its_uploads(pool: PgPool) -> anyhow::Result<()> {
     let z2 = seed_z2(&pool).await?;
     let home = Uploader(Z2_HOME, "z²");
@@ -200,7 +200,7 @@ async fn the_artists_own_account_keeps_its_uploads(pool: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_short_name_in_a_strangers_title_is_not_a_primary_but_a_feature_stays(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -241,7 +241,7 @@ async fn genius_id_of(pool: &PgPool, artist_id: Uuid) -> anyhow::Result<Option<S
     Ok(genius_id)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_external_credit_by_id_still_reaches_a_short_named_artist(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -262,7 +262,7 @@ async fn an_external_credit_by_id_still_reaches_a_short_named_artist(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unknown_external_artist_with_a_short_name_is_not_the_local_one(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -287,7 +287,7 @@ async fn an_unknown_external_artist_with_a_short_name_is_not_the_local_one(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_artists_own_upload_takes_an_unknown_external_credit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -304,7 +304,7 @@ async fn the_artists_own_upload_takes_an_unknown_external_credit(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_namesake_account_of_a_known_artist_is_left_out_but_reuploads_are_not(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -332,7 +332,7 @@ async fn a_namesake_account_of_a_known_artist_is_left_out_but_reuploads_are_not(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_name_match_gives_an_alt_account_and_never_the_artist_link(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -358,7 +358,7 @@ async fn a_name_match_gives_an_alt_account_and_never_the_artist_link(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_short_name_never_gets_an_auto_match_account(pool: PgPool) -> anyhow::Result<()> {
     let uploader = Uploader("700", "oyg");
 
@@ -378,7 +378,7 @@ async fn a_short_name_never_gets_an_auto_match_account(pool: PgPool) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_trusted_account_stops_new_auto_matches(pool: PgPool) -> anyhow::Result<()> {
     let monarchy = seed_artist(&pool, "Monarchy").await?;
     seed_account(&pool, monarchy, "800", "mb_resolve", false).await?;
@@ -395,7 +395,7 @@ async fn a_trusted_account_stops_new_auto_matches(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_namesake_with_a_transliterated_uploader_name_is_left_out(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -415,7 +415,7 @@ async fn a_namesake_with_a_transliterated_uploader_name_is_left_out(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn two_ideographs_are_a_full_name_and_one_is_short(pool: PgPool) -> anyhow::Result<()> {
     let faye = seed_artist(&pool, "王菲").await?;
     seed_account(&pool, faye, "910", "mb_resolve", false).await?;
@@ -491,7 +491,7 @@ async fn count_of(pool: &PgPool, table: &str) -> anyhow::Result<i64> {
     Ok(count)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_loser_of_a_new_artist_race_reuses_the_winners_row(pool: PgPool) -> anyhow::Result<()> {
     let name = "Nova Quill";
     let mut winner = pool.begin().await?;
@@ -514,7 +514,7 @@ async fn the_loser_of_a_new_artist_race_reuses_the_winners_row(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_loser_of_an_mb_artist_race_reuses_the_winners_row(pool: PgPool) -> anyhow::Result<()> {
     let mut winner = pool.begin().await?;
     let winner_id: Uuid = sqlx::query_scalar(
@@ -540,7 +540,7 @@ async fn the_loser_of_an_mb_artist_race_reuses_the_winners_row(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_loser_of_an_album_race_reuses_the_winners_album(pool: PgPool) -> anyhow::Result<()> {
     let artist = seed_artist(&pool, "Nova Quill").await?;
     let mut winner = pool.begin().await?;
@@ -577,7 +577,7 @@ async fn the_loser_of_an_album_race_reuses_the_winners_album(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_mb_artist_never_takes_a_genius_id_held_by_another(pool: PgPool) -> anyhow::Result<()> {
     let found = seed_artist(&pool, "Nova Quill").await?;
     sqlx::query("UPDATE artists SET mb_artist_id = 'mb-nova' WHERE id = $1")
@@ -604,7 +604,7 @@ async fn an_mb_artist_never_takes_a_genius_id_held_by_another(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_genius_id_taken_mid_persist_leaves_the_link_and_the_id_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -637,7 +637,7 @@ async fn a_genius_id_taken_mid_persist_leaves_the_link_and_the_id_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn credits_of_a_new_artist_pair_persist_in_one_stable_order(
     pool: PgPool,
 ) -> anyhow::Result<()> {

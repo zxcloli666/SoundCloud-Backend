@@ -4,7 +4,7 @@ use super::service::SubscriptionsService;
 
 const DAY: i64 = 86_400;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn status_carries_star_since_only_while_premium(pool: PgPool) {
     let service = SubscriptionsService::new(pool, false);
     let now = chrono::Utc::now().timestamp();

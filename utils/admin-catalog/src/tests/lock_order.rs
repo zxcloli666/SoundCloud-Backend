@@ -93,7 +93,7 @@ async fn persist_like_batches(pool: PgPool, ids: Vec<Uuid>) -> usize {
     deadlocks
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn admin_edits_and_jobs_batches_on_the_same_tracks_never_deadlock(pool: PgPool) {
     let uploader = "9000001";
     let artist_id = artist(&pool, "Lock Order").await;

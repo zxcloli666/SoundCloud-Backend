@@ -143,7 +143,7 @@ fn snapshot(track_ids: Vec<String>) -> PlaylistSnapshot {
     }
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn persist_writes_the_state_row_before_the_playlist_and_the_projection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -166,7 +166,7 @@ async fn persist_writes_the_state_row_before_the_playlist_and_the_projection(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_remote_delete_writes_the_state_row_before_the_playlist(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -182,7 +182,7 @@ async fn a_remote_delete_writes_the_state_row_before_the_playlist(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_observed_playlist_writes_the_state_row_before_the_playlist(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -284,7 +284,7 @@ async fn observe_round(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn membership_ops_dispatched_on_core_and_concurrent_persists_never_deadlock(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -336,7 +336,7 @@ async fn membership_ops_dispatched_on_core_and_concurrent_persists_never_deadloc
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn first_membership_ops_from_both_nodes_and_core_on_a_playlist_without_state_take_distinct_sequences(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -431,7 +431,7 @@ fn hydrated(sc_track_ids: &[String]) -> serde_json::Value {
     )
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn hydrated_tracks_with_nul_in_their_text_are_stored_without_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -454,7 +454,7 @@ async fn hydrated_tracks_with_nul_in_their_text_are_stored_without_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn hydrated_batches_racing_on_one_new_track_retry_and_keep_their_other_rows(
     pool: PgPool,
 ) -> anyhow::Result<()> {

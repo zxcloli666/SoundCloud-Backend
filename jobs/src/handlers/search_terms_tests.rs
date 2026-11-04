@@ -46,7 +46,7 @@ fn words(expected: &[(&str, i32)]) -> Vec<(String, i32)> {
         .collect()
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_search_lexicon_learns_catalog_words_but_not_whisper_gibberish(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -73,7 +73,7 @@ async fn the_search_lexicon_learns_catalog_words_but_not_whisper_gibberish(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_removed_track_drops_its_stale_word_and_lowers_the_shared_counts(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -123,7 +123,7 @@ async fn a_removed_track_drops_its_stale_word_and_lowers_the_shared_counts(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unchanged_catalog_rewrites_and_locks_no_lexicon_row(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -151,7 +151,7 @@ async fn an_unchanged_catalog_rewrites_and_locks_no_lexicon_row(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_chunk_commits_on_its_own_and_the_result_matches_one_pass(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -195,7 +195,7 @@ async fn every_chunk_commits_on_its_own_and_the_result_matches_one_pass(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_second_refresh_steps_aside_while_the_first_holds_the_lock(
     pool: PgPool,
 ) -> anyhow::Result<()> {

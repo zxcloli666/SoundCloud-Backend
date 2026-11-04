@@ -108,7 +108,7 @@ fn uploaders(page: &VibeResponse) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_vibe_we_already_have_a_vector_for_is_answered_without_the_worker(
     pg: PgPool,
@@ -142,7 +142,7 @@ async fn a_vibe_we_already_have_a_vector_for_is_answered_without_the_worker(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn no_single_uploader_is_allowed_to_fill_the_page(pg: PgPool) -> anyhow::Result<()> {
     let query = fresh("something one artist made all of");
@@ -171,7 +171,7 @@ async fn no_single_uploader_is_allowed_to_fill_the_page(pg: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_track_postgres_refuses_is_absent_from_the_atmosphere(pg: PgPool) -> anyhow::Result<()> {
     let query = fresh("something the catalogue will take back");
@@ -201,7 +201,7 @@ async fn a_track_postgres_refuses_is_absent_from_the_atmosphere(pg: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_atmosphere_names_only_genres_that_are_actually_on_the_page(
     pg: PgPool,

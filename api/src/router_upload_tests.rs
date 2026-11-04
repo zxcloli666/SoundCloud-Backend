@@ -36,7 +36,7 @@ async fn session_without_a_refreshable_login(pool: &PgPool) -> anyhow::Result<Uu
     Ok(session)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_is_refused_before_the_file_arrives_when_soundcloud_needs_a_new_login(
     pool: PgPool,
 ) -> anyhow::Result<()> {

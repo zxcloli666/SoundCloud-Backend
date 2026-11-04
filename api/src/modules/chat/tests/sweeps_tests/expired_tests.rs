@@ -20,7 +20,7 @@ fn gone_seqs(entries: &[String], conversation: Uuid) -> BTreeSet<i64> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn expired_messages_go_and_live_members_hear_about_it(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());
@@ -61,7 +61,7 @@ async fn expired_messages_go_and_live_members_hear_about_it(pg: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_large_backlog_goes_in_primary_key_batches(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());
@@ -80,7 +80,7 @@ async fn a_large_backlog_goes_in_primary_key_batches(pg: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn many_chats_in_one_batch_are_all_announced(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());

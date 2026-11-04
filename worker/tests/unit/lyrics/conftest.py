@@ -133,7 +133,9 @@ async def harness(
 ) -> AsyncIterator[LaneHarness]:
     counters = Counters()
     async with FakeAudioServer(body=wav_bytes()) as server, aiohttp.ClientSession() as session:
-        source = AudioSource(session, timeout_s=30, max_bytes=96 << 20, counters=counters)
+        source = AudioSource(
+            session, timeout_s=30, idle_s=10, max_bytes=96 << 20, counters=counters
+        )
         lane = TranscribeLane(
             russian_engines,
             source,

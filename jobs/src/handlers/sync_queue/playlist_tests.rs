@@ -105,7 +105,7 @@ async fn drive_membership(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_finished_membership_apply_is_recorded_and_pulls_the_next_observation_forward(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -128,7 +128,7 @@ async fn a_finished_membership_apply_is_recorded_and_pulls_the_next_observation_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_membership_apply_that_lost_its_generation_records_no_mark(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -143,7 +143,7 @@ async fn a_membership_apply_that_lost_its_generation_records_no_mark(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_patch(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -220,7 +220,7 @@ async fn playlist_metadata_ack_is_fenced_and_a_fresh_owner_read_confirms_the_pat
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unconfirmed_playlist_edit_without_a_queue_row_is_healed_into_a_push(
     pool: PgPool,
 ) -> anyhow::Result<()> {
