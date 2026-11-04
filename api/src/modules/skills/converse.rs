@@ -1,15 +1,21 @@
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use axum::extract::ConnectInfo;
+use axum::http::request::Parts;
 use backend_contracts::remote::{CommandKind, LinkProvider};
 
 use super::phrases::Phrases;
+use super::review;
 use super::speech::{clip, clip_utterance};
 use crate::common::admission::{AdmissionRejection, Endpoint};
 use crate::modules::remote::Asked;
+use crate::modules::remote::linking::is_review_user;
 use crate::modules::remote::links::Grant;
 use crate::state::AppState;
 
 const MIN_WAIT: Duration = Duration::from_millis(200);
+const ANSWER_MARGIN: Duration = Duration::from_millis(100);
 
 pub struct Said {
     pub text: String,
@@ -22,6 +28,13 @@ impl Said {
             text: text.to_owned(),
             speech: text.to_owned(),
         }
+    }
+}
+
+pub fn caller(st: &AppState, parts: &Parts) -> String {
+    match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
+        Some(ConnectInfo(address)) => st.admission.network_key(*address, &parts.headers),
+        None => "unknown".to_owned(),
     }
 }
 
@@ -47,7 +60,10 @@ pub async fn run(
         Err(AdmissionRejection::Limited { .. }) => return Said::plain(phrases.too_fast()),
         Err(AdmissionRejection::Unavailable) => return Said::plain(phrases.busy()),
     }
-    match st.subscriptions.is_premium(&grant.sc_user_id).await {
+    if is_review_user(&grant.sc_user_id) {
+        return review::answer(&utterance, phrases);
+    }
+    match st.subscriptions.is_premium_cached(&grant.sc_user_id).await {
         Ok(true) => {}
         Ok(false) => return Said::plain(phrases.star_needed()),
         Err(error) => {
@@ -59,7 +75,7 @@ pub async fn run(
         LinkProvider::Alice => "alice",
         LinkProvider::Salut => "salut",
     };
-    let deadline = started + budget;
+    let deadline = started + budget.saturating_sub(ANSWER_MARGIN);
     if deadline.saturating_duration_since(Instant::now()) < MIN_WAIT {
         return Said::plain(phrases.busy());
     }

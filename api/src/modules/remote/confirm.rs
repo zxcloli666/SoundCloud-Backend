@@ -28,12 +28,16 @@ pub struct PageTicket {
     pub state: String,
     pub scope: String,
     pub location: String,
+    #[serde(default)]
+    pub hint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SalutTicket {
     pub status: Status,
     pub user: String,
+    #[serde(default)]
+    pub hint: String,
 }
 
 pub struct LinkConfirm {
@@ -129,9 +133,23 @@ impl LinkConfirm {
         Ok(count)
     }
 
-    pub async fn asked_today(&self, user: &str) -> AppResult<i64> {
+    fn day_key(user: &str) -> String {
         let day = chrono::Utc::now().timestamp() / DAY_SECS;
-        self.count(&format!("day:{user}:{day}"), DAY_SECS).await
+        format!("day:{user}:{day}")
+    }
+
+    pub async fn asked_today(&self, user: &str) -> AppResult<i64> {
+        self.count(&Self::day_key(user), DAY_SECS).await
+    }
+
+    pub async fn asks_so_far(&self, user: &str) -> AppResult<i64> {
+        let mut conn = self.redis.get().await.map_err(redis_error)?;
+        let count: Option<i64> = redis::cmd("GET")
+            .arg(self.key(&Self::day_key(user)))
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_error)?;
+        Ok(count.unwrap_or(0))
     }
 
     pub async fn missed(&self, code_id: uuid::Uuid) -> AppResult<i64> {

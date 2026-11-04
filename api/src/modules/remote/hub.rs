@@ -16,7 +16,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::buffer::Buffer;
-use super::roster::Roster;
+use super::roster::{DEVICE_TTL, Roster};
 use super::waits::Waits;
 use crate::bus::nats::NatsService;
 
@@ -25,6 +25,8 @@ const PUBLISH_BUDGET: Duration = Duration::from_millis(250);
 const EXPIRY_MARGIN_MS: i64 = 1000;
 const RESUBSCRIBE_MIN: Duration = Duration::from_millis(500);
 const RESUBSCRIBE_MAX: Duration = Duration::from_secs(30);
+pub const PRESENCE_REFRESH: Duration = Duration::from_secs(DEVICE_TTL.as_secs() / 2);
+const PRESENCE_CAPACITY: u64 = 100_000;
 
 pub enum Asked {
     Reply(RemoteReply),
@@ -54,6 +56,27 @@ struct Pending {
     reply: oneshot::Sender<RemoteReply>,
 }
 
+struct Draft<'a> {
+    kind: CommandKind,
+    source: &'a str,
+    text: &'a str,
+    hint: Option<String>,
+}
+
+struct PendingGuard<'a> {
+    pending: &'a Mutex<HashMap<Uuid, Pending>>,
+    id: Uuid,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
+}
+
 pub struct RemoteHub {
     nats: Option<Arc<NatsService>>,
     buffer: Buffer,
@@ -62,6 +85,7 @@ pub struct RemoteHub {
     commands: broadcast::Sender<Arc<RemoteCommand>>,
     pending: Mutex<HashMap<Uuid, Pending>>,
     seen: Cache<Uuid, ()>,
+    published: Cache<(String, String), (i64, Instant)>,
     last_seq: AtomicI64,
 }
 
@@ -69,7 +93,7 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn now_micros() -> i64 {
+pub fn now_micros() -> i64 {
     chrono::Utc::now().timestamp_micros()
 }
 
@@ -86,6 +110,10 @@ impl RemoteHub {
             seen: Cache::builder()
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(180))
+                .build(),
+            published: Cache::builder()
+                .max_capacity(PRESENCE_CAPACITY)
+                .time_to_live(DEVICE_TTL)
                 .build(),
             last_seq: AtomicI64::new(0),
         })
@@ -193,29 +221,32 @@ impl RemoteHub {
         }
     }
 
-    async fn receive(&self, command: RemoteCommand) {
+    pub(super) async fn receive(&self, command: RemoteCommand) {
         if self.seen.contains_key(&command.id) {
             return;
         }
         self.seen.insert(command.id, ());
-        if self.roster.polled_recently(&command.user, Instant::now())
-            && let Err(error) = self.buffer.push(&command).await
-        {
-            warn!(%error, "remote command was not buffered");
+        let command = Arc::new(command);
+        let _ = self.commands.send(command.clone());
+        if self.roster.polled_recently(&command.user, Instant::now()) {
+            let buffer = self.buffer.clone();
+            tokio::spawn(async move {
+                if let Err(error) = buffer.push(&command).await {
+                    warn!(%error, "remote command was not buffered");
+                }
+            });
         }
-        let _ = self.commands.send(Arc::new(command));
     }
 
-    pub async fn confirm_link(&self, user: &str, provider: LinkProvider) -> Asked {
+    pub async fn confirm_link(&self, user: &str, provider: LinkProvider, hint: &str) -> Asked {
         let deadline = Instant::now() + Duration::from_secs(CONFIRM_HOLD_SECS);
-        self.dispatch(
-            user,
-            CommandKind::LinkConfirm,
-            provider.as_str(),
-            "",
-            deadline,
-        )
-        .await
+        let draft = Draft {
+            kind: CommandKind::LinkConfirm,
+            source: provider.as_str(),
+            text: "",
+            hint: Some(hint.to_owned()),
+        };
+        self.send(user, draft, deadline).await
     }
 
     pub async fn dispatch(
@@ -226,6 +257,16 @@ impl RemoteHub {
         text: &str,
         deadline: Instant,
     ) -> Asked {
+        let draft = Draft {
+            kind,
+            source,
+            text,
+            hint: None,
+        };
+        self.send(user, draft, deadline).await
+    }
+
+    async fn send(&self, user: &str, draft: Draft<'_>, deadline: Instant) -> Asked {
         if self.roster.winner(user, Instant::now()).is_none() {
             return Asked::Offline;
         }
@@ -233,11 +274,12 @@ impl RemoteHub {
         let budget = deadline.saturating_duration_since(Instant::now());
         let command = RemoteCommand {
             id: Uuid::now_v7(),
-            kind,
+            kind: draft.kind,
             seq: self.next_seq(user).await,
             user: user.to_owned(),
-            source: source.to_owned(),
-            text: text.to_owned(),
+            source: draft.source.to_owned(),
+            text: draft.text.to_owned(),
+            hint: draft.hint,
             created_at,
             expires_at: created_at + budget.as_millis() as i64 + EXPIRY_MARGIN_MS,
         };
@@ -252,22 +294,24 @@ impl RemoteHub {
                     reply: tx,
                 },
             );
+        let _cleanup = PendingGuard {
+            pending: &self.pending,
+            id: command.id,
+        };
         if let Ok(payload) = serde_json::to_vec(&command) {
             self.publish(COMMAND_SUBJECT.to_owned(), payload).await;
         }
-        let id = command.id;
         self.receive(command).await;
         let remaining = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(remaining, rx).await {
             Ok(Ok(reply)) => Asked::Reply(reply),
-            _ => {
-                self.pending
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&id);
-                Asked::Silent
-            }
+            _ => Asked::Silent,
         }
+    }
+
+    #[cfg(test)]
+    pub fn pending_count(&self) -> usize {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub async fn reply(&self, user: &str, reply: RemoteReply) {
@@ -292,7 +336,11 @@ impl RemoteHub {
     }
 
     pub async fn announce(&self, user: &str, device: &str, active: i64) {
-        self.roster.note(user, device, active, Instant::now());
+        let now = Instant::now();
+        self.roster.note(user, device, active, now);
+        if !self.presence_due(user, device, active, now) {
+            return;
+        }
         let presence = Presence {
             user: user.to_owned(),
             device: device.to_owned(),
@@ -301,6 +349,20 @@ impl RemoteHub {
         if let Ok(payload) = serde_json::to_vec(&presence) {
             self.publish(PRESENCE_SUBJECT.to_owned(), payload).await;
         }
+    }
+
+    pub(super) fn presence_due(&self, user: &str, device: &str, active: i64, now: Instant) -> bool {
+        let key = (user.to_owned(), device.to_owned());
+        let due = match self.published.get(&key) {
+            Some((sent_active, sent_at)) => {
+                sent_active != active || now.duration_since(sent_at) >= PRESENCE_REFRESH
+            }
+            None => true,
+        };
+        if due {
+            self.published.insert(key, (active, now));
+        }
+        due
     }
 
     pub fn active_device(&self, user: &str) -> Option<String> {

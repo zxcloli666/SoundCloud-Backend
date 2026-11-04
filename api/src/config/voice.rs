@@ -5,6 +5,9 @@ use redact::Secret;
 use serde::Deserialize;
 
 use super::{env_opt, env_str, env_u64};
+use crate::modules::remote::secrets::valid_review_code;
+
+const CODE_RETRY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug)]
 pub struct OAuthClient {
@@ -20,11 +23,14 @@ pub struct VoiceCfg {
     pub skill_name: String,
     pub alice_skill_id: String,
     pub salut_token: Secret<String>,
+    pub salut_project_id: String,
+    pub review_code: Secret<String>,
     pub alice_wait: Duration,
     pub salut_wait: Duration,
     pub oauth_clients: Vec<OAuthClient>,
     pub enabled: bool,
     pub confirm_per_user_day: u64,
+    pub code_retry: Duration,
 }
 
 #[derive(Deserialize)]
@@ -47,22 +53,44 @@ impl VoiceCfg {
                 (Vec::new(), false)
             }
         };
-        Self {
+        let voice = Self {
             assistant_name,
             skill_name,
             alice_skill_id: env_str("VOICE_ALICE_SKILL_ID", ""),
             salut_token: env_str("VOICE_SALUT_TOKEN", "").into(),
-            alice_wait: Duration::from_millis(env_u64("VOICE_ALICE_WAIT_MS", 4000)),
+            salut_project_id: env_str("VOICE_SALUT_PROJECT_ID", ""),
+            review_code: review_code(&env_str("VOICE_REVIEW_CODE", "")).into(),
+            alice_wait: Duration::from_millis(env_u64("VOICE_ALICE_WAIT_MS", 3500)),
             salut_wait: Duration::from_millis(env_u64("VOICE_SALUT_WAIT_MS", 5500)),
             oauth_clients,
             enabled,
             confirm_per_user_day: env_u64("VOICE_CONFIRM_PER_USER_DAY", 20),
+            code_retry: CODE_RETRY,
+        };
+        if voice.enabled && !voice.salut_enabled() {
+            tracing::error!(
+                "Salut is off: set VOICE_SALUT_TOKEN, or VOICE_SALUT_PROJECT_ID when Sber cannot send a secret"
+            );
         }
+        voice
+    }
+
+    pub fn salut_enabled(&self) -> bool {
+        !self.salut_token.expose().is_empty() || !self.salut_project_id.is_empty()
     }
 
     pub fn client(&self, id: &str) -> Option<&OAuthClient> {
         self.oauth_clients.iter().find(|client| client.id == id)
     }
+}
+
+fn review_code(raw: &str) -> String {
+    let code = raw.trim();
+    if code.is_empty() || valid_review_code(code) {
+        return code.to_owned();
+    }
+    tracing::error!("VOICE_REVIEW_CODE is ignored: it needs 8 or more digits and nothing else");
+    String::new()
 }
 
 pub fn parse_clients(raw: &str) -> Result<Vec<OAuthClient>, String> {
@@ -116,6 +144,15 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("needs an id"));
+    }
+
+    #[test]
+    fn a_review_code_is_kept_only_when_it_has_eight_digits_or_more() {
+        assert_eq!(review_code(" 12345678 "), "12345678");
+        assert_eq!(review_code("1234567890"), "1234567890");
+        assert_eq!(review_code("1234567"), "");
+        assert_eq!(review_code("1234-5678"), "");
+        assert_eq!(review_code(""), "");
     }
 
     #[test]

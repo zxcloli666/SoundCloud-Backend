@@ -112,8 +112,8 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 45. `0293_scd_verify_receipts`: function bodies only, no install. An api answer for an M chunk carries its `repl_purges` receipts of the differing keys; when core has the row and the receipts differ, core sends a `receipts` op with its own list before the image, and the api keeps exactly that list for the key. `scd_node_retention_batch('repl_purges')` expires receipts after 7 days on api nodes in split mode, behind `scd_node_retention_guard()`; on core and in legacy mode it does nothing.
 
 Order for 0285-0292: core first. Migrate main and star only after they applied core's stream past core's 0285 commit: a change from before it still carries the 7 columns, and the apply on a node without them fails with "missing replicated columns". Keep jobs on core stopped until all three are at 0292: a claim batch reads the table for about 2 s, and a long jobs transaction replays as a long apply on main and star; both hold the table past the 200 ms lock tries of 0291. The B2 binary runs on this schema, so stopping is for the locks only.
-40. `0294_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes with a rotation seed, Salut `sub` bindings).
-41. `0295_scd_install`: the generated SQL again: the two tables get their triggers and publication lists.
+46. `0294_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes with a rotation seed, Salut `sub` bindings).
+47. `0295_scd_install`: the generated SQL again: the two tables get their triggers and publication lists.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 

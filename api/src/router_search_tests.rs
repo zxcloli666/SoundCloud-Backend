@@ -28,7 +28,7 @@ pub(super) fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
-fn config(redis: &str) -> AppConfig {
+pub(super) fn config(redis: &str) -> AppConfig {
     let limit = AdmissionLimitCfg {
         per_client: 1_000,
         global: 1_000_000,
@@ -92,11 +92,14 @@ fn config(redis: &str) -> AppConfig {
             room_join: limit,
             voice_link_code: limit,
             voice_remote: limit,
+            voice_remote_wait: limit,
             voice_page_ip: limit,
             voice_page_client: limit,
             voice_salut_sub: limit,
             voice_utterance: limit,
             voice_resolve: limit,
+            voice_alice_ip: limit,
+            voice_salut_ip: limit,
             diag_bundle: limit,
             diag_events: limit,
             diag_bytes: AdmissionLimitCfg {
@@ -123,6 +126,8 @@ fn config(redis: &str) -> AppConfig {
             skill_name: "Лоля".to_owned(),
             alice_skill_id: "skill-1".to_owned(),
             salut_token: "salut-token".to_owned().into(),
+            salut_project_id: String::new(),
+            review_code: "12345678".to_owned().into(),
             alice_wait: Duration::from_millis(800),
             salut_wait: Duration::from_millis(800),
             oauth_clients: vec![crate::config::OAuthClient {
@@ -133,6 +138,7 @@ fn config(redis: &str) -> AppConfig {
             }],
             enabled: true,
             confirm_per_user_day: 20,
+            code_retry: Duration::from_millis(200),
         },
         soundwave: SoundwaveCfg {
             popularity_boost: 0.0,
@@ -164,7 +170,17 @@ pub(super) async fn state(
     relay: Arc<SearchRelay>,
     redis: &str,
 ) -> anyhow::Result<AppState> {
-    let config = Arc::new(config(redis));
+    state_with(pg, relay, config(redis)).await
+}
+
+pub(super) async fn state_with(
+    pg: &PgPool,
+    relay: Arc<SearchRelay>,
+    config: AppConfig,
+) -> anyhow::Result<AppState> {
+    let redis = config.redis.url.clone();
+    let redis = redis.as_str();
+    let config = Arc::new(config);
     let pg = pg.clone();
     let redis_pool = deadpool_redis::Config::from_url(redis)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
@@ -399,6 +415,19 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     Ok(crate::router::build(
         state(pool, soundcloud_hits(), redis).await?,
     ))
+}
+
+pub(super) async fn app_with(
+    pool: &PgPool,
+    config: AppConfig,
+    star: bool,
+) -> anyhow::Result<axum::Router> {
+    let mut st = state_with(pool, soundcloud_hits(), config).await?;
+    if !star {
+        st.subscriptions =
+            crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
+    }
+    Ok(crate::router::build(st))
 }
 
 pub(super) async fn app_without_star(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Router> {

@@ -13,6 +13,7 @@ pub const CONFIRM_HOLD_SECS: u64 = 60;
 pub const MAX_DEVICES_PER_USER: usize = 3;
 pub const MAX_REPLY_BYTES: usize = 8 * 1024;
 pub const MAX_UTTERANCE_CHARS: usize = 300;
+pub const LINK_HINT_DIGITS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,6 +57,8 @@ pub struct RemoteCommand {
     pub user: String,
     pub source: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     pub created_at: i64,
     pub expires_at: i64,
 }
@@ -145,14 +148,36 @@ mod tests {
             user: "101".into(),
             source: "alice".into(),
             text: "включи следующий трек".into(),
+            hint: None,
             created_at: 1,
             expires_at: 2,
         };
         let json = serde_json::to_value(&command).unwrap();
         assert_eq!(json["expiresAt"], 2);
         assert_eq!(json["createdAt"], 1);
+        assert!(json.get("hint").is_none());
         let back: RemoteCommand = serde_json::from_value(json).unwrap();
         assert_eq!(back, command);
+    }
+
+    #[test]
+    fn a_link_confirm_carries_its_hint_in_camel_case() {
+        let command = RemoteCommand {
+            id: Uuid::nil(),
+            kind: CommandKind::LinkConfirm,
+            seq: 1,
+            user: "101".into(),
+            source: "alice".into(),
+            text: String::new(),
+            hint: Some("47".into()),
+            created_at: 1,
+            expires_at: 2,
+        };
+        let json = serde_json::to_value(&command).unwrap();
+        assert_eq!(json["hint"], "47");
+        assert_eq!(json["kind"], "link_confirm");
+        let back: RemoteCommand = serde_json::from_value(json).unwrap();
+        assert_eq!(back.hint.as_deref(), Some("47"));
     }
 
     #[test]

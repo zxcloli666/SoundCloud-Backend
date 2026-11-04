@@ -41,3 +41,34 @@ async fn status_carries_star_since_only_while_premium(pool: PgPool) {
         None
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_cached_star_answer_skips_the_database_until_a_write(pool: PgPool) {
+    let service = SubscriptionsService::new(pool.clone(), false);
+    let now = chrono::Utc::now().timestamp();
+    assert!(
+        !service
+            .is_premium_cached("soundcloud:users:7")
+            .await
+            .unwrap()
+    );
+    service
+        .upsert("soundcloud:users:7", now + DAY, None)
+        .await
+        .unwrap();
+    assert!(service.is_premium_cached("7").await.unwrap());
+    sqlx::query("DELETE FROM subscriptions")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        service
+            .is_premium_cached("soundcloud:users:7")
+            .await
+            .unwrap(),
+        "a cached answer does not read the database again"
+    );
+    assert!(!service.is_premium("soundcloud:users:7").await.unwrap());
+    service.remove("soundcloud:users:7").await.unwrap();
+    assert!(!service.is_premium_cached("7").await.unwrap());
+}

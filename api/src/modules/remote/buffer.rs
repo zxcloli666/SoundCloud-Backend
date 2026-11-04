@@ -15,6 +15,7 @@ redis.call('SET', KEYS[1], next, 'EX', ARGV[2])
 return next
 "#;
 
+#[derive(Clone)]
 pub struct Buffer {
     redis: Pool,
     prefix: String,

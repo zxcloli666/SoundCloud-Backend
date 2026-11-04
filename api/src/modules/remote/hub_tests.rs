@@ -310,7 +310,7 @@ async fn a_link_confirmation_is_a_command_of_its_own_kind() {
     let asking = {
         let hub = hub.clone();
         let user = user.clone();
-        tokio::spawn(async move { hub.confirm_link(&user, LinkProvider::Salut).await })
+        tokio::spawn(async move { hub.confirm_link(&user, LinkProvider::Salut, "47").await })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
     let delivered = hub
@@ -319,6 +319,7 @@ async fn a_link_confirmation_is_a_command_of_its_own_kind() {
     let command = &delivered.commands[0];
     assert_eq!(command.kind, CommandKind::LinkConfirm);
     assert_eq!(command.source, "salut");
+    assert_eq!(command.hint.as_deref(), Some("47"));
     assert!(command.expires_at - command.created_at > 55_000);
     hub.reply(&user, spoken(command.id, "")).await;
     match asking.await.expect("asker") {
@@ -350,4 +351,135 @@ async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
         "{:?}",
         started.elapsed()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_dropped_ask_leaves_no_pending_entry() {
+    let hub = local_hub();
+    let user = Uuid::now_v7().to_string();
+    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
+    let asking = {
+        let hub = hub.clone();
+        let user = user.clone();
+        tokio::spawn(async move {
+            hub.ask(&user, "alice", "пауза", Duration::from_secs(5))
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(hub.pending_count(), 1);
+    asking.abort();
+    let _ = asking.await;
+    assert_eq!(hub.pending_count(), 0, "an aborted request cleans up");
+}
+
+#[tokio::test]
+async fn presence_goes_out_only_for_a_new_device_a_new_activity_or_a_stale_entry() {
+    let hub = local_hub();
+    let start = Instant::now();
+    assert!(hub.presence_due("1", "pc", 5, start));
+    assert!(!hub.presence_due("1", "pc", 5, start + Duration::from_secs(1)));
+    assert!(hub.presence_due("1", "laptop", 5, start + Duration::from_secs(1)));
+    assert!(hub.presence_due("1", "pc", 6, start + Duration::from_secs(2)));
+    assert!(!hub.presence_due("1", "pc", 6, start + Duration::from_secs(3)));
+    let stale = start + Duration::from_secs(2) + super::hub::PRESENCE_REFRESH;
+    assert!(hub.presence_due("1", "pc", 6, stale));
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_polling_loop_publishes_presence_once() {
+    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned());
+    let watcher = async_nats::connect(&url).await.expect("nats");
+    let mut presence = watcher
+        .subscribe(backend_contracts::remote::PRESENCE_SUBJECT)
+        .await
+        .expect("a presence subscription");
+    watcher.flush().await.expect("flush");
+    let hub = hub_on_nats().await;
+    let user = Uuid::now_v7().to_string();
+    for _ in 0..50 {
+        hub.poll(&user, "pc", 7, None, Duration::from_millis(1))
+            .await;
+    }
+    let mut seen = 0;
+    while let Ok(Some(message)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        futures::StreamExt::next(&mut presence),
+    )
+    .await
+    {
+        let parsed: backend_contracts::remote::Presence =
+            serde_json::from_slice(&message.payload).expect("presence json");
+        if parsed.user == user {
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 1, "fifty polls with the same activity publish once");
+}
+
+#[tokio::test]
+#[ignore = "requires a local Redis"]
+async fn a_stuck_redis_does_not_hold_back_live_delivery() {
+    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let mut config = Config::from_url(url);
+    config.pool = Some(deadpool_redis::PoolConfig {
+        max_size: 1,
+        timeouts: deadpool_redis::Timeouts {
+            wait: Some(Duration::from_secs(3)),
+            create: Some(Duration::from_secs(1)),
+            recycle: Some(Duration::from_secs(1)),
+        },
+        ..Default::default()
+    });
+    let pool = config.create_pool(Some(Runtime::Tokio1)).expect("a pool");
+    let hub = RemoteHub::new(
+        None,
+        pool.clone(),
+        &format!("remote-test-{}", Uuid::now_v7()),
+    );
+    let user = Uuid::now_v7().to_string();
+    let handshake = hub
+        .poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
+    let waiting = {
+        let hub = hub.clone();
+        let user = user.clone();
+        tokio::spawn(async move {
+            hub.poll(
+                &user,
+                "pc",
+                1,
+                Some(handshake.cursor),
+                Duration::from_secs(5),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let held = pool.get().await.expect("the only connection");
+    let now = super::hub::now_ms();
+    let started = Instant::now();
+    hub.receive(backend_contracts::remote::RemoteCommand {
+        id: Uuid::now_v7(),
+        kind: CommandKind::Utterance,
+        seq: super::hub::now_micros(),
+        user: user.clone(),
+        source: "alice".to_owned(),
+        text: "пауза".to_owned(),
+        hint: None,
+        created_at: now,
+        expires_at: now + 5_000,
+    })
+    .await;
+    let delivered = waiting.await.expect("the waiter");
+    assert_eq!(delivered.commands.len(), 1);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(held);
 }

@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use mini_moka::sync::Cache;
 use serde::Serialize;
 use sqlx::PgPool;
 
@@ -18,14 +20,40 @@ pub struct PremiumStatus {
     pub star_since: Option<i64>,
 }
 
+const STAR_TTL: Duration = Duration::from_secs(60);
+const STAR_CAPACITY: u64 = 100_000;
+
 pub struct SubscriptionsService {
     pg: PgPool,
     always_premium: bool,
+    star: Cache<String, bool>,
 }
 
 impl SubscriptionsService {
     pub fn new(pg: PgPool, always_premium: bool) -> Arc<Self> {
-        Arc::new(Self { pg, always_premium })
+        Arc::new(Self {
+            pg,
+            always_premium,
+            star: Cache::builder()
+                .max_capacity(STAR_CAPACITY)
+                .time_to_live(STAR_TTL)
+                .build(),
+        })
+    }
+
+    pub async fn is_premium_cached(&self, user_urn: &str) -> AppResult<bool> {
+        let key = crate::common::sc_ids::extract_sc_id(user_urn).to_owned();
+        if let Some(premium) = self.star.get(&key) {
+            return Ok(premium);
+        }
+        let premium = self.is_premium(user_urn).await?;
+        self.star.insert(key, premium);
+        Ok(premium)
+    }
+
+    fn forget(&self, user_urn: &str) {
+        self.star
+            .invalidate(&crate::common::sc_ids::extract_sc_id(user_urn).to_owned());
     }
 
     pub async fn is_premium(&self, user_urn: &str) -> AppResult<bool> {
@@ -87,6 +115,7 @@ impl SubscriptionsService {
         )
         .execute(&self.pg)
         .await?;
+        self.forget(user_urn);
         Ok(())
     }
 
@@ -95,6 +124,7 @@ impl SubscriptionsService {
         let result = sqlx::query_file!("queries/subscriptions/service/remove.sql", &variants)
             .execute(&self.pg)
             .await?;
+        self.forget(user_urn);
         Ok(result.rows_affected())
     }
 }

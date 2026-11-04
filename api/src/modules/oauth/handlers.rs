@@ -19,9 +19,9 @@ use super::request::{
     redirect_with_code,
 };
 use crate::common::admission::{AdmissionRejection, Endpoint};
-use crate::error::AppError;
 use crate::modules::remote::confirm::{PageTicket, Status};
-use crate::modules::remote::linking::{self, Found, Pairing};
+use crate::modules::remote::handlers::voice_disabled;
+use crate::modules::remote::linking::{self, Found, Pairing, REVIEW_USER, is_review_code};
 use crate::modules::remote::secrets::{normalize_code, random_token, secret_matches};
 use crate::state::AppState;
 
@@ -77,12 +77,7 @@ async fn authorize_page(
 ) -> Response {
     let voice = &st.config.voice;
     if !voice.enabled {
-        return AppError::coded(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "voice_disabled",
-            "Voice is not configured",
-        )
-        .into_response();
+        return voice_disabled();
     }
     let Some(client) = known_target(voice, &params.client_id, &params.redirect_uri) else {
         return refused(
@@ -146,12 +141,7 @@ async fn authorize_submit(
 ) -> Response {
     let voice = &st.config.voice;
     if !voice.enabled {
-        return AppError::coded(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "voice_disabled",
-            "Voice is not configured",
-        )
-        .into_response();
+        return voice_disabled();
     }
     let Some(client) = known_target(voice, &form.client_id, &form.redirect_uri) else {
         return refused(
@@ -168,7 +158,7 @@ async fn authorize_submit(
         target: target_name(client.provider),
     };
     let address = match parts.extensions.get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(address)) => st.admission.client_key(*address, &parts.headers),
+        Some(ConnectInfo(address)) => st.admission.network_key(*address, &parts.headers),
         None => "unknown".to_owned(),
     };
     if let Some(refusal) = within_limit(
@@ -183,6 +173,9 @@ async fn authorize_submit(
     }
     if let Some(refusal) = within_limit(&st, Endpoint::VoicePageClient, &client.id, &fields).await {
         return refusal;
+    }
+    if is_review_code(voice, &form.code) {
+        return review_redirect(&st, client.provider, &form, &fields).await;
     }
     let Some(code) = normalize_code(&form.code) else {
         return html(
@@ -232,6 +225,7 @@ async fn authorize_submit(
         state: form.state.clone(),
         scope: form.scope.clone(),
         location: String::new(),
+        hint: pairing.hint.clone(),
     };
     if let Err(error) = st
         .confirm
@@ -242,8 +236,53 @@ async fn authorize_submit(
         st.confirm.release(pairing.code_id).await;
         return busy_form(&fields);
     }
+    let hint = pairing.hint.clone();
     tokio::spawn(settle_page(st.clone(), pairing, ticket.clone(), record));
-    html(StatusCode::OK, page::pending(&ticket, &voice.skill_name))
+    html(
+        StatusCode::OK,
+        page::pending(&ticket, &voice.skill_name, &hint),
+    )
+}
+
+async fn review_redirect(
+    st: &AppState,
+    provider: LinkProvider,
+    form: &AuthorizeForm,
+    fields: &PageFields<'_>,
+) -> Response {
+    let issued = st
+        .links
+        .issue_auth_code(REVIEW_USER, provider, &form.client_id, &form.redirect_uri)
+        .await;
+    let code = match issued {
+        Ok(code) => code,
+        Err(error) => {
+            tracing::warn!(%error, "review auth code was not issued");
+            return busy_form(fields);
+        }
+    };
+    let Some(location) = redirect_with_code(
+        &form.redirect_uri,
+        &code,
+        &form.state,
+        &form.client_id,
+        &form.scope,
+    )
+    .and_then(|location| HeaderValue::from_str(&location).ok()) else {
+        return busy_form(fields);
+    };
+    found(location)
+}
+
+fn found(location: HeaderValue) -> Response {
+    (
+        StatusCode::FOUND,
+        [
+            (LOCATION, location),
+            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+    )
+        .into_response()
 }
 
 async fn settle_page(st: AppState, pairing: Pairing, ticket: String, mut record: PageTicket) {
@@ -332,21 +371,14 @@ async fn authorize_status(
     if record.status == Status::Pending {
         return html(
             StatusCode::OK,
-            page::pending(&params.ticket, &voice.skill_name),
+            page::pending(&params.ticket, &voice.skill_name, &record.hint),
         );
     }
     let _ = st.confirm.take::<PageTicket>(&key).await;
     if record.status == Status::Approved
         && let Ok(location) = HeaderValue::from_str(&record.location)
     {
-        return (
-            StatusCode::FOUND,
-            [
-                (LOCATION, location),
-                (CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            ],
-        )
-            .into_response();
+        return found(location);
     }
     let Some(client) = known_target(voice, &record.client_id, &record.redirect_uri) else {
         return refused(StatusCode::BAD_REQUEST, "Ссылка не подходит.");

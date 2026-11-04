@@ -16,9 +16,11 @@ const OPEN_ROUTES: &[&str] = &[
     "/auth/link/status",
     "/resolve",
     "/oauth/authorize",
+    "/oauth/authorize/status",
     "/oauth/token",
     "/skills/alice",
     "/skills/salut",
+    "/skills/salut/{token}",
     "/diag/bundles",
     "/diag/events",
 ];

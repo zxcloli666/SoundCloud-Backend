@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use backend_contracts::remote::{
@@ -9,7 +10,7 @@ use backend_contracts::remote::{
     WaitResponse,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::common::admission::{AdmissionRejection, Endpoint};
@@ -84,6 +85,19 @@ pub fn admission_error(rejection: AdmissionRejection, code: &'static str, what: 
     }
 }
 
+pub fn voice_disabled() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "statusCode": 503,
+            "code": "voice_disabled",
+            "message": "Voice is not configured",
+            "error": "Service Unavailable",
+        })),
+    )
+        .into_response()
+}
+
 pub fn star_required() -> AppError {
     AppError::coded(
         StatusCode::FORBIDDEN,
@@ -92,8 +106,8 @@ pub fn star_required() -> AppError {
     )
 }
 
-async fn require_star(st: &AppState, ctx: &SessionCtx) -> AppResult<()> {
-    if st.subscriptions.is_premium(&ctx.sc_user_id).await? {
+pub async fn require_star(st: &AppState, user: &str) -> AppResult<()> {
+    if st.subscriptions.is_premium_cached(user).await? {
         Ok(())
     } else {
         Err(star_required())
@@ -107,13 +121,11 @@ async fn wait(
 ) -> AppResult<Json<WaitResponse>> {
     let since = number(q.since, "since")?;
     let active = number(q.active, "active")?.unwrap_or(0);
-    require_star(&st, &ctx).await?;
-    if since.is_none() {
-        st.admission
-            .check_session(Endpoint::VoiceRemote, ctx.session_id)
-            .await
-            .map_err(|rejection| admission_error(rejection, "voice_remote_limited", "remote"))?;
-    }
+    st.admission
+        .check_session(Endpoint::VoiceRemoteWait, ctx.session_id)
+        .await
+        .map_err(|rejection| admission_error(rejection, "voice_remote_limited", "remote wait"))?;
+    require_star(&st, &ctx.sc_user_id).await?;
     let device: String = q
         .device
         .unwrap_or_default()
@@ -145,7 +157,7 @@ async fn reply(
         .check_session(Endpoint::VoiceRemote, ctx.session_id)
         .await
         .map_err(|rejection| admission_error(rejection, "voice_remote_limited", "remote"))?;
-    require_star(&st, &ctx).await?;
+    require_star(&st, &ctx.sc_user_id).await?;
     let display = if body.display.is_empty() {
         body.text
     } else {
@@ -171,11 +183,11 @@ async fn link_code(
     ctx: SessionCtx,
     Json(body): Json<LinkCodeRequest>,
 ) -> AppResult<Json<LinkCodeResponse>> {
-    require_star(&st, &ctx).await?;
     st.admission
         .check_session(Endpoint::VoiceLinkCode, ctx.session_id)
         .await
         .map_err(|rejection| admission_error(rejection, "voice_link_limited", "link code"))?;
+    require_star(&st, &ctx.sc_user_id).await?;
     Ok(Json(
         st.links.create_code(&ctx.sc_user_id, body.provider).await?,
     ))

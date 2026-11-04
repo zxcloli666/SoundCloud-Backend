@@ -1,22 +1,24 @@
+use std::time::Instant;
+
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::header::AUTHORIZATION;
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use backend_contracts::remote::LinkProvider;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::converse::{self, Said};
+use super::converse::{self, Said, caller};
 use super::phrases::{Phrases, wants_help};
 use super::speech::spoken_digits;
 use crate::common::admission::{AdmissionRejection, Endpoint};
-use crate::error::AppError;
 use crate::modules::remote::confirm::{SalutTicket, Status};
-use crate::modules::remote::linking::{self, Found, Pairing};
-use crate::modules::remote::links::Grant;
+use crate::modules::remote::handlers::voice_disabled;
+use crate::modules::remote::linking::{self, Found, Pairing, REVIEW_USER, is_review_code};
 use crate::modules::remote::secrets::{normalize_code, token_matches};
 use crate::state::AppState;
-use backend_contracts::remote::LinkProvider;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +39,15 @@ pub struct SalutRequest {
 pub struct SalutPayload {
     #[serde(default)]
     pub message: Option<SalutMessage>,
+    #[serde(default)]
+    pub app_info: Option<SalutAppInfo>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SalutAppInfo {
+    #[serde(default)]
+    pub project_id: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,6 +64,13 @@ impl SalutRequest {
             .get("sub")
             .and_then(Value::as_str)
             .filter(|sub| !sub.is_empty())
+    }
+
+    pub fn project_id(&self) -> &str {
+        self.payload
+            .app_info
+            .as_ref()
+            .map_or("", |info| info.project_id.as_str())
     }
 
     pub fn utterance(&self) -> &str {
@@ -90,7 +108,7 @@ pub fn answer(request: &SalutRequest, said: &Said, finished: bool) -> Value {
     })
 }
 
-pub(super) fn authorized(headers: &HeaderMap, expected: &str) -> bool {
+pub(super) fn authorized(headers: &HeaderMap, path_token: Option<&str>, expected: &str) -> bool {
     let bearer = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -98,29 +116,67 @@ pub(super) fn authorized(headers: &HeaderMap, expected: &str) -> bool {
     let custom = headers
         .get("x-voice-token")
         .and_then(|value| value.to_str().ok());
-    [bearer, custom]
+    [bearer, custom, path_token]
         .into_iter()
         .flatten()
         .any(|provided| token_matches(provided.trim(), expected))
 }
 
+pub(super) fn admitted(
+    token: &str,
+    project_id: &str,
+    headers: &HeaderMap,
+    path_token: Option<&str>,
+    request: &SalutRequest,
+) -> Result<(), StatusCode> {
+    if token.is_empty() && project_id.is_empty() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if !token.is_empty() && !authorized(headers, path_token, token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !project_id.is_empty() && !token_matches(request.project_id(), project_id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
+}
+
 pub async fn webhook(
     State(st): State<AppState>,
-    headers: HeaderMap,
+    parts: Parts,
     Json(request): Json<SalutRequest>,
 ) -> Response {
-    let started = std::time::Instant::now();
+    serve(st, parts, None, request).await
+}
+
+pub async fn webhook_with_token(
+    State(st): State<AppState>,
+    Path(token): Path<String>,
+    parts: Parts,
+    Json(request): Json<SalutRequest>,
+) -> Response {
+    serve(st, parts, Some(token), request).await
+}
+
+async fn serve(
+    st: AppState,
+    parts: Parts,
+    path_token: Option<String>,
+    request: SalutRequest,
+) -> Response {
+    let started = Instant::now();
     let voice = &st.config.voice;
-    if !voice.enabled {
-        return AppError::coded(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "voice_disabled",
-            "Voice is not configured",
-        )
-        .into_response();
+    if !voice.enabled || !voice.salut_enabled() {
+        return voice_disabled();
     }
-    if !authorized(&headers, voice.salut_token.expose()) {
-        return StatusCode::UNAUTHORIZED.into_response();
+    if let Err(status) = admitted(
+        voice.salut_token.expose(),
+        &voice.salut_project_id,
+        &parts.headers,
+        path_token.as_deref(),
+        &request,
+    ) {
+        return status.into_response();
     }
     if request.message_name == "CLOSE_APP" {
         return Json(json!({})).into_response();
@@ -128,46 +184,72 @@ pub async fn webhook(
     let phrases = Phrases {
         name: &voice.assistant_name,
     };
-    let Some(sub) = request.sub().map(str::to_owned) else {
+    if let Some(said) = greeting(&request, &phrases) {
+        return Json(answer(&request, &said, false)).into_response();
+    }
+    let Some(sub) = request.sub() else {
         return Json(answer(&request, &Said::plain(phrases.repeat()), true)).into_response();
     };
-    let grant = match st.links.find_salut(&sub).await {
-        Ok(grant) => grant,
-        Err(error) => {
-            tracing::warn!(%error, "salut binding lookup failed");
-            return Json(answer(&request, &Said::plain(phrases.busy()), true)).into_response();
-        }
-    };
-    let said = match grant {
-        Some(grant) => linked(&st, &grant, &request, started, &phrases).await,
-        None => unlinked(&st, &sub, &request, &phrases).await,
+    let budget = voice.salut_wait.saturating_sub(started.elapsed());
+    let said = match tokio::time::timeout(
+        budget,
+        respond(&st, &parts, sub, &request, started, &phrases),
+    )
+    .await
+    {
+        Ok(said) => said,
+        Err(_) => Said::plain(phrases.busy()),
     };
     Json(answer(&request, &said, false)).into_response()
 }
 
-async fn linked(
-    st: &AppState,
-    grant: &Grant,
-    request: &SalutRequest,
-    started: std::time::Instant,
-    phrases: &Phrases<'_>,
-) -> Said {
+fn greeting(request: &SalutRequest, phrases: &Phrases<'_>) -> Option<Said> {
     let utterance = request.utterance();
     if request.message_name == "RUN_APP" || utterance.is_empty() {
-        return Said::plain(&phrases.hello());
+        return Some(Said::plain(&phrases.hello()));
     }
-    if wants_help(utterance) {
-        return Said::plain(&phrases.help());
+    wants_help(utterance).then(|| Said::plain(&phrases.help()))
+}
+
+async fn respond(
+    st: &AppState,
+    parts: &Parts,
+    sub: &str,
+    request: &SalutRequest,
+    started: Instant,
+    phrases: &Phrases<'_>,
+) -> Said {
+    let caller = format!("salut:{}", caller(st, parts));
+    match st
+        .admission
+        .check_key(Endpoint::VoiceSalutIp, &caller)
+        .await
+    {
+        Ok(()) => {}
+        Err(AdmissionRejection::Limited { .. }) => return Said::plain(phrases.too_fast()),
+        Err(AdmissionRejection::Unavailable) => return Said::plain(phrases.busy()),
     }
-    converse::run(
-        st,
-        grant,
-        utterance,
-        started,
-        st.config.voice.salut_wait,
-        phrases,
-    )
-    .await
+    let grant = match st.links.find_salut(sub).await {
+        Ok(grant) => grant,
+        Err(error) => {
+            tracing::warn!(%error, "salut binding lookup failed");
+            return Said::plain(phrases.busy());
+        }
+    };
+    match grant {
+        Some(grant) => {
+            converse::run(
+                st,
+                &grant,
+                request.utterance(),
+                started,
+                st.config.voice.salut_wait,
+                phrases,
+            )
+            .await
+        }
+        None => unlinked(st, sub, request, phrases).await,
+    }
 }
 
 const TICKET_PENDING_SECS: u64 = 90;
@@ -190,14 +272,17 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
     if spoken.is_empty() {
         return Said::plain(phrases.say_code());
     }
-    let Some(code) = normalize_code(&spoken) else {
-        return Said::plain(phrases.code_needs_six());
-    };
     match st.admission.check_key(Endpoint::VoiceSalutSub, sub).await {
         Ok(()) => {}
         Err(AdmissionRejection::Limited { .. }) => return Said::plain(phrases.code_throttled()),
         Err(AdmissionRejection::Unavailable) => return Said::plain(phrases.busy()),
     }
+    if is_review_code(&st.config.voice, &spoken) {
+        return bind(st, REVIEW_USER, sub, phrases).await;
+    }
+    let Some(code) = normalize_code(&spoken) else {
+        return Said::plain(phrases.code_needs_six());
+    };
     let pairing = match linking::find(st, LinkProvider::Salut, &code).await {
         Ok(Found::Ready(pairing)) => pairing,
         Ok(Found::NoCode) => return Said::plain(phrases.code_wrong()),
@@ -211,6 +296,7 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
     let pending = SalutTicket {
         status: Status::Pending,
         user: pairing.user.clone(),
+        hint: pairing.hint.clone(),
     };
     if let Err(error) = st
         .confirm
@@ -221,8 +307,19 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
         st.confirm.release(pairing.code_id).await;
         return Said::plain(phrases.busy());
     }
+    let hint = pairing.hint.clone();
     tokio::spawn(settle(st.clone(), pairing, sub.to_owned()));
-    Said::plain(phrases.confirm_on_pc())
+    Said::plain(&phrases.confirm_with_hint(&hint))
+}
+
+async fn bind(st: &AppState, user: &str, sub: &str, phrases: &Phrases<'_>) -> Said {
+    match st.links.bind_salut(user, sub).await {
+        Ok(()) => Said::plain(phrases.linked()),
+        Err(error) => {
+            tracing::warn!(%error, "salut binding failed");
+            Said::plain(phrases.busy())
+        }
+    }
 }
 
 async fn settle(st: AppState, pairing: Pairing, sub: String) {
@@ -230,6 +327,7 @@ async fn settle(st: AppState, pairing: Pairing, sub: String) {
     let done = SalutTicket {
         status,
         user: pairing.user,
+        hint: pairing.hint,
     };
     if let Err(error) = st
         .confirm
@@ -247,7 +345,7 @@ async fn after_confirmation(
     phrases: &Phrases<'_>,
 ) -> Said {
     if ticket.status == Status::Pending {
-        return Said::plain(phrases.confirm_on_pc());
+        return Said::plain(&phrases.confirm_with_hint(&ticket.hint));
     }
     let _ = st.confirm.take::<SalutTicket>(&ticket_key(sub)).await;
     match ticket.status {

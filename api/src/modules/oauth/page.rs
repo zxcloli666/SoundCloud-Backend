@@ -38,10 +38,11 @@ pub fn form(fields: &PageFields<'_>, error: Option<&str>) -> String {
         .replace("__STYLE__", STYLE)
 }
 
-pub fn pending(ticket: &str, assistant: &str) -> String {
+pub fn pending(ticket: &str, assistant: &str, hint: &str) -> String {
     PENDING_TEMPLATE
         .replace("__TICKET__", &escape(ticket))
         .replace("__ASSISTANT__", &escape(assistant))
+        .replace("__HINT__", &escape(hint))
         .replace("__STYLE__", STYLE)
 }
 
@@ -67,6 +68,7 @@ const STYLE: &str = r#"
     input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
     button { font-size: 17px; font-weight: 600; padding: 14px; border: 0; border-radius: 14px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
     .error { color: var(--error); margin-top: 14px; font-size: 15px; }
+    .hint { font-size: 44px; font-weight: 700; letter-spacing: 0.08em; text-align: center; color: var(--text); margin: 18px 0 4px; font-variant-numeric: tabular-nums; }
     .spinner { width: 36px; height: 36px; margin: 22px auto 6px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
@@ -112,8 +114,9 @@ const PENDING_TEMPLATE: &str = r#"<!DOCTYPE html>
 <body>
 <main role="status">
 <h1>Подтвердите на компьютере</h1>
+<p class="hint" aria-label="Число для проверки">__HINT__</p>
+<p>Откройте SoundCloud Desktop. Ответьте «Да», только если там то же число. Страница обновится сама.</p>
 <div class="spinner" aria-hidden="true"></div>
-<p>Откройте SoundCloud Desktop и ответьте «Да». Страница обновится сама.</p>
 </main>
 </body>
 </html>
@@ -135,3 +138,16 @@ const FAILURE_TEMPLATE: &str = r#"<!DOCTYPE html>
 </body>
 </html>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pending_page_shows_the_hint_escaped() {
+        let page = pending("ticket", "Лоля", "47");
+        assert!(page.contains(">47<"));
+        assert!(page.contains("ticket=ticket"));
+        assert!(pending("t", "a", "<b>").contains("&lt;b&gt;"));
+    }
+}

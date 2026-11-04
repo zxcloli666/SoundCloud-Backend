@@ -10,7 +10,7 @@ use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::likes::cold::apply_user_favorite_flag;
-use crate::modules::remote::handlers::{admission_error, star_required};
+use crate::modules::remote::handlers::{admission_error, require_star};
 use crate::modules::search::catalog::DEFAULT_LIMIT;
 use crate::modules::search::lyrics::LyricsSearchResponse;
 use crate::modules::search::resolve::{DEFAULT_PER_KIND, Kind};
@@ -184,9 +184,7 @@ async fn resolve(
         .check_session(Endpoint::VoiceResolve, ctx.session_id)
         .await
         .map_err(|rejection| admission_error(rejection, "voice_resolve_limited", "resolve"))?;
-    if !st.subscriptions.is_premium(&ctx.sc_user_id).await? {
-        return Err(star_required());
-    }
+    require_star(&st, &ctx.sc_user_id).await?;
     let kinds = body.kinds;
     let found = st
         .search

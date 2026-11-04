@@ -3,7 +3,8 @@ use serde_json::json;
 
 use super::alice::{AliceRequest, pong, spoken, start_linking};
 use super::converse::Said;
-use super::salut::{SalutRequest, answer, authorized};
+use super::salut::{SalutRequest, admitted, answer, authorized};
+use axum::http::StatusCode;
 
 const ALICE_SAMPLE: &str = r#"{
   "meta": {
@@ -157,19 +158,59 @@ fn a_run_app_request_without_a_message_still_parses() {
 }
 
 #[test]
-fn the_shared_salut_token_is_taken_from_either_header_and_never_empty() {
+fn the_shared_salut_token_is_taken_from_either_header_or_the_path_and_never_empty() {
     let mut headers = HeaderMap::new();
-    assert!(!authorized(&headers, "secret"));
+    assert!(!authorized(&headers, None, "secret"));
+    assert!(authorized(&headers, Some("secret"), "secret"));
+    assert!(!authorized(&headers, Some("secreT"), "secret"));
+    assert!(!authorized(&headers, Some(""), ""));
     headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
-    assert!(authorized(&headers, "secret"));
-    assert!(!authorized(&headers, "other"));
-    assert!(!authorized(&headers, ""));
+    assert!(authorized(&headers, None, "secret"));
+    assert!(!authorized(&headers, None, "other"));
+    assert!(!authorized(&headers, None, ""));
 
     let mut custom = HeaderMap::new();
     custom.insert("x-voice-token", HeaderValue::from_static("secret"));
-    assert!(authorized(&custom, "secret"));
+    assert!(authorized(&custom, None, "secret"));
 
     let mut blank = HeaderMap::new();
     blank.insert("authorization", HeaderValue::from_static("Bearer "));
-    assert!(!authorized(&blank, ""));
+    assert!(!authorized(&blank, None, ""));
+}
+
+#[test]
+fn salut_admits_by_token_by_project_or_not_at_all() {
+    let request: SalutRequest = serde_json::from_str(SALUT_SAMPLE).unwrap();
+    assert_eq!(request.project_id(), "p");
+    let none = HeaderMap::new();
+
+    assert_eq!(
+        admitted("", "", &none, Some("x"), &request),
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    );
+    assert_eq!(
+        admitted("tok", "", &none, None, &request),
+        Err(StatusCode::UNAUTHORIZED)
+    );
+    assert_eq!(admitted("tok", "", &none, Some("tok"), &request), Ok(()));
+    assert_eq!(admitted("", "p", &none, None, &request), Ok(()));
+    assert_eq!(
+        admitted("", "other", &none, None, &request),
+        Err(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(
+        admitted("tok", "other", &none, Some("tok"), &request),
+        Err(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(admitted("tok", "p", &none, Some("tok"), &request), Ok(()));
+
+    let bare: SalutRequest = serde_json::from_str(
+        r#"{"sessionId":"s","messageId":0,"uuid":{"sub":"x"},"messageName":"RUN_APP","payload":{}}"#,
+    )
+    .unwrap();
+    assert_eq!(bare.project_id(), "");
+    assert_eq!(
+        admitted("", "p", &none, None, &bare),
+        Err(StatusCode::FORBIDDEN)
+    );
 }

@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
 use super::catalog::{Request, SearchService};
+use super::failure::search_timeout;
 use super::terms::{self, Shape, quote};
 use crate::error::AppResult;
 
@@ -13,6 +15,7 @@ const MIN_STEM_LEN: usize = 3;
 pub const MAX_VARIANT_CHARS: usize = 80;
 pub const DEFAULT_PER_KIND: i64 = 5;
 pub const MAX_PER_KIND: i64 = 10;
+pub const SOFT_BUDGET: Duration = Duration::from_millis(1800);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -100,6 +103,14 @@ pub fn merge(found: Vec<Resolved>, per_kind: usize) -> BTreeMap<Kind, Vec<Resolv
     grouped
 }
 
+pub fn past_deadline(found: Vec<Resolved>) -> AppResult<Vec<Resolved>> {
+    if found.is_empty() {
+        Err(search_timeout())
+    } else {
+        Ok(found)
+    }
+}
+
 pub fn clean_kinds(kinds: &[Kind]) -> Vec<Kind> {
     if kinds.is_empty() {
         return ALL_KINDS.to_vec();
@@ -136,15 +147,18 @@ impl SearchService {
         let queries = clean_variants(variants);
         let kinds = clean_kinds(kinds);
         let per_kind = per_kind.clamp(1, MAX_PER_KIND);
+        let soft = Instant::now() + SOFT_BUDGET;
         let found = self
             .guarded(|| async {
                 let mut tx = self.begin().await?;
                 let mut found = Vec::new();
                 for (index, q) in queries.iter().enumerate() {
-                    found.extend(
-                        self.resolve_variant(&mut tx, index, q, &kinds, per_kind)
-                            .await?,
-                    );
+                    let left = soft.saturating_duration_since(Instant::now());
+                    let variant = self.resolve_variant(&mut tx, index, q, &kinds, per_kind);
+                    match tokio::time::timeout(left, variant).await {
+                        Ok(rows) => found.extend(rows?),
+                        Err(_) => return past_deadline(found),
+                    }
                 }
                 tx.commit().await?;
                 Ok::<Vec<Resolved>, crate::error::AppError>(found)
@@ -274,6 +288,13 @@ mod tests {
             variant,
             tier,
         }
+    }
+
+    #[test]
+    fn past_the_deadline_what_was_found_is_kept() {
+        let kept = past_deadline(vec![item(Kind::Track, "a", 0.9, 0, 0)]).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(past_deadline(Vec::new()).is_err());
     }
 
     #[test]

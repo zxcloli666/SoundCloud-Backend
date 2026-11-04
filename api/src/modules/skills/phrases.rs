@@ -66,6 +66,10 @@ impl Phrases<'_> {
         "Подтвердите на компьютере."
     }
 
+    pub fn confirm_with_hint(&self, hint: &str) -> String {
+        format!("Подтвердите на компьютере. Там будет число {hint}.")
+    }
+
     pub fn link_denied(&self) -> &'static str {
         "Привязка отклонена на компьютере."
     }
@@ -146,5 +150,6 @@ mod tests {
         let phrases = Phrases { name: "Тест" };
         assert!(phrases.help().starts_with("Я Тест."));
         assert!(phrases.hello().contains("Тест"));
+        assert!(phrases.confirm_with_hint("47").contains("число 47"));
     }
 }

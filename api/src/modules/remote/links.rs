@@ -11,7 +11,7 @@ pub const AUTH_CODE_TTL_SECS: i32 = 300;
 pub const ACCESS_TTL_SECS: i32 = 24 * 60 * 60;
 pub const REFRESH_TTL_SECS: i32 = 365 * 24 * 60 * 60;
 const CODE_ATTEMPTS: usize = 8;
-pub const REFRESH_GRACE_SECS: i32 = 60;
+pub const REFRESH_GRACE_SECS: i32 = 300;
 
 pub struct LinksService {
     pg: PgPool,

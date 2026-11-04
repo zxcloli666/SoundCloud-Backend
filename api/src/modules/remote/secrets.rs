@@ -4,7 +4,9 @@ use rand::{Rng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use backend_contracts::remote::{LINK_CODE_DIGITS, LinkProvider};
+use backend_contracts::remote::{LINK_CODE_DIGITS, LINK_HINT_DIGITS, LinkProvider};
+
+pub const MIN_REVIEW_CODE_DIGITS: usize = 8;
 
 pub fn random_code() -> String {
     let upper = 10_u32.pow(LINK_CODE_DIGITS as u32);
@@ -15,9 +17,27 @@ pub fn random_code() -> String {
     )
 }
 
+pub fn random_hint() -> String {
+    let lower = 10_u32.pow(LINK_HINT_DIGITS as u32 - 1);
+    let upper = 10_u32.pow(LINK_HINT_DIGITS as u32);
+    rand::rngs::OsRng.gen_range(lower..upper).to_string()
+}
+
+fn digits_of(raw: &str) -> String {
+    raw.chars().filter(char::is_ascii_digit).collect()
+}
+
 pub fn normalize_code(raw: &str) -> Option<String> {
-    let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits_of(raw);
     (digits.len() == LINK_CODE_DIGITS).then_some(digits)
+}
+
+pub fn valid_review_code(code: &str) -> bool {
+    code.len() >= MIN_REVIEW_CODE_DIGITS && code.chars().all(|c| c.is_ascii_digit())
+}
+
+pub fn review_code_matches(raw: &str, review_code: &str) -> bool {
+    valid_review_code(review_code) && token_matches(&digits_of(raw), review_code)
 }
 
 pub fn code_hash(provider: LinkProvider, code: &str) -> String {
@@ -82,6 +102,31 @@ mod tests {
             assert_eq!(code.len(), 6);
             assert!(code.chars().all(|c| c.is_ascii_digit()));
         }
+    }
+
+    #[test]
+    fn a_hint_is_two_digits_without_a_leading_zero() {
+        for _ in 0..500 {
+            let hint = random_hint();
+            assert_eq!(hint.len(), 2, "{hint}");
+            assert!(hint.chars().all(|c| c.is_ascii_digit()));
+            assert!(!hint.starts_with('0'));
+        }
+    }
+
+    #[test]
+    fn the_review_code_needs_eight_digits_and_never_matches_a_link_code() {
+        assert!(review_code_matches("12345678", "12345678"));
+        assert!(review_code_matches("1234 5678", "12345678"));
+        assert!(review_code_matches("код 1 2 3 4 5 6 7 8", "12345678"));
+        assert!(!review_code_matches("123456", "12345678"));
+        assert!(!review_code_matches("12345679", "12345678"));
+        assert!(!review_code_matches("123456", "123456"));
+        assert!(!review_code_matches("", ""));
+        assert!(!review_code_matches("abcdefgh", "abcdefgh"));
+        assert!(valid_review_code("00000000"));
+        assert!(!valid_review_code("1234567"));
+        assert!(!valid_review_code("1234567a"));
     }
 
     #[test]

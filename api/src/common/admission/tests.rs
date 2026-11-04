@@ -29,6 +29,23 @@ fn client_identity_groups_ipv6_by_network_and_normalizes_mapped_ipv4() {
 }
 
 #[test]
+fn voice_pages_group_ipv6_by_slash_48() {
+    let first = IpAddr::V6("2001:db8:1234:5678::1".parse::<Ipv6Addr>().unwrap());
+    let same_48 = IpAddr::V6("2001:db8:1234:ffff:1::9".parse::<Ipv6Addr>().unwrap());
+    let other_48 = IpAddr::V6("2001:db8:1235::1".parse::<Ipv6Addr>().unwrap());
+    let ipv4 = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+    let mapped = IpAddr::V6(Ipv4Addr::new(192, 0, 2, 7).to_ipv6_mapped());
+    let other_v4 = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8));
+
+    assert_eq!(network_identity(first), network_identity(same_48));
+    assert_ne!(network_identity(first), network_identity(other_48));
+    assert_ne!(network_identity(first), client_identity(first));
+    assert_eq!(network_identity(ipv4), network_identity(mapped));
+    assert_eq!(network_identity(ipv4), client_identity(ipv4));
+    assert_ne!(network_identity(ipv4), network_identity(other_v4));
+}
+
+#[test]
 fn retry_after_rounds_up() {
     assert_eq!(milliseconds_to_seconds(1), 1);
     assert_eq!(milliseconds_to_seconds(1_001), 2);
@@ -225,11 +242,14 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             room_join: limits(15, 16),
             voice_link_code: limits(23, 24),
             voice_remote: limits(25, 26),
+            voice_remote_wait: limits(25, 26),
             voice_page_ip: limits(25, 26),
             voice_page_client: limits(25, 26),
             voice_salut_sub: limits(25, 26),
             voice_utterance: limits(27, 28),
             voice_resolve: limits(29, 30),
+            voice_alice_ip: limits(29, 30),
+            voice_salut_ip: limits(29, 30),
             diag_bundle: limits(17, 18),
             diag_events: limits(19, 20),
             diag_bytes: limits(21, 22),
@@ -269,11 +289,14 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         Endpoint::RoomJoin.key(),
         Endpoint::VoiceLinkCode.key(),
         Endpoint::VoiceRemote.key(),
+        Endpoint::VoiceRemoteWait.key(),
         Endpoint::VoicePageIp.key(),
         Endpoint::VoicePageClient.key(),
         Endpoint::VoiceSalutSub.key(),
         Endpoint::VoiceUtterance.key(),
         Endpoint::VoiceResolve.key(),
+        Endpoint::VoiceAliceIp.key(),
+        Endpoint::VoiceSalutIp.key(),
     ];
     assert_eq!(
         keys.iter().collect::<std::collections::HashSet<_>>().len(),
@@ -494,11 +517,14 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         room_join: limit,
         voice_link_code: limit,
         voice_remote: limit,
+        voice_remote_wait: limit,
         voice_page_ip: limit,
         voice_page_client: limit,
         voice_salut_sub: limit,
         voice_utterance: limit,
         voice_resolve: limit,
+        voice_alice_ip: limit,
+        voice_salut_ip: limit,
         diag_bundle: limit,
         diag_events: limit,
         diag_bytes: limit,
