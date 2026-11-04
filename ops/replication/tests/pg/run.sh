@@ -42,6 +42,8 @@ fresh scd_b1_exercise scd_b1_tpl
 sql -At -d scd_b1_exercise -f - < "$here/exercise.sql" > "$tmp/exercise.log" 2>&1 || { cat "$tmp/exercise.log"; exit 1; }
 sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 
+. "$here/pressure.sh"
+
 say "three nodes on real logical replication"
 val postgres "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = 'scd_repl'" | grep -q 1 || sql -d postgres -c "CREATE ROLE scd_repl NOLOGIN"
 for n in $nodes; do
@@ -163,6 +165,7 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 . "$here/chat.sh"
 . "$here/keep.sh"
 . "$here/lyrics_race.sh"
+. "$here/receipts.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

@@ -1,0 +1,1 @@
+ANALYZE colike_fresh

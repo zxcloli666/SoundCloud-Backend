@@ -15,7 +15,7 @@ use crate::bus::{Bus, DeliveryContext};
 use crate::config::{JobsConfig, WorkerDispatchConfig};
 use crate::db::Databases;
 use crate::qdrant::QdrantProvisioner;
-use crate::queue::{JobResult, LeasedJob};
+use crate::queue::{JobResult, LeasedJob, WriteGovernor};
 use backend_contracts::pipeline::{LyricsEmbeddingResult, TranscriptionResult};
 use backend_contracts::worker_contract::{LYRICS_LANE, TRANSCRIBE_LANE};
 use backend_contracts::{LyricsEmbedPayload, LyricsLookupPayload, StoredAudioDispatchPayload};
@@ -34,6 +34,7 @@ pub struct LyricsHandler {
     embedding_results: EmbeddingResultHandler,
     lookup: LyricsLookupHandler,
     sweep: LyricsLookupHandler,
+    bulk_governor: Arc<WriteGovernor>,
     reaper: LyricsReaper,
     backlog: WorkerBacklog,
     dispatch: WorkerDispatchConfig,
@@ -49,6 +50,7 @@ impl LyricsHandler {
         config: &JobsConfig,
         bus: Bus,
         qdrant: QdrantProvisioner,
+        bulk_governor: Arc<WriteGovernor>,
     ) -> Self {
         let dispatch = config.worker_dispatch;
         let fast_pool = databases.main.fast.clone();
@@ -65,6 +67,7 @@ impl LyricsHandler {
                 background,
                 config.lyrics.clone(),
             ),
+            bulk_governor,
             reaper: LyricsReaper::new(fast_pool.clone(), dispatch),
             backlog: WorkerBacklog::new(bus.clone()),
             dispatch,
@@ -128,7 +131,7 @@ impl LyricsHandler {
     }
 
     pub async fn sweep_lookups(&self, job: &LeasedJob) -> JobResult {
-        self.sweep.run_sweep(job).await
+        self.sweep.run_sweep(job, &self.bulk_governor).await
     }
 
     pub async fn reap_transcriptions(&self) -> JobResult {
