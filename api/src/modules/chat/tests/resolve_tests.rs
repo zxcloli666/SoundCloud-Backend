@@ -57,7 +57,7 @@ async fn a_session_miss_during_a_replication_stall_asks_for_a_retry_not_a_login(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_young_session_a_split_node_has_not_received_yet_asks_for_a_retry_not_a_login(
     pool: PgPool,
 ) -> anyhow::Result<()> {
