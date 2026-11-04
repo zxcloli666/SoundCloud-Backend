@@ -128,6 +128,54 @@ jobs:
           paths: ${{ env.TARGETS }}
           key: ${{ env.TARGET_KEY }}
 
+  chat-s3:
+    name: Chat S3 tests
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    env:
+      REDIS_URL: redis://localhost:6379
+      TARGETS: api/target
+      TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock scripts/ci-sqlx-template.patch
+      CHAT_TEST_S3_ENDPOINT: http://127.0.0.1:8333
+      CHAT_TEST_S3_ACCESS_KEY: UPTESTAK
+      CHAT_TEST_S3_SECRET_KEY: UPTESTSECRET
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Services
+        run: sh scripts/ci-db.sh up postgres redis seaweed
+
+      - name: Toolchain
+        run: sh scripts/ci-toolchain.sh
+
+      - name: Restore targets
+        id: targets
+        uses: ./.github/actions/target-cache
+        with:
+          mode: restore
+          name: api-tests
+          paths: ${{ env.TARGETS }}
+          key: ${{ env.TARGET_KEY }}
+
+      - name: Fetch
+        run: |
+          cargo fetch --locked --manifest-path api/Cargo.toml
+          sh scripts/ci-sqlx-template.sh api
+
+      - name: System packages
+        if: steps.targets.outputs.exact != 'true'
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: cmake clang libclang-dev pkg-config
+
+      - name: Wait for services
+        run: sh scripts/ci-db.sh wait
+
+      - name: SeaweedFS tests
+        working-directory: api
+        run: cargo test --config "$RUNNER_TEMP/sqlx-template.toml" --bin api -- --ignored s3_live
+
   api-clippy:
     name: API clippy
     needs: changes
