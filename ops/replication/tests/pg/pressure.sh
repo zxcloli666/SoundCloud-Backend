@@ -2,7 +2,7 @@ wp_query="$(cat "$root/jobs/queries/queue/write_pressure.sql")"
 wp_backlog() { val postgres "$wp_query" | cut -d'|' -f1; }
 wp_lag() { val postgres "SELECT pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), confirmed_flush_lsn)::bigint FROM pg_catalog.pg_replication_slots WHERE slot_name = '$1'"; }
 wp_slot() { val postgres "SELECT pg_catalog.pg_create_logical_replication_slot('$1', 'pgoutput')" > /dev/null; }
-wp_wal() { val postgres "SELECT pg_catalog.pg_logical_emit_message(false, 'scd_b1_pressure', repeat('x', $1))" > /dev/null; }
+wp_wal() { val postgres "SELECT pg_catalog.pg_logical_emit_message(true, 'scd_b1_pressure', repeat('x', $1))" > /dev/null; }
 
 say "write pressure: the bulk governor counts the scd slots and skips the graph slots"
 wp_slot scd_b1_pressure_graph_from_core
