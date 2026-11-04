@@ -169,7 +169,7 @@ pub(super) async fn state(
     let tokens = TokenProvider::new(auth.clone(), OAuthAppTokenService::new(pg.clone()));
     let resolve = ScReadService::new(sc.clone(), tokens.clone(), pg.clone());
     let cache = CacheService::new(redis_pool.clone());
-    let background_jobs = crate::background_jobs::BackgroundJobs::new(nats.clone());
+    let background_jobs = crate::background_jobs::BackgroundJobs::offline(nats.clone());
     let indexing_jobs = crate::background_jobs::IndexingJobs::new(background_jobs.clone());
     let collab_jobs = crate::background_jobs::CollabJobs::new(
         background_jobs.clone(),
