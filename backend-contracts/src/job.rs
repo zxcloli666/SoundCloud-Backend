@@ -7,17 +7,25 @@ use serde::{Deserialize, Serialize};
 pub enum JobLane {
     CoreFast,
     CoreBulk,
+    Lookup,
     Maintenance,
     Ops,
 }
 
 impl JobLane {
-    pub const ALL: [Self; 4] = [Self::CoreFast, Self::CoreBulk, Self::Maintenance, Self::Ops];
+    pub const ALL: [Self; 5] = [
+        Self::CoreFast,
+        Self::CoreBulk,
+        Self::Lookup,
+        Self::Maintenance,
+        Self::Ops,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CoreFast => "core_fast",
             Self::CoreBulk => "core_bulk",
+            Self::Lookup => "lookup",
             Self::Maintenance => "maintenance",
             Self::Ops => "ops",
         }
@@ -327,9 +335,8 @@ impl JobKind {
             | Self::CatalogCollection
             | Self::CrawlArtist
             | Self::IndexTrack
-            | Self::LyricsLookup
-            | Self::LyricsLookupSweep
             | Self::PlaylistObserveShadow => JobLane::CoreBulk,
+            Self::LyricsLookup | Self::LyricsLookupSweep => JobLane::Lookup,
         }
     }
 }
@@ -504,7 +511,8 @@ mod tests {
         assert_eq!(JobKind::IndexingReap.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::IndexingRequeueStuck.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
-        assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::CoreBulk);
+        assert_eq!(JobKind::LyricsLookup.lane(), JobLane::Lookup);
+        assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Lookup);
         assert_eq!(JobKind::StarTrackTiers.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::IndexTrack.lane(), JobLane::CoreBulk);

@@ -565,6 +565,26 @@ async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     Ok(())
 }
 
+async fn until_listening(pool: &PgPool) -> anyhow::Result<()> {
+    let started = std::time::Instant::now();
+    loop {
+        let listeners: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND query LIKE 'LISTEN%'",
+        )
+        .fetch_one(pool)
+        .await?;
+        if listeners > 0 {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(10),
+            "the listener never subscribed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
     pool: PgPool,
@@ -577,7 +597,7 @@ async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
         queue,
         cancellation.clone(),
     ));
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    until_listening(&pool).await?;
 
     sqlx::query("SELECT pg_notify('lyrics_wake', '51')")
         .execute(&pool)

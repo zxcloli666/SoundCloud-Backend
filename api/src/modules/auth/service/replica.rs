@@ -1,17 +1,18 @@
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
 use tokio::time::Instant;
-use uuid::Uuid;
+use uuid::{Uuid, Version};
 
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::model::{AuthSession, Session};
 
 use super::AuthService;
 
-const SESSION_WAIT: Duration = Duration::from_millis(1500);
+const SESSION_WAIT: Duration = Duration::from_millis(750);
 const SESSION_POLL: Duration = Duration::from_millis(250);
+const SESSION_IN_FLIGHT: Duration = Duration::from_secs(6 * 60 * 60);
 pub const SESSION_RETRY_AFTER_SECONDS: i64 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,32 +24,38 @@ pub(super) enum Feed {
 
 impl AuthService {
     pub async fn find_session(&self, session_id: Uuid) -> AppResult<Option<Session>> {
-        self.replicated(|| self.get_session(session_id)).await
+        self.replicated(session_id, || self.get_session(session_id))
+            .await
     }
 
     pub async fn find_session_cached(&self, session_id: Uuid) -> AppResult<Option<Session>> {
-        self.replicated(|| self.get_session_cached(session_id))
+        self.replicated(session_id, || self.get_session_cached(session_id))
             .await
     }
 
     pub async fn find_auth_session(&self, session_id: Uuid) -> AppResult<Option<AuthSession>> {
-        self.replicated(|| self.get_auth_session(session_id)).await
+        self.replicated(session_id, || self.get_auth_session(session_id))
+            .await
     }
 
     pub(super) async fn feed(&self) -> AppResult<Feed> {
         let row = sqlx::query_file!("queries/auth/service/replication_feed.sql")
             .fetch_one(&self.pool)
             .await?;
-        Ok(if row.enabled == 0 {
+        Ok(if row.enabled == 0 && !row.split {
             Feed::Local
-        } else if row.stalled > 0 {
+        } else if row.enabled == 0 || row.stalled > 0 {
             Feed::Stalled
         } else {
             Feed::Streaming
         })
     }
 
-    pub(crate) async fn replicated_now<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
+    pub(crate) async fn replicated_now<T, F, Fut>(
+        &self,
+        session_id: Uuid,
+        lookup: F,
+    ) -> AppResult<Option<T>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = AppResult<Option<T>>>,
@@ -56,13 +63,24 @@ impl AuthService {
         if let Some(found) = lookup().await? {
             return Ok(Some(found));
         }
-        match self.feed().await? {
-            Feed::Stalled => Err(session_not_replicated()),
-            Feed::Local | Feed::Streaming => Ok(None),
+        let feed = self.feed().await?;
+        self.missed_now(feed, session_id).await
+    }
+
+    async fn missed_now<T>(&self, feed: Feed, session_id: Uuid) -> AppResult<Option<T>> {
+        let retry = match feed {
+            Feed::Local => false,
+            Feed::Stalled => true,
+            Feed::Streaming => self.may_arrive(session_id).await?,
+        };
+        if retry {
+            Err(session_not_replicated())
+        } else {
+            Ok(None)
         }
     }
 
-    pub(crate) async fn replicated<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
+    async fn replicated<T, F, Fut>(&self, session_id: Uuid, lookup: F) -> AppResult<Option<T>>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = AppResult<Option<T>>>,
@@ -70,21 +88,82 @@ impl AuthService {
         if let Some(found) = lookup().await? {
             return Ok(Some(found));
         }
-        match self.feed().await? {
-            Feed::Local => Ok(None),
-            Feed::Stalled => Err(session_not_replicated()),
+        let feed = self.feed().await?;
+        self.missed(feed, session_id, lookup).await
+    }
+
+    async fn missed<T, F, Fut>(
+        &self,
+        feed: Feed,
+        session_id: Uuid,
+        lookup: F,
+    ) -> AppResult<Option<T>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = AppResult<Option<T>>>,
+    {
+        match feed {
+            Feed::Local => Ok(dead()),
+            Feed::Stalled => {
+                crate::metrics::record_session_miss("stalled");
+                Err(session_not_replicated())
+            }
             Feed::Streaming => {
-                let deadline = Instant::now() + SESSION_WAIT;
-                while Instant::now() < deadline {
-                    tokio::time::sleep(SESSION_POLL).await;
-                    if let Some(found) = lookup().await? {
-                        return Ok(Some(found));
-                    }
+                if !self.may_arrive(session_id).await? {
+                    return Ok(dead());
                 }
-                Ok(None)
+                wait_for(lookup).await
             }
         }
     }
+
+    async fn may_arrive(&self, session_id: Uuid) -> AppResult<bool> {
+        Ok(in_flight(session_id, SystemTime::now()) && !self.logged_out(session_id).await?)
+    }
+
+    async fn logged_out(&self, session_id: Uuid) -> AppResult<bool> {
+        let logged_out =
+            sqlx::query_file_scalar!("queries/auth/service/session_logged_out.sql", session_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(logged_out)
+    }
+}
+
+async fn wait_for<T, F, Fut>(lookup: F) -> AppResult<Option<T>>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = AppResult<Option<T>>>,
+{
+    let deadline = Instant::now() + SESSION_WAIT;
+    while Instant::now() < deadline {
+        tokio::time::sleep(SESSION_POLL).await;
+        if let Some(found) = lookup().await? {
+            crate::metrics::record_session_miss("found_after_wait");
+            return Ok(Some(found));
+        }
+    }
+    crate::metrics::record_session_miss("in_flight");
+    Err(session_not_replicated())
+}
+
+fn dead<T>() -> Option<T> {
+    crate::metrics::record_session_miss("dead");
+    None
+}
+
+fn in_flight(session_id: Uuid, now: SystemTime) -> bool {
+    if session_id.get_version() != Some(Version::SortRand) {
+        return false;
+    }
+    let Some((seconds, nanos)) = session_id.get_timestamp().map(|minted| minted.to_unix()) else {
+        return false;
+    };
+    let minted = UNIX_EPOCH + Duration::new(seconds, nanos);
+    let age = now
+        .duration_since(minted)
+        .unwrap_or_else(|ahead| ahead.duration());
+    age < SESSION_IN_FLIGHT
 }
 
 pub const NOT_REPLICATED: &str = "session_not_replicated";
@@ -97,3 +176,7 @@ fn session_not_replicated() -> AppError {
     )
     .with_retry_after(SESSION_RETRY_AFTER_SECONDS)
 }
+
+#[cfg(test)]
+#[path = "../session_miss_tests.rs"]
+mod tests;

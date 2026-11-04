@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::common::sc_ids::extract_sc_id;
 use crate::error::{AppError, AppResult};
 use crate::modules::cold_refresh::BACKGROUND_PRIORITY;
-use crate::modules::cold_refresh::entity::enqueue_entity;
+use crate::modules::cold_refresh::entity::{enqueue_entity, not_found, unavailable};
 
 pub(super) async fn read(pool: &PgPool, reader: &str, user_urn: &str) -> AppResult<Value> {
     let payload = CatalogRefreshPayload {
@@ -21,6 +21,9 @@ pub(super) async fn read(pool: &PgPool, reader: &str, user_urn: &str) -> AppResu
     let snapshot = sqlx::query_file!("queries/users/service/web_profiles.sql", &payload.sc_id)
         .fetch_optional(pool)
         .await?;
+    if snapshot.is_none() && unavailable(pool, &payload.dedup_key()).await? {
+        return Err(not_found(payload.entity));
+    }
     if snapshot.as_ref().is_none_or(|row| !row.fresh) {
         let enqueued = enqueue_entity(
             pool,

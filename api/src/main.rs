@@ -72,7 +72,7 @@ use crate::modules::search::SearchService;
 use crate::modules::subscriptions::SubscriptionsService;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::tracks::TracksService;
-use crate::modules::users::UsersService;
+use crate::modules::users::{PublicUsers, UsersService};
 use crate::qdrant::QdrantService;
 use crate::sc::{ScClient, ScReadService};
 use crate::state::AppState;
@@ -222,7 +222,6 @@ async fn main() {
     let auras = AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue = SyncQueueService::new(pg.clone(), redis_pool.clone());
     let cold_refresh = ColdRefreshService::new(pg.clone(), config.cold.clone());
-    let me = MeService::new(pg.clone(), sync_queue.clone(), cold_refresh.clone());
     let s3_verifier = S3VerifierService::new(
         http_client.clone(),
         config.storage.url.clone(),
@@ -254,6 +253,13 @@ async fn main() {
         indexing.clone(),
         admission.clone(),
     );
+    let public_users = PublicUsers::new(pg.clone(), miss.clone());
+    let me = MeService::new(
+        pg.clone(),
+        sync_queue.clone(),
+        cold_refresh.clone(),
+        public_users.clone(),
+    );
     let tracks = TracksService::new(crate::modules::tracks::TracksServiceDependencies {
         sc: sc.clone(),
         pg: pg.clone(),
@@ -271,7 +277,7 @@ async fn main() {
         redis: redis_pool.clone(),
         miss: miss.clone(),
     });
-    let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone());
+    let users = UsersService::new(pg.clone(), cold_refresh.clone(), miss.clone(), public_users);
     let dislikes = DislikesService::new(pg.clone(), events.clone());
     let search = SearchService::new(pg.clone(), cache.clone());
     let soundcloud_search = crate::modules::soundcloud_search::SoundCloudSearch::new(

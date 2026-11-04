@@ -12,11 +12,13 @@ use crate::modules::cold_refresh::{
 };
 use crate::modules::likes::cold as likes_cold;
 use crate::modules::resolve::{Adopted, CatalogMiss};
+use crate::modules::users::PublicUsers;
 
 pub struct UsersService {
     pg: PgPool,
     cold_refresh: Arc<ColdRefreshService>,
     miss: Arc<CatalogMiss>,
+    public: Arc<PublicUsers>,
 }
 
 impl UsersService {
@@ -24,11 +26,13 @@ impl UsersService {
         pg: PgPool,
         cold_refresh: Arc<ColdRefreshService>,
         miss: Arc<CatalogMiss>,
+        public: Arc<PublicUsers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
             cold_refresh,
             miss,
+            public,
         })
     }
 
@@ -39,21 +43,12 @@ impl UsersService {
         user_urn: &str,
     ) -> AppResult<Value> {
         let repo = crate::modules::users::UserRepository::new(self.pg.clone());
-        if let Some(row) = repo.find_by_urn(user_urn).await? {
-            let synced_at = row.sc_synced_at;
+        if let Some(mut row) = repo.find_by_urn(user_urn).await? {
             let _ = repo.touch_last_read(user_urn).await;
-            if self.cold_refresh.is_user_stale(Some(synced_at))
-                && let Err(error) = crate::modules::cold_refresh::entity::enqueue_entity(
-                    &self.pg,
-                    backend_contracts::CatalogEntity::User,
-                    user_urn,
-                    None,
-                    Some(reader),
-                    crate::modules::cold_refresh::BACKGROUND_PRIORITY,
-                )
-                .await
+            if self.public.refresh(session_id, reader, &row).await
+                && let Some(fresh) = repo.find_by_urn(user_urn).await?
             {
-                tracing::debug!(%error, "catalog refresh enqueue deferred");
+                row = fresh;
             }
             return Ok(crate::modules::users::project_to_sc_shape(&row));
         }

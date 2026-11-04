@@ -1,10 +1,11 @@
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::error::AppResult;
 use crate::modules::me::MeService;
 
-pub(super) async fn read(me: &MeService, sc_user_id: &str) -> AppResult<Value> {
-    let mut profile = me.get_profile(sc_user_id).await?;
+pub(super) async fn read(me: &MeService, session: Uuid, sc_user_id: &str) -> AppResult<Value> {
+    let mut profile = me.get_profile(session, sc_user_id).await?;
     fill_old_likes_counter(&mut profile);
     Ok(profile)
 }

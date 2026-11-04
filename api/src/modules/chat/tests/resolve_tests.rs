@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 use super::session_entry;
@@ -53,6 +54,74 @@ async fn a_session_miss_during_a_replication_stall_asks_for_a_retry_not_a_login(
     assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(error.body()["error"], "chat_session_not_replicated");
     assert_eq!(error.body()["retry_ms"], 5_000);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_young_session_a_split_node_has_not_received_yet_asks_for_a_retry_not_a_login(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let split = split_without_replication(&pool).await?;
+    let redis = crate::redis::connect_url("redis://127.0.0.1:1")?;
+    let chat = chat_state(split.clone(), redis, true);
+    let young = Uuid::now_v7();
+
+    let missed = session_entry(&chat, young).await;
+    let unknown = chat.callers.is_unknown(young);
+    land_session(&split, young, "4444").await?;
+    let found = session_entry(&chat, young).await;
+    split.close().await;
+
+    assert!(
+        matches!(missed, Err(ChatError::SessionNotReplicated)),
+        "{missed:?}"
+    );
+    assert!(
+        !unknown,
+        "a retryable miss must not be remembered as unknown"
+    );
+    assert_eq!(
+        found
+            .expect("the landed session")
+            .map(|entry| entry.user_id),
+        Some("4444".to_owned())
+    );
+    Ok(())
+}
+
+async fn split_without_replication(pool: &PgPool) -> anyhow::Result<PgPool> {
+    sqlx::query(
+        "DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET scd.mode = %L', current_database(), 'split'); END $$",
+    )
+    .execute(pool)
+    .await?;
+    Ok(PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with((*pool.connect_options()).clone())
+        .await?)
+}
+
+async fn land_session(pool: &PgPool, session: Uuid, user: &str) -> anyhow::Result<()> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET LOCAL scd.mode = 'legacy'")
+        .execute(&mut *transaction)
+        .await?;
+    let connection = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO soundcloud_connections
+            (id, soundcloud_user_id, username, access_token, refresh_token, expires_at, scope)
+         VALUES ($1, $2, $2, 'access', 'refresh', now() + interval '1 hour', '')",
+    )
+    .bind(connection)
+    .bind(user)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query("INSERT INTO sessions (id, soundcloud_connection_id) VALUES ($1, $2)")
+        .bind(session)
+        .bind(connection)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
     Ok(())
 }
 

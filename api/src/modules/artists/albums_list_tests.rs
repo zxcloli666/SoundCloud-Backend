@@ -155,7 +155,8 @@ async fn a_second_credit_on_the_same_album_does_not_duplicate_it(
 async fn the_listing_reaches_albums_through_indexes_instead_of_scanning_the_catalog(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    sqlx::raw_sql(
+    crate::db::insert_replicated(
+        &pool,
         "INSERT INTO artists (id, name, normalized_name, source)
          SELECT ('00000000-0000-4000-8001-' || lpad(to_hex(n), 12, '0'))::uuid, 'a' || n, 'a' || n, 'test'
          FROM generate_series(1, 2000) AS n;
@@ -178,7 +179,6 @@ async fn the_listing_reaches_albums_through_indexes_instead_of_scanning_the_cata
          JOIN (SELECT id, row_number() OVER () AS rn FROM albums) AS album ON album.rn = wanted.rn;
          ANALYZE artists, albums, album_artists, wanted_tracks, wanted_track_albums;",
     )
-    .execute(&pool)
     .await?;
 
     let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {ALBUMS_LIST}"))

@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use backend_contracts::JobKind;
+use backend_contracts::{CollectionFailure, JobKind};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::FromRow;
@@ -73,6 +73,10 @@ pub enum JobError {
         delay: std::time::Duration,
         error: anyhow::Error,
     },
+    Settled {
+        failure: CollectionFailure,
+        error: anyhow::Error,
+    },
 }
 
 impl JobError {
@@ -94,6 +98,13 @@ impl JobError {
         Self::Permanent(error.into())
     }
 
+    pub fn settled(failure: CollectionFailure, error: impl Into<anyhow::Error>) -> Self {
+        Self::Settled {
+            failure,
+            error: error.into(),
+        }
+    }
+
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Retryable(_))
     }
@@ -105,6 +116,7 @@ impl Display for JobError {
             Self::Retryable(error) | Self::Permanent(error) | Self::Postponed { error, .. } => {
                 Display::fmt(error, formatter)
             }
+            Self::Settled { failure, error } => formatter.write_str(&failure.message(error)),
         }
     }
 }
@@ -112,9 +124,10 @@ impl Display for JobError {
 impl std::error::Error for JobError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Retryable(error) | Self::Permanent(error) | Self::Postponed { error, .. } => {
-                error.source()
-            }
+            Self::Retryable(error)
+            | Self::Permanent(error)
+            | Self::Postponed { error, .. }
+            | Self::Settled { error, .. } => error.source(),
         }
     }
 }
