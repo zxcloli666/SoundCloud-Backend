@@ -93,7 +93,7 @@ __ERROR__
 <input type="hidden" name="redirect_uri" value="__REDIRECT_URI__">
 <input type="hidden" name="state" value="__STATE__">
 <input type="hidden" name="scope" value="__SCOPE__">
-<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8" placeholder="000000" autofocus required>
+<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="16" placeholder="000000" autofocus required>
 <button type="submit">Связать</button>
 </form>
 </main>

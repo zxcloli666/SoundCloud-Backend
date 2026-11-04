@@ -7,6 +7,7 @@ use subtle::ConstantTimeEq;
 use backend_contracts::remote::{LINK_CODE_DIGITS, LINK_HINT_DIGITS, LinkProvider};
 
 pub const MIN_REVIEW_CODE_DIGITS: usize = 8;
+pub const MAX_REVIEW_CODE_DIGITS: usize = 12;
 
 pub fn random_code() -> String {
     let upper = 10_u32.pow(LINK_CODE_DIGITS as u32);
@@ -33,7 +34,8 @@ pub fn normalize_code(raw: &str) -> Option<String> {
 }
 
 pub fn valid_review_code(code: &str) -> bool {
-    code.len() >= MIN_REVIEW_CODE_DIGITS && code.chars().all(|c| c.is_ascii_digit())
+    (MIN_REVIEW_CODE_DIGITS..=MAX_REVIEW_CODE_DIGITS).contains(&code.len())
+        && code.chars().all(|c| c.is_ascii_digit())
 }
 
 pub fn review_code_matches(raw: &str, review_code: &str) -> bool {
@@ -115,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn the_review_code_needs_eight_digits_and_never_matches_a_link_code() {
+    fn the_review_code_needs_eight_to_twelve_digits_and_never_matches_a_link_code() {
         assert!(review_code_matches("12345678", "12345678"));
         assert!(review_code_matches("1234 5678", "12345678"));
         assert!(review_code_matches("код 1 2 3 4 5 6 7 8", "12345678"));
@@ -127,6 +129,9 @@ mod tests {
         assert!(valid_review_code("00000000"));
         assert!(!valid_review_code("1234567"));
         assert!(!valid_review_code("1234567a"));
+        assert!(valid_review_code("123456789012"));
+        assert!(!valid_review_code("1234567890123"));
+        assert!(review_code_matches("1234 5678 90", "1234567890"));
     }
 
     #[test]

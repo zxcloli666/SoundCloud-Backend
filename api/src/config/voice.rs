@@ -89,7 +89,7 @@ fn review_code(raw: &str) -> String {
     if code.is_empty() || valid_review_code(code) {
         return code.to_owned();
     }
-    tracing::error!("VOICE_REVIEW_CODE is ignored: it needs 8 or more digits and nothing else");
+    tracing::error!("VOICE_REVIEW_CODE is ignored: it needs 8 to 12 digits and nothing else");
     String::new()
 }
 
