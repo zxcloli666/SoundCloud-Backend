@@ -73,6 +73,20 @@ struct Slot {
     failed_at: Option<Instant>,
 }
 
+struct Attempt<'a> {
+    slot: &'a Mutex<Slot>,
+    finished: bool,
+}
+
+impl Drop for Attempt<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+            slot.failed_at = Some(Instant::now());
+        }
+    }
+}
+
 enum Cached {
     Open(Arc<Store>),
     Failing,
@@ -90,8 +104,8 @@ pub(super) struct Scan {
 pub struct RemoteHub {
     nats: Option<Arc<NatsService>>,
     prefix: String,
-    slot: Arc<Mutex<Slot>>,
-    opening: Arc<tokio::sync::Mutex<()>>,
+    slot: Mutex<Slot>,
+    opening: tokio::sync::Mutex<()>,
     waits: Arc<Waits>,
     published: Cache<(String, String), (i64, Instant)>,
 }
@@ -125,8 +139,8 @@ impl RemoteHub {
         Arc::new(Self {
             nats,
             prefix: prefix.to_owned(),
-            slot: Arc::new(Mutex::new(Slot::default())),
-            opening: Arc::new(tokio::sync::Mutex::new(())),
+            slot: Mutex::new(Slot::default()),
+            opening: tokio::sync::Mutex::new(()),
             waits: Arc::new(Waits::default()),
             published: Cache::builder()
                 .max_capacity(PRESENCE_CAPACITY)
@@ -156,34 +170,32 @@ impl RemoteHub {
             Cached::Failing => return None,
             Cached::Unknown => {}
         }
-        let opening = self.opening.clone().lock_owned().await;
+        let _opening = self.opening.lock().await;
         match self.cached() {
             Cached::Open(store) => return Some(store),
             Cached::Failing => return None,
             Cached::Unknown => {}
         }
-        let nats = nats.clone();
-        let prefix = self.prefix.clone();
-        let slot = self.slot.clone();
-        let opened = tokio::spawn(async move {
-            let _opening = opening;
-            let opened = Store::open(&nats, &prefix).await;
-            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
-            match opened {
-                Ok(store) => {
-                    let store = Arc::new(store);
-                    slot.store = Some(store.clone());
-                    slot.failed_at = None;
-                    Some(store)
-                }
-                Err(error) => {
-                    warn!(%error, "remote store is unavailable");
-                    slot.failed_at = Some(Instant::now());
-                    None
-                }
+        let mut attempt = Attempt {
+            slot: &self.slot,
+            finished: false,
+        };
+        let opened = Store::open(nats, &self.prefix).await;
+        attempt.finished = true;
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        match opened {
+            Ok(store) => {
+                let store = Arc::new(store);
+                slot.store = Some(store.clone());
+                slot.failed_at = None;
+                Some(store)
             }
-        });
-        opened.await.ok().flatten()
+            Err(error) => {
+                warn!(%error, "remote store is unavailable");
+                slot.failed_at = Some(Instant::now());
+                None
+            }
+        }
     }
 
     #[cfg(test)]
