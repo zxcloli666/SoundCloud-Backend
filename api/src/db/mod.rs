@@ -15,7 +15,7 @@ mod retry;
 
 pub use retry::retry_conflicts;
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 271;
+const REQUIRED_CORE_SCHEMA_VERSION: i64 = 282;
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -168,6 +168,28 @@ pub async fn connect(cfg: &AppConfig) -> Result<PgPool, sqlx::Error> {
         Some(&CORE_RELEASED_AT_MS),
     )
     .await
+}
+
+pub async fn connect_pool(db: &DatabaseCfg, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+    pool(db, max_connections, 0, core_opts(db)?, None).await
+}
+
+pub async fn connect_counted_pool(
+    db: &DatabaseCfg,
+    max_connections: u32,
+    on_use: fn(),
+) -> Result<PgPool, sqlx::Error> {
+    pool_options(db, max_connections, 0, None)
+        .after_connect(move |_, _| {
+            on_use();
+            Box::pin(async { Ok(()) })
+        })
+        .before_acquire(move |connection, meta| {
+            on_use();
+            Box::pin(verify_idle(connection, meta.idle_for))
+        })
+        .connect_with(core_opts(db)?)
+        .await
 }
 
 pub async fn begin_admin(
@@ -390,6 +412,36 @@ mod tests {
 
     #[sqlx::test(migrations = "./migrations")]
     async fn api_starts_on_a_core_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
+        verify_schema(&pool).await
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn a_database_ahead_of_the_required_migration_still_boots(
+        pool: PgPool,
+    ) -> anyhow::Result<()> {
+        sqlx::raw_sql(
+            "CREATE TABLE _sqlx_migrations (version bigint PRIMARY KEY, success boolean NOT NULL);
+             CREATE TABLE playlists (urn text PRIMARY KEY);
+             CREATE TABLE playlist_track_projection (playlist_urn text);
+             CREATE TABLE playlist_membership_state (
+                 playlist_urn text PRIMARY KEY,
+                 next_reconcile_at timestamptz,
+                 sync_status text NOT NULL
+             );
+             CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
+             CREATE INDEX playlist_membership_state_reconcile_due_idx
+                 ON playlist_membership_state (next_reconcile_at, playlist_urn)
+                 WHERE sync_status <> 'clean';",
+        )
+        .execute(&pool)
+        .await?;
+        for ahead in [REQUIRED_CORE_SCHEMA_VERSION, 283, 284, 290] {
+            sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES ($1, true)")
+                .bind(ahead)
+                .execute(&pool)
+                .await?;
+        }
+
         verify_schema(&pool).await
     }
 

@@ -1,7 +1,7 @@
 mod connection;
 pub(crate) mod login;
 mod oauth;
-mod replica;
+pub(crate) mod replica;
 
 use std::sync::Arc;
 use std::time::Duration;

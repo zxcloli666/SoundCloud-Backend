@@ -66,6 +66,7 @@ fn config(redis: &str) -> AppConfig {
             token: String::new().into(),
             metrics_token: String::new().into(),
             diag_token: String::new().into(),
+            handoff_token: String::new().into(),
         },
         diag: DiagCfg {
             host: "test".to_owned(),
@@ -366,6 +367,20 @@ pub(super) async fn app(pool: &PgPool, redis: &str) -> anyhow::Result<axum::Rout
     Ok(crate::router::build(
         state(pool, soundcloud_hits(), redis).await?,
     ))
+}
+
+pub(crate) async fn app_with_handoff(
+    pool: &PgPool,
+    redis: &str,
+    admin: &str,
+    handoff: &str,
+) -> anyhow::Result<axum::Router> {
+    let mut state = state(pool, soundcloud_hits(), redis).await?;
+    let mut config = (*state.config).clone();
+    config.admin.token = admin.to_owned().into();
+    config.admin.handoff_token = handoff.to_owned().into();
+    state.config = Arc::new(config);
+    Ok(crate::router::build(state))
 }
 
 pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {

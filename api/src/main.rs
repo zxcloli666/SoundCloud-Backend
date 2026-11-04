@@ -29,6 +29,7 @@ mod qdrant;
 mod query_surface_tests;
 mod redis;
 mod router;
+mod rt;
 mod sc;
 #[cfg(test)]
 #[path = "sc_surface_tests.rs"]
@@ -97,6 +98,14 @@ async fn main() {
     );
     metrics::init();
     metrics::spawn_runtime_probe();
+
+    if rt::role() == rt::Role::Rt {
+        if let Err(error) = rt::run().await {
+            tracing::error!(error = %format!("{error:#}"), "chat-api stopped at boot");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let config = Arc::new(AppConfig::from_env());
     info!(port = config.port, "backend starting");

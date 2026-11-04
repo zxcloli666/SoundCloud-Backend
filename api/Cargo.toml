@@ -4,7 +4,7 @@ version = "8.2.7"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.8", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart", "http2"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-full", "timeout"] }
 
@@ -79,12 +79,16 @@ redact = { version = "0.1.0", path = "../utils/redact" }
 telemetry = { version = "0.1.0", path = "../utils/telemetry" }
 wt = { package = "write-through", version = "0.1.0", path = "../utils/write-through", features = ["sqlx"] }
 repl-verify = { version = "0.1.0", path = "../utils/repl-verify" }
+sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 pprof = { version = "0.15", features = ["flamegraph"], optional = true }
 sourcemap = "9.3.2"
 tar = "0.4.46"
 flate2 = "1.1.10"
+
+[dev-dependencies]
+sc-chat-wire = { git = "https://github.com/zxcloli666/SoundCloud-Core", tag = "sc-chat-wire-v0.1.1", features = ["vectors"] }
 
 [features]
 profiling = ["dep:pprof"]
