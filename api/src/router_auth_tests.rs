@@ -7,6 +7,7 @@ const FORWARDS_TO_THE_API: &[&str] = &["/rt/rooms/proxy.rs"];
 const OPEN_ROUTES: &[&str] = &[
     "/health",
     "/health/live",
+    "/health/db",
     "/probe",
     "/auth/login",
     "/auth/login/status",
