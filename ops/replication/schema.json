@@ -1164,12 +1164,6 @@
   "lyrics_lookup_state": {
    "columns": [
     {"default": "1", "generated": false, "name": "algorithm_version", "notnull": true, "type": "integer"},
-    {"default": "0", "generated": false, "name": "attempts", "notnull": true, "type": "bigint"},
-    {"default": null, "generated": false, "name": "claim_expires_at", "notnull": false, "type": "timestamp with time zone"},
-    {"default": null, "generated": false, "name": "claim_job_generation", "notnull": false, "type": "bigint"},
-    {"default": null, "generated": false, "name": "claim_job_id", "notnull": false, "type": "uuid"},
-    {"default": null, "generated": false, "name": "claim_job_lease_id", "notnull": false, "type": "uuid"},
-    {"default": null, "generated": false, "name": "claim_state_generation", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
     {"default": "0", "generated": false, "name": "failure_streak", "notnull": true, "type": "integer"},
     {"default": "1", "generated": false, "name": "generation", "notnull": true, "type": "bigint"},
@@ -1180,7 +1174,6 @@
     {"default": null, "generated": false, "name": "input_release_date", "notnull": false, "type": "date"},
     {"default": null, "generated": false, "name": "input_sc_created_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "input_title", "notnull": true, "type": "text"},
-    {"default": null, "generated": false, "name": "last_attempt_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "last_error", "notnull": false, "type": "character varying(512)"},
     {"default": null, "generated": false, "name": "last_outcome", "notnull": false, "type": "character varying(32)"},
     {"default": "0", "generated": false, "name": "miss_streak", "notnull": true, "type": "integer"},

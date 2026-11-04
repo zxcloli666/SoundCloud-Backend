@@ -547,7 +547,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.algorithm_version, t.attempts, t.claim_expires_at, t.claim_job_generation, t.claim_job_id, t.claim_job_lease_id, t.claim_state_generation, t.created_at, t.failure_streak, t.generation, t.input_artist, t.input_duration_ms, t.input_genius_song_id, t.input_genius_url, t.input_release_date, t.input_sc_created_at, t.input_title, t.last_attempt_at, t.last_error, t.last_outcome, t.miss_streak, t.next_run_at, t.priority, t.retry_after_at, t.sc_track_id, t.source_set_version, t.status, t.track_id, t.updated_at, t.wake_durable_at, t.wake_generation, t.wake_message_id)::text) FROM public.lyrics_lookup_state t WHERE t.track_id = (k ->> 'track_id')::uuid
+SELECT md5(ROW(t.algorithm_version, t.created_at, t.failure_streak, t.generation, t.input_artist, t.input_duration_ms, t.input_genius_song_id, t.input_genius_url, t.input_release_date, t.input_sc_created_at, t.input_title, t.last_error, t.last_outcome, t.miss_streak, t.next_run_at, t.priority, t.retry_after_at, t.sc_track_id, t.source_set_version, t.status, t.track_id, t.updated_at, t.wake_durable_at, t.wake_generation, t.wake_message_id)::text) FROM public.lyrics_lookup_state t WHERE t.track_id = (k ->> 'track_id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_oauth_app_request_cooldowns(k jsonb)

@@ -388,6 +388,11 @@ mod tests {
         verify_schema(&pool).await
     }
 
+    #[sqlx::test(migrations = "./migrations")]
+    async fn api_starts_on_a_core_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
+        verify_schema(&pool).await
+    }
+
     #[sqlx::test(migrations = false)]
     async fn a_connection_dropped_mid_query_frees_its_pool_slot(
         _: PgPoolOptions,
