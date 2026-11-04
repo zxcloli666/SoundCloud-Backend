@@ -165,7 +165,7 @@ async fn the_bulk_lane_never_claims_old_lookups_and_claims_its_own_work_around_t
 }
 
 #[sqlx::test(migrations = false)]
-async fn the_task_reports_finished_after_its_pass_and_stays_until_shutdown(
+async fn the_task_finishes_its_first_pass_then_keeps_moving_stale_jobs_until_shutdown(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     install_schema(&pool).await?;
@@ -179,34 +179,13 @@ async fn the_task_reports_finished_after_its_pass_and_stays_until_shutdown(
     let realign = paced(&pool, 2);
     let cancellation = CancellationToken::new();
     assert!(!realign.finished());
-
     let task = tokio::spawn(realign.clone().run(cancellation.clone()));
     finished(&realign).await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(!task.is_finished());
-    cancellation.cancel();
-    task.await??;
-
-    assert_eq!(
-        lanes(&pool).await?,
-        [("lyrics.lookup".to_owned(), "lookup".to_owned(), 5)]
-    );
-    Ok(())
-}
-
-#[sqlx::test(migrations = false)]
-async fn jobs_written_to_a_stale_lane_after_the_first_pass_are_moved_by_a_later_one(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    install_schema(&pool).await?;
-    let realign = paced(&pool, 2);
-    let cancellation = CancellationToken::new();
-    let task = tokio::spawn(realign.clone().run(cancellation.clone()));
-    finished(&realign).await?;
+    let after_first_pass = lanes(&pool).await?;
 
     sqlx::query(
         "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
-         SELECT gen_random_uuid(), 'lyrics.lookup', 'core_bulk', n::text, '{}'::jsonb
+         SELECT gen_random_uuid(), 'lyrics.lookup', 'core_bulk', 'late-' || n, '{}'::jsonb
          FROM generate_series(1, 3) AS n",
     )
     .execute(&pool)
@@ -224,13 +203,19 @@ async fn jobs_written_to_a_stale_lane_after_the_first_pass_are_moved_by_a_later_
         }
     })
     .await;
+    let running = !task.is_finished();
     cancellation.cancel();
     task.await??;
     moved??;
 
     assert_eq!(
+        after_first_pass,
+        [("lyrics.lookup".to_owned(), "lookup".to_owned(), 5)]
+    );
+    assert!(running);
+    assert_eq!(
         lanes(&pool).await?,
-        [("lyrics.lookup".to_owned(), "lookup".to_owned(), 3)]
+        [("lyrics.lookup".to_owned(), "lookup".to_owned(), 8)]
     );
     Ok(())
 }

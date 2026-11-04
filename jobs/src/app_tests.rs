@@ -171,7 +171,7 @@ async fn jobs_starts_on_a_core_with_every_migration_and_refuses_one_without_0292
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn jobs_refuses_a_core_whose_queue_has_no_lookup_lane(pool: PgPool) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
     sqlx::raw_sql(
