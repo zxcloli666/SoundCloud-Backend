@@ -14,7 +14,7 @@ esac
 
 echo "changes since ${base:-no base, everything runs}" >&2
 
-shared='.github/workflows/ci.yml rust-toolchain.toml .cargo scripts/ci-changes.sh scripts/ci-mtime.sh scripts/ci-toolchain.sh'
+shared='.github/workflows/ci.yml .github/actions/target-cache rust-toolchain.toml .cargo scripts/ci-changes.sh scripts/ci-mtime.sh scripts/ci-toolchain.sh scripts/ci-db.sh scripts/ci-sqlx-template.sh scripts/ci-sqlx-template.patch'
 
 emit() {
     name=$1
@@ -32,3 +32,4 @@ emit services streaming storage gateway utils
 emit prod api jobs streaming backend-contracts utils
 emit yanked '*Cargo.lock' deny.toml
 emit worker worker backend-contracts/contract backend-contracts/fixtures
+emit chat_load scripts/chat-load
