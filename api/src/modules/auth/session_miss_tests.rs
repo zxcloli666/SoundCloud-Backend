@@ -117,13 +117,7 @@ async fn a_session_that_lands_during_the_wait_is_found(pool: PgPool) -> anyhow::
 async fn a_young_session_logged_out_elsewhere_answers_at_once(pool: PgPool) -> anyhow::Result<()> {
     let auth = auth(&pool)?;
     let young = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO repl_tombstones (tbl, pk, v)
-         VALUES ('sessions', jsonb_build_object('id', $1::uuid), 1)",
-    )
-    .bind(young)
-    .execute(&pool)
-    .await?;
+    tombstone(&pool, young).await?;
 
     let started = Instant::now();
     let found = auth
@@ -133,6 +127,41 @@ async fn a_young_session_logged_out_elsewhere_answers_at_once(pool: PgPool) -> a
 
     assert!(found.is_none());
     assert!(waited < SESSION_POLL, "waited {waited:?}");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_no_wait_lookup_of_chat_keeps_the_same_age_rule(pool: PgPool) -> anyhow::Result<()> {
+    let auth = auth(&pool)?;
+    let young = Uuid::now_v7();
+    let logged_out = Uuid::now_v7();
+    tombstone(&pool, logged_out).await?;
+    let old = minted_at(SystemTime::now() - (SESSION_IN_FLIGHT + MINUTE));
+
+    let started = Instant::now();
+    let missed = auth.missed_now::<()>(Feed::Streaming, young).await;
+    let waited = started.elapsed();
+
+    let error = match missed {
+        Err(error) => error,
+        Ok(found) => anyhow::bail!("a young session must not ask for a new login: {found:?}"),
+    };
+    assert_eq!(error.public_code(), "session_not_replicated");
+    assert!(waited < SESSION_POLL, "waited {waited:?}");
+    for dead in [Uuid::new_v4(), old, logged_out] {
+        assert!(
+            auth.missed_now::<()>(Feed::Streaming, dead)
+                .await?
+                .is_none(),
+            "session {dead}"
+        );
+    }
+    assert!(auth.missed_now::<()>(Feed::Local, young).await?.is_none());
+    assert!(
+        auth.missed_now::<()>(Feed::Stalled, Uuid::new_v4())
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -176,6 +205,17 @@ fn assert_counted(outcome: &str) {
     };
     let series = format!("api_session_miss_total{{outcome=\"{outcome}\"}}");
     assert!(rendered.contains(&series), "{series} missing");
+}
+
+async fn tombstone(pool: &PgPool, session_id: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO repl_tombstones (tbl, pk, v)
+         VALUES ('sessions', jsonb_build_object('id', $1::uuid), 1)",
+    )
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn store(pool: &PgPool, session_id: Uuid) -> anyhow::Result<()> {

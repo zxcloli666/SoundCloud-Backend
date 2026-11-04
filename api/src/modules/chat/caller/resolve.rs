@@ -51,7 +51,7 @@ async fn session_entry(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionE
                 return Ok(Some(synthetic));
             }
             chat.auth
-                .replicated_now(|| stored_session(chat, id))
+                .replicated_now(id, || stored_session(chat, id))
                 .await
                 .map_err(not_replicated)
         })

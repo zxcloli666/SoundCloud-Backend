@@ -12,7 +12,7 @@ use super::AuthService;
 
 const SESSION_WAIT: Duration = Duration::from_millis(750);
 const SESSION_POLL: Duration = Duration::from_millis(250);
-const SESSION_IN_FLIGHT: Duration = Duration::from_secs(30 * 60);
+const SESSION_IN_FLIGHT: Duration = Duration::from_secs(6 * 60 * 60);
 pub const SESSION_RETRY_AFTER_SECONDS: i64 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,7 +51,11 @@ impl AuthService {
         })
     }
 
-    pub(crate) async fn replicated_now<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
+    pub(crate) async fn replicated_now<T, F, Fut>(
+        &self,
+        session_id: Uuid,
+        lookup: F,
+    ) -> AppResult<Option<T>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = AppResult<Option<T>>>,
@@ -59,9 +63,20 @@ impl AuthService {
         if let Some(found) = lookup().await? {
             return Ok(Some(found));
         }
-        match self.feed().await? {
-            Feed::Stalled => Err(session_not_replicated()),
-            Feed::Local | Feed::Streaming => Ok(None),
+        let feed = self.feed().await?;
+        self.missed_now(feed, session_id).await
+    }
+
+    async fn missed_now<T>(&self, feed: Feed, session_id: Uuid) -> AppResult<Option<T>> {
+        let retry = match feed {
+            Feed::Local => false,
+            Feed::Stalled => true,
+            Feed::Streaming => self.may_arrive(session_id).await?,
+        };
+        if retry {
+            Err(session_not_replicated())
+        } else {
+            Ok(None)
         }
     }
 
@@ -94,12 +109,16 @@ impl AuthService {
                 Err(session_not_replicated())
             }
             Feed::Streaming => {
-                if !in_flight(session_id, SystemTime::now()) || self.logged_out(session_id).await? {
+                if !self.may_arrive(session_id).await? {
                     return Ok(dead());
                 }
                 wait_for(lookup).await
             }
         }
+    }
+
+    async fn may_arrive(&self, session_id: Uuid) -> AppResult<bool> {
+        Ok(in_flight(session_id, SystemTime::now()) && !self.logged_out(session_id).await?)
     }
 
     async fn logged_out(&self, session_id: Uuid) -> AppResult<bool> {
