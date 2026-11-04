@@ -666,7 +666,10 @@ async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
         "DELETE FROM lyrics_lookup_state WHERE sc_track_id = '304'",
         "UPDATE tracks SET enrich_next_run_at = now() - interval '1 minute' WHERE sc_track_id = '303'",
         "UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'sq' WHERE sc_track_id = '306'",
-        "UPDATE audio_index_wire_state SET status = 'reopenable' WHERE sc_track_id = '303'",
+        "UPDATE audio_index_wire_state
+         SET status = 'terminal', upload_generation = 1, outcome_status = 'failed',
+             outcome_reason = 'worker_lost'
+         WHERE sc_track_id = '303'",
         "UPDATE lyrics_cache SET embedded_at = now() WHERE sc_track_id = '305'",
         "UPDATE storage_event_state SET uploaded_generation = 3 WHERE sc_track_id = '301'",
         "INSERT INTO tracks (
