@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[path = "reaper_plan_tests.rs"]
+mod plan_tests;
+#[cfg(test)]
 #[path = "reaper_tests.rs"]
 mod tests;
 #[path = "reaper_tiered.rs"]

@@ -1,48 +1,34 @@
-WITH RECURSIVE resume AS (
-    SELECT CASE
-        WHEN cursor.last_owner_sc_user_id IS NULL THEN NULL
-        WHEN EXISTS (
-            SELECT 1 FROM playlist_membership_state AS state
-            WHERE state.sync_status <> 'clean'
-              AND state.next_reconcile_at IS NOT NULL
-              AND state.next_reconcile_at <= now()
-              AND state.owner_sc_user_id > cursor.last_owner_sc_user_id
-        ) THEN cursor.last_owner_sc_user_id
-        ELSE NULL
-    END AS after_owner
-    FROM playlist_sweep_cursor AS cursor
+WITH due_owners AS MATERIALIZED (
+    SELECT DISTINCT state.owner_sc_user_id
+    FROM playlist_membership_state AS state
+    WHERE state.sync_status <> 'clean'
+      AND state.next_reconcile_at IS NOT NULL
+      AND state.next_reconcile_at <= now()
+),
+ahead AS (
+    SELECT due.owner_sc_user_id
+    FROM due_owners AS due
+    WHERE due.owner_sc_user_id > (SELECT cursor.last_owner_sc_user_id FROM playlist_sweep_cursor AS cursor)
+    ORDER BY due.owner_sc_user_id
+    LIMIT $1
 ),
 owners AS (
-    (
-        SELECT state.owner_sc_user_id, 1 AS depth
-        FROM playlist_membership_state AS state, resume
-        WHERE state.sync_status <> 'clean'
-          AND state.next_reconcile_at IS NOT NULL
-          AND state.next_reconcile_at <= now()
-          AND (resume.after_owner IS NULL OR state.owner_sc_user_id > resume.after_owner)
-        ORDER BY state.owner_sc_user_id
-        LIMIT 1
-    )
+    SELECT ahead.owner_sc_user_id
+    FROM ahead
     UNION ALL
-    SELECT next.owner_sc_user_id, owners.depth + 1
-    FROM owners
-    CROSS JOIN LATERAL (
-        SELECT state.owner_sc_user_id
-        FROM playlist_membership_state AS state
-        WHERE state.sync_status <> 'clean'
-          AND state.next_reconcile_at IS NOT NULL
-          AND state.next_reconcile_at <= now()
-          AND state.owner_sc_user_id > owners.owner_sc_user_id
-        ORDER BY state.owner_sc_user_id
-        LIMIT 1
-    ) AS next
-    WHERE owners.depth < $1
+    (
+        SELECT due.owner_sc_user_id
+        FROM due_owners AS due
+        WHERE NOT EXISTS (SELECT 1 FROM ahead)
+        ORDER BY due.owner_sc_user_id
+        LIMIT $1
+    )
 ),
 picked AS (
-    SELECT share.playlist_urn, owners.owner_sc_user_id
+    SELECT share.playlist_urn, owners.owner_sc_user_id, share.next_reconcile_at
     FROM owners
     CROSS JOIN LATERAL (
-        SELECT state.playlist_urn
+        SELECT state.playlist_urn, state.next_reconcile_at
         FROM playlist_membership_state AS state
         WHERE state.owner_sc_user_id = owners.owner_sc_user_id
           AND state.sync_status <> 'clean'
@@ -51,6 +37,7 @@ picked AS (
         ORDER BY state.next_reconcile_at, state.playlist_urn
         LIMIT $2
     ) AS share
+    ORDER BY owners.owner_sc_user_id, share.next_reconcile_at, share.playlist_urn
     LIMIT $3
 ),
 advance AS (
