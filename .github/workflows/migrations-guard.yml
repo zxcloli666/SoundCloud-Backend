@@ -95,6 +95,13 @@ jobs:
 
   replication-crates:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TARGETS: utils/write-through/target utils/catalog-ingest/target utils/catalog-match/target utils/admin-catalog/target utils/repl-verify/target streaming/target
+      TARGET_KEY: utils/write-through/Cargo.lock utils/catalog-ingest/Cargo.lock utils/catalog-match/Cargo.lock utils/admin-catalog/Cargo.lock utils/repl-verify/Cargo.lock streaming/Cargo.lock
+      SAVE_TARGETS: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/replication-fast' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -127,26 +134,22 @@ jobs:
       - name: toolchain
         if: steps.changed.outputs.run == 'true'
         run: sh scripts/ci-toolchain.sh
-      - uses: swatinem/rust-cache@v2
+      - name: Restore targets
         if: steps.changed.outputs.run == 'true'
+        uses: ./.github/actions/target-cache
         with:
-          workspaces: |
-            utils/write-through -> target
-            utils/catalog-ingest -> target
-            utils/catalog-match -> target
-            utils/admin-catalog -> target
-            utils/repl-verify -> target
-            streaming -> target
-          key: write-through
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          mode: restore
+          name: replication-crates
+          paths: ${{ env.TARGETS }}
+          key: ${{ env.TARGET_KEY }}
       - name: write-through client, api and core on real Postgres
         if: steps.changed.outputs.run == 'true'
         env:
           DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
         run: |
           docker exec scdpg createdb -U scd wt_build
-          for f in api/migrations/*.sql; do docker exec -i scdpg psql -X -q -v ON_ERROR_STOP=1 -U scd -d wt_build -c "SET client_min_messages = error" -f - < "$f"; done
+          docker cp api/migrations scdpg:/migrations
+          docker exec scdpg sh -c 'for f in /migrations/*.sql; do PGOPTIONS="-c client_min_messages=error" psql -X -q -v ON_ERROR_STOP=1 -U scd -d wt_build -f "$f" || exit 1; done'
           cargo fmt --manifest-path utils/write-through/Cargo.toml --check
           cargo clippy --manifest-path utils/write-through/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo test --manifest-path utils/write-through/Cargo.toml --all-features --locked
@@ -174,3 +177,11 @@ jobs:
         env:
           STREAMING_SCHEMA_TEST_DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
         run: cargo test --manifest-path streaming/Cargo.toml --locked -- --ignored --skip stream::anon
+      - name: Save targets
+        if: steps.changed.outputs.run == 'true' && env.SAVE_TARGETS == 'true'
+        uses: ./.github/actions/target-cache
+        with:
+          mode: save
+          name: replication-crates
+          paths: ${{ env.TARGETS }}
+          key: ${{ env.TARGET_KEY }}
