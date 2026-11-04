@@ -126,7 +126,10 @@ tables:
     derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}
     note: "api nodes read vector eligibility from lyrics_cache.embedding_request_id and embedding_request_created_at, set by open_embedding_request"
   lyrics_lookup_backfill_state: {class: P}
-  lyrics_lookup_queue: {class: P, note: "core-private lookup queue, one row per lyrics_lookup_state row; lyrics_lookup_queue_sync keeps the mirror columns, jobs owns attempts, last_attempt_at and the claim"}
+  lyrics_lookup_queue:
+    class: P
+    derived: {star_due_mark_row: {rows: [star_due_marks]}, star_due_mark_update: {rows: [star_due_marks]}}
+    note: "core-private lookup queue, one row per lyrics_lookup_state row; lyrics_lookup_queue_sync keeps the mirror columns, jobs owns attempts, last_attempt_at and the claim"
   oauth_app_token_issuance_reservations: {class: P}
   oauth_app_token_refresh_state: {class: P}
   pipeline_event_receipts: {class: P}

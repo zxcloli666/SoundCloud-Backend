@@ -43,6 +43,7 @@ SELECT n,
 ALTER TABLE tracks DISABLE TRIGGER ALL;
 ALTER TABLE lyrics_cache DISABLE TRIGGER ALL;
 ALTER TABLE lyrics_lookup_state DISABLE TRIGGER ALL;
+ALTER TABLE lyrics_lookup_queue DISABLE TRIGGER ALL;
 ALTER TABLE storage_event_state DISABLE TRIGGER ALL;
 ALTER TABLE audio_index_wire_state DISABLE TRIGGER ALL;
 ALTER TABLE transcription_wire_state DISABLE TRIGGER ALL;
@@ -214,14 +215,33 @@ UPDATE lyrics_lookup_state AS state
    SET next_run_at = CASE
                          WHEN star.f < 3 THEN now() - interval '1 hour'
                          ELSE now() + (1 + star.k % 30) * interval '1 day'
-                     END,
-       claim_job_id = CASE WHEN star.f = 2 THEN gen_random_uuid() END,
-       claim_job_generation = CASE WHEN star.f = 2 THEN 1 END,
-       claim_job_lease_id = CASE WHEN star.f = 2 THEN gen_random_uuid() END,
-       claim_state_generation = CASE WHEN star.f = 2 THEN 1 END,
-       claim_expires_at = CASE WHEN star.f = 2 THEN now() + interval '10 minutes' END
+                     END
   FROM planfixture_star AS star
  WHERE state.sc_track_id = star.sc_track_id;
+
+INSERT INTO lyrics_lookup_queue (track_id, priority, next_run_at, created_at, wake_at)
+SELECT state.track_id,
+       state.priority,
+       state.next_run_at,
+       state.created_at,
+       CASE WHEN state.wake_message_id IS NOT NULL AND state.wake_durable_at IS NULL THEN state.updated_at END
+  FROM lyrics_lookup_state AS state
+ON CONFLICT (track_id) DO UPDATE
+   SET priority = EXCLUDED.priority,
+       next_run_at = EXCLUDED.next_run_at,
+       created_at = EXCLUDED.created_at,
+       wake_at = EXCLUDED.wake_at;
+
+UPDATE lyrics_lookup_queue AS queue
+   SET claim_job_id = gen_random_uuid(),
+       claim_job_generation = 1,
+       claim_job_lease_id = gen_random_uuid(),
+       claim_state_generation = state.generation,
+       claim_expires_at = now() + interval '10 minutes'
+  FROM lyrics_lookup_state AS state
+  JOIN planfixture_star AS star ON star.sc_track_id = state.sc_track_id
+ WHERE queue.track_id = state.track_id
+   AND star.f = 2;
 
 UPDATE lyrics_lookup_backfill_state
    SET completed = true,
@@ -307,6 +327,7 @@ RESET work_mem;
 ALTER TABLE tracks ENABLE TRIGGER ALL;
 ALTER TABLE lyrics_cache ENABLE TRIGGER ALL;
 ALTER TABLE lyrics_lookup_state ENABLE TRIGGER ALL;
+ALTER TABLE lyrics_lookup_queue ENABLE TRIGGER ALL;
 ALTER TABLE storage_event_state ENABLE TRIGGER ALL;
 ALTER TABLE audio_index_wire_state ENABLE TRIGGER ALL;
 ALTER TABLE transcription_wire_state ENABLE TRIGGER ALL;
@@ -322,6 +343,8 @@ ALTER TABLE lyrics_cache ENABLE ALWAYS TRIGGER star_due_mark_update;
 ALTER TABLE lyrics_cache ENABLE ALWAYS TRIGGER star_due_mark_row;
 ALTER TABLE lyrics_lookup_state ENABLE ALWAYS TRIGGER star_due_mark_update;
 ALTER TABLE lyrics_lookup_state ENABLE ALWAYS TRIGGER star_due_mark_row;
+ALTER TABLE lyrics_lookup_queue ENABLE ALWAYS TRIGGER star_due_mark_update;
+ALTER TABLE lyrics_lookup_queue ENABLE ALWAYS TRIGGER star_due_mark_row;
 ALTER TABLE storage_event_state ENABLE ALWAYS TRIGGER star_due_mark_update;
 ALTER TABLE storage_event_state ENABLE ALWAYS TRIGGER star_due_mark_row;
 ALTER TABLE audio_index_wire_state ENABLE ALWAYS TRIGGER star_due_mark_update;

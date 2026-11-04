@@ -8,6 +8,7 @@ use super::{
 };
 
 const ENRICH_MAX_ATTEMPTS: i16 = 5;
+const FULL_PASS: &str = include_str!("refresh_due_full_pass.sql");
 
 type Flags = (String, bool, bool, bool, bool, bool, Option<String>);
 
@@ -401,9 +402,10 @@ async fn a_flag_that_turns_with_time_is_rechecked_without_a_mark(
     .await?;
     handler.refresh().await?;
     let waiting: (bool, bool) = sqlx::query_as(
-        "SELECT star.lookup_due, star.recheck_at = state.next_run_at
+        "SELECT star.lookup_due, star.recheck_at = queue.next_run_at
          FROM star_track_tiers AS star
          JOIN lyrics_lookup_state AS state ON state.sc_track_id = star.sc_track_id
+         JOIN lyrics_lookup_queue AS queue ON queue.track_id = state.track_id
          WHERE star.sc_track_id = '301'",
     )
     .fetch_one(&pool)
@@ -411,7 +413,7 @@ async fn a_flag_that_turns_with_time_is_rechecked_without_a_mark(
     assert_eq!(waiting, (false, true));
 
     sqlx::raw_sql(
-        "ALTER TABLE lyrics_lookup_state DISABLE TRIGGER star_due_mark_update;
+        "ALTER TABLE lyrics_lookup_queue DISABLE TRIGGER star_due_mark_update;
          UPDATE lyrics_lookup_state SET next_run_at = now() - interval '1 minute'
          WHERE sc_track_id = '301';
          UPDATE star_track_tiers SET recheck_at = now() - interval '1 minute'
@@ -488,6 +490,7 @@ async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_leg
         "audio_index_wire_state",
         "lyrics_cache",
         "lyrics_embedding_wire_state",
+        "lyrics_lookup_queue",
         "lyrics_lookup_state",
         "storage_event_state",
         "tracks",
@@ -523,5 +526,166 @@ async fn an_applied_change_marks_on_core_in_split_and_waits_for_the_sweep_in_leg
     )
     .await?;
     assert_eq!(marks(&pool).await?, ["1"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_queue_change_of_the_due_time_or_the_claim_marks_the_star_track(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_uploaded_star_tracks(&pool).await?;
+    sqlx::query(
+        "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms)
+         VALUES ('399', 'soundcloud:tracks:399', 'Other', 'other', 1000)",
+    )
+    .execute(&pool)
+    .await?;
+    let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
+    handler.refresh().await?;
+    let rounds: [(&str, &[&str], bool); 4] = [
+        (
+            "UPDATE lyrics_lookup_queue AS queue
+             SET claim_job_id = gen_random_uuid(),
+                 claim_job_generation = 1,
+                 claim_job_lease_id = gen_random_uuid(),
+                 claim_state_generation = state.generation,
+                 claim_expires_at = now() + interval '15 minutes',
+                 attempts = queue.attempts + 1,
+                 last_attempt_at = now()
+             FROM lyrics_lookup_state AS state
+             WHERE state.track_id = queue.track_id
+               AND state.sc_track_id IN ('301', '399')",
+            &["301"],
+            false,
+        ),
+        (
+            "UPDATE lyrics_lookup_queue AS queue
+             SET next_run_at = now() + interval '1 hour',
+                 claim_job_id = NULL,
+                 claim_job_generation = NULL,
+                 claim_job_lease_id = NULL,
+                 claim_state_generation = NULL,
+                 claim_expires_at = NULL
+             FROM lyrics_lookup_state AS state
+             WHERE state.track_id = queue.track_id
+               AND state.sc_track_id IN ('301', '399')",
+            &["301"],
+            false,
+        ),
+        (
+            "UPDATE lyrics_lookup_queue AS queue
+             SET next_run_at = now() - interval '1 minute'
+             FROM lyrics_lookup_state AS state
+             WHERE state.track_id = queue.track_id
+               AND state.sc_track_id IN ('301', '399')",
+            &["301"],
+            true,
+        ),
+        (
+            "UPDATE lyrics_lookup_queue
+             SET attempts = attempts + 1, last_attempt_at = now(), priority = 0",
+            &[],
+            true,
+        ),
+    ];
+
+    for (write, marked, due) in rounds {
+        sqlx::query(write).execute(&pool).await?;
+        assert_eq!(marks(&pool).await?, marked, "{write}");
+        handler.refresh().await?;
+        let lookup_due: bool =
+            sqlx::query_scalar("SELECT lookup_due FROM star_track_tiers WHERE sc_track_id = '301'")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(lookup_due, due, "{write}");
+        assert_eq!(sweep(&pool).await?, (0, 0), "{write}");
+    }
+    Ok(())
+}
+
+async fn full_pass(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(FULL_PASS)
+        .bind(AUDIO_INDEX_QUARANTINE_SECONDS)
+        .bind(QUALITY_UPGRADE_COOLDOWN_SECONDS)
+        .bind(ENRICH_MAX_ATTEMPTS)
+        .fetch_one(pool)
+        .await?)
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn every_dirty_pass_leaves_the_flags_of_the_old_full_pass(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_uploaded_star_tracks(&pool).await?;
+    sqlx::raw_sql(
+        "UPDATE tracks SET index_state = 'ok' WHERE sc_track_id = '301';
+         UPDATE tracks SET enrich_state = 'failed', enrich_attempts = 5 WHERE sc_track_id = '302';
+         UPDATE tracks SET enrich_state = 'failed', enrich_next_run_at = now() + interval '1 hour'
+         WHERE sc_track_id = '303';
+         UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'hq',
+                           hq_upgrade_last_at = now() - interval '1 hour'
+         WHERE sc_track_id = '304';
+         UPDATE lyrics_lookup_state SET next_run_at = now() + interval '30 days'
+         WHERE sc_track_id = '305';",
+    )
+    .execute(&pool)
+    .await?;
+    let handler = StarTiersHandler::new(pool.clone(), ENRICH_MAX_ATTEMPTS);
+    handler.refresh().await?;
+    assert_eq!(full_pass(&pool).await?, 0);
+
+    let rounds = [
+        "UPDATE lyrics_lookup_queue AS queue
+         SET claim_job_id = gen_random_uuid(),
+             claim_job_generation = 1,
+             claim_job_lease_id = gen_random_uuid(),
+             claim_state_generation = state.generation,
+             claim_expires_at = now() + interval '15 minutes',
+             attempts = queue.attempts + 1,
+             last_attempt_at = now()
+         FROM lyrics_lookup_state AS state
+         WHERE state.track_id = queue.track_id
+           AND state.sc_track_id IN ('301', '302')",
+        "UPDATE lyrics_lookup_queue AS queue
+         SET next_run_at = CASE state.sc_track_id
+                 WHEN '301' THEN now() + interval '1 hour'
+                 ELSE now() - interval '1 minute'
+             END,
+             claim_job_id = NULL,
+             claim_job_generation = NULL,
+             claim_job_lease_id = NULL,
+             claim_state_generation = NULL,
+             claim_expires_at = NULL
+         FROM lyrics_lookup_state AS state
+         WHERE state.track_id = queue.track_id
+           AND state.sc_track_id IN ('301', '302')",
+        "UPDATE lyrics_lookup_state SET next_run_at = now() + interval '1 day'
+         WHERE sc_track_id = '303'",
+        "UPDATE lyrics_lookup_state SET next_run_at = now() - interval '1 minute'
+         WHERE sc_track_id = '305'",
+        "DELETE FROM lyrics_lookup_state WHERE sc_track_id = '304'",
+        "UPDATE tracks SET enrich_next_run_at = now() - interval '1 minute' WHERE sc_track_id = '303'",
+        "UPDATE tracks SET hq_upgrade_pending = true, storage_quality = 'sq' WHERE sc_track_id = '306'",
+        "UPDATE audio_index_wire_state SET status = 'reopenable' WHERE sc_track_id = '303'",
+        "UPDATE lyrics_cache SET embedded_at = now() WHERE sc_track_id = '305'",
+        "UPDATE storage_event_state SET uploaded_generation = 3 WHERE sc_track_id = '301'",
+        "INSERT INTO tracks (
+             sc_track_id, urn, title, title_normalized, duration_ms, storage_state, s3_verified_at
+         ) VALUES ('307', 'soundcloud:tracks:307', 'T307', 't307', 1000, 'ok', now());
+         INSERT INTO user_likes_tracks (user_id, sc_track_id) VALUES ('7', '307')",
+        "UPDATE lyrics_lookup_queue SET attempts = attempts + 1, last_attempt_at = now();
+         UPDATE tracks SET likes_count_sc = 10",
+    ];
+    for round in rounds {
+        sqlx::raw_sql(round).execute(&pool).await?;
+        handler.refresh().await?;
+        assert_eq!(full_pass(&pool).await?, 0, "{round}");
+    }
+
+    let before = flags(&pool).await?;
+    assert_eq!(sweep(&pool).await?, (0, 0));
+    assert_eq!(full_pass(&pool).await?, 0);
+    assert_eq!(flags(&pool).await?, before);
+    assert_eq!(before.len(), 7);
     Ok(())
 }
