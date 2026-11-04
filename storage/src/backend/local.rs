@@ -6,7 +6,8 @@ use tokio_util::io::ReaderStream;
 use tracing::info;
 use uuid::Uuid;
 
-use super::{BackendError, ByteStream, ObjectInfo};
+use super::{BackendError, ByteStream, ObjectInfo, Ranged};
+use crate::byte_range::ByteRange;
 
 const DURATION_EPSILON_SECS: f64 = 2.0;
 
@@ -102,12 +103,13 @@ impl LocalBackend {
         Ok((info, Box::pin(stream)))
     }
 
-    pub async fn stream_range(
-        &self,
-        key: &str,
-        start: u64,
-        end: u64,
-    ) -> Result<(ObjectInfo, ByteStream), BackendError> {
+    pub async fn read_range(&self, key: &str, range: &ByteRange) -> Result<Ranged, BackendError> {
+        let Some(info) = self.head(key).await? else {
+            return Err(BackendError::NotFound);
+        };
+        let Some(slice) = range.slice(info.size) else {
+            return Ok(Ranged::Unsatisfiable { total: info.size });
+        };
         let path = self.path_for(key);
         let mut file = match tokio::fs::File::open(&path).await {
             Ok(f) => f,
@@ -116,14 +118,14 @@ impl LocalBackend {
             }
             Err(e) => return Err(BackendError::Io(e)),
         };
-        file.seek(std::io::SeekFrom::Start(start)).await?;
-        let length = end - start + 1;
-        let info = ObjectInfo {
-            size: length,
-            content_type: Some(super::content_type_for(key).to_string()),
-        };
-        let stream = ReaderStream::new(file.take(length)).map(|r| r.map_err(std::io::Error::other));
-        Ok((info, Box::pin(stream)))
+        file.seek(std::io::SeekFrom::Start(slice.start)).await?;
+        let stream =
+            ReaderStream::new(file.take(slice.len())).map(|r| r.map_err(std::io::Error::other));
+        Ok(Ranged::Part {
+            slice,
+            content_type: info.content_type,
+            stream: Box::pin(stream),
+        })
     }
 }
 

@@ -11,8 +11,8 @@ use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
 use crate::AppState;
-use crate::backend::{Backend, BackendError, ByteStream, ObjectInfo};
-use crate::routes::byte_range::ByteRange;
+use crate::backend::{Backend, BackendError, ByteStream, ObjectInfo, Ranged};
+use crate::byte_range::{ByteRange, unsatisfied};
 
 const REDIRECT_PRESIGN_EXPIRES: Duration = Duration::from_secs(15 * 60);
 
@@ -49,41 +49,73 @@ pub async fn serve(
             .unwrap());
     };
 
-    let info = match state.backend.head(&path).await {
-        Ok(Some(info)) => info,
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(e) => {
-            warn!("[files] head {path} failed: {e}");
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    let Some((start, end)) = requested.resolve(info.size) else {
-        return Ok(Response::builder()
-            .status(StatusCode::RANGE_NOT_SATISFIABLE)
-            .header(header::CONTENT_RANGE, format!("bytes */{}", info.size))
-            .header(header::ACCEPT_RANGES, "bytes")
-            .body(Body::empty())
-            .unwrap());
-    };
-
-    let stream = match with_first_bytes(|| state.backend.stream_range(&path, start, end)).await {
-        Ok((_, stream)) => stream,
+    let ranged = match open_range(&state, &path, &requested).await {
+        Ok(ranged) => ranged,
         Err(BackendError::NotFound) => return Err(StatusCode::NOT_FOUND),
         Err(e) => {
-            warn!("[files] stream {path} {start}-{end} failed: {e}");
+            warn!("[files] stream {path} {} failed: {e}", requested.header());
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    Ok(object_response(&info, end - start + 1)
-        .status(StatusCode::PARTIAL_CONTENT)
-        .header(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{end}/{}", info.size),
+    Ok(match ranged {
+        Ranged::Unsatisfiable { total } => Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, unsatisfied(total))
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(Body::empty())
+            .unwrap(),
+        Ranged::Whole { info, stream } => object_response(&info, info.size)
+            .body(Body::from_stream(stream))
+            .unwrap(),
+        Ranged::Part {
+            slice,
+            content_type,
+            stream,
+        } => object_response(
+            &ObjectInfo {
+                size: slice.len(),
+                content_type,
+            },
+            slice.len(),
         )
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_RANGE, slice.content_range())
         .body(Body::from_stream(stream))
-        .unwrap())
+        .unwrap(),
+    })
+}
+
+async fn open_range(
+    state: &AppState,
+    path: &str,
+    range: &ByteRange,
+) -> Result<Ranged, BackendError> {
+    let mut last = None;
+    for _ in 0..OPEN_ATTEMPTS {
+        let primed = match state.backend.read_range(path, range).await? {
+            Ranged::Part {
+                slice,
+                content_type,
+                stream,
+            } => prime(stream).await.map(|stream| Ranged::Part {
+                slice,
+                content_type,
+                stream,
+            }),
+            Ranged::Whole { info, stream } => prime(stream)
+                .await
+                .map(|stream| Ranged::Whole { info, stream }),
+            unsatisfiable => return Ok(unsatisfiable),
+        };
+        match primed {
+            Ok(ranged) => return Ok(ranged),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(BackendError::Io(last.unwrap_or_else(|| {
+        std::io::Error::other("no bytes before the first chunk")
+    })))
 }
 
 async fn open_full(state: &AppState, path: &str) -> Result<(ObjectInfo, ByteStream), StatusCode> {
@@ -123,19 +155,25 @@ where
 {
     let mut last = None;
     for _ in 0..OPEN_ATTEMPTS {
-        let (info, mut stream) = open().await?;
-        match stream.next().await {
-            Some(Ok(first)) => {
-                let rest = futures::stream::once(async move { Ok(first) }).chain(stream);
-                return Ok((info, Box::pin(rest)));
-            }
-            Some(Err(e)) => last = Some(e),
-            None => return Ok((info, stream)),
+        let (info, stream) = open().await?;
+        match prime(stream).await {
+            Ok(stream) => return Ok((info, stream)),
+            Err(e) => last = Some(e),
         }
     }
     Err(BackendError::Io(last.unwrap_or_else(|| {
         std::io::Error::other("no bytes before the first chunk")
     })))
+}
+
+async fn prime(mut stream: ByteStream) -> Result<ByteStream, std::io::Error> {
+    match stream.next().await {
+        Some(Ok(first)) => Ok(Box::pin(
+            futures::stream::once(async move { Ok(first) }).chain(stream),
+        )),
+        Some(Err(e)) => Err(e),
+        None => Ok(stream),
+    }
 }
 
 /// GET /redirect/{path} — stable URL for AI pipeline workers.
