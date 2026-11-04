@@ -48,6 +48,20 @@ impl AuthService {
         })
     }
 
+    pub(crate) async fn replicated_now<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = AppResult<Option<T>>>,
+    {
+        if let Some(found) = lookup().await? {
+            return Ok(Some(found));
+        }
+        match self.feed().await? {
+            Feed::Stalled => Err(session_not_replicated()),
+            Feed::Local | Feed::Streaming => Ok(None),
+        }
+    }
+
     pub(crate) async fn replicated<T, F, Fut>(&self, lookup: F) -> AppResult<Option<T>>
     where
         F: Fn() -> Fut,

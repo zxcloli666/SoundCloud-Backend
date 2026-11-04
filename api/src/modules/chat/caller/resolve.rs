@@ -41,17 +41,25 @@ pub async fn resolve(chat: &ChatState, inner: &Inner, enc: &[u8; 32]) -> ChatRes
 }
 
 async fn session_entry(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionEntry>> {
-    chat.callers
+    if chat.callers.is_unknown(id) {
+        return Ok(None);
+    }
+    let found = chat
+        .callers
         .cold(async {
             if let Some(synthetic) = synthetic::session(chat, id).await? {
                 return Ok(Some(synthetic));
             }
             chat.auth
-                .replicated(|| stored_session(chat, id))
+                .replicated_now(|| stored_session(chat, id))
                 .await
                 .map_err(not_replicated)
         })
-        .await
+        .await?;
+    if found.is_none() {
+        chat.callers.remember_unknown(id);
+    }
+    Ok(found)
 }
 
 async fn stored_session(chat: &ChatState, id: Uuid) -> AppResult<Option<SessionEntry>> {
