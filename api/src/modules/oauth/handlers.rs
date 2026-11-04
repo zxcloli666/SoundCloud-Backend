@@ -19,9 +19,9 @@ use super::request::{
     redirect_with_code,
 };
 use crate::common::admission::{AdmissionRejection, Endpoint};
-use crate::modules::remote::confirm::{PageTicket, Status};
+use crate::modules::remote::confirm::{Confirming, PageTicket, Status};
 use crate::modules::remote::handlers::voice_disabled;
-use crate::modules::remote::linking::{self, Found, Pairing, REVIEW_USER, is_review_code};
+use crate::modules::remote::linking::{self, Found, REVIEW_USER, is_review_code};
 use crate::modules::remote::secrets::{normalize_code, random_token, secret_matches};
 use crate::state::AppState;
 
@@ -68,7 +68,6 @@ fn target_name(provider: LinkProvider) -> &'static str {
 }
 
 const TICKET_TTL_SECS: u64 = 600;
-const PAGE_WAIT_SECS: u64 = 60;
 const PENDING_TTL_SECS: u64 = 90;
 
 async fn authorize_page(
@@ -218,7 +217,7 @@ async fn authorize_submit(
         }
     };
     let ticket = random_token();
-    let record = PageTicket {
+    let mut record = PageTicket {
         status: Status::Pending,
         client_id: client.id.clone(),
         redirect_uri: form.redirect_uri.clone(),
@@ -226,21 +225,30 @@ async fn authorize_submit(
         scope: form.scope.clone(),
         location: String::new(),
         hint: pairing.hint.clone(),
+        confirming: None,
+    };
+    let ttl = match linking::ask(&st, &pairing).await {
+        Ok(confirming) => {
+            record.confirming = Some(confirming);
+            PENDING_TTL_SECS
+        }
+        Err(status) => {
+            record.status = status;
+            TICKET_TTL_SECS
+        }
     };
     if let Err(error) = st
         .confirm
-        .put(&format!("ticket:{ticket}"), &record, PENDING_TTL_SECS)
+        .put(&format!("ticket:{ticket}"), &record, ttl)
         .await
     {
         tracing::warn!(%error, "link ticket was not stored");
         st.confirm.release(pairing.code_id).await;
         return busy_form(&fields);
     }
-    let hint = pairing.hint.clone();
-    tokio::spawn(settle_page(st.clone(), pairing, ticket.clone(), record));
     html(
         StatusCode::OK,
-        page::pending(&ticket, &voice.skill_name, &hint),
+        page::pending(&ticket, &voice.skill_name, &record.hint),
     )
 }
 
@@ -285,49 +293,42 @@ fn found(location: HeaderValue) -> Response {
         .into_response()
 }
 
-async fn settle_page(st: AppState, pairing: Pairing, ticket: String, mut record: PageTicket) {
-    let asked = tokio::time::timeout(
-        std::time::Duration::from_secs(PAGE_WAIT_SECS + 5),
-        linking::ask_desktop(&st, &pairing),
-    )
-    .await;
-    record.status = asked.unwrap_or(Status::Silent);
-    if record.status == Status::Approved {
-        let issued = st
-            .links
-            .issue_auth_code(
-                &pairing.user,
-                pairing.provider,
-                &record.client_id,
+async fn settle_page(st: &AppState, record: &mut PageTicket, confirming: &Confirming) -> bool {
+    let Some(status) = linking::outcome(st, confirming).await else {
+        return false;
+    };
+    record.status = status;
+    if status != Status::Approved {
+        return true;
+    }
+    let issued = st
+        .links
+        .issue_auth_code(
+            &confirming.user,
+            confirming.provider,
+            &record.client_id,
+            &record.redirect_uri,
+        )
+        .await;
+    match issued {
+        Ok(code) => {
+            match redirect_with_code(
                 &record.redirect_uri,
-            )
-            .await;
-        match issued {
-            Ok(code) => {
-                match redirect_with_code(
-                    &record.redirect_uri,
-                    &code,
-                    &record.state,
-                    &record.client_id,
-                    &record.scope,
-                ) {
-                    Some(location) => record.location = location,
-                    None => record.status = Status::Failed,
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "auth code was not issued after the confirmation");
-                record.status = Status::Failed;
+                &code,
+                &record.state,
+                &record.client_id,
+                &record.scope,
+            ) {
+                Some(location) => record.location = location,
+                None => record.status = Status::Failed,
             }
         }
+        Err(error) => {
+            tracing::warn!(%error, "auth code was not issued after the confirmation");
+            record.status = Status::Failed;
+        }
     }
-    if let Err(error) = st
-        .confirm
-        .put(&format!("ticket:{ticket}"), &record, TICKET_TTL_SECS)
-        .await
-    {
-        tracing::warn!(%error, "link ticket result was not stored");
-    }
+    true
 }
 
 fn outcome_text(status: Status) -> &'static str {
@@ -352,7 +353,7 @@ async fn authorize_status(
     } else {
         Ok(None)
     };
-    let record = match record {
+    let mut record = match record {
         Ok(Some(record)) => record,
         Ok(None) => {
             return refused(
@@ -369,10 +370,19 @@ async fn authorize_status(
         }
     };
     if record.status == Status::Pending {
-        return html(
-            StatusCode::OK,
-            page::pending(&params.ticket, &voice.skill_name, &record.hint),
-        );
+        let settled = match record.confirming.clone() {
+            Some(confirming) => settle_page(&st, &mut record, &confirming).await,
+            None => {
+                record.status = Status::Failed;
+                true
+            }
+        };
+        if !settled {
+            return html(
+                StatusCode::OK,
+                page::pending(&params.ticket, &voice.skill_name, &record.hint),
+            );
+        }
     }
     let _ = st.confirm.take::<PageTicket>(&key).await;
     if record.status == Status::Approved

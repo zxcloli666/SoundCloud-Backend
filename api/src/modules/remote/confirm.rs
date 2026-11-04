@@ -1,13 +1,15 @@
+use backend_contracts::remote::LinkProvider;
 use deadpool_redis::Pool;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-pub const MAX_MISSES: i64 = 5;
+pub const MAX_CODE_ASKS: i64 = 5;
 const LOCK_SECS: u64 = 70;
 const DAY_SECS: i64 = 24 * 3600;
-const MISS_TTL_SECS: i64 = 700;
+const CODE_ASKS_TTL_SECS: i64 = 700;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +23,15 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Confirming {
+    pub code_id: Uuid,
+    pub user: String,
+    pub provider: LinkProvider,
+    pub command: Uuid,
+    pub deadline_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageTicket {
     pub status: Status,
     pub client_id: String,
@@ -30,6 +41,8 @@ pub struct PageTicket {
     pub location: String,
     #[serde(default)]
     pub hint: String,
+    #[serde(default)]
+    pub confirming: Option<Confirming>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +51,8 @@ pub struct SalutTicket {
     pub user: String,
     #[serde(default)]
     pub hint: String,
+    #[serde(default)]
+    pub confirming: Option<Confirming>,
 }
 
 pub struct LinkConfirm {
@@ -152,8 +167,22 @@ impl LinkConfirm {
         Ok(count.unwrap_or(0))
     }
 
-    pub async fn missed(&self, code_id: uuid::Uuid) -> AppResult<i64> {
-        self.count(&format!("misses:{code_id}"), MISS_TTL_SECS)
+    fn code_asks_key(code_id: Uuid) -> String {
+        format!("asks:{code_id}")
+    }
+
+    pub async fn note_code_ask(&self, code_id: Uuid) -> AppResult<i64> {
+        self.count(&Self::code_asks_key(code_id), CODE_ASKS_TTL_SECS)
             .await
+    }
+
+    pub async fn code_asks(&self, code_id: Uuid) -> AppResult<i64> {
+        let mut conn = self.redis.get().await.map_err(redis_error)?;
+        let count: Option<i64> = redis::cmd("GET")
+            .arg(self.key(&Self::code_asks_key(code_id)))
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_error)?;
+        Ok(count.unwrap_or(0))
     }
 }

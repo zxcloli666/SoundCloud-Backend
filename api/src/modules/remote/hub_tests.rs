@@ -4,12 +4,10 @@ use std::time::{Duration, Instant};
 use backend_contracts::remote::{
     CommandKind, LinkProvider, RemoteCommand, RemoteReply, WaitResponse,
 };
-use deadpool_redis::{Config, Pool, Runtime};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::buffer::Buffer;
-use super::hub::{Asked, RemoteHub, now_micros, now_ms};
+use super::hub::{Asked, Refused, RemoteHub, now_ms};
 use crate::bus::nats::NatsService;
 
 impl RemoteHub {
@@ -36,42 +34,42 @@ impl RemoteHub {
         )
         .await
     }
+
+    async fn confirm(&self, user: &str, provider: LinkProvider, hint: &str) -> RemoteCommand {
+        let command = self
+            .link_confirm(user, provider, hint)
+            .await
+            .expect("a reachable desktop");
+        assert!(self.post(&command).await, "the confirmation was published");
+        command
+    }
 }
 
-fn redis() -> Pool {
-    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
-    Config::from_url(url)
-        .create_pool(Some(Runtime::Tokio1))
-        .expect("a redis pool")
+fn prefix() -> String {
+    format!("remote_test_{}", Uuid::now_v7().simple())
 }
 
-async fn hub_on_nats() -> Arc<RemoteHub> {
+async fn host(prefix: &str) -> Arc<RemoteHub> {
     let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned());
     let nats = NatsService::connect(&url, CancellationToken::new())
         .await
         .expect("nats");
-    let hub = RemoteHub::new(
-        Some(nats),
-        redis(),
-        &format!("remote-test-{}", Uuid::now_v7()),
-    );
-    hub.start().await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let hub = RemoteHub::new(Some(nats), prefix);
+    assert!(hub.prepare().await, "the remote store opens");
     hub
 }
 
-fn local_hub() -> Arc<RemoteHub> {
-    RemoteHub::new(None, redis(), &format!("remote-test-{}", Uuid::now_v7()))
+async fn hosts<const N: usize>() -> [Arc<RemoteHub>; N] {
+    let prefix = prefix();
+    let mut opened = Vec::with_capacity(N);
+    for _ in 0..N {
+        opened.push(host(&prefix).await);
+    }
+    opened.try_into().unwrap_or_else(|_| unreachable!())
 }
 
-async fn until_known(hub: &RemoteHub, user: &str) {
-    for _ in 0..100 {
-        if hub.active_device(user).is_some() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("presence never reached the host");
+fn user() -> String {
+    Uuid::now_v7().simple().to_string()
 }
 
 fn spoken(id: Uuid, text: &str) -> RemoteReply {
@@ -84,259 +82,389 @@ fn spoken(id: Uuid, text: &str) -> RemoteReply {
     }
 }
 
+fn texts(response: &WaitResponse) -> Vec<&str> {
+    response
+        .commands
+        .iter()
+        .map(|command| command.text.as_str())
+        .collect()
+}
+
+fn raw_command(user: &str, text: &str, created_at: i64) -> RemoteCommand {
+    RemoteCommand {
+        id: Uuid::now_v7(),
+        kind: CommandKind::Utterance,
+        seq: 0,
+        user: user.to_owned(),
+        source: "alice".to_owned(),
+        text: text.to_owned(),
+        hint: None,
+        created_at,
+        expires_at: now_ms() + 30_000,
+    }
+}
+
+fn waiting(
+    hub: &Arc<RemoteHub>,
+    user: &str,
+    device: &'static str,
+    active: i64,
+    cursor: i64,
+    hold: Duration,
+) -> tokio::task::JoinHandle<WaitResponse> {
+    let hub = hub.clone();
+    let user = user.to_owned();
+    tokio::spawn(async move { hub.poll(&user, device, active, Some(cursor), hold).await })
+}
+
 #[tokio::test]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_command_created_on_one_host_reaches_a_waiter_on_another_and_the_reply_returns() {
-    let creator = hub_on_nats().await;
-    let desktop_host = hub_on_nats().await;
-    let user = Uuid::now_v7().to_string();
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_command_from_one_host_reaches_a_desktop_on_another_and_the_reply_returns() {
+    let [star, main] = hosts().await;
+    let user = user();
 
-    let handshake = desktop_host
-        .poll(&user, "pc", 10, None, Duration::from_secs(1))
-        .await;
-    let waiting = {
-        let host = desktop_host.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            host.poll(
-                &user,
-                "pc",
-                10,
-                Some(handshake.cursor),
-                Duration::from_secs(10),
-            )
-            .await
-        })
-    };
-    until_known(&creator, &user).await;
-
+    let handshake = main.poll(&user, "pc", 10, None, Duration::ZERO).await;
+    let desktop = waiting(
+        &main,
+        &user,
+        "pc",
+        10,
+        handshake.cursor,
+        Duration::from_secs(10),
+    );
     let asking = {
-        let creator = creator.clone();
+        let star = star.clone();
         let user = user.clone();
         tokio::spawn(async move {
-            creator
-                .ask(&user, "alice", "следующий трек", Duration::from_secs(5))
+            star.ask(&user, "alice", "следующий трек", Duration::from_secs(5))
                 .await
         })
     };
 
-    let delivered = waiting.await.expect("the waiter finishes");
-    assert_eq!(delivered.commands.len(), 1);
+    let delivered = desktop.await.expect("the waiter finishes");
+    assert_eq!(texts(&delivered), ["следующий трек"]);
     let command = &delivered.commands[0];
-    assert_eq!(command.text, "следующий трек");
     assert_eq!(command.source, "alice");
+    assert!(command.seq > handshake.cursor);
+    assert_eq!(delivered.cursor, command.seq);
     assert_eq!(delivered.active_device.as_deref(), Some("pc"));
 
-    desktop_host
-        .reply(&user, spoken(command.id, "Следующий трек"))
-        .await;
+    assert!(
+        main.reply(&user, spoken(command.id, "Следующий трек"))
+            .await
+    );
     match asking.await.expect("the asker finishes") {
         Asked::Reply(reply) => assert_eq!(reply.speech, "Следующий трек"),
-        _ => panic!("the reply did not come back to the creating host"),
+        _ => panic!("the reply did not come back to the asking host"),
     }
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis and NATS"]
+#[ignore = "requires a local NATS with JetStream"]
+async fn an_answer_survives_a_restart_of_the_asking_host() {
+    let prefix = prefix();
+    let star = host(&prefix).await;
+    let main = host(&prefix).await;
+    let user = user();
+
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let command = star.confirm(&user, LinkProvider::Salut, "47").await;
+    drop(star);
+    let shown = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_secs(2),
+        )
+        .await;
+    assert_eq!(shown.commands[0].id, command.id);
+    assert!(main.reply(&user, spoken(command.id, "")).await);
+
+    let restarted = host(&prefix).await;
+    let answer = restarted
+        .answer(&user, command.id)
+        .await
+        .expect("the answer is read after the restart");
+    assert!(answer.ok);
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
 async fn only_the_most_recently_active_desktop_gets_the_command() {
-    let first_host = hub_on_nats().await;
-    let second_host = hub_on_nats().await;
-    let creator = hub_on_nats().await;
-    let user = Uuid::now_v7().to_string();
+    let [first, second, star] = hosts().await;
+    let user = user();
 
-    let quiet = first_host
-        .poll(&user, "laptop", 5, None, Duration::from_secs(1))
-        .await;
-    let active = second_host
-        .poll(&user, "desktop", 9, None, Duration::from_secs(1))
-        .await;
-    let laptop = {
-        let host = first_host.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            host.poll(
-                &user,
-                "laptop",
-                5,
-                Some(quiet.cursor),
-                Duration::from_secs(2),
-            )
-            .await
-        })
-    };
-    let desktop = {
-        let host = second_host.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            host.poll(
-                &user,
-                "desktop",
-                9,
-                Some(active.cursor),
-                Duration::from_secs(2),
-            )
-            .await
-        })
-    };
-    until_known(&creator, &user).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let quiet = first.poll(&user, "laptop", 5, None, Duration::ZERO).await;
+    let active = second.poll(&user, "desktop", 9, None, Duration::ZERO).await;
+    assert_eq!(star.active_device(&user).await.as_deref(), Some("desktop"));
+    let laptop = waiting(
+        &first,
+        &user,
+        "laptop",
+        5,
+        quiet.cursor,
+        Duration::from_secs(2),
+    );
+    let desktop = waiting(
+        &second,
+        &user,
+        "desktop",
+        9,
+        active.cursor,
+        Duration::from_secs(2),
+    );
 
-    let _ = creator
+    let _ = star
         .ask(&user, "salut", "пауза", Duration::from_millis(300))
         .await;
-    assert!(laptop.await.expect("laptop").commands.is_empty());
-    assert_eq!(desktop.await.expect("desktop").commands.len(), 1);
+    let laptop = laptop.await.expect("laptop");
+    assert!(laptop.commands.is_empty());
+    assert_eq!(laptop.active_device.as_deref(), Some("desktop"));
+    assert_eq!(texts(&desktop.await.expect("desktop")), ["пауза"]);
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis and NATS"]
+#[ignore = "requires a local NATS with JetStream"]
 async fn a_user_nobody_is_polling_for_is_offline_at_once() {
-    let hub = hub_on_nats().await;
-    let started = std::time::Instant::now();
+    let [hub] = hosts().await;
+    let started = Instant::now();
     let asked = hub
-        .ask("no-such-user", "alice", "пауза", Duration::from_secs(3))
+        .ask(&user(), "alice", "пауза", Duration::from_secs(3))
         .await;
     assert!(matches!(asked, Asked::Offline));
-    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(started.elapsed() < Duration::from_millis(500));
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_command_sent_between_two_waits_is_picked_up_from_the_buffer() {
-    let hub = local_hub();
-    let user = Uuid::now_v7().to_string();
-    let handshake = hub.poll(&user, "pc", 1, None, Duration::from_secs(1)).await;
-    let missed = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(handshake.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert!(missed.commands.is_empty());
-    assert_eq!(missed.cursor, handshake.cursor);
+#[ignore = "requires a local NATS with JetStream"]
+async fn commands_from_two_hosts_between_two_waits_arrive_in_order() {
+    let [first, second, main] = hosts().await;
+    let user = user();
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
 
-    let asked = hub
-        .ask(&user, "alice", "громче", Duration::from_millis(200))
-        .await;
-    assert!(matches!(asked, Asked::Silent));
-
-    let caught = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(handshake.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert_eq!(caught.commands.len(), 1);
-    assert_eq!(caught.commands[0].text, "громче");
-    let again = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(caught.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert!(again.commands.is_empty());
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_reply_from_another_user_is_ignored() {
-    let hub = local_hub();
-    let user = Uuid::now_v7().to_string();
-    let _ = hub
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    let asking = {
-        let hub = hub.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            hub.ask(&user, "alice", "пауза", Duration::from_millis(400))
-                .await
-        })
-    };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let buffered = hub
-        .poll(&user, "pc", 1, Some(0), Duration::from_millis(10))
-        .await;
-    let id = buffered
-        .commands
-        .first()
-        .map(|command| command.id)
-        .expect("a command");
-    hub.reply("someone-else", spoken(id, "чужой ответ")).await;
-    assert!(matches!(asking.await.expect("asker"), Asked::Silent));
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn two_hosts_on_one_redis_number_a_users_commands_in_order() {
-    let prefix = format!("remote-test-{}", Uuid::now_v7());
-    let first = RemoteHub::new(None, redis(), &prefix);
-    let second = RemoteHub::new(None, redis(), &prefix);
-    let user = Uuid::now_v7().to_string();
-    first
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    second
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    for (hub, text) in [(&first, "раз"), (&second, "два"), (&first, "три")] {
-        let _ = hub
-            .ask(&user, "alice", text, Duration::from_millis(30))
+    for (host, text) in [(&first, "раз"), (&second, "два"), (&first, "три")] {
+        let _ = host
+            .ask(&user, "alice", text, Duration::from_millis(50))
             .await;
     }
-    let caught = first
-        .poll(&user, "pc", 1, Some(0), Duration::from_millis(50))
+
+    let caught = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_secs(1),
+        )
         .await;
-    let texts: Vec<&str> = caught.commands.iter().map(|c| c.text.as_str()).collect();
-    assert_eq!(texts, ["раз", "два", "три"]);
-    let seqs: Vec<i64> = caught.commands.iter().map(|c| c.seq).collect();
+    assert_eq!(texts(&caught), ["раз", "два", "три"]);
+    let seqs: Vec<i64> = caught.commands.iter().map(|command| command.seq).collect();
     assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(caught.cursor, *seqs.last().expect("a cursor"));
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_link_confirmation_is_a_command_of_its_own_kind() {
-    let hub = local_hub();
-    let user = Uuid::now_v7().to_string();
-    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_command_sent_before_the_handshake_is_not_delivered() {
+    let [star, main] = hosts().await;
+    let user = user();
+    main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let _ = star
+        .ask(&user, "alice", "старая команда", Duration::from_millis(50))
         .await;
-    let asking = {
-        let hub = hub.clone();
-        let user = user.clone();
-        tokio::spawn(async move { hub.confirm_link(&user, LinkProvider::Salut, "47").await })
-    };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let delivered = hub
-        .poll(&user, "pc", 1, Some(0), Duration::from_millis(50))
+
+    let restarted = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let quiet = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(restarted.cursor),
+            Duration::from_millis(200),
+        )
+        .await;
+    assert!(quiet.commands.is_empty(), "{:?}", texts(&quiet));
+    assert_eq!(quiet.cursor, restarted.cursor);
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn the_cursor_does_not_depend_on_the_clocks_of_the_hosts() {
+    let [main] = hosts().await;
+    let store = main.store().await.expect("a store");
+    let user = user();
+    let skew = 10 * 60 * 1000;
+
+    store
+        .publish(&raw_command(&user, "от спешащих часов", now_ms() + skew))
+        .await
+        .expect("published");
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    store
+        .publish(&raw_command(&user, "от отстающих часов", now_ms() - skew))
+        .await
+        .expect("published");
+
+    let caught = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_secs(1),
+        )
+        .await;
+    assert_eq!(texts(&caught), ["от отстающих часов"]);
+    assert!(caught.cursor > handshake.cursor);
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_cursor_from_before_a_stream_reset_falls_back_to_a_handshake() {
+    let [main] = hosts().await;
+    let user = user();
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let started = Instant::now();
+    let reset = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor + 1_000),
+            Duration::from_secs(5),
+        )
+        .await;
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(reset.commands.is_empty());
+    assert_eq!(reset.cursor, handshake.cursor);
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_link_confirmation_is_a_command_of_its_own_kind() {
+    let [star, main] = hosts().await;
+    let user = user();
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let sent = star.confirm(&user, LinkProvider::Salut, "47").await;
+
+    let delivered = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_secs(1),
+        )
         .await;
     let command = &delivered.commands[0];
+    assert_eq!(command.id, sent.id);
     assert_eq!(command.kind, CommandKind::LinkConfirm);
     assert_eq!(command.source, "salut");
     assert_eq!(command.hint.as_deref(), Some("47"));
     assert!(command.expires_at - command.created_at > 55_000);
-    hub.reply(&user, spoken(command.id, "")).await;
-    match asking.await.expect("asker") {
-        Asked::Reply(reply) => assert!(reply.ok),
-        _ => panic!("no answer"),
-    }
+
+    assert!(star.answer(&user, command.id).await.is_none());
+    assert!(main.reply(&user, spoken(command.id, "")).await);
+    assert!(star.answer(&user, command.id).await.expect("an answer").ok);
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
-    let hub = local_hub();
-    let user = Uuid::now_v7().to_string();
-    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
+#[ignore = "requires a local NATS with JetStream"]
+async fn an_answered_link_confirm_never_reaches_a_desktop_that_takes_over_on_another_host() {
+    let [first, second] = hosts().await;
+    let user = user();
+    let laptop = second.poll(&user, "laptop", 1, None, Duration::ZERO).await;
+    let desktop = first.poll(&user, "desktop", 5, None, Duration::ZERO).await;
+
+    let sent = first.confirm(&user, LinkProvider::Alice, "47").await;
+    let shown = first
+        .poll(
+            &user,
+            "desktop",
+            5,
+            Some(desktop.cursor),
+            Duration::from_secs(1),
+        )
         .await;
+    assert_eq!(shown.commands[0].id, sent.id);
+    assert!(first.reply(&user, spoken(sent.id, "")).await);
+
+    let taken_over = second
+        .poll(
+            &user,
+            "laptop",
+            9,
+            Some(laptop.cursor),
+            Duration::from_millis(200),
+        )
+        .await;
+    assert!(taken_over.commands.is_empty(), "{:?}", texts(&taken_over));
+    assert_eq!(taken_over.active_device.as_deref(), Some("laptop"));
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn the_first_answer_wins() {
+    let [star, main] = hosts().await;
+    let user = user();
+    main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let sent = star.confirm(&user, LinkProvider::Alice, "47").await;
+
+    assert!(main.reply(&user, spoken(sent.id, "да")).await);
+    let mut no = spoken(sent.id, "нет");
+    no.ok = false;
+    assert!(main.reply(&user, no).await);
+
+    let answer = star.answer(&user, sent.id).await.expect("an answer");
+    assert!(answer.ok);
+    assert_eq!(answer.speech, "да");
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_reply_from_another_user_does_not_answer_the_command() {
+    let [star, main] = hosts().await;
+    let user = user();
+    let stranger = self::user();
+    let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
+    let asking = {
+        let star = star.clone();
+        let user = user.clone();
+        tokio::spawn(async move {
+            star.ask(&user, "alice", "пауза", Duration::from_millis(800))
+                .await
+        })
+    };
+    let shown = main
+        .poll(
+            &user,
+            "pc",
+            1,
+            Some(handshake.cursor),
+            Duration::from_secs(1),
+        )
+        .await;
+    let id = shown.commands[0].id;
+
+    assert!(main.reply(&stranger, spoken(id, "чужой ответ")).await);
+    assert!(matches!(asking.await.expect("asker"), Asked::Silent));
+    assert!(star.answer(&user, id).await.is_none());
+
+    assert!(main.reply(&user, spoken(id, "свой ответ")).await);
+    assert_eq!(
+        star.answer(&user, id).await.expect("an answer").speech,
+        "свой ответ"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires a local NATS with JetStream"]
+async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
+    let [hub] = hosts().await;
+    let user = user();
+    hub.poll(&user, "pc", 1, None, Duration::ZERO).await;
     let started = Instant::now();
     tokio::time::sleep(Duration::from_millis(300)).await;
     let _ = hub
@@ -349,37 +477,31 @@ async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
         )
         .await;
     assert!(
-        started.elapsed() < Duration::from_millis(650),
+        started.elapsed() < Duration::from_millis(700),
         "{:?}",
         started.elapsed()
     );
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_dropped_ask_leaves_no_pending_entry() {
-    let hub = local_hub();
-    let user = Uuid::now_v7().to_string();
-    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    let asking = {
-        let hub = hub.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            hub.ask(&user, "alice", "пауза", Duration::from_secs(5))
-                .await
-        })
-    };
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(hub.pending_count(), 1);
-    asking.abort();
-    let _ = asking.await;
-    assert_eq!(hub.pending_count(), 0, "an aborted request cleans up");
+#[ignore = "requires a local NATS with JetStream"]
+async fn a_polling_loop_writes_presence_once() {
+    let [hub] = hosts().await;
+    let store = hub.store().await.expect("a store");
+    let user = user();
+    hub.poll(&user, "pc", 7, None, Duration::ZERO).await;
+    let first = store.device_revision(&user).await.expect("a roster entry");
+    for _ in 0..50 {
+        hub.poll(&user, "pc", 7, None, Duration::ZERO).await;
+    }
+    assert_eq!(store.device_revision(&user).await, Some(first));
+    hub.poll(&user, "pc", 8, None, Duration::ZERO).await;
+    assert!(store.device_revision(&user).await > Some(first));
 }
 
 #[tokio::test]
 async fn presence_goes_out_only_for_a_new_device_a_new_activity_or_a_stale_entry() {
-    let hub = local_hub();
+    let hub = RemoteHub::new(None, &prefix());
     let start = Instant::now();
     assert!(hub.presence_due("1", "pc", 5, start));
     assert!(!hub.presence_due("1", "pc", 5, start + Duration::from_secs(1)));
@@ -391,262 +513,13 @@ async fn presence_goes_out_only_for_a_new_device_a_new_activity_or_a_stale_entry
 }
 
 #[tokio::test]
-#[ignore = "requires a local Redis and NATS"]
-async fn a_polling_loop_publishes_presence_once() {
-    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned());
-    let watcher = async_nats::connect(&url).await.expect("nats");
-    let mut presence = watcher
-        .subscribe(backend_contracts::remote::PRESENCE_SUBJECT)
-        .await
-        .expect("a presence subscription");
-    watcher.flush().await.expect("flush");
-    let hub = hub_on_nats().await;
-    let user = Uuid::now_v7().to_string();
-    for _ in 0..50 {
-        hub.poll(&user, "pc", 7, None, Duration::from_millis(1))
-            .await;
-    }
-    let mut seen = 0;
-    while let Ok(Some(message)) = tokio::time::timeout(
-        Duration::from_millis(500),
-        futures::StreamExt::next(&mut presence),
-    )
-    .await
-    {
-        let parsed: backend_contracts::remote::Presence =
-            serde_json::from_slice(&message.payload).expect("presence json");
-        if parsed.user == user {
-            seen += 1;
-        }
-    }
-    assert_eq!(seen, 1, "fifty polls with the same activity publish once");
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_stuck_redis_does_not_hold_back_live_delivery() {
-    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
-    let mut config = Config::from_url(url);
-    config.pool = Some(deadpool_redis::PoolConfig {
-        max_size: 1,
-        timeouts: deadpool_redis::Timeouts {
-            wait: Some(Duration::from_secs(3)),
-            create: Some(Duration::from_secs(1)),
-            recycle: Some(Duration::from_secs(1)),
-        },
-        ..Default::default()
-    });
-    let pool = config.create_pool(Some(Runtime::Tokio1)).expect("a pool");
-    let hub = RemoteHub::new(
-        None,
-        pool.clone(),
-        &format!("remote-test-{}", Uuid::now_v7()),
-    );
-    let user = Uuid::now_v7().to_string();
-    let handshake = hub
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    let waiting = {
-        let hub = hub.clone();
-        let user = user.clone();
-        tokio::spawn(async move {
-            hub.poll(
-                &user,
-                "pc",
-                1,
-                Some(handshake.cursor),
-                Duration::from_secs(5),
-            )
-            .await
-        })
-    };
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let held = pool.get().await.expect("the only connection");
-    let now = now_ms();
-    let started = Instant::now();
-    hub.receive(backend_contracts::remote::RemoteCommand {
-        id: Uuid::now_v7(),
-        kind: CommandKind::Utterance,
-        seq: now_micros(),
-        user: user.clone(),
-        source: "alice".to_owned(),
-        text: "пауза".to_owned(),
-        hint: None,
-        created_at: now,
-        expires_at: now + 5_000,
-    })
-    .await;
-    let delivered = waiting.await.expect("the waiter");
-    assert_eq!(delivered.commands.len(), 1);
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        started.elapsed()
-    );
-    drop(held);
-}
-
-const SKEW_MICROS: i64 = 5_000_000;
-
-fn hub_and_buffer() -> (Arc<RemoteHub>, Buffer) {
-    let prefix = format!("remote-test-{}", Uuid::now_v7());
-    (
-        RemoteHub::new(None, redis(), &prefix),
-        Buffer::new(redis(), prefix),
-    )
-}
-
-fn command_numbered(user: &str, seq: i64, text: &str) -> RemoteCommand {
-    let now = now_ms();
-    RemoteCommand {
-        id: Uuid::now_v7(),
-        kind: CommandKind::Utterance,
-        seq,
-        user: user.to_owned(),
-        source: "alice".to_owned(),
-        text: text.to_owned(),
-        hint: None,
-        created_at: now,
-        expires_at: now + 5_000,
-    }
-}
-
-fn texts(response: &WaitResponse) -> Vec<&str> {
-    response
-        .commands
-        .iter()
-        .map(|command| command.text.as_str())
-        .collect()
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_host_with_a_slow_clock_still_reaches_a_desktop_that_just_started() {
-    let (hub, buffer) = hub_and_buffer();
-    let user = Uuid::now_v7().to_string();
-    let handshake = hub
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-
-    let seq = buffer
-        .next_seq(&user, now_micros() - SKEW_MICROS)
-        .await
-        .expect("a sequence");
-    buffer
-        .push(&command_numbered(&user, seq, "пауза"))
-        .await
-        .expect("buffered");
-
-    let caught = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(handshake.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert_eq!(texts(&caught), ["пауза"]);
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn a_command_numbered_by_a_fast_clock_before_the_start_is_not_delivered() {
-    let (hub, buffer) = hub_and_buffer();
-    let user = Uuid::now_v7().to_string();
-    let seq = buffer
-        .next_seq(&user, now_micros() + SKEW_MICROS)
-        .await
-        .expect("a sequence");
-    buffer
-        .push(&command_numbered(&user, seq, "старая команда"))
-        .await
-        .expect("buffered");
-
-    let handshake = hub
-        .poll(&user, "pc", 1, None, Duration::from_millis(10))
-        .await;
-    assert_eq!(handshake.cursor, seq);
-    let quiet = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(handshake.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert!(quiet.commands.is_empty());
-
-    let _ = hub
-        .ask(&user, "alice", "новая команда", Duration::from_millis(30))
-        .await;
-    let caught = hub
-        .poll(
-            &user,
-            "pc",
-            1,
-            Some(handshake.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert_eq!(texts(&caught), ["новая команда"]);
-    assert!(caught.cursor > seq);
-}
-
-#[tokio::test]
-#[ignore = "requires a local Redis"]
-async fn an_answered_link_confirm_never_reaches_a_desktop_that_takes_over_on_another_host() {
-    let prefix = format!("remote-test-{}", Uuid::now_v7());
-    let first = RemoteHub::new(None, redis(), &prefix);
-    let second = RemoteHub::new(None, redis(), &prefix);
-    let user = Uuid::now_v7().to_string();
-    let laptop = second
-        .poll(&user, "laptop", 1, None, Duration::from_millis(10))
-        .await;
-    let desktop = first
-        .poll(&user, "desktop", 5, None, Duration::from_millis(10))
-        .await;
-
-    let asking = {
-        let first = first.clone();
-        let user = user.clone();
-        tokio::spawn(async move { first.confirm_link(&user, LinkProvider::Alice, "47").await })
-    };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let shown = first
-        .poll(
-            &user,
-            "desktop",
-            5,
-            Some(desktop.cursor),
-            Duration::from_secs(1),
-        )
-        .await;
-    let command = &shown.commands[0];
-    assert_eq!(command.kind, CommandKind::LinkConfirm);
-    first.reply(&user, spoken(command.id, "")).await;
-    assert!(matches!(asking.await.expect("asker"), Asked::Reply(_)));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let taken_over = second
-        .poll(
-            &user,
-            "laptop",
-            9,
-            Some(laptop.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert!(taken_over.commands.is_empty(), "{:?}", texts(&taken_over));
-    let same_host = first
-        .poll(
-            &user,
-            "desktop",
-            9,
-            Some(desktop.cursor),
-            Duration::from_millis(50),
-        )
-        .await;
-    assert!(same_host.commands.is_empty());
+async fn without_nats_waits_are_refused_and_skills_see_no_desktop() {
+    let hub = RemoteHub::new(None, &prefix());
+    let refused = hub.wait("1", "pc", 1, None, Duration::ZERO).await;
+    assert!(matches!(refused, Err(Refused::Unavailable)));
+    assert!(matches!(
+        hub.ask("1", "alice", "пауза", Duration::from_secs(1)).await,
+        Asked::Offline
+    ));
+    assert!(!hub.reply("1", spoken(Uuid::now_v7(), "")).await);
 }

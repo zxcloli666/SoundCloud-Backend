@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::hub::Refused;
 use crate::common::admission::{AdmissionRejection, Endpoint};
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
@@ -138,13 +139,19 @@ async fn wait(
         .wait(&ctx.sc_user_id, &device, active, since, hold)
         .await
     {
-        Some(response) => Ok(Json(response)),
-        None => Err(AppError::coded(
+        Ok(response) => Ok(Json(response)),
+        Err(Refused::TooManyDevices) => Err(AppError::coded(
             StatusCode::TOO_MANY_REQUESTS,
             "voice_too_many_devices",
             "Too many devices are waiting for this account",
         )
         .with_retry_after(20)),
+        Err(Refused::Unavailable) => Err(AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_busy",
+            "remote is busy, try again shortly",
+        )
+        .with_retry_after(5)),
     }
 }
 
@@ -163,7 +170,8 @@ async fn reply(
     } else {
         body.display
     };
-    st.remote
+    let recorded = st
+        .remote
         .reply(
             &ctx.sc_user_id,
             RemoteReply {
@@ -175,6 +183,14 @@ async fn reply(
             },
         )
         .await;
+    if !recorded {
+        return Err(AppError::coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "voice_busy",
+            "remote is busy, try again shortly",
+        )
+        .with_retry_after(1));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

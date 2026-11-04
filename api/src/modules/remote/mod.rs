@@ -1,11 +1,11 @@
-pub mod buffer;
 pub mod confirm;
+pub mod devices;
 pub mod handlers;
 pub mod hub;
 pub mod linking;
 pub mod links;
-pub mod roster;
 pub mod secrets;
+pub mod store;
 pub mod waits;
 
 #[cfg(test)]

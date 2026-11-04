@@ -3,8 +3,8 @@ use std::time::Duration;
 use backend_contracts::remote::LinkProvider;
 use uuid::Uuid;
 
-use super::confirm::{LinkConfirm, MAX_MISSES, Status};
-use super::hub::Asked;
+use super::confirm::{Confirming, MAX_CODE_ASKS, Status};
+use super::hub::now_ms;
 use super::links::{FoundCode, LinksService};
 use super::secrets::{random_hint, review_code_matches};
 use crate::config::VoiceCfg;
@@ -56,6 +56,18 @@ pub async fn find(st: &AppState, provider: LinkProvider, code: &str) -> AppResul
     if !st.confirm.claim(found.id).await? {
         return Ok(Found::InUse);
     }
+    match st.confirm.code_asks(found.id).await {
+        Ok(asks) if asks >= MAX_CODE_ASKS => {
+            let _ = st.links.consume_code(found.id).await;
+            st.confirm.release(found.id).await;
+            return Ok(Found::NoCode);
+        }
+        Ok(_) => {}
+        Err(error) => {
+            st.confirm.release(found.id).await;
+            return Err(error);
+        }
+    }
     let asked = match st.confirm.asks_so_far(&found.user).await {
         Ok(count) => count,
         Err(error) => {
@@ -75,52 +87,55 @@ pub async fn find(st: &AppState, provider: LinkProvider, code: &str) -> AppResul
     }))
 }
 
-pub async fn ask_desktop(st: &AppState, pairing: &Pairing) -> Status {
-    let status = confirm_on_desktop(st, pairing).await;
-    st.confirm.release(pairing.code_id).await;
-    status
-}
-
-async fn confirm_on_desktop(st: &AppState, pairing: &Pairing) -> Status {
-    if st.remote.active_device(&pairing.user).is_none() {
-        return Status::Offline;
-    }
+pub async fn ask(st: &AppState, pairing: &Pairing) -> Result<Confirming, Status> {
+    let Some(command) = st
+        .remote
+        .link_confirm(&pairing.user, pairing.provider, &pairing.hint)
+        .await
+    else {
+        st.confirm.release(pairing.code_id).await;
+        return Err(Status::Offline);
+    };
     if let Err(error) = st.confirm.asked_today(&pairing.user).await {
         tracing::warn!(%error, "link confirmations were not counted");
-        return Status::Failed;
+        st.confirm.release(pairing.code_id).await;
+        return Err(Status::Failed);
     }
-    let asked = st
-        .remote
-        .confirm_link(&pairing.user, pairing.provider, &pairing.hint)
-        .await;
-    match asked {
-        Asked::Reply(reply) if reply.ok => match st.links.consume_code(pairing.code_id).await {
-            Ok(true) => Status::Approved,
-            _ => Status::Failed,
-        },
-        Asked::Reply(_) => {
-            let _ = st.links.consume_code(pairing.code_id).await;
-            Status::Denied
-        }
-        Asked::Offline => Status::Offline,
-        Asked::Silent => {
-            note_miss(&st.links, &st.confirm, pairing.code_id).await;
-            Status::Silent
-        }
+    if let Err(error) = st.confirm.note_code_ask(pairing.code_id).await {
+        tracing::warn!(%error, "link code asks were not counted");
+        st.confirm.release(pairing.code_id).await;
+        return Err(Status::Failed);
     }
+    if !st.remote.post(&command).await {
+        st.confirm.release(pairing.code_id).await;
+        return Err(Status::Failed);
+    }
+    Ok(Confirming {
+        code_id: pairing.code_id,
+        user: pairing.user.clone(),
+        provider: pairing.provider,
+        command: command.id,
+        deadline_ms: command.expires_at,
+    })
 }
 
-pub async fn note_miss(links: &LinksService, confirm: &LinkConfirm, code_id: Uuid) -> i64 {
-    match confirm.missed(code_id).await {
-        Ok(misses) => {
-            if misses >= MAX_MISSES {
-                let _ = links.consume_code(code_id).await;
+pub async fn outcome(st: &AppState, confirming: &Confirming) -> Option<Status> {
+    if let Some(reply) = st.remote.answer(&confirming.user, confirming.command).await {
+        let status = if reply.ok {
+            match st.links.consume_code(confirming.code_id).await {
+                Ok(true) => Status::Approved,
+                _ => Status::Failed,
             }
-            misses
-        }
-        Err(error) => {
-            tracing::warn!(%error, "link code misses were not counted");
-            0
-        }
+        } else {
+            let _ = st.links.consume_code(confirming.code_id).await;
+            Status::Denied
+        };
+        st.confirm.release(confirming.code_id).await;
+        return Some(status);
     }
+    if now_ms() <= confirming.deadline_ms {
+        return None;
+    }
+    st.confirm.release(confirming.code_id).await;
+    Some(Status::Silent)
 }

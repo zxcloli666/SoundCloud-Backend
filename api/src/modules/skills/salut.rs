@@ -16,7 +16,7 @@ use super::speech::spoken_digits;
 use crate::common::admission::{AdmissionRejection, Endpoint};
 use crate::modules::remote::confirm::{SalutTicket, Status};
 use crate::modules::remote::handlers::voice_disabled;
-use crate::modules::remote::linking::{self, Found, Pairing, REVIEW_USER, is_review_code};
+use crate::modules::remote::linking::{self, Found, REVIEW_USER, is_review_code};
 use crate::modules::remote::secrets::{normalize_code, token_matches};
 use crate::state::AppState;
 
@@ -293,23 +293,28 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
             return Said::plain(phrases.busy());
         }
     };
-    let pending = SalutTicket {
+    let mut ticket = SalutTicket {
         status: Status::Pending,
         user: pairing.user.clone(),
         hint: pairing.hint.clone(),
+        confirming: None,
     };
-    if let Err(error) = st
-        .confirm
-        .put(&ticket_key(sub), &pending, TICKET_PENDING_SECS)
-        .await
-    {
+    let ttl = match linking::ask(st, &pairing).await {
+        Ok(confirming) => {
+            ticket.confirming = Some(confirming);
+            TICKET_PENDING_SECS
+        }
+        Err(status) => {
+            ticket.status = status;
+            TICKET_DONE_SECS
+        }
+    };
+    if let Err(error) = st.confirm.put(&ticket_key(sub), &ticket, ttl).await {
         tracing::warn!(%error, "salut link state was not stored");
         st.confirm.release(pairing.code_id).await;
         return Said::plain(phrases.busy());
     }
-    let hint = pairing.hint.clone();
-    tokio::spawn(settle(st.clone(), pairing, sub.to_owned()));
-    Said::plain(&phrases.confirm_with_hint(&hint))
+    Said::plain(&phrases.confirm_with_hint(&ticket.hint))
 }
 
 async fn bind(st: &AppState, user: &str, sub: &str, phrases: &Phrases<'_>) -> Said {
@@ -322,30 +327,21 @@ async fn bind(st: &AppState, user: &str, sub: &str, phrases: &Phrases<'_>) -> Sa
     }
 }
 
-async fn settle(st: AppState, pairing: Pairing, sub: String) {
-    let status = linking::ask_desktop(&st, &pairing).await;
-    let done = SalutTicket {
-        status,
-        user: pairing.user,
-        hint: pairing.hint,
-    };
-    if let Err(error) = st
-        .confirm
-        .put(&ticket_key(&sub), &done, TICKET_DONE_SECS)
-        .await
-    {
-        tracing::warn!(%error, "salut link result was not stored");
-    }
-}
-
 async fn after_confirmation(
     st: &AppState,
     sub: &str,
-    ticket: SalutTicket,
+    mut ticket: SalutTicket,
     phrases: &Phrases<'_>,
 ) -> Said {
     if ticket.status == Status::Pending {
-        return Said::plain(&phrases.confirm_with_hint(&ticket.hint));
+        let settled = match &ticket.confirming {
+            Some(confirming) => linking::outcome(st, confirming).await,
+            None => Some(Status::Failed),
+        };
+        match settled {
+            Some(status) => ticket.status = status,
+            None => return Said::plain(&phrases.confirm_with_hint(&ticket.hint)),
+        }
     }
     let _ = st.confirm.take::<SalutTicket>(&ticket_key(sub)).await;
     match ticket.status {

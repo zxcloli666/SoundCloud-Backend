@@ -2,11 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub const COMMAND_SUBJECT: &str = "remote.cmd";
-pub const PRESENCE_SUBJECT: &str = "remote.presence";
-pub const REPLY_SUBJECT_PREFIX: &str = "remote.reply";
 pub const WAIT_HOLD_SECS: u64 = 20;
-pub const BUFFER_SECS: u64 = 60;
 pub const LINK_CODE_DIGITS: usize = 6;
 pub const LINK_CODE_TTL_SECS: i64 = 600;
 pub const CONFIRM_HOLD_SECS: u64 = 60;
@@ -114,25 +110,9 @@ pub struct LinksResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Presence {
-    pub user: String,
-    pub device: String,
-    pub active: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ReplyEnvelope {
     pub user: String,
     pub reply: RemoteReply,
-}
-
-pub fn reply_subject(id: Uuid) -> String {
-    format!("{REPLY_SUBJECT_PREFIX}.{id}")
-}
-
-pub fn reply_subject_filter() -> String {
-    format!("{REPLY_SUBJECT_PREFIX}.*")
 }
 
 #[cfg(test)]

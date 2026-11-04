@@ -28,6 +28,22 @@ pub(super) fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
+pub(super) fn nats_url() -> String {
+    std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned())
+}
+
+pub(super) async fn remote_hub(
+    prefix: &str,
+) -> anyhow::Result<Arc<crate::modules::remote::RemoteHub>> {
+    let nats =
+        NatsService::connect(&nats_url(), tokio_util::sync::CancellationToken::new()).await?;
+    Ok(crate::modules::remote::RemoteHub::new(Some(nats), prefix))
+}
+
+pub(super) fn remote_prefix() -> String {
+    format!("remote_test_{}", Uuid::now_v7().simple())
+}
+
 pub(super) fn config(redis: &str) -> AppConfig {
     let limit = AdmissionLimitCfg {
         per_client: 1_000,
@@ -333,11 +349,7 @@ pub(super) async fn state_with(
         recommendations,
         sync_queue,
         rooms,
-        remote: crate::modules::remote::RemoteHub::new(
-            None,
-            redis_pool.clone(),
-            &format!("remote-test-{}", Uuid::now_v7()),
-        ),
+        remote: remote_hub(&remote_prefix()).await?,
         links: crate::modules::remote::LinksService::new(pg.clone()),
         confirm: std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
             redis_pool.clone(),

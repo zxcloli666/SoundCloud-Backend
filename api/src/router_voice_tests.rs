@@ -7,8 +7,14 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::router_search_tests::{app, app_with, app_without_star, config, redis_url};
+use backend_contracts::remote::LinkProvider;
+
+use super::router_search_tests::{
+    app, app_with, app_without_star, config, redis_url, remote_hub, remote_prefix, soundcloud_hits,
+    state,
+};
 use crate::config::{AdmissionLimitCfg, AppConfig};
+use crate::modules::remote::LinkConfirm;
 
 const REDIRECT: &str = "https://social.yandex.net/broker/redirect";
 
@@ -376,7 +382,7 @@ async fn fake_desktop(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -540,7 +546,7 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn a_code_redeemed_twice_revokes_the_grant_and_its_tokens(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -600,7 +606,7 @@ async fn a_code_redeemed_twice_revokes_the_grant_and_its_tokens(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn a_linked_account_is_listed(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -614,7 +620,7 @@ async fn a_linked_account_is_listed(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn an_expired_link_code_is_refused(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -628,7 +634,7 @@ async fn an_expired_link_code_is_refused(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn a_code_for_one_provider_does_not_link_the_other(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -639,7 +645,7 @@ async fn a_code_for_one_provider_does_not_link_the_other(pool: PgPool) -> anyhow
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn revoking_a_link_stops_the_skill_from_recognising_the_user(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -692,7 +698,7 @@ async fn revoking_a_link_stops_the_skill_from_recognising_the_user(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn alice_answers_ping_help_linking_offline_and_a_real_command(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -752,7 +758,7 @@ async fn alice_answers_ping_help_linking_offline_and_a_real_command(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn salut_links_by_voice_and_then_relays_commands(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "303").await?;
@@ -889,7 +895,7 @@ async fn salut_links_by_voice_and_then_relays_commands(pool: PgPool) -> anyhow::
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_remote_endpoints_need_a_session(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     for (method, uri) in [
@@ -905,7 +911,7 @@ async fn the_remote_endpoints_need_a_session(pool: PgPool) -> anyhow::Result<()>
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO artists (id, name, normalized_name, source, track_count_primary, monthly_listeners)
@@ -987,7 +993,7 @@ async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow:
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_link_page_refuses_framing_and_waits_for_the_desktop(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1028,7 +1034,7 @@ async fn the_link_page_refuses_framing_and_waits_for_the_desktop(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn a_no_from_the_desktop_issues_nothing_and_burns_the_code(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1050,7 +1056,7 @@ async fn a_no_from_the_desktop_issues_nothing_and_burns_the_code(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn without_a_desktop_the_link_is_not_made_and_the_code_survives(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1071,7 +1077,7 @@ async fn without_a_desktop_the_link_is_not_made_and_the_code_survives(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "303").await?;
@@ -1121,43 +1127,39 @@ async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> an
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
-async fn five_unanswered_asks_burn_a_code(pool: PgPool) -> anyhow::Result<()> {
-    let redis = deadpool_redis::Config::from_url(redis_url())
-        .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let confirm =
-        crate::modules::remote::LinkConfirm::new(redis, format!("voice-test-{}", Uuid::now_v7()));
-    let links = crate::modules::remote::LinksService::new(pool.clone());
-    let issued = links
-        .create_code("101", backend_contracts::remote::LinkProvider::Alice)
-        .await?;
-    let found = links
-        .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
-        .await?
-        .expect("the code exists");
-    for expected in 1..5 {
-        let misses = crate::modules::remote::linking::note_miss(&links, &confirm, found.id).await;
-        assert_eq!(misses, expected);
-        assert!(
-            links
-                .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
-                .await?
-                .is_some()
-        );
+#[ignore = "requires a local Redis and NATS"]
+async fn a_code_is_asked_at_most_five_times(pool: PgPool) -> anyhow::Result<()> {
+    use crate::modules::remote::linking::{self, Found};
+    let st = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let issued = st.links.create_code("101", LinkProvider::Alice).await?;
+    st.remote
+        .wait("101", "pc", 1, None, Duration::ZERO)
+        .await
+        .map_err(|refused| anyhow::anyhow!("{refused:?}"))?;
+    for _ in 0..5 {
+        let Found::Ready(pairing) = linking::find(&st, LinkProvider::Alice, &issued.code).await?
+        else {
+            anyhow::bail!("the code is still usable before the sixth try");
+        };
+        assert!(linking::ask(&st, &pairing).await.is_ok());
+        st.confirm.release(pairing.code_id).await;
     }
-    crate::modules::remote::linking::note_miss(&links, &confirm, found.id).await;
+    assert!(matches!(
+        linking::find(&st, LinkProvider::Alice, &issued.code).await?,
+        Found::NoCode
+    ));
     assert!(
-        links
-            .find_code(backend_contracts::remote::LinkProvider::Alice, &issued.code)
+        st.links
+            .find_code(LinkProvider::Alice, &issued.code)
             .await?
             .is_none(),
-        "the fifth miss invalidates the code"
+        "the sixth try burns the code"
     );
     Ok(())
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -1226,7 +1228,7 @@ async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn waits_per_user_are_capped_and_a_repeat_replaces_the_first(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1271,7 +1273,7 @@ async fn waits_per_user_are_capped_and_a_repeat_replaces_the_first(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn reply_is_capped_and_needs_star(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -1298,7 +1300,7 @@ async fn reply_is_capped_and_needs_star(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn resolve_survives_a_hostile_body(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -1320,7 +1322,7 @@ async fn resolve_survives_a_hostile_body(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn alice_answers_inside_its_budget_when_the_desktop_is_silent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1464,7 +1466,7 @@ async fn salut_at(app: &axum::Router, uri: &str, body: Value) -> anyhow::Result<
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn every_wait_is_rate_limited_per_session(pool: PgPool) -> anyhow::Result<()> {
     let app = app_with(
         &pool,
@@ -1517,7 +1519,7 @@ async fn every_wait_is_rate_limited_per_session(pool: PgPool) -> anyhow::Result<
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_link_hint_on_the_page_matches_the_one_sent_to_the_desktop(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1572,7 +1574,7 @@ async fn the_link_hint_on_the_page_matches_the_one_sent_to_the_desktop(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn salut_says_the_hint_after_the_code(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "303").await?;
@@ -1612,10 +1614,9 @@ async fn salut_says_the_hint_after_the_code(pool: PgPool) -> anyhow::Result<()> 
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn a_code_written_a_moment_later_is_still_found(pool: PgPool) -> anyhow::Result<()> {
     use crate::modules::remote::linking::find_code_with_retry;
-    use backend_contracts::remote::LinkProvider;
     let links = crate::modules::remote::LinksService::new(pool.clone());
     let late = |code: &'static str| {
         let pool = pool.clone();
@@ -1662,7 +1663,7 @@ async fn a_code_written_a_moment_later_is_still_found(pool: PgPool) -> anyhow::R
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn alice_answers_busy_inside_its_budget_when_the_database_is_stuck(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1683,7 +1684,7 @@ async fn alice_answers_busy_inside_its_budget_when_the_database_is_stuck(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn hello_and_help_need_no_link_in_either_skill(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let hello = alice_call(&app, None, alice_body("", true)).await?;
@@ -1719,7 +1720,7 @@ async fn hello_and_help_need_no_link_in_either_skill(pool: PgPool) -> anyhow::Re
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn salut_takes_the_token_in_the_path_or_only_a_project_id(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1812,7 +1813,7 @@ async fn salut_takes_the_token_in_the_path_or_only_a_project_id(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn the_review_code_links_a_demo_account_that_never_reaches_a_desktop(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1886,7 +1887,7 @@ async fn the_review_code_links_a_demo_account_that_never_reaches_a_desktop(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn an_expired_alice_link_is_not_listed(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
@@ -1902,7 +1903,7 @@ async fn an_expired_alice_link_is_not_listed(pool: PgPool) -> anyhow::Result<()>
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn links_open_on_a_premium_host_without_star_but_waits_do_not(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1917,7 +1918,7 @@ async fn links_open_on_a_premium_host_without_star_but_waits_do_not(
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn offline_asks_do_not_burn_the_daily_cap(pool: PgPool) -> anyhow::Result<()> {
     let app = app_with(
         &pool,
@@ -1981,7 +1982,7 @@ fn random_address() -> std::net::SocketAddr {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "requires a local Redis"]
+#[ignore = "requires a local Redis and NATS"]
 async fn skill_calls_are_limited_per_address_before_any_lookup(pool: PgPool) -> anyhow::Result<()> {
     let app = app_with(
         &pool,
@@ -2056,5 +2057,163 @@ async fn skill_calls_are_limited_per_address_before_any_lookup(pool: PgPool) -> 
     )
     .await?;
     assert_eq!(said(&limited), "Слишком много команд. Подождите немного.");
+    Ok(())
+}
+
+struct Host {
+    remote: String,
+    redis: String,
+}
+
+impl Host {
+    fn new(remote: &str) -> Self {
+        Self {
+            remote: remote.to_owned(),
+            redis: format!("voice-test-{}", Uuid::now_v7()),
+        }
+    }
+
+    async fn start(&self, pool: &PgPool) -> anyhow::Result<axum::Router> {
+        let mut st = state(pool, soundcloud_hits(), &redis_url()).await?;
+        let redis = deadpool_redis::Config::from_url(redis_url())
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
+        st.remote = remote_hub(&self.remote).await?;
+        st.confirm = std::sync::Arc::new(LinkConfirm::new(redis, self.redis.clone()));
+        Ok(crate::router::build(st))
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_desktop_polling_another_host_confirms_a_link_made_on_star(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let core = remote_prefix();
+    let star = Host::new(&core).start(&pool).await?;
+    let main = Host::new(&core).start(&pool).await?;
+    let session = session_for(&pool, "101").await?;
+    let confirmer = confirming_desktop(&main, session, "pc", true).await?;
+
+    let code = new_code(&main, session, "alice").await?;
+    let approved = authorize(&star, &code, "s").await?;
+    assert_eq!(approved.status, StatusCode::FOUND, "{}", approved.text());
+    let token = exchange(&star, &auth_code_of(&approved)).await?;
+    assert!(!token.is_empty());
+    confirmer.abort();
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_page_link_survives_a_star_restart_mid_confirm(pool: PgPool) -> anyhow::Result<()> {
+    let core = remote_prefix();
+    let star = Host::new(&core);
+    let before = star.start(&pool).await?;
+    let main = Host::new(&core).start(&pool).await?;
+    let session = session_for(&pool, "101").await?;
+
+    let handshake = json_call(
+        &main,
+        session,
+        "GET",
+        "/remote/wait?device=pc&active=5",
+        None,
+    )
+    .await?
+    .json();
+    let code = new_code(&main, session, "alice").await?;
+    let pending = submit_code(&before, &code).await?;
+    assert!(pending.text().contains("Подтвердите на компьютере"));
+    drop(before);
+
+    let shown = json_call(
+        &main,
+        session,
+        "GET",
+        &format!(
+            "/remote/wait?device=pc&active=5&since={}",
+            handshake["cursor"].as_i64().unwrap_or_default()
+        ),
+        None,
+    )
+    .await?
+    .json();
+    let command = &shown["commands"][0];
+    assert_eq!(command["kind"], "link_confirm");
+    let answered = json_call(
+        &main,
+        session,
+        "POST",
+        "/remote/reply",
+        Some(json!({"id": command["id"], "ok": true, "text": "done", "state": "done"})),
+    )
+    .await?;
+    assert_eq!(
+        answered.status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        answered.text()
+    );
+
+    let after = star.start(&pool).await?;
+    let approved = ticket_flow(&after, pending).await?;
+    assert_eq!(approved.status, StatusCode::FOUND, "{}", approved.text());
+    exchange(&after, &auth_code_of(&approved)).await?;
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis and NATS"]
+async fn salut_binds_after_a_star_restart_with_the_desktop_on_another_host(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let core = remote_prefix();
+    let star = Host::new(&core);
+    let before = star.start(&pool).await?;
+    let main = Host::new(&core).start(&pool).await?;
+    let session = session_for(&pool, "303").await?;
+    let sub = "11111111-2222-3333-4444-555555555555";
+    let confirmer = confirming_desktop(&main, session, "pc", true).await?;
+    let code = new_code(&main, session, "salut").await?;
+    let spoken = code
+        .chars()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let first = salut_call(
+        &before,
+        Some("salut-token"),
+        salut_body(sub, &spoken, &spoken, 1),
+    )
+    .await?
+    .json();
+    assert!(
+        first["payload"]["pronounceText"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Подтвердите")
+    );
+    drop(before);
+
+    let after = star.start(&pool).await?;
+    let mut bound = 0;
+    for n in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        salut_call(
+            &after,
+            Some("salut-token"),
+            salut_body(sub, "а", "а", 2 + n),
+        )
+        .await?;
+        bound =
+            sqlx::query_scalar("SELECT count(*) FROM remote_grants WHERE external_id IS NOT NULL")
+                .fetch_one(&pool)
+                .await?;
+        if bound > 0 {
+            break;
+        }
+    }
+    confirmer.abort();
+    assert_eq!(bound, 1);
     Ok(())
 }

@@ -298,9 +298,10 @@ async fn main() {
     let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
-    let remote =
-        crate::modules::remote::RemoteHub::new(Some(nats.clone()), redis_pool.clone(), "remote");
-    remote.start().await;
+    let remote = crate::modules::remote::RemoteHub::new(Some(nats.clone()), "remote");
+    if !remote.prepare().await {
+        tracing::warn!("remote store is not ready yet, voice opens it on first use");
+    }
     let links = crate::modules::remote::LinksService::new(pg.clone());
     let confirm = std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
         redis_pool.clone(),

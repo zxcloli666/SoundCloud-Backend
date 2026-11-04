@@ -113,6 +113,10 @@ impl NatsService {
             .map_err(|error| NatsRequestError::Decode(subject.to_owned(), error.to_string()))
     }
 
+    pub fn jetstream(&self) -> &async_nats::jetstream::Context {
+        &self.js
+    }
+
     pub async fn subscribe(&self, subject: &str) -> AppResult<async_nats::Subscriber> {
         self.js
             .client()
