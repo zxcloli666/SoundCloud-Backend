@@ -102,10 +102,38 @@ impl QueueWorker {
         self
     }
 
-    fn concurrency(&self) -> usize {
+    fn claim_room(&self, running: usize) -> usize {
         match &self.governor {
-            Some(governor) => governor.limit().min(self.lane.concurrency),
-            None => self.lane.concurrency,
+            Some(governor) => {
+                governor.claim_room(running, self.lane.concurrency, self.lane.claim_batch)
+            }
+            None => claim_limit(self.lane.concurrency, running, self.lane.claim_batch),
+        }
+    }
+
+    fn idle(&self, running: usize) {
+        if let Some(governor) = &self.governor {
+            governor.lane_idle(running);
+        }
+    }
+
+    fn note_due_kinds(
+        &self,
+        due_kinds: &mut Vec<JobKind>,
+        jobs: &[LeasedJob],
+        successful_claims: u64,
+    ) {
+        let Some(governor) = &self.governor else {
+            return;
+        };
+        for job in jobs {
+            if !due_kinds.contains(&job.kind) {
+                due_kinds.push(job.kind);
+            }
+        }
+        if successful_claims.is_multiple_of(claims_per_round(self.kinds.len())) {
+            governor.lane_round(due_kinds);
+            due_kinds.clear();
         }
     }
 
@@ -114,22 +142,22 @@ impl QueueWorker {
         let mut successful_claims = 0_u64;
         let mut empty_polls = 0_u32;
         let mut next_release = tokio::time::Instant::now();
+        let mut due_kinds = Vec::new();
+        if let Some(governor) = &self.governor {
+            governor.lane_round(self.kinds);
+        }
 
-        'worker: loop {
+        loop {
             observe_ready(&mut tasks)?;
 
             if cancellation.is_cancelled() {
                 break;
             }
 
-            let limit = claim_limit(self.concurrency(), tasks.len(), self.lane.claim_batch);
+            let limit = self.claim_room(tasks.len());
 
             if limit == 0 {
-                tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => break 'worker,
-                    task = tasks.join_next() => observe_optional(task)?,
-                }
+                wait_for_poll(&mut tasks, self.config.poll_interval, &cancellation).await?;
                 continue;
             }
 
@@ -143,6 +171,7 @@ impl QueueWorker {
             match claimed {
                 Ok(jobs) if !jobs.is_empty() => {
                     successful_claims = successful_claims.wrapping_add(1);
+                    self.note_due_kinds(&mut due_kinds, &jobs, successful_claims);
                     empty_polls = 0;
                     for job in jobs {
                         spawn_job(
@@ -154,8 +183,10 @@ impl QueueWorker {
                         );
                     }
                 }
-                Ok(_) => {
+                Ok(jobs) => {
+                    self.idle(tasks.len());
                     successful_claims = successful_claims.wrapping_add(1);
+                    self.note_due_kinds(&mut due_kinds, &jobs, successful_claims);
                     empty_polls = empty_polls.saturating_add(1);
                     let wait = super::backoff::idle_wait(empty_polls, self.config.poll_interval);
                     wait_for_poll(&mut tasks, wait, &cancellation).await?;
@@ -203,8 +234,14 @@ fn spawn_job(
     });
 }
 
-fn claim_limit(concurrency: usize, running: usize, batch: usize) -> usize {
+pub(super) fn claim_limit(concurrency: usize, running: usize, batch: usize) -> usize {
     concurrency.saturating_sub(running).min(batch)
+}
+
+fn claims_per_round(kinds: usize) -> u64 {
+    u64::try_from(kinds.max(1))
+        .unwrap_or(u64::MAX)
+        .saturating_mul(2)
 }
 
 fn kind_turn(shares_between_kinds: bool, successful_claims: u64) -> Option<usize> {
@@ -300,6 +337,14 @@ mod tests {
         assert_eq!(kind_turn(true, 2), Some(1));
         assert_eq!(kind_turn(true, 6), Some(3));
         assert_eq!(kind_turn(false, 0), None);
+    }
+
+    #[test]
+    fn a_claim_round_gives_every_kind_of_a_sharing_lane_one_turn() {
+        let turns: Vec<_> = (0..claims_per_round(3))
+            .filter_map(|claim| kind_turn(true, claim))
+            .collect();
+        assert_eq!(turns, [0, 1, 2]);
     }
 
     #[test]

@@ -1,6 +1,9 @@
 #[cfg(test)]
 #[path = "lookup_tests.rs"]
 mod db_tests;
+#[cfg(test)]
+#[path = "lookup_sweep_tests.rs"]
+mod sweep_tests;
 #[path = "lookup_tiered.rs"]
 mod tiered;
 
@@ -18,7 +21,10 @@ use uuid::Uuid;
 
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
-use crate::queue::{JobError, JobRepository, JobResult, LeasedJob, NewJob, QueueError};
+use crate::queue::{
+    Borrower, JobError, JobRepository, JobResult, LeasedJob, LentSlot, NewJob, QueueError,
+    WriteGovernor,
+};
 
 use super::embedding_queue;
 use super::text::lyrics_text;
@@ -94,7 +100,7 @@ impl LyricsLookupHandler {
         super::wake::listen(self.pool.clone(), self.queue.clone(), cancellation).await
     }
 
-    pub async fn run_sweep(&self, job: &LeasedJob) -> JobResult {
+    pub async fn run_sweep(&self, job: &LeasedJob, governor: &Arc<WriteGovernor>) -> JobResult {
         if job.dedup_key.as_deref() != Some("schedule") {
             return Err(JobError::permanent(anyhow::anyhow!(
                 "lyrics lookup sweep has an invalid dedup key"
@@ -117,34 +123,68 @@ impl LyricsLookupHandler {
 
         super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
 
+        let borrower = governor.borrower(job.kind);
         let claims = tiered::claim(
             &self.pool,
             job,
-            self.config.batch.max(1),
+            sweep_size(self.config.batch, self.config.concurrency, borrower.slots()),
             self.config.claim_seconds,
             self.turns.next(),
         )
         .await
         .map_err(JobError::retryable)?;
-        self.process_batch(job, claims).await
+        self.process_batch(job, claims, &borrower).await
     }
 
-    async fn process_batch(&self, job: &LeasedJob, claims: Vec<LookupClaim>) -> JobResult {
+    async fn process_batch(
+        &self,
+        job: &LeasedJob,
+        claims: Vec<LookupClaim>,
+        borrower: &Borrower,
+    ) -> JobResult {
         let concurrency = self.config.concurrency.max(1);
         let mut queue = claims.into_iter();
         let mut running = FuturesUnordered::new();
+        let mut own_slot_free = true;
         loop {
-            while running.len() < concurrency
-                && let Some(claim) = queue.next()
-            {
-                running.push(self.process(job, claim));
+            borrower.want((queue.len() + running.len()).min(concurrency));
+            while running.len() < concurrency && !queue.as_slice().is_empty() {
+                let lent = if own_slot_free {
+                    None
+                } else if let Some(lent) = borrower.lend() {
+                    Some(lent)
+                } else {
+                    break;
+                };
+                let Some(claim) = queue.next() else {
+                    break;
+                };
+                own_slot_free = false;
+                running.push(self.process_in_slot(job, claim, lent));
             }
-            let Some(result) = running.next().await else {
-                break;
-            };
-            result?;
+            let waiting = running.len() < concurrency && !queue.as_slice().is_empty();
+            tokio::select! {
+                finished = running.next() => {
+                    let Some((own_slot, result)) = finished else {
+                        break;
+                    };
+                    own_slot_free |= own_slot;
+                    result?;
+                }
+                _ = borrower.freed(), if waiting => {}
+            }
         }
         Ok(())
+    }
+
+    async fn process_in_slot(
+        &self,
+        job: &LeasedJob,
+        claim: LookupClaim,
+        lent: Option<LentSlot>,
+    ) -> (bool, JobResult) {
+        let result = self.process(job, claim).await;
+        (lent.is_none(), result)
     }
 
     async fn process(&self, job: &LeasedJob, claim: LookupClaim) -> JobResult {
@@ -335,6 +375,15 @@ impl LyricsLookupHandler {
     }
 }
 
+fn sweep_size(batch: i64, concurrency: usize, slots: usize) -> i64 {
+    let concurrency = concurrency.max(1);
+    let batch = usize::try_from(batch.max(1)).unwrap_or(usize::MAX);
+    let size = batch
+        .saturating_mul(slots.clamp(1, concurrency))
+        .div_ceil(concurrency);
+    i64::try_from(size).unwrap_or(i64::MAX)
+}
+
 fn canonical_track_id(value: &str) -> anyhow::Result<String> {
     catalog_ingest::normalize_sc_track_id(value)
         .ok_or_else(|| anyhow::anyhow!("lyrics lookup has an invalid track id"))
@@ -426,6 +475,14 @@ mod tests {
             miss_streak: streak,
             failure_streak: 0,
         }
+    }
+
+    #[test]
+    fn a_sweep_claims_its_configured_waves_for_the_slots_it_can_use() {
+        assert_eq!(sweep_size(512, 128, 1), 4);
+        assert_eq!(sweep_size(512, 128, 31), 124);
+        assert_eq!(sweep_size(512, 128, 500), 512);
+        assert_eq!(sweep_size(8, 4, 0), 2);
     }
 
     #[test]

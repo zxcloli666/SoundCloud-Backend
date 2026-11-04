@@ -37,7 +37,7 @@ python3 ops/replication/gen.py
 
 When generated SQL changes, ship it as a new `NNNN_scd_install.sql` (`--install`); an applied install migration is never edited. `--install` compares each trigger with the install before it: an unchanged one is written as `SELECT public.scd_keep_trigger(...)`, a new or changed one as plain `CREATE OR REPLACE TRIGGER`, so only the tables of changed triggers are locked.
 
-`run.sh` without `SCHEMA_UPDATE` is the PG proof: migrations, schema.json diff, install of the generated SQL twice with an empty search_path, `smoke.sql` per trigger class, then `lyrics_drop.sh` (the 0285-0292 rollout on its own three nodes built at 0284: core first, then main, then star under a held reader lock; rows, verify digests, HOT settles and apply errors at every step), then core + main + star as three databases on real logical replication, and `split.sh`: dispatch, dead commands, purges, R6 and FK cases with row diffs per node pair.
+`run.sh` without `SCHEMA_UPDATE` is the PG proof: migrations, schema.json diff, install of the generated SQL twice with an empty search_path, `smoke.sql` per trigger class, `pressure.sh` (the jobs write-pressure query counts scd slots, not graph slots), then `lyrics_drop.sh` (the 0285-0292 rollout on its own three nodes built at 0284: core first, then main, then star under a held reader lock; rows, verify digests, HOT settles and apply errors at every step), then core + main + star as three databases on real logical replication, and `split.sh`: dispatch, dead commands, purges, R6 and FK cases with row diffs per node pair.
 
 ## check-ownership rules
 
