@@ -38,6 +38,8 @@ mod recommendations;
 mod repl;
 mod search_terms;
 mod secret_link;
+#[cfg(test)]
+mod soundcloud_stub;
 pub(crate) mod star_priority;
 mod subscriptions;
 mod sync_queue;

@@ -2,8 +2,8 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use sc_transport::{
-    Apiv2Proxy, EGRESS_RELAY_LUA, EGRESS_RELAY_RAW, EgressHealth, ScClient, ScResult, SearchType,
-    normalize_v2_to_v1, parse_list_cursor,
+    Apiv2Proxy, EGRESS_RELAY_LUA, EGRESS_RELAY_RAW, EgressHealth, RelayRead, ScClient, ScError,
+    ScResult, SearchType, normalize_v2_to_v1, parse_list_cursor,
 };
 
 use super::egress::{EGRESS_APP, PgEgressHealth};
@@ -63,14 +63,14 @@ impl PublicCatalogReader {
         !self.raw_health.is_open().await
     }
 
-    async fn observe_lua<T>(&self, read: &sc_transport::RelayRead<T>) {
+    async fn observe_lua<T>(&self, read: &RelayRead<T>) {
         if self.lua_health.observe(read).await {
             debug!("relay lua breaker is open, background reads take the proxy");
         }
     }
 
-    async fn observe_raw_answer(&self, answered: bool) {
-        if self.raw_health.record_answer(answered).await {
+    async fn observe_raw<T>(&self, read: &RelayRead<T>) {
+        if self.raw_health.observe(read).await {
             debug!("relay raw breaker is open, background reads take the proxy");
         }
     }
@@ -132,18 +132,19 @@ impl PublicCatalogReader {
     pub async fn get_json_from_region(&self, path: &str, region_rotation: i32) -> ScResult<Value> {
         let url = format!("{SC_API_V2}{path}");
         if self.raw_is_worth_trying().await {
-            let answer = self
+            let read = self
                 .sc
                 .apiv2_get_via_relay_rotated(&url, region_rotation)
                 .await;
-            self.observe_raw_answer(answer.is_some()).await;
-            if let Some(value) = answer {
-                return Ok(value);
+            self.observe_raw(&read).await;
+            match read {
+                RelayRead::Found(value) => return Ok(value),
+                RelayRead::Missing => return Err(gone()),
+                RelayRead::Unavailable => debug!(
+                    path,
+                    region_rotation, "relay read unavailable, falling back to the proxy"
+                ),
             }
-            debug!(
-                path,
-                region_rotation, "relay read unavailable, falling back to the proxy"
-            );
         }
         self.proxy.get_value(&url).await
     }
@@ -209,15 +210,18 @@ impl PublicCatalogReader {
             }
         };
         if self.raw_is_worth_trying().await {
-            let answer = self
+            let read = self
                 .sc
                 .apiv2_get_via_relay_rotated(&url, region_rotation)
                 .await;
-            self.observe_raw_answer(answer.is_some()).await;
-            if let Some(page) = answer {
-                return Ok(page_from_relay(&page));
+            self.observe_raw(&read).await;
+            match read {
+                RelayRead::Found(page) => return Ok(page_from_relay(&page)),
+                RelayRead::Missing => return Err(gone()),
+                RelayRead::Unavailable => {
+                    debug!(path, "relay listing unavailable, falling back to the proxy")
+                }
             }
-            debug!(path, "relay listing unavailable, falling back to the proxy");
         }
         let page = self.proxy.get_list(&url).await?;
         let mut items = page.items;
@@ -228,6 +232,14 @@ impl PublicCatalogReader {
             items,
             next_href: page.next_href,
         })
+    }
+}
+
+fn gone() -> ScError {
+    ScError::Api {
+        status: 404,
+        body: Value::Null,
+        retry_after_sec: None,
     }
 }
 
@@ -269,6 +281,7 @@ fn accepted_cursor(page: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handlers::soundcloud_stub::{GoneRelay, SoundCloud};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -383,6 +396,32 @@ mod tests {
             reached < 12,
             "a relay that answers nobody must stop receiving background reads, saw {reached} of 12"
         );
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_calls_an_entity_gone_answers_absent_without_a_ban_or_the_proxy()
+    -> anyhow::Result<()> {
+        let soundcloud = SoundCloud::answering(Vec::new()).await?;
+        let relayed = Arc::new(AtomicUsize::new(0));
+        let sc = soundcloud.client()?.with_relay(Arc::new(GoneRelay {
+            calls: relayed.clone(),
+        }));
+        let reader = PublicCatalogReader::new(sc, unreachable_pool());
+
+        for region in 0..12 {
+            let read = reader.get_json_from_region("/tracks/42", region % 3).await;
+            assert!(
+                matches!(read, Err(ScError::Api { status: 404, .. })),
+                "{read:?}"
+            );
+        }
+        let listed = reader.list_page("/users/42/tracks", None, 20, 0).await;
+        assert!(matches!(listed, Err(ScError::Api { status: 404, .. })));
+
+        assert_eq!(relayed.load(Ordering::SeqCst), 13);
+        assert!(reader.raw_is_worth_trying().await);
+        assert_eq!(soundcloud.asked().await, 0);
+        Ok(())
     }
 
     #[test]

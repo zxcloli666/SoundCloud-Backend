@@ -1,117 +1,22 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use backend_contracts::{CatalogEntity, CatalogRefreshPayload, CollectionFailure, JobKind};
-use base64::Engine;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::CatalogRefreshHandler;
 use crate::handlers::catalog_read::PublicCatalogReader;
 use crate::handlers::catalog_refresh_writer::CatalogWriter;
 use crate::handlers::catalog_remote::CatalogRemote;
+use crate::handlers::soundcloud_stub::{GoneRelay, SoundCloud};
 use crate::queue::{JobError, JobRepository, LeasedJob};
 
-const APIV2: &str = "https://api-v2.soundcloud.com/";
-const HOME: &str = r#"<script>window.__sc_hydration = [{"hydratable":"apiClient","data":{"id":"stub-client"}}]</script>"#;
-
-struct SoundCloud {
-    proxy_url: String,
-    asked: Arc<Mutex<Vec<String>>>,
-    server: JoinHandle<anyhow::Result<()>>,
-}
-
-impl SoundCloud {
-    async fn answering(answers: Vec<(&'static str, String)>) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let proxy_url = format!("http://{}/", listener.local_addr()?);
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&asked);
-        let server: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
-            let mut answers = answers.into_iter();
-            loop {
-                let (mut stream, _) = listener.accept().await?;
-                let target = read_target(&mut stream).await?;
-                if !target.starts_with(APIV2) {
-                    respond(&mut stream, "200 OK", HOME).await?;
-                    continue;
-                }
-                seen.lock().await.push(target);
-                let (status, body) = answers
-                    .next()
-                    .unwrap_or_else(|| ("404 Not Found", "{}".to_owned()));
-                respond(&mut stream, status, &body).await?;
-            }
-        });
-        Ok(Self {
-            proxy_url,
-            asked,
-            server,
-        })
-    }
-
-    async fn asked(&self) -> usize {
-        self.asked.lock().await.len()
-    }
-
-    fn reader(&self, pool: &PgPool) -> anyhow::Result<PublicCatalogReader> {
-        let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
-            proxy_url: self.proxy_url.clone(),
-            proxy_fallback: false,
-            api_base: Some("http://127.0.0.1:1".to_owned()),
-            home_base: Some("https://soundcloud.com/".to_owned()),
-        })?;
-        Ok(PublicCatalogReader::new(sc, pool.clone()))
-    }
-}
-
-impl Drop for SoundCloud {
-    fn drop(&mut self) {
-        self.server.abort();
-    }
-}
-
-async fn read_target(stream: &mut TcpStream) -> anyhow::Result<String> {
-    let mut request = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 || request.len().saturating_add(read) > 16 * 1024 {
-            return Err(anyhow::anyhow!("the stub received an invalid request"));
-        }
-        request.extend_from_slice(&chunk[..read]);
-    }
-    let request = String::from_utf8(request)?;
-    let encoded = request
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-target"))
-        .map(|(_, value)| value.trim())
-        .ok_or_else(|| anyhow::anyhow!("the request names no target"))?;
-    Ok(String::from_utf8(
-        base64::engine::general_purpose::STANDARD.decode(encoded)?,
-    )?)
-}
-
-async fn respond(stream: &mut TcpStream, status: &str, body: &str) -> anyhow::Result<()> {
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes()).await?;
-    stream.write_all(body.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
-}
-
-fn refresher(pool: &PgPool, soundcloud: &SoundCloud) -> anyhow::Result<CatalogRefreshHandler> {
+fn refresher(pool: &PgPool, public: PublicCatalogReader) -> anyhow::Result<CatalogRefreshHandler> {
     Ok(CatalogRefreshHandler {
         writer: CatalogWriter::new(pool.clone(), 420_000),
-        public: Arc::new(soundcloud.reader(pool)?),
+        public: Arc::new(public),
         remote: CatalogRemote::offline(pool.clone())?,
         pool: pool.clone(),
     })
@@ -187,7 +92,7 @@ async fn a_track_absent_in_every_region_settles_once_and_is_held_without_asking_
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let soundcloud = SoundCloud::answering(Vec::new()).await?;
-    let handler = refresher(&pool, &soundcloud)?;
+    let handler = refresher(&pool, soundcloud.reader(&pool)?)?;
 
     let job = leased(&pool).await?;
     let error = handler
@@ -225,7 +130,7 @@ async fn a_track_absent_in_every_region_settles_once_and_is_held_without_asking_
 #[sqlx::test(migrations = "../api/migrations")]
 async fn a_held_absence_is_asked_again_once_its_day_is_over(pool: PgPool) -> anyhow::Result<()> {
     let soundcloud = SoundCloud::answering(Vec::new()).await?;
-    let handler = refresher(&pool, &soundcloud)?;
+    let handler = refresher(&pool, soundcloud.reader(&pool)?)?;
     refresh(&pool, &handler).await?;
     sqlx::query("UPDATE background_job_failures SET failed_at = now() - interval '25 hours'")
         .execute(&pool)
@@ -249,7 +154,7 @@ async fn a_track_one_region_hides_is_stored_and_never_settled(pool: PgPool) -> a
         ("200 OK", found.to_string()),
     ])
     .await?;
-    let handler = refresher(&pool, &soundcloud)?;
+    let handler = refresher(&pool, soundcloud.reader(&pool)?)?;
 
     refresh(&pool, &handler).await?;
 
@@ -259,5 +164,27 @@ async fn a_track_one_region_hides_is_stored_and_never_settled(pool: PgPool) -> a
         .fetch_one(&pool)
         .await?;
     assert_eq!(title, "Found");
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_track_the_relay_calls_gone_in_every_region_settles_without_the_proxy(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let soundcloud = SoundCloud::answering(Vec::new()).await?;
+    let relayed = Arc::new(AtomicUsize::new(0));
+    let sc = soundcloud.client()?.with_relay(Arc::new(GoneRelay {
+        calls: Arc::clone(&relayed),
+    }));
+    let handler = refresher(&pool, PublicCatalogReader::new(sc, pool.clone()))?;
+
+    refresh(&pool, &handler).await?;
+
+    assert_eq!(relayed.load(Ordering::SeqCst), 3);
+    assert_eq!(soundcloud.asked().await, 0);
+    assert_eq!(
+        settled(&pool).await?,
+        vec!["not_found: SoundCloud API error (status 404)".to_owned()]
+    );
     Ok(())
 }
