@@ -46,6 +46,18 @@ pub(super) async fn process_job(
             let completion = repository.postpone(&job, &error.to_string(), delay).await?;
             log_completion(&job, completion, false);
         }
+        Err(JobError::Settled { failure, error }) => {
+            tracing::info!(
+                job_id = %job.id,
+                kind = %job.kind,
+                settled = failure.as_str(),
+                "background job settled"
+            );
+            let completion = repository
+                .fail(&job, &failure.message(error), false)
+                .await?;
+            log_completion(&job, completion, false);
+        }
         Err(error) => {
             let retryable = error.is_retryable();
             tracing::warn!(
@@ -69,6 +81,7 @@ fn outcome(result: &JobResult) -> crate::metrics::Outcome {
         Ok(()) => crate::metrics::Outcome::Ok,
         Err(error) if cancelled_by_timeout(error) => crate::metrics::Outcome::Timeout,
         Err(JobError::Postponed { .. }) => crate::metrics::Outcome::Postponed,
+        Err(JobError::Settled { failure, .. }) => crate::metrics::Outcome::Settled(*failure),
         Err(error) if error.is_retryable() => crate::metrics::Outcome::Retryable,
         Err(_) => crate::metrics::Outcome::Terminal,
     }
@@ -77,7 +90,7 @@ fn outcome(result: &JobResult) -> crate::metrics::Outcome {
 fn sqlstate(error: &JobError) -> Option<String> {
     let source = match error {
         JobError::Retryable(error) | JobError::Permanent(error) => error,
-        JobError::Postponed { error, .. } => error,
+        JobError::Postponed { error, .. } | JobError::Settled { error, .. } => error,
     };
     source.chain().find_map(|cause| {
         cause
@@ -215,6 +228,23 @@ mod timeout_tests {
                 "invalid payload"
             )))),
             crate::metrics::Outcome::Terminal
+        );
+    }
+
+    #[test]
+    fn a_settled_job_is_counted_by_its_code_and_keeps_the_code_in_its_error() {
+        let absent = JobError::settled(
+            backend_contracts::CollectionFailure::NotFound,
+            anyhow::anyhow!("SoundCloud API error (status 404)"),
+        );
+
+        assert_eq!(
+            absent.to_string(),
+            "not_found: SoundCloud API error (status 404)"
+        );
+        assert_eq!(
+            outcome(&Err(absent)),
+            crate::metrics::Outcome::Settled(backend_contracts::CollectionFailure::NotFound)
         );
     }
 

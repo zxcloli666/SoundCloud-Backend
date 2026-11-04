@@ -15,6 +15,7 @@ fn redis_url() -> String {
 
 fn state() -> Arc<ChatState> {
     let pg = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(200))
         .connect_lazy("postgres://scd@127.0.0.1:1/none")
         .expect("a lazy pool");
     let redis = crate::redis::connect_url(&redis_url()).expect("a redis pool");

@@ -18,6 +18,8 @@ pub mod mmr;
 pub(crate) mod projected;
 pub mod quality;
 pub mod related;
+#[cfg(test)]
+mod related_artists_tests;
 pub mod rerank_multi;
 pub mod s3_verifier;
 pub mod search;

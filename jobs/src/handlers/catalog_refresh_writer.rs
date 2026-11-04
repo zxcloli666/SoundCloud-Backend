@@ -34,6 +34,16 @@ impl CatalogWriter {
         .map_err(JobError::retryable)
     }
 
+    pub(super) async fn is_absent(&self, payload: &CatalogRefreshPayload) -> JobResult<bool> {
+        sqlx::query_file_scalar!(
+            "../api/queries/cold_refresh/entity_absent.sql",
+            payload.dedup_key()
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(JobError::retryable)
+    }
+
     pub(super) async fn begin_observation(&self) -> JobResult<catalog_ingest::Observation> {
         catalog_ingest::Observation::begin(&self.pool)
             .await

@@ -59,6 +59,7 @@ fn chat() -> Arc<ChatState> {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
     let redis = crate::redis::connect_url(&url).expect("a redis pool");
     let pg = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(200))
         .connect_lazy("postgres://scd@127.0.0.1:1/none")
         .expect("a lazy pool");
     state_with(pg, redis, None)

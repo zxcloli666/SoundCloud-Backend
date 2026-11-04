@@ -227,6 +227,17 @@ Nothing to commit, nothing to keep in sync.
 Исключение - публичная часть открытого юзера: `PublicUsers` читает ее через apiv2 прямо в запросе (до 2 с, без spawn),
 `/me` накладывает публичные поля из `users` поверх apiv1-снимка `user_profiles`, если строка `users` свежее.
 
+**Промах по сессии** (`auth/service/replica.rs`). Id новой сессии — UUIDv7, его создаёт api-нода
+в той же транзакции, что и строку. На ноде с живой подпиской промах по v4 или по v7 старше
+`SESSION_IN_FLIGHT` (6 ч) — сразу «нет сессии», без ожидания. Молодой v7 без tombstone в
+`repl_tombstones` ждёт до 750 мс и отвечает 503 `session_not_replicated` с Retry-After, не 401:
+8.4.13 выходит из аккаунта по 401 с `/auth/refresh`. Чат (`replicated_now`) не ждёт, но по тому же
+правилу отвечает `chat_session_not_replicated`, а не relogin. Окно держится только потому, что
+сессию удаляет один путь, logout, и в split он всегда пишет tombstone. Новый путь удаления сессий
+обязан делать так же. В split-режиме стоящая или выключенная подписка даёт 503 на любой промах.
+Счётчик `api_session_miss_total{outcome}` (только HTTP, без чата): `dead`, `in_flight`,
+`found_after_wait`, `stalled`; `in_flight` вычитается в ApiServerErrors и ApiHostUnavailable.
+
 **Приложение обязано работать с протухшим SC-токеном.** `/me` возвращает зеркало
 `user_profiles` либо минимальный профиль из локальных данных. Только разрешённые
 SC-пути запрашивают токен через `ctx.with_access_token(...)`.

@@ -71,6 +71,7 @@ async fn every_admin_route_refuses_a_missing_or_wrong_token() {
     let missing_file = offline_chat_state(true);
     let with_file = state(
         sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(200))
             .connect_lazy("postgres://scd@127.0.0.1:1/none")
             .expect("a lazy pool"),
         None,

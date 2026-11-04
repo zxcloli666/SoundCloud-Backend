@@ -29,6 +29,7 @@ const POOL_WAIT_LAST: &str = "api_pg_pool_wait_last_seconds";
 const SHED_TOTAL: &str = "api_load_shed_total";
 const SHED_IN_FLIGHT: &str = "api_load_shed_in_flight";
 const SESSION_CACHE: &str = "api_session_cache_total";
+const SESSION_MISS: &str = "api_session_miss_total";
 const TICK_DELAY: &str = "api_runtime_tick_delay_seconds";
 const RUNTIME_BUSY: &str = "api_runtime_busy_ratio";
 const RUNTIME_QUEUE: &str = "api_runtime_queue_depth";
@@ -182,6 +183,13 @@ pub fn record_session_cache(outcome: &'static str) {
         return;
     }
     metrics::counter!(SESSION_CACHE, "outcome" => outcome).increment(1);
+}
+
+pub fn record_session_miss(outcome: &'static str) {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(SESSION_MISS, "outcome" => outcome).increment(1);
 }
 
 pub fn set_shed_in_flight(in_flight: usize) {

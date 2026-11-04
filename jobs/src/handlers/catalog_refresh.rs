@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use backend_contracts::{CatalogEntity, CatalogRefreshPayload};
+use backend_contracts::{CatalogEntity, CatalogRefreshPayload, CollectionFailure};
 use serde_json::Value;
 use sqlx::PgPool;
 
@@ -10,6 +10,7 @@ use crate::queue::{JobError, JobResult, LeasedJob};
 
 use super::catalog_read::PublicCatalogReader;
 use super::catalog_remote::{CatalogRemote, owner_is_signed_out, public_error};
+use super::playlist_observe::PlaylistReadError;
 use super::secret_link;
 
 const FETCH_DEADLINE: Duration = Duration::from_secs(45);
@@ -48,6 +49,10 @@ impl CatalogRefreshHandler {
         if self.writer.is_deleted(&payload).await? {
             return Ok(());
         }
+        if self.writer.is_absent(&payload).await? {
+            crate::metrics::record_catalog_refresh_held();
+            return Ok(());
+        }
         let observation = self.writer.begin_observation().await?;
         let value = tokio::time::timeout(FETCH_DEADLINE, self.fetch(&payload))
             .await
@@ -78,16 +83,23 @@ impl CatalogRefreshHandler {
         if payload.entity == CatalogEntity::WebProfiles {
             return match self.public.get_json(&path).await {
                 Ok(value) => Ok(value),
+                Err(error @ sc_transport::ScError::Api { status: 404, .. }) => {
+                    Err(JobError::settled(CollectionFailure::NotFound, error))
+                }
                 Err(error) => {
                     tracing::debug!(%error, path, "apiv2 web profiles unavailable, trying apiv1");
-                    self.remote.public_get(&path).await
+                    self.remote.public_get(&path).await.map_err(settle_absent)
                 }
             };
         }
         match payload.owner_id.as_deref() {
             Some(owner) => match self.public_by_secret(payload, &path).await? {
                 Some(value) => Ok(value),
-                None => self.remote.owner_get(owner, &path).await,
+                None => self
+                    .remote
+                    .owner_get(owner, &path)
+                    .await
+                    .map_err(settle_absent),
             },
             None => self.public_get_across_regions(&path).await,
         }
@@ -147,9 +159,25 @@ impl CatalogRefreshHandler {
                 }
             }
         }
-        Err(public_error(last.unwrap_or_else(|| {
-            sc_transport::ScError::invalid("catalog entity was never requested")
-        })))
+        match last {
+            Some(absent) => Err(JobError::settled(CollectionFailure::NotFound, absent)),
+            None => Err(public_error(sc_transport::ScError::invalid(
+                "catalog entity was never requested",
+            ))),
+        }
+    }
+}
+
+fn settle_absent(error: JobError) -> JobError {
+    match error {
+        JobError::Permanent(error)
+            if error
+                .downcast_ref::<PlaylistReadError>()
+                .is_some_and(PlaylistReadError::is_not_found) =>
+        {
+            JobError::settled(CollectionFailure::NotFound, error)
+        }
+        error => error,
     }
 }
 
@@ -365,6 +393,34 @@ mod geo_tests {
     }
 
     #[test]
+    fn only_a_not_found_from_the_owner_api_settles_as_absent() {
+        let refused = |status| {
+            crate::handlers::catalog_remote::owner_error(PlaylistReadError::Api {
+                status,
+                body: serde_json::Value::Null,
+                retry_after_seconds: None,
+            })
+        };
+        assert!(matches!(
+            settle_absent(refused(wreq::StatusCode::NOT_FOUND)),
+            crate::queue::JobError::Settled {
+                failure: CollectionFailure::NotFound,
+                ..
+            }
+        ));
+        assert!(matches!(
+            settle_absent(refused(wreq::StatusCode::FORBIDDEN)),
+            crate::queue::JobError::Postponed { .. }
+        ));
+        assert!(matches!(
+            settle_absent(crate::queue::JobError::permanent(anyhow::anyhow!(
+                "catalog response is private to another account"
+            ))),
+            crate::queue::JobError::Permanent(_)
+        ));
+    }
+
+    #[test]
     fn a_blocked_region_answers_differently_from_an_absent_entity() {
         let blocked = sc_transport::ScError::Api {
             status: 403,
@@ -377,3 +433,7 @@ mod geo_tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "catalog_refresh_absent_tests.rs"]
+mod absent_tests;
