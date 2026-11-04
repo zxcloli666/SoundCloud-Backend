@@ -502,7 +502,7 @@ def owner_purges(t, keys, flag):
     for i, u in enumerate(keys):
         pred_new = index_pred(u, t.columns, "NEW")
         pred_t = index_pred(u, t.columns, "t")
-        conds = (["k%d" % i] if flag else []) + ([pred_new] if pred_new else [])
+        conds = [flag % i] + ([pred_new] if pred_new else [])
         where = "%s = %s" % (keys_tuple(u, t.columns, "t"), keys_tuple(u, t.columns, "NEW"))
         if pred_t:
             where += " AND " + pred_t
@@ -512,8 +512,12 @@ def owner_purges(t, keys, flag):
             "    PERFORM %s(%s);" % (fn_name("purge", t), pk_json("r", t.pk)),
             "END LOOP;",
         ]
-        lines += ["IF %s THEN" % " AND ".join(conds)] + indent(loop) + ["END IF;"] if conds else loop
+        lines += ["IF %s THEN" % " AND ".join(conds)] + indent(loop) + ["END IF;"]
     return lines
+
+
+def key_changed(t, u, old):
+    return "%s IS DISTINCT FROM %s" % (keys_tuple(u, t.columns, "NEW", True), keys_tuple(u, t.columns, old, True))
 
 
 def is_pending(t, rec):
@@ -603,12 +607,19 @@ def owner(t):
     ]
     lines += indent(moved(t), 2)
     for i, u in enumerate(keys):
-        lines.append("        k%d := %s IS DISTINCT FROM %s;" % (i, keys_tuple(u, t.columns, "NEW", True), keys_tuple(u, t.columns, "OLD", True)))
-    lines += indent(owner_purges(t, keys, True), 2)
+        lines.append("        k%d := %s;" % (i, key_changed(t, u, "OLD")))
+    lines += indent(owner_purges(t, keys, "k%d"), 2)
     lines += ["        RETURN NEW;", "    END IF;"]
-    body = ["PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(t.name), same("t", "NEW", t.pk)), "held := FOUND;"]
+    if keys:
+        body = ["SELECT %s INTO %s FROM %s t WHERE %s FOR UPDATE;" % (
+            ", ".join(key_changed(t, u, "t") for u in keys), ", ".join("k%d" % i for i in range(len(keys))), table(t.name), same("t", "NEW", t.pk))]
+    else:
+        body = ["PERFORM 1 FROM %s t WHERE %s FOR UPDATE;" % (table(t.name), same("t", "NEW", t.pk))]
+    body += ["held := FOUND;"]
     body += pending(t, carry_inserted(t))
-    body += owner_purges(t, keys, False)
+    if keys:
+        body += ["IF NOT held THEN"] + indent(insert_self(t)) + ["END IF;"]
+    body += owner_purges(t, keys, "(NOT held OR k%d)")
     body += ["IF held THEN"]
     if cols:
         body += ["    UPDATE %s t SET %s WHERE %s;" % (table(t.name), assign(cols, "NEW"), same("t", "NEW", t.pk))]

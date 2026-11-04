@@ -271,8 +271,6 @@ SELECT v.cls FROM (VALUES
     ('playlist_track_projection', 'C'),
     ('playlists', 'C'),
     ('recommendation_quality_models', 'P'),
-    ('remote_grants', 'A'),
-    ('remote_link_codes', 'A'),
     ('repl_checksums', 'K'),
     ('repl_purges', 'X'),
     ('repl_repair', 'X'),
@@ -429,10 +427,6 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlist_track_projection', jsonb_build_object('playlist_urn', t.playlist_urn, 'position', t."position") FROM public.playlist_track_projection t ON CONFLICT DO NOTHING;
         WHEN 'playlists' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlists', jsonb_build_object('urn', t.urn) FROM public.playlists t ON CONFLICT DO NOTHING;
-        WHEN 'remote_grants' THEN
-            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_grants', jsonb_build_object('id', t.id) FROM public.remote_grants t ON CONFLICT DO NOTHING;
-        WHEN 'remote_link_codes' THEN
-            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_link_codes', jsonb_build_object('id', t.id) FROM public.remote_link_codes t ON CONFLICT DO NOTHING;
         WHEN 'repl_checksums' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'repl_checksums', jsonb_build_object('node', t.node, 'tbl', t.tbl, 'range', t.range) FROM public.repl_checksums t ON CONFLICT DO NOTHING;
         WHEN 'repl_tombstones' THEN
@@ -555,8 +549,6 @@ BEGIN
         ('playlist_remote_snapshots', 'C'),
         ('playlist_track_projection', 'C'),
         ('playlists', 'C'),
-        ('remote_grants', 'A'),
-        ('remote_link_codes', 'A'),
         ('repl_checksums', 'K'),
         ('repl_tombstones', 'A'),
         ('sc_egress_health', 'A'),
@@ -618,8 +610,6 @@ VALUES
     ('scd_api_pub', 'api', 'insert, update, delete', 'login_requests', ARRAY['chat_bind', 'code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_app_request_cooldowns', ARRAY['failure_count', 'oauth_app_id', 'retry_at', 'row_v', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_apps', ARRAY['active', 'client_id', 'client_secret', 'created_at', 'id', 'name', 'redirect_uri', 'row_v', 'updated_at']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'prev_refresh_hash', 'provider', 'refresh_expires_at', 'refresh_hash', 'rotated_at', 'rotation_seed', 'row_v', 'sc_user_id']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_checksums', ARRAY['at', 'hash', 'node', 'range', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -681,8 +671,6 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_remote_snapshots', ARRAY['content_fingerprint', 'created_at', 'id', 'playlist_urn', 'track_count']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_track_projection', ARRAY['playlist_urn', 'position', 'sc_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlists', ARRAY['artwork_url', 'created_at', 'deleted_at', 'description', 'duration_ms', 'genre', 'kind', 'label_name', 'last_read_at', 'likes_count_sc', 'owner_sc_user_id', 'owner_urn', 'owner_username', 'permalink_url', 'playlist_type', 'release_date', 'release_year', 'reposts_count_sc', 'sc_created_at', 'sc_desired', 'sc_last_modified', 'sc_metadata', 'sc_mutation_observation', 'sc_observation', 'sc_playlist_id', 'sc_synced_at', 'sc_write_confirmed', 'sharing', 'tags', 'title', 'title_normalized', 'track_count', 'updated_at', 'urn']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'prev_refresh_hash', 'provider', 'refresh_expires_at', 'refresh_hash', 'rotated_at', 'rotation_seed', 'row_v', 'sc_user_id']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_purges', ARRAY['at', 'pk', 'purged_v', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -1286,17 +1274,28 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.albums t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT (NEW.mb_release_id, ((NEW.mb_release_id IS NOT NULL))) IS DISTINCT FROM (t.mb_release_id, ((t.mb_release_id IS NOT NULL))), (NEW.spotify_album_id, ((NEW.spotify_album_id IS NOT NULL))) IS DISTINCT FROM (t.spotify_album_id, ((t.spotify_album_id IS NOT NULL))) INTO k0, k1 FROM public.albums t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'albums' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        IF ((NEW.mb_release_id IS NOT NULL)) THEN
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.albums (aggregates_updated_at, confidence, cover_url, created_at, genius_album_id, id, is_star_artist, mb_release_id, normalized_title, popularity_score, primary_artist_id, release_date, release_year, source, spotify_album_id, title, total_duration_ms, track_count, type, updated_at)
+            VALUES (NEW.aggregates_updated_at, NEW.confidence, NEW.cover_url, NEW.created_at, NEW.genius_album_id, NEW.id, NEW.is_star_artist, NEW.mb_release_id, NEW.normalized_title, NEW.popularity_score, NEW.primary_artist_id, NEW.release_date, NEW.release_year, NEW.source, NEW.spotify_album_id, NEW.title, NEW.total_duration_ms, NEW.track_count, NEW.type, NEW.updated_at)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) AND ((NEW.mb_release_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.albums t WHERE t.mb_release_id = NEW.mb_release_id AND ((t.mb_release_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_albums(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        IF ((NEW.spotify_album_id IS NOT NULL)) THEN
+        IF (NOT held OR k1) AND ((NEW.spotify_album_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.albums t WHERE t.spotify_album_id = NEW.spotify_album_id AND ((t.spotify_album_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_albums(jsonb_build_object('id', r.id));
             END LOOP;
@@ -1747,12 +1746,23 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.artist_sc_accounts t WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id) FOR UPDATE;
+        SELECT (NEW.sc_user_id, (NEW.verified)) IS DISTINCT FROM (t.sc_user_id, (t.verified)) INTO k0 FROM public.artist_sc_accounts t WHERE (t.artist_id, t.sc_user_id) = (NEW.artist_id, NEW.sc_user_id) FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artist_sc_accounts' AND p.pk = jsonb_build_object('artist_id', NEW.artist_id, 'sc_user_id', NEW.sc_user_id)) THEN
             RETURN NULL;
         END IF;
-        IF (NEW.verified) THEN
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.artist_sc_accounts (artist_id, created_at, notes, role, sc_user_id, source, updated_at, verified)
+            VALUES (NEW.artist_id, NEW.created_at, NEW.notes, NEW.role, NEW.sc_user_id, NEW.source, NEW.updated_at, NEW.verified)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) AND (NEW.verified) THEN
             FOR r IN SELECT t.artist_id, t.sc_user_id FROM public.artist_sc_accounts t WHERE t.sc_user_id = NEW.sc_user_id AND (t.verified) AND (t.artist_id, t.sc_user_id) IS DISTINCT FROM (NEW.artist_id, NEW.sc_user_id) LOOP
                 PERFORM public.scd_purge_artist_sc_accounts(jsonb_build_object('artist_id', r.artist_id, 'sc_user_id', r.sc_user_id));
             END LOOP;
@@ -2075,7 +2085,7 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.artists t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT (NEW.genius_artist_id, ((NEW.genius_artist_id IS NOT NULL))) IS DISTINCT FROM (t.genius_artist_id, ((t.genius_artist_id IS NOT NULL))), (NEW.mb_artist_id, ((NEW.mb_artist_id IS NOT NULL))) IS DISTINCT FROM (t.mb_artist_id, ((t.mb_artist_id IS NOT NULL))), (NEW.normalized_name, ((NEW.merged_into IS NULL))) IS DISTINCT FROM (t.normalized_name, ((t.merged_into IS NULL))), (NEW.spotify_artist_id, ((NEW.spotify_artist_id IS NOT NULL))) IS DISTINCT FROM (t.spotify_artist_id, ((t.spotify_artist_id IS NOT NULL))) INTO k0, k1, k2, k3 FROM public.artists t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'artists' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -2083,22 +2093,33 @@ BEGIN
             PERFORM pg_catalog.set_config('scd.merging', '', true);
             RETURN NULL;
         END IF;
-        IF ((NEW.genius_artist_id IS NOT NULL)) THEN
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.artists (account_walk_locked_at, aggregates_updated_at, album_count_denorm, avatar_url, bio, confidence, country, crawl_attempts, crawl_dead, crawl_fail_count, created_at, genius_artist_id, genius_crawl_offset, genius_crawled_at, genius_locked_at, genius_next_run_at, has_sc_account, id, interest_score, is_star, isni, last_account_walk_at, last_crawled_at, mb_artist_id, mb_crawl_offset, mb_crawled_at, mb_locked_at, mb_next_run_at, merged_into, monthly_listeners, name, normalized_name, popularity_score, sc_user_id, source, spotify_artist_id, star_aura_id, star_custom_hex, tags, track_count_featured, track_count_primary, trending_score, updated_at)
+            VALUES (NEW.account_walk_locked_at, NEW.aggregates_updated_at, NEW.album_count_denorm, NEW.avatar_url, NEW.bio, NEW.confidence, NEW.country, NEW.crawl_attempts, NEW.crawl_dead, NEW.crawl_fail_count, NEW.created_at, NEW.genius_artist_id, NEW.genius_crawl_offset, NEW.genius_crawled_at, NEW.genius_locked_at, NEW.genius_next_run_at, NEW.has_sc_account, NEW.id, NEW.interest_score, NEW.is_star, NEW.isni, NEW.last_account_walk_at, NEW.last_crawled_at, NEW.mb_artist_id, NEW.mb_crawl_offset, NEW.mb_crawled_at, NEW.mb_locked_at, NEW.mb_next_run_at, NEW.merged_into, NEW.monthly_listeners, NEW.name, NEW.normalized_name, NEW.popularity_score, NEW.sc_user_id, NEW.source, NEW.spotify_artist_id, NEW.star_aura_id, NEW.star_custom_hex, NEW.tags, NEW.track_count_featured, NEW.track_count_primary, NEW.trending_score, NEW.updated_at)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) AND ((NEW.genius_artist_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.artists t WHERE t.genius_artist_id = NEW.genius_artist_id AND ((t.genius_artist_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        IF ((NEW.mb_artist_id IS NOT NULL)) THEN
+        IF (NOT held OR k1) AND ((NEW.mb_artist_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.artists t WHERE t.mb_artist_id = NEW.mb_artist_id AND ((t.mb_artist_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        IF ((NEW.merged_into IS NULL)) THEN
+        IF (NOT held OR k2) AND ((NEW.merged_into IS NULL)) THEN
             FOR r IN SELECT t.id FROM public.artists t WHERE t.normalized_name = NEW.normalized_name AND ((t.merged_into IS NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        IF ((NEW.spotify_artist_id IS NOT NULL)) THEN
+        IF (NOT held OR k3) AND ((NEW.spotify_artist_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.artists t WHERE t.spotify_artist_id = NEW.spotify_artist_id AND ((t.spotify_artist_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_artists(jsonb_build_object('id', r.id));
             END LOOP;
@@ -5048,14 +5069,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.lyrics_lookup_state t WHERE t.track_id = NEW.track_id FOR UPDATE;
+        SELECT NEW.sc_track_id IS DISTINCT FROM t.sc_track_id INTO k0 FROM public.lyrics_lookup_state t WHERE t.track_id = NEW.track_id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'lyrics_lookup_state' AND p.pk = jsonb_build_object('track_id', NEW.track_id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.track_id FROM public.lyrics_lookup_state t WHERE t.sc_track_id = NEW.sc_track_id AND t.track_id IS DISTINCT FROM NEW.track_id LOOP
-            PERFORM public.scd_purge_lyrics_lookup_state(jsonb_build_object('track_id', r.track_id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.lyrics_lookup_state (algorithm_version, created_at, failure_streak, generation, input_artist, input_duration_ms, input_genius_song_id, input_genius_url, input_release_date, input_sc_created_at, input_title, last_error, last_outcome, miss_streak, next_run_at, priority, retry_after_at, sc_track_id, source_set_version, status, track_id, updated_at, wake_durable_at, wake_generation, wake_message_id)
+            VALUES (NEW.algorithm_version, NEW.created_at, NEW.failure_streak, NEW.generation, NEW.input_artist, NEW.input_duration_ms, NEW.input_genius_song_id, NEW.input_genius_url, NEW.input_release_date, NEW.input_sc_created_at, NEW.input_title, NEW.last_error, NEW.last_outcome, NEW.miss_streak, NEW.next_run_at, NEW.priority, NEW.retry_after_at, NEW.sc_track_id, NEW.source_set_version, NEW.status, NEW.track_id, NEW.updated_at, NEW.wake_durable_at, NEW.wake_generation, NEW.wake_message_id)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.track_id FROM public.lyrics_lookup_state t WHERE t.sc_track_id = NEW.sc_track_id AND t.track_id IS DISTINCT FROM NEW.track_id LOOP
+                PERFORM public.scd_purge_lyrics_lookup_state(jsonb_build_object('track_id', r.track_id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.lyrics_lookup_state t SET algorithm_version = NEW.algorithm_version, created_at = NEW.created_at, failure_streak = NEW.failure_streak, generation = NEW.generation, input_artist = NEW.input_artist, input_duration_ms = NEW.input_duration_ms, input_genius_song_id = NEW.input_genius_song_id, input_genius_url = NEW.input_genius_url, input_release_date = NEW.input_release_date, input_sc_created_at = NEW.input_sc_created_at, input_title = NEW.input_title, last_error = NEW.last_error, last_outcome = NEW.last_outcome, miss_streak = NEW.miss_streak, next_run_at = NEW.next_run_at, priority = NEW.priority, retry_after_at = NEW.retry_after_at, sc_track_id = NEW.sc_track_id, source_set_version = NEW.source_set_version, status = NEW.status, updated_at = NEW.updated_at, wake_durable_at = NEW.wake_durable_at, wake_generation = NEW.wake_generation, wake_message_id = NEW.wake_message_id WHERE t.track_id = NEW.track_id;
             RETURN NULL;
@@ -5682,14 +5716,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = NEW.archive_id FOR UPDATE;
+        SELECT NEW.queue_id IS DISTINCT FROM t.queue_id INTO k0 FROM public.playlist_legacy_membership_intents t WHERE t.archive_id = NEW.archive_id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_legacy_membership_intents' AND p.pk = jsonb_build_object('archive_id', NEW.archive_id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.archive_id FROM public.playlist_legacy_membership_intents t WHERE t.queue_id = NEW.queue_id AND t.archive_id IS DISTINCT FROM NEW.archive_id LOOP
-            PERFORM public.scd_purge_playlist_legacy_membership_intents(jsonb_build_object('archive_id', r.archive_id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlist_legacy_membership_intents (archive_id, archived_at, classification, legacy_desired_revision, legacy_synced_revision, legacy_user_id, local_snapshot_id, playlist_urn, prior_classification, queue_created_at, queue_failed_at, queue_generation, queue_id, queue_last_error, queue_next_run_at, queue_payload, queue_retry_count, remote_attempted_generation, remote_completed_generation, remote_result, resolved_at, source)
+            VALUES (NEW.archive_id, NEW.archived_at, NEW.classification, NEW.legacy_desired_revision, NEW.legacy_synced_revision, NEW.legacy_user_id, NEW.local_snapshot_id, NEW.playlist_urn, NEW.prior_classification, NEW.queue_created_at, NEW.queue_failed_at, NEW.queue_generation, NEW.queue_id, NEW.queue_last_error, NEW.queue_next_run_at, NEW.queue_payload, NEW.queue_retry_count, NEW.remote_attempted_generation, NEW.remote_completed_generation, NEW.remote_result, NEW.resolved_at, NEW.source)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.archive_id FROM public.playlist_legacy_membership_intents t WHERE t.queue_id = NEW.queue_id AND t.archive_id IS DISTINCT FROM NEW.archive_id LOOP
+                PERFORM public.scd_purge_playlist_legacy_membership_intents(jsonb_build_object('archive_id', r.archive_id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlist_legacy_membership_intents t SET archived_at = NEW.archived_at, classification = NEW.classification, legacy_desired_revision = NEW.legacy_desired_revision, legacy_synced_revision = NEW.legacy_synced_revision, legacy_user_id = NEW.legacy_user_id, local_snapshot_id = NEW.local_snapshot_id, playlist_urn = NEW.playlist_urn, prior_classification = NEW.prior_classification, queue_created_at = NEW.queue_created_at, queue_failed_at = NEW.queue_failed_at, queue_generation = NEW.queue_generation, queue_id = NEW.queue_id, queue_last_error = NEW.queue_last_error, queue_next_run_at = NEW.queue_next_run_at, queue_payload = NEW.queue_payload, queue_retry_count = NEW.queue_retry_count, remote_attempted_generation = NEW.remote_attempted_generation, remote_completed_generation = NEW.remote_completed_generation, remote_result = NEW.remote_result, resolved_at = NEW.resolved_at, source = NEW.source WHERE t.archive_id = NEW.archive_id;
             RETURN NULL;
@@ -5810,17 +5857,32 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlist_membership_operations t WHERE t.operation_id = NEW.operation_id FOR UPDATE;
+        SELECT (NEW.playlist_urn, NEW.idempotency_key) IS DISTINCT FROM (t.playlist_urn, t.idempotency_key), (NEW.playlist_urn, NEW.sequence) IS DISTINCT FROM (t.playlist_urn, t.sequence) INTO k0, k1 FROM public.playlist_membership_operations t WHERE t.operation_id = NEW.operation_id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_membership_operations' AND p.pk = jsonb_build_object('operation_id', NEW.operation_id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.idempotency_key) = (NEW.playlist_urn, NEW.idempotency_key) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
-            PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
-        END LOOP;
-        FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.sequence) = (NEW.playlist_urn, NEW.sequence) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
-            PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlist_membership_operations (accepted_projection_revision, actor_sc_user_id, base_baseline_generation, base_observation_id, boundary, conflict_code, created_at, expected_projection_revision, idempotency_key, kind, left_anchor_track_id, operation_id, ordered_track_ids, outcome, playlist_urn, request_fingerprint, resolved_at, right_anchor_track_id, sequence, track_id)
+            VALUES (NEW.accepted_projection_revision, NEW.actor_sc_user_id, NEW.base_baseline_generation, NEW.base_observation_id, NEW.boundary, NEW.conflict_code, NEW.created_at, NEW.expected_projection_revision, NEW.idempotency_key, NEW.kind, NEW.left_anchor_track_id, NEW.operation_id, NEW.ordered_track_ids, NEW.outcome, NEW.playlist_urn, NEW.request_fingerprint, NEW.resolved_at, NEW.right_anchor_track_id, NEW.sequence, NEW.track_id)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.idempotency_key) = (NEW.playlist_urn, NEW.idempotency_key) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
+                PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
+            END LOOP;
+        END IF;
+        IF (NOT held OR k1) THEN
+            FOR r IN SELECT t.operation_id FROM public.playlist_membership_operations t WHERE (t.playlist_urn, t.sequence) = (NEW.playlist_urn, NEW.sequence) AND t.operation_id IS DISTINCT FROM NEW.operation_id LOOP
+                PERFORM public.scd_purge_playlist_membership_operations(jsonb_build_object('operation_id', r.operation_id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlist_membership_operations t SET accepted_projection_revision = NEW.accepted_projection_revision, actor_sc_user_id = NEW.actor_sc_user_id, base_baseline_generation = NEW.base_baseline_generation, base_observation_id = NEW.base_observation_id, boundary = NEW.boundary, conflict_code = NEW.conflict_code, created_at = NEW.created_at, expected_projection_revision = NEW.expected_projection_revision, idempotency_key = NEW.idempotency_key, kind = NEW.kind, left_anchor_track_id = NEW.left_anchor_track_id, ordered_track_ids = NEW.ordered_track_ids, outcome = NEW.outcome, playlist_urn = NEW.playlist_urn, request_fingerprint = NEW.request_fingerprint, resolved_at = NEW.resolved_at, right_anchor_track_id = NEW.right_anchor_track_id, sequence = NEW.sequence, track_id = NEW.track_id WHERE t.operation_id = NEW.operation_id;
             RETURN NULL;
@@ -6095,14 +6157,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlist_remote_observations t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (t.playlist_urn, t.id) INTO k0 FROM public.playlist_remote_observations t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_observations' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.id FROM public.playlist_remote_observations t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_playlist_remote_observations(jsonb_build_object('id', r.id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlist_remote_observations (all_items_identified, authority, declared_track_count, error_kind, id, observed_at, observed_track_count, outcome, pagination_complete, playlist_urn, retry_at, sc_last_modified, snapshot_id)
+            VALUES (NEW.all_items_identified, NEW.authority, NEW.declared_track_count, NEW.error_kind, NEW.id, NEW.observed_at, NEW.observed_track_count, NEW.outcome, NEW.pagination_complete, NEW.playlist_urn, NEW.retry_at, NEW.sc_last_modified, NEW.snapshot_id)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.id FROM public.playlist_remote_observations t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_playlist_remote_observations(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlist_remote_observations t SET all_items_identified = NEW.all_items_identified, authority = NEW.authority, declared_track_count = NEW.declared_track_count, error_kind = NEW.error_kind, observed_at = NEW.observed_at, observed_track_count = NEW.observed_track_count, outcome = NEW.outcome, pagination_complete = NEW.pagination_complete, playlist_urn = NEW.playlist_urn, retry_at = NEW.retry_at, sc_last_modified = NEW.sc_last_modified, snapshot_id = NEW.snapshot_id WHERE t.id = NEW.id;
             RETURN NULL;
@@ -6270,17 +6345,32 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlist_remote_snapshots t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT (NEW.playlist_urn, NEW.content_fingerprint) IS DISTINCT FROM (t.playlist_urn, t.content_fingerprint), (NEW.playlist_urn, NEW.id) IS DISTINCT FROM (t.playlist_urn, t.id) INTO k0, k1 FROM public.playlist_remote_snapshots t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_remote_snapshots' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.content_fingerprint) = (NEW.playlist_urn, NEW.content_fingerprint) AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
-        END LOOP;
-        FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlist_remote_snapshots (content_fingerprint, created_at, id, playlist_urn, track_count)
+            VALUES (NEW.content_fingerprint, NEW.created_at, NEW.id, NEW.playlist_urn, NEW.track_count)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.content_fingerprint) = (NEW.playlist_urn, NEW.content_fingerprint) AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
+        IF (NOT held OR k1) THEN
+            FOR r IN SELECT t.id FROM public.playlist_remote_snapshots t WHERE (t.playlist_urn, t.id) = (NEW.playlist_urn, NEW.id) AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_playlist_remote_snapshots(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlist_remote_snapshots t SET content_fingerprint = NEW.content_fingerprint, created_at = NEW.created_at, playlist_urn = NEW.playlist_urn, track_count = NEW.track_count WHERE t.id = NEW.id;
             RETURN NULL;
@@ -6438,14 +6528,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlist_track_projection t WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position") FOR UPDATE;
+        SELECT (NEW.playlist_urn, NEW.sc_track_id) IS DISTINCT FROM (t.playlist_urn, t.sc_track_id) INTO k0 FROM public.playlist_track_projection t WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position") FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlist_track_projection' AND p.pk = jsonb_build_object('playlist_urn', NEW.playlist_urn, 'position', NEW."position")) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.playlist_urn, t."position" FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.sc_track_id) = (NEW.playlist_urn, NEW.sc_track_id) AND (t.playlist_urn, t."position") IS DISTINCT FROM (NEW.playlist_urn, NEW."position") LOOP
-            PERFORM public.scd_purge_playlist_track_projection(jsonb_build_object('playlist_urn', r.playlist_urn, 'position', r."position"));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlist_track_projection (playlist_urn, "position", sc_track_id)
+            VALUES (NEW.playlist_urn, NEW."position", NEW.sc_track_id)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.playlist_urn, t."position" FROM public.playlist_track_projection t WHERE (t.playlist_urn, t.sc_track_id) = (NEW.playlist_urn, NEW.sc_track_id) AND (t.playlist_urn, t."position") IS DISTINCT FROM (NEW.playlist_urn, NEW."position") LOOP
+                PERFORM public.scd_purge_playlist_track_projection(jsonb_build_object('playlist_urn', r.playlist_urn, 'position', r."position"));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlist_track_projection t SET sc_track_id = NEW.sc_track_id WHERE (t.playlist_urn, t."position") = (NEW.playlist_urn, NEW."position");
             RETURN NULL;
@@ -6619,7 +6722,7 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;
+        SELECT NEW.sc_playlist_id IS DISTINCT FROM t.sc_playlist_id INTO k0 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'playlists' AND p.pk = jsonb_build_object('urn', NEW.urn)) THEN
             PERFORM pg_catalog.set_config('scd.merging', 'on', true);
@@ -6627,9 +6730,22 @@ BEGIN
             PERFORM pg_catalog.set_config('scd.merging', '', true);
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
-            PERFORM public.scd_purge_playlists(jsonb_build_object('urn', r.urn));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.playlists (artwork_url, created_at, deleted_at, description, duration_ms, genre, kind, label_name, last_read_at, likes_count_sc, owner_sc_user_id, owner_urn, owner_username, permalink_url, playlist_type, release_date, release_year, reposts_count_sc, sc_created_at, sc_desired, sc_last_modified, sc_metadata, sc_mutation_observation, sc_observation, sc_playlist_id, sc_synced_at, sc_write_confirmed, sharing, tags, title, title_normalized, track_count, updated_at, urn)
+            VALUES (NEW.artwork_url, NEW.created_at, NEW.deleted_at, NEW.description, NEW.duration_ms, NEW.genre, NEW.kind, NEW.label_name, NEW.last_read_at, NEW.likes_count_sc, NEW.owner_sc_user_id, NEW.owner_urn, NEW.owner_username, NEW.permalink_url, NEW.playlist_type, NEW.release_date, NEW.release_year, NEW.reposts_count_sc, NEW.sc_created_at, NEW.sc_desired, NEW.sc_last_modified, NEW.sc_metadata, NEW.sc_mutation_observation, NEW.sc_observation, NEW.sc_playlist_id, NEW.sc_synced_at, NEW.sc_write_confirmed, NEW.sharing, NEW.tags, NEW.title, NEW.title_normalized, NEW.track_count, NEW.updated_at, NEW.urn)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.urn FROM public.playlists t WHERE t.sc_playlist_id = NEW.sc_playlist_id AND t.urn IS DISTINCT FROM NEW.urn LOOP
+                PERFORM public.scd_purge_playlists(jsonb_build_object('urn', r.urn));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.playlists t SET artwork_url = NEW.artwork_url, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, genre = NEW.genre, kind = NEW.kind, label_name = NEW.label_name, last_read_at = NEW.last_read_at, likes_count_sc = NEW.likes_count_sc, owner_sc_user_id = NEW.owner_sc_user_id, owner_urn = NEW.owner_urn, owner_username = NEW.owner_username, permalink_url = NEW.permalink_url, playlist_type = NEW.playlist_type, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_playlist_id = NEW.sc_playlist_id, sc_synced_at = NEW.sc_synced_at, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, track_count = NEW.track_count, updated_at = NEW.updated_at WHERE t.urn = NEW.urn;
             RETURN NULL;
@@ -6694,334 +6810,6 @@ END
 $f$;
 
 SELECT public.scd_keep_trigger('public.recommendation_quality_models', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.recommendation_quality_models FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_recommendation_quality_models', 'cmd', 'migration', 'repl');$t$);
-COMMIT;
-
-BEGIN;
-SET LOCAL lock_timeout = '5s';
-CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_grants(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.prev_refresh_hash, t.provider, t.refresh_expires_at, t.refresh_hash, t.rotated_at, t.rotation_seed, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_row_json_remote_grants(k jsonb)
-RETURNS jsonb
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_merge_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    o record;
-    core boolean := public.scd_role() = 'core';
-    n bigint;
-    tv bigint;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
-            NEW.access_expires_at := OLD.access_expires_at;
-            NEW.access_hash := OLD.access_hash;
-            NEW.client_id := OLD.client_id;
-            NEW.code_expires_at := OLD.code_expires_at;
-            NEW.code_hash := OLD.code_hash;
-            NEW.code_redirect_uri := OLD.code_redirect_uri;
-            NEW.created_at := OLD.created_at;
-            NEW.external_id := OLD.external_id;
-            NEW.last_used_at := OLD.last_used_at;
-            NEW.prev_refresh_hash := OLD.prev_refresh_hash;
-            NEW.provider := OLD.provider;
-            NEW.refresh_expires_at := OLD.refresh_expires_at;
-            NEW.refresh_hash := OLD.refresh_hash;
-            NEW.rotated_at := OLD.rotated_at;
-            NEW.rotation_seed := OLD.rotation_seed;
-            NEW.sc_user_id := OLD.sc_user_id;
-            NEW.row_v := OLD.row_v;
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        SELECT t.* INTO o FROM public.remote_grants t WHERE t.id = NEW.id;
-        IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
-                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-                UPDATE public.remote_grants t SET
-                    access_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_expires_at ELSE o.access_expires_at END,
-                    access_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_hash ELSE o.access_hash END,
-                    client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
-                    code_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_expires_at ELSE o.code_expires_at END,
-                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
-                    code_redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_redirect_uri ELSE o.code_redirect_uri END,
-                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
-                    external_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.external_id ELSE o.external_id END,
-                    last_used_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_used_at ELSE o.last_used_at END,
-                    prev_refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.prev_refresh_hash ELSE o.prev_refresh_hash END,
-                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
-                    refresh_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_expires_at ELSE o.refresh_expires_at END,
-                    refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_hash ELSE o.refresh_hash END,
-                    rotated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotated_at ELSE o.rotated_at END,
-                    rotation_seed = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotation_seed ELSE o.rotation_seed END,
-                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
-                    row_v = greatest(o.row_v, NEW.row_v)
-                WHERE t.id = o.id;
-                GET DIAGNOSTICS n = ROW_COUNT;
-                PERFORM pg_catalog.set_config('scd.merging', '', true);
-                IF n = 0 THEN
-                    CONTINUE;
-                END IF;
-            END IF;
-            RETURN NULL;
-        END IF;
-        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
-        IF tv IS NOT NULL THEN
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, prev_refresh_hash, provider, refresh_expires_at, refresh_hash, rotated_at, rotation_seed, row_v, sc_user_id)
-        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.row_v, NEW.sc_user_id)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.remote_grants still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_grants();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_merge;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('remote_grants', jsonb_build_object('id', OLD.id), OLD.row_v, now());
-    RETURN OLD;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_grants();
-CREATE OR REPLACE FUNCTION public.scd_erase_remote_grants(k jsonb, upto bigint)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-    DELETE FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid;
-    PERFORM pg_catalog.set_config('scd.merging', '', true);
-END
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    tv bigint;
-BEGIN
-    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
-    IF tv IS NOT NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_grants();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_tomb_check;
-
-CREATE OR REPLACE FUNCTION public.scd_ver_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(NEW.row_v);
-        RETURN NEW;
-    END IF;
-    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.prev_refresh_hash, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.rotated_at, OLD.rotation_seed, OLD.sc_user_id) THEN
-        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
-    ELSE
-        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_grants();
-
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zzz_suppress;
-COMMIT;
-
-BEGIN;
-SET LOCAL lock_timeout = '5s';
-CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_link_codes(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.code_hash, t.created_at, t.expires_at, t.id, t.provider, t.row_v, t.sc_user_id)::text) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_row_json_remote_link_codes(k jsonb)
-RETURNS jsonb
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_merge_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    o record;
-    core boolean := public.scd_role() = 'core';
-    n bigint;
-    tv bigint;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
-            NEW.code_hash := OLD.code_hash;
-            NEW.created_at := OLD.created_at;
-            NEW.expires_at := OLD.expires_at;
-            NEW.provider := OLD.provider;
-            NEW.sc_user_id := OLD.sc_user_id;
-            NEW.row_v := OLD.row_v;
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        SELECT t.* INTO o FROM public.remote_link_codes t WHERE t.id = NEW.id;
-        IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
-                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-                UPDATE public.remote_link_codes t SET
-                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
-                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
-                    expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
-                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
-                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
-                    row_v = greatest(o.row_v, NEW.row_v)
-                WHERE t.id = o.id;
-                GET DIAGNOSTICS n = ROW_COUNT;
-                PERFORM pg_catalog.set_config('scd.merging', '', true);
-                IF n = 0 THEN
-                    CONTINUE;
-                END IF;
-            END IF;
-            RETURN NULL;
-        END IF;
-        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
-        IF tv IS NOT NULL THEN
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.remote_link_codes (code_hash, created_at, expires_at, id, provider, row_v, sc_user_id)
-        VALUES (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.id, NEW.provider, NEW.row_v, NEW.sc_user_id)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.remote_link_codes still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_link_codes();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_merge;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('remote_link_codes', jsonb_build_object('id', OLD.id), OLD.row_v, now());
-    RETURN OLD;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_link_codes();
-CREATE OR REPLACE FUNCTION public.scd_erase_remote_link_codes(k jsonb, upto bigint)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-    DELETE FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid;
-    PERFORM pg_catalog.set_config('scd.merging', '', true);
-END
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    tv bigint;
-BEGIN
-    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
-    IF tv IS NOT NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_link_codes();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_tomb_check;
-
-CREATE OR REPLACE FUNCTION public.scd_ver_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(NEW.row_v);
-        RETURN NEW;
-    END IF;
-    IF (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.provider, NEW.sc_user_id) IS DISTINCT FROM (OLD.code_hash, OLD.created_at, OLD.expires_at, OLD.provider, OLD.sc_user_id) THEN
-        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
-    ELSE
-        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_link_codes();
-
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zzz_suppress;
 COMMIT;
 
 BEGIN;
@@ -7137,10 +6925,6 @@ BEGIN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
-        WHEN 'remote_grants' THEN
-            PERFORM 1 FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
-        WHEN 'remote_link_codes' THEN
-            PERFORM 1 FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'sc_egress_health' THEN
             PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
         WHEN 'sessions' THEN
@@ -7180,10 +6964,6 @@ BEGIN
             PERFORM public.scd_erase_listening_history(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
-        WHEN 'remote_grants' THEN
-            PERFORM public.scd_erase_remote_grants(k, upto);
-        WHEN 'remote_link_codes' THEN
-            PERFORM public.scd_erase_remote_link_codes(k, upto);
         WHEN 'sc_egress_health' THEN
             PERFORM public.scd_erase_sc_egress_health(k, upto);
         WHEN 'sessions' THEN
@@ -8777,18 +8557,33 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.taste_model_versions t WHERE t.version = NEW.version FOR UPDATE;
+        SELECT NEW.collection IS DISTINCT FROM t.collection, NEW.input_object IS DISTINCT FROM t.input_object, (((true)), (NEW.active)) IS DISTINCT FROM (((true)), (t.active)) INTO k0, k1, k2 FROM public.taste_model_versions t WHERE t.version = NEW.version FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'taste_model_versions' AND p.pk = jsonb_build_object('version', NEW.version)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE t.collection = NEW.collection AND t.version IS DISTINCT FROM NEW.version LOOP
-            PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
-        END LOOP;
-        FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE t.input_object = NEW.input_object AND t.version IS DISTINCT FROM NEW.version LOOP
-            PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
-        END LOOP;
-        IF (NEW.active) THEN
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.taste_model_versions (active, applied_at, collection, created_at, dim, input_object, items_count, metrics, pooling, refreshed_through, trained_at, users_count, version)
+            VALUES (NEW.active, NEW.applied_at, NEW.collection, NEW.created_at, NEW.dim, NEW.input_object, NEW.items_count, NEW.metrics, NEW.pooling, NEW.refreshed_through, NEW.trained_at, NEW.users_count, NEW.version)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE t.collection = NEW.collection AND t.version IS DISTINCT FROM NEW.version LOOP
+                PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
+            END LOOP;
+        END IF;
+        IF (NOT held OR k1) THEN
+            FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE t.input_object = NEW.input_object AND t.version IS DISTINCT FROM NEW.version LOOP
+                PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
+            END LOOP;
+        END IF;
+        IF (NOT held OR k2) AND (NEW.active) THEN
             FOR r IN SELECT t.version FROM public.taste_model_versions t WHERE ((true)) = ((true)) AND (t.active) AND t.version IS DISTINCT FROM NEW.version LOOP
                 PERFORM public.scd_purge_taste_model_versions(jsonb_build_object('version', r.version));
             END LOOP;
@@ -9250,14 +9045,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.track_comments t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT NEW.sc_comment_id IS DISTINCT FROM t.sc_comment_id INTO k0 FROM public.track_comments t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'track_comments' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.id FROM public.track_comments t WHERE t.sc_comment_id = NEW.sc_comment_id AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_track_comments(jsonb_build_object('id', r.id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.track_comments (body, created_at, id, sc_comment_id, sc_created_at, sc_track_id, synced_at, track_position_ms, user_urn)
+            VALUES (NEW.body, NEW.created_at, NEW.id, NEW.sc_comment_id, NEW.sc_created_at, NEW.sc_track_id, NEW.synced_at, NEW.track_position_ms, NEW.user_urn)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.id FROM public.track_comments t WHERE t.sc_comment_id = NEW.sc_comment_id AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_track_comments(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.track_comments t SET body = NEW.body, created_at = NEW.created_at, sc_comment_id = NEW.sc_comment_id, sc_created_at = NEW.sc_created_at, sc_track_id = NEW.sc_track_id, synced_at = NEW.synced_at, track_position_ms = NEW.track_position_ms, user_urn = NEW.user_urn WHERE t.id = NEW.id;
             RETURN NULL;
@@ -9436,17 +9244,32 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.tracks t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT NEW.sc_track_id IS DISTINCT FROM t.sc_track_id, NEW.urn IS DISTINCT FROM t.urn INTO k0, k1 FROM public.tracks t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.id FROM public.tracks t WHERE t.sc_track_id = NEW.sc_track_id AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
-        END LOOP;
-        FOR r IN SELECT t.id FROM public.tracks t WHERE t.urn = NEW.urn AND t.id IS DISTINCT FROM NEW.id LOOP
-            PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.tracks (album_id, album_position, artwork_url, audio_fingerprint, canonical_track_id, comments_count_sc, cover_of_artist_id, created_at, deleted_at, description, duration_ms, duration_resolve_attempts, duration_resolve_retry_at, enrich_attempts, enrich_confidence, enrich_error, enrich_locked_at, enrich_next_run_at, enrich_source, enrich_state, enriched_at, genius_song_id, genius_url, genre, hq_upgrade_attempts, hq_upgrade_last_at, hq_upgrade_pending, id, index_attempts, index_priority, index_state, indexed_at, is_cover, isrc, language, language_confidence, last_read_at, likes_count_sc, metadata_artist, needs_duration_resolve, permalink_url, pipeline_held, play_count_sc, primary_artist_id, quality_model_version, quality_score, recording_key, release_date, release_year, reposts_count_sc, s3_missing_at, s3_verified_at, sc_created_at, sc_desired, sc_last_modified, sc_metadata, sc_mutation_observation, sc_observation, sc_synced_at, sc_track_id, sc_write_confirmed, sharing, storage_attempts, storage_priority, storage_quality, storage_state, superseded_by, tags, title, title_normalized, transcribe_at, transcribe_state, updated_at, upload_kind, uploader_avatar_url, uploader_sc_user_id, uploader_urn, uploader_username, urn, waveform_url, work_key, work_normalizer_version)
+            VALUES (NEW.album_id, NEW.album_position, NEW.artwork_url, NEW.audio_fingerprint, NEW.canonical_track_id, NEW.comments_count_sc, NEW.cover_of_artist_id, NEW.created_at, NEW.deleted_at, NEW.description, NEW.duration_ms, NEW.duration_resolve_attempts, NEW.duration_resolve_retry_at, NEW.enrich_attempts, NEW.enrich_confidence, NEW.enrich_error, NEW.enrich_locked_at, NEW.enrich_next_run_at, NEW.enrich_source, NEW.enrich_state, NEW.enriched_at, NEW.genius_song_id, NEW.genius_url, NEW.genre, NEW.hq_upgrade_attempts, NEW.hq_upgrade_last_at, NEW.hq_upgrade_pending, NEW.id, NEW.index_attempts, NEW.index_priority, NEW.index_state, NEW.indexed_at, NEW.is_cover, NEW.isrc, NEW.language, NEW.language_confidence, NEW.last_read_at, NEW.likes_count_sc, NEW.metadata_artist, NEW.needs_duration_resolve, NEW.permalink_url, NEW.pipeline_held, NEW.play_count_sc, NEW.primary_artist_id, NEW.quality_model_version, NEW.quality_score, NEW.recording_key, NEW.release_date, NEW.release_year, NEW.reposts_count_sc, NEW.s3_missing_at, NEW.s3_verified_at, NEW.sc_created_at, NEW.sc_desired, NEW.sc_last_modified, NEW.sc_metadata, NEW.sc_mutation_observation, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_track_id, NEW.sc_write_confirmed, NEW.sharing, NEW.storage_attempts, NEW.storage_priority, NEW.storage_quality, NEW.storage_state, NEW.superseded_by, NEW.tags, NEW.title, NEW.title_normalized, NEW.transcribe_at, NEW.transcribe_state, NEW.updated_at, NEW.upload_kind, NEW.uploader_avatar_url, NEW.uploader_sc_user_id, NEW.uploader_urn, NEW.uploader_username, NEW.urn, NEW.waveform_url, NEW.work_key, NEW.work_normalizer_version)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.id FROM public.tracks t WHERE t.sc_track_id = NEW.sc_track_id AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
+        IF (NOT held OR k1) THEN
+            FOR r IN SELECT t.id FROM public.tracks t WHERE t.urn = NEW.urn AND t.id IS DISTINCT FROM NEW.id LOOP
+                PERFORM public.scd_purge_tracks(jsonb_build_object('id', r.id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.tracks t SET album_id = NEW.album_id, album_position = NEW.album_position, artwork_url = NEW.artwork_url, audio_fingerprint = NEW.audio_fingerprint, canonical_track_id = NEW.canonical_track_id, comments_count_sc = NEW.comments_count_sc, cover_of_artist_id = NEW.cover_of_artist_id, created_at = NEW.created_at, deleted_at = NEW.deleted_at, description = NEW.description, duration_ms = NEW.duration_ms, duration_resolve_attempts = NEW.duration_resolve_attempts, duration_resolve_retry_at = NEW.duration_resolve_retry_at, enrich_attempts = NEW.enrich_attempts, enrich_confidence = NEW.enrich_confidence, enrich_error = NEW.enrich_error, enrich_locked_at = NEW.enrich_locked_at, enrich_next_run_at = NEW.enrich_next_run_at, enrich_source = NEW.enrich_source, enrich_state = NEW.enrich_state, enriched_at = NEW.enriched_at, genius_song_id = NEW.genius_song_id, genius_url = NEW.genius_url, genre = NEW.genre, hq_upgrade_attempts = NEW.hq_upgrade_attempts, hq_upgrade_last_at = NEW.hq_upgrade_last_at, hq_upgrade_pending = NEW.hq_upgrade_pending, index_attempts = NEW.index_attempts, index_priority = NEW.index_priority, index_state = NEW.index_state, indexed_at = NEW.indexed_at, is_cover = NEW.is_cover, isrc = NEW.isrc, language = NEW.language, language_confidence = NEW.language_confidence, likes_count_sc = NEW.likes_count_sc, metadata_artist = NEW.metadata_artist, needs_duration_resolve = NEW.needs_duration_resolve, permalink_url = NEW.permalink_url, pipeline_held = NEW.pipeline_held, play_count_sc = NEW.play_count_sc, primary_artist_id = NEW.primary_artist_id, quality_model_version = NEW.quality_model_version, quality_score = NEW.quality_score, recording_key = NEW.recording_key, release_date = NEW.release_date, release_year = NEW.release_year, reposts_count_sc = NEW.reposts_count_sc, s3_missing_at = NEW.s3_missing_at, s3_verified_at = NEW.s3_verified_at, sc_created_at = NEW.sc_created_at, sc_desired = NEW.sc_desired, sc_last_modified = NEW.sc_last_modified, sc_metadata = NEW.sc_metadata, sc_mutation_observation = NEW.sc_mutation_observation, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, sc_track_id = NEW.sc_track_id, sc_write_confirmed = NEW.sc_write_confirmed, sharing = NEW.sharing, storage_attempts = NEW.storage_attempts, storage_priority = NEW.storage_priority, storage_quality = NEW.storage_quality, storage_state = NEW.storage_state, superseded_by = NEW.superseded_by, tags = NEW.tags, title = NEW.title, title_normalized = NEW.title_normalized, transcribe_at = NEW.transcribe_at, transcribe_state = NEW.transcribe_state, updated_at = NEW.updated_at, upload_kind = NEW.upload_kind, uploader_avatar_url = NEW.uploader_avatar_url, uploader_sc_user_id = NEW.uploader_sc_user_id, uploader_urn = NEW.uploader_urn, uploader_username = NEW.uploader_username, urn = NEW.urn, waveform_url = NEW.waveform_url, work_key = NEW.work_key, work_normalizer_version = NEW.work_normalizer_version WHERE t.id = NEW.id;
             RETURN NULL;
@@ -11704,14 +11527,27 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.users t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
+        SELECT NEW.urn IS DISTINCT FROM t.urn INTO k0 FROM public.users t WHERE t.sc_user_id = NEW.sc_user_id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
             RETURN NULL;
         END IF;
-        FOR r IN SELECT t.sc_user_id FROM public.users t WHERE t.urn = NEW.urn AND t.sc_user_id IS DISTINCT FROM NEW.sc_user_id LOOP
-            PERFORM public.scd_purge_users(jsonb_build_object('sc_user_id', r.sc_user_id));
-        END LOOP;
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.users (avatar_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified)
+            VALUES (NEW.avatar_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) THEN
+            FOR r IN SELECT t.sc_user_id FROM public.users t WHERE t.urn = NEW.urn AND t.sc_user_id IS DISTINCT FROM NEW.sc_user_id LOOP
+                PERFORM public.scd_purge_users(jsonb_build_object('sc_user_id', r.sc_user_id));
+            END LOOP;
+        END IF;
         IF held THEN
             UPDATE public.users t SET avatar_url = NEW.avatar_url, city = NEW.city, comments_count = NEW.comments_count, country = NEW.country, created_at = NEW.created_at, description = NEW.description, first_name = NEW.first_name, followers_count = NEW.followers_count, followings_count = NEW.followings_count, full_name = NEW.full_name, kind = NEW.kind, last_name = NEW.last_name, permalink = NEW.permalink, permalink_url = NEW.permalink_url, playlists_count = NEW.playlists_count, reposts_count = NEW.reposts_count, sc_created_at = NEW.sc_created_at, sc_last_modified = NEW.sc_last_modified, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, tracks_count = NEW.tracks_count, updated_at = NEW.updated_at, urn = NEW.urn, username = NEW.username, username_normalized = NEW.username_normalized, verified = NEW.verified WHERE t.sc_user_id = NEW.sc_user_id;
             RETURN NULL;
@@ -12102,17 +11938,28 @@ BEGIN
         RETURN NEW;
     END IF;
     FOR attempt IN 1..3 LOOP
-        PERFORM 1 FROM public.wanted_tracks t WHERE t.id = NEW.id FOR UPDATE;
+        SELECT (NEW.source, NEW.external_id, ((NEW.external_id IS NOT NULL))) IS DISTINCT FROM (t.source, t.external_id, ((t.external_id IS NOT NULL))), (NEW.isrc, ((NEW.isrc IS NOT NULL))) IS DISTINCT FROM (t.isrc, ((t.isrc IS NOT NULL))) INTO k0, k1 FROM public.wanted_tracks t WHERE t.id = NEW.id FOR UPDATE;
         held := FOUND;
         IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'wanted_tracks' AND p.pk = jsonb_build_object('id', NEW.id)) THEN
             RETURN NULL;
         END IF;
-        IF ((NEW.external_id IS NOT NULL)) THEN
+        IF NOT held THEN
+            PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+            INSERT INTO public.wanted_tracks (discovered_at, duration_ms, external_id, fetched_at, id, isrc, normalized_title, primary_artist_id, recording_key, release_year, resolve_attempts, resolve_error, resolve_locked_at, resolve_next_run_at, source, status, title, track_id, updated_at, work_key, work_normalizer_version, work_reconciled_at)
+            VALUES (NEW.discovered_at, NEW.duration_ms, NEW.external_id, NEW.fetched_at, NEW.id, NEW.isrc, NEW.normalized_title, NEW.primary_artist_id, NEW.recording_key, NEW.release_year, NEW.resolve_attempts, NEW.resolve_error, NEW.resolve_locked_at, NEW.resolve_next_run_at, NEW.source, NEW.status, NEW.title, NEW.track_id, NEW.updated_at, NEW.work_key, NEW.work_normalizer_version, NEW.work_reconciled_at)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS n = ROW_COUNT;
+            PERFORM pg_catalog.set_config('scd.merging', '', true);
+            IF n > 0 THEN
+                RETURN NULL;
+            END IF;
+        END IF;
+        IF (NOT held OR k0) AND ((NEW.external_id IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.wanted_tracks t WHERE (t.source, t.external_id) = (NEW.source, NEW.external_id) AND ((t.external_id IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_wanted_tracks(jsonb_build_object('id', r.id));
             END LOOP;
         END IF;
-        IF ((NEW.isrc IS NOT NULL)) THEN
+        IF (NOT held OR k1) AND ((NEW.isrc IS NOT NULL)) THEN
             FOR r IN SELECT t.id FROM public.wanted_tracks t WHERE t.isrc = NEW.isrc AND ((t.isrc IS NOT NULL)) AND t.id IS DISTINCT FROM NEW.id LOOP
                 PERFORM public.scd_purge_wanted_tracks(jsonb_build_object('id', r.id));
             END LOOP;
@@ -12273,10 +12120,6 @@ BEGIN
             RETURN public.scd_row_hash_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_hash_recommendation_quality_models(k);
-        WHEN 'remote_grants' THEN
-            RETURN public.scd_row_hash_remote_grants(k);
-        WHEN 'remote_link_codes' THEN
-            RETURN public.scd_row_hash_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_hash_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -12503,10 +12346,6 @@ BEGIN
             RETURN public.scd_row_json_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_json_recommendation_quality_models(k);
-        WHEN 'remote_grants' THEN
-            RETURN public.scd_row_json_remote_grants(k);
-        WHEN 'remote_link_codes' THEN
-            RETURN public.scd_row_json_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_json_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -13077,16 +12916,6 @@ BEGIN
             ('playlists', 'zz_owner'),
             ('playlists', 'zzz_suppress'),
             ('recommendation_quality_models', 'zz_guard'),
-            ('remote_grants', 'zz_merge'),
-            ('remote_grants', 'zz_tomb'),
-            ('remote_grants', 'zz_tomb_check'),
-            ('remote_grants', 'zz_ver'),
-            ('remote_grants', 'zzz_suppress'),
-            ('remote_link_codes', 'zz_merge'),
-            ('remote_link_codes', 'zz_tomb'),
-            ('remote_link_codes', 'zz_tomb_check'),
-            ('remote_link_codes', 'zz_ver'),
-            ('remote_link_codes', 'zzz_suppress'),
             ('repl_checksums', 'zz_max'),
             ('repl_checksums', 'zzz_suppress'),
             ('repl_tombstones', 'zz_erase'),

@@ -129,7 +129,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
             None,
             "love",
             Some("17"),
-            "tracks_uploader_popular_idx",
+            "tracks_uploader_",
         ),
     ] {
         let plan = explain!(

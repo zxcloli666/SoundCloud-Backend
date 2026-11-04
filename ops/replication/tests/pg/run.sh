@@ -42,6 +42,7 @@ fresh scd_b1_exercise scd_b1_tpl
 sql -At -d scd_b1_exercise -f - < "$here/exercise.sql" > "$tmp/exercise.log" 2>&1 || { cat "$tmp/exercise.log"; exit 1; }
 sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 
+. "$here/lookups.sh"
 . "$here/pressure.sh"
 
 say "three nodes on real logical replication"

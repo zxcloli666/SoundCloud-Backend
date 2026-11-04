@@ -148,15 +148,36 @@ class Generated(unittest.TestCase):
                                      "                IF n = 0 THEN\n                    CONTINUE;"), 2)
         owner = text[text.index("FUNCTION public.scd_owner_playlists()"):]
         owner = owner[:owner.index("$f$;")]
-        locked = owner.index("    FOR attempt IN 1..3 LOOP\n        PERFORM 1 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;\n"
+        locked = owner.index("    FOR attempt IN 1..3 LOOP\n        SELECT NEW.sc_playlist_id IS DISTINCT FROM t.sc_playlist_id INTO k0 FROM public.playlists t WHERE t.urn = NEW.urn FOR UPDATE;\n"
                              "        held := FOUND;\n        IF EXISTS (SELECT 1 FROM public.cmd_pending p")
         self.assertEqual(owner.count("FROM public.cmd_pending p"), 6)
         self.assertNotIn("IF FOUND", owner)
-        self.assertLess(owner.index("        IF held THEN\n            UPDATE public.playlists t SET"), owner.index("ON CONFLICT DO NOTHING;"))
+        self.assertLess(owner.index("        IF held THEN\n            UPDATE public.playlists t SET"), owner.rindex("ON CONFLICT DO NOTHING;"))
         self.assertLess(owner.index("IF TG_OP = 'UPDATE' THEN\n        IF NEW.urn IS DISTINCT FROM OLD.urn THEN"), locked)
         self.assertIn("            UPDATE public.playlists t SET last_read_at = NEW.last_read_at WHERE t.urn = NEW.urn AND t.last_read_at IS DISTINCT FROM NEW.last_read_at;\n"
                       "            PERFORM pg_catalog.set_config('scd.merging', '', true);\n            RETURN NULL;", owner)
         self.assertIn("                IF NEW.last_read_at IS DISTINCT FROM OLD.last_read_at THEN\n                    NEW.artwork_url := OLD.artwork_url;", owner)
+
+    def test_owner_insert_looks_up_a_unique_key_only_on_a_conflict_or_a_new_value(self):
+        text = self.files["triggers.sql"]
+        owner = text[text.index("FUNCTION public.scd_owner_artists()"):]
+        owner = owner[:owner.index("$f$;")]
+        insert = owner[owner.index("    FOR attempt IN 1..3 LOOP"):]
+        self.assertTrue(insert.startswith("    FOR attempt IN 1..3 LOOP\n        SELECT (NEW.genius_artist_id, ((NEW.genius_artist_id IS NOT NULL))) "
+                                          "IS DISTINCT FROM (t.genius_artist_id, ((t.genius_artist_id IS NOT NULL))), "))
+        self.assertIn(" INTO k0, k1, k2, k3 FROM public.artists t WHERE t.id = NEW.id FOR UPDATE;\n        held := FOUND;\n", insert)
+        early = insert.index("        IF NOT held THEN\n            PERFORM pg_catalog.set_config('scd.merging', 'on', true);\n            INSERT INTO public.artists")
+        self.assertLess(insert.index("FROM public.cmd_pending p"), early)
+        self.assertLess(early, insert.index("FOR r IN SELECT"))
+        self.assertEqual(insert.count("FOR r IN SELECT"), 4)
+        self.assertEqual(insert.count("ON CONFLICT DO NOTHING;"), 2)
+        self.assertIn("        IF (NOT held OR k2) AND ((NEW.merged_into IS NULL)) THEN\n"
+                      "            FOR r IN SELECT t.id FROM public.artists t WHERE t.normalized_name = NEW.normalized_name AND ((t.merged_into IS NULL)) "
+                      "AND t.id IS DISTINCT FROM NEW.id LOOP", insert)
+        plain = text[text.index("FUNCTION public.scd_owner_background_job_failures()"):]
+        plain = plain[:plain.index("$f$;")]
+        self.assertIn("        PERFORM 1 FROM public.background_job_failures t WHERE (t.id, t.generation) = (NEW.id, NEW.generation) FOR UPDATE;\n", plain)
+        self.assertEqual(plain.count("ON CONFLICT DO NOTHING;"), 1)
 
     def test_owner_holds_every_incoming_change_of_a_pending_key(self):
         text = self.files["triggers.sql"]

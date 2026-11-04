@@ -18,7 +18,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lyrics_race scd_b1_ld_core scd_b1_ld_main scd_b1_ld_star scd_b1_ld_tpl scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lookups scd_b1_lyrics_race scd_b1_ld_core scd_b1_ld_main scd_b1_ld_star scd_b1_ld_tpl scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
@@ -63,12 +63,12 @@ subscribe() {
 
 wait_for() {
   local i
-  for i in $(seq 1 120); do
+  for i in $(seq 1 600); do
     if [ "$(val "$1" "$2")" = t ]; then
       echo "ok $3"
       return 0
     fi
-    sleep 0.5
+    sleep 0.1
   done
   echo "FAIL $3 (on $1: $2)"
   exit 1

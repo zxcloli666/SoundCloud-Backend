@@ -85,7 +85,7 @@ pub(crate) async fn miss_with(
         tokio_util::sync::CancellationToken::new(),
     )
     .await?;
-    let background = crate::background_jobs::BackgroundJobs::new(nats);
+    let background = crate::background_jobs::BackgroundJobs::offline(nats);
     let indexing = crate::modules::indexing::IndexingService::new(
         pool.clone(),
         background.clone(),

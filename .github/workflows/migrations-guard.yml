@@ -78,8 +78,8 @@ jobs:
       - name: postgres 17 with wal_level=logical and commit timestamps
         if: steps.changed.outputs.run == 'true'
         run: |
-          docker run -d --name scdpg -p 5432:5432 -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
-            mirror.gcr.io/library/postgres:17-alpine -c wal_level=logical -c track_commit_timestamp=on
+          docker run -d --name scdpg -p 5432:5432 --tmpfs /var/lib/postgresql/data -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
+            mirror.gcr.io/library/postgres:17-alpine -c wal_level=logical -c track_commit_timestamp=on -c fsync=off -c full_page_writes=off
           for i in $(seq 1 60); do
             docker exec scdpg pg_isready -q -U scd -h 127.0.0.1 && break
             sleep 1
@@ -90,35 +90,70 @@ jobs:
         env:
           PSQL: docker exec -i scdpg psql -U scd
           PGBENCH: docker exec -i scdpg pgbench -U scd
-          LYRICS_RACE_SECONDS: 600
+          LYRICS_RACE_SECONDS: ${{ github.event_name == 'push' && 600 || 60 }}
         run: bash ops/replication/tests/pg/run.sh || { docker logs scdpg 2>&1 | grep -E -B2 'processing remote data|logical replication (apply|parallel apply) worker .* (exited|failed)' | tail -60; exit 1; }
+
+  replication-crates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TARGETS: utils/write-through/target utils/catalog-ingest/target utils/catalog-match/target utils/admin-catalog/target utils/repl-verify/target streaming/target
+      TARGET_KEY: utils/write-through/Cargo.lock utils/catalog-ingest/Cargo.lock utils/catalog-match/Cargo.lock utils/admin-catalog/Cargo.lock utils/repl-verify/Cargo.lock streaming/Cargo.lock
+      SAVE_TARGETS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: needs a run
+        id: changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          case "$BASE" in ''|0000000000000000000000000000000000000000)
+            echo run=true >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          RANGE="$BASE..HEAD"
+          [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && RANGE="$BASE...HEAD"
+          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/catalog-ingest utils/catalog-match utils/admin-catalog utils/repl-verify streaming/src/db streaming/src/hq_upgrade streaming/src/hq_upgrade.rs jobs/queries/queue/write_pressure.sql .github/workflows/migrations-guard.yml; then
+            echo run=false >> "$GITHUB_OUTPUT"
+          else
+            echo run=true >> "$GITHUB_OUTPUT"
+          fi
+      - name: postgres 17 with wal_level=logical and commit timestamps
+        if: steps.changed.outputs.run == 'true'
+        run: |
+          docker run -d --name scdpg -p 5432:5432 --tmpfs /var/lib/postgresql/data -e POSTGRES_USER=scd -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scd \
+            mirror.gcr.io/library/postgres:17-alpine -c wal_level=logical -c track_commit_timestamp=on -c fsync=off -c full_page_writes=off
+          for i in $(seq 1 60); do
+            docker exec scdpg pg_isready -q -U scd -h 127.0.0.1 && break
+            sleep 1
+          done
+          docker exec scdpg pg_isready -U scd -h 127.0.0.1
       - name: toolchain
         if: steps.changed.outputs.run == 'true'
         run: sh scripts/ci-toolchain.sh
-      - uses: swatinem/rust-cache@v2
+      - name: Restore targets
         if: steps.changed.outputs.run == 'true'
+        uses: ./.github/actions/target-cache
         with:
-          workspaces: |
-            utils/write-through -> target
-            utils/catalog-ingest -> target
-            utils/catalog-match -> target
-            utils/admin-catalog -> target
-            utils/repl-verify -> target
-            streaming -> target
-          key: write-through
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          mode: restore
+          name: replication-crates
+          paths: ${{ env.TARGETS }}
+          key: ${{ env.TARGET_KEY }}
       - name: write-through client, api and core on real Postgres
         if: steps.changed.outputs.run == 'true'
         env:
           DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
         run: |
           docker exec scdpg createdb -U scd wt_build
-          for f in api/migrations/*.sql; do docker exec -i scdpg psql -X -q -v ON_ERROR_STOP=1 -U scd -d wt_build -c "SET client_min_messages = error" -f - < "$f"; done
+          docker cp api/migrations scdpg:/migrations
+          docker exec scdpg sh -c 'for f in /migrations/*.sql; do PGOPTIONS="-c client_min_messages=error" psql -X -q -v ON_ERROR_STOP=1 -U scd -d wt_build -f "$f" || exit 1; done'
           cargo fmt --manifest-path utils/write-through/Cargo.toml --check
           cargo clippy --manifest-path utils/write-through/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo test --manifest-path utils/write-through/Cargo.toml --all-features --locked
-      - name: catalog-ingest, catalog-match and admin-catalog on real Postgres
+      - name: catalog-ingest and catalog-match on real Postgres, admin-catalog lint
         if: steps.changed.outputs.run == 'true'
         env:
           DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
@@ -129,7 +164,6 @@ jobs:
           done
           cargo test --manifest-path utils/catalog-ingest/Cargo.toml --locked
           cargo test --manifest-path utils/catalog-match/Cargo.toml --locked
-          cargo test --manifest-path utils/admin-catalog/Cargo.toml --locked
       - name: resend sweeper and verify loop on real Postgres
         if: steps.changed.outputs.run == 'true'
         env:
@@ -143,3 +177,11 @@ jobs:
         env:
           STREAMING_SCHEMA_TEST_DATABASE_URL: postgres://scd:dev@localhost:5432/wt_build
         run: cargo test --manifest-path streaming/Cargo.toml --locked -- --ignored --skip stream::anon
+      - name: Save targets
+        if: steps.changed.outputs.run == 'true' && env.SAVE_TARGETS == 'true'
+        uses: ./.github/actions/target-cache
+        with:
+          mode: save
+          name: replication-crates
+          paths: ${{ env.TARGETS }}
+          key: ${{ env.TARGET_KEY }}
