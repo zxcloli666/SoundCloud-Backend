@@ -410,6 +410,11 @@ mod tests {
         verify_schema(&pool).await
     }
 
+    #[sqlx::test(migrations = "./migrations")]
+    async fn api_starts_on_a_core_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
+        verify_schema(&pool).await
+    }
+
     #[sqlx::test(migrations = false)]
     async fn a_database_ahead_of_the_required_migration_still_boots(
         pool: PgPool,

@@ -154,3 +154,25 @@ async fn an_invalid_audio_backfill_index_fails_the_indexing_schema_check(
     assert!(rebuilt);
     Ok(())
 }
+
+#[sqlx::test(migrations = false)]
+async fn jobs_starts_on_a_core_with_every_migration_and_refuses_one_without_0292(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    validate_core_schema(&pool).await?;
+
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 292")
+        .execute(&pool)
+        .await?;
+    let refused = validate_core_schema(&pool).await;
+
+    assert!(refused.is_err_and(|error| error.to_string().contains("through 0292")));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn jobs_starts_on_an_ops_database_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
+    crate::db::migrations::run_ops(&pool).await?;
+    validate_ops_schema(&pool).await
+}
