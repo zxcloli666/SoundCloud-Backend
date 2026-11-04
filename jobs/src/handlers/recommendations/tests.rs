@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::RecommendationHandler;
 
-async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
+pub(super) async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "CREATE TABLE artists (
              id uuid PRIMARY KEY,
@@ -52,7 +52,7 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn insert_artist_track(
+pub(super) async fn insert_artist_track(
     pool: &PgPool,
     artist_id: Uuid,
     track_id: Uuid,
