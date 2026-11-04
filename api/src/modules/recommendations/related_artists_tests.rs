@@ -177,7 +177,7 @@ async fn coplay_rows_read(pool: &PgPool, sql: &str, limit: Option<i64>) -> anyho
     Ok(read)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn bounded_related_artists_match_the_full_sort_for_every_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -207,7 +207,7 @@ async fn bounded_related_artists_match_the_full_sort_for_every_limit(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn tied_weights_keep_the_same_weights_and_the_same_artists_above_the_cut(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -236,7 +236,7 @@ async fn tied_weights_keep_the_same_weights_and_the_same_artists_above_the_cut(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn related_artists_of_a_hub_read_a_few_edges_instead_of_all_of_them(
     pool: PgPool,
 ) -> anyhow::Result<()> {

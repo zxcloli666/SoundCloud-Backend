@@ -93,35 +93,33 @@ async fn tracks(
     count: i64,
     mixed: bool,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "WITH made AS (
-             INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms,
-                                 sharing, storage_state, index_state, needs_duration_resolve)
-             SELECT n::text, 'urn:' || n, 'T' || n, 't' || n, 1000,
-                    CASE WHEN $4 AND n % 11 = 0 THEN 'private' ELSE 'public' END,
-                    CASE WHEN $4 AND n % 4 = 0 THEN 'pending' ELSE 'ok' END,
-                    CASE WHEN $4 AND n % 6 = 0 THEN 'pending' ELSE 'indexed' END,
-                    $4 AND n % 9 = 0
-             FROM generate_series($2::bigint, $2::bigint + $3::bigint - 1) AS n
-             RETURNING id, sc_track_id
-         ), credited AS (
-             INSERT INTO track_artists (track_id, artist_id, role, source)
-             SELECT id, $1, 'primary', 'test' FROM made
-         )
-         INSERT INTO sc_track_counters (sc_track_id, play_count)
-         SELECT sc_track_id,
-                CASE WHEN sc_track_id::bigint % 17 = 0 THEN 777
-                     ELSE (sc_track_id::bigint * 7919) % 100003 END
-         FROM made
-         WHERE sc_track_id::bigint % 5 <> 0",
+    let last = first + count - 1;
+    crate::db::insert_replicated(
+        pool,
+        &format!(
+            "WITH made AS (
+                 INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms,
+                                     sharing, storage_state, index_state, needs_duration_resolve)
+                 SELECT n::text, 'urn:' || n, 'T' || n, 't' || n, 1000,
+                        CASE WHEN {mixed} AND n % 11 = 0 THEN 'private' ELSE 'public' END,
+                        CASE WHEN {mixed} AND n % 4 = 0 THEN 'pending' ELSE 'ok' END,
+                        CASE WHEN {mixed} AND n % 6 = 0 THEN 'pending' ELSE 'indexed' END,
+                        {mixed} AND n % 9 = 0
+                 FROM generate_series({first}, {last}) AS n
+                 RETURNING id, sc_track_id
+             ), credited AS (
+                 INSERT INTO track_artists (track_id, artist_id, role, source)
+                 SELECT id, '{artist}'::uuid, 'primary', 'test' FROM made
+             )
+             INSERT INTO sc_track_counters (sc_track_id, play_count)
+             SELECT sc_track_id,
+                    CASE WHEN sc_track_id::bigint % 17 = 0 THEN 777
+                         ELSE (sc_track_id::bigint * 7919) % 100003 END
+             FROM made
+             WHERE sc_track_id::bigint % 5 <> 0"
+        ),
     )
-    .bind(artist)
-    .bind(first)
-    .bind(count)
-    .bind(mixed)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn seed(pool: &PgPool) -> anyhow::Result<HashMap<String, i64>> {
@@ -261,7 +259,7 @@ fn with_plays(rows: &[(Uuid, String)], plays: &HashMap<String, i64>) -> Vec<(Uui
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn per_artist_top_tracks_return_the_old_rows_for_every_input_and_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -298,7 +296,7 @@ async fn per_artist_top_tracks_return_the_old_rows_for_every_input_and_limit(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn per_artist_collect_keeps_the_old_artists_and_play_counts(
     pool: PgPool,
 ) -> anyhow::Result<()> {
