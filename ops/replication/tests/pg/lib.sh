@@ -63,12 +63,12 @@ subscribe() {
 
 wait_for() {
   local i
-  for i in $(seq 1 120); do
+  for i in $(seq 1 600); do
     if [ "$(val "$1" "$2")" = t ]; then
       echo "ok $3"
       return 0
     fi
-    sleep 0.5
+    sleep 0.1
   done
   echo "FAIL $3 (on $1: $2)"
   exit 1
