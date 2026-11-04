@@ -120,7 +120,7 @@ async fn a_star_reader_lifts_the_refresh_it_triggers(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_user_soundcloud_called_absent_is_not_found_until_the_hold_runs_out(
     pool: PgPool,
 ) -> anyhow::Result<()> {

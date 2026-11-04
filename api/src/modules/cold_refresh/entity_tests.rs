@@ -41,7 +41,7 @@ async fn opened(pool: &PgPool) -> AppError {
     .await
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_track_soundcloud_has_just_called_absent_is_not_found_without_a_new_refresh(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -54,7 +54,7 @@ async fn a_track_soundcloud_has_just_called_absent_is_not_found_without_a_new_re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_single_absence_is_asked_again_after_a_day(pool: PgPool) -> anyhow::Result<()> {
     settled_absent(&pool, "25 hours").await?;
 
@@ -65,7 +65,7 @@ async fn a_single_absence_is_asked_again_after_a_day(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_absence_is_held_as_long_as_it_has_lasted(pool: PgPool) -> anyhow::Result<()> {
     settled_absent(&pool, "10 days").await?;
     settled_absent(&pool, "2 days").await?;
@@ -77,7 +77,7 @@ async fn an_absence_is_held_as_long_as_it_has_lasted(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_absence_is_asked_again_once_its_hold_has_run_out(pool: PgPool) -> anyhow::Result<()> {
     settled_absent(&pool, "28 days").await?;
     settled_absent(&pool, "22 days").await?;

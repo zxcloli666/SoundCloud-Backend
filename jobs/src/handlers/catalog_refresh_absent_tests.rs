@@ -87,7 +87,7 @@ async fn settled(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_track_absent_in_every_region_settles_once_and_is_held_without_asking_again(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -127,7 +127,7 @@ async fn a_track_absent_in_every_region_settles_once_and_is_held_without_asking_
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_held_absence_is_asked_again_once_its_day_is_over(pool: PgPool) -> anyhow::Result<()> {
     let soundcloud = SoundCloud::answering(Vec::new()).await?;
     let handler = refresher(&pool, soundcloud.reader(&pool)?)?;
@@ -143,7 +143,7 @@ async fn a_held_absence_is_asked_again_once_its_day_is_over(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_track_one_region_hides_is_stored_and_never_settled(pool: PgPool) -> anyhow::Result<()> {
     let found = json!({
         "id": 42, "urn": "soundcloud:tracks:42", "title": "Found", "sharing": "public",
@@ -167,7 +167,7 @@ async fn a_track_one_region_hides_is_stored_and_never_settled(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_track_the_relay_calls_gone_in_every_region_settles_without_the_proxy(
     pool: PgPool,
 ) -> anyhow::Result<()> {
