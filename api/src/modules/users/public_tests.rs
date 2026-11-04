@@ -52,7 +52,7 @@ fn new_avatar() -> Arc<SearchRelay> {
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_fresh_user_is_served_without_soundcloud(pool: PgPool) -> anyhow::Result<()> {
     let row = seed(&pool, "1 minute").await?;
     let relay = relay();
@@ -67,7 +67,7 @@ async fn a_fresh_user_is_served_without_soundcloud(pool: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unanswered_read_leaves_one_viewer_refresh_and_is_not_repeated(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -88,7 +88,7 @@ async fn an_unanswered_read_leaves_one_viewer_refresh_and_is_not_repeated(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_stale_user_is_read_through_apiv2_at_once(pool: PgPool) -> anyhow::Result<()> {
     let row = seed(&pool, "1 hour").await?;

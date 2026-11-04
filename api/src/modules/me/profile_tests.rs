@@ -76,7 +76,7 @@ async fn seed_both(pool: &PgPool, profile_ago: &str, user_ago: &str) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_fresher_public_user_overrides_the_owner_snapshot_and_keeps_private_fields(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -88,7 +88,7 @@ async fn a_fresher_public_user_overrides_the_owner_snapshot_and_keeps_private_fi
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_older_public_user_leaves_the_owner_snapshot_alone(pool: PgPool) -> anyhow::Result<()> {
     seed_both(&pool, "1 minute", "1 hour").await?;
     let profile = read(&pool, "17").await?;

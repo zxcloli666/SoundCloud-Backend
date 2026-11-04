@@ -217,7 +217,7 @@ async fn an_exhausted_session_stops_adopting(pool: PgPool) -> anyhow::Result<()>
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
-async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyhow::Result<()> {
+async fn a_stalled_soundcloud_playlist_write_stays_fast(pool: PgPool) -> anyhow::Result<()> {
     let miss = miss_with(&pool, SearchRelay::stalled(), &redis_url(), 1000).await?;
     let unknown: Vec<String> = (301..=325).map(|id| id.to_string()).collect();
     let started = std::time::Instant::now();
@@ -240,9 +240,7 @@ async fn a_stalled_soundcloud_cannot_hold_a_playlist_write(pool: PgPool) -> anyh
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
-async fn a_stalled_soundcloud_answers_an_opened_entity_as_unavailable_quickly(
-    pool: PgPool,
-) -> anyhow::Result<()> {
+async fn a_stalled_soundcloud_opened_entity_stays_fast(pool: PgPool) -> anyhow::Result<()> {
     let miss = miss_with(&pool, SearchRelay::stalled(), &redis_url(), 1000).await?;
     let started = std::time::Instant::now();
     assert_eq!(
