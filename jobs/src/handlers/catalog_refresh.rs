@@ -82,7 +82,7 @@ impl CatalogRefreshHandler {
         let path = payload.entity.path(&payload.sc_id);
         if payload.entity == CatalogEntity::WebProfiles {
             return match self.public.get_json(&path).await {
-                Ok(value) => Ok(value),
+                Ok(value) => Ok(super::catalog_web_profiles::links_only(value)),
                 Err(error @ sc_transport::ScError::Api { status: 404, .. }) => {
                     Err(JobError::settled(CollectionFailure::NotFound, error))
                 }

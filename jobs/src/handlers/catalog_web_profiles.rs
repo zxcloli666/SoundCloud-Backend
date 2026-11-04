@@ -2,6 +2,17 @@ use serde_json::Value;
 
 use crate::queue::{JobError, JobResult};
 
+pub(super) fn links_only(mut value: Value) -> Value {
+    if let Some(items) = value.as_array_mut() {
+        items.retain(|item| {
+            item.get("url")
+                .and_then(Value::as_str)
+                .is_some_and(is_web_link)
+        });
+    }
+    value
+}
+
 pub(super) fn validate(value: &Value) -> JobResult {
     let invalid = || JobError::retryable(anyhow::anyhow!("invalid or incomplete web profiles"));
     let items = value.as_array().ok_or_else(invalid)?;
@@ -18,9 +29,8 @@ pub(super) fn validate(value: &Value) -> JobResult {
         let url = object
             .get("url")
             .and_then(Value::as_str)
-            .and_then(|url| url::Url::parse(url).ok())
             .ok_or_else(invalid)?;
-        if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
+        if !is_web_link(url) {
             return Err(invalid());
         }
         for field in ["urn", "kind", "service", "title", "username", "created_at"] {
@@ -33,6 +43,11 @@ pub(super) fn validate(value: &Value) -> JobResult {
         }
     }
     Ok(())
+}
+
+fn is_web_link(url: &str) -> bool {
+    url::Url::parse(url)
+        .is_ok_and(|url| matches!(url.scheme(), "https" | "http") && url.host_str().is_some())
 }
 
 #[cfg(test)]
@@ -50,6 +65,27 @@ mod tests {
         assert!(validate(&links).is_ok());
         assert_eq!(links[0]["service"], "instagram");
         assert_eq!(links[1]["service"], "personal");
+    }
+
+    #[test]
+    fn apiv2_emails_and_script_links_are_dropped_and_web_links_kept() {
+        let links = links_only(json!([
+            {"url": "https://open.spotify.com/artist/0P84", "network": "spotify", "title": "SPOTIFY"},
+            {"url": "sweatbuh@gmail.com", "network": "other", "title": "beat/song enquiry"},
+            {"url": "javascript:alert(1)", "network": "other"},
+            {"url": "http://t.me/x", "network": "personal", "title": "tg"}
+        ]));
+        assert!(validate(&links).is_ok());
+        let urls: Vec<&str> = links
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|link| link["url"].as_str())
+            .collect();
+        assert_eq!(
+            urls,
+            ["https://open.spotify.com/artist/0P84", "http://t.me/x"]
+        );
     }
 
     #[test]
