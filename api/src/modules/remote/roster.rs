@@ -156,12 +156,20 @@ mod tests {
         let roster = Roster::default();
         let start = Instant::now();
         for (index, device) in ["a", "b", "c", "d"].into_iter().enumerate() {
-            roster.note("1", device, index as i64, start + Duration::from_secs(index as u64));
+            roster.note(
+                "1",
+                device,
+                index as i64,
+                start + Duration::from_secs(index as u64),
+            );
         }
         let now = start + Duration::from_secs(4);
         assert_eq!(roster.winner("1", now).as_deref(), Some("d"));
         let devices = roster.devices.lock().unwrap();
-        let names: Vec<&str> = devices.by_user["1"].iter().map(|s| s.device.as_str()).collect();
+        let names: Vec<&str> = devices.by_user["1"]
+            .iter()
+            .map(|s| s.device.as_str())
+            .collect();
         assert_eq!(names.len(), 3);
         assert!(!names.contains(&"a"));
     }

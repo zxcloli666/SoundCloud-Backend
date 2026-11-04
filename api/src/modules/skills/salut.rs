@@ -193,11 +193,7 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
     let Some(code) = normalize_code(&spoken) else {
         return Said::plain(phrases.code_needs_six());
     };
-    match st
-        .admission
-        .check_key(Endpoint::VoiceSalutSub, sub)
-        .await
-    {
+    match st.admission.check_key(Endpoint::VoiceSalutSub, sub).await {
         Ok(()) => {}
         Err(AdmissionRejection::Limited { .. }) => return Said::plain(phrases.code_throttled()),
         Err(AdmissionRejection::Unavailable) => return Said::plain(phrases.busy()),

@@ -279,10 +279,16 @@ async fn two_hosts_on_one_redis_number_a_users_commands_in_order() {
     let first = RemoteHub::new(None, redis(), &prefix);
     let second = RemoteHub::new(None, redis(), &prefix);
     let user = Uuid::now_v7().to_string();
-    first.poll(&user, "pc", 1, None, Duration::from_millis(10)).await;
-    second.poll(&user, "pc", 1, None, Duration::from_millis(10)).await;
+    first
+        .poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
+    second
+        .poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
     for (hub, text) in [(&first, "раз"), (&second, "два"), (&first, "три")] {
-        let _ = hub.ask(&user, "alice", text, Duration::from_millis(30)).await;
+        let _ = hub
+            .ask(&user, "alice", text, Duration::from_millis(30))
+            .await;
     }
     let caught = first
         .poll(&user, "pc", 1, Some(0), Duration::from_millis(50))
@@ -299,7 +305,8 @@ async fn a_link_confirmation_is_a_command_of_its_own_kind() {
     use backend_contracts::remote::LinkProvider;
     let hub = local_hub();
     let user = Uuid::now_v7().to_string();
-    hub.poll(&user, "pc", 1, None, Duration::from_millis(10)).await;
+    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
     let asking = {
         let hub = hub.clone();
         let user = user.clone();
@@ -325,7 +332,8 @@ async fn a_link_confirmation_is_a_command_of_its_own_kind() {
 async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
     let hub = local_hub();
     let user = Uuid::now_v7().to_string();
-    hub.poll(&user, "pc", 1, None, Duration::from_millis(10)).await;
+    hub.poll(&user, "pc", 1, None, Duration::from_millis(10))
+        .await;
     let started = Instant::now();
     tokio::time::sleep(Duration::from_millis(300)).await;
     let _ = hub
@@ -337,5 +345,9 @@ async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
             started + Duration::from_millis(500),
         )
         .await;
-    assert!(started.elapsed() < Duration::from_millis(650), "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_millis(650),
+        "{:?}",
+        started.elapsed()
+    );
 }

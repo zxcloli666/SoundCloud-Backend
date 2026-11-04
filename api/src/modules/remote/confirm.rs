@@ -135,6 +135,7 @@ impl LinkConfirm {
     }
 
     pub async fn missed(&self, code_id: uuid::Uuid) -> AppResult<i64> {
-        self.count(&format!("misses:{code_id}"), MISS_TTL_SECS).await
+        self.count(&format!("misses:{code_id}"), MISS_TTL_SECS)
+            .await
     }
 }

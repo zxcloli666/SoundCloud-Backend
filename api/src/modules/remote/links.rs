@@ -2,7 +2,9 @@ use backend_contracts::remote::{LINK_CODE_TTL_SECS, LinkCodeResponse, LinkInfo, 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::secrets::{code_hash, random_code, random_seed, random_token, rotated_tokens, token_hash};
+use super::secrets::{
+    code_hash, random_code, random_seed, random_token, rotated_tokens, token_hash,
+};
 use crate::error::{AppError, AppResult};
 
 pub const AUTH_CODE_TTL_SECS: i32 = 300;

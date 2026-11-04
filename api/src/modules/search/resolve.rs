@@ -141,7 +141,10 @@ impl SearchService {
                 let mut tx = self.begin().await?;
                 let mut found = Vec::new();
                 for (index, q) in queries.iter().enumerate() {
-                    found.extend(self.resolve_variant(&mut tx, index, q, &kinds, per_kind).await?);
+                    found.extend(
+                        self.resolve_variant(&mut tx, index, q, &kinds, per_kind)
+                            .await?,
+                    );
                 }
                 tx.commit().await?;
                 Ok::<Vec<Resolved>, crate::error::AppError>(found)
@@ -292,7 +295,11 @@ mod tests {
         raw.insert(0, "Запрос 0".to_owned());
         let cleaned = clean_variants(&raw);
         assert_eq!(cleaned.len(), MAX_VARIANTS);
-        assert!(cleaned.iter().all(|q| q.chars().count() <= MAX_VARIANT_CHARS));
+        assert!(
+            cleaned
+                .iter()
+                .all(|q| q.chars().count() <= MAX_VARIANT_CHARS)
+        );
         let unique: std::collections::HashSet<&String> = cleaned.iter().collect();
         assert_eq!(unique.len(), cleaned.len());
         let only_long = clean_variants(&["б".repeat(500)]);

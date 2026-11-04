@@ -4,10 +4,10 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::response::{IntoResponse, Response};
-use std::time::Instant;
 use backend_contracts::remote::LinkProvider;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Instant;
 
 use super::converse::{self, Said};
 use super::phrases::{Phrases, wants_help};

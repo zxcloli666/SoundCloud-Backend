@@ -2,8 +2,8 @@ use backend_contracts::remote::LinkProvider;
 use uuid::Uuid;
 
 use super::confirm::{LinkConfirm, MAX_MISSES, Status};
-use super::links::LinksService;
 use super::hub::Asked;
+use super::links::LinksService;
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -47,7 +47,10 @@ pub async fn find(st: &AppState, provider: LinkProvider, code: &str) -> AppResul
 }
 
 pub async fn ask_desktop(st: &AppState, pairing: &Pairing) -> Status {
-    let asked = st.remote.confirm_link(&pairing.user, pairing.provider).await;
+    let asked = st
+        .remote
+        .confirm_link(&pairing.user, pairing.provider)
+        .await;
     let status = match asked {
         Asked::Reply(reply) if reply.ok => match st.links.consume_code(pairing.code_id).await {
             Ok(true) => Status::Approved,

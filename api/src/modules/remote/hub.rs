@@ -208,8 +208,14 @@ impl RemoteHub {
 
     pub async fn confirm_link(&self, user: &str, provider: LinkProvider) -> Asked {
         let deadline = Instant::now() + Duration::from_secs(CONFIRM_HOLD_SECS);
-        self.dispatch(user, CommandKind::LinkConfirm, provider.as_str(), "", deadline)
-            .await
+        self.dispatch(
+            user,
+            CommandKind::LinkConfirm,
+            provider.as_str(),
+            "",
+            deadline,
+        )
+        .await
     }
 
     pub async fn dispatch(

@@ -89,7 +89,11 @@ mod tests {
         .await
         .expect("the first wait is told to stop");
         drop(first);
-        assert_eq!(waits.count("1"), 1, "the replaced wait leaves the newer one in place");
+        assert_eq!(
+            waits.count("1"),
+            1,
+            "the replaced wait leaves the newer one in place"
+        );
         drop(second);
         assert_eq!(waits.count("1"), 0);
     }

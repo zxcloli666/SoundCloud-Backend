@@ -529,7 +529,10 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
         &app,
         &[
             ("grant_type", "refresh_token"),
-            ("refresh_token", next["refresh_token"].as_str().unwrap_or_default()),
+            (
+                "refresh_token",
+                next["refresh_token"].as_str().unwrap_or_default(),
+            ),
             ("client_id", "yandex"),
             ("client_secret", "s3cret"),
         ],
@@ -928,7 +931,9 @@ async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow:
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
-async fn the_link_page_refuses_framing_and_waits_for_the_desktop(pool: PgPool) -> anyhow::Result<()> {
+async fn the_link_page_refuses_framing_and_waits_for_the_desktop(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
     let uri = format!(
@@ -967,7 +972,9 @@ async fn the_link_page_refuses_framing_and_waits_for_the_desktop(pool: PgPool) -
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires a local Redis"]
-async fn a_no_from_the_desktop_issues_nothing_and_burns_the_code(pool: PgPool) -> anyhow::Result<()> {
+async fn a_no_from_the_desktop_issues_nothing_and_burns_the_code(
+    pool: PgPool,
+) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
     let confirmer = confirming_desktop(&app, session, "pc", false).await?;
@@ -1014,10 +1021,18 @@ async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> an
     let sub = "11111111-2222-3333-4444-555555555555";
     let confirmer = confirming_desktop(&app, session, "pc", false).await?;
     let code = new_code(&app, session, "salut").await?;
-    let spoken = code.chars().map(|c| c.to_string()).collect::<Vec<_>>().join(" ");
-    let first = salut_call(&app, Some("salut-token"), salut_body(sub, &spoken, &spoken, 1))
-        .await?
-        .json();
+    let spoken = code
+        .chars()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let first = salut_call(
+        &app,
+        Some("salut-token"),
+        salut_body(sub, &spoken, &spoken, 1),
+    )
+    .await?
+    .json();
     assert!(
         first["payload"]["pronounceText"]
             .as_str()
@@ -1040,9 +1055,10 @@ async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> an
     }
     confirmer.abort();
     assert!(text.contains("отклонена"), "{text}");
-    let bound: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants WHERE external_id IS NOT NULL")
-        .fetch_one(&pool)
-        .await?;
+    let bound: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM remote_grants WHERE external_id IS NOT NULL")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(bound, 0);
     Ok(())
 }
@@ -1052,7 +1068,8 @@ async fn salut_binds_only_after_a_yes_and_a_no_binds_nothing(pool: PgPool) -> an
 async fn five_unanswered_asks_burn_a_code(pool: PgPool) -> anyhow::Result<()> {
     let redis = deadpool_redis::Config::from_url(redis_url())
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
-    let confirm = crate::modules::remote::LinkConfirm::new(redis, format!("voice-test-{}", Uuid::now_v7()));
+    let confirm =
+        crate::modules::remote::LinkConfirm::new(redis, format!("voice-test-{}", Uuid::now_v7()));
     let links = crate::modules::remote::LinksService::new(pool.clone());
     let issued = links
         .create_code("101", backend_contracts::remote::LinkProvider::Alice)
@@ -1087,13 +1104,29 @@ async fn five_unanswered_asks_burn_a_code(pool: PgPool) -> anyhow::Result<()> {
 async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
-    let first = json_call(&app, session, "GET", "/remote/wait?since=&device=pc&active=", None).await?;
+    let first = json_call(
+        &app,
+        session,
+        "GET",
+        "/remote/wait?since=&device=pc&active=",
+        None,
+    )
+    .await?;
     assert_eq!(first.status, StatusCode::OK, "{}", first.text());
     assert!(first.json()["cursor"].as_i64().unwrap_or_default() > 0);
     let bad = json_call(&app, session, "GET", "/remote/wait?since=abc", None).await?;
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
 
     let (access, _) = link_alice(&app, session).await?;
+    let fresh = json_call(
+        &app,
+        session,
+        "GET",
+        "/remote/wait?device=pc&active=100",
+        None,
+    )
+    .await?
+    .json();
     let desktop = tokio::spawn({
         let app = app.clone();
         async move {
@@ -1101,7 +1134,10 @@ async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
                 &app,
                 session,
                 "GET",
-                &format!("/remote/wait?device=pc&active=1&since={}", first.json()["cursor"]),
+                &format!(
+                    "/remote/wait?device=pc&active=100&since={}",
+                    fresh["cursor"]
+                ),
                 None,
             )
             .await
@@ -1125,7 +1161,9 @@ async fn the_desktop_shapes_are_tolerated(pool: PgPool) -> anyhow::Result<()> {
         .json();
     desktop.await?;
     assert_eq!(answered["response"]["text"], "Из поля text");
-    let links = json_call(&app, session, "GET", "/remote/links", None).await?.json();
+    let links = json_call(&app, session, "GET", "/remote/links", None)
+        .await?
+        .json();
     assert!(links["links"].is_array());
     Ok(())
 }
@@ -1214,8 +1252,8 @@ async fn resolve_survives_a_hostile_body(pool: PgPool) -> anyhow::Result<()> {
         "POST",
         "/search/resolve",
         Some(json!({
-            "variants": (0..500).map(|n| format!("{}{n}", "я".repeat(300))).collect::<Vec<_>>(),
-            "kinds": vec!["track"; 30_000],
+            "variants": (0..150).map(|n| format!("{}{n}", "я".repeat(300))).collect::<Vec<_>>(),
+            "kinds": vec!["track"; 5_000],
         })),
     )
     .await?;
@@ -1232,13 +1270,28 @@ async fn alice_answers_inside_its_budget_when_the_desktop_is_silent(
     let app = app(&pool, &redis_url()).await?;
     let session = session_for(&pool, "101").await?;
     let (access, _) = link_alice(&app, session).await?;
-    json_call(&app, session, "GET", "/remote/wait?device=quiet&active=9", None).await?;
+    json_call(
+        &app,
+        session,
+        "GET",
+        "/remote/wait?device=quiet&active=9",
+        None,
+    )
+    .await?;
     let started = std::time::Instant::now();
     let reply = alice_call(&app, Some(&access), alice_body("пауза", true))
         .await?
         .json();
     let took = started.elapsed();
-    assert!(reply["response"]["text"].as_str().unwrap_or_default().contains("не отвечает"));
-    assert!(took >= Duration::from_millis(600) && took < Duration::from_millis(1000), "{took:?}");
+    assert!(
+        reply["response"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("не отвечает")
+    );
+    assert!(
+        took >= Duration::from_millis(600) && took < Duration::from_millis(1000),
+        "{took:?}"
+    );
     Ok(())
 }

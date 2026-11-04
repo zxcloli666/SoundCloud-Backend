@@ -171,14 +171,17 @@ async fn authorize_submit(
         Some(ConnectInfo(address)) => st.admission.client_key(*address, &parts.headers),
         None => "unknown".to_owned(),
     };
-    if let Some(refusal) =
-        within_limit(&st, Endpoint::VoicePageIp, &format!("oauth:{address}"), &fields).await
+    if let Some(refusal) = within_limit(
+        &st,
+        Endpoint::VoicePageIp,
+        &format!("oauth:{address}"),
+        &fields,
+    )
+    .await
     {
         return refusal;
     }
-    if let Some(refusal) =
-        within_limit(&st, Endpoint::VoicePageClient, &client.id, &fields).await
-    {
+    if let Some(refusal) = within_limit(&st, Endpoint::VoicePageClient, &client.id, &fields).await {
         return refusal;
     }
     let Some(code) = normalize_code(&form.code) else {
@@ -291,7 +294,9 @@ async fn settle_page(st: AppState, pairing: Pairing, ticket: String, mut record:
 fn outcome_text(status: Status) -> &'static str {
     match status {
         Status::Denied => "Связывание отклонено на компьютере.",
-        Status::Offline => "Компьютер не отвечает. Откройте SoundCloud Desktop и возьмите новый код.",
+        Status::Offline => {
+            "Компьютер не отвечает. Откройте SoundCloud Desktop и возьмите новый код."
+        }
         Status::Silent => "Компьютер не ответил вовремя. Возьмите новый код в приложении.",
         _ => "Не получилось. Возьмите новый код в приложении.",
     }
@@ -318,7 +323,10 @@ async fn authorize_status(
         }
         Err(error) => {
             tracing::warn!(%error, "link ticket lookup failed");
-            return refused(StatusCode::SERVICE_UNAVAILABLE, "Сервис занят. Обновите страницу.");
+            return refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Сервис занят. Обновите страницу.",
+            );
         }
     };
     if record.status == Status::Pending {
