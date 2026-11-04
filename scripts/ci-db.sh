@@ -15,6 +15,12 @@ start() {
     qdrant)
         docker run -d --name qdrant -p 6333:6333 -p 6334:6334 mirror.gcr.io/qdrant/qdrant:v1.19.0
         ;;
+    seaweed)
+        printf '%s' '{"identities":[{"name":"test","credentials":[{"accessKey":"UPTESTAK","secretKey":"UPTESTSECRET"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > "$RUNNER_TEMP/s3.json"
+        docker run -d --name seaweed -p 8333:8333 -v "$RUNNER_TEMP/s3.json:/etc/seaweedfs/s3.json:ro" \
+            mirror.gcr.io/chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+            server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -master.volumeSizeLimitMB=64
+        ;;
     esac
 }
 
@@ -35,6 +41,9 @@ up() {
     esac
     case " $* " in
     *" qdrant "*) timeout 120 sh -c 'until curl -sf http://127.0.0.1:6333/readyz > /dev/null; do sleep 1; done' ;;
+    esac
+    case " $* " in
+    *" seaweed "*) timeout 120 sh -c 'until curl -s -o /dev/null http://127.0.0.1:8333/; do sleep 1; done' ;;
     esac
 }
 
