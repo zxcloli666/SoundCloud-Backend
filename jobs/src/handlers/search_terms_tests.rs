@@ -217,11 +217,65 @@ async fn a_second_refresh_steps_aside_while_the_first_holds_the_lock(
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     assert!(lexicon(&pool).await?.is_empty());
 
-    running.close().await?;
+    let released = sqlx::query_file_scalar!("queries/search/unlock_terms.sql")
+        .fetch_one(&mut *running)
+        .await?;
+    assert!(released);
     refresh_with(&pool, CHUNK_ROWS).await?;
     assert_eq!(
         lexicon(&pool).await?,
         words(&[("rihanna", 2), ("umbrella", 2)])
     );
+    Ok(())
+}
+
+async fn lock_is_free(pool: &PgPool) -> anyhow::Result<bool> {
+    let mut probe = pool.acquire().await?;
+    let acquired = sqlx::query_file_scalar!("queries/search/lock_terms.sql")
+        .fetch_one(&mut *probe)
+        .await?;
+    if acquired {
+        sqlx::query_file_scalar!("queries/search/unlock_terms.sql")
+            .fetch_one(&mut *probe)
+            .await?;
+    }
+    Ok(acquired)
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_finished_refresh_frees_the_lock_while_its_session_is_still_open(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_tracks(
+        &pool,
+        &[("1", "Umbrella", "rihanna"), ("2", "Umbrella", "rihanna")],
+    )
+    .await?;
+    let mut finished = pool.acquire().await?;
+    finished.close_on_drop();
+
+    assert!(refresh(&mut finished, CHUNK_ROWS).await?.is_some());
+
+    assert!(lock_is_free(&pool).await?);
+    assert_eq!(
+        lexicon(&pool).await?,
+        words(&[("rihanna", 2), ("umbrella", 2)])
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_failed_refresh_frees_the_lock_while_its_session_is_still_open(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let mut failed = pool.acquire().await?;
+    failed.close_on_drop();
+    sqlx::query("CREATE TEMP TABLE search_terms_delta (chunk bigint)")
+        .execute(&mut *failed)
+        .await?;
+
+    assert!(refresh(&mut failed, CHUNK_ROWS).await.is_err());
+
+    assert!(lock_is_free(&pool).await?);
     Ok(())
 }
