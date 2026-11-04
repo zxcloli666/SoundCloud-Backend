@@ -105,3 +105,24 @@ fn a_full_room_is_marked_and_sinks_below_rooms_with_a_free_seat() {
     assert_eq!(order, ["2", "3", "1"]);
     assert!(cards[2].full);
 }
+
+#[test]
+fn a_card_carries_the_room_title_and_never_the_ban_list() {
+    let mut room = room("1", 1, 100);
+    room.title = Some("Friday".to_owned());
+    room.banned.push("666".to_owned());
+    let card = PublicRoom::of(&room, &everyone(&room)).unwrap();
+    assert_eq!(card.title.as_deref(), Some("Friday"));
+    assert_eq!(card.banned, ["666"]);
+    let shown = serde_json::to_value(&card).unwrap();
+    assert_eq!(shown["title"], "Friday");
+    assert!(shown.get("banned").is_none(), "{shown}");
+    assert!(!shown.to_string().contains("666"));
+}
+
+#[test]
+fn an_unlisted_room_has_no_card() {
+    let mut room = room("1", 1, 100);
+    room.unlisted = true;
+    assert!(PublicRoom::of(&room, &everyone(&room)).is_none());
+}

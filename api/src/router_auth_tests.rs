@@ -2,9 +2,12 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const FORWARDS_TO_THE_API: &[&str] = &["/rt/rooms/proxy.rs"];
+
 const OPEN_ROUTES: &[&str] = &[
     "/health",
     "/health/live",
+    "/health/db",
     "/probe",
     "/auth/login",
     "/auth/login/status",
@@ -23,6 +26,7 @@ const OPEN_ROUTES: &[&str] = &[
     "/skills/salut/{token}",
     "/diag/bundles",
     "/diag/events",
+    "/chat/x",
 ];
 
 const METRICS_ROUTE: &str = "/admin/metrics";
@@ -157,9 +161,13 @@ fn guards(signature: &str) -> bool {
     signature.contains("AdminAuth")
         || signature.contains("MetricsAuth")
         || signature.contains("DiagAuth")
+        || signature.contains("HandoffAuth")
         || signature.contains("SessionCtx")
         || signature.contains("OptionalSession")
         || signature.contains("RawSessionIdHeader")
+        || signature.contains("ChatCaller")
+        || signature.contains("ChatAdmin")
+        || signature.contains("MetricsReader")
 }
 
 fn resolve<'a>(sources: &'a [(String, String)], file: &str, reference: &str) -> Option<&'a str> {
@@ -193,7 +201,7 @@ fn every_route_is_gated_or_explicitly_open() {
         .collect();
 
     for (file, source) in &sources {
-        if !source.contains(".route(") {
+        if !source.contains(".route(") || FORWARDS_TO_THE_API.iter().any(|f| file.ends_with(f)) {
             continue;
         }
         for (path, handlers) in route_handlers(source) {
@@ -302,6 +310,8 @@ fn an_admin_route_is_gated_by_admin_auth_and_by_nothing_weaker() {
                     "MetricsAuth"
                 } else if path.starts_with("/admin/diag/") {
                     "DiagAuth"
+                } else if path.starts_with("/admin/rooms/handoff") {
+                    "HandoffAuth"
                 } else {
                     "AdminAuth"
                 };
@@ -370,6 +380,47 @@ fn the_metrics_token_opens_the_metrics_page_and_nothing_else() {
     assert!(
         wrong.is_empty(),
         "the metrics token must open {METRICS_ROUTE} and nothing else:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn the_handoff_token_opens_the_rooms_handoff_routes_and_nothing_else() {
+    let sources: Vec<(String, String)> = router_sources()
+        .into_iter()
+        .map(|(file, raw)| (file, strip_comments(&raw)))
+        .collect();
+
+    let mut handoff_routes = 0;
+    let mut wrong: Vec<String> = Vec::new();
+    for (file, source) in &sources {
+        if !source.contains(".route(") {
+            continue;
+        }
+        for (path, handlers) in route_handlers(source) {
+            for handler in handlers {
+                let Some(signature) = resolve(&sources, file, &handler) else {
+                    continue;
+                };
+                if !signature.contains("HandoffAuth") {
+                    continue;
+                }
+                if path.starts_with("/admin/rooms/handoff") {
+                    handoff_routes += 1;
+                } else {
+                    wrong.push(format!("{path} -> {handler} ({file})"));
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        handoff_routes, 2,
+        "the handoff routes are not behind HandoffAuth"
+    );
+    assert!(
+        wrong.is_empty(),
+        "the handoff token must open the rooms handoff routes and nothing else:\n{}",
         wrong.join("\n")
     );
 }

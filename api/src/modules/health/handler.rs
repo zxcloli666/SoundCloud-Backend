@@ -8,8 +8,6 @@ use serde::Serialize;
 use sqlx::PgPool;
 use tracing::warn;
 
-use crate::state::AppState;
-
 const DATABASE_TIMEOUT: Duration = Duration::from_secs(2);
 const VERDICT_TTL: Duration = Duration::from_secs(5);
 const STALL_WINDOW: Duration = Duration::from_secs(60);
@@ -44,15 +42,15 @@ pub struct HealthResponse {
     pub timestamp: String,
 }
 
-pub async fn check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
-    answer(cached_verdict(&state.pg).await)
+pub async fn check(State(pg): State<PgPool>) -> (StatusCode, Json<HealthResponse>) {
+    answer(cached_verdict(&pg).await)
 }
 
-pub async fn live(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
-    answer(stalled(&state.pg, crate::db::core_pool_quiet_for()).await)
+pub async fn live(State(pg): State<PgPool>) -> (StatusCode, Json<HealthResponse>) {
+    answer(stalled(&pg, crate::db::core_pool_quiet_for()).await)
 }
 
-fn answer(verdict: Verdict) -> (StatusCode, Json<HealthResponse>) {
+pub fn answer(verdict: Verdict) -> (StatusCode, Json<HealthResponse>) {
     let (code, status) = match verdict {
         Ok(()) => (StatusCode::OK, "ok"),
         Err(reason) => (StatusCode::SERVICE_UNAVAILABLE, reason),

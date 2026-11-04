@@ -28,7 +28,6 @@ impl CoreRpc {
         Arc::new(Self { nats: Some(nats) })
     }
 
-    #[cfg(test)]
     pub fn unreachable() -> Arc<Self> {
         Arc::new(Self { nats: None })
     }

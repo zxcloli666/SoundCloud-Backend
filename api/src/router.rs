@@ -206,7 +206,7 @@ mod router_cache_tests;
 
 #[cfg(test)]
 #[path = "router_search_tests.rs"]
-mod router_search_tests;
+pub(crate) mod router_search_tests;
 
 #[cfg(test)]
 #[path = "router_identity_tests.rs"]

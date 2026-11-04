@@ -1,0 +1,12 @@
+mod devices_tests;
+mod expired_tests;
+mod leader_tests;
+mod marks_tests;
+mod purge_tests;
+mod redis_info_tests;
+mod reports_tests;
+mod rooms_tests;
+mod schedule_tests;
+mod startup_tests;
+mod support;
+mod unit_tests;

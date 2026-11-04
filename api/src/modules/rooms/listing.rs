@@ -19,6 +19,7 @@ pub struct PublicTrack {
 #[serde(rename_all = "camelCase")]
 pub struct PublicRoom {
     pub host_id: String,
+    pub title: Option<String>,
     pub host_name: String,
     pub host_avatar_url: Option<String>,
     pub status: PlaybackStatus,
@@ -27,9 +28,11 @@ pub struct PublicRoom {
     pub capacity: usize,
     pub full: bool,
     pub created_at: i64,
+    #[serde(skip)]
+    pub banned: Vec<String>,
 }
 
-fn text(value: &Value) -> Option<String> {
+pub fn text(value: &Value) -> Option<String> {
     let text: String = value
         .as_str()?
         .trim()
@@ -40,7 +43,7 @@ fn text(value: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-fn image(raw: &str) -> Option<String> {
+pub fn image(raw: &str) -> Option<String> {
     if raw.len() > MAX_IMAGE_CHARS {
         return None;
     }
@@ -54,7 +57,7 @@ fn image(raw: &str) -> Option<String> {
 }
 
 impl PublicTrack {
-    fn of(track: &Value) -> Option<Self> {
+    pub fn of(track: &Value) -> Option<Self> {
         let artwork = [&track["artwork_url"], &track["user"]["avatar_url"]]
             .into_iter()
             .find_map(|value| image(value.as_str()?));
@@ -68,6 +71,9 @@ impl PublicTrack {
 
 impl PublicRoom {
     pub fn of(room: &Room, online: &[String]) -> Option<Self> {
+        if room.unlisted {
+            return None;
+        }
         let host = room.members.iter().find(|m| m.user_id == room.host_id)?;
         let listeners = room
             .members
@@ -76,6 +82,7 @@ impl PublicRoom {
             .count();
         Some(Self {
             host_id: host.user_id.clone(),
+            title: room.title.clone(),
             host_name: host.name.clone(),
             host_avatar_url: host.avatar_url.as_deref().and_then(image),
             status: room.playback.status,
@@ -84,6 +91,7 @@ impl PublicRoom {
             capacity: MAX_MEMBERS,
             full: listeners >= MAX_MEMBERS,
             created_at: room.created_at,
+            banned: room.banned.clone(),
         })
     }
 }

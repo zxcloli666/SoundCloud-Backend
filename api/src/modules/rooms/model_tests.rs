@@ -215,3 +215,75 @@ fn a_full_room_gives_the_seats_of_absent_guests_away() {
     room.join(Member::new("50", &profile("fresh"), 900))
         .unwrap();
 }
+
+#[test]
+fn room_json_written_before_room_chat_still_loads() {
+    let stored = json!({
+        "code": "ABC234",
+        "hostId": "1",
+        "version": 7,
+        "createdAt": 10,
+        "members": [
+            {"userId": "1", "name": "Host", "avatarUrl": null, "joinedAt": 10, "readyUrn": null},
+            {"userId": "2", "name": "Guest", "avatarUrl": "https://i1.sndcdn.com/a.jpg",
+             "joinedAt": 11, "readyUrn": "soundcloud:tracks:42"}
+        ],
+        "playback": {"status": "playing", "track": {"title": "Song"},
+                     "trackUrn": "soundcloud:tracks:42", "positionMs": 0, "at": 100, "rate": 1.0}
+    });
+    let room: Room = serde_json::from_value(stored).unwrap();
+    assert_eq!(room.version, 7);
+    assert_eq!(room.members[1].chat_from_seq, 0);
+    assert!(!room.public);
+    assert_eq!(room.title, None);
+    assert_eq!(room.chat_id, None);
+    assert!(room.moderators.is_empty() && room.banned.is_empty() && room.muted.is_empty());
+    assert_eq!(room.slow_mode_s, None);
+    assert!(room.chat_enabled);
+    assert!(room.links);
+    assert!(!room.unlisted);
+    assert_eq!(room.playback.crossfade_sec, 0);
+    let again: Room = serde_json::from_value(serde_json::to_value(&room).unwrap()).unwrap();
+    assert_eq!(again, room);
+}
+
+#[test]
+fn titles_are_one_clean_line_of_at_most_48_chars() {
+    assert_eq!(
+        clean_title("  Night\n\tDrive  "),
+        Some("Night Drive".to_owned())
+    );
+    assert_eq!(
+        clean_title("Lo\u{0007}fi \u{202E}evil\u{200B}"),
+        Some("Lofi evil".to_owned())
+    );
+    assert_eq!(clean_title(" \u{200B} \n"), None);
+    let long = "Ж".repeat(60);
+    assert_eq!(clean_title(&long).map(|t| t.chars().count()), Some(48));
+    assert_eq!(
+        clean_title(&format!("{} tail", "a".repeat(47))).as_deref(),
+        Some("a".repeat(47).as_str())
+    );
+}
+
+#[test]
+fn a_banned_person_cannot_take_a_seat() {
+    let mut room = room();
+    room.banned.push("2".to_owned());
+    let refused = room
+        .join(Member::new("2", &profile("Guest"), 11))
+        .unwrap_err();
+    assert_eq!(refused.status(), axum::http::StatusCode::FORBIDDEN);
+    assert!(!room.is_member("2"));
+}
+
+#[test]
+fn a_member_keeps_the_point_their_chat_history_starts_at() {
+    let mut room = room();
+    room.join(Member::new("2", &profile("Guest"), 11).reading_from(40))
+        .unwrap();
+    room.join(Member::new("2", &profile("Renamed"), 12).reading_from(90))
+        .unwrap();
+    assert_eq!(room.member("2").map(|m| m.chat_from_seq), Some(40));
+    assert_eq!(room.member("2").map(|m| m.joined_at), Some(11));
+}

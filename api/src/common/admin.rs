@@ -11,6 +11,8 @@ pub struct MetricsAuth;
 
 pub struct DiagAuth;
 
+pub struct HandoffAuth;
+
 impl FromRequestParts<AppState> for AdminAuth {
     type Rejection = AppError;
 
@@ -59,6 +61,24 @@ impl FromRequestParts<AppState> for DiagAuth {
         }
         AdminAuth::from_request_parts(parts, state).await?;
         Ok(DiagAuth)
+    }
+}
+
+impl FromRequestParts<AppState> for HandoffAuth {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        if token_matches(
+            header(parts, "x-handoff-token"),
+            state.config.admin.handoff_token.expose(),
+        ) {
+            return Ok(HandoffAuth);
+        }
+        AdminAuth::from_request_parts(parts, state).await?;
+        Ok(HandoffAuth)
     }
 }
 

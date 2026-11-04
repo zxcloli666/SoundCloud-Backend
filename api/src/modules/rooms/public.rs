@@ -9,7 +9,7 @@ use crate::common::sc_ids::user_id_variants;
 use crate::error::{AppError, AppResult};
 use crate::modules::rooms::listing::{PublicRoom, rank};
 use crate::modules::rooms::model::Profile;
-use crate::modules::rooms::service::{ONLINE_WINDOW_MS, RoomView, RoomsService, now_ms};
+use crate::modules::rooms::service::{Cause, ONLINE_WINDOW_MS, RoomView, RoomsService, now_ms};
 
 pub const LIST_LIMIT: usize = 50;
 const SCAN_LIMIT: isize = 300;
@@ -32,13 +32,18 @@ pub async fn blocked_hosts(pg: &PgPool, sc_user_id: &str) -> AppResult<HashSet<S
     Ok(rows.into_iter().collect())
 }
 
+pub async fn host_blocks(pg: &PgPool, host_id: &str, user_id: &str) -> AppResult<bool> {
+    let variants = user_id_variants(host_id);
+    Ok(
+        sqlx::query_file_scalar!("queries/rooms/host_blocks.sql", &variants, user_id, host_id)
+            .fetch_one(pg)
+            .await?,
+    )
+}
+
 impl RoomsService {
     pub async fn set_public(&self, code: &str, user_id: &str, public: bool) -> AppResult<RoomView> {
-        let current = self
-            .store
-            .load(code)
-            .await?
-            .ok_or_else(|| AppError::not_found("Room not found"))?;
+        let current = self.room(code).await?;
         if !current.is_host(user_id) {
             return Err(AppError::forbidden(
                 "Only the host opens or closes the room",
@@ -48,21 +53,18 @@ impl RoomsService {
             return self.view(code, user_id).await;
         }
         let room = if public {
-            self.store
-                .update(code, |room| room.set_public(user_id, true))
+            self.apply(code, Cause::Quiet, |room| room.set_public(user_id, true))
                 .await?
                 .0
         } else {
             let room = self
-                .store
-                .relocate(code, |room| room.set_public(user_id, false))
+                .relocate(code, Cause::Quiet, |room| room.set_public(user_id, false))
                 .await?;
             self.directory.unlist(code).await?;
             room
         };
         self.directory.host_seen(&room, now_ms()).await?;
         *self.listing.lock().await = None;
-        self.hub.announce(code).await;
         self.view(&room.code, user_id).await
     }
 
@@ -95,14 +97,15 @@ impl RoomsService {
         host_id: &str,
         user_id: &str,
         profile: &Profile,
+        pg: &PgPool,
     ) -> AppResult<RoomView> {
         let code = self
             .directory
             .hosted_by(host_id_of(host_id)?)
             .await?
             .ok_or_else(|| AppError::not_found("Room not found"))?;
-        let view = self.admit(&code, user_id, profile, true).await?;
-        if view.room.host_id != host_id {
+        let view = self.admit(&code, user_id, profile, true, pg).await?;
+        if view.host_id != host_id {
             return Err(AppError::not_found("Room not found"));
         }
         Ok(view)
