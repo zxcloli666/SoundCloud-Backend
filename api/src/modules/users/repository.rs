@@ -19,6 +19,7 @@ pub struct UserRow {
     pub permalink: Option<String>,
     pub permalink_url: Option<String>,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
     pub country: Option<String>,
     pub city: Option<String>,
     pub description: Option<String>,
@@ -107,6 +108,9 @@ pub fn project_to_sc_shape(row: &UserRow) -> Value {
     }
     if let Some(a) = &row.avatar_url {
         obj.insert("avatar_url".into(), Value::String(a.clone()));
+    }
+    if let Some(b) = &row.banner_url {
+        obj.insert("banner_url".into(), Value::String(b.clone()));
     }
     if let Some(c) = &row.country {
         obj.insert("country_code".into(), Value::String(c.clone()));

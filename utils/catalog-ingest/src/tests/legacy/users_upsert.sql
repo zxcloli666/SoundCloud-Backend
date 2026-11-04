@@ -2,9 +2,9 @@ INSERT INTO users (
    sc_user_id, urn, username, username_normalized, full_name, first_name, last_name,
    permalink, permalink_url, avatar_url, country, city, description, verified,
    followers_count, followings_count, tracks_count, playlists_count,
-   reposts_count, comments_count, kind, sc_created_at, sc_last_modified, sc_synced_at, sc_observation
+   reposts_count, comments_count, kind, sc_created_at, sc_last_modified, sc_synced_at, sc_observation, banner_url
 ) VALUES (
-   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,now(),$24
+   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,now(),$24,$26
 )
 ON CONFLICT (sc_user_id) DO UPDATE SET
    urn = EXCLUDED.urn,
@@ -16,6 +16,7 @@ ON CONFLICT (sc_user_id) DO UPDATE SET
    permalink = CASE WHEN $25::jsonb ? 'permalink' THEN EXCLUDED.permalink ELSE users.permalink END,
    permalink_url = CASE WHEN $25::jsonb ? 'permalink_url' THEN EXCLUDED.permalink_url ELSE users.permalink_url END,
    avatar_url = CASE WHEN $25::jsonb ? 'avatar_url' THEN EXCLUDED.avatar_url ELSE users.avatar_url END,
+   banner_url = CASE WHEN $25::jsonb ? 'visuals' THEN EXCLUDED.banner_url ELSE users.banner_url END,
    country = CASE WHEN $25::jsonb ?| ARRAY['country', 'country_code'] THEN EXCLUDED.country ELSE users.country END,
    city = CASE WHEN $25::jsonb ? 'city' THEN EXCLUDED.city ELSE users.city END,
    description = CASE WHEN $25::jsonb ? 'description' THEN EXCLUDED.description ELSE users.description END,
@@ -39,6 +40,7 @@ WHERE EXCLUDED.sc_observation > 0
       OR users.sc_last_modified IS DISTINCT FROM EXCLUDED.sc_last_modified
       OR users.username IS DISTINCT FROM EXCLUDED.username
       OR ($25::jsonb ? 'avatar_url' AND users.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url)
+      OR ($25::jsonb ? 'visuals' AND users.banner_url IS DISTINCT FROM EXCLUDED.banner_url)
       OR ($25::jsonb ? 'verified' AND users.verified IS DISTINCT FROM EXCLUDED.verified)
   )
   AND (EXCLUDED.sc_observation > users.sc_observation

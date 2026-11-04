@@ -1231,7 +1231,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.avatar_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
+SELECT md5(ROW(t.avatar_url, t.banner_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
