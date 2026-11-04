@@ -20,6 +20,9 @@ static OPS: sqlx::migrate::Migrator = {
     migrator
 };
 
+#[cfg(test)]
+pub(crate) static TEST_CORE: sqlx::migrate::Migrator = sqlx::migrate!("../api/migrations");
+
 pub(crate) async fn run_core(
     pool: &PgPool,
     bootstrap_app: Option<&OAuthAppBootstrap>,

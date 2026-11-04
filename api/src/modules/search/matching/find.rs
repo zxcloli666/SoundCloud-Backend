@@ -25,5 +25,5 @@ pub async fn find(search: &SearchService, wanted: &Wanted) -> AppResult<Option<S
         .tracks(&wanted.title, None, 0, TITLE_LIMIT)
         .await?
         .collection;
-    Ok(pick::by_uploader(wanted, &hits))
+    Ok(pick::by_artist(wanted, &hits))
 }

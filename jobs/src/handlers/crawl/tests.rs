@@ -240,7 +240,7 @@ async fn a_successful_genius_crawl_refreshes_both_cursors(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_crawled_artist_with_an_unknown_id_is_not_a_short_named_local_one(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -330,7 +330,7 @@ async fn aliases_of(pool: &PgPool, external_id: &str) -> anyhow::Result<Vec<Stri
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_flushed_page_writes_the_wanted_rows_with_credits_aliases_and_albums(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -379,7 +379,7 @@ async fn a_flushed_page_writes_the_wanted_rows_with_credits_aliases_and_albums(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_recrawl_keeps_the_aliases_and_replaces_only_the_changed_ones(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -399,7 +399,7 @@ async fn a_recrawl_keeps_the_aliases_and_replaces_only_the_changed_ones(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_single_row_alias_store_keeps_aliases_on_a_repeat(pool: PgPool) -> anyhow::Result<()> {
     let primary = seed_artist(&pool, "Мокери").await?;
     let mut page = page::Page::default();
@@ -424,7 +424,7 @@ async fn the_single_row_alias_store_keeps_aliases_on_a_repeat(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unchanged_recrawl_does_not_touch_the_wanted_row(pool: PgPool) -> anyhow::Result<()> {
     let primary = seed_artist(&pool, "Мокери").await?;
     let mut page = page::Page::default();
@@ -446,7 +446,7 @@ async fn an_unchanged_recrawl_does_not_touch_the_wanted_row(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_same_song_twice_in_one_page_is_written_in_order(pool: PgPool) -> anyhow::Result<()> {
     let primary = seed_artist(&pool, "Мокери").await?;
     let mut page = page::Page::default();
@@ -458,7 +458,7 @@ async fn the_same_song_twice_in_one_page_is_written_in_order(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_page_resolves_the_same_artist_once(pool: PgPool) -> anyhow::Result<()> {
     let artist = seed_artist(&pool, "Gost").await?;
     let mut page = page::Page::default();
@@ -475,7 +475,7 @@ async fn a_page_resolves_the_same_artist_once(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_genius_id_held_by_another_artist_is_not_taken_and_the_lookup_is_deferred(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -505,7 +505,7 @@ async fn a_genius_id_held_by_another_artist_is_not_taken_and_the_lookup_is_defer
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_artist_with_its_own_genius_id_stays_matched(pool: PgPool) -> anyhow::Result<()> {
     let artist = seed_artist(&pool, "Nova Quill").await?;
     sqlx::query("UPDATE artists SET genius_artist_id = '55' WHERE id = $1")

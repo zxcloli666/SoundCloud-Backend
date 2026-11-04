@@ -1,0 +1,95 @@
+name: target-cache
+description: Restore or save cargo target dirs as one zstd tar in the public ghcr package cache/scd-ci
+
+inputs:
+  mode:
+    description: restore or save
+    required: true
+  name:
+    description: Snapshot name, one per job
+    required: true
+  paths:
+    description: Target dirs of the job, space separated
+    required: true
+  key:
+    description: Files whose contents pick the exact tag (lockfiles, patches), space separated
+    required: true
+  token:
+    description: Token that may push packages
+    default: ${{ github.token }}
+
+outputs:
+  exact:
+    description: true when the snapshot of the exact key was restored
+    value: ${{ steps.restore.outputs.exact }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oras-project/setup-oras@v2
+      with:
+        version: 1.3.4
+
+    - name: Restore
+      id: restore
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        KEY: ${{ inputs.key }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+        repo=ghcr.io/$owner/cache/scd-ci
+        toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+        key=$(for file in $KEY; do git rev-parse "HEAD:$file"; done | sha256sum | cut -c1-12)
+        exact=$NAME-$toolchain-$key
+        pack=$RUNNER_TEMP/target-cache
+        mkdir -p "$pack"
+        echo "exact=false" >> "$GITHUB_OUTPUT"
+        for tag in "$exact" "$NAME-latest"; do
+          oras pull "$repo:$tag" --output "$pack" > /dev/null 2>&1 || continue
+          if zstd -dc "$pack/target.tar.zst" | tar -xf -; then
+            echo "restored $repo:$tag ($(du -sh "$pack/target.tar.zst" | cut -f1))"
+            [ "$tag" = "$exact" ] && echo "exact=true" >> "$GITHUB_OUTPUT"
+            sh scripts/ci-mtime.sh
+          else
+            echo "::warning::$repo:$tag did not unpack, building cold"
+          fi
+          rm -rf "$pack"
+          exit 0
+        done
+        echo "no snapshot for $NAME in $repo, building cold"
+
+    - name: Save
+      if: inputs.mode == 'save'
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        PATHS: ${{ inputs.paths }}
+        KEY: ${{ inputs.key }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+        repo=ghcr.io/$owner/cache/scd-ci
+        toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+        key=$(for file in $KEY; do git rev-parse "HEAD:$file"; done | sha256sum | cut -c1-12)
+        exact=$NAME-$toolchain-$key
+        sh scripts/ci-mtime.sh stamp
+        dirs=()
+        for dir in $PATHS; do
+          [ -e "$dir" ] || continue
+          find "$dir" -type f -perm -u+x -size +20M ! -name '*.*' ! -path '*/build/*' -delete
+          dirs+=("$dir")
+        done
+        pack=$RUNNER_TEMP/target-cache
+        mkdir -p "$pack"
+        tar -cf - .ci-sha "${dirs[@]}" | zstd -q -T0 -3 -o "$pack/target.tar.zst"
+        echo "target.tar.zst is $(du -sh "$pack/target.tar.zst" | cut -f1)"
+        printf '%s' "$TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        cd "$pack"
+        oras push "$repo:$exact,$NAME-latest" target.tar.zst:application/zstd \
+          --annotation "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > /dev/null
+        echo "pushed $repo:$exact"
+        rm -rf "$pack"

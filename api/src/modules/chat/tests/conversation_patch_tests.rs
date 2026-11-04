@@ -15,7 +15,7 @@ fn settings(admins_only: Option<bool>, history_visible: Option<bool>) -> Convers
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_group_admins_patch_a_chat(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     let member = access_of(&pool, id, "202").await;
@@ -41,7 +41,7 @@ async fn only_group_admins_patch_a_chat(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn settings_merge_and_a_rename_leaves_a_row(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     let owner = access_of(&pool, id, "101").await;

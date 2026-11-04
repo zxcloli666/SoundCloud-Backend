@@ -17,7 +17,7 @@ async fn members_of(pg: &PgPool, conversation: Uuid) -> Vec<(String, String, Str
     .expect("members")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_dm_is_one_conversation_from_either_side(pool: PgPool) -> ChatResult<()> {
     follow(&pool, "202", "101").await;
     let first = plan_direct(&pool, "101", "202").await?;
@@ -47,7 +47,7 @@ async fn a_dm_is_one_conversation_from_either_side(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn two_racing_creates_of_one_dm_end_in_one_row(pool: PgPool) -> ChatResult<()> {
     let plan = DirectPlan::New {
         peer: "202".to_owned(),
@@ -61,7 +61,7 @@ async fn two_racing_creates_of_one_dm_end_in_one_row(pool: PgPool) -> ChatResult
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_recipient_policy_decides_where_a_stranger_lands(pool: PgPool) -> ChatResult<()> {
     assert_eq!(
         plan_direct(&pool, "101", "202").await,
@@ -92,7 +92,7 @@ async fn the_recipient_policy_decides_where_a_stranger_lands(pool: PgPool) -> Ch
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn sharing_an_accepted_group_makes_a_contact(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     dm_policy(&pool, "101", "nobody").await;
@@ -111,7 +111,7 @@ async fn sharing_an_accepted_group_makes_a_contact(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_declined_dm_reopens_only_for_the_one_who_comes_back(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Invited).await;
     sqlx::query("UPDATE chat.members SET state = 'left' WHERE user_id = '202'")
@@ -131,7 +131,7 @@ async fn a_declined_dm_reopens_only_for_the_one_who_comes_back(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn saved_messages_are_one_per_user(pool: PgPool) -> ChatResult<()> {
     let first = saved(&pool, "101").await?.id;
     assert_eq!(saved(&pool, "101").await?.id, first);
@@ -143,7 +143,7 @@ async fn saved_messages_are_one_per_user(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_group_starts_with_its_owner_and_a_created_row(pool: PgPool) -> ChatResult<()> {
     let created = super::group(
         &pool,
@@ -218,7 +218,7 @@ fn group_meta_comes_whole_and_small() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_conversation_cap_stops_new_chats(pool: PgPool) -> ChatResult<()> {
     sqlx::query(
         "INSERT INTO chat.members (conversation_id, user_id, state)
@@ -231,7 +231,7 @@ async fn the_conversation_cap_stops_new_chats(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_list_pages_by_cursor_and_skips_left_chats(pool: PgPool) -> ChatResult<()> {
     let mut made = Vec::new();
     for peer in ["202", "303", "404"] {
@@ -285,7 +285,7 @@ async fn the_list_pages_by_cursor_and_skips_left_chats(pool: PgPool) -> ChatResu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_user_held_from_strangers_starts_no_request_and_invites_no_one(
     pool: PgPool,
 ) -> ChatResult<()> {

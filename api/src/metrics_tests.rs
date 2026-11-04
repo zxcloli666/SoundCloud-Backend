@@ -129,7 +129,7 @@ fn every_outcome_has_a_stable_name() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_scrape_reports_the_database_it_actually_serves(
     pool: sqlx::PgPool,
 ) -> anyhow::Result<()> {
@@ -160,7 +160,7 @@ async fn a_scrape_reports_the_database_it_actually_serves(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     pool: sqlx::PgPool,
 ) -> anyhow::Result<()> {
@@ -226,7 +226,7 @@ fn metrics_named_in(rules: &str, prefix: &str) -> Vec<String> {
     names
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_metric_an_alert_watches_is_actually_exported(
     pool: sqlx::PgPool,
 ) -> anyhow::Result<()> {
@@ -263,7 +263,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_scrape_never_fails_because_statistics_are_unavailable(
     pool: sqlx::PgPool,
 ) -> anyhow::Result<()> {

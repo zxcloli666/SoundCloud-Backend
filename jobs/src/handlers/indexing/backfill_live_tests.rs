@@ -162,7 +162,7 @@ async fn run_queued_dispatches(pool: &PgPool, indexing: &IndexingHandler) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 #[ignore = "requires a disposable JetStream server: it provisions the real stream names"]
 async fn stored_tracks_without_a_storage_event_stay_within_the_audio_backlog_across_reaps(
     pool: PgPool,

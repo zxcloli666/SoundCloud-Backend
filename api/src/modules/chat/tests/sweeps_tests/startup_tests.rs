@@ -22,7 +22,7 @@ async fn touched(pg: &PgPool, id: Uuid, last_seq: i64, ago: &str) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_bump_lost_before_a_restart_is_sent_again(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());
@@ -67,7 +67,7 @@ async fn a_bump_lost_before_a_restart_is_sent_again(pg: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_purge_query_left_by_a_dead_process_is_cancelled(pg: PgPool) -> anyhow::Result<()> {
     let chat = super::support::state(pg.clone());
     let owner = user();

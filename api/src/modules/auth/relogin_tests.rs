@@ -100,7 +100,7 @@ async fn connection_of(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<Uu
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_relogin_renews_the_connection_every_session_of_the_account_uses(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -138,7 +138,7 @@ async fn a_relogin_renews_the_connection_every_session_of_the_account_uses(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_login_as_another_account_gets_its_own_connection(pool: PgPool) -> anyhow::Result<()> {
     let (app, old) = rejected_login(&pool, "42").await?;
     let target = session(&pool, old).await?;

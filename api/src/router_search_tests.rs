@@ -410,7 +410,7 @@ pub(super) fn urns(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_import_contract_answers_with_soundcloud_hits(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -427,7 +427,7 @@ async fn the_import_contract_answers_with_soundcloud_hits(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_query_wins_over_ids(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5"]).await?;
@@ -440,7 +440,7 @@ async fn a_query_wins_over_ids(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn ids_are_read_locally_in_request_order(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5", "7"]).await?;
     let app = app(&pool, "redis://127.0.0.1:1").await?;
@@ -457,7 +457,7 @@ async fn ids_are_read_locally_in_request_order(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn no_params_is_an_empty_page(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, "redis://127.0.0.1:1").await?;
     let session = session(&pool).await?;
@@ -470,7 +470,7 @@ async fn no_params_is_an_empty_page(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn playlist_and_user_search_accept_every_released_param(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
@@ -494,7 +494,7 @@ async fn playlist_and_user_search_accept_every_released_param(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn catalog_search_ignores_legacy_params(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5"]).await?;
     let app = app(&pool, "redis://127.0.0.1:1").await?;
@@ -509,7 +509,7 @@ async fn catalog_search_ignores_legacy_params(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn catalog_tracks_carry_the_listener_like(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5", "7"]).await?;
     sqlx::query(
@@ -549,7 +549,7 @@ async fn catalog_tracks_carry_the_listener_like(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn catalog_search_pages_twenty_without_a_limit(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5"]).await?;
     let app = app(&pool, "redis://127.0.0.1:1").await?;

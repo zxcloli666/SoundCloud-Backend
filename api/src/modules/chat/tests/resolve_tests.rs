@@ -33,7 +33,7 @@ async fn heal_the_feed(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_session_miss_during_a_replication_stall_asks_for_a_retry_not_a_login(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -145,7 +145,7 @@ async fn stored_session(pool: &PgPool, user: &str) -> anyhow::Result<Uuid> {
     Ok(session)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_flood_of_random_session_ids_does_not_starve_a_real_user_and_unknown_ids_are_remembered(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -174,7 +174,7 @@ async fn a_flood_of_random_session_ids_does_not_starve_a_real_user_and_unknown_i
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_stalled_feed_answers_a_flood_without_waiting_and_remembers_nothing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
