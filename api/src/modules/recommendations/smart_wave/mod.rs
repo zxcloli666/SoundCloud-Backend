@@ -3,6 +3,8 @@ pub mod blocked;
 pub mod cursor;
 pub mod graph;
 pub mod rank;
+#[cfg(test)]
+mod ranked_tests;
 pub mod session;
 pub mod signals;
 pub mod track_arm;
