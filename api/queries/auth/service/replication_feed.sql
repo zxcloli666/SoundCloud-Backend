@@ -6,7 +6,8 @@ SELECT count(*) FILTER (WHERE subscription.subenabled) AS "enabled!",
                  OR worker.last_msg_receipt_time IS NULL
                  OR worker.last_msg_receipt_time < now() - interval '60 seconds'
              )
-       ) AS "stalled!"
+       ) AS "stalled!",
+       public.scd_mode() = 'split' AS "split!"
 FROM pg_catalog.pg_subscription AS subscription
 LEFT JOIN pg_catalog.pg_stat_subscription AS worker
   ON worker.subid = subscription.oid

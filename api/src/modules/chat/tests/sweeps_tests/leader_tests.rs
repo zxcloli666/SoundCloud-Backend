@@ -12,8 +12,9 @@ const LEAD_DB: u8 = 11;
 #[tokio::test]
 #[ignore = "requires a local Redis"]
 async fn one_process_leads_renews_and_hands_over_on_release() -> anyhow::Result<()> {
-    let pg =
-        sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://scd@127.0.0.1:1/none")?;
+    let pg = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
+        .connect_lazy("postgres://scd@127.0.0.1:1/none")?;
     let redis = crate::redis::connect_url(&redis_db(LEAD_DB))?;
     let chat = chat_state(pg, redis, true);
     let mut conn = chat.redis.get().await?;

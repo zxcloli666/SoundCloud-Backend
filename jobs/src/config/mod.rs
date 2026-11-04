@@ -459,7 +459,7 @@ impl JobsConfig {
         };
         queue.validate()?;
 
-        let main_database = DatabaseConfig::from_env("", true)?;
+        let main_database = DatabaseConfig::from_env("", true, "36")?;
         let read_database = read_database_from_env(main_database.tls.require_mtls)?;
         let config = Self {
             instance_id,
@@ -482,7 +482,7 @@ impl JobsConfig {
             main_database,
             queue_pool: queue_pool_from_env()?,
             maintenance_pool: maintenance_pool_from_env()?,
-            ops_database: DatabaseConfig::from_env("OPS_", false)?,
+            ops_database: DatabaseConfig::from_env("OPS_", false, "4")?,
             read_database,
             queue,
             subscriptions: SubscriptionsConfig::from_env()?,
@@ -514,10 +514,10 @@ impl JobsConfig {
             },
             PoolCoverage {
                 pool_key: "PG_BULK_POOL_MAX",
-                lane_keys: "JOBS_CORE_BULK",
+                lane_keys: "JOBS_CORE_BULK+LYRICS_LOOKUP",
                 connections: self.main_database.bulk_pool.maximum,
-                lane_slots: self.queue.core_bulk.concurrency,
-                also_serves: "lyrics lookups and the lookup sweep, search terms refresh",
+                lane_slots: self.queue.core_bulk.concurrency + self.lyrics.concurrency,
+                also_serves: "search terms refresh",
             },
             PoolCoverage {
                 pool_key: "PG_MAINTENANCE_POOL_MAX",

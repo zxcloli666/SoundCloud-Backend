@@ -38,6 +38,8 @@ mod recommendations;
 mod repl;
 mod search_terms;
 mod secret_link;
+#[cfg(test)]
+mod soundcloud_stub;
 pub(crate) mod star_priority;
 mod subscriptions;
 mod sync_queue;
@@ -59,7 +61,7 @@ use crate::bus::Bus;
 use crate::config::JobsConfig;
 use crate::db::Databases;
 use crate::qdrant::QdrantProvisioner;
-use crate::queue::{JobError, JobResult, LeasedJob, WriteGovernor};
+use crate::queue::{JobError, JobResult, LeasedJob, LookupLane};
 
 use self::account_walk::AccountWalkHandler;
 use self::admin_maintenance::AdminMaintenanceHandler;
@@ -112,10 +114,10 @@ pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::CatalogCollection,
     JobKind::CrawlArtist,
     JobKind::IndexTrack,
-    JobKind::LyricsLookup,
-    JobKind::LyricsLookupSweep,
     JobKind::PlaylistObserveShadow,
 ];
+
+pub(crate) const LOOKUP_KINDS: &[JobKind] = &[JobKind::LyricsLookup, JobKind::LyricsLookupSweep];
 
 pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::ArtistAttributionRevalidate,
@@ -225,7 +227,7 @@ impl JobHandlers {
         bus: Bus,
         qdrant: QdrantProvisioner,
         relay: Option<std::sync::Arc<call_relay::Client>>,
-        bulk_governor: Arc<WriteGovernor>,
+        lookups: Arc<LookupLane>,
     ) -> Result<Self, crate::ClientBuildError> {
         let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
             proxy_url: config.enrich.proxy_url.clone(),
@@ -317,7 +319,7 @@ impl JobHandlers {
                 config,
                 bus.clone(),
                 qdrant.clone(),
-                bulk_governor,
+                lookups,
             ),
             maintenance: MaintenanceHandler::new(databases.main.fast.clone()),
             oauth_apps: OAuthAppsRefreshHandler::new(databases.main.fast.clone(), &config.oauth)?,
@@ -709,6 +711,7 @@ mod kind_tests {
             let count = [
                 CORE_FAST_KINDS,
                 CORE_BULK_KINDS,
+                LOOKUP_KINDS,
                 MAINTENANCE_KINDS,
                 OPS_KINDS,
             ]
@@ -725,6 +728,8 @@ mod kind_tests {
             "core_fast"
         } else if CORE_BULK_KINDS.contains(&kind) {
             "core_bulk"
+        } else if LOOKUP_KINDS.contains(&kind) {
+            "lookup"
         } else if MAINTENANCE_KINDS.contains(&kind) {
             "maintenance"
         } else {

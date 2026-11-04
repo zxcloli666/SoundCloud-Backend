@@ -26,7 +26,8 @@ use crate::handlers::{
 };
 use crate::health::HealthState;
 use crate::queue::{
-    JobError, JobRepository, NewJob, QueueError, QueueWorker, WriteGovernor, recover_exhausted,
+    JobError, JobRepository, LaneRealign, LookupLane, LookupWorker, NewJob, QueueError,
+    QueueWorker, WriteGovernor, recover_exhausted,
 };
 use crate::scheduler::Scheduler;
 use crate::supervisor::Supervisor;
@@ -37,6 +38,7 @@ pub async fn run() -> anyhow::Result<()> {
     info!(
         core_fast = config.queue.core_fast.concurrency,
         core_bulk = config.queue.core_bulk.concurrency,
+        lyrics_lookups = config.lyrics.concurrency,
         maintenance = config.queue.maintenance.concurrency,
         ops = config.queue.ops.concurrency,
         main_fast_pool = config.main_database.fast_pool.maximum,
@@ -97,6 +99,7 @@ pub async fn run() -> anyhow::Result<()> {
     ));
 
     let bulk_governor = WriteGovernor::new(config.queue.core_bulk.concurrency);
+    let lookup_lane = LookupLane::new(config.lyrics.concurrency, bulk_governor.clone());
     let handlers = Arc::new(
         JobHandlers::new(
             &databases,
@@ -104,7 +107,7 @@ pub async fn run() -> anyhow::Result<()> {
             bus.clone(),
             qdrant.clone(),
             connect_call_relay().await,
-            bulk_governor.clone(),
+            lookup_lane.clone(),
         )
         .context("jobs handlers could not be created")?,
     );
@@ -135,10 +138,15 @@ pub async fn run() -> anyhow::Result<()> {
         databases.queue.clone(),
         format!("{}:ops", config.instance_id),
     );
+    let lookup_repository = JobRepository::new(
+        databases.queue.clone(),
+        format!("{}:lookup", config.instance_id),
+    );
     let ingress_repository = JobRepository::new(
         databases.queue.clone(),
         format!("{}:ingress", config.instance_id),
     );
+    let realign = LaneRealign::new(databases.queue.clone());
     let core_fast_worker = QueueWorker::new(
         core_fast_repository.clone(),
         handlers.clone(),
@@ -154,7 +162,8 @@ pub async fn run() -> anyhow::Result<()> {
         CORE_BULK_KINDS,
     )
     .governed_by(bulk_governor.clone())
-    .sharing_between_kinds();
+    .sharing_between_kinds()
+    .realigned_by(realign.clone());
     let maintenance_worker = QueueWorker::new(
         maintenance_repository,
         handlers.clone(),
@@ -168,6 +177,12 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.clone(),
         config.queue.ops.clone(),
         OPS_KINDS,
+    );
+    let lookup_worker = LookupWorker::new(
+        lookup_repository,
+        handlers.clone(),
+        config.queue.clone(),
+        lookup_lane,
     );
     let cancellation = CancellationToken::new();
     crate::metrics::init();
@@ -334,6 +349,11 @@ pub async fn run() -> anyhow::Result<()> {
         core_bulk_worker.run(cancellation.clone()),
     );
     supervisor.spawn(
+        "lyrics lookup worker",
+        lookup_worker.run(cancellation.clone()),
+    );
+    supervisor.spawn("lane realign", realign.run(cancellation.clone()));
+    supervisor.spawn(
         "maintenance worker",
         maintenance_worker.run(cancellation.clone()),
     );
@@ -497,6 +517,28 @@ async fn validate_core_schema(core: &sqlx::PgPool) -> anyhow::Result<()> {
     ensure!(
         core_lanes_ready && core_indexes_ready,
         "core jobs queue schema is incomplete"
+    );
+    let lookup_lane_ready = sqlx::query_scalar::<_, bool>(
+        "SELECT count(*) = 3
+         FROM pg_constraint
+         WHERE conrelid IN (
+                   to_regclass('background_jobs'),
+                   to_regclass('background_job_failures'),
+                   to_regclass('background_schedules')
+               )
+           AND conname IN (
+               'background_jobs_lane_valid',
+               'background_job_failures_lane_valid',
+               'background_schedules_lane_valid'
+           )
+           AND pg_get_constraintdef(oid) LIKE '%''lookup''%'",
+    )
+    .fetch_one(core)
+    .await
+    .context("core queue lookup lane validation failed")?;
+    ensure!(
+        lookup_lane_ready,
+        "core jobs queue has no lookup lane; apply migration 0307"
     );
     let sync_queue_ready = sqlx::query_scalar::<_, bool>(
         "SELECT to_regclass('sync_queue_head_idx') IS NOT NULL

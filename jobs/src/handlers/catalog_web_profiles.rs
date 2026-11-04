@@ -41,6 +41,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn apiv2_web_profiles_pass_as_apiv1_links_with_a_service() {
+        let mut links = json!([
+            {"url": "https://www.instagram.com/bigsean/", "network": "instagram", "title": "", "username": "bigsean"},
+            {"url": "http://uknowbigsean.com/", "network": "personal", "title": "", "username": ""}
+        ]);
+        sc_transport::normalize_v2_to_v1(&mut links);
+        assert!(validate(&links).is_ok());
+        assert_eq!(links[0]["service"], "instagram");
+        assert_eq!(links[1]["service"], "personal");
+    }
+
+    #[test]
     fn web_profiles_accept_empty_and_link_snapshots() {
         assert!(validate(&json!([])).is_ok());
         assert!(validate(&json!([{"url":"https://example.test", "title":null}])).is_ok());

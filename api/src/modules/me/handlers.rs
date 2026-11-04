@@ -43,7 +43,9 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn get_profile(State(st): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
-    Ok(Json(st.me.get_profile(&ctx.sc_user_id).await?))
+    Ok(Json(
+        st.me.get_profile(ctx.session_id, &ctx.sc_user_id).await?,
+    ))
 }
 
 async fn get_sync_status(

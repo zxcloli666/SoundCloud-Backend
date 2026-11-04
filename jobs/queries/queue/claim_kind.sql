@@ -10,7 +10,8 @@ WITH candidates AS (
     LIMIT $1
 )
 UPDATE background_jobs AS job
-SET lease_id = gen_random_uuid(),
+SET lane = $5,
+    lease_id = gen_random_uuid(),
     lease_generation = job.generation,
     leased_by = $3,
     lease_expires_at = now() + $4::bigint * interval '1 millisecond',

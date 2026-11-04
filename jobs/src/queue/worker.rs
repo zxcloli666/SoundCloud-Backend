@@ -11,11 +11,12 @@ use super::ClaimOrder;
 use super::execution::process_job;
 use super::governor::WriteGovernor;
 use super::model::{LeasedJob, QueueError};
+use super::realign::LaneRealign;
 use super::repository::JobRepository;
 
 const RECOVERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 const RECOVERY_BATCH: usize = 100;
-const RELEASE_EXPIRED_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+pub(super) const RELEASE_EXPIRED_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(crate) struct QueueWorker {
     repository: JobRepository,
@@ -24,10 +25,11 @@ pub(crate) struct QueueWorker {
     lane: QueueLaneConfig,
     kinds: &'static [JobKind],
     governor: Option<Arc<WriteGovernor>>,
+    realign: Option<Arc<LaneRealign>>,
     shares_between_kinds: bool,
 }
 
-struct JobTaskExit {
+pub(super) struct JobTaskExit {
     id: uuid::Uuid,
     kind: JobKind,
     result: Result<(), QueueError>,
@@ -48,6 +50,7 @@ impl QueueWorker {
             lane,
             kinds,
             governor: None,
+            realign: None,
             shares_between_kinds: false,
         }
     }
@@ -63,7 +66,7 @@ impl QueueWorker {
         limit: usize,
     ) -> Result<Vec<LeasedJob>, QueueError> {
         let lease = self.config.lease_duration;
-        let Some(turn) = kind_turn(self.shares_between_kinds, successful_claims) else {
+        let Some(turn) = self.turn(successful_claims) else {
             let order = next_claim_order(successful_claims);
             return self.repository.claim(self.kinds, order, limit, lease).await;
         };
@@ -80,21 +83,12 @@ impl QueueWorker {
         Ok(Vec::new())
     }
 
-    async fn release_expired(&self) {
-        loop {
-            match self
-                .repository
-                .release_expired(self.kinds, self.lane.claim_batch)
-                .await
-            {
-                Ok(released) if released < self.lane.claim_batch as u64 => break,
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(error = %error, "expired background job release failed");
-                    break;
-                }
-            }
-        }
+    fn turn(&self, successful_claims: u64) -> Option<usize> {
+        let realigning = self
+            .realign
+            .as_ref()
+            .is_some_and(|realign| !realign.finished());
+        kind_turn(realigning, self.shares_between_kinds, successful_claims)
     }
 
     pub(crate) fn governed_by(mut self, governor: Arc<WriteGovernor>) -> Self {
@@ -102,38 +96,15 @@ impl QueueWorker {
         self
     }
 
-    fn claim_room(&self, running: usize) -> usize {
+    pub(crate) fn realigned_by(mut self, realign: Arc<LaneRealign>) -> Self {
+        self.realign = Some(realign);
+        self
+    }
+
+    fn concurrency(&self) -> usize {
         match &self.governor {
-            Some(governor) => {
-                governor.claim_room(running, self.lane.concurrency, self.lane.claim_batch)
-            }
-            None => claim_limit(self.lane.concurrency, running, self.lane.claim_batch),
-        }
-    }
-
-    fn idle(&self, running: usize) {
-        if let Some(governor) = &self.governor {
-            governor.lane_idle(running);
-        }
-    }
-
-    fn note_due_kinds(
-        &self,
-        due_kinds: &mut Vec<JobKind>,
-        jobs: &[LeasedJob],
-        successful_claims: u64,
-    ) {
-        let Some(governor) = &self.governor else {
-            return;
-        };
-        for job in jobs {
-            if !due_kinds.contains(&job.kind) {
-                due_kinds.push(job.kind);
-            }
-        }
-        if successful_claims.is_multiple_of(claims_per_round(self.kinds.len())) {
-            governor.lane_round(due_kinds);
-            due_kinds.clear();
+            Some(governor) => governor.limit().min(self.lane.concurrency),
+            None => self.lane.concurrency,
         }
     }
 
@@ -142,10 +113,6 @@ impl QueueWorker {
         let mut successful_claims = 0_u64;
         let mut empty_polls = 0_u32;
         let mut next_release = tokio::time::Instant::now();
-        let mut due_kinds = Vec::new();
-        if let Some(governor) = &self.governor {
-            governor.lane_round(self.kinds);
-        }
 
         loop {
             observe_ready(&mut tasks)?;
@@ -154,7 +121,7 @@ impl QueueWorker {
                 break;
             }
 
-            let limit = self.claim_room(tasks.len());
+            let limit = claim_limit(self.concurrency(), tasks.len(), self.lane.claim_batch);
 
             if limit == 0 {
                 wait_for_poll(&mut tasks, self.config.poll_interval, &cancellation).await?;
@@ -163,7 +130,7 @@ impl QueueWorker {
 
             if tokio::time::Instant::now() >= next_release {
                 next_release = tokio::time::Instant::now() + RELEASE_EXPIRED_INTERVAL;
-                self.release_expired().await;
+                release_expired(&self.repository, self.kinds, self.lane.claim_batch).await;
             }
 
             let claimed = self.claim(successful_claims, limit).await;
@@ -171,7 +138,6 @@ impl QueueWorker {
             match claimed {
                 Ok(jobs) if !jobs.is_empty() => {
                     successful_claims = successful_claims.wrapping_add(1);
-                    self.note_due_kinds(&mut due_kinds, &jobs, successful_claims);
                     empty_polls = 0;
                     for job in jobs {
                         spawn_job(
@@ -180,13 +146,12 @@ impl QueueWorker {
                             self.handlers.clone(),
                             self.config.clone(),
                             job,
+                            (),
                         );
                     }
                 }
-                Ok(jobs) => {
-                    self.idle(tasks.len());
+                Ok(_) => {
                     successful_claims = successful_claims.wrapping_add(1);
-                    self.note_due_kinds(&mut due_kinds, &jobs, successful_claims);
                     empty_polls = empty_polls.saturating_add(1);
                     let wait = super::backoff::idle_wait(empty_polls, self.config.poll_interval);
                     wait_for_poll(&mut tasks, wait, &cancellation).await?;
@@ -219,32 +184,48 @@ pub(crate) async fn recover_exhausted(
     }
 }
 
-fn spawn_job(
+pub(super) async fn release_expired(repository: &JobRepository, kinds: &[JobKind], batch: usize) {
+    loop {
+        match repository.release_expired(kinds, batch).await {
+            Ok(released) if released < batch as u64 => break,
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "expired background job release failed");
+                break;
+            }
+        }
+    }
+}
+
+pub(super) fn spawn_job<T: Send + 'static>(
     tasks: &mut JoinSet<JobTaskExit>,
     repository: JobRepository,
     handlers: Arc<JobHandlers>,
     config: QueueConfig,
     job: LeasedJob,
+    held: T,
 ) {
     let id = job.id;
     let kind = job.kind;
     tasks.spawn(async move {
         let result = process_job(repository, handlers, config, job).await;
+        drop(held);
         JobTaskExit { id, kind, result }
     });
 }
 
-pub(super) fn claim_limit(concurrency: usize, running: usize, batch: usize) -> usize {
+fn claim_limit(concurrency: usize, running: usize, batch: usize) -> usize {
     concurrency.saturating_sub(running).min(batch)
 }
 
-fn claims_per_round(kinds: usize) -> u64 {
-    u64::try_from(kinds.max(1))
-        .unwrap_or(u64::MAX)
-        .saturating_mul(2)
-}
-
-fn kind_turn(shares_between_kinds: bool, successful_claims: u64) -> Option<usize> {
+fn kind_turn(
+    realigning: bool,
+    shares_between_kinds: bool,
+    successful_claims: u64,
+) -> Option<usize> {
+    if realigning {
+        return Some(usize::try_from(successful_claims).unwrap_or(usize::MAX));
+    }
     (shares_between_kinds && successful_claims.is_multiple_of(2))
         .then(|| usize::try_from(successful_claims / 2).unwrap_or(usize::MAX))
 }
@@ -269,7 +250,7 @@ async fn recover_once(repository: &JobRepository) {
     }
 }
 
-fn observe_ready(tasks: &mut JoinSet<JobTaskExit>) -> anyhow::Result<()> {
+pub(super) fn observe_ready(tasks: &mut JoinSet<JobTaskExit>) -> anyhow::Result<()> {
     while let Some(task) = tasks.try_join_next() {
         observe_task(task)?;
     }
@@ -283,7 +264,7 @@ fn observe_optional(task: Option<Result<JobTaskExit, JoinError>>) -> anyhow::Res
     }
 }
 
-fn observe_task(task: Result<JobTaskExit, JoinError>) -> anyhow::Result<()> {
+pub(super) fn observe_task(task: Result<JobTaskExit, JoinError>) -> anyhow::Result<()> {
     match task {
         Ok(JobTaskExit {
             id,
@@ -305,7 +286,7 @@ fn observe_task(task: Result<JobTaskExit, JoinError>) -> anyhow::Result<()> {
     }
 }
 
-async fn wait_for_poll(
+pub(super) async fn wait_for_poll(
     tasks: &mut JoinSet<JobTaskExit>,
     poll_interval: std::time::Duration,
     cancellation: &CancellationToken,
@@ -332,19 +313,18 @@ mod tests {
 
     #[test]
     fn every_second_claim_of_a_sharing_lane_is_the_turn_of_the_next_kind() {
-        assert_eq!(kind_turn(true, 0), Some(0));
-        assert_eq!(kind_turn(true, 1), None);
-        assert_eq!(kind_turn(true, 2), Some(1));
-        assert_eq!(kind_turn(true, 6), Some(3));
-        assert_eq!(kind_turn(false, 0), None);
+        assert_eq!(kind_turn(false, true, 0), Some(0));
+        assert_eq!(kind_turn(false, true, 1), None);
+        assert_eq!(kind_turn(false, true, 2), Some(1));
+        assert_eq!(kind_turn(false, true, 6), Some(3));
+        assert_eq!(kind_turn(false, false, 0), None);
     }
 
     #[test]
-    fn a_claim_round_gives_every_kind_of_a_sharing_lane_one_turn() {
-        let turns: Vec<_> = (0..claims_per_round(3))
-            .filter_map(|claim| kind_turn(true, claim))
-            .collect();
-        assert_eq!(turns, [0, 1, 2]);
+    fn while_the_lanes_realign_every_claim_is_the_turn_of_the_next_kind() {
+        assert_eq!(kind_turn(true, false, 0), Some(0));
+        assert_eq!(kind_turn(true, false, 1), Some(1));
+        assert_eq!(kind_turn(true, true, 3), Some(3));
     }
 
     #[test]

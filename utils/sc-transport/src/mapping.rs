@@ -149,6 +149,12 @@ fn normalize_object(obj: &mut Map<String, Value>) {
     {
         obj.insert("urn".to_string(), Value::String(urn));
     }
+    if !obj.contains_key("service")
+        && obj.contains_key("url")
+        && let Some(network) = obj.get("network").cloned()
+    {
+        obj.insert("service".to_string(), network);
+    }
 }
 
 fn synth_urn(obj: &Map<String, Value>) -> Option<String> {
@@ -259,5 +265,16 @@ mod tests {
         let (ids, embedded) = collect_playlist_track_ids(&playlist);
         assert_eq!(ids, vec!["abc"]);
         assert!(embedded.contains_key("abc"));
+    }
+
+    #[test]
+    fn an_apiv2_web_profile_names_its_network_as_the_apiv1_service() {
+        let mut links = json!([
+            {"url": "https://www.instagram.com/x/", "network": "instagram", "title": "", "username": "x"},
+            {"url": "https://t.me/x", "network": "personal", "service": "other"}
+        ]);
+        normalize_v2_to_v1(&mut links);
+        assert_eq!(links[0]["service"], "instagram");
+        assert_eq!(links[1]["service"], "other");
     }
 }
