@@ -101,7 +101,7 @@ jobs:
     env:
       TARGETS: utils/write-through/target utils/catalog-ingest/target utils/catalog-match/target utils/admin-catalog/target utils/repl-verify/target streaming/target
       TARGET_KEY: utils/write-through/Cargo.lock utils/catalog-ingest/Cargo.lock utils/catalog-match/Cargo.lock utils/admin-catalog/Cargo.lock utils/repl-verify/Cargo.lock streaming/Cargo.lock
-      SAVE_TARGETS: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/replication-fast' }}
+      SAVE_TARGETS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
