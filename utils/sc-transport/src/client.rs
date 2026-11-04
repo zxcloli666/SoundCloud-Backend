@@ -62,6 +62,7 @@ const API_BASE: &str = "https://api.soundcloud.com";
 const AUTH_BASE: &str = "https://secure.soundcloud.com";
 const SC_HOME: &str = "https://soundcloud.com";
 const ANON_CID_TTL: Duration = Duration::from_secs(1800);
+const ANON_CID_FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 const ANON_CID_RETRY_BASE: Duration = Duration::from_secs(5);
 const ANON_CID_RETRY_MAX: Duration = Duration::from_secs(300);
 const TOKEN_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -109,6 +110,10 @@ impl AnonClientId {
             .as_ref()
             .filter(|(_, fetched_at)| fetched_at.elapsed() < ANON_CID_TTL)
             .map(|(id, _)| id.clone())
+    }
+
+    fn stale(&self) -> Option<String> {
+        self.value.as_ref().map(|(id, _)| id.clone())
     }
 
     fn accept(&mut self, id: String) {
@@ -643,7 +648,10 @@ impl ScClient {
         if let Some(id) = self.inner.anon_client_id.read().await.fresh() {
             return Some(id);
         }
-        self.refresh_anon_client_id(None).await
+        if let Some(id) = self.refresh_anon_client_id(None).await {
+            return Some(id);
+        }
+        self.inner.anon_client_id.read().await.stale()
     }
 
     pub async fn rotate_anon_client_id(&self, stale: Option<&str>) -> Option<String> {
@@ -663,11 +671,11 @@ impl ScClient {
                 return None;
             }
         }
-        let fetched = self
-            .anon_get_via_relay_proxy(&self.inner.home_base, HeaderMap::new())
-            .await
-            .ok()
-            .and_then(|bytes| extract_anon_client_id(&String::from_utf8_lossy(&bytes)));
+        let fetch = self.anon_get_via_relay_proxy(&self.inner.home_base, HeaderMap::new());
+        let fetched = match tokio::time::timeout(ANON_CID_FETCH_TIMEOUT, fetch).await {
+            Ok(Ok(bytes)) => extract_anon_client_id(&String::from_utf8_lossy(&bytes)),
+            _ => None,
+        };
         let mut state = self.inner.anon_client_id.write().await;
         match fetched {
             Some(id) => {
@@ -1471,6 +1479,15 @@ mod size_tests {
         state.accept("id".to_owned());
         assert!(!state.is_backing_off());
         assert_eq!(state.fresh().as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_last_id_to_fall_back_on() {
+        let mut state = AnonClientId::default();
+        assert_eq!(state.stale(), None);
+        state.accept("id".to_owned());
+        state.reject();
+        assert_eq!(state.stale().as_deref(), Some("id"));
     }
 
     #[test]

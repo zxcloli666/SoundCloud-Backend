@@ -89,6 +89,8 @@ jobs:
         if: steps.changed.outputs.run == 'true'
         env:
           PSQL: docker exec -i scdpg psql -U scd
+          PGBENCH: docker exec -i scdpg pgbench -U scd
+          LYRICS_RACE_SECONDS: 600
         run: bash ops/replication/tests/pg/run.sh
       - name: toolchain
         if: steps.changed.outputs.run == 'true'

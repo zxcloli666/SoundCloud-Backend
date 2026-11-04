@@ -119,7 +119,7 @@ tables:
   enrich_calibration: {class: P, note: "no code writer, read by jobs only"}
   lyrics_embedding_wire_state: {class: P, note: "api nodes read vector eligibility from lyrics_cache.embedding_request_id and embedding_request_created_at, set by open_embedding_request"}
   lyrics_lookup_backfill_state: {class: P}
-  lyrics_lookup_queue: {class: P, note: "core-private lookup queue, one row per lyrics_lookup_state row, written by lyrics_lookup_queue_sync and the admin lyrics_lookup_queue backfill"}
+  lyrics_lookup_queue: {class: P, note: "core-private lookup queue, one row per lyrics_lookup_state row; lyrics_lookup_queue_sync keeps the mirror columns, jobs owns attempts, last_attempt_at and the claim"}
   oauth_app_token_issuance_reservations: {class: P}
   oauth_app_token_refresh_state: {class: P}
   pipeline_event_receipts: {class: P}

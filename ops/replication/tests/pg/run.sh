@@ -13,7 +13,7 @@ teardown
 say "migrate a template database"
 fresh scd_b1_tpl
 fresh scd_b1_ops
-for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -c "SET client_min_messages = error" -f - < "$f"; done
+for f in "$root"/api/migrations/*.sql; do sql -d scd_b1_tpl -c "SET client_min_messages = error" -f - < "$f" > /dev/null; done
 for f in "$root"/api/migrations-ops/*.sql; do sql -d scd_b1_ops -c "SET client_min_messages = error" -f - < "$f"; done
 
 say "schema.json matches the migrations"
@@ -163,6 +163,8 @@ sql -d scd_b1_core -c "ALTER SUBSCRIPTION core_from_main ENABLE"
 . "$here/lyrics_queue.sh"
 . "$here/deletes.sh"
 . "$here/chat.sh"
+. "$here/keep.sh"
+. "$here/lyrics_race.sh"
 
 say "all subscriptions still running"
 for n in $nodes; do

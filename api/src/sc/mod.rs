@@ -2,6 +2,7 @@ pub mod egress;
 pub mod errors;
 pub mod health;
 pub mod read;
+pub mod stall;
 
 #[cfg(test)]
 #[path = "read_metrics_tests.rs"]
