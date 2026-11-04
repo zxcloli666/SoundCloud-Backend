@@ -166,6 +166,9 @@ jobs:
       - name: Wait for Qdrant
         run: timeout 120 sh -c 'until curl -sf http://127.0.0.1:6333/readyz > /dev/null; do sleep 2; done'
 
+      - name: NATS
+        run: docker run -d --name nats -p 4222:4222 mirror.gcr.io/library/nats:2.14-alpine -js
+
       - name: Tests
         working-directory: api
         run: |
@@ -182,6 +185,7 @@ jobs:
           cargo test --bin api --locked modules::chat::synthetic::tests -- --ignored
           cargo test --bin api --locked -- --ignored modules::chat::devices::tests modules::chat::keys::tests modules::chat::invites::tests modules::chat::settings::tests
           cargo test --bin api --locked recommendations::service::qdrant_io::live_tests -- --ignored --test-threads=1
+          cargo test --bin api --locked -- --ignored modules::remote:: router_voice_tests
 
       - name: Clippy
         working-directory: api
