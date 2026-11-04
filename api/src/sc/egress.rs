@@ -83,7 +83,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_outage_one_process_hit_reaches_the_other_and_stays_on_its_own_egress(pg: PgPool) {
         let serving = process("api", EGRESS_RELAY_LUA, &pg);
         let background = process("jobs", EGRESS_RELAY_LUA, &pg);
@@ -120,7 +120,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_recovery_in_one_process_frees_the_other_before_the_cooldown_lapses(pg: PgPool) {
         let serving = process("api", EGRESS_RELAY_LUA, &pg);
         let background = process("jobs", EGRESS_RELAY_LUA, &pg);

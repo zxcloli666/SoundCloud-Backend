@@ -305,7 +305,7 @@ mod tests {
         .await?)
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn a_created_playlist_records_its_tracks_as_added_when_the_user_asked(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -365,7 +365,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn a_created_playlist_without_tracks_adds_nothing(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {

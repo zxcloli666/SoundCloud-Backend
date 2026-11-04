@@ -24,7 +24,7 @@ const APP_OFF_FRESH: Uuid = Uuid::from_u128(0xa9);
 const APP_REMOVED: Uuid = Uuid::from_u128(0xaa);
 const UNKNOWN: Uuid = Uuid::from_u128(0xff);
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_session_gets_the_old_verdict_here_and_keeps_its_own_on_the_new_path(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -63,7 +63,7 @@ async fn every_session_gets_the_old_verdict_here_and_keeps_its_own_on_the_new_pa
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_login_whose_app_is_off_or_removed_signs_in_again_while_another_app_is_active(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -98,7 +98,7 @@ async fn a_login_whose_app_is_off_or_removed_signs_in_again_while_another_app_is
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_login_whose_app_is_off_waits_half_an_hour_when_no_app_is_active(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -131,7 +131,7 @@ async fn a_login_whose_app_is_off_waits_half_an_hour_when_no_app_is_active(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_session_left_without_its_soundcloud_account_reads_as_signed_out(
     pool: PgPool,
 ) -> anyhow::Result<()> {

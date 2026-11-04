@@ -19,7 +19,7 @@ async fn session(pool: &PgPool, age: Duration) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_session_younger_than_an_hour_is_young(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let young = session(&pool, Duration::minutes(10)).await;
@@ -29,7 +29,7 @@ async fn a_session_younger_than_an_hour_is_young(pool: PgPool) {
     assert!(!session_is_young(&chat, Uuid::now_v7()).await.expect("read"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn requests_list_pending_chats_without_blocked_senders(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let wanted = conversation(&pool, "direct", &[("7", true), ("101", false)]).await;

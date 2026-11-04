@@ -104,7 +104,7 @@ async fn every_admin_route_refuses_a_missing_or_wrong_token() {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn metrics_and_stats_answer_with_the_token(pool: PgPool) {
     crate::metrics::init();
     let chat = state(pool, None);
@@ -176,7 +176,7 @@ fn resolve(decision: AdminDecision) -> Resolve {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_admin_view_decrypts_only_the_report_and_writes_an_audit_row(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -210,7 +210,7 @@ async fn the_admin_view_decrypts_only_the_report_and_writes_an_audit_row(pool: P
     assert_eq!(shown.audit.len(), 1);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -290,7 +290,7 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn restrictions_and_message_deletes_go_through_the_admin_routes(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -357,7 +357,7 @@ async fn restrictions_and_message_deletes_go_through_the_admin_routes(pool: PgPo
     assert_eq!(audit_actions(&pool, &audit::user("82")).await.len(), 2);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn rewrap_moves_keys_and_evidence_to_the_current_versions(pool: PgPool) {
     let old = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -386,7 +386,7 @@ async fn rewrap_moves_keys_and_evidence_to_the_current_versions(pool: PgPool) {
     assert_eq!(audit_actions(&pool, "keys").await.len(), 1);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_admin_unlist_hides_a_public_room_even_from_its_host(pool: PgPool) {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
@@ -441,7 +441,7 @@ async fn an_admin_unlist_hides_a_public_room_even_from_its_host(pool: PgPool) {
     chat.rooms.end(&code).await.expect("the room ends");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_restore_puts_back_only_removed_target_messages_in_the_report(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -480,7 +480,7 @@ async fn a_restore_puts_back_only_removed_target_messages_in_the_report(pool: Pg
     assert_eq!(restore.2["seqs"], json!([seq]));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_restore_leaves_a_message_its_sender_deleted_for_everyone(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -509,7 +509,7 @@ async fn a_restore_leaves_a_message_its_sender_deleted_for_everyone(pool: PgPool
     assert!(body_of(&pool, dm, seq).await.is_none());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_report_trail_shows_linked_rows_without_a_decrypt(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -545,7 +545,7 @@ async fn the_report_trail_shows_linked_rows_without_a_decrypt(pool: PgPool) {
     assert_eq!(decrypts, 0);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_report_list_pages_on_a_report_cursor(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);

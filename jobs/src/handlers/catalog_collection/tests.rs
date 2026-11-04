@@ -118,7 +118,7 @@ async fn next_generation(pool: &PgPool, job: &mut LeasedJob) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_public_like_walk_backfills_the_real_like_time_and_later_snapshots_keep_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -199,7 +199,7 @@ async fn a_public_like_walk_backfills_the_real_like_time_and_later_snapshots_kee
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn followers_prune_only_after_complete_public_snapshots_including_empty_ones(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -287,7 +287,7 @@ async fn followers_prune_only_after_complete_public_snapshots_including_empty_on
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn owner_followings_schedule_public_uploads_without_reviving_unfollows_or_resetting_retry(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -363,7 +363,7 @@ async fn owner_followings_schedule_public_uploads_without_reviving_unfollows_or_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn public_followings_and_expired_leases_do_not_fan_out_upload_jobs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -412,7 +412,7 @@ async fn public_followings_and_expired_leases_do_not_fan_out_upload_jobs(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn pages_resume_atomically_and_duplicate_delivery_cannot_rewind_progress(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -486,7 +486,7 @@ async fn pages_resume_atomically_and_duplicate_delivery_cannot_rewind_progress(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn failed_page_rolls_back_catalog_mirror_cursor_and_downstream_work(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -529,7 +529,7 @@ async fn failed_page_rolls_back_catalog_mirror_cursor_and_downstream_work(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_page_of_new_tracks_delivers_one_lyrics_wake_per_track(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -567,7 +567,7 @@ async fn a_page_of_new_tracks_delivers_one_lyrics_wake_per_track(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn repeated_cursor_and_lost_generation_cannot_commit_a_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -618,7 +618,7 @@ async fn repeated_cursor_and_lost_generation_cannot_commit_a_page(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn observation_preserves_pending_local_intent_and_public_scope_cannot_delete(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -668,7 +668,7 @@ async fn observation_preserves_pending_local_intent_and_public_scope_cannot_dele
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_collection_kind_persists_to_its_own_mirror(pool: PgPool) -> anyhow::Result<()> {
     let (job, mut payload, writer) = setup(&pool).await?;
     for (kind, table, item) in [
@@ -715,7 +715,7 @@ async fn every_collection_kind_persists_to_its_own_mirror(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complete(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -819,7 +819,7 @@ async fn an_audience_snapshot_prunes_only_its_own_relation_and_only_when_complet
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn playlist_reposters_address_the_playlist_and_keep_their_own_mirror(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -850,7 +850,7 @@ async fn playlist_reposters_address_the_playlist_and_keep_their_own_mirror(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn comments_keep_optimistic_local_writes_until_the_queue_drains(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -925,7 +925,7 @@ async fn comments_keep_optimistic_local_writes_until_the_queue_drains(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_malformed_comment_page_cannot_certify_a_snapshot(pool: PgPool) -> anyhow::Result<()> {
     let (_job, mut payload, _writer) = setup(&pool).await?;
     payload.collection = CatalogCollection::TrackComments;
@@ -966,7 +966,7 @@ async fn a_malformed_comment_page_cannot_certify_a_snapshot(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_empty_page_with_a_continuation_moves_on_without_completing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1002,7 +1002,7 @@ async fn an_empty_page_with_a_continuation_moves_on_without_completing(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_page_repeating_one_comment_still_commits(pool: PgPool) -> anyhow::Result<()> {
     let (job, mut payload, writer) = setup(&pool).await?;
     payload.collection = CatalogCollection::TrackComments;
@@ -1031,7 +1031,7 @@ async fn a_page_repeating_one_comment_still_commits(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_apiv2_owner_snapshot_never_removes_a_like_and_leaves_removal_to_the_owner_api(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1092,7 +1092,7 @@ async fn an_apiv2_owner_snapshot_never_removes_a_like_and_leaves_removal_to_the_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_apiv2_owner_snapshot_missing_only_private_likes_completes_without_the_owner_api(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1150,7 +1150,7 @@ async fn an_apiv2_owner_snapshot_missing_only_private_likes_completes_without_th
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_owner_collection_is_checked_on_the_owner_api_the_first_time_and_then_weekly(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1230,7 +1230,7 @@ async fn an_owner_collection_is_checked_on_the_owner_api_the_first_time_and_then
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_owner_run_abandoned_by_apiv2_starts_over_on_the_owner_api(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1271,7 +1271,7 @@ async fn an_owner_run_abandoned_by_apiv2_starts_over_on_the_owner_api(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_page_waiting_on_a_track_does_not_hold_its_job_row(pool: PgPool) -> anyhow::Result<()> {
     let (job, payload, writer) = setup(&pool).await?;
     let first = state::begin(&pool, &job, &payload).await?.unwrap();

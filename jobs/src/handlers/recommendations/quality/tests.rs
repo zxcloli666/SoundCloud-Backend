@@ -58,7 +58,7 @@ async fn insert_track(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_saved_model_is_the_latest_and_versions_count_up(pool: PgPool) -> anyhow::Result<()> {
     assert!(store::latest(&pool).await?.is_none());
 
@@ -74,7 +74,7 @@ async fn a_saved_model_is_the_latest_and_versions_count_up(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_database_refuses_a_model_of_another_shape(pool: PgPool) -> anyhow::Result<()> {
     let refused = sqlx::query(
         "INSERT INTO recommendation_quality_models (
@@ -89,7 +89,7 @@ async fn the_database_refuses_a_model_of_another_shape(pool: PgPool) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn without_a_model_only_unscored_tracks_are_picked(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "1", 10, None, None).await?;
     insert_track(&pool, "2", 5, Some(0.4), None).await?;
@@ -98,7 +98,7 @@ async fn without_a_model_only_unscored_tracks_are_picked(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_new_model_rescores_older_scores_after_the_unscored(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "1", 30, None, None).await?;
     insert_track(&pool, "2", 20, Some(0.4), Some(1)).await?;
@@ -112,7 +112,7 @@ async fn a_new_model_rescores_older_scores_after_the_unscored(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_persisted_score_remembers_the_model_that_made_it(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "1", 10, None, None).await?;
     insert_track(&pool, "2", 5, None, None).await?;
@@ -143,7 +143,7 @@ async fn a_persisted_score_remembers_the_model_that_made_it(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unreachable_vector_store_fails_the_batch_instead_of_zeroing_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -155,7 +155,7 @@ async fn an_unreachable_vector_store_fails_the_batch_instead_of_zeroing_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn retraining_into_the_same_model_keeps_the_current_version(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -188,7 +188,7 @@ async fn insert_dislike(pool: &PgPool, user: &str, sc_track_id: &str) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_good_track_is_labelled_by_its_listeners_not_by_its_popularity(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -219,7 +219,7 @@ async fn a_good_track_is_labelled_by_its_listeners_not_by_its_popularity(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_training_sees_the_same_negatives(pool: PgPool) -> anyhow::Result<()> {
     for id in ["5", "4", "3", "2", "1"] {
         insert_track(&pool, id, 10, None, None).await?;
@@ -245,7 +245,7 @@ async fn every_training_sees_the_same_negatives(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn one_backfill_run_scores_more_than_a_single_batch(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (

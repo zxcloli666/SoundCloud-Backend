@@ -66,7 +66,7 @@ async fn app(pool: &PgPool) -> anyhow::Result<axum::Router> {
     ))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn soundcloud_track_hits_come_back_as_the_local_projection(
     pool: PgPool,
@@ -141,7 +141,7 @@ async fn soundcloud_track_hits_come_back_as_the_local_projection(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn soundcloud_playlist_and_user_hits_come_back_as_the_local_projection(
     pool: PgPool,
@@ -254,7 +254,7 @@ async fn seed_local_track(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_pasted_link_resolves_locally_and_its_new_playlist_waits_for_membership(
     pool: PgPool,
@@ -308,7 +308,7 @@ async fn a_pasted_link_resolves_locally_and_its_new_playlist_waits_for_membershi
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_short_link_is_expanded_once_and_resolved_like_its_target(
     pool: PgPool,
@@ -380,7 +380,7 @@ fn resolved_profile(inputs: &Value) -> Option<Value> {
     }))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_profile_subpage_resolves_as_the_profile_and_then_locally(
     pool: PgPool,

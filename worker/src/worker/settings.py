@@ -131,6 +131,7 @@ class SlotSettings:
 @dataclass(frozen=True)
 class AudioSection:
     download_timeout_s: float
+    download_idle_s: float
     max_download_mib: int
     min_duration_s: float
     max_duration_s: float

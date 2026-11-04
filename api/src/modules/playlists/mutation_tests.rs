@@ -61,7 +61,7 @@ fn addition() -> Option<(MembershipRequest, Uuid)> {
     ))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn playlist_metadata_is_local_and_coalesces_without_soundcloud_or_a_membership_baseline(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -115,7 +115,7 @@ async fn playlist_metadata_is_local_and_coalesces_without_soundcloud_or_a_member
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_mixed_update_is_accepted_before_the_first_soundcloud_observation(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -146,7 +146,7 @@ async fn a_mixed_update_is_accepted_before_the_first_soundcloud_observation(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn playlist_metadata_and_membership_roll_back_together_on_failure(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -189,7 +189,7 @@ async fn playlist_metadata_and_membership_roll_back_together_on_failure(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn playlist_delete_cancels_metadata_and_prevents_metadata_resurrection(
     pool: PgPool,
 ) -> anyhow::Result<()> {

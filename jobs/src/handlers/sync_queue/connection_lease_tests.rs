@@ -132,7 +132,7 @@ async fn mark(pool: &PgPool, id: Uuid, seconds: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_refresh_lease_has_one_winner(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
 
@@ -145,7 +145,7 @@ async fn a_refresh_lease_has_one_winner(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_delayed_snapshot_cannot_rotate_a_newer_token(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
     let stale_generation: i64 =
@@ -183,7 +183,7 @@ async fn a_delayed_snapshot_cannot_rotate_a_newer_token(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_stale_failure_cannot_overwrite_a_new_login(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
     let (lease, generation) = claim(&pool, id).await?.expect("claim succeeds");
@@ -204,7 +204,7 @@ async fn a_stale_failure_cannot_overwrite_a_new_login(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_login_during_a_refresh_wins_over_the_refresh_result(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
     let (lease, generation) = claim(&pool, id).await?.expect("claim succeeds");
@@ -247,7 +247,7 @@ async fn a_login_during_a_refresh_wins_over_the_refresh_result(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_older_login_never_replaces_a_newer_one(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
     let older: i64 = sqlx::query_scalar("SELECT public.scd_clock()")
@@ -267,7 +267,7 @@ async fn an_older_login_never_replaces_a_newer_one(pool: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn recent_rejections_retry_and_only_confirmed_ones_ask_for_login(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -299,7 +299,7 @@ async fn recent_rejections_retry_and_only_confirmed_ones_ask_for_login(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_recent_success_or_a_usable_token_prevents_a_login_request(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -322,7 +322,7 @@ async fn a_recent_success_or_a_usable_token_prevents_a_login_request(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_transient_failure_or_a_success_clears_rejection_evidence(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -363,7 +363,7 @@ async fn a_transient_failure_or_a_success_clears_rejection_evidence(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_access_rejection_leaves_a_lease_and_a_confirmed_failure_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -403,7 +403,7 @@ async fn an_access_rejection_leaves_a_lease_and_a_confirmed_failure_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_repeated_access_rejection_counts_once(pool: PgPool) -> anyhow::Result<()> {
     let id = connection(&pool).await?;
 

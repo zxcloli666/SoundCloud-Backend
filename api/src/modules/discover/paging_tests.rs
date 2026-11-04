@@ -124,7 +124,7 @@ fn assert_every_one_exactly_once(sort: &str, seen: &[Uuid], expected: &HashSet<U
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_artist_is_reached_exactly_once_whatever_the_sort(pg: PgPool) -> anyhow::Result<()> {
     let expected = seed_artists(&pg).await?;
 
@@ -135,7 +135,7 @@ async fn every_artist_is_reached_exactly_once_whatever_the_sort(pg: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_album_is_reached_exactly_once_whatever_the_sort(pg: PgPool) -> anyhow::Result<()> {
     let expected = seed_albums(&pg).await?;
 
@@ -168,7 +168,7 @@ async fn pages_of_artists(pg: &PgPool) -> anyhow::Result<Vec<Vec<Uuid>>> {
     anyhow::bail!("the walk never reached the end")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_page_of_its_own_size_does_not_promise_another_one(pg: PgPool) -> anyhow::Result<()> {
     for index in 0..PAGE * 2 {
         sqlx::query(

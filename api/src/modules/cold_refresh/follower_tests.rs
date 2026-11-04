@@ -6,7 +6,7 @@ use super::{
     read_collection_page,
 };
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn collection_last_allowed_page_does_not_advertise_an_unreachable_next_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -25,7 +25,7 @@ async fn collection_last_allowed_page_does_not_advertise_an_unreachable_next_pag
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn followers_read_the_local_snapshot_and_schedule_one_public_refresh(
     pool: PgPool,
 ) -> anyhow::Result<()> {

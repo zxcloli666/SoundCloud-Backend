@@ -19,7 +19,7 @@ fn remove_primary(track_id: Uuid, artist_id: Uuid) -> AdminCommand {
     }
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_retried_request_replays_the_first_reply_and_applies_nothing_again(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;
@@ -39,7 +39,7 @@ async fn a_retried_request_replays_the_first_reply_and_applies_nothing_again(poo
     assert_eq!(ledger_rows(&pool).await, 1);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_new_request_id_is_a_new_edit(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;
@@ -53,7 +53,7 @@ async fn a_new_request_id_is_a_new_edit(pool: PgPool) {
     assert_eq!(ledger_rows(&pool).await, 2);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn one_request_id_cannot_carry_a_different_edit(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;
@@ -80,7 +80,7 @@ async fn one_request_id_cannot_carry_a_different_edit(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_refused_request_leaves_no_trace_and_can_be_sent_again(pool: PgPool) {
     let artist = artist(&pool, "Late").await;
     let track = track(&pool, None).await;
@@ -107,7 +107,7 @@ async fn a_refused_request_leaves_no_trace_and_can_be_sent_again(pool: PgPool) {
     assert_eq!(ledger_rows(&pool).await, 1);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn two_copies_of_one_request_running_together_apply_once(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;
@@ -125,7 +125,7 @@ async fn two_copies_of_one_request_running_together_apply_once(pool: PgPool) {
     assert_eq!(ledger_rows(&pool).await, 1);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn answers_older_than_a_week_are_pruned_by_the_next_edit(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;

@@ -49,7 +49,7 @@ fn urns(page: &Value) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_superlike_likes_the_track_and_dies_with_the_like(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["5", "6"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -101,7 +101,7 @@ async fn a_superlike_likes_the_track_and_dies_with_the_like(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_superlikes_list_pages_newest_first(pool: PgPool) -> anyhow::Result<()> {
     seed_tracks(&pool, &["1", "2", "3"]).await?;
     let app = app(&pool, NO_REDIS).await?;
@@ -126,7 +126,7 @@ async fn the_superlikes_list_pages_newest_first(pool: PgPool) -> anyhow::Result<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_free_listener_at_ten_gets_402_and_the_track_stays_unliked(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -154,7 +154,7 @@ async fn a_free_listener_at_ten_gets_402_and_the_track_stays_unliked(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn liking_a_liked_track_again_keeps_its_superlike_and_its_place(
     pool: PgPool,
 ) -> anyhow::Result<()> {

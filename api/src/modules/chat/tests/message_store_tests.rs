@@ -10,7 +10,7 @@ use crate::modules::chat::conversations::fixtures::{
 use crate::modules::chat::messages::gate;
 use crate::modules::chat::model::MemberState;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_resent_message_keeps_its_seq_and_stays_one_row(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let out = outgoing(Class::Post, 0, None);
@@ -24,7 +24,7 @@ async fn a_resent_message_keeps_its_seq_and_stays_one_row(pool: PgPool) -> ChatR
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_resend_after_a_rekey_still_finds_the_stored_row(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let out = outgoing(Class::Post, 0, None);
@@ -39,7 +39,7 @@ async fn a_resend_after_a_rekey_still_finds_the_stored_row(pool: PgPool) -> Chat
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn someone_else_cannot_claim_a_client_id(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let out = outgoing(Class::Post, 0, None);
@@ -51,7 +51,7 @@ async fn someone_else_cannot_claim_a_client_id(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn concurrent_sends_keep_seq_gapless(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -75,7 +75,7 @@ async fn concurrent_sends_keep_seq_gapless(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_pending_rekey_turns_the_epoch_once(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     post(&pool, id, "101").await;
@@ -100,7 +100,7 @@ async fn a_pending_rekey_turns_the_epoch_once(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_epoch_turns_after_10k_messages_or_30_days(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     exec(
@@ -133,7 +133,7 @@ async fn an_epoch_turns_after_10k_messages_or_30_days(pool: PgPool) -> ChatResul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_future_epoch_is_stale_and_turns_nothing(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     assert_eq!(
@@ -147,7 +147,7 @@ async fn a_future_epoch_is_stale_and_turns_nothing(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn posts_take_the_timer_from_the_send_update(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let before = post(&pool, id, "101").await;
@@ -193,7 +193,7 @@ async fn posts_take_the_timer_from_the_send_update(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_expired_target_refuses_edits_reactions_and_pins(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let target = post(&pool, id, "101").await;
@@ -215,7 +215,7 @@ async fn an_expired_target_refuses_edits_reactions_and_pins(pool: PgPool) -> Cha
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn edits_belong_to_the_author(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let target = post(&pool, id, "101").await;
@@ -257,7 +257,7 @@ async fn edits_belong_to_the_author(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_stranger_is_not_a_member(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     assert_eq!(
@@ -269,7 +269,7 @@ async fn a_stranger_is_not_a_member(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn group_meta_rides_the_send_update(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     let mut meta = outgoing(Class::Meta, 0, None);
@@ -289,7 +289,7 @@ async fn group_meta_rides_the_send_update(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_first_post_accepts_the_membership(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     assert!(!access_of(&pool, id, "202").await.accepted);
@@ -298,7 +298,7 @@ async fn the_first_post_accepts_the_membership(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_request_holds_three_posts_until_accepted(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Invited).await;
     let mut last = None;
@@ -332,7 +332,7 @@ async fn a_request_holds_three_posts_until_accepted(pool: PgPool) -> ChatResult<
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn hidden_history_cannot_be_a_target(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let old = post(&pool, id, "101").await;
@@ -375,7 +375,7 @@ async fn restrict(pool: &PgPool, user: &str, scope: &str) {
     .expect("a restriction");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_restricted_sender_is_muted_where_the_scope_says(pool: PgPool) -> ChatResult<()> {
     let redis = crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool");
     let chat = crate::modules::chat::test_support::chat_state(pool.clone(), redis, true);

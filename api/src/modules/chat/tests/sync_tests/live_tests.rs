@@ -76,7 +76,7 @@ fn seqs(entry: &Value) -> Vec<i64> {
         .unwrap_or_default()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_new_client_is_reset_then_a_change_wakes_its_parked_poll(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -111,7 +111,7 @@ async fn a_new_client_is_reset_then_a_change_wakes_its_parked_poll(pool: PgPool)
     assert!(found["messages"][0]["body"].as_str().is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn wakes_inside_the_window_coalesce_into_one_answer(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -156,7 +156,7 @@ async fn wakes_inside_the_window_coalesce_into_one_answer(pool: PgPool) {
     assert_eq!(seqs(entry(&second, chat_id)), vec![2, 3, 4]);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn typing_wakes_only_the_poll_focused_on_that_chat(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -216,7 +216,7 @@ async fn typing_wakes_only_the_poll_focused_on_that_chat(pool: PgPool) {
     assert_eq!(unfocused.status, StatusCode::NO_CONTENT);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn typing_in_a_chat_the_caller_is_not_in_is_refused(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -234,7 +234,7 @@ async fn typing_in_a_chat_the_caller_is_not_in_is_refused(pool: PgPool) {
     assert_eq!(typed.body, json!({"error": "chat_not_member"}));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_flushed_redis_resets_the_client(pool: PgPool) {
     let redis = redis_pool(&redis_db(9));
@@ -274,7 +274,7 @@ async fn a_flushed_redis_resets_the_client(pool: PgPool) {
     assert_eq!(settled.status, StatusCode::NO_CONTENT);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn expired_messages_and_left_chats_reach_the_client(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -312,7 +312,7 @@ async fn expired_messages_and_left_chats_reach_the_client(pool: PgPool) {
     assert_eq!(left.body["convs"], json!([]));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn missed_rows_come_from_postgres_and_stop_at_the_byte_cap(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -341,7 +341,7 @@ async fn missed_rows_come_from_postgres_and_stop_at_the_byte_cap(pool: PgPool) {
     assert!(answer.body.to_string().len() <= 20_000);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_dm_read_mark_reaches_the_peer(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -375,7 +375,7 @@ async fn a_dm_read_mark_reaches_the_peer(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_peer_without_read_receipts_shows_only_delivered(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -408,7 +408,7 @@ async fn a_peer_without_read_receipts_shows_only_delivered(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn marks_for_a_chat_the_caller_is_not_in_are_dropped(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -433,7 +433,7 @@ async fn marks_for_a_chat_the_caller_is_not_in_are_dropped(pool: PgPool) {
     assert_eq!(quiet.status, StatusCode::NO_CONTENT, "{}", quiet.body);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn devices_and_requests_come_when_their_markers_move(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -504,7 +504,7 @@ async fn session_devices(
     answer.body["devices"].as_array().map_or(0, Vec::len)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn presence_shows_only_sharing_contacts_seen_recently(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -562,7 +562,7 @@ async fn presence_shows_only_sharing_contacts_seen_recently(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_read_on_one_device_reaches_the_other_devices_of_that_user(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -597,7 +597,7 @@ async fn a_read_on_one_device_reaches_the_other_devices_of_that_user(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_device_revoked_while_parked_gets_no_more_changes(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -626,7 +626,7 @@ async fn a_device_revoked_while_parked_gets_no_more_changes(pool: PgPool) {
     assert_eq!(ended.body, json!({"error": "chat_device_revoked"}));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_focus_on_a_chat_the_caller_is_not_in_is_checked_once(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -673,7 +673,7 @@ async fn a_focus_on_a_chat_the_caller_is_not_in_is_checked_once(pool: PgPool) {
     assert_eq!(quiet.status, StatusCode::NO_CONTENT, "{}", quiet.body);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn typing_between_blocked_dm_peers_is_dropped(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -703,7 +703,7 @@ async fn typing_between_blocked_dm_peers_is_dropped(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn presence_is_hidden_between_blocked_contacts(pool: PgPool) {
     let chat = with_postgres(&pool);
@@ -741,7 +741,7 @@ async fn presence_is_hidden_between_blocked_contacts(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_postgres_fallback_spends_one_budget_across_chats(pool: PgPool) {
     let chat = with_postgres(&pool);

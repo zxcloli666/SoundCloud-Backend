@@ -246,7 +246,7 @@ async fn owned(pool: &PgPool) -> anyhow::Result<bool> {
     .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unclear_create_found_on_soundcloud_is_finished_without_a_second_post(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -265,7 +265,7 @@ async fn an_unclear_create_found_on_soundcloud_is_finished_without_a_second_post
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unclear_create_missing_on_soundcloud_is_sent_again(pool: PgPool) -> anyhow::Result<()> {
     let (fake, handler) = setup(&pool).await?;
     fake.create_replies([Reply::Status(StatusCode::BAD_GATEWAY), created()]);
@@ -279,7 +279,7 @@ async fn an_unclear_create_missing_on_soundcloud_is_sent_again(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_create_answer_too_large_to_read_is_found_in_the_listing_without_tracks(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -310,7 +310,7 @@ async fn a_create_answer_too_large_to_read_is_found_in_the_listing_without_track
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unclear_create_keeps_its_mark_through_a_lost_login_and_both_pauses(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -363,7 +363,7 @@ async fn an_unclear_create_keeps_its_mark_through_a_lost_login_and_both_pauses(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_listing_that_keeps_failing_parks_the_create_after_five_tries(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -382,7 +382,7 @@ async fn a_listing_that_keeps_failing_parks_the_create_after_five_tries(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_listing_refused_for_the_token_is_read_again_with_the_renewed_one(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -413,7 +413,7 @@ async fn a_listing_refused_for_the_token_is_read_again_with_the_renewed_one(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn five_unclear_posts_park_the_create(pool: PgPool) -> anyhow::Result<()> {
     let (fake, handler) = setup(&pool).await?;
     fake.create_replies((0..5).map(|_| Reply::Status(StatusCode::GATEWAY_TIMEOUT)));
@@ -432,7 +432,7 @@ async fn five_unclear_posts_park_the_create(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unclear_create_without_a_title_is_parked_at_once(pool: PgPool) -> anyhow::Result<()> {
     let (fake, handler) = setup(&pool).await?;
     sqlx::query("UPDATE sync_queue SET payload = '{\"playlist\": {\"sharing\": \"private\"}}'")

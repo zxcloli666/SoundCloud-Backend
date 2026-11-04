@@ -651,7 +651,7 @@ mod tests {
         flat
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn concurrent_misses_for_one_artist_make_one_db_call(
         small: PgPool,
     ) -> anyhow::Result<()> {
@@ -692,7 +692,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn overlapping_callers_load_each_artist_once(small: PgPool) -> anyhow::Result<()> {
         let pool = wide(&small).await?;
         let artists = seed(&pool).await?;
@@ -725,7 +725,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_failed_owner_does_not_strand_the_waiters(small: PgPool) -> anyhow::Result<()> {
         let pool = wide(&small).await?;
         let artists = seed(&pool).await?;
@@ -869,7 +869,7 @@ mod tests {
         flat(kept)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_unbounded_top_k_returns_the_old_edges(pool: PgPool) -> anyhow::Result<()> {
         let ids = hubs(&pool).await?;
         let old = flat(old_edges(&pool, &ids).await?);
@@ -879,7 +879,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_small_top_k_keeps_the_heaviest_edges_of_each_side(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -892,7 +892,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_unlimited_colike_branch_returns_the_old_colike_rows_and_coplay_is_cut(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -914,7 +914,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn top_k_keeps_the_heaviest_edge_so_normalisation_is_unchanged(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -933,7 +933,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_edge_query_walks_the_covering_indexes(pool: PgPool) -> anyhow::Result<()> {
         let ids = hubs(&pool).await?;
         sqlx::query("ANALYZE artist_coplay").execute(&pool).await?;
@@ -972,7 +972,7 @@ mod tests {
         "../../../../queries/recommendations/smart_wave/graph/load_user_seeds_legacy.sql"
     );
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn lateral_recent_likes_seed_the_same_artists(pool: PgPool) -> anyhow::Result<()> {
         for track in 1..=250_i32 {
             liked_artist(&pool, &track.to_string(), track).await?;
@@ -1108,7 +1108,7 @@ mod tests {
         Ok(artist)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_superliked_like_seeds_its_artist_three_times_harder_even_when_old(
         pool: PgPool,
     ) -> anyhow::Result<()> {
