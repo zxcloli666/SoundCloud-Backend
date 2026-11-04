@@ -137,7 +137,7 @@ fn opened_to(chat: Arc<ChatState>, user_id: &str) -> Arc<ChatState> {
     chat
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_sealed_poll_parked_at_shutdown_carries_its_retry_delay_to_the_client(pool: PgPool) {
     let bob = user();

@@ -254,7 +254,7 @@ fn resolve_input_reads_a_profile_subpage_as_the_profile() -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO users (sc_user_id, urn, username, username_normalized, permalink_url)
@@ -293,7 +293,7 @@ async fn local_resolve_matches_permalinks_regardless_of_case(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn local_resolve_rechecks_visibility_for_an_existing_identity(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -383,7 +383,7 @@ async fn local_resolve_rechecks_visibility_for_an_existing_identity(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn resolved_observation_cannot_return_metadata_rejected_by_the_catalog(
     pool: PgPool,
 ) -> anyhow::Result<()> {

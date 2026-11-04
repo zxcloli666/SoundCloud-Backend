@@ -63,7 +63,7 @@ async fn edit_track_sharing(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_confirmation_does_not_admit_an_older_response(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -124,7 +124,7 @@ async fn catalog_metadata_confirmation_does_not_admit_an_older_response(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_identical_newer_reads_advance_the_fence(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -149,7 +149,7 @@ async fn catalog_metadata_identical_newer_reads_advance_the_fence(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_older_soundcloud_versions_cannot_replace_newer_metadata(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -175,7 +175,7 @@ async fn catalog_metadata_older_soundcloud_versions_cannot_replace_newer_metadat
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_newer_source_versions_win_without_crossing_local_mutations(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -225,7 +225,7 @@ async fn catalog_metadata_newer_source_versions_win_without_crossing_local_mutat
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_refresh_cannot_publish_pending_local_private_tracks(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -240,7 +240,7 @@ async fn catalog_metadata_refresh_cannot_publish_pending_local_private_tracks(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn catalog_metadata_refresh_cannot_publish_acknowledged_local_private_playlists(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -281,7 +281,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn refresh_for_a_signed_out_owner_finishes_without_retrying(
         pool: PgPool,
     ) -> anyhow::Result<()> {

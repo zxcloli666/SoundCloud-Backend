@@ -1,6 +1,6 @@
 use super::*;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_stale_profile_is_returned_while_one_durable_refresh_is_coalesced(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -29,7 +29,7 @@ async fn a_stale_profile_is_returned_while_one_durable_refresh_is_coalesced(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_fresh_profile_needs_no_refresh_job(pool: PgPool) -> anyhow::Result<()> {
     let profile = json!({"id": 17, "username": "fresh"});
     sqlx::query("INSERT INTO user_profiles VALUES ('17', $1, now())")
@@ -44,7 +44,7 @@ async fn a_fresh_profile_needs_no_refresh_job(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_missing_profile_returns_the_user_mirror_without_any_external_dependency(
     pool: PgPool,
 ) -> anyhow::Result<()> {

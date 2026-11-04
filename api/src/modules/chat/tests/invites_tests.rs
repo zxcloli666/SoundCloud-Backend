@@ -37,7 +37,7 @@ fn a_token_is_32_random_bytes_in_url_safe_base64() {
     assert!(parse_token(&"A".repeat(43)).is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_group_admins_make_links(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true), ("2", true)]).await;
@@ -86,7 +86,7 @@ async fn only_group_admins_make_links(pool: PgPool) {
     ));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_link_adds_an_accepted_member_and_runs_out_of_uses(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true), ("2", true)]).await;
@@ -139,7 +139,7 @@ async fn a_link_adds_an_accepted_member_and_runs_out_of_uses(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn bans_blocks_full_groups_and_revoked_links_keep_people_out(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true), ("2", true)]).await;
@@ -207,7 +207,7 @@ async fn bans_blocks_full_groups_and_revoked_links_keep_people_out(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_expired_link_or_a_deleted_group_is_gone(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true)]).await;
@@ -237,7 +237,7 @@ async fn an_expired_link_or_a_deleted_group_is_gone(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_link_dies_with_its_maker_admin_rights(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true), ("102", true)]).await;
@@ -289,7 +289,7 @@ async fn a_link_dies_with_its_maker_admin_rights(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_link_into_a_hidden_history_group_starts_a_new_epoch(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let group = conversation(&pool, "group", &[("101", true), ("2", true)]).await;
@@ -317,7 +317,7 @@ async fn a_link_into_a_hidden_history_group_starts_a_new_epoch(pool: PgPool) {
     assert_eq!((joined_epoch, rekey), (4, true));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_link_join_reaches_every_member_and_the_joiner_requests(pool: PgPool) {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());

@@ -50,7 +50,7 @@ async fn counts(pool: &PgPool) -> anyhow::Result<(i64, i64, i64, i64)> {
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn retention_deletes_the_rows_past_seven_days_and_keeps_the_rest(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -68,7 +68,7 @@ async fn retention_deletes_the_rows_past_seven_days_and_keeps_the_rest(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_split_core_without_its_peers_keeps_tombstones_receipts_and_acks(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -93,7 +93,7 @@ async fn a_split_core_without_its_peers_keeps_tombstones_receipts_and_acks(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn replay_runs_the_dead_command_again_and_drops_the_letter(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -153,7 +153,7 @@ async fn replay_runs_the_dead_command_again_and_drops_the_letter(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn job_status_follows_the_queue_and_the_reconcile_repairs_gaps(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -195,7 +195,7 @@ async fn job_status_follows_the_queue_and_the_reconcile_repairs_gaps(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn job_status_is_kept_on_a_legacy_node_for_local_and_replicated_writes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -252,7 +252,7 @@ async fn job_status_is_kept_on_a_legacy_node_for_local_and_replicated_writes(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn retention_drops_reasserts_and_purges_with_their_ack_and_old_upload_receipts(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -320,7 +320,7 @@ const LOGIN_LETTERS: &str = "INSERT INTO oauth_apps (id, name, client_id, client
      INSERT INTO cmd_dead (node, id, kind, args, sqlstate, message)
      VALUES ('main', '00000000-0000-4000-8000-0000000000b5', 'track.edit', '{\"access_token\": \"kept\"}', '23514', 'seed')";
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn dead_logins_lose_their_tokens_once_no_replay_can_install_them(
     pool: PgPool,
 ) -> anyhow::Result<()> {

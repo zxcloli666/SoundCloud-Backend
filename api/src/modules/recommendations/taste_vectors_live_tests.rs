@@ -92,7 +92,7 @@ async fn serve_version_towards(pg: &PgPool, listener: &str, index: usize) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_taste_shelf_never_offers_what_the_listener_already_likes(
     pg: PgPool,
@@ -142,7 +142,7 @@ fn shelf<'a>(response: &'a ClusterResponse, id: &str) -> Vec<&'a str> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_listener_with_a_taste_vector_gets_a_taste_shelf_and_the_rest_of_the_wave_stays(
     pg: PgPool,

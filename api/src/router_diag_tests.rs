@@ -75,7 +75,7 @@ fn admin_get(path: &str) -> anyhow::Result<Request<Body>> {
         .body(Body::empty())?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_web_page_cannot_post_diagnostics_or_read_the_code(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, TOKEN, 1 << 30).await?;
 
@@ -116,7 +116,7 @@ async fn a_web_page_cannot_post_diagnostics_or_read_the_code(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn desktop_style_posts_work_and_answers_are_never_cached(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, TOKEN, 1 << 30).await?;
 
@@ -181,7 +181,7 @@ async fn desktop_style_posts_work_and_answers_are_never_cached(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_diag_token_opens_diag_routes_only_and_an_empty_one_opens_nothing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -207,7 +207,7 @@ async fn the_diag_token_opens_diag_routes_only_and_an_empty_one_opens_nothing(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn both_posts_answer_503_while_the_tables_are_over_the_ceiling(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -230,7 +230,7 @@ async fn both_posts_answer_503_while_the_tables_are_over_the_ceiling(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_server_computes_the_fingerprint_and_ignores_the_clients(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -258,7 +258,7 @@ async fn the_server_computes_the_fingerprint_and_ignores_the_clients(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_premium_reserve_node_takes_reports_and_diag_reads_without_a_session(
     pool: PgPool,
 ) -> anyhow::Result<()> {

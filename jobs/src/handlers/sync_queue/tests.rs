@@ -570,7 +570,7 @@ async fn write_app(pool: &PgPool) -> anyhow::Result<Option<Uuid>> {
     Ok(token.oauth_app_id)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_saved_pause_keeps_its_reason_and_restores_with_a_strike(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -598,7 +598,7 @@ async fn a_saved_pause_keeps_its_reason_and_restores_with_a_strike(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_pause_saved_for_a_day_is_cut_to_two_hours(pool: PgPool) -> anyhow::Result<()> {
     crate::db::migrations::run_core(&pool, None).await?;
     let app = oauth_app(&pool).await?;
@@ -617,7 +617,7 @@ async fn a_pause_saved_for_a_day_is_cut_to_two_hours(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn writes_go_through_the_good_app_even_when_the_refused_one_was_refreshed_later(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -645,7 +645,7 @@ async fn writes_go_through_the_good_app_even_when_the_refused_one_was_refreshed_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_good_app_that_needs_sign_in_does_not_beat_a_usable_refused_one(
     pool: PgPool,
 ) -> anyhow::Result<()> {

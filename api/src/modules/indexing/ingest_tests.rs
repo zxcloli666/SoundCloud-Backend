@@ -54,7 +54,7 @@ async fn stored(pool: &PgPool, sc_track_id: &str) -> anyhow::Result<(Option<Stri
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_lands_with_its_owned_row(pool: PgPool) -> anyhow::Result<()> {
     let indexing = indexing(&pool).await?;
 
@@ -72,7 +72,7 @@ async fn an_upload_lands_with_its_owned_row(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_too_long_upload_is_marked_and_still_owned(pool: PgPool) -> anyhow::Result<()> {
     let indexing = indexing(&pool).await?;
 
@@ -91,7 +91,7 @@ async fn a_too_long_upload_is_marked_and_still_owned(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_without_track_fields_still_records_the_owned_row(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -109,7 +109,7 @@ async fn an_upload_without_track_fields_still_records_the_owned_row(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_held_track_over_the_cap_is_released_as_too_long(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, pipeline_held)

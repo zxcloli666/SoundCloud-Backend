@@ -99,7 +99,7 @@ fn remote_track() -> Value {
     json!({"id":42,"urn":"soundcloud:tracks:42","kind":"track","title":"Relay title","duration":120000})
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_relay_answer_ends_the_walk_and_never_reaches_the_token_chain(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -121,7 +121,7 @@ async fn a_relay_answer_ends_the_walk_and_never_reaches_the_token_chain(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_relay_that_says_the_entity_is_missing_still_hands_the_walk_on(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -143,7 +143,7 @@ async fn a_relay_that_says_the_entity_is_missing_still_hands_the_walk_on(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_silent_relay_hands_the_walk_on_and_then_stops_being_asked(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -360,7 +360,7 @@ fn sc_hit(id: u64) -> Value {
     json!({"id": id, "kind": "track", "title": format!("hit {id}")})
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_lua_search_page_is_normalized_and_keeps_the_cursor_chain(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -394,7 +394,7 @@ async fn a_lua_search_page_is_normalized_and_keeps_the_cursor_chain(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_silent_lua_search_falls_through_to_the_proxy_and_then_stops_being_asked(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -446,7 +446,7 @@ async fn a_silent_lua_search_falls_through_to_the_proxy_and_then_stops_being_ask
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_rejected_query_reports_the_soundcloud_status(pool: PgPool) -> anyhow::Result<()> {
     let relay = SearchRelay::new(None, 422, json!({"error": "bad query"}));
     let read = search_service(&pool, relay)?;
@@ -475,7 +475,7 @@ async fn every_entity_read(read: &ScReadService) -> Vec<Result<Value, crate::err
     ]
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_apiv2_not_found_is_the_answer_and_skips_apiv1(pool: PgPool) -> anyhow::Result<()> {
     for status in [404, 410] {
         let relay = SearchRelay::new(None, status, json!({"error": "gone"}));
@@ -500,7 +500,7 @@ async fn an_apiv2_not_found_is_the_answer_and_skips_apiv1(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_apiv2_server_error_still_falls_back_to_apiv1(pool: PgPool) -> anyhow::Result<()> {
     let relay = SearchRelay::new(None, 503, json!({"error": "busy"}));
     let read = search_service(&pool, relay.clone())?;

@@ -89,7 +89,7 @@ fn rooms_of(pool: deadpool_redis::Pool) -> std::sync::Arc<crate::modules::rooms:
     crate::modules::rooms::RoomsService::new(pool, crate::modules::rooms::RoomHub::new(None))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_handoff_moves_every_room_with_its_ttl_and_a_second_call_finds_nothing(
     pool: PgPool,
@@ -177,7 +177,7 @@ async fn plant_rooms(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_wrong_token_is_refused_and_a_page_is_only_read_until_the_ack(
     pool: PgPool,
@@ -222,7 +222,7 @@ async fn a_wrong_token_is_refused_and_a_page_is_only_read_until_the_ack(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_lost_page_response_or_a_lost_ack_loses_no_room(pool: PgPool) -> anyhow::Result<()> {
     let music = flushed(&music_url(LOST_DBS.0)).await;
@@ -265,7 +265,7 @@ async fn a_lost_page_response_or_a_lost_ack_loses_no_room(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_redis_rt_failure_mid_run_is_an_error_and_deletes_nothing_on_the_api(
     pool: PgPool,
@@ -303,7 +303,7 @@ async fn a_redis_rt_failure_mid_run_is_an_error_and_deletes_nothing_on_the_api(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn rooms_live_on_the_api_while_proxied_and_move_to_redis_rt_at_the_cut(
     pool: PgPool,

@@ -117,6 +117,7 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
 
 pub fn offline_chat_state(enabled: bool) -> Arc<ChatState> {
     let pg = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(200))
         .connect_lazy("postgres://scd@127.0.0.1:1/none")
         .expect("a lazy pool");
     let redis = crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool");

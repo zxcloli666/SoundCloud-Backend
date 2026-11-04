@@ -72,7 +72,7 @@ fn lost() -> HashSet<String> {
     HashSet::from(["7002".to_owned(), "7003".to_owned()])
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_writing_node_stores_both_verdicts_through_the_kind(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let storage = storage_holding("soundcloud_tracks_7001.m4a").await?;
@@ -109,7 +109,7 @@ async fn a_writing_node_stores_both_verdicts_through_the_kind(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_node_without_api_background_keeps_its_verdicts_in_process(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -142,7 +142,7 @@ async fn a_node_without_api_background_keeps_its_verdicts_in_process(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_writing_api_node_in_split_sends_its_verdicts_to_core_and_leaves_its_tracks_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {

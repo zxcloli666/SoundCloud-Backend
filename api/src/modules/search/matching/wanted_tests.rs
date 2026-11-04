@@ -1,4 +1,4 @@
-use super::wanted::{Wanted, clean_title, first_artist, simplify};
+use super::wanted::{Wanted, clean_title, core_key, first_artist, simplify};
 
 #[test]
 fn only_the_first_artist_is_kept() {
@@ -32,6 +32,11 @@ fn bracketed_noise_is_dropped_from_titles() {
         ("Song Name | Official Channel", "Song Name"),
         ("Song - 2011 Remaster", "Song"),
         ("Song feat. Guest", "Song"),
+        ("Song (prod. by Someone)", "Song"),
+        (
+            "RHYNO (prod. by Guy-Manuel de Homem-Christo) (from GTAVI: The Album)",
+            "RHYNO (from GTAVI: The Album)",
+        ),
         ("Song (Live at Wembley)", "Song (Live at Wembley)"),
         ("(Official Video)", "(Official Video)"),
     ] {
@@ -43,6 +48,13 @@ fn bracketed_noise_is_dropped_from_titles() {
 fn comparison_keeps_letters_and_digits_only() {
     assert_eq!(simplify("Beyoncé - Halo!"), "beyoncéhalo");
     assert_eq!(simplify("Кукла колдуна"), "куклаколдуна");
+}
+
+#[test]
+fn the_core_key_drops_every_bracket() {
+    assert_eq!(core_key("RHYNO (from GTAVI: The Album)"), "rhyno");
+    assert_eq!(core_key("Song [Extended] (2024)"), "song");
+    assert_eq!(core_key("(Intro)"), "");
 }
 
 #[test]

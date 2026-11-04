@@ -68,7 +68,7 @@ impl AiStore {
 mod tests {
     use super::*;
 
-    #[sqlx::test(migrations = "../api/migrations")]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn only_a_language_model_answer_keeps_its_budget_unit(pool: PgPool) {
         let store = AiStore::new(pool, 1);
 

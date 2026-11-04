@@ -15,7 +15,7 @@ fn upsert(artist_id: Uuid, sc_user_id: &str, role: &str, notes: Option<&str>) ->
     }
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_manual_account_is_verified_and_keeps_its_notes(pool: PgPool) {
     let artist = artist(&pool, "Owner").await;
 
@@ -34,7 +34,7 @@ async fn a_manual_account_is_verified_and_keeps_its_notes(pool: PgPool) {
     assert_eq!(notes.as_deref(), Some("official"));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_verified_account_cannot_belong_to_two_artists(pool: PgPool) {
     let first = artist(&pool, "First Owner").await;
     let second = artist(&pool, "Second Owner").await;
@@ -52,7 +52,7 @@ async fn a_verified_account_cannot_belong_to_two_artists(pool: PgPool) {
     assert_eq!(owners, 1);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_account_needs_a_known_role_and_an_id(pool: PgPool) {
     let artist = artist(&pool, "Strict").await;
 
@@ -66,7 +66,7 @@ async fn an_account_needs_a_known_role_and_an_id(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn deleting_an_account_reports_whether_it_existed(pool: PgPool) {
     let artist = artist(&pool, "Leaver").await;
     send(&pool, upsert(artist, "555", "alt", None)).await;
