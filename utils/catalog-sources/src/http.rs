@@ -90,8 +90,22 @@ impl RelayTransport for RealRelay {
 
 impl ExternalFetcher {
     pub fn new(http: Client, proxy_url: String, relay: Option<Arc<RelayClient>>) -> Arc<Self> {
+        Self::admitting(http, proxy_url, relay, PROXY_MAX_CONCURRENT)
+    }
+
+    pub fn admitting(
+        http: Client,
+        proxy_url: String,
+        relay: Option<Arc<RelayClient>>,
+        proxy_requests: usize,
+    ) -> Arc<Self> {
         let relay = relay.map(|client| Arc::new(RealRelay { client }) as Arc<dyn RelayTransport>);
-        Self::build(http, proxy_url, relay)
+        Self::build(
+            http,
+            proxy_url,
+            relay,
+            proxy_requests.max(PROXY_MAX_CONCURRENT),
+        )
     }
 
     #[cfg(test)]
@@ -100,17 +114,22 @@ impl ExternalFetcher {
         proxy_url: String,
         relay: Arc<dyn RelayTransport>,
     ) -> Arc<Self> {
-        Self::build(http, proxy_url, Some(relay))
+        Self::build(http, proxy_url, Some(relay), PROXY_MAX_CONCURRENT)
     }
 
-    fn build(http: Client, proxy_url: String, relay: Option<Arc<dyn RelayTransport>>) -> Arc<Self> {
+    fn build(
+        http: Client,
+        proxy_url: String,
+        relay: Option<Arc<dyn RelayTransport>>,
+        proxy_requests: usize,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::new(Inner {
                 http,
                 proxy_url,
                 relay,
                 relay_sem: Arc::new(Semaphore::new(RELAY_MAX_CONCURRENT)),
-                proxy_sem: Arc::new(Semaphore::new(PROXY_MAX_CONCURRENT)),
+                proxy_sem: Arc::new(Semaphore::new(proxy_requests)),
             }),
             background: false,
         })
@@ -479,6 +498,87 @@ mod tests {
         }
 
         assert!(started.elapsed() >= Duration::from_millis(380));
+    }
+
+    async fn holding_proxy(
+        in_flight: Arc<std::sync::atomic::AtomicUsize>,
+        release: Arc<Semaphore>,
+    ) -> String {
+        let app = Router::new().route(
+            "/",
+            any(move || {
+                let in_flight = in_flight.clone();
+                let release = release.clone();
+                async move {
+                    in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Ok(permit) = release.acquire().await {
+                        permit.forget();
+                    }
+                    in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    "{}"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{address}/")
+    }
+
+    async fn steady(in_flight: &std::sync::atomic::AtomicUsize, expected: usize) {
+        let mut since = None;
+        let reached = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if in_flight.load(std::sync::atomic::Ordering::SeqCst) == expected {
+                    let at = *since.get_or_insert_with(std::time::Instant::now);
+                    if at.elapsed() >= Duration::from_millis(300) {
+                        return;
+                    }
+                } else {
+                    since = None;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            reached.is_ok(),
+            "the proxy should hold {expected} requests, it holds {}",
+            in_flight.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_proxy_admits_as_many_requests_as_it_is_sized_for_and_never_fewer_than_the_default()
+    {
+        for (requests, admitted) in [(48, 48), (8, PROXY_MAX_CONCURRENT)] {
+            let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let release = Arc::new(Semaphore::new(0));
+            let proxy = holding_proxy(in_flight.clone(), release.clone()).await;
+            let http = sc_fingerprint::builder(None).build().unwrap();
+            let fetcher = ExternalFetcher::admitting(http, proxy, None, requests);
+            let sent = 60;
+            let calls = futures::future::join_all((0..sent).map(|call| {
+                let fetcher = fetcher.clone();
+                async move {
+                    fetcher
+                        .get_bytes(
+                            &format!("https://lrclib.net/api/search?q={call}"),
+                            HeaderMap::new(),
+                        )
+                        .await
+                }
+            }));
+            let calls = tokio::spawn(calls);
+
+            steady(&in_flight, admitted).await;
+            release.add_permits(sent);
+
+            let results = calls.await.unwrap();
+            assert!(results.iter().all(Result::is_ok));
+        }
     }
 
     #[test]
