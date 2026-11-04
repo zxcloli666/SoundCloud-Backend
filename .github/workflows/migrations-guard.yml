@@ -70,7 +70,7 @@ jobs:
           esac
           RANGE="$BASE..HEAD"
           [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && RANGE="$BASE...HEAD"
-          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/catalog-ingest utils/catalog-match utils/admin-catalog utils/repl-verify streaming/src/db streaming/src/hq_upgrade streaming/src/hq_upgrade.rs .github/workflows/migrations-guard.yml; then
+          if git diff --quiet "$RANGE" -- api/migrations api/migrations-ops ops/replication utils/write-through utils/catalog-ingest utils/catalog-match utils/admin-catalog utils/repl-verify streaming/src/db streaming/src/hq_upgrade streaming/src/hq_upgrade.rs jobs/queries/queue/write_pressure.sql .github/workflows/migrations-guard.yml; then
             echo run=false >> "$GITHUB_OUTPUT"
           else
             echo run=true >> "$GITHUB_OUTPUT"

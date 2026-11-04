@@ -438,6 +438,66 @@ async fn registration_moves_idle_jobs_left_in_a_stale_lane(pool: PgPool) -> anyh
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_sweep_left_in_maintenance_is_leased_by_the_bulk_lane_while_maintenance_is_full(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::query(
+        "INSERT INTO background_schedules (kind, lane, interval_seconds, next_run_at, priority, max_attempts)
+         VALUES ('lyrics.lookup_sweep', 'maintenance', 60, now(), -10, 4)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO background_jobs (
+             id, kind, lane, dedup_key, payload, priority,
+             lease_id, lease_generation, leased_by, lease_expires_at
+         )
+         SELECT gen_random_uuid(), kind, 'maintenance', 'schedule', '{}'::jsonb, 0,
+                gen_random_uuid(), 1, 'maintenance', now() + interval '30 minutes'
+         FROM unnest(ARRAY['discover.accounts', 'discover.interest', 'enrich.tracks']) AS kind
+         UNION ALL
+         SELECT gen_random_uuid(), 'lyrics.lookup', 'core_bulk', track, '{}'::jsonb, 10,
+                NULL, NULL, NULL, NULL
+         FROM unnest(ARRAY['1', '2']) AS track
+         UNION ALL
+         SELECT gen_random_uuid(), 'lyrics.lookup_sweep', 'maintenance', 'schedule', '{}'::jsonb, -10,
+                NULL, NULL, NULL, NULL",
+    )
+    .execute(&pool)
+    .await?;
+
+    Scheduler::new(pool.clone()).register().await?;
+
+    let leased = JobRepository::new(pool.clone(), "core-bulk".to_owned())
+        .claim(
+            crate::handlers::CORE_BULK_KINDS,
+            ClaimOrder::Priority,
+            8,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let kinds: Vec<JobKind> = leased.iter().map(|job| job.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            JobKind::LyricsLookup,
+            JobKind::LyricsLookup,
+            JobKind::LyricsLookupSweep
+        ]
+    );
+    let lanes = sqlx::query_scalar::<_, String>(
+        "SELECT lane FROM background_schedules WHERE kind = 'lyrics.lookup_sweep'
+         UNION ALL
+         SELECT lane FROM background_jobs WHERE kind = 'lyrics.lookup_sweep'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(lanes, ["core_bulk", "core_bulk"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn registration_realigns_stale_lanes_in_bounded_batches(pool: PgPool) -> anyhow::Result<()> {
     install_schema(&pool).await?;
     let stale = REALIGN_BATCH * 2 + 5;

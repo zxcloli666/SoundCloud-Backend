@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
@@ -23,6 +23,34 @@ const PRESSURE: &str = include_str!("../../queries/queue/write_pressure.sql");
 pub(crate) struct WriteGovernor {
     limit: AtomicUsize,
     ceiling: usize,
+    lane: Mutex<LaneUse>,
+}
+
+#[derive(Default)]
+struct LaneUse {
+    running: usize,
+    lent: usize,
+    idle: bool,
+}
+
+impl LaneUse {
+    fn spare(&self, limit: usize) -> usize {
+        if !self.idle {
+            return 0;
+        }
+        limit.saturating_sub(self.running + self.lent + 1)
+    }
+}
+
+pub(crate) struct LentSlot {
+    governor: Arc<WriteGovernor>,
+}
+
+impl Drop for LentSlot {
+    fn drop(&mut self) {
+        let mut lane = self.governor.lane();
+        lane.lent = lane.lent.saturating_sub(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, sqlx::FromRow)]
@@ -64,11 +92,45 @@ impl WriteGovernor {
         Arc::new(Self {
             limit: AtomicUsize::new(FLOOR.min(ceiling)),
             ceiling,
+            lane: Mutex::new(LaneUse::default()),
         })
     }
 
     pub(crate) fn limit(&self) -> usize {
         self.limit.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn lane_busy(&self, running: usize) -> usize {
+        let mut lane = self.lane();
+        lane.running = running;
+        lane.idle = false;
+        running + lane.lent
+    }
+
+    pub(crate) fn lane_idle(&self, running: usize) {
+        let mut lane = self.lane();
+        lane.running = running;
+        lane.idle = true;
+    }
+
+    pub(crate) fn spare(&self) -> usize {
+        self.lane().spare(self.limit())
+    }
+
+    pub(crate) fn lend(self: &Arc<Self>) -> Option<LentSlot> {
+        let mut lane = self.lane();
+        if lane.spare(self.limit()) == 0 {
+            return None;
+        }
+        lane.lent += 1;
+        Some(LentSlot {
+            governor: self.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_at(&self, limit: usize) {
+        self.limit.store(limit, Ordering::Relaxed);
     }
 
     pub(crate) async fn run(
@@ -123,6 +185,10 @@ impl WriteGovernor {
             "bulk concurrency adjusted to the database pressure"
         );
         true
+    }
+
+    fn lane(&self) -> MutexGuard<'_, LaneUse> {
+        self.lane.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -202,6 +268,39 @@ mod tests {
     fn moderate_pressure_keeps_the_current_slots() {
         assert_eq!(next_limit(10, 32, pressure(300, 3), SETTLED), 10);
         assert_eq!(next_limit(10, 32, pressure(10, 20), SETTLED), 10);
+    }
+
+    #[test]
+    fn a_busy_lane_lends_nothing_and_an_idle_one_keeps_a_slot_for_itself() {
+        let governor = WriteGovernor::new(32);
+        governor.hold_at(6);
+        assert!(governor.lend().is_none());
+
+        governor.lane_idle(1);
+        let lent: Vec<_> = std::iter::from_fn(|| governor.lend()).collect();
+
+        assert_eq!(lent.len(), 4);
+        assert_eq!(governor.lane_busy(1), 5);
+        assert!(governor.lend().is_none());
+        assert_eq!(governor.spare(), 0);
+    }
+
+    #[test]
+    fn lent_slots_hold_the_lane_under_a_lowered_limit_until_they_come_back() {
+        let governor = WriteGovernor::new(32);
+        governor.hold_at(6);
+        governor.lane_idle(1);
+        let mut lent: Vec<_> = std::iter::from_fn(|| governor.lend()).collect();
+        governor.hold_at(2);
+
+        lent.truncate(3);
+        assert!(governor.lend().is_none());
+        assert_eq!(governor.lane_busy(1), 4);
+
+        lent.clear();
+        assert_eq!(governor.lane_busy(1), 1);
+        governor.lane_idle(1);
+        assert!(governor.lend().is_none());
     }
 
     #[test]

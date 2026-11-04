@@ -109,27 +109,40 @@ impl QueueWorker {
         }
     }
 
+    fn busy(&self, running: usize) -> usize {
+        match &self.governor {
+            Some(governor) => governor.lane_busy(running),
+            None => running,
+        }
+    }
+
+    fn idle(&self, running: usize) {
+        if let Some(governor) = &self.governor {
+            governor.lane_idle(running);
+        }
+    }
+
     pub(crate) async fn run(self, cancellation: CancellationToken) -> anyhow::Result<()> {
         let mut tasks = JoinSet::new();
         let mut successful_claims = 0_u64;
         let mut empty_polls = 0_u32;
         let mut next_release = tokio::time::Instant::now();
 
-        'worker: loop {
+        loop {
             observe_ready(&mut tasks)?;
 
             if cancellation.is_cancelled() {
                 break;
             }
 
-            let limit = claim_limit(self.concurrency(), tasks.len(), self.lane.claim_batch);
+            let limit = claim_limit(
+                self.concurrency(),
+                self.busy(tasks.len()),
+                self.lane.claim_batch,
+            );
 
             if limit == 0 {
-                tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => break 'worker,
-                    task = tasks.join_next() => observe_optional(task)?,
-                }
+                wait_for_poll(&mut tasks, self.config.poll_interval, &cancellation).await?;
                 continue;
             }
 
@@ -155,6 +168,7 @@ impl QueueWorker {
                     }
                 }
                 Ok(_) => {
+                    self.idle(tasks.len());
                     successful_claims = successful_claims.wrapping_add(1);
                     empty_polls = empty_polls.saturating_add(1);
                     let wait = super::backoff::idle_wait(empty_polls, self.config.poll_interval);

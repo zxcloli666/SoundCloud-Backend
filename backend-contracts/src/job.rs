@@ -302,7 +302,6 @@ impl JobKind {
             | Self::EnrichTracks
             | Self::IndexingReap
             | Self::IndexingRequeueStuck
-            | Self::LyricsLookupSweep
             | Self::LyricsReapEmbeddings
             | Self::LyricsReapTranscriptions
             | Self::PlaylistLegacyDrain
@@ -325,6 +324,7 @@ impl JobKind {
             | Self::CrawlArtist
             | Self::IndexTrack
             | Self::LyricsLookup
+            | Self::LyricsLookupSweep
             | Self::PlaylistObserveShadow => JobLane::CoreBulk,
         }
     }
@@ -498,7 +498,7 @@ mod tests {
         assert_eq!(JobKind::IndexingReap.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::IndexingRequeueStuck.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::LyricsReapEmbeddings.lane(), JobLane::Maintenance);
-        assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::Maintenance);
+        assert_eq!(JobKind::LyricsLookupSweep.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::StarTrackTiers.lane(), JobLane::Maintenance);
         assert_eq!(JobKind::CatalogRefresh.lane(), JobLane::CoreBulk);
         assert_eq!(JobKind::IndexTrack.lane(), JobLane::CoreBulk);

@@ -96,6 +96,7 @@ pub async fn run() -> anyhow::Result<()> {
         config.taste.clone(),
     ));
 
+    let bulk_governor = WriteGovernor::new(config.queue.core_bulk.concurrency);
     let handlers = Arc::new(
         JobHandlers::new(
             &databases,
@@ -103,6 +104,7 @@ pub async fn run() -> anyhow::Result<()> {
             bus.clone(),
             qdrant.clone(),
             connect_call_relay().await,
+            bulk_governor.clone(),
         )
         .context("jobs handlers could not be created")?,
     );
@@ -144,7 +146,6 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.core_fast.clone(),
         CORE_FAST_KINDS,
     );
-    let bulk_governor = WriteGovernor::new(config.queue.core_bulk.concurrency);
     let core_bulk_worker = QueueWorker::new(
         core_bulk_repository,
         handlers.clone(),

@@ -59,7 +59,7 @@ use crate::bus::Bus;
 use crate::config::JobsConfig;
 use crate::db::Databases;
 use crate::qdrant::QdrantProvisioner;
-use crate::queue::{JobError, JobResult, LeasedJob};
+use crate::queue::{JobError, JobResult, LeasedJob, WriteGovernor};
 
 use self::account_walk::AccountWalkHandler;
 use self::admin_maintenance::AdminMaintenanceHandler;
@@ -113,6 +113,7 @@ pub(crate) const CORE_BULK_KINDS: &[JobKind] = &[
     JobKind::CrawlArtist,
     JobKind::IndexTrack,
     JobKind::LyricsLookup,
+    JobKind::LyricsLookupSweep,
     JobKind::PlaylistObserveShadow,
 ];
 
@@ -133,7 +134,6 @@ pub(crate) const MAINTENANCE_KINDS: &[JobKind] = &[
     JobKind::EnrichTracks,
     JobKind::IndexingReap,
     JobKind::IndexingRequeueStuck,
-    JobKind::LyricsLookupSweep,
     JobKind::LyricsReapEmbeddings,
     JobKind::LyricsReapTranscriptions,
     JobKind::PlaylistLegacyDrain,
@@ -225,6 +225,7 @@ impl JobHandlers {
         bus: Bus,
         qdrant: QdrantProvisioner,
         relay: Option<std::sync::Arc<call_relay::Client>>,
+        bulk_governor: Arc<WriteGovernor>,
     ) -> Result<Self, crate::ClientBuildError> {
         let sc = sc_transport::ScClient::new(&sc_transport::ScConfig {
             proxy_url: config.enrich.proxy_url.clone(),
@@ -316,6 +317,7 @@ impl JobHandlers {
                 config,
                 bus.clone(),
                 qdrant.clone(),
+                bulk_governor,
             ),
             maintenance: MaintenanceHandler::new(databases.main.fast.clone()),
             oauth_apps: OAuthAppsRefreshHandler::new(databases.main.fast.clone(), &config.oauth)?,

@@ -2,6 +2,7 @@ SELECT COALESCE((
            SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), slot.confirmed_flush_lsn))
            FROM pg_replication_slots AS slot
            WHERE slot.slot_type = 'logical'
+             AND slot.slot_name !~ '_graph(_|$)'
        ), 0)::bigint AS replication_backlog_bytes,
        (
            SELECT count(*)
