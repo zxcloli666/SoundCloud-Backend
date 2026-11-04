@@ -44,7 +44,7 @@ async fn a_profile_mirrored_from_apiv2_carries_every_field_old_clients_read(
     sc_transport::normalize_v2_to_v1(&mut mirrored);
     mirror(&pool, &mirrored).await?;
 
-    let profile = read(&*service(&pool)?, "17").await?;
+    let profile = read(&*service(&pool).await?, Uuid::now_v7(), "17").await?;
 
     assert_eq!(unreadable_fields(&profile), Vec::<String>::new());
     assert_eq!(profile["public_favorites_count"], mirrored["likes_count"]);
@@ -58,7 +58,7 @@ async fn a_profile_mirrored_from_apiv1_reaches_old_clients_unchanged(
     let mirrored = apiv1_me();
     mirror(&pool, &mirrored).await?;
 
-    let profile = read(&*service(&pool)?, "17").await?;
+    let profile = read(&*service(&pool).await?, Uuid::now_v7(), "17").await?;
 
     assert_eq!(unreadable_fields(&profile), Vec::<String>::new());
     assert_eq!(profile, mirrored);
@@ -75,7 +75,7 @@ async fn a_mirrored_profile_without_any_like_counter_reads_as_no_likes(
     }
     mirror(&pool, &mirrored).await?;
 
-    let profile = read(&*service(&pool)?, "17").await?;
+    let profile = read(&*service(&pool).await?, Uuid::now_v7(), "17").await?;
 
     assert_eq!(unreadable_fields(&profile), Vec::<String>::new());
     assert_eq!(profile["public_favorites_count"], json!(0));
@@ -93,7 +93,7 @@ async fn the_user_mirror_fallback_carries_every_field_old_clients_read(
     .execute(&pool)
     .await?;
 
-    let profile = read(&*service(&pool)?, "17").await?;
+    let profile = read(&*service(&pool).await?, Uuid::now_v7(), "17").await?;
 
     assert_eq!(unreadable_fields(&profile), Vec::<String>::new());
     assert_eq!(
@@ -122,7 +122,12 @@ async fn the_session_fallback_carries_every_field_old_clients_read(
         .execute(&pool)
         .await?;
 
-    let profile = read(&*service(&pool)?, "soundcloud:users:17").await?;
+    let profile = read(
+        &*service(&pool).await?,
+        Uuid::now_v7(),
+        "soundcloud:users:17",
+    )
+    .await?;
 
     assert_eq!(unreadable_fields(&profile), Vec::<String>::new());
     assert_eq!(
@@ -223,7 +228,7 @@ fn unreadable_fields(profile: &Value) -> Vec<String> {
         .collect()
 }
 
-fn service(pool: &PgPool) -> anyhow::Result<Arc<MeService>> {
+async fn service(pool: &PgPool) -> anyhow::Result<Arc<MeService>> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     let cold = crate::modules::cold_refresh::ColdRefreshService::new(
@@ -239,9 +244,11 @@ fn service(pool: &PgPool) -> anyhow::Result<Arc<MeService>> {
             evict_after_sec: 86400,
         },
     );
+    let miss = crate::modules::resolve::miss_tests::offline(pool).await?;
     Ok(MeService::new(
         pool.clone(),
         crate::modules::sync_queue::SyncQueueService::new(pool.clone(), redis),
         cold,
+        crate::modules::users::PublicUsers::new(pool.clone(), miss),
     ))
 }

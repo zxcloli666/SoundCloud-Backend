@@ -1,7 +1,7 @@
 use super::*;
 use crate::modules::me::MeService;
 
-fn service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<MeService>> {
+async fn service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<MeService>> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;
     let cold = crate::modules::cold_refresh::ColdRefreshService::new(
@@ -17,10 +17,12 @@ fn service(pool: &PgPool) -> anyhow::Result<std::sync::Arc<MeService>> {
             evict_after_sec: 86400,
         },
     );
+    let miss = crate::modules::resolve::miss_tests::offline(pool).await?;
     Ok(MeService::new(
         pool.clone(),
         crate::modules::sync_queue::SyncQueueService::new(pool.clone(), redis),
         cold,
+        crate::modules::users::PublicUsers::new(pool.clone(), miss),
     ))
 }
 
@@ -72,7 +74,7 @@ async fn feed_and_follow_changes_work_with_external_services_unavailable(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed(&pool).await?;
-    let me = service(&pool)?;
+    let me = service(&pool).await?;
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         me.get_followings_tracks("42", 0, 50),
@@ -106,7 +108,7 @@ async fn feed_and_follow_changes_work_with_external_services_unavailable(
 
 #[sqlx::test(migrations = "./migrations")]
 async fn follow_and_upload_refresh_enqueue_commit_together(pool: PgPool) -> anyhow::Result<()> {
-    let me = service(&pool)?;
+    let me = service(&pool).await?;
     sqlx::raw_sql(
         "CREATE FUNCTION reject_test_upload_job() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN RAISE EXCEPTION 'injected enqueue failure'; END $$;

@@ -57,6 +57,7 @@ So wave quality depends on the user's liked tracks being **indexed** (vectors), 
   Adding an apiv2 endpoint? **curl-test it first** (some are 401/404 for anon). Full rules + how to write a
   new SC Lua method: **[docs/sc-networking.md](docs/sc-networking.md)**.
   SC_SEARCH: /tracks|/playlists|/users ?q= read apiv2 search through ScReadService::search (relay Lua then proxy, own breaker, no apiv1, no token), cached 300 s; detail and playlist-write misses read through CatalogMiss (RESOLVE_MISS).
+  An opened user (`/users/{urn}`, `/me`) older than 10 min is read the same way through `users::PublicUsers`: one apiv2 read per user per node per 10 min, capped at 2 s, otherwise a durable `catalog.refresh` at viewer priority.
 - **Prioritize user-relevant work.** `TrackPriority` (Like=1 … Discovery=5) → `tracks.{index,storage}_priority`; enrich
   backfill orders by `index_priority` too. Likes/owned must beat the discovery firehose for SC-download/index/enrich.
 - **Skip pointless external work.** MusicBrainz only for ISRC/`metadata_artist` (label) tracks — it never matches
@@ -221,6 +222,8 @@ Nothing to commit, nothing to keep in sync.
 резолвится через `get_session` без обновления. `/me` читает локальный профиль;
 маршрут `/me/cold` удалён. Обновление профиля и устаревших сущностей каталога
 принадлежит durable job `catalog.refresh`. В API нет отцепленных задач для этих обновлений.
+Исключение - публичная часть открытого юзера: `PublicUsers` читает ее через apiv2 прямо в запросе (до 2 с, без spawn),
+`/me` накладывает публичные поля из `users` поверх apiv1-снимка `user_profiles`, если строка `users` свежее.
 
 **Приложение обязано работать с протухшим SC-токеном.** `/me` возвращает зеркало
 `user_profiles` либо минимальный профиль из локальных данных. Только разрешённые

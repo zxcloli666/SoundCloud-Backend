@@ -20,7 +20,9 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn cold_profile(State(state): State<AppState>, ctx: SessionCtx) -> AppResult<Json<Value>> {
-    Ok(Json(profile::read(&state.me, &ctx.sc_user_id).await?))
+    Ok(Json(
+        profile::read(&state.me, ctx.session_id, &ctx.sc_user_id).await?,
+    ))
 }
 
 #[tracing::instrument(skip_all)]
