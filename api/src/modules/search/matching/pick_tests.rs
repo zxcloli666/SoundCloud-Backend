@@ -130,6 +130,17 @@ fn a_label_upload_credited_to_the_artist_counts_as_theirs() {
 }
 
 #[test]
+fn the_artists_own_upload_beats_a_reupload_credited_to_them() {
+    let hits = [
+        credited(hit(1, "Hello", "random reposter", 0), "Adele"),
+        hit(2, "Hello", "Adele", 0),
+    ];
+    let w = wanted("Adele", "Hello", None);
+    assert_eq!(combined(&w, &hits), urn(2));
+    assert_eq!(by_artist(&w, &hits), urn(2));
+}
+
+#[test]
 fn different_brackets_on_both_sides_match_only_when_the_rest_is_equal() {
     let w = wanted(
         "Travis Scott, Grand Theft Auto VI",
