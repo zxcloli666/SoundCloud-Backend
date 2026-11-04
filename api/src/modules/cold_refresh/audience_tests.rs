@@ -41,7 +41,7 @@ async fn seed_users(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn each_relation_reads_only_its_own_audience(pool: PgPool) -> anyhow::Result<()> {
     seed_users(&pool).await?;
     sqlx::raw_sql(
@@ -62,7 +62,7 @@ async fn each_relation_reads_only_its_own_audience(pool: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_audience_member_without_a_catalog_profile_is_skipped(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -83,7 +83,7 @@ async fn an_audience_member_without_a_catalog_profile_is_skipped(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_last_allowed_audience_page_does_not_advertise_an_unreachable_next_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -105,7 +105,7 @@ async fn the_last_allowed_audience_page_does_not_advertise_an_unreachable_next_p
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_audience_refresh_is_public_and_deduplicated(pool: PgPool) -> anyhow::Result<()> {
     let refresh = async |coll: super::AudienceCollection, urn: &str| {
         ensure(&pool, coll.kind, urn, false, coll.ttl_sec).await
@@ -129,7 +129,7 @@ async fn an_audience_refresh_is_public_and_deduplicated(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unknown_subject_asks_for_the_entity_before_its_audience(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -144,7 +144,7 @@ async fn an_unknown_subject_asks_for_the_entity_before_its_audience(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_star_reader_lifts_the_card_refresh_behind_an_audience_or_comments_page(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -182,7 +182,7 @@ async fn a_star_reader_lifts_the_card_refresh_behind_an_audience_or_comments_pag
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -222,7 +222,7 @@ async fn a_subject_that_stopped_being_public_serves_and_keeps_nothing(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_public_subject_serves_its_mirror_and_schedules_one_refresh(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -224,7 +224,7 @@ mod tests {
         assert!(!key.contains("private-client-id"));
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_cooldown_shorter_than_a_second_still_reads_as_one(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -278,7 +278,7 @@ mod tests {
         Ok(Config::from_url("redis://127.0.0.1:1").create_pool(Some(Runtime::Tokio1))?)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn concurrent_penalties_never_shorten_the_cooldown(pool: PgPool) -> anyhow::Result<()> {
         let health = AuthHealthService::with_database(dead_redis()?, pool.clone());
         let oauth_app_id = seed_app(&pool).await?;
@@ -305,7 +305,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn late_success_does_not_clear_an_active_penalty(pool: PgPool) -> anyhow::Result<()> {
         let health = AuthHealthService::with_database(dead_redis()?, pool.clone());
         let oauth_app_id = seed_app(&pool).await?;
@@ -326,7 +326,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_cooldown_that_lapsed_stops_holding_the_app_back(pool: PgPool) -> anyhow::Result<()> {
         let health = AuthHealthService::with_database(dead_redis()?, pool.clone());
         let oauth_app_id = seed_app(&pool).await?;
@@ -348,7 +348,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_stalled_redis_is_not_on_the_oauth_path_at_all(pool: PgPool) -> anyhow::Result<()> {
         let (redis, stalled_server) = stalled_redis().await?;
         let health = AuthHealthService::with_database(redis, pool.clone());
@@ -377,7 +377,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_stalled_redis_still_bounds_the_health_counters(pool: PgPool) -> anyhow::Result<()> {
         let (redis, server) = stalled_redis().await?;
         let health = AuthHealthService::with_database(redis, pool);

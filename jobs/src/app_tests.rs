@@ -155,7 +155,7 @@ async fn an_invalid_audio_backfill_index_fails_the_indexing_schema_check(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn jobs_starts_on_a_core_with_every_migration_and_refuses_one_without_0292(
     pool: PgPool,
 ) -> anyhow::Result<()> {

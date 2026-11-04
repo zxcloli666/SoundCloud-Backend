@@ -265,7 +265,7 @@ mod tests {
         Ok(enqueued.is_some_and(|enqueued| enqueued.claimed))
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn observation_enqueue_is_throttled_and_count_mismatch_breaks_the_throttle(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -326,7 +326,7 @@ mod tests {
             .expect("redis pool")
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_count_change_makes_the_next_view_enqueue_at_once(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -355,7 +355,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_thousand_views_on_two_nodes_make_one_background_job(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -403,7 +403,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn status_reports_projection_and_pending_operations(pool: PgPool) -> anyhow::Result<()> {
         let observation_id =
             test_schema::seed_playlist(&pool, PLAYLIST, OWNER, &["1", "2"]).await?;
@@ -450,7 +450,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_playlist_that_was_never_observed_still_reports_its_status(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -479,7 +479,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_playlist_whose_state_row_is_absent_is_still_served(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -554,7 +554,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn status_reports_the_queued_read_and_a_retry_only_while_waiting_on_a_failure(
         pool: PgPool,
     ) -> anyhow::Result<()> {

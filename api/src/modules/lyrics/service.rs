@@ -270,7 +270,7 @@ mod tests {
         assert!(duration_matches(None, 134_000));
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_track_without_lyrics_or_lookup_state_still_reports_status(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -351,7 +351,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_search_without_a_title_or_an_artist_asks_nothing_of_the_catalog(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -369,7 +369,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn another_artist_with_the_same_title_is_not_served(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -387,7 +387,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_same_artist_at_a_different_length_is_not_the_same_song(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -408,7 +408,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_closest_artist_wins_when_several_tracks_share_a_title(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -432,7 +432,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_empty_cache_row_cannot_even_be_written(pool: sqlx::PgPool) -> anyhow::Result<()> {
         seed_track(&pool).await?;
 
@@ -452,7 +452,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_unknown_track_is_not_found_rather_than_pending(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -464,7 +464,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn stored_lyrics_are_served_without_touching_the_queue(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -490,7 +490,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_reserve_replica_answers_pending_without_touching_the_lookup(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -515,7 +515,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_reserve_replica_without_lookup_state_refuses_instead_of_pretending(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {
@@ -531,7 +531,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_missing_lookup_becomes_a_durable_request_and_a_pending_answer(
         pool: sqlx::PgPool,
     ) -> anyhow::Result<()> {

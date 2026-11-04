@@ -21,7 +21,7 @@ async fn install(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn featured_changes_atomically_enqueue_public_catalog_hydration(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -69,7 +69,7 @@ async fn featured_changes_atomically_enqueue_public_catalog_hydration(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn hydration_failure_rolls_back_featured_creation(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query("ALTER TABLE background_jobs ADD CHECK (kind <> 'catalog.refresh')")
         .execute(&pool)

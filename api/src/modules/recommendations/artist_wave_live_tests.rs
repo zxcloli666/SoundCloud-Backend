@@ -37,7 +37,7 @@ async fn tracks_of(pg: &PgPool, artist_id: Uuid) -> anyhow::Result<HashSet<Strin
     Ok(ids.into_iter().collect())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_artists_own_tracks_are_on_the_page_and_only_on_their_own_shelf(
     pg: PgPool,
@@ -83,7 +83,7 @@ async fn the_artists_own_tracks_are_on_the_page_and_only_on_their_own_shelf(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn nothing_is_offered_twice_on_an_artist_page(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(991_000, 60);
@@ -113,7 +113,7 @@ async fn nothing_is_offered_twice_on_an_artist_page(pg: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn an_artist_we_have_no_tracks_for_gives_an_empty_page(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(992_000, 20);

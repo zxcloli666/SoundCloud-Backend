@@ -39,7 +39,7 @@ fn profile() -> Value {
     json!({"id": 17, "urn": "soundcloud:users:17", "username": "Alice", "private_field": "owner-only"})
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn profile_and_user_are_persisted_under_the_current_lease(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -66,7 +66,7 @@ async fn profile_and_user_are_persisted_under_the_current_lease(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_late_profile_response_cannot_replace_a_newer_profile_or_user(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -84,7 +84,7 @@ async fn a_late_profile_response_cannot_replace_a_newer_profile_or_user(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_identical_profile_observation_advances_the_fence_against_intermediate_reads(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -106,7 +106,7 @@ async fn an_identical_profile_observation_advances_the_fence_against_intermediat
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn user_versions_reject_older_sources_and_unverified_payloads(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -141,7 +141,7 @@ async fn user_versions_reject_older_sources_and_unverified_payloads(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_owner_profile_write_fences_a_public_read_started_before_login(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -164,7 +164,7 @@ async fn an_owner_profile_write_fences_a_public_read_started_before_login(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_thin_login_profile_preserves_absent_fields_but_can_clear_explicit_fields(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -212,7 +212,7 @@ async fn a_thin_login_profile_preserves_absent_fields_but_can_clear_explicit_fie
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn malformed_profiles_fail_without_persisting_either_projection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -239,7 +239,7 @@ async fn malformed_profiles_fail_without_persisting_either_projection(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn lost_or_expired_leases_cannot_persist_catalog_data(pool: PgPool) -> anyhow::Result<()> {
     let (writer, mut job) = setup(&pool).await?;
     let original_lease = job.lease_id;
@@ -296,7 +296,7 @@ async fn lost_or_expired_leases_cannot_persist_catalog_data(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn profile_write_failure_rolls_back_the_user_upsert(pool: PgPool) -> anyhow::Result<()> {
     let (writer, job) = setup(&pool).await?;
     sqlx::query("ALTER TABLE user_profiles ADD CHECK (soundcloud_user_id <> '17')")
@@ -320,7 +320,7 @@ async fn profile_write_failure_rolls_back_the_user_upsert(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_refreshed_track_over_the_duration_cap_is_marked_too_long(
     pool: PgPool,
 ) -> anyhow::Result<()> {

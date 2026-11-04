@@ -77,7 +77,7 @@ async fn play(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn stats_rank_tops_and_bucket_by_local_time(pool: PgPool) -> anyhow::Result<()> {
     let a = ("Alpha", Some("soundcloud:users:1"));
     let b = ("Beta", None);
@@ -122,7 +122,7 @@ async fn stats_rank_tops_and_bucket_by_local_time(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_empty_history_returns_zeroes(pool: PgPool) -> anyhow::Result<()> {
     let service = HistoryService::new(pool);
     let stats = service

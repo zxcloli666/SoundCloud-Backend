@@ -821,7 +821,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_top_artists_shelf_is_what_the_legacy_query_returned(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -832,7 +832,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_adjacent_shelf_is_what_the_legacy_query_returned(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -843,7 +843,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_adjacent_edges_use_the_covering_indexes(pool: PgPool) -> anyhow::Result<()> {
         fixture(&pool).await?;
         sqlx::query("ANALYZE artist_coplay").execute(&pool).await?;
@@ -899,7 +899,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn fresh_likes_return_the_same_set_as_the_ctid_ordered_query(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -930,7 +930,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn fresh_likes_walk_the_user_created_index_without_sorting_every_like(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -959,7 +959,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn fresh_drops_return_what_the_legacy_query_returned(pool: PgPool) -> anyhow::Result<()> {
         fixture(&pool).await?;
         sqlx::query(

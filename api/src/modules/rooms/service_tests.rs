@@ -92,7 +92,7 @@ fn types(rows: &[Value]) -> Vec<&str> {
     rows.iter().filter_map(|row| row["type"].as_str()).collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_poll_from_outside_the_room_leaves_no_trace(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -127,7 +127,7 @@ async fn a_poll_from_outside_the_room_leaves_no_trace(pg: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_member_poll_keeps_the_room_and_its_chat_alive(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -166,7 +166,7 @@ async fn a_member_poll_keeps_the_room_and_its_chat_alive(pg: PgPool) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -249,7 +249,7 @@ async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_that_goes_private_keeps_its_chat_and_its_bans(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -311,7 +311,7 @@ async fn a_room_that_goes_private_keeps_its_chat_and_its_bans(pg: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_host_hands_the_room_over_with_its_code_chat_and_music(
     pg: PgPool,
@@ -373,7 +373,7 @@ async fn the_host_hands_the_room_over_with_its_code_chat_and_music(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_last_one_out_ends_the_room_and_shreds_its_chat(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -433,7 +433,7 @@ async fn the_last_one_out_ends_the_room_and_shreds_its_chat(pg: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn nobody_the_host_blocked_gets_in(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -473,7 +473,7 @@ async fn nobody_the_host_blocked_gets_in(pg: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_preview_touches_nothing_and_is_cached(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -529,7 +529,7 @@ async fn a_preview_touches_nothing_and_is_cached(pg: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn room_json_from_the_old_api_is_served_and_upgraded(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -570,7 +570,7 @@ async fn room_json_from_the_old_api_is_served_and_upgraded(pg: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_host_and_a_guest_leaving_at_once_end_the_room(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
@@ -599,7 +599,7 @@ async fn a_host_and_a_guest_leaving_at_once_end_the_room(pg: PgPool) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_unlisted_room_leaves_the_public_list_but_keeps_its_code(
     pg: PgPool,

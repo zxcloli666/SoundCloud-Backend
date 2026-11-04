@@ -77,7 +77,7 @@ async fn backdate_keys(pool: &PgPool, conversation: Uuid, hours: i32) {
     .expect("backdated keys");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
     let user = fresh_user();
@@ -111,7 +111,7 @@ async fn a_member_gets_the_current_key_sealed_to_its_box(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn only_members_get_keys(pool: PgPool) {
     let user = fresh_user();
@@ -153,7 +153,7 @@ async fn only_members_get_keys(pool: PgPool) {
     assert_eq!(stored, 0, "a refused caller creates no key");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
     let user = fresh_user();
@@ -196,7 +196,7 @@ async fn the_history_gate_holds_until_an_older_device_confirms(pool: PgPool) {
     assert_eq!(unlocked[0].ck, full[0].ck);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
     let user = fresh_user();
@@ -220,7 +220,7 @@ async fn the_history_gate_opens_by_itself_after_72_hours(pool: PgPool) {
     assert_eq!(epochs(&opened(&new, chat_id, &open)), vec![0, 1]);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(pool: PgPool) {
     let user = fresh_user();
@@ -252,7 +252,7 @@ async fn a_chat_joined_after_registration_gives_a_new_device_its_current_key(poo
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
     let user = fresh_user();
@@ -293,7 +293,7 @@ async fn a_group_that_hides_history_starts_at_the_join_epoch(pool: PgPool) {
     assert_eq!(epochs(&opened(&device, group, &newest)), vec![3]);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
     let user = fresh_user();
@@ -323,7 +323,7 @@ async fn a_pending_rekey_rotates_once_under_a_race(pool: PgPool) {
     assert_eq!(rotate(&chat, chat_id).await, Ok(2));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
     let user = fresh_user();
@@ -348,7 +348,7 @@ async fn a_small_answer_budget_pages_the_keys(pool: PgPool) {
     assert_eq!(epochs(&opened(&device, chat_id, &answer)), vec![1, 2]);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_revoked_device_gets_no_keys(pool: PgPool) {
     let user = fresh_user();

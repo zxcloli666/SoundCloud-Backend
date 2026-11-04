@@ -9,7 +9,7 @@ fn claimed() -> Profile {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_stored_account_wins_over_what_the_client_claims(pool: PgPool) -> anyhow::Result<()> {
     let unknown = account_profile(&pool, "41", claimed()).await?;
     assert_eq!(unknown.name, "Somebody Famous");

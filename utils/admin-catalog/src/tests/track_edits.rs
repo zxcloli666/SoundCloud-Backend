@@ -15,7 +15,7 @@ async fn block(pool: &PgPool, track: Uuid, artist: Uuid) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn setting_the_primary_artist_replaces_the_primary_credit_and_lifts_the_block(pool: PgPool) {
     let old = artist(&pool, "Old").await;
     let new = artist(&pool, "New").await;
@@ -42,7 +42,7 @@ async fn setting_the_primary_artist_replaces_the_primary_credit_and_lifts_the_bl
     assert_eq!(blocks(&pool, track).await, 0);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_unknown_artist_or_track_changes_nothing(pool: PgPool) {
     let known = artist(&pool, "Known").await;
     let track = track(&pool, None).await;
@@ -75,7 +75,7 @@ async fn an_unknown_artist_or_track_changes_nothing(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_primary_credit_displaces_the_other_primary(pool: PgPool) {
     let first = artist(&pool, "First").await;
     let second = artist(&pool, "Second").await;
@@ -103,7 +103,7 @@ async fn a_primary_credit_displaces_the_other_primary(pool: PgPool) {
     assert_eq!(primary(&pool, track).await, Some(second));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn the_feature_alias_is_stored_as_featured_and_a_bad_role_is_refused(pool: PgPool) {
     let artist = artist(&pool, "Guest").await;
     let track = track(&pool, None).await;
@@ -127,7 +127,7 @@ async fn the_feature_alias_is_stored_as_featured_and_a_bad_role_is_refused(pool:
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn removing_the_primary_credit_clears_the_track_primary(pool: PgPool) {
     let artist = artist(&pool, "Lead").await;
     let track = track(&pool, None).await;
@@ -155,7 +155,7 @@ async fn removing_the_primary_credit_clears_the_track_primary(pool: PgPool) {
     assert!(credits(&pool, track).await.is_empty());
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn detaching_an_artist_blocks_it_and_unblocking_lifts_the_block(pool: PgPool) {
     let artist = artist(&pool, "Wrong").await;
     let track = track(&pool, None).await;
@@ -193,7 +193,7 @@ async fn detaching_an_artist_blocks_it_and_unblocking_lifts_the_block(pool: PgPo
     assert_eq!(blocks(&pool, track).await, 0);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn detaching_an_unknown_track_is_not_found(pool: PgPool) {
     let artist = artist(&pool, "Nobody").await;
     let reply = send(
@@ -210,7 +210,7 @@ async fn detaching_an_unknown_track_is_not_found(pool: PgPool) {
     assert_eq!(reply.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_account_detach_blocks_only_that_uploaders_tracks(pool: PgPool) {
     let artist = artist(&pool, "Claimed").await;
     let theirs = track(&pool, Some("111")).await;
@@ -244,7 +244,7 @@ async fn an_account_detach_blocks_only_that_uploaders_tracks(pool: PgPool) {
     assert_eq!(credits(&pool, other).await.len(), 1);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_album_assignment_moves_the_track_between_albums(pool: PgPool) {
     let track = track(&pool, None).await;
     let first = Uuid::new_v4();

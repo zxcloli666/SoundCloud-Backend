@@ -52,6 +52,7 @@ class Harness:
         source = AudioSource(
             session,
             timeout_s=audio.download_timeout_s,
+            idle_s=audio.download_idle_s,
             max_bytes=audio.max_download_mib << 20,
             counters=self.counters,
         )

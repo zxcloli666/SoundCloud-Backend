@@ -241,7 +241,7 @@ async fn bulk_jobs(pool: &PgPool, jobs: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn targeted_lookups_in_flight_follow_the_governor_limit(pool: PgPool) -> anyhow::Result<()> {
     due_tracks(&pool).await?;
     let tracks: Vec<String> = (1..=TRACKS).map(|id| id.to_string()).collect();
@@ -285,7 +285,7 @@ async fn targeted_lookups_in_flight_follow_the_governor_limit(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_keeps_its_slots(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -356,7 +356,7 @@ async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_k
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_sweep_dropped_mid_batch_hands_its_slots_and_its_reserve_back(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -385,7 +385,7 @@ async fn a_sweep_dropped_mid_batch_hands_its_slots_and_its_reserve_back(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_failed_lookup_lets_the_rest_of_the_sweep_batch_finish_and_returns_its_error(
     pool: PgPool,
 ) -> anyhow::Result<()> {

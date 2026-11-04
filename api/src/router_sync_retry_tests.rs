@@ -30,7 +30,7 @@ async fn dead(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_retry_keeps_every_dead_edit_when_the_playlist_re_read_is_not_queued(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -114,7 +114,8 @@ mod tests {
     use sqlx::PgPool;
 
     async fn seed(pool: &PgPool) -> anyhow::Result<()> {
-        sqlx::query(
+        crate::db::insert_replicated(
+            pool,
             "INSERT INTO tracks (
                  sc_track_id, urn, title, title_normalized, duration_ms, sharing, language
              )
@@ -122,7 +123,6 @@ mod tests {
                     (ARRAY['en', 'en', 'en', 'en', 'ru', 'es', 'de', 'fr', 'pt', 'ja'])[1 + n % 10]
              FROM generate_series(1, 20000) AS n",
         )
-        .execute(pool)
         .await?;
         sqlx::query(
             "INSERT INTO sc_track_counters (sc_track_id, play_count, fetched_at)
@@ -136,7 +136,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_cold_start_pool_reads_the_top_by_index_instead_of_joining_the_catalog(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -161,7 +161,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_cold_start_pool_still_returns_the_most_played_first(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -178,7 +178,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_language_pool_also_walks_the_play_count_index(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool).await?;
 
@@ -204,7 +204,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_language_pool_returns_the_most_played_of_that_language(
         pool: PgPool,
     ) -> anyhow::Result<()> {

@@ -37,7 +37,7 @@ async fn cache_state(pool: &PgPool) -> anyhow::Result<Option<String>> {
     )
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_queued_row_opens_one_request_over_text_without_timestamps(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -79,7 +79,7 @@ async fn a_queued_row_opens_one_request_over_text_without_timestamps(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_unacknowledged_request_is_published_again_under_the_same_identity(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -107,7 +107,7 @@ async fn an_unacknowledged_request_is_published_again_under_the_same_identity(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn lyrics_that_leave_no_text_are_skipped(pool: PgPool) -> anyhow::Result<()> {
     seed_lyrics(&pool, None, Some("[00:01.00]\n[00:02.00]")).await?;
 
@@ -124,7 +124,7 @@ async fn lyrics_that_leave_no_text_are_skipped(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_long_text_is_cut_to_the_wire_limit_on_a_line_boundary(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -139,7 +139,7 @@ async fn a_long_text_is_cut_to_the_wire_limit_on_a_line_boundary(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn reopening_a_request_replaces_it_and_counts_the_reopen(pool: PgPool) -> anyhow::Result<()> {
     seed_lyrics(&pool, Some("first line\nsecond line"), None).await?;
     let first = published(&pool).await?;
@@ -168,7 +168,7 @@ async fn reopening_a_request_replaces_it_and_counts_the_reopen(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn reopening_a_timed_out_request_does_not_count_the_reopen(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -1,0 +1,92 @@
+--- a/src/testing/mod.rs
++++ b/src/testing/mod.rs
+@@ -6,7 +6,9 @@
+ use futures_core::future::BoxFuture;
+ 
+ use once_cell::sync::OnceCell;
++use sha2::{Digest, Sha256};
+ use sqlx_core::connection::Connection;
++use sqlx_core::migrate::Migrator;
+ use sqlx_core::query_scalar::query_scalar;
+ 
+ use crate::error::Error;
+@@ -167,7 +169,13 @@
+     .execute(&mut *conn)
+     .await?;
+ 
+-    let create_command = format!("create database {db_name:?}");
++    let create_command = match args.migrator {
++        Some(migrator) => {
++            let template = migrated_template(&mut conn, master_pool, migrator).await?;
++            format!("create database {db_name:?} template {template:?}")
++        }
++        None => format!("create database {db_name:?}"),
++    };
+     debug_assert!(create_command.starts_with("create database \""));
+     conn.execute(&(create_command)[..]).await?;
+ 
+@@ -189,6 +197,64 @@
+     })
+ }
+ 
++async fn migrated_template(
++    conn: &mut PgConnection,
++    master_pool: &Pool<Postgres>,
++    migrator: &Migrator,
++) -> Result<String, Error> {
++    let mut hasher = Sha256::new();
++    for migration in migrator.iter() {
++        hasher.update(migration.version.to_le_bytes());
++        hasher.update(&*migration.checksum);
++    }
++    let mut name = String::from("_sqlx_template_");
++    for byte in &hasher.finalize()[..8] {
++        write!(name, "{byte:02x}").ok();
++    }
++
++    query("select pg_advisory_lock(hashtext($1))")
++        .bind(&name)
++        .execute(&mut *conn)
++        .await?;
++    let built = build_template(conn, master_pool, migrator, &name).await;
++    query("select pg_advisory_unlock(hashtext($1))")
++        .bind(&name)
++        .execute(&mut *conn)
++        .await?;
++    built.map(|()| name)
++}
++
++async fn build_template(
++    conn: &mut PgConnection,
++    master_pool: &Pool<Postgres>,
++    migrator: &Migrator,
++    name: &str,
++) -> Result<(), Error> {
++    let exists: bool =
++        query_scalar("select exists (select 1 from pg_database where datname = $1)")
++            .bind(name)
++            .fetch_one(&mut *conn)
++            .await?;
++    if exists {
++        return Ok(());
++    }
++
++    let building = format!("{name}_building");
++    conn.execute(&*format!("drop database if exists {building:?}"))
++        .await?;
++    conn.execute(&*format!("create database {building:?}"))
++        .await?;
++
++    let options = master_pool.connect_options().deref().clone().database(&building);
++    let mut template = PgConnection::connect_with(&options).await?;
++    migrator.run_direct(&mut template).await?;
++    template.close().await?;
++
++    conn.execute(&*format!("alter database {building:?} rename to {name:?}"))
++        .await?;
++    Ok(())
++}
++
+ async fn do_cleanup(conn: &mut PgConnection, db_name: &str) -> Result<(), Error> {
+     let delete_db_command = format!("drop database if exists {db_name:?};");
+     conn.execute(&*delete_db_command).await?;

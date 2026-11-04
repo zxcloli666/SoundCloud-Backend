@@ -27,7 +27,7 @@ fn assert_the_shelves_were_built(response: &ClusterResponse) {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_track_you_are_listening_to_is_never_offered_next_to_itself(
     pg: PgPool,
@@ -51,7 +51,7 @@ async fn the_track_you_are_listening_to_is_never_offered_next_to_itself(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn nothing_is_offered_twice_across_the_shelves(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(950_000, 60);
@@ -75,7 +75,7 @@ async fn nothing_is_offered_twice_across_the_shelves(pg: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_same_vibe_shelf_does_not_repeat_the_anchors_own_artist(
     pg: PgPool,
@@ -108,7 +108,7 @@ async fn the_same_vibe_shelf_does_not_repeat_the_anchors_own_artist(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_neighbour_by_another_artist_still_reaches_the_same_vibe_shelf(
     pg: PgPool,
@@ -143,7 +143,7 @@ async fn a_neighbour_by_another_artist_still_reaches_the_same_vibe_shelf(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_track_we_have_never_heard_of_gives_an_empty_page_instead_of_an_error(
     pg: PgPool,

@@ -142,7 +142,7 @@ mod tests {
         assert!(cluster_ids(&json!({"id": "x"})).is_empty());
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn clusters_keep_their_ids_and_gain_urns_and_projected_tracks(
         pool: PgPool,
     ) -> anyhow::Result<()> {
