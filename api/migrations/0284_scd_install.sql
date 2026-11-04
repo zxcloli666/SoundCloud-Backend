@@ -138,6 +138,28 @@ BEGIN
 END
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_keep_trigger(rel text, trig text, replica boolean, ddl text)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_trigger AS t
+        WHERE t.tgrelid = pg_catalog.to_regclass(rel)
+          AND t.tgname = trig
+          AND NOT t.tgisinternal
+          AND t.tgenabled = CASE WHEN replica THEN 'R' ELSE 'O' END
+    ) THEN
+        RETURN;
+    END IF;
+    EXECUTE ddl;
+    IF replica THEN
+        EXECUTE pg_catalog.format('ALTER TABLE %s ENABLE REPLICA TRIGGER %s', rel, trig);
+    END IF;
+END
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_kinds()
 RETURNS TABLE (kind text, optimistic boolean)
 LANGUAGE sql STABLE
@@ -249,8 +271,6 @@ SELECT v.cls FROM (VALUES
     ('playlist_track_projection', 'C'),
     ('playlists', 'C'),
     ('recommendation_quality_models', 'P'),
-    ('remote_grants', 'A'),
-    ('remote_link_codes', 'A'),
     ('repl_checksums', 'K'),
     ('repl_purges', 'X'),
     ('repl_repair', 'X'),
@@ -405,10 +425,6 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlist_track_projection', jsonb_build_object('playlist_urn', t.playlist_urn, 'position', t."position") FROM public.playlist_track_projection t ON CONFLICT DO NOTHING;
         WHEN 'playlists' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlists', jsonb_build_object('urn', t.urn) FROM public.playlists t ON CONFLICT DO NOTHING;
-        WHEN 'remote_grants' THEN
-            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_grants', jsonb_build_object('id', t.id) FROM public.remote_grants t ON CONFLICT DO NOTHING;
-        WHEN 'remote_link_codes' THEN
-            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_link_codes', jsonb_build_object('id', t.id) FROM public.remote_link_codes t ON CONFLICT DO NOTHING;
         WHEN 'repl_checksums' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'repl_checksums', jsonb_build_object('node', t.node, 'tbl', t.tbl, 'range', t.range) FROM public.repl_checksums t ON CONFLICT DO NOTHING;
         WHEN 'repl_tombstones' THEN
@@ -531,8 +547,6 @@ BEGIN
         ('playlist_remote_snapshots', 'C'),
         ('playlist_track_projection', 'C'),
         ('playlists', 'C'),
-        ('remote_grants', 'A'),
-        ('remote_link_codes', 'A'),
         ('repl_checksums', 'K'),
         ('repl_tombstones', 'A'),
         ('sc_egress_health', 'A'),
@@ -594,8 +608,6 @@ VALUES
     ('scd_api_pub', 'api', 'insert, update, delete', 'login_requests', ARRAY['chat_bind', 'code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_app_request_cooldowns', ARRAY['failure_count', 'oauth_app_id', 'retry_at', 'row_v', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_apps', ARRAY['active', 'client_id', 'client_secret', 'created_at', 'id', 'name', 'redirect_uri', 'row_v', 'updated_at']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'provider', 'refresh_expires_at', 'refresh_hash', 'row_v', 'sc_user_id']::text[]),
-    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_checksums', ARRAY['at', 'hash', 'node', 'range', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -657,8 +669,6 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_remote_snapshots', ARRAY['content_fingerprint', 'created_at', 'id', 'playlist_urn', 'track_count']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_track_projection', ARRAY['playlist_urn', 'position', 'sc_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlists', ARRAY['artwork_url', 'created_at', 'deleted_at', 'description', 'duration_ms', 'genre', 'kind', 'label_name', 'last_read_at', 'likes_count_sc', 'owner_sc_user_id', 'owner_urn', 'owner_username', 'permalink_url', 'playlist_type', 'release_date', 'release_year', 'reposts_count_sc', 'sc_created_at', 'sc_desired', 'sc_last_modified', 'sc_metadata', 'sc_mutation_observation', 'sc_observation', 'sc_playlist_id', 'sc_synced_at', 'sc_write_confirmed', 'sharing', 'tags', 'title', 'title_normalized', 'track_count', 'updated_at', 'urn']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'provider', 'refresh_expires_at', 'refresh_hash', 'row_v', 'sc_user_id']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_purges', ARRAY['at', 'pk', 'purged_v', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -737,7 +747,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_catalog_requests FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_catalog_requests', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.admin_catalog_requests', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_catalog_requests FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_catalog_requests', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -781,7 +791,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_maintenance_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_maintenance_runs', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.admin_maintenance_runs', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.admin_maintenance_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_admin_maintenance_runs', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_admin_maintenance_runs()
 RETURNS trigger
@@ -846,11 +856,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.admin_maintenance_runs still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();
-ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.admin_maintenance_runs', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_admin_maintenance_runs();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.admin_maintenance_runs ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.admin_maintenance_runs', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.admin_maintenance_runs FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -894,7 +902,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.ai_resolver_budget FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_ai_resolver_budget', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.ai_resolver_budget', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.ai_resolver_budget FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_ai_resolver_budget', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -938,7 +946,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.ai_resolver_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_ai_resolver_cache', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.ai_resolver_cache', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.ai_resolver_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_ai_resolver_cache', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -982,7 +990,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.album_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_album_artists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.album_artists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.album_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_album_artists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_album_artists()
 RETURNS trigger
@@ -1046,11 +1054,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.album_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();
-ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.album_artists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.album_artists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.album_artists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1094,7 +1100,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.album_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_album_tracks', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.album_tracks', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.album_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_album_tracks', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_album_tracks()
 RETURNS trigger
@@ -1159,11 +1165,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.album_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();
-ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.album_tracks', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.album_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_album_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.album_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.album_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.album_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1211,7 +1215,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_albums', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.albums', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_albums', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_albums()
 RETURNS trigger
@@ -1300,11 +1304,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.albums still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();
-ALTER TABLE public.albums ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.albums', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_albums();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.albums ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.albums', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1348,7 +1350,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_attribution_revalidation FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_attribution_revalidation', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artist_attribution_revalidation', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_attribution_revalidation FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_attribution_revalidation', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artist_attribution_revalidation()
 RETURNS trigger
@@ -1413,11 +1415,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_attribution_revalidation still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();
-ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artist_attribution_revalidation', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_attribution_revalidation();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artist_attribution_revalidation ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artist_attribution_revalidation', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_attribution_revalidation FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1461,7 +1461,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_colike FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_colike', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artist_colike', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_colike FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_colike', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artist_colike()
 RETURNS trigger
@@ -1526,11 +1526,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_colike still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();
-ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artist_colike', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_colike FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_colike();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artist_colike ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artist_colike', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_colike FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1574,7 +1572,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_coplay FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_coplay', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artist_coplay', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_coplay FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_coplay', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artist_coplay()
 RETURNS trigger
@@ -1639,11 +1637,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_coplay still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();
-ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artist_coplay', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_coplay();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artist_coplay ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artist_coplay', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_coplay FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1687,7 +1683,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_sc_accounts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_sc_accounts', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artist_sc_accounts', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_sc_accounts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_sc_accounts', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artist_sc_accounts()
 RETURNS trigger
@@ -1764,11 +1760,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_sc_accounts still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();
-ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artist_sc_accounts', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_sc_accounts();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artist_sc_accounts ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artist_sc_accounts', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_sc_accounts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1812,7 +1806,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_socials FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_socials', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artist_socials', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artist_socials FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artist_socials', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artist_socials()
 RETURNS trigger
@@ -1877,11 +1871,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artist_socials still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();
-ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artist_socials', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artist_socials FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artist_socials();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artist_socials ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artist_socials', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artist_socials FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -1952,9 +1944,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF has_sc_account ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_artists();
+SELECT public.scd_keep_trigger('public.artists', 'zz_core_col', false, $t$CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF has_sc_account ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.artists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_artists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_artists()
 RETURNS trigger
@@ -2114,11 +2106,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();
-ALTER TABLE public.artists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.artists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.artists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.artists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -2162,7 +2152,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.audio_index_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_audio_index_wire_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.audio_index_wire_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.audio_index_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_audio_index_wire_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2206,7 +2196,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_job_enqueues FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_job_enqueues', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.background_job_enqueues', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_job_enqueues FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_job_enqueues', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2250,7 +2240,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_job_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_job_failures', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.background_job_failures', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_job_failures FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_job_failures', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_background_job_failures()
 RETURNS trigger
@@ -2315,11 +2305,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.background_job_failures still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();
-ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.background_job_failures', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_background_job_failures();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.background_job_failures ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.background_job_failures', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.background_job_failures FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -2363,7 +2351,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_jobs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_jobs', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.background_jobs', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_jobs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_jobs', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2407,7 +2395,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_schedules FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_schedules', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.background_schedules', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.background_schedules FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_background_schedules', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2451,7 +2439,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_audience', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_audience FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_audience', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_catalog_audience()
 RETURNS trigger
@@ -2516,11 +2504,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.catalog_audience still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();
-ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.catalog_audience', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_audience();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.catalog_audience ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.catalog_audience', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_audience FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -2564,7 +2550,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_cursors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_cursors', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_collection_cursors', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_cursors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_cursors', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2608,7 +2594,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_seen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_seen', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_collection_seen', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_seen FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_seen', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2654,7 +2640,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_sync', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_collection_sync', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_collection_sync', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_catalog_collection_sync()
 RETURNS trigger
@@ -2719,11 +2705,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.catalog_collection_sync still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();
-ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.catalog_collection_sync', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_catalog_collection_sync();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.catalog_collection_sync ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.catalog_collection_sync', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.catalog_collection_sync FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -2767,7 +2751,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_merge_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_merge_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_merge_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_merge_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_merge_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2811,7 +2795,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_work_links FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_work_links', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.catalog_work_links', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.catalog_work_links FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_catalog_work_links', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -2924,8 +2908,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.cdn_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.cdn_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_cdn_tracks();
-ALTER TABLE public.cdn_tracks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.cdn_tracks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.cdn_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_cdn_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_cdn_tracks()
 RETURNS trigger
@@ -2944,10 +2927,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.cdn_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_cdn_tracks();
+SELECT public.scd_keep_trigger('public.cdn_tracks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.cdn_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_cdn_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.cdn_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.cdn_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.cdn_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.cdn_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -2991,7 +2973,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.cmd_dead FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_cmd_dead', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.cmd_dead', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.cmd_dead FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_cmd_dead', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -3040,11 +3022,9 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_bundles();
-ALTER TABLE public.diag_bundles ENABLE REPLICA TRIGGER zz_skip;
+SELECT public.scd_keep_trigger('public.diag_bundles', 'zz_skip', true, $t$CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_bundles();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.diag_bundles ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.diag_bundles', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_bundles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3093,11 +3073,9 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_events();
-ALTER TABLE public.diag_events ENABLE REPLICA TRIGGER zz_skip;
+SELECT public.scd_keep_trigger('public.diag_events', 'zz_skip', true, $t$CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_events();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.diag_events ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.diag_events', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3183,8 +3161,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.diag_issue_days still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.diag_issue_days FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_diag_issue_days();
-ALTER TABLE public.diag_issue_days ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.diag_issue_days', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.diag_issue_days FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_diag_issue_days();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_diag_issue_days()
 RETURNS trigger
@@ -3203,10 +3180,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.diag_issue_days FOR EACH ROW EXECUTE FUNCTION public.scd_ver_diag_issue_days();
+SELECT public.scd_keep_trigger('public.diag_issue_days', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.diag_issue_days FOR EACH ROW EXECUTE FUNCTION public.scd_ver_diag_issue_days();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_days FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.diag_issue_days ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.diag_issue_days', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_days FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3255,11 +3231,9 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_issue_origins();
-ALTER TABLE public.diag_issue_origins ENABLE REPLICA TRIGGER zz_skip;
+SELECT public.scd_keep_trigger('public.diag_issue_origins', 'zz_skip', true, $t$CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_diag_issue_origins();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.diag_issue_origins ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.diag_issue_origins', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.diag_issue_origins FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3379,8 +3353,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.discover_promoted still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_discover_promoted();
-ALTER TABLE public.discover_promoted ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_discover_promoted();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_discover_promoted()
 RETURNS trigger
@@ -3392,7 +3365,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_discover_promoted();
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_discover_promoted();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_discover_promoted(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -3424,8 +3397,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_discover_promoted();
-ALTER TABLE public.discover_promoted ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_discover_promoted();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_discover_promoted()
 RETURNS trigger
@@ -3446,8 +3418,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_discover_promoted();
-ALTER TABLE public.discover_promoted ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_discover_promoted();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_discover_promoted()
 RETURNS trigger
@@ -3466,10 +3437,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_promoted FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_promoted();
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_promoted FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_promoted();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.discover_promoted ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.discover_promoted', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_promoted FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3553,8 +3523,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.discover_settings still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.discover_settings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_discover_settings();
-ALTER TABLE public.discover_settings ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.discover_settings', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.discover_settings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_discover_settings();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_discover_settings()
 RETURNS trigger
@@ -3573,10 +3542,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_settings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_settings();
+SELECT public.scd_keep_trigger('public.discover_settings', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.discover_settings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_discover_settings();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_settings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.discover_settings ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.discover_settings', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_settings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3620,7 +3588,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.discover_tag_counts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_discover_tag_counts', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.discover_tag_counts', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.discover_tag_counts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_discover_tag_counts', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_discover_tag_counts()
 RETURNS trigger
@@ -3685,11 +3653,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.discover_tag_counts still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();
-ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.discover_tag_counts', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_discover_tag_counts();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.discover_tag_counts ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.discover_tag_counts', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.discover_tag_counts FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3800,8 +3766,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.disliked_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_disliked_tracks();
-ALTER TABLE public.disliked_tracks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_disliked_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_disliked_tracks()
 RETURNS trigger
@@ -3813,7 +3778,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_disliked_tracks();
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_disliked_tracks();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_disliked_tracks(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -3845,8 +3810,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_disliked_tracks();
-ALTER TABLE public.disliked_tracks ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_disliked_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_disliked_tracks()
 RETURNS trigger
@@ -3867,8 +3831,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_disliked_tracks();
-ALTER TABLE public.disliked_tracks ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_disliked_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_disliked_tracks()
 RETURNS trigger
@@ -3887,10 +3850,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.disliked_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_disliked_tracks();
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.disliked_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_disliked_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.disliked_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.disliked_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.disliked_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -3934,7 +3896,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.enrich_calibration FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_enrich_calibration', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.enrich_calibration', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.enrich_calibration FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_enrich_calibration', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -4001,11 +3963,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_entity_reads();
-ALTER TABLE public.entity_reads ENABLE REPLICA TRIGGER zz_max;
+SELECT public.scd_keep_trigger('public.entity_reads', 'zz_max', true, $t$CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_entity_reads();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.entity_reads ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.entity_reads', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.entity_reads FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4096,8 +4056,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.featured_items still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_featured_items();
-ALTER TABLE public.featured_items ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.featured_items', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_featured_items();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_featured_items()
 RETURNS trigger
@@ -4109,7 +4068,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_featured_items();
+SELECT public.scd_keep_trigger('public.featured_items', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_featured_items();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_featured_items(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -4135,8 +4094,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_featured_items();
-ALTER TABLE public.featured_items ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.featured_items', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_featured_items();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_featured_items()
 RETURNS trigger
@@ -4155,10 +4113,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.featured_items FOR EACH ROW EXECUTE FUNCTION public.scd_ver_featured_items();
+SELECT public.scd_keep_trigger('public.featured_items', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.featured_items FOR EACH ROW EXECUTE FUNCTION public.scd_ver_featured_items();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.featured_items ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.featured_items', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.featured_items FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4202,7 +4159,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.job_status FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_job_status', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.job_status', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.job_status FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_job_status', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_job_status()
 RETURNS trigger
@@ -4267,11 +4224,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.job_status still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();
-ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.job_status', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.job_status FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_job_status();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.job_status ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.job_status', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.job_status FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4374,8 +4329,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.link_requests still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_link_requests();
-ALTER TABLE public.link_requests ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.link_requests', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_link_requests();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_link_requests()
 RETURNS trigger
@@ -4387,7 +4341,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_link_requests();
+SELECT public.scd_keep_trigger('public.link_requests', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_link_requests();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_link_requests(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -4413,8 +4367,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_link_requests();
-ALTER TABLE public.link_requests ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.link_requests', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_link_requests();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_link_requests()
 RETURNS trigger
@@ -4439,10 +4392,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.link_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_link_requests();
+SELECT public.scd_keep_trigger('public.link_requests', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.link_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_link_requests();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.link_requests ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.link_requests', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.link_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4497,8 +4449,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_listening_history();
-ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zz_skip;
+SELECT public.scd_keep_trigger('public.listening_history', 'zz_skip', true, $t$CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_listening_history();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_listening_history()
 RETURNS trigger
@@ -4510,7 +4461,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_listening_history();
+SELECT public.scd_keep_trigger('public.listening_history', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_listening_history();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_listening_history(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -4536,11 +4487,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_listening_history();
-ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.listening_history', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_listening_history();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.listening_history ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.listening_history', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.listening_history FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4651,8 +4600,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.login_requests still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_login_requests();
-ALTER TABLE public.login_requests ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.login_requests', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_login_requests();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_login_requests()
 RETURNS trigger
@@ -4664,7 +4612,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_login_requests();
+SELECT public.scd_keep_trigger('public.login_requests', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_login_requests();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_login_requests(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -4690,8 +4638,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_login_requests();
-ALTER TABLE public.login_requests ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.login_requests', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_login_requests();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_login_requests()
 RETURNS trigger
@@ -4710,10 +4657,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.login_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_login_requests();
+SELECT public.scd_keep_trigger('public.login_requests', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.login_requests FOR EACH ROW EXECUTE FUNCTION public.scd_ver_login_requests();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.login_requests ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.login_requests', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.login_requests FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4769,9 +4715,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF fts ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_lyrics_cache();
+SELECT public.scd_keep_trigger('public.lyrics_cache', 'zz_core_col', false, $t$CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF fts ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_lyrics_cache();$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_cache', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.lyrics_cache', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_cache FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_cache', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_lyrics_cache()
 RETURNS trigger
@@ -4859,11 +4805,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.lyrics_cache still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();
-ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.lyrics_cache', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_cache();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.lyrics_cache ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.lyrics_cache', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_cache FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -4907,7 +4851,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_embedding_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_embedding_wire_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.lyrics_embedding_wire_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_embedding_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_embedding_wire_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -4951,7 +4895,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_backfill_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_backfill_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.lyrics_lookup_backfill_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_backfill_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_backfill_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -4995,7 +4939,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_queue', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.lyrics_lookup_queue', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_queue', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -5040,7 +4984,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.lyrics_lookup_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.lyrics_lookup_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_lyrics_lookup_state', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_lyrics_lookup_state()
 RETURNS trigger
@@ -5115,11 +5059,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.lyrics_lookup_state still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();
-ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.lyrics_lookup_state', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_lyrics_lookup_state();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.lyrics_lookup_state ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.lyrics_lookup_state', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.lyrics_lookup_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5201,8 +5143,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.oauth_app_request_cooldowns still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_app_request_cooldowns();
-ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.oauth_app_request_cooldowns', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_app_request_cooldowns();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_orphan_oauth_app_request_cooldowns()
 RETURNS trigger
@@ -5215,8 +5156,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_oauth_app_request_cooldowns();
-ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zz_orphan;
+SELECT public.scd_keep_trigger('public.oauth_app_request_cooldowns', 'zz_orphan', true, $t$CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_oauth_app_request_cooldowns();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_oauth_app_request_cooldowns()
 RETURNS trigger
@@ -5235,10 +5175,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_app_request_cooldowns();
+SELECT public.scd_keep_trigger('public.oauth_app_request_cooldowns', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_app_request_cooldowns();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.oauth_app_request_cooldowns ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.oauth_app_request_cooldowns', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_request_cooldowns FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5282,7 +5221,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_token_issuance_reservations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_token_issuance_reservations', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.oauth_app_token_issuance_reservations', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_token_issuance_reservations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_token_issuance_reservations', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -5326,7 +5265,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_token_refresh_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_token_refresh_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.oauth_app_token_refresh_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_token_refresh_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_token_refresh_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -5370,7 +5309,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_tokens FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_tokens', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.oauth_app_tokens', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.oauth_app_tokens FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_oauth_app_tokens', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_oauth_app_tokens()
 RETURNS trigger
@@ -5435,11 +5374,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.oauth_app_tokens still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();
-ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.oauth_app_tokens', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_oauth_app_tokens();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.oauth_app_tokens ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.oauth_app_tokens', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_app_tokens FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5486,8 +5423,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_oauth_apps();
-ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zz_fk;
+SELECT public.scd_keep_trigger('public.oauth_apps', 'zz_fk', true, $t$CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_oauth_apps();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_oauth_apps()
 RETURNS trigger
@@ -5573,8 +5509,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.oauth_apps still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_apps();
-ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.oauth_apps', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_oauth_apps();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_oauth_apps()
 RETURNS trigger
@@ -5593,10 +5528,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_apps();
+SELECT public.scd_keep_trigger('public.oauth_apps', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.oauth_apps FOR EACH ROW EXECUTE FUNCTION public.scd_ver_oauth_apps();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.oauth_apps ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.oauth_apps', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.oauth_apps FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5640,7 +5574,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.pipeline_event_receipts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_pipeline_event_receipts', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.pipeline_event_receipts', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.pipeline_event_receipts FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_pipeline_event_receipts', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -5684,7 +5618,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_legacy_membership_intents FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_legacy_membership_intents', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_legacy_membership_intents', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_legacy_membership_intents FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_legacy_membership_intents', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_legacy_membership_intents()
 RETURNS trigger
@@ -5759,11 +5693,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_legacy_membership_intents still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();
-ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_legacy_membership_intents', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_legacy_membership_intents();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_legacy_membership_intents ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_legacy_membership_intents', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_legacy_membership_intents FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5807,7 +5739,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_operations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_operations', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_membership_operations', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_operations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_operations', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_membership_operations()
 RETURNS trigger
@@ -5892,11 +5824,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_membership_operations still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();
-ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_membership_operations', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_operations();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_membership_operations ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_membership_operations', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_operations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -5942,7 +5872,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_membership_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_membership_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_membership_state', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_membership_state()
 RETURNS trigger
@@ -6007,11 +5937,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_membership_state still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();
-ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_membership_state', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_membership_state();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_membership_state ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_membership_state', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_membership_state FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -6055,7 +5983,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_reconcile_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_reconcile_runs', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_reconcile_runs', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_reconcile_runs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_reconcile_runs', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -6103,7 +6031,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_observations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_observations', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_remote_observations', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_observations FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_observations', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_remote_observations()
 RETURNS trigger
@@ -6178,11 +6106,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_remote_observations still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();
-ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_remote_observations', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_observations();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_remote_observations ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_remote_observations', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_observations FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -6226,7 +6152,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshot_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshot_tracks', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_remote_snapshot_tracks', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshot_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshot_tracks', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -6273,7 +6199,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshots FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshots', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_remote_snapshots', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_remote_snapshots FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_remote_snapshots', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_remote_snapshots()
 RETURNS trigger
@@ -6358,11 +6284,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_remote_snapshots still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();
-ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_remote_snapshots', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_remote_snapshots();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_remote_snapshots ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_remote_snapshots', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_remote_snapshots FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -6406,7 +6330,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_sweep_cursor FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_sweep_cursor', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_sweep_cursor', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_sweep_cursor FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_sweep_cursor', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -6450,7 +6374,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_track_projection FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_track_projection', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlist_track_projection', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlist_track_projection FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlist_track_projection', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlist_track_projection()
 RETURNS trigger
@@ -6525,11 +6449,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlist_track_projection still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();
-ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlist_track_projection', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlist_track_projection();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlist_track_projection ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlist_track_projection', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlist_track_projection FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -6596,9 +6518,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF last_read_at ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_playlists();
+SELECT public.scd_keep_trigger('public.playlists', 'zz_core_col', false, $t$CREATE OR REPLACE TRIGGER zz_core_col BEFORE UPDATE OF last_read_at ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_core_col_playlists();$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.playlists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_playlists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_playlists()
 RETURNS trigger
@@ -6711,11 +6633,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.playlists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();
-ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.playlists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_playlists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.playlists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.playlists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -6759,329 +6679,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.recommendation_quality_models FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_recommendation_quality_models', 'cmd', 'migration', 'repl');
-COMMIT;
-
-BEGIN;
-SET LOCAL lock_timeout = '5s';
-CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_grants(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.provider, t.refresh_expires_at, t.refresh_hash, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_row_json_remote_grants(k jsonb)
-RETURNS jsonb
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_merge_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    o record;
-    core boolean := public.scd_role() = 'core';
-    n bigint;
-    tv bigint;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
-            NEW.access_expires_at := OLD.access_expires_at;
-            NEW.access_hash := OLD.access_hash;
-            NEW.client_id := OLD.client_id;
-            NEW.code_expires_at := OLD.code_expires_at;
-            NEW.code_hash := OLD.code_hash;
-            NEW.code_redirect_uri := OLD.code_redirect_uri;
-            NEW.created_at := OLD.created_at;
-            NEW.external_id := OLD.external_id;
-            NEW.last_used_at := OLD.last_used_at;
-            NEW.provider := OLD.provider;
-            NEW.refresh_expires_at := OLD.refresh_expires_at;
-            NEW.refresh_hash := OLD.refresh_hash;
-            NEW.sc_user_id := OLD.sc_user_id;
-            NEW.row_v := OLD.row_v;
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        SELECT t.* INTO o FROM public.remote_grants t WHERE t.id = NEW.id;
-        IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
-                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-                UPDATE public.remote_grants t SET
-                    access_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_expires_at ELSE o.access_expires_at END,
-                    access_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_hash ELSE o.access_hash END,
-                    client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
-                    code_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_expires_at ELSE o.code_expires_at END,
-                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
-                    code_redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_redirect_uri ELSE o.code_redirect_uri END,
-                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
-                    external_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.external_id ELSE o.external_id END,
-                    last_used_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_used_at ELSE o.last_used_at END,
-                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
-                    refresh_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_expires_at ELSE o.refresh_expires_at END,
-                    refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_hash ELSE o.refresh_hash END,
-                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
-                    row_v = greatest(o.row_v, NEW.row_v)
-                WHERE t.id = o.id;
-                GET DIAGNOSTICS n = ROW_COUNT;
-                PERFORM pg_catalog.set_config('scd.merging', '', true);
-                IF n = 0 THEN
-                    CONTINUE;
-                END IF;
-            END IF;
-            RETURN NULL;
-        END IF;
-        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
-        IF tv IS NOT NULL THEN
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, provider, refresh_expires_at, refresh_hash, row_v, sc_user_id)
-        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.row_v, NEW.sc_user_id)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.remote_grants still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_grants();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_merge;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('remote_grants', jsonb_build_object('id', OLD.id), OLD.row_v, now());
-    RETURN OLD;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_grants();
-CREATE OR REPLACE FUNCTION public.scd_erase_remote_grants(k jsonb, upto bigint)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-    DELETE FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid;
-    PERFORM pg_catalog.set_config('scd.merging', '', true);
-END
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    tv bigint;
-BEGIN
-    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
-    IF tv IS NOT NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_grants();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_tomb_check;
-
-CREATE OR REPLACE FUNCTION public.scd_ver_remote_grants()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(NEW.row_v);
-        RETURN NEW;
-    END IF;
-    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.sc_user_id) THEN
-        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
-    ELSE
-        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_grants();
-
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zzz_suppress;
-COMMIT;
-
-BEGIN;
-SET LOCAL lock_timeout = '5s';
-CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_link_codes(k jsonb)
-RETURNS text
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT md5(ROW(t.code_hash, t.created_at, t.expires_at, t.id, t.provider, t.row_v, t.sc_user_id)::text) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_row_json_remote_link_codes(k jsonb)
-RETURNS jsonb
-LANGUAGE sql STABLE
-SET timezone TO 'UTC'
-SET extra_float_digits TO 1
-SET datestyle TO 'ISO, YMD'
-SET intervalstyle TO 'postgres'
-SET bytea_output TO 'hex'
-AS $f$
-SELECT pg_catalog.to_jsonb(t) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_merge_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    o record;
-    core boolean := public.scd_role() = 'core';
-    n bigint;
-    tv bigint;
-BEGIN
-    IF current_setting('scd.merging', true) = 'on' THEN
-        RETURN NEW;
-    END IF;
-    IF TG_OP = 'UPDATE' THEN
-        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
-            NEW.code_hash := OLD.code_hash;
-            NEW.created_at := OLD.created_at;
-            NEW.expires_at := OLD.expires_at;
-            NEW.provider := OLD.provider;
-            NEW.sc_user_id := OLD.sc_user_id;
-            NEW.row_v := OLD.row_v;
-        END IF;
-        RETURN NEW;
-    END IF;
-    FOR attempt IN 1..3 LOOP
-        SELECT t.* INTO o FROM public.remote_link_codes t WHERE t.id = NEW.id;
-        IF FOUND THEN
-            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
-                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-                UPDATE public.remote_link_codes t SET
-                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
-                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
-                    expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
-                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
-                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
-                    row_v = greatest(o.row_v, NEW.row_v)
-                WHERE t.id = o.id;
-                GET DIAGNOSTICS n = ROW_COUNT;
-                PERFORM pg_catalog.set_config('scd.merging', '', true);
-                IF n = 0 THEN
-                    CONTINUE;
-                END IF;
-            END IF;
-            RETURN NULL;
-        END IF;
-        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
-        IF tv IS NOT NULL THEN
-            RETURN NULL;
-        END IF;
-        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.remote_link_codes (code_hash, created_at, expires_at, id, provider, row_v, sc_user_id)
-        VALUES (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.id, NEW.provider, NEW.row_v, NEW.sc_user_id)
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS n = ROW_COUNT;
-        PERFORM pg_catalog.set_config('scd.merging', '', true);
-        IF n > 0 THEN
-            RETURN NULL;
-        END IF;
-    END LOOP;
-    RAISE EXCEPTION 'scd: insert into public.remote_link_codes still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_link_codes();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_merge;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
-    VALUES ('remote_link_codes', jsonb_build_object('id', OLD.id), OLD.row_v, now());
-    RETURN OLD;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_link_codes();
-CREATE OR REPLACE FUNCTION public.scd_erase_remote_link_codes(k jsonb, upto bigint)
-RETURNS void
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-    DELETE FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid;
-    PERFORM pg_catalog.set_config('scd.merging', '', true);
-END
-$f$;
-
-CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-DECLARE
-    tv bigint;
-BEGIN
-    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
-    IF tv IS NOT NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_link_codes();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_tomb_check;
-
-CREATE OR REPLACE FUNCTION public.scd_ver_remote_link_codes()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $f$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        NEW.row_v := public.scd_hlc(NEW.row_v);
-        RETURN NEW;
-    END IF;
-    IF (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.provider, NEW.sc_user_id) IS DISTINCT FROM (OLD.code_hash, OLD.created_at, OLD.expires_at, OLD.provider, OLD.sc_user_id) THEN
-        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
-    ELSE
-        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
-    END IF;
-    RETURN NEW;
-END
-$f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_link_codes();
-
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.recommendation_quality_models', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.recommendation_quality_models FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_recommendation_quality_models', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -7148,11 +6746,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_repl_checksums();
-ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zz_max;
+SELECT public.scd_keep_trigger('public.repl_checksums', 'zz_max', true, $t$CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_repl_checksums();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.repl_checksums ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.repl_checksums', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_checksums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7199,10 +6795,6 @@ BEGIN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
-        WHEN 'remote_grants' THEN
-            PERFORM 1 FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
-        WHEN 'remote_link_codes' THEN
-            PERFORM 1 FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'sc_egress_health' THEN
             PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
         WHEN 'sessions' THEN
@@ -7242,10 +6834,6 @@ BEGIN
             PERFORM public.scd_erase_listening_history(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
-        WHEN 'remote_grants' THEN
-            PERFORM public.scd_erase_remote_grants(k, upto);
-        WHEN 'remote_link_codes' THEN
-            PERFORM public.scd_erase_remote_link_codes(k, upto);
         WHEN 'sc_egress_health' THEN
             PERFORM public.scd_erase_sc_egress_health(k, upto);
         WHEN 'sessions' THEN
@@ -7283,8 +6871,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_erase BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_erase_repl_tombstones();
-ALTER TABLE public.repl_tombstones ENABLE REPLICA TRIGGER zz_erase;
+SELECT public.scd_keep_trigger('public.repl_tombstones', 'zz_erase', true, $t$CREATE OR REPLACE TRIGGER zz_erase BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_erase_repl_tombstones();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_repl_tombstones()
 RETURNS trigger
@@ -7299,10 +6886,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW EXECUTE FUNCTION public.scd_ver_repl_tombstones();
+SELECT public.scd_keep_trigger('public.repl_tombstones', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.repl_tombstones FOR EACH ROW EXECUTE FUNCTION public.scd_ver_repl_tombstones();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.repl_tombstones ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.repl_tombstones', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.repl_tombstones FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7391,8 +6977,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.sc_egress_health still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sc_egress_health();
-ALTER TABLE public.sc_egress_health ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sc_egress_health();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_sc_egress_health()
 RETURNS trigger
@@ -7404,7 +6989,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_sc_egress_health();
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_sc_egress_health();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_sc_egress_health(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -7436,8 +7021,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_sc_egress_health();
-ALTER TABLE public.sc_egress_health ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_sc_egress_health();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_sc_egress_health()
 RETURNS trigger
@@ -7458,8 +7042,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_sc_egress_health();
-ALTER TABLE public.sc_egress_health ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_sc_egress_health();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_sc_egress_health()
 RETURNS trigger
@@ -7478,10 +7061,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sc_egress_health FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sc_egress_health();
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sc_egress_health FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sc_egress_health();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.sc_egress_health ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.sc_egress_health', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_egress_health FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7548,11 +7130,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_sc_track_counters();
-ALTER TABLE public.sc_track_counters ENABLE REPLICA TRIGGER zz_max;
+SELECT public.scd_keep_trigger('public.sc_track_counters', 'zz_max', true, $t$CREATE OR REPLACE TRIGGER zz_max BEFORE INSERT OR UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_max_sc_track_counters();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.sc_track_counters ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.sc_track_counters', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sc_track_counters FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7596,7 +7176,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.search_terms FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_search_terms', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.search_terms', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.search_terms FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_search_terms', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_search_terms()
 RETURNS trigger
@@ -7661,11 +7241,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.search_terms still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();
-ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.search_terms', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.search_terms FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_search_terms();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.search_terms ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.search_terms', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.search_terms FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7758,8 +7336,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.sessions still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sessions();
-ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.sessions', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sessions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_orphan_sessions()
 RETURNS trigger
@@ -7772,8 +7349,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF soundcloud_connection_id ON public.sessions FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_sessions();
-ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zz_orphan;
+SELECT public.scd_keep_trigger('public.sessions', 'zz_orphan', true, $t$CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF soundcloud_connection_id ON public.sessions FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_sessions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_sessions()
 RETURNS trigger
@@ -7785,7 +7361,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_sessions();
+SELECT public.scd_keep_trigger('public.sessions', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_sessions();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_sessions(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -7811,8 +7387,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_sessions();
-ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.sessions', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_sessions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_sessions()
 RETURNS trigger
@@ -7837,10 +7412,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sessions();
+SELECT public.scd_keep_trigger('public.sessions', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sessions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sessions();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.sessions ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.sessions', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sessions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -7900,10 +7474,9 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_soundcloud_connections();
-ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_fk;
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_fk', true, $t$CREATE OR REPLACE TRIGGER zz_fk BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_fk_soundcloud_connections();$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, login_v, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_guard_result', false, $t$CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF first_refresh_rejection_at, last_refresh_attempt_at, last_refresh_error, last_refresh_error_kind, last_refresh_success_at, login_v, refresh_failure_count, refresh_generation, refresh_lease_expires_at, refresh_lease_id, refresh_rejection_count, retry_at, updated_at ON public.soundcloud_connections FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_soundcloud_connections', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_soundcloud_connections()
 RETURNS trigger
@@ -8007,8 +7580,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.soundcloud_connections still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_soundcloud_connections();
-ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_soundcloud_connections();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_orphan_soundcloud_connections()
 RETURNS trigger
@@ -8021,8 +7593,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_soundcloud_connections();
-ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_orphan;
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_orphan', true, $t$CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF oauth_app_id ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_soundcloud_connections();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_soundcloud_connections()
 RETURNS trigger
@@ -8040,8 +7611,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_soundcloud_connections();
-ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zz_purge_guard;
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_purge_guard', true, $t$CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_soundcloud_connections();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_soundcloud_connections()
 RETURNS trigger
@@ -8060,10 +7630,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW EXECUTE FUNCTION public.scd_ver_soundcloud_connections();
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.soundcloud_connections FOR EACH ROW EXECUTE FUNCTION public.scd_ver_soundcloud_connections();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.soundcloud_connections ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.soundcloud_connections', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.soundcloud_connections FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -8107,7 +7676,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.star_track_tiers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_star_track_tiers', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.star_track_tiers', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.star_track_tiers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_star_track_tiers', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -8151,7 +7720,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_repairs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_repairs', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.storage_event_repairs', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_repairs FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_repairs', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -8195,7 +7764,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.storage_event_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.storage_event_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_storage_event_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -8239,7 +7808,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.subscription_snapshot_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_subscription_snapshot_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.subscription_snapshot_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.subscription_snapshot_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_subscription_snapshot_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -8326,8 +7895,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.subscriptions still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_subscriptions();
-ALTER TABLE public.subscriptions ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.subscriptions', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_subscriptions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_subscriptions()
 RETURNS trigger
@@ -8339,7 +7907,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_subscriptions();
+SELECT public.scd_keep_trigger('public.subscriptions', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_subscriptions();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_subscriptions(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -8371,8 +7939,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_subscriptions();
-ALTER TABLE public.subscriptions ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.subscriptions', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_subscriptions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_subscriptions()
 RETURNS trigger
@@ -8393,8 +7960,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_subscriptions();
-ALTER TABLE public.subscriptions ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.subscriptions', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_subscriptions();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_subscriptions()
 RETURNS trigger
@@ -8413,10 +7979,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.subscriptions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_subscriptions();
+SELECT public.scd_keep_trigger('public.subscriptions', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.subscriptions FOR EACH ROW EXECUTE FUNCTION public.scd_ver_subscriptions();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.subscriptions ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.subscriptions', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.subscriptions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -8467,9 +8032,9 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF action_type, cancelled, created_at, generation, intent_v, payload, target_urn, user_id ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_sync_queue', 'mirror', 'migration', 'repl', 'api');
+SELECT public.scd_keep_trigger('public.sync_queue', 'zz_guard_intent', false, $t$CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF action_type, cancelled, created_at, generation, intent_v, payload, target_urn, user_id ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_sync_queue', 'mirror', 'migration', 'repl', 'api');$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF dead, exec_generation, failed_at, last_error, lease_generation, lease_id, locked_at, next_run_at, remote_attempted_generation, remote_completed_generation, remote_result, retry_count ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_sync_queue', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.sync_queue', 'zz_guard_result', false, $t$CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF dead, exec_generation, failed_at, last_error, lease_generation, lease_id, locked_at, next_run_at, remote_attempted_generation, remote_completed_generation, remote_result, retry_count ON public.sync_queue FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_sync_queue', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_sync_queue()
 RETURNS trigger
@@ -8601,8 +8166,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.sync_queue still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sync_queue FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sync_queue();
-ALTER TABLE public.sync_queue ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.sync_queue', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.sync_queue FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_sync_queue();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_sync_queue()
 RETURNS trigger
@@ -8620,8 +8184,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.sync_queue FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_sync_queue();
-ALTER TABLE public.sync_queue ENABLE REPLICA TRIGGER zz_purge_guard;
+SELECT public.scd_keep_trigger('public.sync_queue', 'zz_purge_guard', true, $t$CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.sync_queue FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_sync_queue();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_sync_queue()
 RETURNS trigger
@@ -8642,10 +8205,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sync_queue FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sync_queue();
+SELECT public.scd_keep_trigger('public.sync_queue', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.sync_queue FOR EACH ROW EXECUTE FUNCTION public.scd_ver_sync_queue();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.sync_queue ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.sync_queue', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -8689,7 +8251,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.sync_queue_action_pauses FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_sync_queue_action_pauses', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.sync_queue_action_pauses', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.sync_queue_action_pauses FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_sync_queue_action_pauses', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_sync_queue_action_pauses()
 RETURNS trigger
@@ -8754,11 +8316,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.sync_queue_action_pauses still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();
-ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.sync_queue_action_pauses', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_sync_queue_action_pauses();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.sync_queue_action_pauses ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.sync_queue_action_pauses', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.sync_queue_action_pauses FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -8803,7 +8363,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_model_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_model_versions', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.taste_model_versions', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_model_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_model_versions', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_taste_model_versions()
 RETURNS trigger
@@ -8900,11 +8460,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.taste_model_versions still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();
-ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.taste_model_versions', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_taste_model_versions();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.taste_model_versions ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.taste_model_versions', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.taste_model_versions FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -8948,7 +8506,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_schedule FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_schedule', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.taste_schedule', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.taste_schedule FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_taste_schedule', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -9035,8 +8593,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.track_artist_blocks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_track_artist_blocks();
-ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_track_artist_blocks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_orphan_track_artist_blocks()
 RETURNS trigger
@@ -9052,8 +8609,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF artist_id, track_id ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_track_artist_blocks();
-ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_orphan;
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_orphan', true, $t$CREATE OR REPLACE TRIGGER zz_orphan BEFORE INSERT OR UPDATE OF artist_id, track_id ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_role() = 'core' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_orphan_track_artist_blocks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_track_artist_blocks()
 RETURNS trigger
@@ -9065,7 +8621,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_track_artist_blocks();
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_track_artist_blocks();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_track_artist_blocks(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -9097,8 +8653,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_track_artist_blocks();
-ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_track_artist_blocks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_track_artist_blocks()
 RETURNS trigger
@@ -9119,8 +8674,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_track_artist_blocks();
-ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_track_artist_blocks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_track_artist_blocks()
 RETURNS trigger
@@ -9139,10 +8693,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_track_artist_blocks();
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.track_artist_blocks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_track_artist_blocks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.track_artist_blocks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.track_artist_blocks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artist_blocks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9186,7 +8739,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_artists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.track_artists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_artists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_track_artists()
 RETURNS trigger
@@ -9251,11 +8804,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.track_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();
-ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.track_artists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.track_artists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.track_artists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9299,7 +8850,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_comments FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_comments', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.track_comments', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_comments FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_comments', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_track_comments()
 RETURNS trigger
@@ -9374,11 +8925,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.track_comments still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();
-ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.track_comments', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.track_comments FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_track_comments();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.track_comments ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.track_comments', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.track_comments FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9422,7 +8971,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.track_work_aliases', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_track_work_aliases', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -9480,7 +9029,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.tracks', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_tracks', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_tracks()
 RETURNS trigger
@@ -9565,11 +9114,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();
-ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.tracks', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9613,7 +9160,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.transcription_sync_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_transcription_sync_versions', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.transcription_sync_versions', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.transcription_sync_versions FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_transcription_sync_versions', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -9657,7 +9204,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.transcription_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_transcription_wire_state', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.transcription_wire_state', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.transcription_wire_state FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_transcription_wire_state', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -9739,8 +9286,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_auras still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_auras FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_auras();
-ALTER TABLE public.user_auras ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_auras', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_auras FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_auras();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_auras()
 RETURNS trigger
@@ -9759,10 +9305,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_auras FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_auras();
+SELECT public.scd_keep_trigger('public.user_auras', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_auras FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_auras();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_auras FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_auras ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_auras', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_auras FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9853,8 +9398,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_blocked_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_blocked_artists();
-ALTER TABLE public.user_blocked_artists ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_blocked_artists();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_user_blocked_artists()
 RETURNS trigger
@@ -9866,7 +9410,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_blocked_artists();
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_blocked_artists();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_user_blocked_artists(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -9898,8 +9442,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_blocked_artists();
-ALTER TABLE public.user_blocked_artists ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_blocked_artists();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_user_blocked_artists()
 RETURNS trigger
@@ -9920,8 +9463,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_blocked_artists();
-ALTER TABLE public.user_blocked_artists ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_blocked_artists();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_blocked_artists()
 RETURNS trigger
@@ -9940,10 +9482,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_blocked_artists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_blocked_artists();
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_blocked_artists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_blocked_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_blocked_artists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_blocked_artists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_blocked_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -9987,7 +9528,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_collection_sync', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_collection_sync', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_collection_sync FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_collection_sync', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -10047,11 +9588,9 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT OR UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_user_events();
-ALTER TABLE public.user_events ENABLE REPLICA TRIGGER zz_skip;
+SELECT public.scd_keep_trigger('public.user_events', 'zz_skip', true, $t$CREATE OR REPLACE TRIGGER zz_skip BEFORE INSERT OR UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_skip_user_events();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_events ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_events', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_events FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10095,7 +9634,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_followers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_followers', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_followers', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_followers FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_followers', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_followers()
 RETURNS trigger
@@ -10160,11 +9699,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_followers still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();
-ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_followers', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_followers FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_followers();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_followers ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_followers', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followers FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10215,9 +9752,9 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_followings', 'mirror', 'migration', 'repl', 'api');
+SELECT public.scd_keep_trigger('public.user_followings', 'zz_guard_intent', false, $t$CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_followings', 'mirror', 'migration', 'repl', 'api');$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_followings', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_followings', 'zz_guard_result', false, $t$CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_followings FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_followings', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_followings()
 RETURNS trigger
@@ -10284,8 +9821,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_followings still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_followings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_followings();
-ALTER TABLE public.user_followings ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_followings', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_followings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_followings();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_user_followings()
 RETURNS trigger
@@ -10303,8 +9839,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_followings FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_followings();
-ALTER TABLE public.user_followings ENABLE REPLICA TRIGGER zz_purge_guard;
+SELECT public.scd_keep_trigger('public.user_followings', 'zz_purge_guard', true, $t$CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_followings FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_followings();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_followings()
 RETURNS trigger
@@ -10325,10 +9860,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_followings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_followings();
+SELECT public.scd_keep_trigger('public.user_followings', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_followings FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_followings();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_followings ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_followings', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_followings FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10415,8 +9949,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_like_ranks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_like_ranks();
-ALTER TABLE public.user_like_ranks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_like_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_user_like_ranks()
 RETURNS trigger
@@ -10428,7 +9961,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_like_ranks();
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_like_ranks();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_user_like_ranks(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -10460,8 +9993,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_like_ranks();
-ALTER TABLE public.user_like_ranks ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_like_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_user_like_ranks()
 RETURNS trigger
@@ -10482,8 +10014,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_like_ranks();
-ALTER TABLE public.user_like_ranks ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_like_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_like_ranks()
 RETURNS trigger
@@ -10502,10 +10033,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_like_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_like_ranks();
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_like_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_like_ranks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_like_ranks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_like_ranks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_like_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10556,9 +10086,9 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_playlists', 'mirror', 'migration', 'repl', 'api');
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zz_guard_intent', false, $t$CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_playlists', 'mirror', 'migration', 'repl', 'api');$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_playlists', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zz_guard_result', false, $t$CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF progress, synced_at, synced_for_v ON public.user_likes_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_playlists', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_likes_playlists()
 RETURNS trigger
@@ -10625,8 +10155,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_likes_playlists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_likes_playlists();
-ALTER TABLE public.user_likes_playlists ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_likes_playlists();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_user_likes_playlists()
 RETURNS trigger
@@ -10644,8 +10173,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_likes_playlists();
-ALTER TABLE public.user_likes_playlists ENABLE REPLICA TRIGGER zz_purge_guard;
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zz_purge_guard', true, $t$CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_likes_playlists();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_likes_playlists()
 RETURNS trigger
@@ -10666,10 +10194,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_playlists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_playlists();
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_playlists FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_playlists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_likes_playlists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_likes_playlists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10720,9 +10247,9 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_tracks', 'mirror', 'migration', 'repl', 'api');
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zz_guard_intent', false, $t$CREATE OR REPLACE TRIGGER zz_guard_intent BEFORE INSERT OR UPDATE OF created_at, wanted_state, wanted_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'core') EXECUTE FUNCTION public.scd_guard('public.scd_guard_intent_user_likes_tracks', 'mirror', 'migration', 'repl', 'api');$t$);
 
-CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF liked_at, progress, synced_at, synced_for_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_tracks', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zz_guard_result', false, $t$CREATE OR REPLACE TRIGGER zz_guard_result BEFORE UPDATE OF liked_at, progress, synced_at, synced_for_v ON public.user_likes_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_result_user_likes_tracks', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_merge_user_likes_tracks()
 RETURNS trigger
@@ -10791,8 +10318,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_likes_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_likes_tracks();
-ALTER TABLE public.user_likes_tracks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_likes_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_purge_guard_user_likes_tracks()
 RETURNS trigger
@@ -10810,8 +10336,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_likes_tracks();
-ALTER TABLE public.user_likes_tracks ENABLE REPLICA TRIGGER zz_purge_guard;
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zz_purge_guard', true, $t$CREATE OR REPLACE TRIGGER zz_purge_guard BEFORE DELETE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_purge_guard_user_likes_tracks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_likes_tracks()
 RETURNS trigger
@@ -10832,10 +10357,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_tracks();
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_likes_tracks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_likes_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_likes_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_likes_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_likes_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10879,7 +10403,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_playlists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_owned_playlists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_playlists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_playlists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_owned_playlists()
 RETURNS trigger
@@ -10944,11 +10468,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_owned_playlists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();
-ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_owned_playlists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_playlists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_owned_playlists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_owned_playlists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_playlists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -10992,7 +10514,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_tracks', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_owned_tracks', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_owned_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_owned_tracks', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_owned_tracks()
 RETURNS trigger
@@ -11057,11 +10579,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_owned_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();
-ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_owned_tracks', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_owned_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_owned_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_owned_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_owned_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11105,7 +10625,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_profiles', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_profiles', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_profiles', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_profiles()
 RETURNS trigger
@@ -11170,11 +10690,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_profiles still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();
-ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_profiles', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_profiles();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_profiles ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_profiles', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11261,8 +10779,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_superlike_ranks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_superlike_ranks();
-ALTER TABLE public.user_superlike_ranks ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_superlike_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_user_superlike_ranks()
 RETURNS trigger
@@ -11274,7 +10791,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_superlike_ranks();
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_superlike_ranks();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_user_superlike_ranks(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -11306,8 +10823,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_superlike_ranks();
-ALTER TABLE public.user_superlike_ranks ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_superlike_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_user_superlike_ranks()
 RETURNS trigger
@@ -11328,8 +10844,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_superlike_ranks();
-ALTER TABLE public.user_superlike_ranks ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_superlike_ranks();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_superlike_ranks()
 RETURNS trigger
@@ -11348,10 +10863,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlike_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlike_ranks();
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlike_ranks FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlike_ranks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_superlike_ranks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_superlike_ranks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlike_ranks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11438,8 +10952,7 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_superlikes still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_superlikes();
-ALTER TABLE public.user_superlikes ENABLE REPLICA TRIGGER zz_merge;
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zz_merge', true, $t$CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_user_superlikes();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_user_superlikes()
 RETURNS trigger
@@ -11451,7 +10964,7 @@ BEGIN
     RETURN OLD;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_superlikes();
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zz_tomb', false, $t$CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_user_superlikes();$t$);
 CREATE OR REPLACE FUNCTION public.scd_erase_user_superlikes(k jsonb, upto bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -11483,8 +10996,7 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_superlikes();
-ALTER TABLE public.user_superlikes ENABLE REPLICA TRIGGER zz_tomb_check;
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zz_tomb_check', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_user_superlikes();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_tomb_guard_user_superlikes()
 RETURNS trigger
@@ -11505,8 +11017,7 @@ BEGIN
     RETURN NULL;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_superlikes();
-ALTER TABLE public.user_superlikes ENABLE REPLICA TRIGGER zz_tomb_guard;
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zz_tomb_guard', true, $t$CREATE OR REPLACE TRIGGER zz_tomb_guard BEFORE DELETE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_guard_user_superlikes();$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_ver_user_superlikes()
 RETURNS trigger
@@ -11525,10 +11036,9 @@ BEGIN
     RETURN NEW;
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlikes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlikes();
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zz_ver', false, $t$CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.user_superlikes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_user_superlikes();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_superlikes ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_superlikes', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_superlikes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11572,7 +11082,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_taste_vectors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_taste_vectors', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_taste_vectors', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_taste_vectors FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_taste_vectors', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_taste_vectors()
 RETURNS trigger
@@ -11637,11 +11147,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_taste_vectors still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();
-ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_taste_vectors', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_taste_vectors();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_taste_vectors ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_taste_vectors', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_taste_vectors FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11685,7 +11193,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_web_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_web_profiles', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.user_web_profiles', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.user_web_profiles FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_user_web_profiles', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_user_web_profiles()
 RETURNS trigger
@@ -11750,11 +11258,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.user_web_profiles still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();
-ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.user_web_profiles', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_user_web_profiles();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.user_web_profiles ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.user_web_profiles', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.user_web_profiles FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11798,7 +11304,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.users FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_users', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.users', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.users FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_users', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_users()
 RETURNS trigger
@@ -11873,11 +11379,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.users still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();
-ALTER TABLE public.users ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.users', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.users FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_users();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.users ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.users', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.users FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -11921,7 +11425,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_albums', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.wanted_track_albums', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_albums FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_albums', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_wanted_track_albums()
 RETURNS trigger
@@ -11986,11 +11490,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_track_albums still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();
-ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.wanted_track_albums', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_albums();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.wanted_track_albums ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.wanted_track_albums', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_albums FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -12034,7 +11536,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_artists', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.wanted_track_artists', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_artists FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_artists', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_wanted_track_artists()
 RETURNS trigger
@@ -12099,11 +11601,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_track_artists still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();
-ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.wanted_track_artists', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_track_artists();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.wanted_track_artists ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.wanted_track_artists', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_track_artists FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -12147,7 +11647,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_work_aliases', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.wanted_track_work_aliases', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_track_work_aliases FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_track_work_aliases', 'cmd', 'migration', 'repl');$t$);
 COMMIT;
 
 BEGIN;
@@ -12195,7 +11695,7 @@ BEGIN
 END
 $f$;
 
-CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_tracks', 'cmd', 'migration', 'repl');
+SELECT public.scd_keep_trigger('public.wanted_tracks', 'zz_guard', false, $t$CREATE OR REPLACE TRIGGER zz_guard BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON public.wanted_tracks FOR EACH STATEMENT WHEN (public.scd_role() = 'api') EXECUTE FUNCTION public.scd_guard('public.scd_guard_wanted_tracks', 'cmd', 'migration', 'repl');$t$);
 
 CREATE OR REPLACE FUNCTION public.scd_owner_wanted_tracks()
 RETURNS trigger
@@ -12284,11 +11784,9 @@ BEGIN
     RAISE EXCEPTION 'scd: insert into public.wanted_tracks still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
 END
 $f$;
-CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();
-ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zz_owner;
+SELECT public.scd_keep_trigger('public.wanted_tracks', 'zz_owner', true, $t$CREATE OR REPLACE TRIGGER zz_owner BEFORE INSERT OR UPDATE OR DELETE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_role() = 'api' AND public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_owner_wanted_tracks();$t$);
 
-CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
-ALTER TABLE public.wanted_tracks ENABLE REPLICA TRIGGER zzz_suppress;
+SELECT public.scd_keep_trigger('public.wanted_tracks', 'zzz_suppress', true, $t$CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.wanted_tracks FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();$t$);
 COMMIT;
 
 BEGIN;
@@ -12425,10 +11923,6 @@ BEGIN
             RETURN public.scd_row_hash_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_hash_recommendation_quality_models(k);
-        WHEN 'remote_grants' THEN
-            RETURN public.scd_row_hash_remote_grants(k);
-        WHEN 'remote_link_codes' THEN
-            RETURN public.scd_row_hash_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_hash_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -12655,10 +12149,6 @@ BEGIN
             RETURN public.scd_row_json_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_json_recommendation_quality_models(k);
-        WHEN 'remote_grants' THEN
-            RETURN public.scd_row_json_remote_grants(k);
-        WHEN 'remote_link_codes' THEN
-            RETURN public.scd_row_json_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_json_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -13229,16 +12719,6 @@ BEGIN
             ('playlists', 'zz_owner'),
             ('playlists', 'zzz_suppress'),
             ('recommendation_quality_models', 'zz_guard'),
-            ('remote_grants', 'zz_merge'),
-            ('remote_grants', 'zz_tomb'),
-            ('remote_grants', 'zz_tomb_check'),
-            ('remote_grants', 'zz_ver'),
-            ('remote_grants', 'zzz_suppress'),
-            ('remote_link_codes', 'zz_merge'),
-            ('remote_link_codes', 'zz_tomb'),
-            ('remote_link_codes', 'zz_tomb_check'),
-            ('remote_link_codes', 'zz_ver'),
-            ('remote_link_codes', 'zzz_suppress'),
             ('repl_checksums', 'zz_max'),
             ('repl_checksums', 'zzz_suppress'),
             ('repl_tombstones', 'zz_erase'),
