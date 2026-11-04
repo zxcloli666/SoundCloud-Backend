@@ -181,6 +181,48 @@ impl S3Backend {
         .await
     }
 
+    pub async fn stream_range(
+        &self,
+        key: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<(ObjectInfo, ByteStream), BackendError> {
+        super::s3_trace::s3("get_range", async {
+            let out = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .range(format!("bytes={start}-{end}"))
+                .send()
+                .await
+                .map_err(|err| {
+                    let service_err = err.into_service_error();
+                    if service_err.is_no_such_key() {
+                        BackendError::NotFound
+                    } else {
+                        BackendError::Other(format!("get_object {key}: {service_err}"))
+                    }
+                })?;
+
+            let size = out.content_length().unwrap_or(0) as u64;
+            super::s3_trace::bytes(size);
+            let content_type = out
+                .content_type()
+                .map(|s| s.to_string())
+                .or_else(|| Some(super::content_type_for(key).to_string()));
+
+            let reader = out.body.into_async_read();
+            let stream = ReaderStream::new(reader);
+
+            Ok((
+                ObjectInfo { size, content_type },
+                Box::pin(stream) as ByteStream,
+            ))
+        })
+        .await
+    }
+
     pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<String, BackendError> {
         let cfg = PresigningConfig::expires_in(expires)
             .map_err(|e| BackendError::Other(format!("presign config: {e}")))?;

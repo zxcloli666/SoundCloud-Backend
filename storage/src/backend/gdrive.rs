@@ -3,11 +3,11 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use wreq::{Client, StatusCode as HttpStatus};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::info;
+use wreq::{Client, StatusCode as HttpStatus};
 
 use super::{BackendError, ByteStream, ObjectInfo};
 use crate::config::{GdriveAuth, GdriveConfig};
@@ -202,6 +202,54 @@ impl GdriveBackend {
         }
         let info = ObjectInfo {
             size: parse_size(file.size.as_deref()),
+            content_type: file
+                .mime_type
+                .clone()
+                .or_else(|| Some(super::content_type_for(key).to_string())),
+        };
+        let stream = resp
+            .bytes_stream()
+            .map(|r| r.map_err(std::io::Error::other));
+        Ok((info, Box::pin(stream)))
+    }
+
+    pub async fn stream_range(
+        &self,
+        key: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<(ObjectInfo, ByteStream), BackendError> {
+        let Some(file) = self.find_in_folder(&self.cfg.root_folder_id, key).await? else {
+            return Err(BackendError::NotFound);
+        };
+        let token = self.access_token().await?;
+        let resp = self
+            .http
+            .get(format!(
+                "{DRIVE_API}/files/{}?alt=media&supportsAllDrives=true",
+                file.id
+            ))
+            .bearer_auth(&token)
+            .header("Range", format!("bytes={start}-{end}"))
+            .send()
+            .await
+            .map_err(http_err)?;
+        if resp.status() == HttpStatus::NOT_FOUND {
+            return Err(BackendError::NotFound);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(BackendError::Other(format!("download {key}: {s}: {body}")));
+        }
+        if resp.status() != HttpStatus::PARTIAL_CONTENT {
+            return Err(BackendError::Other(format!(
+                "download {key}: range ignored, got {}",
+                resp.status()
+            )));
+        }
+        let info = ObjectInfo {
+            size: end - start + 1,
             content_type: file
                 .mime_type
                 .clone()
