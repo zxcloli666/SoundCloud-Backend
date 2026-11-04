@@ -52,7 +52,7 @@ impl LinksService {
         provider: LinkProvider,
     ) -> AppResult<LinkCodeResponse> {
         sqlx::query_file!(
-            "queries/remote/delete_stale_codes.sql",
+            "queries/remote/delete_previous_codes.sql",
             user,
             provider.as_str()
         )
@@ -116,9 +116,6 @@ impl LinksService {
         client_id: &str,
         redirect_uri: &str,
     ) -> AppResult<String> {
-        sqlx::query_file!("queries/remote/delete_stale_auth_codes.sql")
-            .execute(&self.pg)
-            .await?;
         let code = random_token();
         sqlx::query_file!(
             "queries/remote/insert_auth_code.sql",
@@ -155,11 +152,21 @@ impl LinksService {
         )
         .fetch_optional(&self.pg)
         .await?;
-        Ok(row.map(|_| IssuedTokens {
-            access_token,
-            refresh_token,
-            expires_in: ACCESS_TTL_SECS,
-        }))
+        if row.is_some() {
+            return Ok(Some(IssuedTokens {
+                access_token,
+                refresh_token,
+                expires_in: ACCESS_TTL_SECS,
+            }));
+        }
+        if let Some(revoked) =
+            sqlx::query_file!("queries/remote/revoke_redeemed_code.sql", token_hash(code))
+                .fetch_optional(&self.pg)
+                .await?
+        {
+            tracing::warn!(grant = %revoked.id, "an auth code was redeemed again, the grant is revoked");
+        }
+        Ok(None)
     }
 
     pub async fn rotate_refresh(

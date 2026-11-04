@@ -468,10 +468,6 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
             .await?;
     assert_ne!(stored, tokens["access_token"].as_str().unwrap_or_default());
 
-    let replay = token_call(&app, &exchange).await?;
-    assert_eq!(replay.status, StatusCode::BAD_REQUEST);
-    assert_eq!(replay.json()["error"], "invalid_grant");
-
     let old_refresh = tokens["refresh_token"]
         .as_str()
         .unwrap_or_default()
@@ -540,6 +536,66 @@ async fn the_link_page_and_the_token_endpoint_follow_the_code_flow(
     )
     .await?;
     assert_eq!(current.status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn a_code_redeemed_twice_revokes_the_grant_and_its_tokens(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let code = new_code(&app, session, "alice").await?;
+    let auth_code = auth_code_of(&authorize(&app, &code, "st").await?);
+    confirmer.abort();
+    let exchange = [
+        ("grant_type", "authorization_code"),
+        ("code", auth_code.as_str()),
+        ("redirect_uri", REDIRECT),
+        ("client_id", "yandex"),
+        ("client_secret", "s3cret"),
+    ];
+    let issued = token_call(&app, &exchange).await?;
+    assert_eq!(issued.status, StatusCode::OK, "{}", issued.text());
+    let tokens = issued.json();
+    let access = tokens["access_token"].as_str().unwrap_or_default();
+    let refresh = tokens["refresh_token"].as_str().unwrap_or_default();
+    let known = alice_call(&app, Some(access), alice_body("пауза", true))
+        .await?
+        .json();
+    assert!(
+        known["response"]["directives"]["start_account_linking"].is_null(),
+        "{known}"
+    );
+
+    let replay = token_call(&app, &exchange).await?;
+    assert_eq!(replay.status, StatusCode::BAD_REQUEST);
+    assert_eq!(replay.json()["error"], "invalid_grant");
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM remote_grants")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(left, 0, "the grant the code issued is gone");
+
+    let refreshed = token_call(
+        &app,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+            ("client_id", "yandex"),
+            ("client_secret", "s3cret"),
+        ],
+    )
+    .await?;
+    assert_eq!(refreshed.status, StatusCode::BAD_REQUEST);
+    assert_eq!(refreshed.json()["error"], "invalid_grant");
+    let after = alice_call(&app, Some(access), alice_body("пауза", true))
+        .await?
+        .json();
+    assert!(after["response"]["directives"]["start_account_linking"].is_object());
+    let again = token_call(&app, &exchange).await?;
+    assert_eq!(again.status, StatusCode::BAD_REQUEST);
     Ok(())
 }
 
