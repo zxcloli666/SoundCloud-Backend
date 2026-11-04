@@ -38,6 +38,17 @@ async fn waiting_on_lexicon(pool: &PgPool) -> anyhow::Result<i64> {
     .await?)
 }
 
+async fn until_waiting_on_lexicon(pool: &PgPool, expected: i64) -> anyhow::Result<i64> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting = waiting_on_lexicon(pool).await?;
+        if waiting >= expected || tokio::time::Instant::now() > deadline {
+            return Ok(waiting);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn uncached(pool: &PgPool, q: &str, shape: Shape) -> anyhow::Result<Vec<TermRow>> {
     let cap = match shape {
         Shape::Lyrics => 8,
@@ -71,7 +82,8 @@ async fn concurrent_identical_searches_make_one_lexicon_call(small: PgPool) -> a
             })
         })
         .collect();
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    until_waiting_on_lexicon(&pool, 1).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let waiting = waiting_on_lexicon(&pool).await?;
     blocker.rollback().await?;
 
@@ -99,8 +111,7 @@ async fn without_the_cache_every_search_calls_the_lexicon(small: PgPool) -> anyh
             tokio::spawn(async move { uncached(&pool, QUERY, Shape::Tracks).await })
         })
         .collect();
-    tokio::time::sleep(Duration::from_millis(700)).await;
-    let waiting = waiting_on_lexicon(&pool).await?;
+    let waiting = until_waiting_on_lexicon(&pool, WAITERS as i64).await?;
     blocker.rollback().await?;
     for call in calls {
         call.await??;
