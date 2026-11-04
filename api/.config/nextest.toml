@@ -11,3 +11,7 @@ serial = { max-threads = 1 }
 [[profile.ci.overrides]]
 filter = 'test(/qdrant_io::live_tests/)'
 test-group = "serial"
+
+[[profile.ci.overrides]]
+filter = 'test(/_stays_fast$/)'
+threads-required = "num-test-threads"

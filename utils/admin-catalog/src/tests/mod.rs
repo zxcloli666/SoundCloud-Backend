@@ -1,3 +1,5 @@
+pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../api/migrations");
+
 mod account_edits;
 mod artist_edits;
 mod credit_edits;

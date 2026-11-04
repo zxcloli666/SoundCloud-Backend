@@ -195,8 +195,8 @@ jobs:
       packages: write
     env:
       QDRANT_URL: http://127.0.0.1:6334
-      TARGETS: backend-contracts/target jobs/target
-      TARGET_KEY: backend-contracts/Cargo.lock jobs/Cargo.lock scripts/ci-sqlx-template.patch
+      TARGETS: backend-contracts/target jobs/target utils/admin-catalog/target
+      TARGET_KEY: backend-contracts/Cargo.lock jobs/Cargo.lock utils/admin-catalog/Cargo.lock scripts/ci-sqlx-template.patch
     steps:
       - uses: actions/checkout@v7
 
@@ -223,6 +223,7 @@ jobs:
         run: |
           cargo fetch --locked --manifest-path backend-contracts/Cargo.toml
           cargo fetch --locked --manifest-path jobs/Cargo.toml
+          cargo fetch --locked --manifest-path utils/admin-catalog/Cargo.toml
           sh scripts/ci-sqlx-template.sh jobs
 
       - name: System packages
@@ -243,6 +244,10 @@ jobs:
       - name: Live vector store
         working-directory: jobs
         run: cargo nextest run --profile ci --config "$RUNNER_TEMP/sqlx-template.toml" --lib --run-ignored only --no-tests warn -E 'test(~indexing::result::live_tests)'
+
+      - name: Admin catalog
+        working-directory: utils/admin-catalog
+        run: cargo nextest run --config "$RUNNER_TEMP/sqlx-template.toml" --all-targets
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'

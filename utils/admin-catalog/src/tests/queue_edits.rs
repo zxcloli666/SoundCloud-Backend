@@ -25,7 +25,7 @@ async fn wanted_state(pool: &PgPool, id: Uuid) -> (String, Option<Uuid>) {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_wanted_track_links_to_the_indexed_track(pool: PgPool) {
     let wanted = wanted(&pool).await;
     let track = track(&pool, None).await;
@@ -45,7 +45,7 @@ async fn a_wanted_track_links_to_the_indexed_track(pool: PgPool) {
     assert_eq!(wanted_state(&pool, wanted).await.1, Some(track));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn linking_to_a_track_that_does_not_exist_leaves_the_wanted_track_alone(pool: PgPool) {
     let wanted = wanted(&pool).await;
 
@@ -67,7 +67,7 @@ async fn linking_to_a_track_that_does_not_exist_leaves_the_wanted_track_alone(po
     );
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_wanted_status_is_checked_against_the_allowed_set(pool: PgPool) {
     let wanted = wanted(&pool).await;
     let set = |status: &str| AdminCommand::WantedSetStatus {
@@ -93,7 +93,7 @@ async fn a_wanted_status_is_checked_against_the_allowed_set(pool: PgPool) {
     assert_eq!(missing.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn abandoning_a_legacy_intent_wakes_the_playlist_once(pool: PgPool) {
     let urn = "soundcloud:playlists:77";
     sqlx::query(
@@ -156,7 +156,7 @@ async fn abandoning_a_legacy_intent_wakes_the_playlist_once(pool: PgPool) {
     assert_eq!(again.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_enrich_retry_resets_one_track_or_every_failed_track(pool: PgPool) {
     let single = track(&pool, None).await;
     let failed = track(&pool, None).await;
@@ -208,7 +208,7 @@ async fn an_enrich_retry_resets_one_track_or_every_failed_track(pool: PgPool) {
     assert_eq!(state(healthy).await, (Some("done".to_owned()), 4));
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn an_enrich_retry_refuses_a_malformed_track_id(pool: PgPool) {
     let reply = send(
         &pool,
