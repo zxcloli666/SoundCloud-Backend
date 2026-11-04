@@ -52,7 +52,7 @@ impl VoiceCfg {
             skill_name,
             alice_skill_id: env_str("VOICE_ALICE_SKILL_ID", ""),
             salut_token: env_str("VOICE_SALUT_TOKEN", "").into(),
-            alice_wait: Duration::from_millis(env_u64("VOICE_ALICE_WAIT_MS", 2600)),
+            alice_wait: Duration::from_millis(env_u64("VOICE_ALICE_WAIT_MS", 4000)),
             salut_wait: Duration::from_millis(env_u64("VOICE_SALUT_WAIT_MS", 5500)),
             oauth_clients,
             enabled,
