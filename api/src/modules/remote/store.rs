@@ -80,6 +80,18 @@ fn failed(what: &str, error: impl Error) -> StoreError {
     }
 }
 
+async fn in_budget<F: Future>(what: &str, request: F) -> StoreResult<F::Output> {
+    tokio::time::timeout(REQUEST_BUDGET, request)
+        .await
+        .map_err(|_| StoreError {
+            missing: false,
+            message: format!(
+                "remote {what}: no answer in {} ms",
+                REQUEST_BUDGET.as_millis()
+            ),
+        })
+}
+
 pub fn commands_stream(prefix: &str) -> String {
     format!("{prefix}_commands")
 }
@@ -96,7 +108,7 @@ struct Bucket {
 }
 
 async fn bucket(js: &Context, spec: Bucket) -> StoreResult<kv::Store> {
-    js.create_or_update_key_value(kv::Config {
+    let created = js.create_or_update_key_value(kv::Config {
         bucket: spec.name,
         history: 1,
         max_age: spec.max_age,
@@ -104,16 +116,17 @@ async fn bucket(js: &Context, spec: Bucket) -> StoreResult<kv::Store> {
         max_value_size: spec.max_value_size,
         storage: StorageType::File,
         ..Default::default()
-    })
-    .await
-    .map_err(|error| failed("bucket", error))
+    });
+    in_budget("bucket", created)
+        .await?
+        .map_err(|error| failed("bucket", error))
 }
 
 impl Store {
     pub async fn open(nats: &NatsService, prefix: &str) -> StoreResult<Self> {
         let mut js = nats.jetstream().clone();
         js.set_timeout(REQUEST_BUDGET);
-        js.create_or_update_stream(stream::Config {
+        let created = js.create_or_update_stream(stream::Config {
             name: commands_stream(prefix),
             subjects: vec![format!("{prefix}.cmd.*")],
             max_age: COMMANDS_AGE,
@@ -125,12 +138,12 @@ impl Store {
             allow_direct: true,
             storage: StorageType::File,
             ..Default::default()
-        })
-        .await
-        .map_err(|error| failed("commands stream", error))?;
-        let commands = js
-            .get_stream(commands_stream(prefix))
-            .await
+        });
+        in_budget("commands stream", created)
+            .await?
+            .map_err(|error| failed("commands stream", error))?;
+        let commands = in_budget("commands stream", js.get_stream(commands_stream(prefix)))
+            .await?
             .map_err(|error| failed("commands stream", error))?;
         let replies = bucket(
             &js,
@@ -202,19 +215,19 @@ impl Store {
     }
 
     pub async fn last_seq(&self) -> StoreResult<u64> {
-        let info = self
-            .commands
-            .get_info()
-            .await
+        let info = in_budget("commands info", self.commands.get_info())
+            .await?
             .map_err(|error| failed("commands info", error))?;
         Ok(info.state.last_sequence)
     }
 
     pub async fn next_after(&self, user: &str, seq: u64) -> StoreResult<Option<Stored>> {
-        let read = self
-            .commands
-            .direct_get_next_for_subject(self.command_subject(user), Some(seq + 1))
-            .await;
+        let read = in_budget(
+            "command read",
+            self.commands
+                .direct_get_next_for_subject(self.command_subject(user), Some(seq + 1)),
+        )
+        .await?;
         match read {
             Ok(message) => {
                 let command = serde_json::from_slice::<RemoteCommand>(&message.payload)
@@ -254,13 +267,11 @@ impl Store {
             serde_json::to_vec(envelope).map_err(|error| failed("reply encode", error))?,
         );
         let key = Self::command_key(&envelope.user, envelope.reply.id);
-        let first = match self.replies.create(&key, body.clone()).await {
+        let first = match in_budget("reply store", self.replies.create(&key, body.clone())).await? {
             Ok(_) => body,
             Err(error) if error.kind() == CreateErrorKind::AlreadyExists => {
-                match self
-                    .replies
-                    .get(&key)
-                    .await
+                match in_budget("reply read", self.replies.get(&key))
+                    .await?
                     .map_err(|error| failed("reply read", error))?
                 {
                     Some(stored) => stored,
@@ -277,10 +288,8 @@ impl Store {
     }
 
     pub async fn reply_for(&self, user: &str, id: Uuid) -> StoreResult<Option<ReplyEnvelope>> {
-        let stored = self
-            .replies
-            .get(Self::command_key(user, id))
-            .await
+        let stored = in_budget("reply read", self.replies.get(Self::command_key(user, id)))
+            .await?
             .map_err(|error| failed("reply read", error))?;
         Ok(stored
             .and_then(|body| serde_json::from_slice::<ReplyEnvelope>(&body).ok())
@@ -290,13 +299,11 @@ impl Store {
     pub async fn claim(&self, user: &str, id: Uuid, device: &str) -> StoreResult<bool> {
         let key = Self::command_key(user, id);
         let mine = Bytes::copy_from_slice(device.as_bytes());
-        match self.claims.create(&key, mine.clone()).await {
+        match in_budget("claim", self.claims.create(&key, mine.clone())).await? {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == CreateErrorKind::AlreadyExists => {
-                let holder = self
-                    .claims
-                    .get(&key)
-                    .await
+                let holder = in_budget("claim read", self.claims.get(&key))
+                    .await?
                     .map_err(|error| failed("claim read", error))?;
                 Ok(holder.is_some_and(|holder| holder == mine))
             }
@@ -305,10 +312,8 @@ impl Store {
     }
 
     pub async fn devices(&self, user: &str) -> StoreResult<Devices> {
-        let stored = self
-            .devices
-            .get(user)
-            .await
+        let stored = in_budget("devices read", self.devices.get(user))
+            .await?
             .map_err(|error| failed("devices read", error))?;
         Ok(stored
             .and_then(|body| serde_json::from_slice(&body).ok())
@@ -324,10 +329,8 @@ impl Store {
     ) -> StoreResult<()> {
         let mut last = None;
         for _ in 0..DEVICE_WRITE_TRIES {
-            let entry = self
-                .devices
-                .entry(user)
-                .await
+            let entry = in_budget("devices read", self.devices.entry(user))
+                .await?
                 .map_err(|error| failed("devices read", error))?;
             let (mut devices, revision) = match entry {
                 Some(entry) if entry.operation == Operation::Put => (
@@ -342,16 +345,14 @@ impl Store {
                 serde_json::to_vec(&devices).map_err(|error| failed("devices encode", error))?,
             );
             let written = match revision {
-                Some(revision) => self
-                    .devices
-                    .update(user, body, revision)
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| failed("devices write", error)),
-                None => self
-                    .devices
-                    .create(user, body)
-                    .await
+                Some(revision) => {
+                    in_budget("devices write", self.devices.update(user, body, revision))
+                        .await?
+                        .map(|_| ())
+                        .map_err(|error| failed("devices write", error))
+                }
+                None => in_budget("devices write", self.devices.create(user, body))
+                    .await?
                     .map(|_| ())
                     .map_err(|error| failed("devices write", error)),
             };
