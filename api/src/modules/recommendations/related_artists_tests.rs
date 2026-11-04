@@ -38,7 +38,7 @@ fn neighbors(side: u128) -> impl Iterator<Item = u128> {
 }
 
 fn merged(n: u128) -> bool {
-    n % 7 == 0
+    n.is_multiple_of(7)
 }
 
 fn distinct_weight(n: u128) -> f32 {
