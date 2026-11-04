@@ -413,7 +413,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_cached_path_returns_what_the_query_returns(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool).await?;
         let cache = ArtistTopTracks::new();
@@ -446,7 +446,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn sixteen_concurrent_misses_make_one_database_call(small: PgPool) -> anyhow::Result<()> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(40)
@@ -482,7 +482,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_track_hidden_after_caching_is_not_served(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool).await?;
         let cache = ArtistTopTracks::new();
@@ -517,7 +517,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn warm_caches_answer_without_touching_the_tracks_table(
         small: PgPool,
     ) -> anyhow::Result<()> {

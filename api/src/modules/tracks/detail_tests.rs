@@ -71,7 +71,7 @@ fn remote_playlist() -> serde_json::Value {
     serde_json::json!({"id":42,"urn":"soundcloud:playlists:42","kind":"playlist","title":"Remote mix","sharing":"private","user":{"id":17,"username":"Owner"},"tracks":[{"id":999}]})
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn playlist_detail_with_secret_uses_local_public_and_owner_records(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -104,7 +104,7 @@ async fn playlist_detail_with_secret_uses_local_public_and_owner_records(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn secret_observations_return_persisted_metadata_and_do_not_persist_access(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -174,7 +174,7 @@ async fn secret_observations_return_persisted_metadata_and_do_not_persist_access
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn metadata_changed_during_secret_verification_wins_over_the_remote_reply(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -216,7 +216,7 @@ async fn metadata_changed_during_secret_verification_wins_over_the_remote_reply(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn deletion_during_secret_verification_never_returns_the_remote_entity(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -247,7 +247,7 @@ async fn deletion_during_secret_verification_never_returns_the_remote_entity(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn secret_response_identity_must_match_the_requested_entity(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -311,7 +311,7 @@ async fn dependencies(pool: &PgPool) -> anyhow::Result<TracksServiceDependencies
     })
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn public_detail_with_secret_works_without_any_soundcloud_connection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -334,7 +334,7 @@ async fn public_detail_with_secret_works_without_any_soundcloud_connection(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn private_owner_detail_with_secret_works_without_any_soundcloud_connection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -375,7 +375,7 @@ async fn job_priority(pool: &PgPool, dedup_key: &str) -> anyhow::Result<i16> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_stale_refresh_nobody_waits_on_stays_below_a_refresh_a_viewer_waits_on(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -410,7 +410,7 @@ async fn a_stale_refresh_nobody_waits_on_stays_below_a_refresh_a_viewer_waits_on
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unknown_track_is_queued_for_refresh_instead_of_fetched_in_the_request(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -435,7 +435,7 @@ async fn an_unknown_track_is_queued_for_refresh_instead_of_fetched_in_the_reques
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_request(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -460,7 +460,7 @@ async fn an_unknown_playlist_is_queued_for_refresh_instead_of_fetched_in_the_req
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn tracks_of_an_unknown_playlist_are_pending_until_the_playlist_is_loaded(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -504,7 +504,7 @@ async fn membership_state(pool: &PgPool) -> anyhow::Result<(String, bool, i32)> 
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn opening_a_public_playlist_parked_without_its_owner_wakes_its_observation(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -563,7 +563,7 @@ async fn record_refusal(pool: &PgPool, dedup_key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_playlist_the_public_reader_refused_is_loaded_as_the_viewer(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -584,7 +584,7 @@ async fn a_playlist_the_public_reader_refused_is_loaded_as_the_viewer(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_forever(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -603,7 +603,7 @@ async fn a_playlist_soundcloud_just_refused_is_not_found_instead_of_pending_fore
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -626,7 +626,7 @@ async fn a_private_track_of_another_user_is_not_probed_against_soundcloud(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unknown_public_track_without_soundcloud_is_refresh_pending(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -639,7 +639,7 @@ async fn an_unknown_public_track_without_soundcloud_is_refresh_pending(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_unknown_public_track_is_read_through_and_served(pool: PgPool) -> anyhow::Result<()> {
     use crate::modules::resolve::miss_tests::{miss_with, redis_url, relay};
@@ -657,7 +657,7 @@ async fn an_unknown_public_track_is_read_through_and_served(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_playlist_write_with_unknown_tracks_is_bounded_when_soundcloud_stalls(
     pool: PgPool,

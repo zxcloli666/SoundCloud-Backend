@@ -110,7 +110,7 @@ fn catalog() -> Vec<Song> {
     ]
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn forgiving_queries_find_the_song(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &catalog()).await?;
     let search = service(&pool)?;
@@ -131,7 +131,7 @@ async fn forgiving_queries_find_the_song(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_variant_ranks_below_the_original_unless_asked_for(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &catalog()).await?;
     let search = service(&pool)?;
@@ -140,7 +140,7 @@ async fn a_variant_ranks_below_the_original_unless_asked_for(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_fan_reupload_collapses_into_one_result(pool: PgPool) -> anyhow::Result<()> {
     let mut songs = catalog();
     songs.push(Song {
@@ -156,7 +156,7 @@ async fn a_fan_reupload_collapses_into_one_result(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_exact_uploader_name_lists_their_uploads(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &catalog()).await?;
     sqlx::query(
@@ -173,7 +173,7 @@ async fn an_exact_uploader_name_lists_their_uploads(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn hidden_tracks_never_surface(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &catalog()).await?;
     sqlx::query("UPDATE tracks SET sharing = 'private' WHERE sc_track_id = '1'")
@@ -204,7 +204,7 @@ async fn hidden_tracks_never_surface(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn user_urn_scopes_tracks_and_playlists(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &catalog()).await?;
     let owner: String =
@@ -251,7 +251,7 @@ async fn user_urn_scopes_tracks_and_playlists(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn users_match_full_names_and_playlists_match_owners(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO users (sc_user_id, urn, username, username_normalized, full_name, followers_count)
@@ -276,7 +276,7 @@ async fn users_match_full_names_and_playlists_match_owners(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn artists_without_tracks_and_empty_albums_stay_hidden(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO artists (id, name, normalized_name, source, track_count_primary, monthly_listeners)
@@ -307,7 +307,7 @@ async fn artists_without_tracks_and_empty_albums_stay_hidden(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_last_page_never_promises_another(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing)

@@ -12,7 +12,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<TrackMutations> {
     ))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn track_mutations_persist_and_merge_without_sessions_tokens_or_redis(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -65,7 +65,7 @@ async fn track_mutations_persist_and_merge_without_sessions_tokens_or_redis(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn track_mutations_roll_back_the_queue_on_wrong_owner_or_failed_local_write(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -88,7 +88,7 @@ async fn track_mutations_roll_back_the_queue_on_wrong_owner_or_failed_local_writ
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn track_delete_supersedes_updates_and_prevents_refresh_resurrection(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -139,7 +139,7 @@ async fn track_delete_supersedes_updates_and_prevents_refresh_resurrection(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn coalesced_track_update_cannot_exceed_the_delivery_payload_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -186,7 +186,7 @@ async fn wait_for_blocked_track_writes(pool: &PgPool, count: i64) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn track_delete_cancels_an_update_that_was_uncommitted_when_delete_started(
     pool: PgPool,
 ) -> anyhow::Result<()> {

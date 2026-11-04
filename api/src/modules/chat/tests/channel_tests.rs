@@ -360,7 +360,7 @@ fn the_auth_gate_holds_sealed_logins_and_links_to_their_window() {
     assert_eq!(gate.admit("/auth/login/status"), Ok(()));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_same_envelope_is_refused_the_second_time(pool: PgPool) -> anyhow::Result<()> {
     let app: Router = routes::public(chat_state(pool, redis()?, true));
@@ -382,7 +382,7 @@ async fn the_same_envelope_is_refused_the_second_time(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn an_idle_request_runs_no_pg_query_on_a_warm_cache(pool: PgPool) -> anyhow::Result<()> {
     let device = Device::new();
@@ -411,7 +411,7 @@ async fn an_idle_request_runs_no_pg_query_on_a_warm_cache(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_session_without_a_bind_reaches_only_the_config(pool: PgPool) -> anyhow::Result<()> {
     let session = session_for(&pool, "4102", None).await?;
@@ -470,7 +470,7 @@ async fn a_session_without_a_bind_reaches_only_the_config(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn chat_stays_closed_to_users_outside_the_beta(pool: PgPool) -> anyhow::Result<()> {
     let device = Device::new();
@@ -494,7 +494,7 @@ async fn chat_stays_closed_to_users_outside_the_beta(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_bound_session_answers_only_its_own_device(pool: PgPool) -> anyhow::Result<()> {
     let owner = Device::new();
@@ -537,7 +537,7 @@ async fn a_bound_session_answers_only_its_own_device(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_relogin_with_new_keys_is_read_again_instead_of_refused(
     pool: PgPool,
@@ -597,7 +597,7 @@ async fn registered(pool: &PgPool, row: &DeviceRow) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_revoked_device_is_refused_on_its_next_request(pool: PgPool) -> anyhow::Result<()> {
     let device = Device::new();
@@ -636,7 +636,7 @@ async fn oauth_app(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_sealed_login_records_the_bind_of_the_signing_device(pool: PgPool) -> anyhow::Result<()> {
     oauth_app(&pool).await?;
@@ -671,7 +671,7 @@ async fn a_sealed_login_records_the_bind_of_the_signing_device(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_sealed_relogin_targets_the_current_session(pool: PgPool) -> anyhow::Result<()> {
     oauth_app(&pool).await?;
@@ -696,7 +696,7 @@ async fn a_sealed_relogin_targets_the_current_session(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
     pool: PgPool,
@@ -777,7 +777,7 @@ async fn push_claimed(app: &Router, token: &str, fresh: &Device) -> anyhow::Resu
     Ok(claimed["sessionId"].as_str().unwrap_or_default().parse()?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_sealed_push_link_binds_the_new_session_only_when_the_bound_source_made_it(
     pool: PgPool,
@@ -815,7 +815,7 @@ async fn a_sealed_push_link_binds_the_new_session_only_when_the_bound_source_mad
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_bound_session_without_a_device_reaches_only_config_and_registration(
     pool: PgPool,

@@ -209,7 +209,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn only_a_track_still_waiting_for_its_audio_gets_an_index_trigger(
         pool: PgPool,
     ) -> anyhow::Result<()> {

@@ -26,7 +26,7 @@ async fn home_wave(
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn two_listeners_with_the_same_taste_are_offered_the_same_wave(
     pg: PgPool,
@@ -52,7 +52,7 @@ async fn two_listeners_with_the_same_taste_are_offered_the_same_wave(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_user_without_a_single_signal_is_shown_the_cold_start_shelf(
     pg: PgPool,
@@ -86,7 +86,7 @@ async fn a_user_without_a_single_signal_is_shown_the_cold_start_shelf(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_taste_too_thin_for_vectors_still_gets_something_to_discover(
     pg: PgPool,
@@ -137,7 +137,7 @@ async fn a_taste_too_thin_for_vectors_still_gets_something_to_discover(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_disliked_track_is_absent_from_every_cluster(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(890_000, 60);
@@ -186,7 +186,7 @@ async fn a_disliked_track_is_absent_from_every_cluster(pg: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn no_track_is_offered_twice_in_one_wave(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(900_000, 60);
@@ -210,7 +210,7 @@ async fn no_track_is_offered_twice_in_one_wave(pg: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_track_that_is_too_short_is_never_recommended(pg: PgPool) -> anyhow::Result<()> {
     let tracks = catalogue(910_000, 10);
@@ -249,7 +249,7 @@ const GHOSTS: [(&str, &str); 4] = [
     ("of unknown length", "needs_duration_resolve = true"),
 ];
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_track_postgres_says_is_ineligible_never_comes_back_from_qdrant(
     pg: PgPool,
@@ -291,7 +291,7 @@ async fn a_track_postgres_says_is_ineligible_never_comes_back_from_qdrant(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn no_shelf_offers_a_track_whose_length_we_do_not_trust(pg: PgPool) -> anyhow::Result<()> {
     let tracks = by_one_artist(930_000, 11);

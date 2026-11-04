@@ -36,7 +36,7 @@ impl Wire {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_profile_mirrored_from_apiv2_carries_every_field_old_clients_read(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -51,7 +51,7 @@ async fn a_profile_mirrored_from_apiv2_carries_every_field_old_clients_read(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_profile_mirrored_from_apiv1_reaches_old_clients_unchanged(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -65,7 +65,7 @@ async fn a_profile_mirrored_from_apiv1_reaches_old_clients_unchanged(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_mirrored_profile_without_any_like_counter_reads_as_no_likes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -82,7 +82,7 @@ async fn a_mirrored_profile_without_any_like_counter_reads_as_no_likes(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_user_mirror_fallback_carries_every_field_old_clients_read(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -103,7 +103,7 @@ async fn the_user_mirror_fallback_carries_every_field_old_clients_read(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_session_fallback_carries_every_field_old_clients_read(
     pool: PgPool,
 ) -> anyhow::Result<()> {

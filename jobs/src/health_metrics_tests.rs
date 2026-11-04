@@ -39,7 +39,7 @@ async fn enqueue(pool: &PgPool, lane: &str, leased: bool, attempts: i32) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -78,7 +78,7 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> anyhow::Result<()> {
     let _alone = RENDERING.lock().await;
     crate::metrics::init();
@@ -103,7 +103,7 @@ async fn a_scrape_reports_what_it_costs_to_get_a_connection(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -125,7 +125,7 @@ async fn a_pool_that_cannot_hand_out_a_connection_is_visible_as_such(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> anyhow::Result<()> {
     let _alone = RENDERING.lock().await;
     crate::metrics::init();
@@ -188,7 +188,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(pool: PgPool) -> any
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_empty_queue_still_reports_every_lane(pool: PgPool) -> anyhow::Result<()> {
     let _alone = RENDERING.lock().await;
     crate::metrics::init();

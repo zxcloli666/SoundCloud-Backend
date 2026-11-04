@@ -60,7 +60,7 @@ pub(super) fn star_first(
 mod tests {
     use super::*;
 
-    #[sqlx::test(migrations = "../api/migrations")]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn users_with_new_events_are_split_by_a_live_star_subscription(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -87,7 +87,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "../api/migrations")]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn only_taste_event_types_ask_for_a_refresh(pool: PgPool) -> anyhow::Result<()> {
         sqlx::raw_sql(
             "INSERT INTO user_events (sc_user_id, sc_track_id, event_type, weight, created_at) VALUES

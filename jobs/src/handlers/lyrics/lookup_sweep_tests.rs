@@ -177,7 +177,7 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<LeasedJob> {
         .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn sweep_lookups_take_their_share_of_a_busy_lane_and_shrink_with_the_governor_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {

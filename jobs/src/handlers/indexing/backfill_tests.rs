@@ -30,7 +30,7 @@ async fn picked(pool: &PgPool, room: i64, turn: Turn) -> anyhow::Result<Vec<Stri
         .collect())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_star_turn_indexes_star_likes_then_likes_then_star_tracks_then_the_rest(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -45,7 +45,7 @@ async fn a_star_turn_indexes_star_likes_then_likes_then_star_tracks_then_the_res
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_wave_pick_waits_with_the_rest_and_not_with_the_likes(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -55,7 +55,7 @@ async fn a_wave_pick_waits_with_the_rest_and_not_with_the_likes(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn other_star_tracks_lead_their_own_turn(pool: PgPool) -> anyhow::Result<()> {
     seed_stored_tracks(&pool).await?;
 
@@ -66,7 +66,7 @@ async fn other_star_tracks_lead_their_own_turn(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_rest_turn_keeps_the_old_order(pool: PgPool) -> anyhow::Result<()> {
     seed_stored_tracks(&pool).await?;
 
@@ -77,7 +77,7 @@ async fn a_rest_turn_keeps_the_old_order(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_star_track_the_refresh_found_indexed_is_not_walked_again(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -93,7 +93,7 @@ async fn a_star_track_the_refresh_found_indexed_is_not_walked_again(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_stored_star_like_with_a_stale_trigger_is_held_back_only_by_its_audio_dispatch(
     pool: PgPool,
 ) -> anyhow::Result<()> {

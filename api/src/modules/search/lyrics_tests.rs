@@ -83,7 +83,7 @@ async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     super::lexicon_refresh::refresh(pool).await
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_misremembered_line_finds_the_song_and_its_line(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let answer = service(&pool)?
@@ -100,7 +100,7 @@ async fn a_misremembered_line_finds_the_song_and_its_line(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn gibberish_and_deleted_tracks_are_never_hits(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let answer = service(&pool)?
@@ -116,7 +116,7 @@ async fn gibberish_and_deleted_tracks_are_never_hits(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_short_query_is_an_empty_text_page(pool: PgPool) -> anyhow::Result<()> {
     let answer = service(&pool)?.lyrics(" a ", Some(-1), Some(500)).await?;
     assert_eq!(
@@ -132,7 +132,7 @@ async fn a_short_query_is_an_empty_text_page(pool: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_common_chorus_over_long_lyrics_stays_fast(pool: PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, duration_ms, sharing, play_count_sc)

@@ -277,7 +277,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "../api/migrations")]
+    #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
     async fn a_truncated_dataset_keeps_the_most_recently_active_listeners(
         pool: PgPool,
     ) -> anyhow::Result<()> {
