@@ -222,6 +222,14 @@ Nothing to commit, nothing to keep in sync.
 маршрут `/me/cold` удалён. Обновление профиля и устаревших сущностей каталога
 принадлежит durable job `catalog.refresh`. В API нет отцепленных задач для этих обновлений.
 
+**Промах по сессии** (`auth/service/replica.rs`). Id новой сессии — UUIDv7, его создаёт api-нода
+в той же транзакции, что и строку. На ноде с живой подпиской промах по v4 или по v7 старше
+`SESSION_IN_FLIGHT` (30 мин) — сразу «нет сессии», без ожидания. Молодой v7 без tombstone в
+`repl_tombstones` ждёт до 750 мс и отвечает 503 `session_not_replicated` с Retry-After, не 401:
+8.4.13 выходит из аккаунта по 401 с `/auth/refresh`. В split-режиме стоящая или выключенная подписка
+даёт 503 на любой промах. Счётчик `api_session_miss_total{outcome}`: `dead`, `in_flight`,
+`found_after_wait`, `stalled`; `in_flight` вычитается в ApiServerErrors и ApiHostUnavailable.
+
 **Приложение обязано работать с протухшим SC-токеном.** `/me` возвращает зеркало
 `user_profiles` либо минимальный профиль из локальных данных. Только разрешённые
 SC-пути запрашивают токен через `ctx.with_access_token(...)`.
