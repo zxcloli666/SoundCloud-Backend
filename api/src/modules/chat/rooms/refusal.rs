@@ -12,6 +12,10 @@ pub fn refusal(error: AppError) -> ChatError {
             ..
         } => return ChatError::NotMember,
         AppError::Coded {
+            code: "room_star_required",
+            ..
+        } => return ChatError::RoomStarRequired,
+        AppError::Coded {
             code: "room_moderators_full",
             ..
         } => return ChatError::Invalid,

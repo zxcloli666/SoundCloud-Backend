@@ -45,14 +45,18 @@ impl Row {
     fn member_seat(&self) -> Seat {
         match self.state.as_deref() {
             Some("active" | "invited") => Seat::Live {
-                floor: self
-                    .joined_seq
-                    .unwrap_or(0)
-                    .max(self.hidden_before_seq.unwrap_or(0)),
+                floor: floor_of(
+                    self.joined_seq.unwrap_or(0),
+                    self.hidden_before_seq.unwrap_or(0),
+                ),
             },
             _ => Seat::Gone,
         }
     }
+}
+
+pub fn floor_of(joined_seq: i64, hidden_before_seq: i64) -> i64 {
+    joined_seq.max(hidden_before_seq)
 }
 
 pub fn seat_of(states: &HashMap<Uuid, ConversationState>, id: Uuid) -> Seat {

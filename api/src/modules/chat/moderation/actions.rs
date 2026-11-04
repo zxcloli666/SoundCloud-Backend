@@ -1,6 +1,7 @@
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
+use crate::modules::chat::media;
 use crate::modules::chat::moderation::decide::Ban;
 use crate::modules::chat::reports::EVIDENCE_KEEP_DAYS;
 use crate::modules::chat::users::{self, Restriction, Scope};
@@ -27,14 +28,17 @@ pub async fn remove_messages(
     sender: &str,
     seqs: &[i64],
 ) -> ChatResult<Vec<i64>> {
+    let mut tx = chat.pg.begin().await?;
     let removed = sqlx::query_file_scalar!(
         "queries/chat/reports/remove_messages.sql",
         conversation,
         sender,
         seqs
     )
-    .fetch_all(&chat.pg)
+    .fetch_all(&mut *tx)
     .await?;
+    media::refs::drop_for_messages(&mut tx, conversation, &removed).await?;
+    tx.commit().await?;
     if !removed.is_empty() {
         chat.hot.forget(conversation);
     }
@@ -77,6 +81,7 @@ pub async fn close_open(
     closing: Closing,
     by: &str,
 ) -> ChatResult<bool> {
+    let mut tx = chat.pg.begin().await?;
     let closed = sqlx::query_file_scalar!(
         "queries/chat/reports/close_open.sql",
         report,
@@ -84,8 +89,12 @@ pub async fn close_open(
         by,
         EVIDENCE_KEEP_DAYS as i32
     )
-    .fetch_optional(&chat.pg)
+    .fetch_optional(&mut *tx)
     .await?;
+    if closed.is_some() {
+        media::hooks::release_holds(&mut tx, report).await?;
+    }
+    tx.commit().await?;
     Ok(closed.is_some())
 }
 

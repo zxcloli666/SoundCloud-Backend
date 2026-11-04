@@ -2,6 +2,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::modules::chat::conversations::remove;
 use crate::modules::chat::epochs;
+use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::members::store::{self as members, Joining};
@@ -63,6 +64,7 @@ pub async fn leave(pg: &PgPool, access: &Access) -> ChatResult<Change> {
         change.rows.extend(hand_over(&mut tx, access).await?);
     }
     epochs::mark_rekey_in(&mut tx, access.conversation).await?;
+    media::hooks::queue_trim(&mut *tx, access.conversation).await?;
     let event = SystemEvent::Left {
         actor: me.to_owned(),
     };
@@ -147,6 +149,7 @@ pub async fn remove(pg: &PgPool, access: &Access, target: &str, ban: bool) -> Ch
         .rows
         .push(system::insert(&mut tx, actor.conversation, &event, None).await?);
     members::recount(&mut tx, actor.conversation).await?;
+    media::hooks::queue_trim(&mut *tx, actor.conversation).await?;
     tx.commit().await?;
     Ok(change)
 }

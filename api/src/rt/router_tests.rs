@@ -253,3 +253,6 @@ async fn rooms_need_no_fresh_soundcloud_token_so_rt_never_asks_core_for_one(
     assert_eq!(status, StatusCode::OK);
     Ok(())
 }
+
+#[path = "definer_tests.rs"]
+mod definer;

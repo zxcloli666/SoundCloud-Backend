@@ -5,6 +5,30 @@ use redact::Secret;
 
 use crate::config::env_opt;
 
+pub mod backdrop;
+pub mod commit;
+pub mod delete;
+pub mod hooks;
+pub mod ledger;
+pub mod limits;
+pub mod mine;
+pub mod refs;
+pub mod reserve;
+pub mod restore;
+pub mod star;
+pub mod urls;
+pub mod usage;
+pub mod view;
+pub mod wire;
+
+pub use commit::commit_media;
+pub use delete::delete_media;
+pub use mine::media_mine;
+pub use reserve::reserve_media;
+pub use restore::restore_media;
+pub use urls::media_urls;
+pub use usage::media_usage;
+
 pub const SECRET_PREFIX: &str = "s3-secret-";
 
 #[derive(Clone, Debug)]
@@ -85,5 +109,21 @@ fn secret(id: u16, keys_dir: &Path) -> Option<Secret<String>> {
 }
 
 #[cfg(test)]
+#[path = "tests/media_test_support.rs"]
+pub mod support;
+
+#[cfg(test)]
+#[path = "tests/media_rows.rs"]
+pub mod rows;
+
+#[cfg(test)]
 #[path = "tests/media_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/media_routes_tests.rs"]
+mod route_tests;
+
+#[cfg(test)]
+#[path = "tests/media_s3_live_tests.rs"]
+mod s3_live;

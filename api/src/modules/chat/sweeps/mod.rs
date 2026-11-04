@@ -5,6 +5,7 @@ pub mod gauges;
 pub mod hooks;
 pub mod leader;
 pub mod marks;
+pub mod media;
 pub mod purge;
 pub mod redis_info;
 pub mod reports;

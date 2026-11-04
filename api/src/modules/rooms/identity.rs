@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::AppResult;
 use crate::modules::rooms::model::Profile;
@@ -10,9 +11,10 @@ fn stored(value: Option<String>) -> Option<String> {
 pub async fn account_profile(
     pg: &PgPool,
     sc_user_id: &str,
+    session_id: Uuid,
     claimed: Profile,
 ) -> AppResult<Profile> {
-    let account = sqlx::query_file!("queries/rooms/account_profile.sql", sc_user_id)
+    let account = sqlx::query_file!("queries/rooms/account_profile.sql", sc_user_id, session_id)
         .fetch_one(pg)
         .await?;
     Ok(Profile {

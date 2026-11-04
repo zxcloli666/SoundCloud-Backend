@@ -118,18 +118,9 @@ impl AuthService {
     }
 
     pub async fn logout(&self, session_id: Uuid) -> AppResult<()> {
-        let mut transaction = self.pool.begin().await?;
-        let deleted = sqlx::query_file!("queries/auth/service/delete_session.sql", session_id)
-            .fetch_optional(&mut *transaction)
+        sqlx::query_file_scalar!("queries/auth/service/end_session.sql", session_id)
+            .fetch_one(&self.pool)
             .await?;
-        if let Some(connection_id) = deleted.and_then(|row| row.soundcloud_connection_id) {
-            wt::call(
-                &mut transaction,
-                &wt::ConnectionDropOrphan { connection_id },
-            )
-            .await?;
-        }
-        transaction.commit().await?;
         self.forget_session(session_id);
         Ok(())
     }

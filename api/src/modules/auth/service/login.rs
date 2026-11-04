@@ -96,23 +96,6 @@ impl AuthService {
         &self,
         existing_session_id: Option<Uuid>,
     ) -> AppResult<LoginInitResult> {
-        self.create_login_request(existing_session_id, None).await
-    }
-
-    pub async fn initiate_bound_login(
-        &self,
-        existing_session_id: Option<Uuid>,
-        chat_bind: &[u8],
-    ) -> AppResult<LoginInitResult> {
-        self.create_login_request(existing_session_id, Some(chat_bind))
-            .await
-    }
-
-    async fn create_login_request(
-        &self,
-        existing_session_id: Option<Uuid>,
-        chat_bind: Option<&[u8]>,
-    ) -> AppResult<LoginInitResult> {
         let code_verifier = base64_url(&random_bytes(32));
         let code_challenge = base64_url(Sha256::digest(code_verifier.as_bytes()).as_slice());
         let state = hex::encode(random_bytes(16));
@@ -132,8 +115,8 @@ impl AuthService {
 
         sqlx::query(
             "INSERT INTO login_requests \
-                (id, state, code_verifier, oauth_app_id, target_session_id, status, expires_at, chat_bind) \
-             VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)",
+                (id, state, code_verifier, oauth_app_id, target_session_id, status, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, 'pending', $6)",
         )
         .bind(login_request_id)
         .bind(&state)
@@ -141,13 +124,46 @@ impl AuthService {
         .bind(&oauth_app_id)
         .bind(target_session_id)
         .bind(expires_at)
-        .bind(chat_bind)
         .execute(&self.pool)
         .await?;
 
         Ok(LoginInitResult {
-            url: self.build_authorize_url(&credentials, &state, &code_challenge)?,
+            url: self.build_authorize_url(
+                &credentials.client_id,
+                &credentials.redirect_uri,
+                &state,
+                &code_challenge,
+            )?,
             login_request_id,
+        })
+    }
+
+    pub async fn initiate_bound_login(
+        &self,
+        existing_session_id: Option<Uuid>,
+        chat_bind: &[u8],
+    ) -> AppResult<LoginInitResult> {
+        let code_verifier = base64_url(&random_bytes(32));
+        let code_challenge = base64_url(Sha256::digest(code_verifier.as_bytes()).as_slice());
+        let state = hex::encode(random_bytes(16));
+        let created = sqlx::query_file!(
+            "queries/auth/service/create_bound_login.sql",
+            state,
+            code_verifier,
+            existing_session_id,
+            chat_bind
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::service_unavailable("No active OAuth apps available"))?;
+        Ok(LoginInitResult {
+            url: self.build_authorize_url(
+                &created.client_id,
+                &created.redirect_uri,
+                &state,
+                &code_challenge,
+            )?,
+            login_request_id: created.login_request_id,
         })
     }
 
@@ -572,28 +588,16 @@ impl AuthService {
         login_request_id: Uuid,
         owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<LoginStatusResult> {
-        let login_request = sqlx::query_file_as!(
-            LoginRequest,
-            "queries/auth/service/get_login_request.sql",
-            login_request_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let login_request =
+            sqlx::query_file!("queries/auth/service/login_status.sql", login_request_id)
+                .fetch_optional(&self.pool)
+                .await?;
         let Some(login_request) = login_request else {
             return Ok(expired_login_status("Unknown login request"));
         };
-        if matches!(login_request.status.as_str(), "pending" | "processing")
-            && login_request.expires_at < Utc::now().naive_utc()
-        {
-            return Ok(expired_login_status("Login request expired"));
-        }
-
-        let session_id = match login_request.result_session_id {
-            Some(session_id) if self.shows_session(login_request.id, owns_bind).await? => {
-                Some(session_id)
-            }
-            _ => None,
-        };
+        let session_id = login_request
+            .result_session_id
+            .filter(|_| login_request.chat_bind.as_deref().is_none_or(&owns_bind));
         Ok(LoginStatusResult {
             status: if login_request.status == "processing" {
                 "pending".to_owned()
@@ -609,21 +613,6 @@ impl AuthService {
                 .profile_ok
                 .map(|success| if success { "ok" } else { "failed" }.to_owned()),
         })
-    }
-
-    async fn shows_session(
-        &self,
-        login_request_id: Uuid,
-        owns_bind: impl Fn(&[u8]) -> bool,
-    ) -> AppResult<bool> {
-        let chat_bind = sqlx::query_file_scalar!(
-            "queries/auth/service/login_request_bind.sql",
-            login_request_id
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten();
-        Ok(chat_bind.as_deref().is_none_or(owns_bind))
     }
 
     pub(super) async fn mark_request_failed(&self, id: Uuid, error: &str) -> AppResult<()> {

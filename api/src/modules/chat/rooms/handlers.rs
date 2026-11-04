@@ -12,8 +12,8 @@ use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::rooms::system::SuggestedTrack;
 use crate::modules::chat::rooms::{bridge, refusal, suggest::suggest_track};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
-use crate::modules::rooms::model::{SettingsPatch, normalize_code};
-use crate::modules::rooms::service::{RoomPreview, RoomView};
+use crate::modules::rooms::model::normalize_code;
+use crate::modules::rooms::service::RoomPreview;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct KickQuery {
@@ -117,20 +117,6 @@ pub async fn moderator(
         .await
         .map_err(refusal)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn settings(
-    caller: ChatCaller,
-    State(chat): State<Arc<ChatState>>,
-    ChatPath(code): ChatPath<String>,
-    ChatJson(patch): ChatJson<SettingsPatch>,
-) -> ChatResult<Json<RoomView>> {
-    let view = chat
-        .rooms
-        .configure(&code_of(&code)?, &caller.user_id, &patch)
-        .await
-        .map_err(refusal)?;
-    Ok(Json(view))
 }
 
 pub async fn suggest(
