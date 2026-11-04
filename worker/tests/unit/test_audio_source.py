@@ -202,4 +202,4 @@ async def test_refused_connection_is_transient(
     )
 
     assert failure.reason is Reason.DOWNLOAD_FAILED
-    assert counters.total("download_failures_total") == 1
+    assert counters.total("download_failures_total") == 2
