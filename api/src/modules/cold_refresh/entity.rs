@@ -85,7 +85,7 @@ pub async fn refresh_pending(
     not_found(entity)
 }
 
-async fn unavailable(pool: &PgPool, dedup_key: &str) -> Result<bool, sqlx::Error> {
+pub async fn unavailable(pool: &PgPool, dedup_key: &str) -> Result<bool, sqlx::Error> {
     let refused = sqlx::query_file_scalar!(
         "queries/cold_refresh/entity_recently_unavailable.sql",
         dedup_key
@@ -100,7 +100,7 @@ async fn unavailable(pool: &PgPool, dedup_key: &str) -> Result<bool, sqlx::Error
         .await
 }
 
-fn not_found(entity: CatalogEntity) -> AppError {
+pub fn not_found(entity: CatalogEntity) -> AppError {
     AppError::not_found(match entity {
         CatalogEntity::Track => "Track not found",
         CatalogEntity::Playlist => "Playlist not found",

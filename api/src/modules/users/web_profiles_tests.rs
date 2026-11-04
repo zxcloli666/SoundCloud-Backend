@@ -119,3 +119,48 @@ async fn a_star_reader_lifts_the_refresh_it_triggers(pool: PgPool) -> anyhow::Re
     );
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_user_soundcloud_called_absent_is_not_found_until_the_hold_runs_out(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO background_job_failures (
+             id, kind, lane, dedup_key, payload, priority, generation, attempts, max_attempts,
+             last_error, created_at, failed_at
+         ) VALUES
+             ($1, 'catalog.refresh', 'core_bulk', 'web_profiles:42:public', '{}', 5, 1, 1, 8,
+              'not_found: SoundCloud API error (status 404)',
+              now() - interval '3 hours', now() - interval '3 hours'),
+             ($2, 'catalog.refresh', 'core_bulk', 'web_profiles:43:public', '{}', 5, 1, 1, 8,
+              'not_found: SoundCloud API error (status 404)',
+              now() - interval '25 hours', now() - interval '25 hours')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await?;
+
+    let held = read(&pool, "7", "42")
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected a held user"))?
+        .into_response();
+    let asked_again = read(&pool, "7", "soundcloud:users:43")
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected a refresh"))?
+        .into_response();
+
+    assert_eq!(held.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        asked_again.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    let keys: Vec<String> =
+        sqlx::query_scalar("SELECT dedup_key FROM background_jobs WHERE kind = 'catalog.refresh'")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(keys, vec!["web_profiles:43:public"]);
+    Ok(())
+}
