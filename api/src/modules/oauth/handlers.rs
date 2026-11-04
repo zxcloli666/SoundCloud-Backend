@@ -417,7 +417,7 @@ async fn token(
     let basic = basic_credentials(headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
     let (client_id, secret) = match basic {
         Some(pair) => pair,
-        None => (form.client_id.clone(), form.client_secret.clone()),
+        None => (form.client_id.clone(), form.client_secret.expose().clone()),
     };
     let Some(client) = st.config.voice.client(&client_id) else {
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
@@ -436,7 +436,7 @@ async fn token(
         }
         "refresh_token" => {
             st.links
-                .rotate_refresh(&form.refresh_token, &client.id)
+                .rotate_refresh(form.refresh_token.expose(), &client.id)
                 .await
         }
         _ => return oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type"),
@@ -449,10 +449,10 @@ async fn token(
                 (PRAGMA, HeaderValue::from_static("no-cache")),
             ],
             Json(json!({
-                "access_token": tokens.access_token,
+                "access_token": tokens.access_token.expose(),
                 "token_type": "Bearer",
                 "expires_in": tokens.expires_in,
-                "refresh_token": tokens.refresh_token,
+                "refresh_token": tokens.refresh_token.expose(),
             })),
         )
             .into_response(),

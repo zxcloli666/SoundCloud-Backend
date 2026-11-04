@@ -38,7 +38,7 @@ pub struct AliceSession {
 #[derive(Debug, Default, Deserialize)]
 pub struct AliceUser {
     #[serde(default)]
-    pub access_token: Option<String>,
+    pub access_token: Option<redact::Secret<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -70,7 +70,8 @@ impl AliceRequest {
             self.session
                 .user
                 .as_ref()
-                .and_then(|user| user.access_token.clone())
+                .and_then(|user| user.access_token.as_ref())
+                .map(|token| token.expose().clone())
                 .filter(|token| !token.is_empty())
         })
     }

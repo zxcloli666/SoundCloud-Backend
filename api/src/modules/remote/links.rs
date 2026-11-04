@@ -1,4 +1,5 @@
 use backend_contracts::remote::{LINK_CODE_TTL_SECS, LinkCodeResponse, LinkInfo, LinkProvider};
+use redact::Secret;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -32,8 +33,8 @@ pub struct FoundCode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedTokens {
-    pub access_token: String,
-    pub refresh_token: String,
+    pub access_token: Secret<String>,
+    pub refresh_token: Secret<String>,
     pub expires_in: i32,
 }
 
@@ -154,8 +155,8 @@ impl LinksService {
         .await?;
         if row.is_some() {
             return Ok(Some(IssuedTokens {
-                access_token,
-                refresh_token,
+                access_token: access_token.into(),
+                refresh_token: refresh_token.into(),
                 expires_in: ACCESS_TTL_SECS,
             }));
         }
@@ -190,8 +191,8 @@ impl LinksService {
         .await?;
         if row.is_some() {
             return Ok(Some(IssuedTokens {
-                access_token,
-                refresh_token: next_refresh,
+                access_token: access_token.into(),
+                refresh_token: next_refresh.into(),
                 expires_in: ACCESS_TTL_SECS,
             }));
         }
@@ -226,8 +227,8 @@ impl LinksService {
             return Ok(None);
         }
         Ok(Some(IssuedTokens {
-            access_token,
-            refresh_token: next_refresh,
+            access_token: access_token.into(),
+            refresh_token: next_refresh.into(),
             expires_in: ACCESS_TTL_SECS,
         }))
     }

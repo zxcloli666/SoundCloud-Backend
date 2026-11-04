@@ -41,11 +41,11 @@ pub struct TokenForm {
     #[serde(default)]
     pub redirect_uri: String,
     #[serde(default)]
-    pub refresh_token: String,
+    pub refresh_token: redact::Secret<String>,
     #[serde(default)]
     pub client_id: String,
     #[serde(default)]
-    pub client_secret: String,
+    pub client_secret: redact::Secret<String>,
 }
 
 pub fn known_target<'a>(
