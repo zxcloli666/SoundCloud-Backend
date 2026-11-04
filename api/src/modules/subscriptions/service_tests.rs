@@ -42,7 +42,7 @@ async fn status_carries_star_since_only_while_premium(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_cached_star_answer_skips_the_database_until_a_write(pool: PgPool) {
     let service = SubscriptionsService::new(pool.clone(), false);
     let now = chrono::Utc::now().timestamp();

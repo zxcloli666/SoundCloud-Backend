@@ -271,6 +271,11 @@ impl RemoteHub {
         }
     }
 
+    #[cfg(test)]
+    pub fn held(&self, user: &str) -> usize {
+        self.waits.count(user)
+    }
+
     pub async fn active_device(&self, user: &str) -> Option<String> {
         if !subject_safe(user) {
             return None;

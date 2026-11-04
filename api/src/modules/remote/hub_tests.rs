@@ -227,7 +227,7 @@ async fn only_the_most_recently_active_desktop_gets_the_command() {
 
 #[tokio::test]
 #[ignore = "requires a local NATS with JetStream"]
-async fn a_user_nobody_is_polling_for_is_offline_at_once() {
+async fn asking_for_a_user_nobody_polls_for_stays_fast() {
     let [hub] = hosts().await;
     let started = Instant::now();
     let asked = hub
@@ -322,7 +322,7 @@ async fn the_cursor_does_not_depend_on_the_clocks_of_the_hosts() {
 
 #[tokio::test]
 #[ignore = "requires a local NATS with JetStream"]
-async fn a_cursor_from_before_a_stream_reset_falls_back_to_a_handshake() {
+async fn a_cursor_from_before_a_stream_reset_gets_a_handshake_and_stays_fast() {
     let [main] = hosts().await;
     let user = user();
     let handshake = main.poll(&user, "pc", 1, None, Duration::ZERO).await;
@@ -461,12 +461,11 @@ async fn a_reply_from_another_user_does_not_answer_the_command() {
 
 #[tokio::test]
 #[ignore = "requires a local NATS with JetStream"]
-async fn the_deadline_counts_from_the_request_start_not_from_the_dispatch() {
+async fn a_late_dispatch_ends_at_the_request_deadline_and_stays_fast() {
     let [hub] = hosts().await;
     let user = user();
     hub.poll(&user, "pc", 1, None, Duration::ZERO).await;
-    let started = Instant::now();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = Instant::now() - Duration::from_millis(300);
     let _ = hub
         .dispatch(
             &user,
