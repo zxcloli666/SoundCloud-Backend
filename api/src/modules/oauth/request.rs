@@ -29,7 +29,7 @@ pub struct AuthorizeForm {
     #[serde(default)]
     pub scope: String,
     #[serde(default)]
-    pub code: String,
+    pub code: redact::Secret<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,7 @@ pub struct TokenForm {
     #[serde(default)]
     pub grant_type: String,
     #[serde(default)]
-    pub code: String,
+    pub code: redact::Secret<String>,
     #[serde(default)]
     pub redirect_uri: String,
     #[serde(default)]

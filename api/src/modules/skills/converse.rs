@@ -91,6 +91,7 @@ pub async fn run(
         .await
     {
         Asked::Offline | Asked::Silent => Said::plain(phrases.offline()),
+        Asked::Busy => Said::plain(phrases.busy()),
         Asked::Reply(reply) => {
             let display = clip(&reply.display);
             let speech = clip(&reply.speech);

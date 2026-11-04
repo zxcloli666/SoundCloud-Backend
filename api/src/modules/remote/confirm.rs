@@ -8,6 +8,7 @@ use crate::error::{AppError, AppResult};
 
 pub const MAX_CODE_ASKS: i64 = 5;
 const LOCK_SECS: u64 = 70;
+const RELEASE_OWN_LOCK: &str = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
 const DAY_SECS: i64 = 24 * 3600;
 const CODE_ASKS_TTL_SECS: i64 = 700;
 
@@ -25,6 +26,7 @@ pub enum Status {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Confirming {
     pub code_id: Uuid,
+    pub holder: String,
     pub user: String,
     pub provider: LinkProvider,
     pub command: Uuid,
@@ -38,7 +40,7 @@ pub struct PageTicket {
     pub redirect_uri: String,
     pub state: String,
     pub scope: String,
-    pub location: String,
+    pub location: redact::Secret<String>,
     #[serde(default)]
     pub hint: String,
     #[serde(default)]
@@ -109,25 +111,33 @@ impl LinkConfirm {
         Ok(body.and_then(|body| serde_json::from_str(&body).ok()))
     }
 
-    pub async fn claim(&self, code_id: uuid::Uuid) -> AppResult<bool> {
+    fn lock_key(&self, code_id: Uuid) -> String {
+        self.key(&format!("lock:{code_id}"))
+    }
+
+    pub async fn claim(&self, code_id: Uuid) -> AppResult<Option<String>> {
+        let holder = Uuid::now_v7().simple().to_string();
         let mut conn = self.redis.get().await.map_err(redis_error)?;
         let set: Option<String> = redis::cmd("SET")
-            .arg(self.key(&format!("lock:{code_id}")))
-            .arg("1")
+            .arg(self.lock_key(code_id))
+            .arg(&holder)
             .arg("NX")
             .arg("EX")
             .arg(LOCK_SECS)
             .query_async(&mut conn)
             .await
             .map_err(redis_error)?;
-        Ok(set.is_some())
+        Ok(set.map(|_| holder))
     }
 
-    pub async fn release(&self, code_id: uuid::Uuid) {
+    pub async fn release(&self, code_id: Uuid, holder: &str) {
         if let Ok(mut conn) = self.redis.get().await {
-            let _ = redis::cmd("DEL")
-                .arg(self.key(&format!("lock:{code_id}")))
-                .query_async::<()>(&mut conn)
+            let _ = redis::cmd("EVAL")
+                .arg(RELEASE_OWN_LOCK)
+                .arg(1)
+                .arg(self.lock_key(code_id))
+                .arg(holder)
+                .query_async::<i64>(&mut conn)
                 .await;
         }
     }
@@ -184,5 +194,63 @@ impl LinkConfirm {
             .await
             .map_err(redis_error)?;
         Ok(count.unwrap_or(0))
+    }
+
+    #[cfg(test)]
+    pub async fn ttl(&self, part: &str) -> AppResult<i64> {
+        let mut conn = self.redis.get().await.map_err(redis_error)?;
+        redis::cmd("TTL")
+            .arg(self.key(part))
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use deadpool_redis::{Config, Runtime};
+
+    use super::*;
+
+    fn confirm() -> LinkConfirm {
+        let url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+        let redis = Config::from_url(url)
+            .create_pool(Some(Runtime::Tokio1))
+            .expect("a redis pool");
+        LinkConfirm::new(redis, format!("voice-test-{}", Uuid::now_v7()))
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local Redis"]
+    async fn a_stale_attempt_does_not_release_a_newer_lock() {
+        let confirm = confirm();
+        let code = Uuid::now_v7();
+        let stale = confirm
+            .claim(code)
+            .await
+            .expect("redis")
+            .expect("the first claim");
+        let mut conn = confirm.redis.get().await.expect("redis");
+        redis::cmd("DEL")
+            .arg(confirm.lock_key(code))
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("the lock runs out");
+        let fresh = confirm
+            .claim(code)
+            .await
+            .expect("redis")
+            .expect("a claim after the lock ran out");
+
+        confirm.release(code, &stale).await;
+        assert!(
+            confirm.claim(code).await.expect("redis").is_none(),
+            "the newer lock is still held"
+        );
+
+        confirm.release(code, &fresh).await;
+        assert!(confirm.claim(code).await.expect("redis").is_some());
     }
 }

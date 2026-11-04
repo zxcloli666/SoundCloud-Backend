@@ -207,8 +207,8 @@ impl AdmissionCfg {
         let voice_link_code = admission_limit("VOICE_LINK_CODE", 10, 600);
         let voice_remote = admission_limit("VOICE_REMOTE", 120, 12000);
         let voice_remote_wait = admission_limit("VOICE_REMOTE_WAIT", 30, 120_000);
-        let voice_page_ip = admission_limit("VOICE_PAGE_IP", 10, 1000);
-        let voice_page_client = admission_limit("VOICE_PAGE_CLIENT", 1000, 2000);
+        let voice_page_ip = admission_limit("VOICE_PAGE_IP", 10, 30_000);
+        let voice_page_client = admission_limit("VOICE_PAGE_CLIENT", 30_000, 30_000);
         let voice_salut_sub = admission_limit("VOICE_SALUT_SUB", 10, 1000);
         let voice_utterance = admission_limit("VOICE_UTTERANCE", 30, 6000);
         let voice_resolve = admission_limit("VOICE_RESOLVE", 120, 6000);

@@ -117,6 +117,10 @@ impl NatsService {
         &self.js
     }
 
+    pub fn disconnected(&self) -> bool {
+        self.js.client().connection_state() == async_nats::connection::State::Disconnected
+    }
+
     pub async fn subscribe(&self, subject: &str) -> AppResult<async_nats::Subscriber> {
         self.js
             .client()

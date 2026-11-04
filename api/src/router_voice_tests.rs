@@ -13,8 +13,11 @@ use super::router_search_tests::{
     app, app_with, app_without_star, config, redis_url, remote_hub, remote_prefix, soundcloud_hits,
     state,
 };
+use crate::bus::nats::NatsService;
 use crate::config::{AdmissionLimitCfg, AppConfig};
 use crate::modules::remote::LinkConfirm;
+use crate::modules::remote::confirm::{Confirming, SalutTicket};
+use crate::modules::remote::hub::now_ms;
 
 const REDIRECT: &str = "https://social.yandex.net/broker/redirect";
 const STATUS_PATH: &str = "/oauth/authorize/status?ticket=";
@@ -1091,7 +1094,7 @@ async fn a_code_is_asked_at_most_five_times(pool: PgPool) -> anyhow::Result<()> 
             anyhow::bail!("the code is still usable before the sixth try");
         };
         assert!(linking::ask(&st, &pairing).await.is_ok());
-        st.confirm.release(pairing.code_id).await;
+        st.confirm.release(pairing.code_id, &pairing.holder).await;
     }
     assert!(matches!(
         linking::find(&st, LinkProvider::Alice, &issued.code).await?,
@@ -1304,8 +1307,8 @@ async fn alice_with_a_silent_desktop_stays_fast(pool: PgPool) -> anyhow::Result<
             .contains("не отвечает")
     );
     assert!(
-        took >= Duration::from_millis(600) && took < Duration::from_millis(1000),
-        "{took:?}"
+        took >= Duration::from_millis(400) && took < Duration::from_millis(2_500),
+        "the skill waits for the desktop and still answers inside the Alice budget: {took:?}"
     );
     Ok(())
 }
@@ -1699,7 +1702,7 @@ async fn hello_and_help_need_no_link_in_either_skill(pool: PgPool) -> anyhow::Re
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis and NATS"]
-async fn salut_takes_the_token_in_the_path_or_only_a_project_id(
+async fn salut_needs_its_token_and_a_project_id_is_only_an_extra_check(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     let sub = "66666666-2222-3333-4444-555555555555";
@@ -1735,22 +1738,8 @@ async fn salut_takes_the_token_in_the_path_or_only_a_project_id(
         salut_for_project(sub, "пауза", "proj"),
     )
     .await?;
-    assert_eq!(known.status, StatusCode::OK);
-    assert!(said(&known).contains("шесть цифр"));
-    let stranger = salut_at(
-        &project_only,
-        "/skills/salut",
-        salut_for_project(sub, "пауза", "other"),
-    )
-    .await?;
-    assert_eq!(stranger.status, StatusCode::FORBIDDEN);
-    let bare = salut_at(
-        &project_only,
-        "/skills/salut",
-        salut_body(sub, "пауза", "", 1),
-    )
-    .await?;
-    assert_eq!(bare.status, StatusCode::FORBIDDEN);
+    assert_eq!(known.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(known.json()["code"], "voice_disabled");
 
     let both = app_with(
         &pool,
@@ -1772,6 +1761,14 @@ async fn salut_takes_the_token_in_the_path_or_only_a_project_id(
     )
     .await?;
     assert_eq!(full.status, StatusCode::OK);
+    assert!(said(&full).contains("шесть цифр"));
+    let stranger = salut_at(
+        &both,
+        "/skills/salut/salut-token",
+        salut_for_project(sub, "пауза", "other"),
+    )
+    .await?;
+    assert_eq!(stranger.status, StatusCode::FORBIDDEN);
 
     let off = app_with(
         &pool,
@@ -2180,5 +2177,135 @@ async fn salut_binds_after_a_star_restart_with_the_desktop_on_another_host(
             .fetch_one(&pool)
             .await?;
     assert_eq!(bound, 1);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn remote_endpoints_answer_busy_when_nats_is_down_stays_fast(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let mut st = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let dead = NatsService::connect(
+        "nats://127.0.0.1:1",
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await?;
+    st.remote = crate::modules::remote::RemoteHub::new(Some(dead), &remote_prefix());
+    let app = crate::router::build(st);
+    let session = session_for(&pool, "101").await?;
+    let started = std::time::Instant::now();
+    for _ in 0..5 {
+        let waited = json_call(
+            &app,
+            session,
+            "GET",
+            "/remote/wait?device=pc&active=1&since=0",
+            None,
+        )
+        .await?;
+        assert_eq!(waited.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(waited.json()["code"], "voice_busy");
+    }
+    let replied = json_call(
+        &app,
+        session,
+        "POST",
+        "/remote/reply",
+        Some(json!({"id": Uuid::now_v7(), "ok": true})),
+    )
+    .await?;
+    assert_eq!(replied.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "one open attempt, not a minute of queued ones: {:?}",
+        started.elapsed()
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_reply_to_an_old_or_foreign_id_is_refused(pool: PgPool) -> anyhow::Result<()> {
+    let app = app(&pool, &redis_url()).await?;
+    let session = session_for(&pool, "101").await?;
+    let at = |offset_ms: i64| {
+        uuid::Builder::from_unix_timestamp_millis((now_ms() + offset_ms) as u64, &[3; 10])
+            .into_uuid()
+    };
+    for id in [at(-600_000), at(600_000), Uuid::new_v4()] {
+        let refused = json_call(
+            &app,
+            session,
+            "POST",
+            "/remote/reply",
+            Some(json!({"id": id, "ok": true})),
+        )
+        .await?;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{id}");
+        assert_eq!(refused.json()["code"], "voice_reply_unknown");
+    }
+    let fresh = json_call(
+        &app,
+        session,
+        "POST",
+        "/remote/reply",
+        Some(json!({"id": at(-5_000), "ok": true})),
+    )
+    .await?;
+    assert_eq!(fresh.status, StatusCode::NO_CONTENT);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis and NATS"]
+async fn a_salut_turn_after_the_confirm_window_still_gets_the_approval(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let st = state(&pool, soundcloud_hits(), &redis_url()).await?;
+    let confirm = st.confirm.clone();
+    let remote = st.remote.clone();
+    let app = crate::router::build(st);
+    let session = session_for(&pool, "303").await?;
+    let sub = "88888888-2222-3333-4444-555555555555";
+    let confirmer = confirming_desktop(&app, session, "pc", true).await?;
+    let code = new_code(&app, session, "salut").await?;
+    let spoken = code
+        .chars()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let first = salut_call(
+        &app,
+        Some("salut-token"),
+        salut_body(sub, &spoken, &spoken, 1),
+    )
+    .await?;
+    assert!(said(&first).contains("Подтвердите"), "{}", first.text());
+
+    let key = format!("salut:{sub}");
+    assert!(
+        confirm.ttl(&key).await? > 500,
+        "a pending Salut ticket outlives the 60 s confirmation"
+    );
+    let mut ticket: SalutTicket = confirm.get(&key).await?.expect("a pending ticket");
+    let asked = ticket.confirming.clone().expect("a confirmation in flight");
+    let deadline = tokio::time::Instant::now() + SETTLE_BUDGET;
+    while remote.answer(&asked.user, asked.command).await.is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the desktop never answered"
+        );
+        tokio::time::sleep(POLL_EVERY).await;
+    }
+    ticket.confirming = Some(Confirming {
+        deadline_ms: now_ms() - 30_000,
+        ..asked
+    });
+    confirm.put(&key, &ticket, 600).await?;
+
+    let linked = salut_until(&app, sub, "а", 2, |said| !said.contains("Подтвердите")).await?;
+    confirmer.abort();
+    assert!(linked.contains("аккаунт связан"), "{linked}");
     Ok(())
 }

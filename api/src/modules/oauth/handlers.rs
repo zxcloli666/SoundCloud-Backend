@@ -68,7 +68,6 @@ fn target_name(provider: LinkProvider) -> &'static str {
 }
 
 const TICKET_TTL_SECS: u64 = 600;
-const PENDING_TTL_SECS: u64 = 90;
 
 async fn authorize_page(
     State(st): State<AppState>,
@@ -173,10 +172,10 @@ async fn authorize_submit(
     if let Some(refusal) = within_limit(&st, Endpoint::VoicePageClient, &client.id, &fields).await {
         return refusal;
     }
-    if is_review_code(voice, &form.code) {
+    if is_review_code(voice, form.code.expose()) {
         return review_redirect(&st, client.provider, &form, &fields).await;
     }
-    let Some(code) = normalize_code(&form.code) else {
+    let Some(code) = normalize_code(form.code.expose()) else {
         return html(
             StatusCode::BAD_REQUEST,
             page::form(&fields, Some("Нужны шесть цифр.")),
@@ -223,27 +222,21 @@ async fn authorize_submit(
         redirect_uri: form.redirect_uri.clone(),
         state: form.state.clone(),
         scope: form.scope.clone(),
-        location: String::new(),
+        location: Default::default(),
         hint: pairing.hint.clone(),
         confirming: None,
     };
-    let ttl = match linking::ask(&st, &pairing).await {
-        Ok(confirming) => {
-            record.confirming = Some(confirming);
-            PENDING_TTL_SECS
-        }
-        Err(status) => {
-            record.status = status;
-            TICKET_TTL_SECS
-        }
-    };
+    match linking::ask(&st, &pairing).await {
+        Ok(confirming) => record.confirming = Some(confirming),
+        Err(status) => record.status = status,
+    }
     if let Err(error) = st
         .confirm
-        .put(&format!("ticket:{ticket}"), &record, ttl)
+        .put(&format!("ticket:{ticket}"), &record, TICKET_TTL_SECS)
         .await
     {
         tracing::warn!(%error, "link ticket was not stored");
-        st.confirm.release(pairing.code_id).await;
+        st.confirm.release(pairing.code_id, &pairing.holder).await;
         return busy_form(&fields);
     }
     html(
@@ -319,7 +312,7 @@ async fn settle_page(st: &AppState, record: &mut PageTicket, confirming: &Confir
                 &record.client_id,
                 &record.scope,
             ) {
-                Some(location) => record.location = location,
+                Some(location) => record.location = location.into(),
                 None => record.status = Status::Failed,
             }
         }
@@ -386,7 +379,7 @@ async fn authorize_status(
     }
     let _ = st.confirm.take::<PageTicket>(&key).await;
     if record.status == Status::Approved
-        && let Ok(location) = HeaderValue::from_str(&record.location)
+        && let Ok(location) = HeaderValue::from_str(record.location.expose())
     {
         return found(location);
     }
@@ -441,7 +434,7 @@ async fn token(
                 return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant");
             }
             st.links
-                .redeem_auth_code(&form.code, &client.id, &form.redirect_uri)
+                .redeem_auth_code(form.code.expose(), &client.id, &form.redirect_uri)
                 .await
         }
         "refresh_token" => {

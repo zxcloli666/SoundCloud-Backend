@@ -129,10 +129,10 @@ pub(super) fn admitted(
     path_token: Option<&str>,
     request: &SalutRequest,
 ) -> Result<(), StatusCode> {
-    if token.is_empty() && project_id.is_empty() {
+    if token.is_empty() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    if !token.is_empty() && !authorized(headers, path_token, token) {
+    if !authorized(headers, path_token, token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
     if !project_id.is_empty() && !token_matches(request.project_id(), project_id) {
@@ -252,8 +252,7 @@ async fn respond(
     }
 }
 
-const TICKET_PENDING_SECS: u64 = 90;
-const TICKET_DONE_SECS: u64 = 600;
+const TICKET_SECS: u64 = 600;
 
 fn ticket_key(sub: &str) -> String {
     format!("salut:{sub}")
@@ -299,19 +298,13 @@ async fn unlinked(st: &AppState, sub: &str, request: &SalutRequest, phrases: &Ph
         hint: pairing.hint.clone(),
         confirming: None,
     };
-    let ttl = match linking::ask(st, &pairing).await {
-        Ok(confirming) => {
-            ticket.confirming = Some(confirming);
-            TICKET_PENDING_SECS
-        }
-        Err(status) => {
-            ticket.status = status;
-            TICKET_DONE_SECS
-        }
-    };
-    if let Err(error) = st.confirm.put(&ticket_key(sub), &ticket, ttl).await {
+    match linking::ask(st, &pairing).await {
+        Ok(confirming) => ticket.confirming = Some(confirming),
+        Err(status) => ticket.status = status,
+    }
+    if let Err(error) = st.confirm.put(&ticket_key(sub), &ticket, TICKET_SECS).await {
         tracing::warn!(%error, "salut link state was not stored");
-        st.confirm.release(pairing.code_id).await;
+        st.confirm.release(pairing.code_id, &pairing.holder).await;
         return Said::plain(phrases.busy());
     }
     Said::plain(&phrases.confirm_with_hint(&ticket.hint))
@@ -349,10 +342,7 @@ async fn after_confirmation(
             Ok(()) => Said::plain(phrases.linked()),
             Err(error) => {
                 tracing::warn!(%error, "salut binding failed");
-                let _ = st
-                    .confirm
-                    .put(&ticket_key(sub), &ticket, TICKET_DONE_SECS)
-                    .await;
+                let _ = st.confirm.put(&ticket_key(sub), &ticket, TICKET_SECS).await;
                 Said::plain(phrases.busy())
             }
         },

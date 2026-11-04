@@ -69,14 +69,14 @@ impl VoiceCfg {
         };
         if voice.enabled && !voice.salut_enabled() {
             tracing::error!(
-                "Salut is off: set VOICE_SALUT_TOKEN, or VOICE_SALUT_PROJECT_ID when Sber cannot send a secret"
+                "Salut is off: set VOICE_SALUT_TOKEN and send it as a header or in /skills/salut/{{token}}; VOICE_SALUT_PROJECT_ID alone does not enable it"
             );
         }
         voice
     }
 
     pub fn salut_enabled(&self) -> bool {
-        !self.salut_token.expose().is_empty() || !self.salut_project_id.is_empty()
+        !self.salut_token.expose().is_empty()
     }
 
     pub fn client(&self, id: &str) -> Option<&OAuthClient> {

@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::hub::Refused;
+use super::hub::{Refused, Replied};
 use crate::common::admission::{AdmissionRejection, Endpoint};
 use crate::common::session::SessionCtx;
 use crate::error::{AppError, AppResult};
@@ -170,7 +170,7 @@ async fn reply(
     } else {
         body.display
     };
-    let recorded = st
+    let replied = st
         .remote
         .reply(
             &ctx.sc_user_id,
@@ -183,15 +183,20 @@ async fn reply(
             },
         )
         .await;
-    if !recorded {
-        return Err(AppError::coded(
+    match replied {
+        Replied::Recorded => Ok(StatusCode::NO_CONTENT),
+        Replied::Unknown => Err(AppError::coded(
+            StatusCode::BAD_REQUEST,
+            "voice_reply_unknown",
+            "this command is not waiting for an answer",
+        )),
+        Replied::Busy => Err(AppError::coded(
             StatusCode::SERVICE_UNAVAILABLE,
             "voice_busy",
             "remote is busy, try again shortly",
         )
-        .with_retry_after(1));
+        .with_retry_after(1)),
     }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn link_code(

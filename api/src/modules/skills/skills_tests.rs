@@ -179,7 +179,7 @@ fn the_shared_salut_token_is_taken_from_either_header_or_the_path_and_never_empt
 }
 
 #[test]
-fn salut_admits_by_token_by_project_or_not_at_all() {
+fn salut_needs_the_token_and_checks_the_project_on_top() {
     let request: SalutRequest = serde_json::from_str(SALUT_SAMPLE).unwrap();
     assert_eq!(request.project_id(), "p");
     let none = HeaderMap::new();
@@ -189,15 +189,19 @@ fn salut_admits_by_token_by_project_or_not_at_all() {
         Err(StatusCode::SERVICE_UNAVAILABLE)
     );
     assert_eq!(
+        admitted("", "p", &none, None, &request),
+        Err(StatusCode::SERVICE_UNAVAILABLE),
+        "a project id alone is not a secret"
+    );
+    assert_eq!(
         admitted("tok", "", &none, None, &request),
         Err(StatusCode::UNAUTHORIZED)
     );
-    assert_eq!(admitted("tok", "", &none, Some("tok"), &request), Ok(()));
-    assert_eq!(admitted("", "p", &none, None, &request), Ok(()));
     assert_eq!(
-        admitted("", "other", &none, None, &request),
-        Err(StatusCode::FORBIDDEN)
+        admitted("tok", "p", &none, None, &request),
+        Err(StatusCode::UNAUTHORIZED)
     );
+    assert_eq!(admitted("tok", "", &none, Some("tok"), &request), Ok(()));
     assert_eq!(
         admitted("tok", "other", &none, Some("tok"), &request),
         Err(StatusCode::FORBIDDEN)
@@ -210,7 +214,7 @@ fn salut_admits_by_token_by_project_or_not_at_all() {
     .unwrap();
     assert_eq!(bare.project_id(), "");
     assert_eq!(
-        admitted("", "p", &none, None, &bare),
+        admitted("tok", "p", &none, Some("tok"), &bare),
         Err(StatusCode::FORBIDDEN)
     );
 }
