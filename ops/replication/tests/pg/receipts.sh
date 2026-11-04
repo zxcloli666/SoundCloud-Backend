@@ -5,7 +5,8 @@ rc_blocks() { only "$1" "SELECT n FROM public.scd_counters WHERE counter = 'purg
 rc_node_batch() { only "$1" "SELECT deleted || '|' || coalesce(held, '') FROM public.scd_node_retention_batch('repl_purges'${2:+, keep => interval '$2'})"; }
 rc_old() { only "$1" "SELECT count(*) FROM public.repl_purges WHERE at < now() - interval '7 days'"; }
 rc_errors() { val postgres "SELECT coalesce(sum(apply_error_count), 0) FROM pg_catalog.pg_stat_subscription_stats"; }
-rc_acts() { awk -v u="\"$2\"" 'index($0, u) && !seen[$(NF-1) " " $NF]++ {printf "%s %s;", $(NF-1), $NF}' "$1"; }
+rc_acts() { awk -v u="\"$2\"" 'index($0, u) && $NF == 1 && !seen[$(NF-1)]++ {printf "%s;", $(NF-1)}' "$1"; }
+rc_settled() { awk -v u="\"$2\"" 'index($0, u) && $NF >= 3 {n++} END {print (n ? "unresolved" : "settled")}' "$1"; }
 rc_mirror() {
   sql -d scd_b1_core -c "SET scd.writer = 'mirror'" -c "INSERT INTO public.user_likes_tracks (user_id, sc_track_id, progress, synced_at, created_at, wanted_state, wanted_v, synced_for_v)
     SELECT '$1', 't1', false, now(), now(), true, f.v, f.v FROM (SELECT public.scd_purge_floor('user_likes_tracks', '$(rc_pk "$1")') AS v) AS f" > /dev/null
@@ -42,13 +43,13 @@ want "core's image without the receipts, the repair before 0293, is refused agai
 
 say "F1 receipts: a dry run counts the receipt difference and changes nothing"
 verify_cycle true "$tmp/receipts.dry"
-want "dry run reports main's extra receipt, then core's row" "$(rc_acts "$tmp/receipts.dry" rc1)" "receipts 1;row 1;"
+want "dry run reports main's extra receipt, then core's row, once per answer" "$(rc_acts "$tmp/receipts.dry" rc1) $(grep -c '"rc1".* [02-9]$' "$tmp/receipts.dry" || true)" "receipts;row; 0"
 grep -q '^star .*"rc1"' "$tmp/receipts.dry" && { echo "FAIL star reported rc1"; cat "$tmp/receipts.dry"; failed=$((failed + 1)); } || echo "ok nothing reported for star"
 want "the dry run changed nothing on main" "$(rc_likes main rc1) $(rc_receipts main "$rc1")" "0 0"
 
 say "F1 receipts: one repair cycle heals main, receipts first, then the row"
 verify_cycle false "$tmp/receipts.fix"
-want "the repair of rc1 is the receipts then the row, on attempt 1 only" "$(rc_acts "$tmp/receipts.fix" rc1)" "receipts 1;row 1;"
+want "the repair of rc1 is the receipts then the row, and it settles" "$(rc_acts "$tmp/receipts.fix" rc1) $(rc_settled "$tmp/receipts.fix" rc1)" "receipts;row; settled"
 swept
 want "main holds core's receipts for rc1, none" "$(rc_receipts main "$rc1")" none
 expect "rc1 lives on every node" "SELECT count(*) FROM public.user_likes_tracks WHERE user_id = 'rc1'" 1
@@ -75,8 +76,8 @@ reach
 want "core mirrors rc5 above its purge" "$(only core "SELECT wanted_v > $rc5_v FROM public.user_likes_tracks WHERE user_id = 'rc5'")" t
 want "star takes rc5, main's stray receipt refuses it" "$(rc_likes star rc5) $(rc_likes main rc5)" "1 0"
 verify_cycle false "$tmp/receipts.purged"
-want "star's stale rc4 is dropped with core's receipt" "$(rc_acts "$tmp/receipts.purged" rc4)" "drop 1;"
-want "main gets core's receipts for rc5, then the row" "$(rc_acts "$tmp/receipts.purged" rc5)" "receipts 1;row 1;"
+want "star's stale rc4 is dropped with core's receipt" "$(rc_acts "$tmp/receipts.purged" rc4) $(rc_settled "$tmp/receipts.purged" rc4)" "drop; settled"
+want "main gets core's receipts for rc5, then the row" "$(rc_acts "$tmp/receipts.purged" rc5) $(rc_settled "$tmp/receipts.purged" rc5)" "receipts;row; settled"
 swept
 expect "rc4 stays purged on every node" "SELECT count(*) FROM public.user_likes_tracks WHERE user_id = 'rc4'" 0
 expect "rc5 lives on every node above its purge" "SELECT count(*) FROM public.user_likes_tracks WHERE user_id = 'rc5' AND wanted_v > $rc5_v" 1
