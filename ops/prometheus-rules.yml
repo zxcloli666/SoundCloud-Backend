@@ -47,24 +47,28 @@ groups:
           description: "On 2026-11-03 after the 04:00 UTC relay reboot, api on main failed every relay_lua call for 18 minutes and SoundCloud search was down there, while star reconnected by itself. Until the relay client fix: restart api on that host (docker compose restart api)."
 
       - alert: ApiSemanticSearchStuck
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[5m]))) > 11
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="10",route=~"/search/(vibe|lyrics)"}[10m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) > 0.05
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[10m])) > 0.05
         for: 10m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "Semantic search on {{ $labels.route }} waits longer than its own poll loop"
-          description: "A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Above eleven seconds the wait is no longer the encoder but something behind it."
+          description: "More than 5% of requests slower than the 10s bound over 10m, from the kept buckets (the largest is 10, so a p99 above 11 could never be reached). A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Routes under 0.05 requests a second (30 in the window) are ignored, so two slow requests are needed."
 
       - alert: ApiSemanticSearchAlwaysCold
-        expr: histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[15m]))) > 5
+        expr: |
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="5",route=~"/search/(vibe|lyrics)"}[15m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) > 0.5
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route=~"/search/(vibe|lyrics)"}[15m])) > 0.02
         for: 30m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "Half of semantic searches on {{ $labels.route }} wait for the encoder"
-          description: "The vector cache and the query-vector collection should make repeat queries instant. A median above five seconds means the encoder is not answering or the cache is not being written."
+          description: "More than half of requests slower than the 5s bound over 15m, from the kept buckets. The vector cache and the query-vector collection should make repeat queries instant. Routes under 0.02 requests a second (18 in the window) are ignored."
 
       - alert: ApiServerErrors
         expr: (sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) - (sum(rate(api_session_miss_total{job="api",outcome="in_flight"}[5m])) or vector(0))) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.02
@@ -166,14 +170,16 @@ groups:
           description: "invalid_client or unauthorized_client: the app is disabled or its secret is wrong. The app is put on a half-hour cooldown, so the pool silently shrinks."
 
       - alert: ApiSoundCloudRetryAfterLong
-        expr: histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket{job="api"}[30m]))) > 300
+        expr: |
+          (sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) - sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="5"}[30m]))) / sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) > 0.5
+            and sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) > 0.01
         for: 30m
         labels:
           severity: warning
           service: api
         annotations:
-          summary: "SoundCloud is asking us to wait minutes"
-          description: "The value SoundCloud sends is obeyed and clamped at an hour. A p90 above five minutes means the throttle is no longer incidental."
+          summary: "SoundCloud is asking us to wait more than 5 seconds"
+          description: "More than half of the Retry-After values SoundCloud sent in 30m ask for more than 5 seconds, from the kept buckets (the 300s bound the p90 rule needed is dropped, so it could not fire). The value SoundCloud sends is obeyed and clamped at an hour. Sustained long waits mean the throttle is no longer incidental. Fewer than 18 values in the window are ignored."
 
       - alert: ApiDeadlocks
         expr: increase(api_pg_deadlocks_total{job="api"}[15m]) > 0

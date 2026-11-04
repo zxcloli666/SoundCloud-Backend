@@ -448,3 +448,121 @@ tests:
             exp_annotations:
               summary: "Lane core_bulk produced 12 dead letters in the last hour"
               description: "Jobs exhausted their retries. jobs_queue_dead_letters is a gauge of rows, so the rule adds up the rises between 5 minute samples and ignores drops (a deploy, retention, or the settled codes auth_required, not_found and forbidden no longer being counted). The payloads stay in the queue for inspection."
+
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="10"}'
+        values: '0+54x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+60x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+59x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ApiSemanticSearchStuck
+      - eval_time: 40m
+        alertname: ApiSemanticSearchStuck
+        exp_alerts:
+          - exp_labels:
+              route: /search/vibe
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Semantic search on /search/vibe waits longer than its own poll loop"
+              description: "More than 5% of requests slower than the 10s bound over 10m, from the kept buckets (the largest is 10, so a p99 above 11 could never be reached). A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Routes under 0.05 requests a second (30 in the window) are ignored, so two slow requests are needed."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+2x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+0x60'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ApiSemanticSearchStuck
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+60x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+24x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="10"}'
+        values: '0+24x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="+Inf"}'
+        values: '0+60x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="5"}'
+        values: '0+36x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/lyrics",le="10"}'
+        values: '0+36x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ApiSemanticSearchAlwaysCold
+      - eval_time: 80m
+        alertname: ApiSemanticSearchAlwaysCold
+        exp_alerts:
+          - exp_labels:
+              route: /search/vibe
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "Half of semantic searches on /search/vibe wait for the encoder"
+              description: "More than half of requests slower than the 5s bound over 15m, from the kept buckets. The vector cache and the query-vector collection should make repeat queries instant. Routes under 0.02 requests a second (18 in the window) are ignored."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="+Inf"}'
+        values: '0+6x60'
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="5"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ApiSoundCloudRetryAfterLong
+      - eval_time: 60m
+        alertname: ApiSoundCloudRetryAfterLong
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "SoundCloud is asking us to wait more than 5 seconds"
+              description: "More than half of the Retry-After values SoundCloud sent in 30m ask for more than 5 seconds, from the kept buckets (the 300s bound the p90 rule needed is dropped, so it could not fire). The value SoundCloud sends is obeyed and clamped at an hour. Sustained long waits mean the throttle is no longer incidental. Fewer than 18 values in the window are ignored."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="+Inf"}'
+        values: '0+6x60'
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="5"}'
+        values: '0+5x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ApiSoundCloudRetryAfterLong
+
+  - interval: 1m
+    input_series:
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="+Inf"}'
+        values: '0+0.5x60'
+      - series: 'api_sc_retry_after_seconds_bucket{job="api",instance="main",le="5"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ApiSoundCloudRetryAfterLong
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="+Inf"}'
+        values: '0+1x90'
+      - series: 'api_http_request_duration_seconds_bucket{job="api",instance="main",route="/search/vibe",le="5"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ApiSemanticSearchAlwaysCold
