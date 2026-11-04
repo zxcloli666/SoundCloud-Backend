@@ -242,6 +242,7 @@ async fn every_metric_an_alert_watches_is_actually_exported(
         retry_after_sec: Some(30),
     });
     set_relay_breaker_open("relay_lua", false);
+    record_session_miss("in_flight");
     sample_pool_wait(&pool).await;
 
     let Some(body) = render(&pool).await else {
