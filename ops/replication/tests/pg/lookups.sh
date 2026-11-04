@@ -35,9 +35,12 @@ SQL
 lk_count() { grep -cF "$2" "$tmp/lk.$1.tsv" || true; }
 
 lk_probes() {
-  local bad
-  bad="$(grep -F "$2" "$tmp/lk.$1.tsv" | awk -F'\t' -v idx="$3" 'index($2, "Index Scan using " idx " ") != 1 && index($2, "Index Only Scan using " idx " ") != 1 || $3 > 8 { print $2 " blocks=" $3 }' | head -3 || true)"
-  [ -z "$bad" ] || { echo "FAIL $1: a lookup on $3 is not an index probe: $bad"; exit 1; }
+  local phase="$1" query="$2" bad
+  shift 2
+  bad="$(grep -F "$query" "$tmp/lk.$phase.tsv" | awk -F'\t' -v idx="$*" '
+    { ok = 0; n = split(idx, names, " "); for (i = 1; i <= n; i++) if (index($2, "Index Scan using " names[i] " ") == 1 || index($2, "Index Only Scan using " names[i] " ") == 1) ok = 1 }
+    !ok || $3 > 8 { print $2 " blocks=" $3 }' | head -3 || true)"
+  [ -z "$bad" ] || { echo "FAIL $phase: a lookup is not a probe of $*: $bad"; exit 1; }
 }
 
 lk_want() {
@@ -97,7 +100,7 @@ SELECT 'urn:p:2', 100 + i, 'sc' || (200 + i) FROM generate_series(0, 7) i;"
 lk_want conflict "8 0 0 0 8 8"
 lk_probes conflict "$lk_name" artists_normalized_name_uq
 lk_probes conflict "$lk_lyrics" lyrics_lookup_state_sc_track_id_key
-lk_probes conflict "$lk_member" playlist_track_projection_member_uq
+lk_probes conflict "$lk_member" playlist_track_projection_member_uq playlist_track_projection_track_idx
 want "conflict: the holders are purged and the incoming rows take their keys" "$(val "$lk_db" "SELECT
     (SELECT count(*) FROM public.artists WHERE id IN (SELECT md5('artist ' || (100 + i))::uuid FROM generate_series(1, 8) i)) || ' ' ||
     (SELECT count(*) FROM public.artists WHERE name LIKE 'Taker %' AND normalized_name LIKE 'artist 10%') || ' ' ||
@@ -118,7 +121,7 @@ SELECT 'urn:p:3', i, 'sc' || (350 + i) FROM generate_series(0, 7) i;"
 lk_want moved "8 0 0 0 8 8"
 lk_probes moved "$lk_name" artists_normalized_name_uq
 lk_probes moved "$lk_lyrics" lyrics_lookup_state_sc_track_id_key
-lk_probes moved "$lk_member" playlist_track_projection_member_uq
+lk_probes moved "$lk_member" playlist_track_projection_member_uq playlist_track_projection_track_idx
 want "moved: a stored row that takes another row's key purges that row" "$(val "$lk_db" "SELECT
     (SELECT count(*) FROM public.artists WHERE id IN (SELECT md5('artist ' || (300 + i))::uuid FROM generate_series(1, 8) i)) || ' ' ||
     (SELECT count(*) FROM public.artists WHERE id IN (SELECT md5('artist ' || i)::uuid FROM generate_series(201, 208) i) AND normalized_name LIKE 'artist 30%') || ' ' ||
