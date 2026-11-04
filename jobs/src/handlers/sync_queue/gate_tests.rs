@@ -25,7 +25,7 @@ async fn attempted(pool: &PgPool) -> anyhow::Result<(bool, bool, String)> {
     .await?)
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_write_admitted_before_its_action_was_paused_is_not_sent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -50,7 +50,7 @@ async fn a_write_admitted_before_its_action_was_paused_is_not_sent(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_write_admitted_before_its_account_was_paused_is_not_sent(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -71,7 +71,7 @@ async fn a_write_admitted_before_its_account_was_paused_is_not_sent(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_create_stopped_before_sending_is_not_checked_as_unclear(
     pool: PgPool,
 ) -> anyhow::Result<()> {
