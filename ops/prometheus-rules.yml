@@ -170,16 +170,14 @@ groups:
           description: "invalid_client or unauthorized_client: the app is disabled or its secret is wrong. The app is put on a half-hour cooldown, so the pool silently shrinks."
 
       - alert: ApiSoundCloudRetryAfterLong
-        expr: |
-          (sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) - sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="5"}[30m]))) / sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) > 0.5
-            and sum(rate(api_sc_retry_after_seconds_bucket{job="api",le="+Inf"}[30m])) > 0.01
+        expr: histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket{job="api"}[30m]))) > 300
         for: 30m
         labels:
           severity: warning
           service: api
         annotations:
-          summary: "SoundCloud is asking us to wait more than 5 seconds"
-          description: "More than half of the Retry-After values SoundCloud sent in 30m ask for more than 5 seconds, from the kept buckets (the 300s bound the p90 rule needed is dropped, so it could not fire). The value SoundCloud sends is obeyed and clamped at an hour. Sustained long waits mean the throttle is no longer incidental. Fewer than 18 values in the window are ignored."
+          summary: "SoundCloud is asking us to wait minutes"
+          description: "The value SoundCloud sends is obeyed and clamped at an hour. A p90 above five minutes means the throttle is no longer incidental."
 
       - alert: ApiDeadlocks
         expr: increase(api_pg_deadlocks_total{job="api"}[15m]) > 0
