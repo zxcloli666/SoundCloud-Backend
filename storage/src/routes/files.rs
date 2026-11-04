@@ -44,7 +44,7 @@ pub async fn serve(
 
     let Some(requested) = requested else {
         let (info, stream) = open_full(&state, &path).await?;
-        return Ok(object_response(&info)
+        return Ok(object_response(&info, info.size)
             .body(Body::from_stream(stream))
             .unwrap());
     };
@@ -76,13 +76,12 @@ pub async fn serve(
         }
     };
 
-    Ok(object_response(&info)
+    Ok(object_response(&info, end - start + 1)
         .status(StatusCode::PARTIAL_CONTENT)
         .header(
             header::CONTENT_RANGE,
             format!("bytes {start}-{end}/{}", info.size),
         )
-        .header(header::CONTENT_LENGTH, end - start + 1)
         .body(Body::from_stream(stream))
         .unwrap())
 }
@@ -98,7 +97,7 @@ async fn open_full(state: &AppState, path: &str) -> Result<(ObjectInfo, ByteStre
     }
 }
 
-fn object_response(info: &ObjectInfo) -> response::Builder {
+fn object_response(info: &ObjectInfo, length: u64) -> response::Builder {
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(
@@ -109,8 +108,8 @@ fn object_response(info: &ObjectInfo) -> response::Builder {
         )
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::ACCEPT_RANGES, "bytes");
-    if info.size > 0 {
-        builder = builder.header(header::CONTENT_LENGTH, info.size);
+    if length > 0 {
+        builder = builder.header(header::CONTENT_LENGTH, length);
     }
     builder
 }
@@ -185,7 +184,9 @@ pub async fn head(
         }
     };
 
-    Ok(object_response(&info).body(Body::empty()).unwrap())
+    Ok(object_response(&info, info.size)
+        .body(Body::empty())
+        .unwrap())
 }
 
 /// DELETE /files/{filename} — delete the single m4a track
