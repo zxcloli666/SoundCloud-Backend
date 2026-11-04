@@ -6,9 +6,11 @@ nodes="core main star"
 sql() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -v FETCH_COUNT=5000 "$@"; }
 val() { $psql_cmd -X -q -v ON_ERROR_STOP=1 -v FETCH_COUNT=5000 -At -d "$1" -c "$2"; }
 say() { printf '== %s\n' "$*"; }
+only() { val "scd_b1_$1" "$2"; }
+want() { [ "$2" = "$3" ] && echo "ok $1 ($2)" || { echo "FAIL $1: got '$2', want '$3'"; exit 1; }; }
 
 teardown() {
-  for n in $nodes legacy_main legacy_star; do
+  for n in $nodes legacy_main legacy_star ld_core ld_main ld_star; do
     for s in $(val postgres "SELECT s.subname FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_database d ON d.oid = s.subdbid WHERE d.datname = 'scd_b1_$n'"); do
       sql -d "scd_b1_$n" -c "ALTER SUBSCRIPTION $s DISABLE" -c "ALTER SUBSCRIPTION $s SET (slot_name = NONE)" -c "DROP SUBSCRIPTION $s"
     done
@@ -16,7 +18,7 @@ teardown() {
   for s in $(val postgres "SELECT slot_name FROM pg_catalog.pg_replication_slots WHERE slot_name LIKE 'scd_b1_%'"); do
     val postgres "SELECT pg_catalog.pg_drop_replication_slot('$s')" > /dev/null
   done
-  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lyrics_race scd_b1_tpl scd_b1_ops; do
+  for d in scd_b1_core scd_b1_main scd_b1_star scd_b1_smoke scd_b1_exercise scd_b1_race scd_b1_order scd_b1_legacy_main scd_b1_legacy_star scd_b1_keep scd_b1_lyrics_race scd_b1_ld_core scd_b1_ld_main scd_b1_ld_star scd_b1_ld_tpl scd_b1_tpl scd_b1_ops; do
     sql -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"
   done
 }
@@ -52,6 +54,11 @@ install() {
   for f in tables triggers row_hash row_json registry purge_children publications; do
     sql -d "$1" -c "SET search_path = ''" -c "SET client_min_messages = warning" -f - < "$repl/generated/$f.sql"
   done
+}
+
+subscribe() {
+  val "scd_b1_$2" "SELECT pg_catalog.pg_create_logical_replication_slot('scd_b1_$1_from_$2', 'pgoutput')" > /dev/null
+  sql -d "scd_b1_$1" -c "CREATE SUBSCRIPTION $1_from_$2 CONNECTION 'host=$socket dbname=scd_b1_$2 user=scd' PUBLICATION $3 WITH ($4, create_slot = false, slot_name = 'scd_b1_$1_from_$2', copy_data = false)"
 }
 
 wait_for() {

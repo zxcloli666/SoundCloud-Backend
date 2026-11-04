@@ -91,7 +91,7 @@ jobs:
           PSQL: docker exec -i scdpg psql -U scd
           PGBENCH: docker exec -i scdpg pgbench -U scd
           LYRICS_RACE_SECONDS: 600
-        run: bash ops/replication/tests/pg/run.sh
+        run: bash ops/replication/tests/pg/run.sh || { docker logs scdpg 2>&1 | grep -E -B2 'processing remote data|logical replication (apply|parallel apply) worker .* (exited|failed)' | tail -60; exit 1; }
       - name: toolchain
         if: steps.changed.outputs.run == 'true'
         run: sh scripts/ci-toolchain.sh

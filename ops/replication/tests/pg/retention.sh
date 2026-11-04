@@ -1,6 +1,3 @@
-only() { val "scd_b1_$1" "$2"; }
-want() { [ "$2" = "$3" ] && echo "ok $1 ($2)" || { echo "FAIL $1: got '$2', want '$3'"; exit 1; }; }
-
 batch() { only core "SELECT deleted || '|' || coalesce(held, '') FROM public.scd_retention_batch('$1', batch => ${2:-1000}, stale => interval '${3:-3 minutes}')"; }
 held() { batch "$@" | cut -d'|' -f2; }
 core_rows() { only core "SELECT count(*) FROM public.$1 WHERE $2"; }
