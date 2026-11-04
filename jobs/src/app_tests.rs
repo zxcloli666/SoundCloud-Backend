@@ -172,6 +172,24 @@ async fn jobs_starts_on_a_core_with_every_migration_and_refuses_one_without_0292
 }
 
 #[sqlx::test(migrations = false)]
+async fn jobs_refuses_a_core_whose_queue_has_no_lookup_lane(pool: PgPool) -> anyhow::Result<()> {
+    crate::db::migrations::run_core(&pool, None).await?;
+    sqlx::raw_sql(
+        "ALTER TABLE background_jobs DROP CONSTRAINT background_jobs_lane_valid;
+         ALTER TABLE background_jobs
+             ADD CONSTRAINT background_jobs_lane_valid
+             CHECK (lane IN ('core_fast', 'core_bulk', 'maintenance', 'ops')) NOT VALID",
+    )
+    .execute(&pool)
+    .await?;
+
+    let refused = validate_core_schema(&pool).await;
+
+    assert!(refused.is_err_and(|error| error.to_string().contains("0307")));
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn jobs_starts_on_an_ops_database_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
     crate::db::migrations::run_ops(&pool).await?;
     validate_ops_schema(&pool).await

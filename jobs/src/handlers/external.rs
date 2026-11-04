@@ -20,7 +20,12 @@ impl ExternalSources {
         enrich: &EnrichConfig,
         lyrics: &LyricsConfig,
     ) -> Result<Self, ClientBuildError> {
-        let fetcher = ExternalFetcher::new(http_client()?, enrich.proxy_url.clone(), relay);
+        let fetcher = ExternalFetcher::admitting(
+            http_client(lyrics.concurrency)?,
+            enrich.proxy_url.clone(),
+            relay,
+            lyrics.concurrency,
+        );
         let background = fetcher.background();
         let genius = GeniusService::new(
             background.clone(),
@@ -43,10 +48,10 @@ impl ExternalSources {
     }
 }
 
-fn http_client() -> Result<wreq::Client, ClientBuildError> {
+fn http_client(proxy_requests: usize) -> Result<wreq::Client, ClientBuildError> {
     sc_fingerprint::builder(None)
         .tcp_keepalive(Duration::from_secs(60))
-        .pool_max_idle_per_host(20)
+        .pool_max_idle_per_host(proxy_requests.max(20))
         .pool_idle_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))

@@ -6,24 +6,22 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::any;
-use backend_contracts::JobKind;
+use backend_contracts::{JobKind, LyricsLookupPayload, Versioned};
 use base64::Engine as _;
 use catalog_sources::{ExternalFetcher, GeniusCfg, GeniusService, LyricsSources};
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{Tier, Turn};
-use crate::queue::{ClaimOrder, JobRepository, LeasedJob, NewJob, WriteGovernor};
+use crate::queue::{
+    ClaimOrder, JobRepository, JobResult, LeasedJob, LookupLane, NewJob, WriteGovernor,
+};
 
 const TRACKS: usize = 24;
 const MUSIXMATCH: &str = "https://apic-desktop.musixmatch.com/ws/1.1";
-const DUE_KINDS: &[JobKind] = &[
-    JobKind::CatalogCollection,
-    JobKind::IndexTrack,
-    JobKind::LyricsLookup,
-    JobKind::LyricsLookupSweep,
-];
+const LEASE: Duration = Duration::from_secs(600);
 
 #[derive(Clone)]
 struct Gate {
@@ -66,7 +64,7 @@ impl Gate {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "the sweep should hold {lookups} lookups, it holds {}",
+                    "the lane should hold {lookups} lookups, it holds {}",
                     self.waiting()
                 )
             })
@@ -102,7 +100,7 @@ async fn gated_source(State(gate): State<Gate>, headers: HeaderMap) -> (StatusCo
 async fn gated_handler(
     pool: &PgPool,
     gate: Gate,
-) -> anyhow::Result<(super::LyricsLookupHandler, tokio::task::JoinHandle<()>)> {
+) -> anyhow::Result<(Arc<super::LyricsLookupHandler>, tokio::task::JoinHandle<()>)> {
     let app = Router::new().route("/", any(gated_source)).with_state(gate);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -126,13 +124,13 @@ async fn gated_handler(
         sources,
         LyricsConfig {
             batch: 24,
-            concurrency: 16,
+            concurrency: 8,
             claim_seconds: 900,
             backfill_batch: 100,
             musixmatch_base: MUSIXMATCH.to_owned(),
         },
     );
-    Ok((handler, server))
+    Ok((Arc::new(handler), server))
 }
 
 async fn due_tracks(pool: &PgPool) -> anyhow::Result<()> {
@@ -177,74 +175,183 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<LeasedJob> {
         .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
 }
 
+fn lane_at(limit: usize) -> (Arc<WriteGovernor>, Arc<LookupLane>) {
+    let governor = WriteGovernor::new(32);
+    governor.hold_at(limit);
+    let lane = LookupLane::new(8, governor.clone());
+    (governor, lane)
+}
+
+async fn wake(pool: &PgPool, sc_track_ids: &[String]) -> anyhow::Result<()> {
+    let queue = JobRepository::new(pool.clone(), "lyrics-wakes".to_owned());
+    super::super::wake::enqueue_many(pool, &queue, sc_track_ids).await?;
+    Ok(())
+}
+
+async fn start_targeted(
+    lane: &Arc<LookupLane>,
+    pool: &PgPool,
+    handler: &Arc<super::LyricsLookupHandler>,
+    running: &mut JoinSet<JobResult>,
+) -> anyhow::Result<usize> {
+    let slots = lane.targeted_slots();
+    if slots.is_empty() {
+        return Ok(0);
+    }
+    let queue = JobRepository::new(pool.clone(), "lookup-lane".to_owned());
+    let claimed = lane.claim_targeted(&queue, slots, LEASE).await?;
+    let started = claimed.len();
+    for (job, slot) in claimed {
+        let payload =
+            serde_json::from_value::<Versioned<LyricsLookupPayload>>(job.payload.clone())?
+                .into_latest();
+        let handler = handler.clone();
+        running.spawn(async move {
+            let looked_up = handler.run_targeted(&job, payload).await;
+            drop(slot);
+            looked_up
+        });
+    }
+    Ok(started)
+}
+
+async fn not_found(pool: &PgPool) -> anyhow::Result<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_state WHERE status = 'not_found'")
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+async fn bulk_jobs(pool: &PgPool, jobs: usize) -> anyhow::Result<()> {
+    let queue = JobRepository::new(pool.clone(), "core-bulk".to_owned());
+    for job in 0..jobs {
+        queue
+            .enqueue(&NewJob {
+                id: uuid::Uuid::now_v7(),
+                kind: JobKind::IndexTrack,
+                dedup_key: Some(format!("bulk-{job}")),
+                payload: serde_json::json!({}),
+                priority: 5,
+                max_attempts: 8,
+                available_at: chrono::Utc::now() - chrono::Duration::minutes(1),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 #[sqlx::test(migrations = "../api/migrations")]
-async fn sweep_lookups_take_their_share_of_a_busy_lane_and_shrink_with_the_governor_limit(
+async fn targeted_lookups_in_flight_follow_the_governor_limit(pool: PgPool) -> anyhow::Result<()> {
+    due_tracks(&pool).await?;
+    let tracks: Vec<String> = (1..=TRACKS).map(|id| id.to_string()).collect();
+    wake(&pool, &tracks).await?;
+    let gate = Gate::new();
+    let (handler, server) = gated_handler(&pool, gate.clone()).await?;
+    let (governor, lane) = lane_at(16);
+    let mut running = JoinSet::new();
+
+    let phases = async {
+        anyhow::ensure!(lane.cap() == 4);
+        anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 4);
+        gate.holds(4).await?;
+        anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 0);
+
+        governor.hold_at(32);
+        anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 4);
+        gate.holds(8).await?;
+
+        governor.hold_at(8);
+        anyhow::ensure!(lane.cap() == 2);
+        anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 0);
+        gate.release(7);
+        for _ in 0..7 {
+            if let Some(done) = running.join_next().await {
+                done??;
+            }
+        }
+        anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 1);
+        gate.holds(2).await
+    }
+    .await;
+    gate.release(TRACKS);
+    while let Some(done) = running.join_next().await {
+        done??;
+    }
+    server.abort();
+    phases?;
+
+    assert_eq!(not_found(&pool).await?, 9);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_keeps_its_slots(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     due_tracks(&pool).await?;
     let job = sweep_job(&pool).await?;
-    let claims = super::tiered::claim(
-        &pool,
-        &job,
-        i64::try_from(TRACKS)?,
-        900,
-        Turn::led_by(Tier::StarLiked),
-    )
-    .await?;
-    assert_eq!(claims.len(), TRACKS);
+    let claims = super::tiered::claim(&pool, &job, 12, 900, Turn::led_by(Tier::StarLiked)).await?;
+    assert_eq!(claims.len(), 12);
+    let swept: Vec<&str> = claims
+        .iter()
+        .map(|claim| claim.sc_track_id.as_str())
+        .collect();
+    let targeted: Vec<String> = (1..=TRACKS)
+        .map(|id| id.to_string())
+        .filter(|id| !swept.contains(&id.as_str()))
+        .collect();
+    wake(&pool, &targeted).await?;
+    bulk_jobs(&pool, 40).await?;
     let gate = Gate::new();
     let (handler, server) = gated_handler(&pool, gate.clone()).await?;
-    let governor = WriteGovernor::new(32);
-    governor.hold_at(32);
-    governor.lane_round(DUE_KINDS);
-    assert_eq!(governor.claim_room(32, 32, 64), 0);
-    let borrower = governor.borrower(JobKind::LyricsLookupSweep);
-    let within = |lane: usize, limit: usize| {
-        let total = lane + gate.waiting().saturating_sub(1);
-        anyhow::ensure!(
-            total <= limit,
-            "lane jobs and sweep lookups hold {total} slots over the limit {limit}"
-        );
-        Ok(())
-    };
+    let (governor, lane) = lane_at(32);
+    let mut running = JoinSet::new();
 
     let phases = async {
         let checked = async {
-            gate.holds(1).await?;
-
-            anyhow::ensure!(governor.claim_room(25, 32, 64) == 0);
-            gate.holds(8).await?;
-            anyhow::ensure!(governor.claim_room(25, 32, 64) == 0);
-            within(25, 32)?;
-
-            governor.hold_at(8);
-            anyhow::ensure!(governor.claim_room(6, 32, 64) == 0);
-            gate.release(8);
-            gate.holds(2).await?;
-            anyhow::ensure!(governor.claim_room(6, 32, 64) == 1);
-            within(7, 8)?;
-
-            governor.lane_idle(1);
             gate.holds(7).await?;
-            within(1, 8)
+            anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 1);
+            gate.holds(8).await?;
+
+            gate.release(5);
+            gate.holds(3).await?;
+            anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 5);
+            gate.holds(8).await?;
+
+            let bulk = JobRepository::new(pool.clone(), "core-bulk".to_owned())
+                .claim(
+                    crate::handlers::CORE_BULK_KINDS,
+                    ClaimOrder::Priority,
+                    governor.limit(),
+                    LEASE,
+                )
+                .await?;
+            anyhow::ensure!(bulk.len() == governor.limit());
+            anyhow::ensure!(
+                bulk.iter()
+                    .all(|job| !crate::handlers::LOOKUP_KINDS.contains(&job.kind))
+            );
+            gate.holds(8).await
         }
         .await;
-        gate.release(TRACKS);
+        gate.release(TRACKS * 2);
         checked
     };
-    let (swept, checked) = tokio::join!(handler.process_batch(&job, claims, &borrower), phases);
+    let (swept, checked) = tokio::join!(handler.process_batch(&job, claims, &lane), phases);
+    while let Some(done) = running.join_next().await {
+        done??;
+    }
     server.abort();
     checked?;
     swept?;
 
-    let settled: (i64, i64) = sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE status = 'not_found'),
-                (SELECT count(*) FROM lyrics_lookup_queue WHERE claim_job_id = $1)
-         FROM lyrics_lookup_state",
-    )
-    .bind(job.id)
-    .fetch_one(&pool)
-    .await?;
-    assert_eq!(settled, (i64::try_from(TRACKS)?, 0));
+    assert_eq!(not_found(&pool).await?, 18);
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM lyrics_lookup_queue WHERE claim_job_id = $1")
+            .bind(job.id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(left, 0);
     Ok(())
 }

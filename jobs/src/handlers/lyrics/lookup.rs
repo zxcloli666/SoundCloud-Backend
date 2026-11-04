@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{self, CORE_FAST_TRACK_PRIORITY, Tier, Turns};
+use crate::metrics::LookupPath;
 use crate::queue::{
-    Borrower, JobError, JobRepository, JobResult, LeasedJob, LentSlot, NewJob, QueueError,
-    WriteGovernor,
+    JobError, JobRepository, JobResult, LeasedJob, LookupLane, LookupSlot, NewJob, QueueError,
 };
 
 use super::embedding_queue;
@@ -36,6 +36,7 @@ const DUE_WAKE_BATCH: i64 = 256;
 const INSUFFICIENT_METADATA_DELAY: i64 = 7 * 24 * 60 * 60;
 const RECHECK_MAX_STREAK: i32 = 7;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(180);
+const SLOT_RECHECK: Duration = Duration::from_secs(1);
 
 #[derive(sqlx::FromRow)]
 struct LookupClaim {
@@ -120,7 +121,7 @@ impl LyricsLookupHandler {
         super::wake::listen(self.pool.clone(), self.queue.clone(), cancellation).await
     }
 
-    pub async fn run_sweep(&self, job: &LeasedJob, governor: &Arc<WriteGovernor>) -> JobResult {
+    pub async fn run_sweep(&self, job: &LeasedJob, lane: &Arc<LookupLane>) -> JobResult {
         if job.dedup_key.as_deref() != Some("schedule") {
             return Err(JobError::permanent(anyhow::anyhow!(
                 "lyrics lookup sweep has an invalid dedup key"
@@ -137,68 +138,68 @@ impl LyricsLookupHandler {
 
         super::wake::enqueue_due(&self.pool, &self.queue, DUE_WAKE_BATCH).await?;
 
-        let borrower = governor.borrower(job.kind);
         let claims = tiered::claim(
             &self.pool,
             job,
-            sweep_size(self.config.batch, self.config.concurrency, borrower.slots()),
+            sweep_size(
+                self.config.batch,
+                self.config.concurrency,
+                lane.sweep_slots(),
+            ),
             self.config.claim_seconds,
             self.turns.next(),
         )
         .await
         .map_err(JobError::retryable)?;
-        self.process_batch(job, claims, &borrower).await
+        let swept = self.process_batch(job, claims, lane).await;
+        lane.sweep_wants(0);
+        swept
     }
 
     async fn process_batch(
         &self,
         job: &LeasedJob,
         claims: Vec<LookupClaim>,
-        borrower: &Borrower,
+        lane: &Arc<LookupLane>,
     ) -> JobResult {
-        let concurrency = self.config.concurrency.max(1);
         let mut queue = claims.into_iter();
         let mut running = FuturesUnordered::new();
-        let mut own_slot_free = true;
         loop {
-            borrower.want((queue.len() + running.len()).min(concurrency));
-            while running.len() < concurrency && !queue.as_slice().is_empty() {
-                let lent = if own_slot_free {
-                    None
-                } else if let Some(lent) = borrower.lend() {
-                    Some(lent)
-                } else {
+            lane.sweep_wants(queue.len() + running.len());
+            while !queue.as_slice().is_empty() {
+                let Some(slot) = lane.sweep_slot() else {
                     break;
                 };
                 let Some(claim) = queue.next() else {
                     break;
                 };
-                own_slot_free = false;
-                running.push(self.process_in_slot(job, claim, lent));
+                running.push(self.process_in_slot(job, claim, slot));
             }
-            let waiting = running.len() < concurrency && !queue.as_slice().is_empty();
+            if running.is_empty() && queue.as_slice().is_empty() {
+                return Ok(());
+            }
+            let waiting = !queue.as_slice().is_empty();
             tokio::select! {
-                finished = running.next() => {
-                    let Some((own_slot, result)) = finished else {
-                        break;
-                    };
-                    own_slot_free |= own_slot;
-                    result?;
+                finished = running.next(), if !running.is_empty() => {
+                    if let Some(result) = finished {
+                        result?;
+                    }
                 }
-                _ = borrower.freed(), if waiting => {}
+                _ = lane.freed(), if waiting => {}
+                _ = tokio::time::sleep(SLOT_RECHECK), if waiting => {}
             }
         }
-        Ok(())
     }
 
     async fn process_in_slot(
         &self,
         job: &LeasedJob,
         claim: LookupClaim,
-        lent: Option<LentSlot>,
-    ) -> (bool, JobResult) {
+        slot: LookupSlot,
+    ) -> JobResult {
         let result = self.process(job, claim).await;
-        (lent.is_none(), result)
+        drop(slot);
+        result
     }
 
     async fn process(&self, job: &LeasedJob, claim: LookupClaim) -> JobResult {
@@ -219,6 +220,8 @@ impl LyricsLookupHandler {
                 retry_after_seconds: None,
             }),
         };
+        let (label, failure) = outcome_label(&outcome);
+        crate::metrics::record_lyrics_lookup(lookup_path(job.kind), label, failure);
         match outcome {
             LyricsLookupOutcome::Found(candidate) => {
                 self.settle_found(job, &claim, candidate, false).await
@@ -396,6 +399,23 @@ fn sweep_size(batch: i64, concurrency: usize, slots: usize) -> i64 {
         .saturating_mul(slots.clamp(1, concurrency))
         .div_ceil(concurrency);
     i64::try_from(size).unwrap_or(i64::MAX)
+}
+
+fn outcome_label(outcome: &LyricsLookupOutcome) -> (&'static str, Option<&str>) {
+    match outcome {
+        LyricsLookupOutcome::Found(_) => ("found", None),
+        LyricsLookupOutcome::FoundWithoutSync(_) => ("found_without_sync", None),
+        LyricsLookupOutcome::CleanMiss => ("not_found", None),
+        LyricsLookupOutcome::InsufficientMetadata => ("insufficient_metadata", None),
+        LyricsLookupOutcome::Retry(failure) => ("retry", Some(failure.class.as_str())),
+    }
+}
+
+fn lookup_path(kind: JobKind) -> LookupPath {
+    match kind {
+        JobKind::LyricsLookup => LookupPath::Targeted,
+        _ => LookupPath::Sweep,
+    }
 }
 
 fn canonical_track_id(value: &str) -> anyhow::Result<String> {
