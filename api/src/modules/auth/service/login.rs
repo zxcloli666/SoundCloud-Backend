@@ -547,7 +547,7 @@ impl AuthService {
             }
         }
 
-        let session_id = Uuid::new_v4();
+        let session_id = Uuid::now_v7();
         sqlx::query_file!(
             "queries/auth/service/insert_session.sql",
             session_id,

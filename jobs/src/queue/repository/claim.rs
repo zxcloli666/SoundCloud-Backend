@@ -46,7 +46,8 @@ impl JobRepository {
                     limit,
                     kind.as_str(),
                     self.worker_id.as_str(),
-                    lease_milliseconds
+                    lease_milliseconds,
+                    kind.lane().as_str()
                 )
                 .fetch_all(&self.pool)
                 .await?

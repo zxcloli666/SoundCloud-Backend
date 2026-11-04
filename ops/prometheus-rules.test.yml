@@ -144,3 +144,56 @@ tests:
             exp_annotations:
               summary: "A node has kept resend keys queued for 30 minutes"
               description: "The sweeper ships pending resends within seconds. Retention of tombstones and receipts waits for every queue to be empty."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_requests_total{job="api",instance="main",status="200"}'
+        values: '0+5400x20'
+      - series: 'api_http_requests_total{job="api",instance="main",status="503"}'
+        values: '0+600x20'
+      - series: 'api_session_miss_total{job="api",instance="main",outcome="in_flight"}'
+        values: '0+540x20'
+      - series: 'api_http_requests_total{job="api",instance="star",status="200"}'
+        values: '0+5400x20'
+      - series: 'api_http_requests_total{job="api",instance="star",status="503"}'
+        values: '0+600x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ApiHostUnavailable
+        exp_alerts:
+          - exp_labels:
+              instance: star
+              severity: critical
+              service: api
+            exp_annotations:
+              summary: "10% of api requests on star answer 503"
+              description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it. A young session that has not replicated yet answers 503 too (api_session_miss_total outcome in_flight); that is replication lag and is subtracted."
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_requests_total{job="api",instance="main",status="200"}'
+        values: '0+5700x20'
+      - series: 'api_http_requests_total{job="api",instance="main",status="503"}'
+        values: '0+300x20'
+      - series: 'api_session_miss_total{job="api",instance="main",outcome="in_flight"}'
+        values: '0+300x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ApiServerErrors
+
+  - interval: 1m
+    input_series:
+      - series: 'api_http_requests_total{job="api",instance="main",status="200"}'
+        values: '0+5700x20'
+      - series: 'api_http_requests_total{job="api",instance="main",status="503"}'
+        values: '0+300x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ApiServerErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: "More than 2% of answers are 5xx"
+              description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new. The 503 for a young session that has not replicated to this node yet (api_session_miss_total outcome in_flight) is replication lag, not an error, and is not counted."

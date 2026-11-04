@@ -63,14 +63,14 @@ groups:
           description: "The vector cache and the query-vector collection should make repeat queries instant. A median above five seconds means the encoder is not answering or the cache is not being written."
 
       - alert: ApiServerErrors
-        expr: sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.02
+        expr: (sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) - (sum(rate(api_session_miss_total{job="api",outcome="in_flight"}[5m])) or vector(0))) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.02
         for: 10m
         labels:
           severity: warning
           service: api
         annotations:
           summary: "More than 2% of answers are 5xx"
-          description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new."
+          description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new. The 503 for a young session that has not replicated to this node yet (api_session_miss_total outcome in_flight) is replication lag, not an error, and is not counted."
 
       - alert: ApiServerErrorsCritical
         expr: sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.1
@@ -112,14 +112,14 @@ groups:
           description: "The scrape probe waits like a request does. Normal max is 0.033s (2h before 2026-10-31 08:40). At 08:41 a cold api on main waited 2.6s and 1.2s, the core pool was 18 of 18 busy and requests got PoolTimedOut. Look at host CPU and what restarted, see backend-ops.md."
 
       - alert: ApiHostUnavailable
-        expr: sum by (instance) (rate(api_http_requests_total{job="api",status="503"}[2m])) / sum by (instance) (rate(api_http_requests_total{job="api"}[2m])) > 0.05
+        expr: (sum by (instance) (rate(api_http_requests_total{job="api",status="503"}[2m])) - (sum by (instance) (rate(api_session_miss_total{job="api",outcome="in_flight"}[2m])) or 0 * sum by (instance) (rate(api_http_requests_total{job="api",status="503"}[2m])))) / sum by (instance) (rate(api_http_requests_total{job="api"}[2m])) > 0.05
         for: 30s
         labels:
           severity: critical
           service: api
         annotations:
           summary: "{{ $value | humanizePercentage }} of api requests on {{ $labels.instance }} answer 503"
-          description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it."
+          description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it. A young session that has not replicated yet answers 503 too (api_session_miss_total outcome in_flight); that is replication lag and is subtracted."
 
       - alert: ApiSoundCloudBreakerOpen
         expr: max by (host, channel) (api_sc_relay_breaker_open{job="api"}) == 1

@@ -49,7 +49,11 @@ pub struct SessionLimits {
 }
 
 impl DatabaseConfig {
-    pub fn from_env(prefix: &str, mtls_by_default: bool) -> Result<Self, ConfigError> {
+    pub fn from_env(
+        prefix: &str,
+        mtls_by_default: bool,
+        bulk_maximum: &str,
+    ) -> Result<Self, ConfigError> {
         let key = |name: &str| format!("{prefix}{name}");
         let url = match env::optional(&key("DATABASE_URL")) {
             Some(url) => url,
@@ -102,7 +106,7 @@ impl DatabaseConfig {
             },
             bulk_pool: PoolConfig {
                 minimum: env::parse(&key("PG_BULK_POOL_MIN"), "0")?,
-                maximum: env::parse(&key("PG_BULK_POOL_MAX"), "4")?,
+                maximum: env::parse(&key("PG_BULK_POOL_MAX"), bulk_maximum)?,
                 acquire_timeout: Duration::from_millis(env::positive_u64(
                     &key("PG_BULK_ACQUIRE_TIMEOUT_MS"),
                     30_000,
@@ -127,7 +131,7 @@ pub fn read_database_from_env(
     if env::optional("JOBS_READ_DATABASE_URL").is_none() {
         return Ok(None);
     }
-    DatabaseConfig::from_env("JOBS_READ_", mtls_by_default).map(Some)
+    DatabaseConfig::from_env("JOBS_READ_", mtls_by_default, "4").map(Some)
 }
 
 pub fn maintenance_pool_from_env() -> Result<PoolConfig, ConfigError> {
@@ -179,12 +183,12 @@ impl PoolCoverage {
     }
 }
 
-pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 5;
+pub const QUEUE_POOL_MINIMUM_CONNECTIONS: u32 = 7;
 
 pub fn queue_pool_from_env() -> Result<PoolConfig, ConfigError> {
     let pool = PoolConfig {
         minimum: env::parse("PG_QUEUE_POOL_MIN", "1")?,
-        maximum: env::parse("PG_QUEUE_POOL_MAX", "5")?,
+        maximum: env::parse("PG_QUEUE_POOL_MAX", "7")?,
         acquire_timeout: Duration::from_millis(env::positive_u64(
             "PG_QUEUE_ACQUIRE_TIMEOUT_MS",
             5_000,
@@ -204,7 +208,7 @@ fn validate_queue_pool(pool: &PoolConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Invalid {
             key: "PG_QUEUE_POOL_MAX".to_owned(),
             reason: format!(
-                "must be at least {QUEUE_POOL_MINIMUM_CONNECTIONS}: one claimer per queue lane and the scheduler"
+                "must be at least {QUEUE_POOL_MINIMUM_CONNECTIONS}: one claimer per queue lane, the scheduler and the lane realignment"
             ),
         });
     }
