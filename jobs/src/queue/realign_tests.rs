@@ -6,7 +6,7 @@ use backend_contracts::JobKind;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
-use super::LaneRealign;
+use super::{LaneRealign, ROW_PAUSE, STEP, pause_after};
 use crate::queue::{ClaimOrder, JobRepository};
 
 async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
@@ -20,13 +20,24 @@ async fn install_schema(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn paced(pool: &PgPool, batch: i64) -> Arc<LaneRealign> {
+fn paced(pool: &PgPool, step: i64) -> Arc<LaneRealign> {
     Arc::new(LaneRealign {
         pool: pool.clone(),
-        batch,
-        pause: Duration::ZERO,
+        step,
+        row_pause: Duration::ZERO,
+        repeat: Duration::from_millis(50),
         finished: AtomicBool::new(false),
     })
+}
+
+async fn finished(realign: &LaneRealign) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !realign.finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
 }
 
 async fn lanes(pool: &PgPool) -> anyhow::Result<Vec<(String, String, i64)>> {
@@ -59,7 +70,7 @@ async fn idle_jobs_left_in_a_stale_lane_move_and_leased_or_unknown_ones_stay(
     .execute(&pool)
     .await?;
 
-    let moved = paced(&pool, 1_000).realign().await;
+    let moved = paced(&pool, 1_000).pass().await;
 
     assert_eq!(moved, 2);
     assert_eq!(
@@ -89,8 +100,8 @@ async fn the_realignment_walks_the_whole_queue_in_small_steps_and_a_second_pass_
     .execute(&pool)
     .await?;
     let realign = paced(&pool, 4);
-    let moved = realign.realign().await;
-    let again = realign.realign().await;
+    let moved = realign.pass().await;
+    let again = realign.pass().await;
 
     assert_eq!(moved, 17);
     assert_eq!(again, 0);
@@ -170,12 +181,7 @@ async fn the_task_reports_finished_after_its_pass_and_stays_until_shutdown(
     assert!(!realign.finished());
 
     let task = tokio::spawn(realign.clone().run(cancellation.clone()));
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !realign.finished() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
+    finished(&realign).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!task.is_finished());
     cancellation.cancel();
@@ -186,4 +192,55 @@ async fn the_task_reports_finished_after_its_pass_and_stays_until_shutdown(
         [("lyrics.lookup".to_owned(), "lookup".to_owned(), 5)]
     );
     Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn jobs_written_to_a_stale_lane_after_the_first_pass_are_moved_by_a_later_one(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    let realign = paced(&pool, 2);
+    let cancellation = CancellationToken::new();
+    let task = tokio::spawn(realign.clone().run(cancellation.clone()));
+    finished(&realign).await?;
+
+    sqlx::query(
+        "INSERT INTO background_jobs (id, kind, lane, dedup_key, payload)
+         SELECT gen_random_uuid(), 'lyrics.lookup', 'core_bulk', n::text, '{}'::jsonb
+         FROM generate_series(1, 3) AS n",
+    )
+    .execute(&pool)
+    .await?;
+    let moved = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let stale: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM background_jobs WHERE lane <> 'lookup'")
+                    .fetch_one(&pool)
+                    .await?;
+            if stale == 0 {
+                return anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    cancellation.cancel();
+    task.await??;
+    moved??;
+
+    assert_eq!(
+        lanes(&pool).await?,
+        [("lyrics.lookup".to_owned(), "lookup".to_owned(), 3)]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_full_step_of_moved_rows_is_paced_under_a_megabyte_of_wal_per_second() {
+    let worst_wal_per_row = 18 * 1024;
+    let step_wal = STEP as f64 * f64::from(worst_wal_per_row);
+    let seconds = pause_after(ROW_PAUSE, STEP).as_secs_f64();
+
+    assert!(step_wal / seconds <= 1024.0 * 1024.0);
+    assert_eq!(pause_after(ROW_PAUSE, 0), Duration::ZERO);
 }

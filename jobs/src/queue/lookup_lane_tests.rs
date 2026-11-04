@@ -39,21 +39,35 @@ fn the_cap_is_the_base_scaled_by_the_governor_limit_and_never_zero() {
 #[test]
 fn a_waiting_targeted_queue_cuts_the_sweep_to_a_quarter_and_an_idle_one_leaves_it_all_but_one() {
     let lane = lane(8, 32);
-    lane.sweep_wants(30);
+    let demand = lane.sweep_demand();
+    demand.wants(30);
     let mut sweep: Vec<_> = std::iter::from_fn(|| lane.sweep_slot()).collect();
     assert_eq!(sweep.len(), 7);
 
     let targeted = lane.targeted_slots();
     assert_eq!(targeted.len(), 1);
-    lane.targeted_waiting(true);
+    lane.held().targeted_waiting = true;
     sweep.truncate(3);
     assert!(lane.sweep_slot().is_none());
     sweep.truncate(2);
     assert!(lane.sweep_slot().is_none());
     assert_eq!(lane.targeted_slots().len(), 5);
 
-    lane.targeted_waiting(false);
+    lane.held().targeted_waiting = false;
     assert_eq!(lane.sweep_slots(), 7);
+}
+
+#[test]
+fn a_dropped_sweep_demand_gives_its_reserve_back_to_targeted_lookups() {
+    let lane = lane(8, 32);
+    let demand = lane.sweep_demand();
+    demand.wants(30);
+    assert_eq!(lane.targeted_slots().len(), 6);
+
+    drop(demand);
+
+    assert_eq!(lane.held().sweep_wants, 0);
+    assert_eq!(lane.targeted_slots().len(), 8);
 }
 
 #[sqlx::test(migrations = false)]
@@ -82,10 +96,11 @@ async fn old_lookups_and_an_old_sweep_left_in_other_lanes_are_owned_by_the_looku
     let lane = lane(8, 32);
     let queue = JobRepository::new(pool.clone(), "lookup".to_owned());
 
-    let targeted = lane
-        .claim_targeted(&queue, lane.targeted_slots(), LEASE)
-        .await?;
+    let slots = lane.targeted_slots();
+    let in_flight_while_claiming = lane.held().targeted_in_flight();
+    let targeted = lane.claim_targeted(&queue, slots, LEASE).await?;
     let held = lane.held().targeted;
+    let in_flight = lane.held().targeted_in_flight();
     let released = queue.release_expired(LOOKUP_KINDS, 16).await?;
     let late = lane
         .claim_targeted(&queue, lane.targeted_slots(), LEASE)
@@ -99,8 +114,10 @@ async fn old_lookups_and_an_old_sweep_left_in_other_lanes_are_owned_by_the_looku
         )
         .await?;
 
+    assert_eq!(in_flight_while_claiming, 0);
     assert_eq!(targeted.len(), 3);
     assert_eq!(held, 3);
+    assert_eq!(in_flight, 3);
     assert!(!lane.held().targeted_waiting);
     assert_eq!(released, 1);
     assert_eq!(late.len(), 1);

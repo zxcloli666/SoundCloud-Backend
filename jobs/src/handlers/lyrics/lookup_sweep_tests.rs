@@ -355,3 +355,75 @@ async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_k
     assert_eq!(left, 0);
     Ok(())
 }
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_sweep_dropped_mid_batch_hands_its_slots_and_its_reserve_back(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    due_tracks(&pool).await?;
+    let job = sweep_job(&pool).await?;
+    let claims = super::tiered::claim(&pool, &job, 12, 900, Turn::led_by(Tier::StarLiked)).await?;
+    let gate = Gate::new();
+    let (handler, server) = gated_handler(&pool, gate.clone()).await?;
+    let (_governor, lane) = lane_at(32);
+
+    let while_held = tokio::select! {
+        _ = handler.process_batch(&job, claims, &lane) => {
+            anyhow::bail!("the sweep finished while its lookups were held")
+        }
+        held = async {
+            gate.holds(7).await?;
+            anyhow::Ok(lane.targeted_slots().len())
+        } => held?,
+    };
+    let after_drop = lane.targeted_slots().len();
+    gate.release(TRACKS);
+    server.abort();
+
+    assert_eq!(while_held, 1);
+    assert_eq!(after_drop, 8);
+    Ok(())
+}
+
+#[sqlx::test(migrations = "../api/migrations")]
+async fn a_failed_lookup_lets_the_rest_of_the_sweep_batch_finish_and_returns_its_error(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    due_tracks(&pool).await?;
+    let job = sweep_job(&pool).await?;
+    let mut claims =
+        super::tiered::claim(&pool, &job, 12, 900, Turn::led_by(Tier::StarLiked)).await?;
+    claims.insert(
+        0,
+        super::LookupClaim {
+            track_id: uuid::Uuid::now_v7(),
+            sc_track_id: "not a track".to_owned(),
+            generation: 1,
+            input_title: "Track".to_owned(),
+            input_artist: "Artist".to_owned(),
+            input_duration_ms: 180_000,
+            input_genius_song_id: None,
+            input_genius_url: None,
+            input_release_date: None,
+            input_sc_created_at: None,
+            miss_streak: 0,
+            failure_streak: 0,
+        },
+    );
+    let gate = Gate::new();
+    let (handler, server) = gated_handler(&pool, gate.clone()).await?;
+    let (_governor, lane) = lane_at(32);
+
+    let phases = async {
+        let held = gate.holds(7).await;
+        gate.release(TRACKS);
+        held
+    };
+    let (swept, held) = tokio::join!(handler.process_batch(&job, claims, &lane), phases);
+    server.abort();
+    held?;
+
+    assert!(swept.is_err());
+    assert_eq!(not_found(&pool).await?, 12);
+    Ok(())
+}

@@ -153,8 +153,7 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.clone(),
         config.queue.core_fast.clone(),
         CORE_FAST_KINDS,
-    )
-    .realigned_by(realign.clone());
+    );
     let core_bulk_worker = QueueWorker::new(
         core_bulk_repository,
         handlers.clone(),
@@ -171,16 +170,14 @@ pub async fn run() -> anyhow::Result<()> {
         config.queue.clone(),
         config.queue.maintenance.clone(),
         MAINTENANCE_KINDS,
-    )
-    .realigned_by(realign.clone());
+    );
     let ops_worker = QueueWorker::new(
         ops_repository,
         handlers.clone(),
         config.queue.clone(),
         config.queue.ops.clone(),
         OPS_KINDS,
-    )
-    .realigned_by(realign.clone());
+    );
     let lookup_worker = LookupWorker::new(
         lookup_repository,
         handlers.clone(),

@@ -24,19 +24,43 @@ pub(crate) struct LookupLane {
 #[derive(Default)]
 struct Held {
     targeted: usize,
+    reserved: usize,
     sweep: usize,
     sweep_wants: usize,
     targeted_waiting: bool,
 }
 
+impl Held {
+    fn targeted_in_flight(&self) -> usize {
+        self.targeted.saturating_sub(self.reserved)
+    }
+}
+
 pub(crate) struct LookupSlot {
     lane: Arc<LookupLane>,
     path: LookupPath,
+    reserved: bool,
 }
 
 impl Drop for LookupSlot {
     fn drop(&mut self) {
-        self.lane.release(self.path);
+        self.lane.release(self.path, self.reserved);
+    }
+}
+
+pub(crate) struct SweepDemand {
+    lane: Arc<LookupLane>,
+}
+
+impl SweepDemand {
+    pub(crate) fn wants(&self, lookups: usize) {
+        self.lane.held().sweep_wants = lookups;
+    }
+}
+
+impl Drop for SweepDemand {
+    fn drop(&mut self) {
+        self.wants(0);
     }
 }
 
@@ -70,10 +94,12 @@ impl LookupLane {
                 .saturating_sub(held.sweep);
             let room = cap.saturating_sub(held.targeted + held.sweep + reserve);
             held.targeted += room;
-            report(&held);
+            held.reserved += room;
             room
         };
-        (0..room).map(|_| self.slot(LookupPath::Targeted)).collect()
+        (0..room)
+            .map(|_| self.slot(LookupPath::Targeted, true))
+            .collect()
     }
 
     pub(crate) async fn claim_targeted(
@@ -91,8 +117,22 @@ impl LookupLane {
                 lease,
             )
             .await?;
-        self.targeted_waiting(reserved > 0 && jobs.len() == reserved);
         slots.truncate(jobs.len());
+        let drained = {
+            let mut held = self.held();
+            held.reserved = held.reserved.saturating_sub(slots.len());
+            let waiting = reserved > 0 && jobs.len() == reserved;
+            let drained = held.targeted_waiting && !waiting;
+            held.targeted_waiting = waiting;
+            report(&held);
+            drained
+        };
+        if drained {
+            self.freed.notify_one();
+        }
+        for slot in &mut slots {
+            slot.reserved = false;
+        }
         Ok(jobs.into_iter().zip(slots).collect())
     }
 
@@ -108,7 +148,7 @@ impl LookupLane {
             held.sweep += 1;
             report(&held);
         }
-        Some(self.slot(LookupPath::Sweep))
+        Some(self.slot(LookupPath::Sweep, false))
     }
 
     pub(crate) fn sweep_slots(&self) -> usize {
@@ -116,39 +156,31 @@ impl LookupLane {
         sweep_limit(cap, self.held().targeted_waiting)
     }
 
-    pub(crate) fn sweep_wants(&self, lookups: usize) {
-        self.held().sweep_wants = lookups;
+    pub(crate) fn sweep_demand(self: &Arc<Self>) -> SweepDemand {
+        SweepDemand { lane: self.clone() }
     }
 
     pub(crate) async fn freed(&self) {
         self.freed.notified().await;
     }
 
-    fn targeted_waiting(&self, waiting: bool) {
-        let drained = {
-            let mut held = self.held();
-            let drained = held.targeted_waiting && !waiting;
-            held.targeted_waiting = waiting;
-            drained
-        };
-        if drained {
-            self.freed.notify_one();
-        }
-    }
-
-    fn slot(self: &Arc<Self>, path: LookupPath) -> LookupSlot {
+    fn slot(self: &Arc<Self>, path: LookupPath, reserved: bool) -> LookupSlot {
         LookupSlot {
             lane: self.clone(),
             path,
+            reserved,
         }
     }
 
-    fn release(&self, path: LookupPath) {
+    fn release(&self, path: LookupPath, reserved: bool) {
         {
             let mut held = self.held();
             match path {
                 LookupPath::Targeted => held.targeted = held.targeted.saturating_sub(1),
                 LookupPath::Sweep => held.sweep = held.sweep.saturating_sub(1),
+            }
+            if reserved {
+                held.reserved = held.reserved.saturating_sub(1);
             }
             report(&held);
         }
@@ -173,5 +205,5 @@ fn sweep_limit(cap: usize, targeted_waiting: bool) -> usize {
 }
 
 fn report(held: &Held) {
-    crate::metrics::record_lyrics_lookup_slots(held.targeted, held.sweep);
+    crate::metrics::record_lyrics_lookup_slots(held.targeted_in_flight(), held.sweep);
 }

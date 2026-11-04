@@ -38,7 +38,7 @@ pub async fn run(scope: MigrationScope) -> anyhow::Result<()> {
 }
 
 async fn migrate_core() -> anyhow::Result<()> {
-    let database = DatabaseConfig::from_env("", true)
+    let database = DatabaseConfig::from_env("", true, "36")
         .context("core migration database configuration is invalid")?;
     let bootstrap_app =
         OAuthAppBootstrap::from_env().context("core migration OAuth configuration is invalid")?;
@@ -77,7 +77,7 @@ async fn migrate_core_on(
 }
 
 async fn migrate_ops() -> anyhow::Result<()> {
-    let database = DatabaseConfig::from_env("OPS_", false)
+    let database = DatabaseConfig::from_env("OPS_", false, "4")
         .context("ops migration database configuration is invalid")?;
     let pool = crate::db::connect_migration(&database, "scd-jobs-migrate:ops")
         .await

@@ -151,9 +151,7 @@ impl LyricsLookupHandler {
         )
         .await
         .map_err(JobError::retryable)?;
-        let swept = self.process_batch(job, claims, lane).await;
-        lane.sweep_wants(0);
-        swept
+        self.process_batch(job, claims, lane).await
     }
 
     async fn process_batch(
@@ -162,10 +160,12 @@ impl LyricsLookupHandler {
         claims: Vec<LookupClaim>,
         lane: &Arc<LookupLane>,
     ) -> JobResult {
+        let demand = lane.sweep_demand();
         let mut queue = claims.into_iter();
         let mut running = FuturesUnordered::new();
+        let mut failed = None;
         loop {
-            lane.sweep_wants(queue.len() + running.len());
+            demand.wants(queue.len() + running.len());
             while !queue.as_slice().is_empty() {
                 let Some(slot) = lane.sweep_slot() else {
                     break;
@@ -176,13 +176,13 @@ impl LyricsLookupHandler {
                 running.push(self.process_in_slot(job, claim, slot));
             }
             if running.is_empty() && queue.as_slice().is_empty() {
-                return Ok(());
+                return failed.map_or(Ok(()), Err);
             }
             let waiting = !queue.as_slice().is_empty();
             tokio::select! {
                 finished = running.next(), if !running.is_empty() => {
-                    if let Some(result) = finished {
-                        result?;
+                    if let Some(Err(error)) = finished {
+                        failed.get_or_insert(error);
                     }
                 }
                 _ = lane.freed(), if waiting => {}
