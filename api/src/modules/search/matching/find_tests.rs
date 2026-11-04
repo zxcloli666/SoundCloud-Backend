@@ -84,6 +84,67 @@ async fn the_title_search_finds_the_artists_upload_the_combined_one_missed(
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_label_upload_beats_reuploads_and_remixes(pool: PgPool) -> anyhow::Result<()> {
+    let reupload = |id, title: &str, uploader: &str, plays, ms| {
+        long(by(song(id, title, "", plays), uploader), ms)
+    };
+    seed(
+        &pool,
+        &[
+            long(
+                by(
+                    song(
+                        2401939677,
+                        "RHYNO (prod. by Guy-Manuel de Homem-Christo) (from GTAVI: The Album)",
+                        "Travis Scott",
+                        78_517,
+                    ),
+                    "Atlantic Records",
+                ),
+                180_000,
+            ),
+            reupload(
+                2402259756,
+                "Travis Scott – RHYNO (GTA VI)",
+                "ay4z",
+                11_968,
+                239_698,
+            ),
+            reupload(
+                2418627087,
+                "Travis Scott RHYNO GTA VI (Madtrix Remix)",
+                "Motta",
+                145,
+                188_800,
+            ),
+            reupload(
+                2405017446,
+                "Travis Scott - RHYNO (JYTTRO EDIT) - FREE DL",
+                "JYTTRO",
+                129,
+                185_316,
+            ),
+            reupload(
+                2403358584,
+                "Travis Scott - RHYNO (Remix) (GTA VI Soundtrack)",
+                "JaRoNiMo BeaTZ",
+                77,
+                174_552,
+            ),
+        ],
+    )
+    .await?;
+    let search = service(&pool)?;
+    let wanted = Wanted::new(
+        "Travis Scott, Grand Theft Auto VI",
+        "RHYNO (from GTAVI: The Album)",
+        Some(180_000),
+    );
+    assert_eq!(find(&search, &wanted).await?, urn(2401939677));
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn an_empty_title_or_unknown_song_is_a_miss(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &[song(1, "Umbrella", "Rihanna", 1_000)]).await?;
     let search = service(&pool)?;
