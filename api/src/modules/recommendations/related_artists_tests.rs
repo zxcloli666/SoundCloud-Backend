@@ -61,7 +61,7 @@ async fn seed(
     sqlx::query(
         "INSERT INTO artists (id, name, normalized_name, source, country, avatar_url)
          SELECT id, 'artist ' || id, id::text, 'test',
-                CASE WHEN n % 3 = 0 THEN 'DE' END,
+                CASE WHEN n % 2 = 1 THEN 'DE' END,
                 CASE WHEN n % 2 = 0 THEN 'https://img/' || id END
          FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, n)",
     )
