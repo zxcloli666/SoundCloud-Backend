@@ -8,4 +8,5 @@ SELECT count(*) AS "reported!",
        ) AS "restricted!"
 FROM chat.reports
 WHERE target_user = $1
+  AND kind = 'messages'
   AND created_at > now() - $2::int * interval '1 day'

@@ -4,8 +4,9 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::modules::chat::ChatState;
+use crate::modules::chat::rooms::perks as room_perks;
 use crate::modules::chat::sweeps::{
-    devices, expired, gauges, leader, marks, purge, redis_info, reports, rooms, startup,
+    devices, expired, gauges, leader, marks, media, purge, redis_info, reports, rooms, startup,
 };
 
 pub const TICK: Duration = Duration::from_secs(1);
@@ -20,10 +21,12 @@ pub enum Sweep {
     Devices,
     Reports,
     RedisInfo,
+    Media,
+    RoomPerks,
 }
 
 impl Sweep {
-    pub const ALL: [Sweep; 7] = [
+    pub const ALL: [Sweep; 9] = [
         Sweep::Marks,
         Sweep::Expired,
         Sweep::Rooms,
@@ -31,6 +34,8 @@ impl Sweep {
         Sweep::Devices,
         Sweep::Reports,
         Sweep::RedisInfo,
+        Sweep::Media,
+        Sweep::RoomPerks,
     ];
 
     pub fn name(self) -> &'static str {
@@ -42,6 +47,8 @@ impl Sweep {
             Sweep::Devices => "devices",
             Sweep::Reports => "reports",
             Sweep::RedisInfo => "redis_info",
+            Sweep::Media => "media",
+            Sweep::RoomPerks => "room_perks",
         }
     }
 
@@ -54,12 +61,15 @@ impl Sweep {
             Sweep::Devices => devices::EVERY_SECS,
             Sweep::Reports => reports::EVERY_SECS,
             Sweep::RedisInfo => redis_info::EVERY_SECS,
+            Sweep::Media => media::EVERY_SECS,
+            Sweep::RoomPerks => room_perks::EVERY_SECS,
         })
     }
 }
 
 pub struct Sweeper {
     marks: marks::Flusher,
+    devices: devices::Revoker,
     due: [Instant; Sweep::ALL.len()],
     pub(super) started: bool,
     pub(super) startup_due: Instant,
@@ -69,6 +79,7 @@ impl Sweeper {
     pub fn new() -> Self {
         Self {
             marks: marks::Flusher::new(),
+            devices: devices::Revoker::default(),
             due: [Instant::now(); Sweep::ALL.len()],
             started: false,
             startup_due: Instant::now(),
@@ -118,9 +129,11 @@ impl Sweeper {
             Sweep::Expired => expired::run_once(chat).await,
             Sweep::Rooms => rooms::run_once(chat).await,
             Sweep::Purge => purge::run_once(chat).await,
-            Sweep::Devices => devices::run_once(chat).await,
+            Sweep::Devices => self.devices.run_once(chat).await,
             Sweep::Reports => reports::run_once(chat).await,
             Sweep::RedisInfo => redis_info::run_once(chat).await,
+            Sweep::Media => media::run_once(chat).await,
+            Sweep::RoomPerks => room_perks::run_once(chat).await,
         };
         match outcome {
             Ok(items) => gauges::done(sweep.name(), items),

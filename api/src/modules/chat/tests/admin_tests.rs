@@ -8,7 +8,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::auth::token_matches;
-use super::reports::{AdminDecision, Resolve, apply, detail};
+use super::reports::detail;
+use super::resolve::{AdminDecision, Resolve, apply};
 use super::restore::restore_with;
 use super::rewrap::rewrap_with;
 use super::router;
@@ -82,6 +83,10 @@ async fn every_admin_route_refuses_a_missing_or_wrong_token() {
         ("GET", "/chat-admin/reports".to_owned()),
         ("GET", format!("/chat-admin/reports/{conversation}")),
         ("POST", format!("/chat-admin/reports/{conversation}")),
+        (
+            "GET",
+            format!("/chat-admin/reports/{conversation}/media/{conversation}"),
+        ),
         ("GET", "/chat-admin/restrictions".to_owned()),
         ("POST", "/chat-admin/restrictions".to_owned()),
         ("DELETE", format!("/chat-admin/messages/{conversation}/5")),
@@ -174,6 +179,7 @@ fn resolve(decision: AdminDecision) -> Resolve {
         ban_days: None,
         ban_permanent: false,
         lift_restriction: false,
+        clear_backdrop: false,
     }
 }
 
@@ -195,13 +201,13 @@ async fn the_admin_view_decrypts_only_the_report_and_writes_an_audit_row(pool: P
     let texts: Vec<(&str, bool)> = shown
         .lines
         .iter()
-        .map(|line| (line.text.as_str(), line.reported))
+        .map(|line| (line.line.text.as_str(), line.line.reported))
         .collect();
     assert_eq!(
         texts,
         vec![("hi", false), ("leaked address 5 Main st", true)]
     );
-    assert_eq!(shown.lines[1].seq, seq);
+    assert_eq!(shown.lines[1].line.seq, seq);
     let rows = audit_actions(&pool, &audit::report(id)).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(

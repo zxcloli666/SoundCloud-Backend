@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use base64::Engine;
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use rand::RngCore;
 use sqlx::PgPool;
 use tracing::info;
@@ -9,9 +9,6 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::AuthService;
-use crate::modules::auth::model::LinkRequestRow;
-
-const LINK_REQUEST_TTL_SECS: i64 = 5 * 60;
 
 pub struct LinkService {
     pool: PgPool,
@@ -77,25 +74,21 @@ impl LinkService {
         let mut bytes = [0; 24];
         rand::thread_rng().fill_bytes(&mut bytes);
         let claim_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-        let expires_at =
-            (Utc::now() + chrono::Duration::seconds(LINK_REQUEST_TTL_SECS)).naive_utc();
-        let row = sqlx::query_file_as!(
-            LinkRequestRow,
+        let created = sqlx::query_file!(
             "queries/auth/link_service/insert.sql",
-            Uuid::new_v4(),
             claim_token,
             mode,
             source_session_id,
-            expires_at,
             chat_bind
         )
-        .fetch_one(&self.pool)
-        .await?;
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("Source session not found"))?;
 
         Ok(CreateLinkResult {
-            link_request_id: row.id,
+            link_request_id: created.link_request_id,
             claim_token,
-            expires_at: row.expires_at,
+            expires_at: created.expires_at,
         })
     }
 
@@ -115,83 +108,26 @@ impl LinkService {
         caller_bind: Option<&[u8]>,
         owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<ClaimResult> {
-        let mut transaction = self.pool.begin().await?;
-        let link = sqlx::query_file_as!(
-            LinkRequestRow,
-            "queries/auth/link_service/lock_pending_by_claim_token.sql",
-            claim_token
+        let proven_bind = match caller_bind {
+            Some(_) => self.source_proof(caller_session_id, owns_bind).await?,
+            None => None,
+        };
+        let claimed = sqlx::query_file!(
+            "queries/auth/link_service/claim.sql",
+            claim_token,
+            caller_session_id,
+            caller_bind,
+            proven_bind.as_deref()
         )
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or_else(|| AppError::not_found("Invalid or already used link token"))?;
-
-        if link.expires_at < Utc::now().naive_utc() {
-            sqlx::query_file!(
-                "queries/auth/link_service/mark_expired.sql",
-                link.id,
-                "Expired"
-            )
-            .execute(&mut *transaction)
-            .await?;
-            transaction.commit().await?;
-            return Err(AppError::bad_request("Link token expired"));
+        .fetch_one(&self.pool)
+        .await?;
+        match (claimed.outcome.as_str(), claimed.session_id, claimed.mode) {
+            ("claimed", Some(session_id), Some(mode)) => {
+                info!("Link claimed");
+                Ok(ClaimResult { session_id, mode })
+            }
+            (outcome, _, _) => Err(claim_error(outcome)),
         }
-
-        let source_session_id = match link.mode.as_str() {
-            "pull" => caller_session_id
-                .ok_or_else(|| AppError::unauthorized("pull claim requires source session"))?,
-            "push" => link
-                .source_session_id
-                .ok_or_else(|| AppError::bad_request("push link has no source session"))?,
-            _ => return Err(AppError::bad_request("Unknown link mode")),
-        };
-        let source = sqlx::query_file!(
-            "queries/auth/service/lock_session_connection.sql",
-            source_session_id
-        )
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or_else(|| AppError::unauthorized("Source session not found"))?;
-        let connection_id = source
-            .soundcloud_connection_id
-            .ok_or_else(AppError::soundcloud_reauthorization_required)?;
-        let link_bind =
-            sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link.id)
-                .fetch_optional(&mut *transaction)
-                .await?
-                .flatten();
-        let source_bind = source.chat_bind.as_deref();
-        let target_bind = match link.mode.as_str() {
-            "pull" => link_bind.filter(|_| source_bind.is_some_and(&owns_bind)),
-            _ => caller_bind
-                .filter(|_| link_bind.is_some() && link_bind.as_deref() == source_bind)
-                .map(<[u8]>::to_vec),
-        };
-
-        let target_session_id = Uuid::now_v7();
-        sqlx::query_file!(
-            "queries/auth/link_service/insert_target_session.sql",
-            target_session_id,
-            connection_id,
-            target_bind.as_deref()
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        sqlx::query_file!(
-            "queries/auth/link_service/mark_claimed.sql",
-            link.id,
-            source_session_id,
-            target_session_id
-        )
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
-
-        info!("Link claimed");
-        Ok(ClaimResult {
-            session_id: target_session_id,
-            mode: link.mode,
-        })
     }
 
     pub async fn get_status(&self, link_request_id: Uuid) -> AppResult<LinkStatusResult> {
@@ -203,13 +139,9 @@ impl LinkService {
         link_request_id: Uuid,
         owns_bind: impl Fn(&[u8]) -> bool,
     ) -> AppResult<LinkStatusResult> {
-        let link = sqlx::query_file_as!(
-            LinkRequestRow,
-            "queries/auth/link_service/by_id.sql",
-            link_request_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let link = sqlx::query_file!("queries/auth/link_service/status.sql", link_request_id)
+            .fetch_optional(&self.pool)
+            .await?;
         let Some(link) = link else {
             return Ok(LinkStatusResult {
                 status: "expired".to_owned(),
@@ -218,44 +150,15 @@ impl LinkService {
                 error: Some("Unknown link request".to_owned()),
             });
         };
-        if link.status == "pending" && link.expires_at < Utc::now().naive_utc() {
-            return Ok(LinkStatusResult {
-                status: "expired".to_owned(),
-                mode: link.mode,
-                session_id: None,
-                error: Some("Expired".to_owned()),
-            });
-        }
-
-        let session_id = match link.target_session_id {
-            Some(session_id)
-                if link.mode == "pull"
-                    && link.status == "claimed"
-                    && self.shows_session(link.id, owns_bind).await? =>
-            {
-                Some(session_id)
-            }
-            _ => None,
-        };
+        let session_id = link
+            .target_session_id
+            .filter(|_| link.chat_bind.as_deref().is_none_or(&owns_bind));
         Ok(LinkStatusResult {
             status: link.status,
             mode: link.mode,
             session_id,
             error: link.error,
         })
-    }
-
-    async fn shows_session(
-        &self,
-        link_request_id: Uuid,
-        owns_bind: impl Fn(&[u8]) -> bool,
-    ) -> AppResult<bool> {
-        let chat_bind =
-            sqlx::query_file_scalar!("queries/auth/link_service/link_bind.sql", link_request_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .flatten();
-        Ok(chat_bind.as_deref().is_none_or(owns_bind))
     }
 
     async fn source_proof(
@@ -272,6 +175,18 @@ impl LinkService {
                 .await?
                 .flatten();
         Ok(stored.filter(|bind| owns_bind(bind)))
+    }
+}
+
+fn claim_error(outcome: &str) -> AppError {
+    match outcome {
+        "unknown" => AppError::not_found("Invalid or already used link token"),
+        "expired" => AppError::bad_request("Link token expired"),
+        "pull_needs_source" => AppError::unauthorized("pull claim requires source session"),
+        "push_without_source" => AppError::bad_request("push link has no source session"),
+        "source_missing" => AppError::unauthorized("Source session not found"),
+        "reauthorize" => AppError::soundcloud_reauthorization_required(),
+        _ => AppError::bad_request("Unknown link mode"),
     }
 }
 

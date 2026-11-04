@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{ONLINE_WINDOW_MS, RoomsService, now_ms};
 use crate::error::AppResult;
 use crate::modules::rooms::listing::{PublicTrack, image};
-use crate::modules::rooms::model::{MAX_MEMBERS, Room};
+use crate::modules::rooms::model::{Backdrop, Cover, Room};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PreviewHost {
@@ -32,6 +32,9 @@ pub struct RoomPreview {
     pub track: Option<PreviewTrack>,
     pub listeners: usize,
     pub capacity: usize,
+    pub star_host: bool,
+    pub cover: Option<Cover>,
+    pub backdrop: Option<Backdrop>,
     pub public: bool,
     pub alive: bool,
 }
@@ -76,7 +79,10 @@ impl RoomPreview {
             },
             track: PreviewTrack::of(room),
             listeners,
-            capacity: MAX_MEMBERS,
+            capacity: room.capacity(),
+            star_host: room.perks.star_host,
+            cover: room.cover_shown(),
+            backdrop: room.backdrop_in_public(),
             public: room.public,
             alive: true,
         })

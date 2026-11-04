@@ -2,6 +2,7 @@ use chrono::Utc;
 use sc_chat_wire::msg::Class;
 use sqlx::PgPool;
 
+use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::store;
 use crate::modules::chat::messages::system::{self, SystemEvent};
@@ -49,6 +50,12 @@ pub async fn for_everyone(pg: &PgPool, access: &Access, seq: i64) -> ChatResult<
         &event,
         Some(seq),
         target.expires_at,
+    )
+    .await?;
+    media::refs::drop_for_messages(
+        &mut tx,
+        access.conversation,
+        &rows.iter().map(|row| row.seq).collect::<Vec<_>>(),
     )
     .await?;
     rows.push(deleted);

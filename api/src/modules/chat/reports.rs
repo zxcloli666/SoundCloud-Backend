@@ -1,3 +1,5 @@
+mod backdrop;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -9,9 +11,12 @@ use uuid::Uuid;
 
 use crate::modules::chat::body::ChatJson;
 use crate::modules::chat::limits::{self, Bucket};
+use crate::modules::chat::media;
 use crate::modules::chat::moderation::evidence::{self, StoredMessage};
 use crate::modules::chat::moderation::keys::ChatKeys;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rooms, users};
+
+pub use backdrop::{Filing, ReportBody, file_backdrop};
 
 pub const CONTEXT_MESSAGES: i64 = 10;
 pub const EVIDENCE_KEEP_DAYS: i64 = 180;
@@ -61,15 +66,24 @@ pub struct ReportRow {
 pub async fn file(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
-    ChatJson(input): ChatJson<FileReport>,
+    ChatJson(body): ChatJson<ReportBody>,
 ) -> ChatResult<Json<FiledReport>> {
-    validate(&input)?;
-    limits::admit(&chat, Bucket::Report, &caller.user_id).await?;
-    let filed = file_with(&chat, &chat.keks, &caller.user_id, &input).await?;
-    if !filed.duplicate {
-        chat.moderator.nudge();
+    match body.filing()? {
+        Filing::Messages(input) => {
+            validate(&input)?;
+            limits::admit(&chat, Bucket::Report, &caller.user_id).await?;
+            let filed = file_with(&chat, &chat.keks, &caller.user_id, &input).await?;
+            if !filed.duplicate {
+                chat.moderator.nudge();
+            }
+            Ok(Json(filed))
+        }
+        Filing::Backdrop(input) => {
+            limits::admit(&chat, Bucket::Report, &caller.user_id).await?;
+            let filed = file_backdrop(&chat, &chat.keks, &caller.user_id, &input).await?;
+            Ok(Json(filed))
+        }
     }
-    Ok(Json(filed))
 }
 
 pub fn validate(input: &FileReport) -> ChatResult<()> {
@@ -132,6 +146,7 @@ pub async fn file_with(
     users::touch(chat, reporter).await?;
     let weight = reporter_weight(chat, reporter).await?;
     let id = Uuid::now_v7();
+    let mut tx = chat.pg.begin().await?;
     sqlx::query_file!(
         "queries/chat/reports/insert.sql",
         id,
@@ -146,8 +161,17 @@ pub async fn file_with(
         capture.sealed,
         i16::try_from(capture.version).map_err(|_| ChatError::Internal)?
     )
-    .execute(&chat.pg)
+    .execute(&mut *tx)
     .await?;
+    media::hooks::hold_for_report(
+        &mut tx,
+        id,
+        input.conversation_id,
+        input.seq_from,
+        input.seq_to,
+    )
+    .await?;
+    tx.commit().await?;
     metrics::counter!("chat_reports_total", "reason" => reason_label(&input.reason)).increment(1);
     Ok(FiledReport {
         id,

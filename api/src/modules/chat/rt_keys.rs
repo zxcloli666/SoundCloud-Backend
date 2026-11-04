@@ -57,6 +57,10 @@ pub fn loadtest_session(session: Uuid) -> String {
     format!("chat:lt:sess:{session}")
 }
 
+pub fn backdrop_lock(conversation: Uuid) -> String {
+    format!("chat:bd:lock:{conversation}")
+}
+
 #[cfg(test)]
 #[path = "tests/rt_keys_tests.rs"]
 mod tests;

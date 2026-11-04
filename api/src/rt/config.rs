@@ -30,6 +30,7 @@ pub struct RtConfig {
     pub soundcloud: SoundcloudCfg,
     pub chat: ChatConfig,
     pub rooms: RoomsConfig,
+    pub subscriptions_always_premium: bool,
 }
 
 impl RtConfig {
@@ -45,6 +46,8 @@ impl RtConfig {
             soundcloud: SoundcloudCfg::from_env(),
             chat: ChatConfig::from_env(),
             rooms: RoomsConfig::from_env(),
+            subscriptions_always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false")
+                == "true",
         }
     }
 }

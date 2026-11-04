@@ -69,7 +69,8 @@ async fn devices_whose_session_is_gone_for_an_hour_are_revoked(pg: PgPool) -> an
     let cached = ok(lookup(&chat, stale).await)?.expect("a device row");
     assert_eq!(cached.status, "active");
 
-    assert_eq!(ok(devices::run_once(&chat).await)?, 1);
+    let mut revoker = devices::Revoker::default();
+    assert_eq!(ok(revoker.run_once(&chat).await)?, 1);
 
     assert!(chat.devices.row(stale).is_none(), "the cache forgets it");
     let fresh = ok(lookup(&chat, stale).await)?.expect("a device row");
@@ -87,6 +88,6 @@ async fn devices_whose_session_is_gone_for_an_hour_are_revoked(pg: PgPool) -> an
         "the next send in every chat of the owner starts a new epoch"
     );
     assert!(deltas(&chat, &owner).await?.contains(&"devices".to_owned()));
-    assert_eq!(ok(devices::run_once(&chat).await)?, 0);
+    assert_eq!(ok(revoker.run_once(&chat).await)?, 0);
     Ok(())
 }

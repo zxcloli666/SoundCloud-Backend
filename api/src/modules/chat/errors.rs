@@ -2,6 +2,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::modules::auth::service::replica::SESSION_RETRY_AFTER_SECONDS;
 
@@ -32,9 +33,15 @@ pub enum ChatError {
     TooYoung,
     Disabled,
     SendPaused,
+    QuotaExceeded { used: u64, quota: u64 },
+    MediaStarRequired,
+    RoomStarRequired,
+    MediaUploadsPaused,
+    MediaMissing { ids: Vec<Uuid> },
+    BackdropCooldown { until: u64 },
+    MediaGone,
     Invalid,
     NotFound,
-    Unimplemented,
     Internal,
 }
 
@@ -71,9 +78,15 @@ impl ChatError {
             ChatError::TooYoung => "chat_too_young",
             ChatError::Disabled => "chat_disabled",
             ChatError::SendPaused => "chat_send_paused",
+            ChatError::QuotaExceeded { .. } => "chat_quota_exceeded",
+            ChatError::MediaStarRequired => "chat_media_star_required",
+            ChatError::RoomStarRequired => "chat_room_star_required",
+            ChatError::MediaUploadsPaused => "chat_media_uploads_paused",
+            ChatError::MediaMissing { .. } => "chat_media_missing",
+            ChatError::BackdropCooldown { .. } => "chat_backdrop_cooldown",
+            ChatError::MediaGone => "chat_media_gone",
             ChatError::Invalid => "chat_invalid",
             ChatError::NotFound => "chat_not_found",
-            ChatError::Unimplemented => "chat_unimplemented",
             ChatError::Internal => "chat_internal",
         }
     }
@@ -83,10 +96,16 @@ impl ChatError {
             ChatError::NotMember
             | ChatError::Muted { .. }
             | ChatError::Unavailable
-            | ChatError::TooYoung => StatusCode::FORBIDDEN,
-            ChatError::EpochStale | ChatError::Replay | ChatError::SessionBoundOther => {
-                StatusCode::CONFLICT
-            }
+            | ChatError::TooYoung
+            | ChatError::QuotaExceeded { .. }
+            | ChatError::MediaStarRequired
+            | ChatError::RoomStarRequired
+            | ChatError::BackdropCooldown { .. } => StatusCode::FORBIDDEN,
+            ChatError::MediaGone => StatusCode::GONE,
+            ChatError::EpochStale
+            | ChatError::Replay
+            | ChatError::SessionBoundOther
+            | ChatError::MediaMissing { .. } => StatusCode::CONFLICT,
             ChatError::SlowMode { .. }
             | ChatError::RequestLimit
             | ChatError::SendLimited
@@ -97,10 +116,10 @@ impl ChatError {
             ChatError::Busy { .. }
             | ChatError::SessionNotReplicated
             | ChatError::Disabled
-            | ChatError::SendPaused => StatusCode::SERVICE_UNAVAILABLE,
+            | ChatError::SendPaused
+            | ChatError::MediaUploadsPaused => StatusCode::SERVICE_UNAVAILABLE,
             ChatError::Invalid => StatusCode::BAD_REQUEST,
             ChatError::NotFound => StatusCode::NOT_FOUND,
-            ChatError::Unimplemented => StatusCode::NOT_IMPLEMENTED,
             ChatError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -114,6 +133,12 @@ impl ChatError {
             }
             ChatError::Clock { server_now } => body["server_now"] = json!(server_now),
             ChatError::SessionNotReplicated => body["retry_ms"] = json!(SESSION_RETRY_MS),
+            ChatError::QuotaExceeded { used, quota } => {
+                body["used"] = json!(used);
+                body["quota"] = json!(quota);
+            }
+            ChatError::MediaMissing { ids } => body["ids"] = json!(ids),
+            ChatError::BackdropCooldown { until } => body["until"] = json!(until),
             _ => {}
         }
         body

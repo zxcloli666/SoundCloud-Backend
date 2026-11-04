@@ -30,7 +30,7 @@ use crate::modules::chat::members::{access, changes, contacts};
 use crate::modules::chat::messages::fanout;
 use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::users::{self, Scope};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, requests};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, requests, rooms};
 
 pub const LIST_ROWS_MAX: usize = 200;
 pub const LIST_BYTES_MAX: usize = 128 * 1024;
@@ -152,9 +152,12 @@ pub async fn show(
     State(chat): State<Arc<ChatState>>,
     ChatPath(conversation): ChatPath<Uuid>,
 ) -> ChatResult<Json<ConversationView>> {
-    Ok(Json(
-        view::one(&chat.pg, conversation, &caller.user_id).await?,
-    ))
+    match view::one(&chat.pg, conversation, &caller.user_id).await {
+        Err(ChatError::NotMember) => Ok(Json(
+            rooms::conversation::view(&chat, conversation, &caller.user_id).await?,
+        )),
+        found => found.map(Json),
+    }
 }
 
 pub async fn update(

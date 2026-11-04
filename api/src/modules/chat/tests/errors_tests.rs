@@ -43,10 +43,54 @@ async fn an_error_carries_its_code_and_the_fields_the_client_needs() {
         )
     );
     assert_eq!(
-        wire(ChatError::Unimplemented).await,
+        wire(ChatError::BackdropCooldown { until: 9 }).await,
         (
-            StatusCode::NOT_IMPLEMENTED,
-            json!({"error": "chat_unimplemented"})
+            StatusCode::FORBIDDEN,
+            json!({"error": "chat_backdrop_cooldown", "until": 9})
+        )
+    );
+    assert_eq!(
+        wire(ChatError::MediaGone).await,
+        (StatusCode::GONE, json!({"error": "chat_media_gone"}))
+    );
+}
+
+#[tokio::test]
+async fn the_media_errors_carry_the_fields_the_contract_names() {
+    let id = uuid::Uuid::from_u128(7);
+    assert_eq!(
+        wire(ChatError::QuotaExceeded { used: 5, quota: 9 }).await,
+        (
+            StatusCode::FORBIDDEN,
+            json!({"error": "chat_quota_exceeded", "used": 5, "quota": 9})
+        )
+    );
+    assert_eq!(
+        wire(ChatError::MediaMissing { ids: vec![id] }).await,
+        (
+            StatusCode::CONFLICT,
+            json!({"error": "chat_media_missing", "ids": [id.to_string()]})
+        )
+    );
+    assert_eq!(
+        wire(ChatError::MediaUploadsPaused).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "chat_media_uploads_paused"})
+        )
+    );
+    assert_eq!(
+        wire(ChatError::MediaStarRequired).await,
+        (
+            StatusCode::FORBIDDEN,
+            json!({"error": "chat_media_star_required"})
+        )
+    );
+    assert_eq!(
+        wire(ChatError::RoomStarRequired).await,
+        (
+            StatusCode::FORBIDDEN,
+            json!({"error": "chat_room_star_required"})
         )
     );
 }
@@ -72,9 +116,15 @@ fn every_code_is_prefixed_and_unique() {
         ChatError::TooYoung,
         ChatError::Disabled,
         ChatError::SendPaused,
+        ChatError::QuotaExceeded { used: 0, quota: 0 },
+        ChatError::MediaStarRequired,
+        ChatError::RoomStarRequired,
+        ChatError::MediaUploadsPaused,
+        ChatError::MediaMissing { ids: Vec::new() },
         ChatError::Invalid,
         ChatError::NotFound,
-        ChatError::Unimplemented,
+        ChatError::BackdropCooldown { until: 0 },
+        ChatError::MediaGone,
         ChatError::Internal,
     ];
     let mut codes: Vec<&str> = all.iter().map(ChatError::code).collect();

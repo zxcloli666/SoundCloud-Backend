@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::modules::rooms::model::{MAX_MEMBERS, PlaybackStatus, Room};
+use crate::modules::rooms::model::{Backdrop, Cover, FREE_CAPACITY, PlaybackStatus, Room};
 
 const MAX_TEXT_CHARS: usize = 120;
 const MAX_IMAGE_CHARS: usize = 512;
@@ -27,6 +27,9 @@ pub struct PublicRoom {
     pub listeners: usize,
     pub capacity: usize,
     pub full: bool,
+    pub star_host: bool,
+    pub cover: Option<Cover>,
+    pub backdrop: Option<Backdrop>,
     pub created_at: i64,
     #[serde(skip)]
     pub banned: Vec<String>,
@@ -88,19 +91,26 @@ impl PublicRoom {
             status: room.playback.status,
             track: room.playback.track.as_ref().and_then(PublicTrack::of),
             listeners,
-            capacity: MAX_MEMBERS,
-            full: listeners >= MAX_MEMBERS,
+            capacity: room.capacity(),
+            full: listeners >= room.capacity(),
+            star_host: room.perks.star_host,
+            cover: room.cover_shown(),
+            backdrop: room.backdrop_in_public(),
             created_at: room.created_at,
             banned: room.banned.clone(),
         })
     }
 }
 
+fn ranked_listeners(room: &PublicRoom) -> usize {
+    room.listeners.min(FREE_CAPACITY)
+}
+
 pub fn rank(rooms: &mut [PublicRoom]) {
     rooms.sort_by(|a, b| {
         a.full
             .cmp(&b.full)
-            .then(b.listeners.cmp(&a.listeners))
+            .then(ranked_listeners(b).cmp(&ranked_listeners(a)))
             .then(a.created_at.cmp(&b.created_at))
             .then(a.host_id.cmp(&b.host_id))
     });

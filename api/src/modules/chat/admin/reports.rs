@@ -4,22 +4,19 @@ use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::admin::auth::ChatAdmin;
-use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
-use crate::modules::chat::moderation::actions;
-use crate::modules::chat::moderation::decide::Ban;
-use crate::modules::chat::moderation::evidence::Line;
+use crate::modules::chat::admin::evidence::{self, EvidenceLine};
+use crate::modules::chat::admin::filed::{self, Filed, ReportKind};
+use crate::modules::chat::body::{ChatPath, ChatQuery};
 use crate::modules::chat::moderation::keys::ChatKeys;
-use crate::modules::chat::reports::{self, EVIDENCE_KEEP_DAYS, ReportRow};
-use crate::modules::chat::{ChatError, ChatResult, ChatState, moderation, users};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, moderation};
 
 pub const PAGE_MAX: i64 = 100;
 pub const AUDIT_SHOWN: i64 = 200;
-pub const BAN_DAYS_MAX: i64 = 3_650;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListQuery {
@@ -45,6 +42,8 @@ pub struct ReportSummary {
     pub handled_by: Option<String>,
     pub handled_at: Option<i64>,
     pub has_evidence: bool,
+    pub kind: ReportKind,
+    pub media_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +57,7 @@ pub struct AuditView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportDetail {
     pub report: ReportSummary,
-    pub lines: Vec<Line>,
+    pub lines: Vec<EvidenceLine>,
     pub audit: Vec<AuditView>,
 }
 
@@ -66,27 +65,6 @@ pub struct ReportDetail {
 pub struct ReportTrail {
     pub report: ReportSummary,
     pub audit: Vec<AuditView>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AdminDecision {
-    Reject,
-    Uphold,
-    Reopen,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Resolve {
-    pub decision: AdminDecision,
-    #[serde(default)]
-    pub delete_seqs: Vec<i64>,
-    pub ban_days: Option<i64>,
-    #[serde(default)]
-    pub ban_permanent: bool,
-    #[serde(default)]
-    pub lift_restriction: bool,
 }
 
 pub async fn list(
@@ -113,9 +91,9 @@ pub async fn list(
     )
     .fetch_all(&chat.pg)
     .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|row| ReportSummary {
+    rows.into_iter()
+        .map(|row| {
+            Ok(ReportSummary {
                 id: row.id,
                 reporter: row.reporter,
                 target_user: row.target_user,
@@ -130,9 +108,12 @@ pub async fn list(
                 handled_by: row.handled_by,
                 handled_at: row.handled_at.map(|at| at.timestamp_millis()),
                 has_evidence: row.has_evidence,
+                kind: ReportKind::parse(&row.kind)?,
+                media_id: row.media_id,
             })
-            .collect(),
-    ))
+        })
+        .collect::<ChatResult<Vec<ReportSummary>>>()
+        .map(Json)
 }
 
 pub async fn show(
@@ -148,7 +129,7 @@ pub async fn trail(
     State(chat): State<Arc<ChatState>>,
     ChatPath(id): ChatPath<Uuid>,
 ) -> ChatResult<Json<ReportTrail>> {
-    let report = reports::load(&chat, id).await?.ok_or(ChatError::NotFound)?;
+    let report = filed::load(&chat, id).await?;
     Ok(Json(ReportTrail {
         report: summary(&report),
         audit: audit_rows(&chat, id).await?,
@@ -161,9 +142,13 @@ pub async fn detail(
     admin: &str,
     id: Uuid,
 ) -> ChatResult<ReportDetail> {
-    let report = reports::load(chat, id).await?.ok_or(ChatError::NotFound)?;
-    let lines = if report.evidence.is_some() {
-        moderation::decrypt(chat, keys, &report, admin).await?
+    let report = filed::load(chat, id).await?;
+    let lines = if report.row.evidence.is_some() {
+        let lines = moderation::decrypt(chat, keys, &report.row, admin).await?;
+        let bundle = evidence::bundle(keys, &report.row)?;
+        let mut shown = evidence::shown_lines(lines, &bundle, report.meta_kind());
+        evidence::label_stored(&chat.pg, &mut shown).await?;
+        shown
     } else {
         Vec::new()
     };
@@ -175,126 +160,7 @@ pub async fn detail(
     })
 }
 
-pub async fn resolve(
-    admin: ChatAdmin,
-    State(chat): State<Arc<ChatState>>,
-    ChatPath(id): ChatPath<Uuid>,
-    ChatJson(input): ChatJson<Resolve>,
-) -> ChatResult<Json<ReportSummary>> {
-    Ok(Json(apply(&chat, &admin.admin, id, &input).await?))
-}
-
-pub async fn apply(
-    chat: &ChatState,
-    admin: &str,
-    id: Uuid,
-    input: &Resolve,
-) -> ChatResult<ReportSummary> {
-    let report = reports::load(chat, id).await?.ok_or(ChatError::NotFound)?;
-    let ban = requested_ban(input)?;
-    if input
-        .delete_seqs
-        .iter()
-        .any(|seq| !(report.seq_from..=report.seq_to).contains(seq))
-    {
-        return Err(ChatError::Invalid);
-    }
-    let acts = !input.delete_seqs.is_empty() || ban != Ban::None;
-    if (input.decision != AdminDecision::Uphold && acts)
-        || (input.lift_restriction && ban != Ban::None)
-    {
-        return Err(ChatError::Invalid);
-    }
-    let target = audit::report(id);
-    if input.decision == AdminDecision::Uphold {
-        uphold(chat, admin, &report, &input.delete_seqs, ban).await?;
-    }
-    if input.lift_restriction {
-        users::lift(chat, &report.target_user).await?;
-        audit::record(
-            chat,
-            admin,
-            "lift",
-            &audit::user(&report.target_user),
-            json!({"report": id}),
-        )
-        .await?;
-    }
-    let state = match input.decision {
-        AdminDecision::Reject => "rejected",
-        AdminDecision::Uphold => "actioned",
-        AdminDecision::Reopen => "open",
-    };
-    sqlx::query_file_scalar!(
-        "queries/chat/admin/resolve.sql",
-        id,
-        state,
-        admin,
-        EVIDENCE_KEEP_DAYS as i32
-    )
-    .fetch_optional(&chat.pg)
-    .await?
-    .ok_or(ChatError::NotFound)?;
-    audit::record(
-        chat,
-        admin,
-        state,
-        &target,
-        json!({"previous": report.state, "previous_by": report.handled_by}),
-    )
-    .await?;
-    let report = reports::load(chat, id).await?.ok_or(ChatError::NotFound)?;
-    Ok(summary(&report))
-}
-
-async fn uphold(
-    chat: &ChatState,
-    admin: &str,
-    report: &ReportRow,
-    seqs: &[i64],
-    ban: Ban,
-) -> ChatResult<()> {
-    if !seqs.is_empty() {
-        let removed =
-            actions::remove_messages(chat, report.conversation_id, &report.target_user, seqs)
-                .await?;
-        audit::record(
-            chat,
-            admin,
-            "delete_messages",
-            &audit::report(report.id),
-            json!({"conversation": report.conversation_id, "seqs": removed}),
-        )
-        .await?;
-        actions::announce_removed(chat, report.conversation_id, &removed).await;
-    }
-    if let Some(restriction) = actions::ban(chat, &report.target_user, ban).await? {
-        audit::record(
-            chat,
-            admin,
-            "ban",
-            &audit::user(&report.target_user),
-            json!({
-                "report": report.id,
-                "permanent": ban == Ban::Permanent,
-                "until": restriction.until.timestamp_millis(),
-            }),
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-fn requested_ban(input: &Resolve) -> ChatResult<Ban> {
-    match (input.ban_permanent, input.ban_days) {
-        (true, None) => Ok(Ban::Permanent),
-        (false, Some(days)) if (1..=BAN_DAYS_MAX).contains(&days) => Ok(Ban::Days(days)),
-        (false, None) => Ok(Ban::None),
-        _ => Err(ChatError::Invalid),
-    }
-}
-
-async fn audit_rows(chat: &ChatState, id: Uuid) -> ChatResult<Vec<AuditView>> {
+pub async fn audit_rows(chat: &ChatState, id: Uuid) -> ChatResult<Vec<AuditView>> {
     let rows = sqlx::query_file!(
         "queries/chat/admin/report_audits.sql",
         audit::report(id),
@@ -314,7 +180,8 @@ async fn audit_rows(chat: &ChatState, id: Uuid) -> ChatResult<Vec<AuditView>> {
         .collect())
 }
 
-fn summary(report: &ReportRow) -> ReportSummary {
+pub fn summary(filed: &Filed) -> ReportSummary {
+    let report = &filed.row;
     ReportSummary {
         id: report.id,
         reporter: report.reporter.clone(),
@@ -332,5 +199,7 @@ fn summary(report: &ReportRow) -> ReportSummary {
             .handled_at
             .map(|at: DateTime<Utc>| at.timestamp_millis()),
         has_evidence: report.evidence.is_some(),
+        kind: filed.kind,
+        media_id: filed.media_id,
     }
 }

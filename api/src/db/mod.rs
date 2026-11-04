@@ -29,7 +29,14 @@ pub(crate) async fn insert_replicated(pool: &PgPool, sql: &str) -> anyhow::Resul
 
 pub use retry::retry_conflicts;
 
-const REQUIRED_CORE_SCHEMA_VERSION: i64 = 282;
+const REQUIRED_CORE_SCHEMA: Required = Required {
+    version: 312,
+    description: "auth definer",
+};
+const REQUIRED_CHAT_SCHEMA: Required = Required {
+    version: 317,
+    description: "chat room backdrop",
+};
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -269,17 +276,35 @@ pub async fn connect_recommendations(cfg: &AppConfig) -> Result<PgPool, sqlx::Er
     pool(db, recommendations_share(db.pool_max), 0, opts, None).await
 }
 
-pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
-    let applied =
-        sqlx::query_scalar::<_, bool>("SELECT success FROM _sqlx_migrations WHERE version = $1")
-            .bind(REQUIRED_CORE_SCHEMA_VERSION)
-            .fetch_optional(pool)
-            .await
-            .context("core migration history is unavailable")?;
+struct Required {
+    version: i64,
+    description: &'static str,
+}
+
+async fn require(pool: &PgPool, schema: &str, required: &Required) -> anyhow::Result<()> {
+    let applied = sqlx::query_scalar::<_, bool>(
+        "SELECT success FROM _sqlx_migrations WHERE version = $1 AND description = $2",
+    )
+    .bind(required.version)
+    .bind(required.description)
+    .fetch_optional(pool)
+    .await
+    .context("core migration history is unavailable")?;
     ensure!(
         applied == Some(true),
-        "core schema is outdated: migration {REQUIRED_CORE_SCHEMA_VERSION} is required"
+        "{schema} schema is outdated: migration {} ({}) is required",
+        required.version,
+        required.description
     );
+    Ok(())
+}
+
+pub async fn verify_chat_schema(pool: &PgPool) -> anyhow::Result<()> {
+    require(pool, "chat", &REQUIRED_CHAT_SCHEMA).await
+}
+
+pub async fn verify_schema(pool: &PgPool) -> anyhow::Result<()> {
+    require(pool, "core", &REQUIRED_CORE_SCHEMA).await?;
     let playlist_shadow_ready = sqlx::query_scalar::<_, bool>(
         "SELECT to_regclass('playlist_track_projection') IS NOT NULL
              AND to_regclass('playlist_membership_state') IS NOT NULL
@@ -383,45 +408,83 @@ mod tests {
         assert!(err.to_string().contains("verify-most"), "{err}");
     }
 
+    const HISTORY: &str = "CREATE TABLE _sqlx_migrations (
+        version bigint PRIMARY KEY,
+        description text NOT NULL,
+        success boolean NOT NULL
+    )";
+
+    const PLAYLIST_SHADOW: &str = "CREATE TABLE playlists (urn text PRIMARY KEY);
+         CREATE TABLE playlist_track_projection (playlist_urn text);
+         CREATE TABLE playlist_membership_state (
+             playlist_urn text PRIMARY KEY,
+             next_reconcile_at timestamptz,
+             sync_status text NOT NULL
+         );
+         CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
+         CREATE INDEX playlist_membership_state_reconcile_due_idx
+             ON playlist_membership_state (next_reconcile_at, playlist_urn)
+             WHERE sync_status <> 'clean';";
+
+    async fn applied(pool: &PgPool, version: i64, description: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success) VALUES ($1, $2, true)",
+        )
+        .bind(version)
+        .bind(description)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     #[sqlx::test(migrations = false)]
     async fn schema_check_requires_latest_core_migration(pool: PgPool) -> anyhow::Result<()> {
-        sqlx::query(
-            "CREATE TABLE _sqlx_migrations (
-                version bigint PRIMARY KEY,
-                success boolean NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await?;
+        sqlx::query(HISTORY).execute(&pool).await?;
+        sqlx::raw_sql(PLAYLIST_SHADOW).execute(&pool).await?;
+        let required = &REQUIRED_CORE_SCHEMA;
 
         let error = verify_schema(&pool).await.expect_err("outdated schema");
         assert!(
-            error
-                .to_string()
-                .contains(&format!("migration {REQUIRED_CORE_SCHEMA_VERSION}"))
+            error.to_string().contains(&format!(
+                "migration {} ({})",
+                required.version, required.description
+            )),
+            "{error}"
         );
-
-        sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES ($1, true)")
-            .bind(REQUIRED_CORE_SCHEMA_VERSION)
+        applied(&pool, required.version, "another branch took this number").await?;
+        assert!(verify_schema(&pool).await.is_err());
+        sqlx::query("DELETE FROM _sqlx_migrations")
             .execute(&pool)
             .await?;
-        sqlx::raw_sql(
-            "CREATE TABLE playlists (urn text PRIMARY KEY);
-             CREATE TABLE playlist_track_projection (playlist_urn text);
-             CREATE TABLE playlist_membership_state (
-                 playlist_urn text PRIMARY KEY,
-                 next_reconcile_at timestamptz,
-                 sync_status text NOT NULL
-             );
-             CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
-             CREATE INDEX playlist_membership_state_reconcile_due_idx
-                 ON playlist_membership_state (next_reconcile_at, playlist_urn)
-                 WHERE sync_status <> 'clean';",
-        )
-        .execute(&pool)
-        .await?;
-
+        applied(&pool, required.version, required.description).await?;
         verify_schema(&pool).await
+    }
+
+    #[sqlx::test(migrations = false)]
+    async fn chat_schema_check_requires_the_backdrop_migration(pool: PgPool) -> anyhow::Result<()> {
+        sqlx::query(HISTORY).execute(&pool).await?;
+        let required = &REQUIRED_CHAT_SCHEMA;
+        applied(&pool, required.version - 1, "chat media").await?;
+        let error = verify_chat_schema(&pool)
+            .await
+            .expect_err("outdated chat schema");
+        assert!(
+            error.to_string().contains(&format!(
+                "migration {} ({})",
+                required.version, required.description
+            )),
+            "{error}"
+        );
+        applied(&pool, required.version + 1, "something later").await?;
+        assert!(verify_chat_schema(&pool).await.is_err());
+        applied(&pool, required.version, "a renumbered stranger").await?;
+        assert!(verify_chat_schema(&pool).await.is_err());
+        sqlx::query("UPDATE _sqlx_migrations SET description = $2 WHERE version = $1")
+            .bind(required.version)
+            .bind(required.description)
+            .execute(&pool)
+            .await?;
+        verify_chat_schema(&pool).await
     }
 
     #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -429,33 +492,21 @@ mod tests {
         verify_schema(&pool).await
     }
 
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+    async fn chat_api_starts_on_a_core_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
+        verify_chat_schema(&pool).await
+    }
+
     #[sqlx::test(migrations = false)]
     async fn a_database_ahead_of_the_required_migration_still_boots(
         pool: PgPool,
     ) -> anyhow::Result<()> {
-        sqlx::raw_sql(
-            "CREATE TABLE _sqlx_migrations (version bigint PRIMARY KEY, success boolean NOT NULL);
-             CREATE TABLE playlists (urn text PRIMARY KEY);
-             CREATE TABLE playlist_track_projection (playlist_urn text);
-             CREATE TABLE playlist_membership_state (
-                 playlist_urn text PRIMARY KEY,
-                 next_reconcile_at timestamptz,
-                 sync_status text NOT NULL
-             );
-             CREATE TABLE playlist_remote_observations (id uuid PRIMARY KEY);
-             CREATE INDEX playlist_membership_state_reconcile_due_idx
-                 ON playlist_membership_state (next_reconcile_at, playlist_urn)
-                 WHERE sync_status <> 'clean';",
-        )
-        .execute(&pool)
-        .await?;
-        for ahead in [REQUIRED_CORE_SCHEMA_VERSION, 283, 284, 290] {
-            sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES ($1, true)")
-                .bind(ahead)
-                .execute(&pool)
-                .await?;
-        }
-
+        sqlx::query(HISTORY).execute(&pool).await?;
+        sqlx::raw_sql(PLAYLIST_SHADOW).execute(&pool).await?;
+        let required = &REQUIRED_CORE_SCHEMA;
+        applied(&pool, required.version, required.description).await?;
+        applied(&pool, required.version + 1, "later work").await?;
+        applied(&pool, required.version + 3, "even later work").await?;
         verify_schema(&pool).await
     }
 

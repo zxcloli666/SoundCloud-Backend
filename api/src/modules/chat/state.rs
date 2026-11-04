@@ -12,7 +12,9 @@ use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::HotCache;
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
+use crate::modules::chat::media::star::Stars;
 use crate::modules::chat::moderation::Moderator;
+use crate::modules::chat::s3::S3;
 use crate::modules::rooms::RoomsService;
 
 pub struct ChatState {
@@ -26,6 +28,8 @@ pub struct ChatState {
     pub hub: ChatHub,
     pub hot: HotCache,
     pub moderator: Moderator,
+    pub stars: Stars,
+    pub s3: S3,
     pub auth: Arc<AuthService>,
     pub link: Arc<LinkService>,
     pub rooms: Arc<RoomsService>,

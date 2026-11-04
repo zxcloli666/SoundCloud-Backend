@@ -65,13 +65,14 @@ impl AuthService {
 
     pub(super) fn build_authorize_url(
         &self,
-        credentials: &OAuthCredentials,
+        client_id: &str,
+        redirect_uri: &str,
         state: &str,
         code_challenge: &str,
     ) -> AppResult<String> {
         let query = serde_urlencoded::to_string([
-            ("client_id", credentials.client_id.as_str()),
-            ("redirect_uri", credentials.redirect_uri.as_str()),
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
             ("response_type", "code"),
             ("code_challenge", code_challenge),
             ("code_challenge_method", "S256"),
@@ -119,7 +120,12 @@ impl AuthService {
         let code_verifier = base64_url(&random_bytes(32));
         let code_challenge = base64_url(sha2::Sha256::digest(code_verifier.as_bytes()).as_slice());
         let state = hex::encode(random_bytes(16));
-        let url = self.build_authorize_url(&credentials, &state, &code_challenge)?;
+        let url = self.build_authorize_url(
+            &credentials.client_id,
+            &credentials.redirect_uri,
+            &state,
+            &code_challenge,
+        )?;
         let expires_at =
             (Utc::now() + chrono::Duration::seconds(LOGIN_REQUEST_TTL_SECS)).naive_utc();
         let app_id = app_id.to_string();
