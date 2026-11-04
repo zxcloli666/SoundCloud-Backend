@@ -118,7 +118,7 @@ INSERT INTO public.lyrics_lookup_state (track_id, sc_track_id, priority, input_t
 SELECT md5('track ' || i)::uuid, 'sc' || (100 + i), 3, 'T' || i, 'A' || i, 1000, '2026-01-01' FROM generate_series(201, 208) i;
 INSERT INTO public.playlist_track_projection (playlist_urn, \"position\", sc_track_id)
 SELECT 'urn:p:3', i, 'sc' || (350 + i) FROM generate_series(0, 7) i;"
-lk_want moved "8 0 0 0 8 8"
+lk_want moved "16 0 0 0 16 16"
 lk_probes moved "$lk_name" artists_normalized_name_uq
 lk_probes moved "$lk_lyrics" lyrics_lookup_state_sc_track_id_key
 lk_probes moved "$lk_member" playlist_track_projection_member_uq playlist_track_projection_track_idx
