@@ -62,13 +62,7 @@ pub async fn refresh_pending(
             owner_id: owner_id.map(extract_sc_id).map(str::to_owned),
         };
         let dedup_key = payload.dedup_key();
-        match sqlx::query_file_scalar!(
-            "queries/cold_refresh/entity_recently_unavailable.sql",
-            &dedup_key
-        )
-        .fetch_one(pool)
-        .await
-        {
+        match unavailable(pool, &dedup_key).await {
             Ok(true) => continue,
             Ok(false) => {}
             Err(error) => return error.into(),
@@ -89,6 +83,21 @@ pub async fn refresh_pending(
             .with_retry_after(retry_after);
     }
     not_found(entity)
+}
+
+async fn unavailable(pool: &PgPool, dedup_key: &str) -> Result<bool, sqlx::Error> {
+    let refused = sqlx::query_file_scalar!(
+        "queries/cold_refresh/entity_recently_unavailable.sql",
+        dedup_key
+    )
+    .fetch_one(pool)
+    .await?;
+    if refused {
+        return Ok(true);
+    }
+    sqlx::query_file_scalar!("queries/cold_refresh/entity_absent.sql", dedup_key)
+        .fetch_one(pool)
+        .await
 }
 
 fn not_found(entity: CatalogEntity) -> AppError {

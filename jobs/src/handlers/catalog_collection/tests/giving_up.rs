@@ -52,7 +52,13 @@ fn owner_refusal(status: StatusCode) -> JobError {
 
 fn failure_of(error: &JobError) -> Option<CollectionFailure> {
     match error {
-        JobError::Permanent(error) => CollectionFailure::from_last_error(&error.to_string()),
+        JobError::Settled { failure, .. } => {
+            assert_eq!(
+                CollectionFailure::from_last_error(&error.to_string()),
+                Some(*failure)
+            );
+            Some(*failure)
+        }
         _ => None,
     }
 }

@@ -110,9 +110,9 @@ impl CatalogCollectionHandler {
         snapshot: &state::Snapshot,
     ) -> JobResult {
         if !payload.apiv2_first() {
-            return Err(failed_for_good(
+            return Err(JobError::settled(
                 CollectionFailure::AuthRequired,
-                "owner must sign in again",
+                anyhow::anyhow!("owner must sign in again"),
             ));
         }
         let owner_api_start = page::owner_api_start(payload)?;
@@ -216,18 +216,14 @@ fn give_up_or_wait(snapshot: &state::Snapshot, error: JobError) -> JobError {
     let age = Utc::now().signed_duration_since(snapshot.started_at);
     match error {
         JobError::Permanent(error) if on_first_page && age >= NOT_FOUND_PATIENCE => {
-            failed_for_good(CollectionFailure::NotFound, error)
+            JobError::settled(CollectionFailure::NotFound, error)
         }
         JobError::Permanent(error) => postpone(1800, error),
         error if on_first_page && refused_as_forbidden(&error) && age >= FORBIDDEN_PATIENCE => {
-            failed_for_good(CollectionFailure::Forbidden, error)
+            JobError::settled(CollectionFailure::Forbidden, error)
         }
         error => error,
     }
-}
-
-fn failed_for_good(failure: CollectionFailure, detail: impl std::fmt::Display) -> JobError {
-    JobError::permanent(anyhow::Error::msg(failure.message(detail)))
 }
 
 #[cfg(test)]

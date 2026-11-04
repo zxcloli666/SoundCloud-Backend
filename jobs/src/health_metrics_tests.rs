@@ -55,6 +55,12 @@ async fn the_queue_snapshot_separates_pending_leased_and_dead_letters(
          ) VALUES (
              gen_random_uuid(), 'catalog.refresh', 'core_bulk', '{}'::jsonb, 0, 1, 8, 8,
              'exhausted', now()
+         ), (
+             gen_random_uuid(), 'catalog.refresh', 'core_bulk', '{}'::jsonb, 0, 1, 1, 8,
+             'not_found: SoundCloud API error (status 404)', now()
+         ), (
+             gen_random_uuid(), 'catalog.collection', 'core_bulk', '{}'::jsonb, 0, 1, 1, 8,
+             'auth_required: owner must sign in again', now()
          )",
     )
     .execute(&pool)

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use backend_contracts::pipeline::WORKER_STREAMS;
 use backend_contracts::reasons::WorkerStatus;
 use backend_contracts::worker_contract::{WORKER_LANES, WorkerLane};
-use backend_contracts::{JobKind, JobLane};
+use backend_contracts::{CollectionFailure, JobKind, JobLane};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
@@ -20,6 +20,7 @@ const POOL_CONNECTIONS: &str = "jobs_pg_pool_connections";
 const POOL_WAIT: &str = "jobs_pg_pool_wait_seconds";
 const POOL_WAIT_LAST: &str = "jobs_pg_pool_wait_last_seconds";
 const COLLAB_SKIPPED: &str = "jobs_collab_skipped_total";
+const CATALOG_REFRESH_HELD: &str = "jobs_catalog_refresh_held_total";
 const STAR_PRIORITY_PICKED: &str = "jobs_star_priority_picked_total";
 const STAR_PRIORITY_WAITING: &str = "jobs_star_priority_waiting_seconds";
 const STAR_PRIORITY_QUEUED_WAITING: &str = "jobs_star_priority_queued_waiting_seconds";
@@ -135,6 +136,7 @@ fn register_series_that_start_at_zero() {
         metrics::counter!(COLLAB_SKIPPED, "reason" => reason.as_str()).increment(0);
     }
     record_storage_repair_paused(None);
+    metrics::counter!(CATALOG_REFRESH_HELD).increment(0);
     for spec in &WORKER_LANES {
         let lane = spec.lane.as_str();
         metrics::gauge!(WORKER_LANE_STATUS_AGE, "lane" => lane).set(0.0);
@@ -201,6 +203,7 @@ pub enum Outcome {
     Retryable,
     Terminal,
     Timeout,
+    Settled(CollectionFailure),
 }
 
 impl Outcome {
@@ -211,8 +214,16 @@ impl Outcome {
             Self::Retryable => "retryable",
             Self::Terminal => "terminal",
             Self::Timeout => "timeout",
+            Self::Settled(failure) => failure.as_str(),
         }
     }
+}
+
+pub fn record_catalog_refresh_held() {
+    if HANDLE.get().is_none() {
+        return;
+    }
+    metrics::counter!(CATALOG_REFRESH_HELD).increment(1);
 }
 
 pub fn record_collab_skipped(reason: CollabSkipReason) {
