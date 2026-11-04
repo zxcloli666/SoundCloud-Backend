@@ -42,7 +42,7 @@ runs:
         owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
         repo=ghcr.io/$owner/cache/scd-ci
         toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-        key=$(cat $KEY | sha256sum | cut -c1-12)
+        key=$(for file in $KEY; do git rev-parse "HEAD:$file"; done | sha256sum | cut -c1-12)
         exact=$NAME-$toolchain-$key
         pack=$RUNNER_TEMP/target-cache
         mkdir -p "$pack"
@@ -74,7 +74,7 @@ runs:
         owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
         repo=ghcr.io/$owner/cache/scd-ci
         toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-        key=$(cat $KEY | sha256sum | cut -c1-12)
+        key=$(for file in $KEY; do git rev-parse "HEAD:$file"; done | sha256sum | cut -c1-12)
         exact=$NAME-$toolchain-$key
         sh scripts/ci-mtime.sh stamp
         dirs=()
