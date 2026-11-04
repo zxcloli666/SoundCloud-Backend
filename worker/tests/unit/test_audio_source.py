@@ -29,10 +29,11 @@ async def session() -> AsyncIterator[aiohttp.ClientSession]:
 
 
 def source(session: aiohttp.ClientSession, counters: Counters, **overrides: float) -> AudioSource:
-    settings = {"timeout_s": 90.0, "max_bytes": 1 << 20} | overrides
+    settings = {"timeout_s": 90.0, "idle_s": 20.0, "max_bytes": 1 << 20} | overrides
     return AudioSource(
         session,
         timeout_s=settings["timeout_s"],
+        idle_s=settings["idle_s"],
         max_bytes=int(settings["max_bytes"]),
         counters=counters,
     )
@@ -128,6 +129,20 @@ async def test_slow_server_times_out_as_download_failure(
 
     assert isinstance(failure, TransientFailure)
     assert failure.reason is Reason.DOWNLOAD_FAILED
+
+
+async def test_stalled_server_times_out_on_idle_with_a_message(
+    server: FakeAudioServer, session: aiohttp.ClientSession, tmp_path: Path
+) -> None:
+    server.slow_chunk_delay_s = 2.0
+    audio = source(session, Counters(), idle_s=0.3)
+
+    failure = await fetch_failure(audio, server.url("/slow"), tmp_path / "a", Deadline.after(30))
+
+    assert failure.reason is Reason.DOWNLOAD_FAILED
+    assert failure.detail
+    assert not failure.detail.endswith(": ")
+    assert len(server.requests) == 2
 
 
 async def test_slow_server_past_deadline_is_deadline_exceeded(
