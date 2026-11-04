@@ -28,6 +28,9 @@ const STAR_DUE_RECHECKED: &str = "jobs_star_due_rechecked_total";
 const STAR_DUE_CHANGED: &str = "jobs_star_due_changed_total";
 const STAR_DUE_SWEEP_MISSED: &str = "jobs_star_due_sweep_missed_total";
 const STORAGE_REPAIR_PAUSED: &str = "jobs_storage_repair_paused_seconds";
+const LYRICS_LOOKUPS_IN_FLIGHT: &str = "jobs_lyrics_lookups_in_flight";
+const LYRICS_LOOKUP_CAP: &str = "jobs_lyrics_lookup_cap";
+const LYRICS_LOOKUP_OUTCOMES: &str = "jobs_lyrics_lookup_outcomes_total";
 
 const CMD_BACKLOG: &str = "scd_cmd_backlog";
 const CMD_AGE: &str = "scd_cmd_age_seconds";
@@ -88,6 +91,24 @@ const RETENTION_TABLES: [&str; 7] = [
     "storage_event_repairs",
 ];
 const REPLAY_RESULTS: [&str; 3] = ["ok", "missing", "failed"];
+const LYRICS_LOOKUP_SETTLED: [&str; 4] = [
+    "found",
+    "found_without_sync",
+    "not_found",
+    "insufficient_metadata",
+];
+const LYRICS_LOOKUP_RETRY_CLASSES: [&str; 10] = [
+    "rate_limited",
+    "blocked",
+    "upstream",
+    "protocol",
+    "transport",
+    "malformed",
+    "oversized",
+    "not_configured",
+    "deadline",
+    "other",
+];
 const UPKEEP_EVERY: Duration = Duration::from_secs(5);
 
 pub fn init() {
@@ -173,6 +194,19 @@ fn register_series_that_start_at_zero() {
     for result in REPLAY_RESULTS {
         metrics::counter!(CMD_REPLAYED, "result" => result).increment(0);
     }
+    for path in LookupPath::ALL {
+        let path = path.as_str();
+        metrics::gauge!(LYRICS_LOOKUPS_IN_FLIGHT, "path" => path).set(0.0);
+        for outcome in LYRICS_LOOKUP_SETTLED {
+            metrics::counter!(LYRICS_LOOKUP_OUTCOMES, "path" => path, "outcome" => outcome, "class" => "none")
+                .increment(0);
+        }
+        for class in LYRICS_LOOKUP_RETRY_CLASSES {
+            metrics::counter!(LYRICS_LOOKUP_OUTCOMES, "path" => path, "outcome" => "retry", "class" => class)
+                .increment(0);
+        }
+    }
+    metrics::gauge!(LYRICS_LOOKUP_CAP).set(0.0);
 }
 
 pub fn record_repl_retention(
@@ -327,6 +361,51 @@ pub fn record_star_priority_round(
 pub fn record_star_priority_queued(kind: &'static str, tier: &'static str, waiting_seconds: f64) {
     metrics::gauge!(STAR_PRIORITY_QUEUED_WAITING, "kind" => kind, "tier" => tier)
         .set(waiting_seconds);
+}
+
+pub fn record_lyrics_lookup_slots(targeted: usize, sweep: usize) {
+    metrics::gauge!(LYRICS_LOOKUPS_IN_FLIGHT, "path" => LookupPath::Targeted.as_str())
+        .set(targeted as f64);
+    metrics::gauge!(LYRICS_LOOKUPS_IN_FLIGHT, "path" => LookupPath::Sweep.as_str())
+        .set(sweep as f64);
+}
+
+pub fn record_lyrics_lookup_cap(cap: usize) {
+    metrics::gauge!(LYRICS_LOOKUP_CAP).set(cap as f64);
+}
+
+pub fn record_lyrics_lookup(path: LookupPath, outcome: &'static str, failure: Option<&str>) {
+    let class = match failure {
+        None => "none",
+        Some(class) => LYRICS_LOOKUP_RETRY_CLASSES
+            .into_iter()
+            .find(|known| *known == class)
+            .unwrap_or("other"),
+    };
+    metrics::counter!(
+        LYRICS_LOOKUP_OUTCOMES,
+        "path" => path.as_str(),
+        "outcome" => outcome,
+        "class" => class
+    )
+    .increment(1);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookupPath {
+    Targeted,
+    Sweep,
+}
+
+impl LookupPath {
+    pub const ALL: [Self; 2] = [Self::Targeted, Self::Sweep];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Targeted => "targeted",
+            Self::Sweep => "sweep",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -703,6 +782,37 @@ mod tests {
             );
             assert!(body.contains(&series), "{series} is not exported at start");
         }
+        for path in LookupPath::ALL {
+            for series in [
+                format!(
+                    "jobs_lyrics_lookups_in_flight{{path=\"{}\"}}",
+                    path.as_str()
+                ),
+                format!(
+                    "jobs_lyrics_lookup_outcomes_total{{path=\"{}\",outcome=\"retry\",class=\"deadline\"}}",
+                    path.as_str()
+                ),
+            ] {
+                assert!(body.contains(&series), "{series} is not exported at start");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_lookup_failure_class_is_counted_as_other() {
+        init();
+        record_lyrics_lookup(LookupPath::Sweep, "retry", Some("made-up-class"));
+        let Some(body) = rendered() else {
+            return;
+        };
+
+        let other = body.lines().find(|line| {
+            line.starts_with(
+                "jobs_lyrics_lookup_outcomes_total{path=\"sweep\",outcome=\"retry\",class=\"other\"}",
+            )
+        });
+        assert!(other.is_some_and(|line| !line.ends_with(" 0")));
+        assert!(!body.contains("made-up-class"));
     }
 
     #[test]
