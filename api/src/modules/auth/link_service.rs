@@ -187,7 +187,7 @@ impl LinkService {
         .await?;
         transaction.commit().await?;
 
-        info!("Link claimed");
+        info!("Link claimed by the device");
         Ok(ClaimResult {
             session_id: target_session_id,
             mode: link.mode,
