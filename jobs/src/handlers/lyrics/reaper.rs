@@ -65,6 +65,7 @@ impl LyricsReaper {
         )
         .fetch_one(&mut *transaction)
         .await
+        .inspect_err(statement_failed("quarantine_stale_transcriptions"))
         .map_err(JobError::retryable)?;
         let orphaned = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_orphaned_transcriptions.sql",
@@ -73,6 +74,7 @@ impl LyricsReaper {
         )
         .fetch_one(&mut *transaction)
         .await
+        .inspect_err(statement_failed("quarantine_orphaned_transcriptions"))
         .map_err(JobError::retryable)?;
         let unreopenable = sqlx::query_file_scalar!(
             "queries/lyrics/settle_unreopenable_transcriptions.sql",
@@ -82,6 +84,7 @@ impl LyricsReaper {
         )
         .fetch_one(&mut *transaction)
         .await
+        .inspect_err(statement_failed("settle_unreopenable_transcriptions"))
         .map_err(JobError::retryable)?;
 
         let mut reopened = 0i64;
@@ -96,6 +99,7 @@ impl LyricsReaper {
         )
         .fetch_all(&mut *transaction)
         .await
+        .inspect_err(statement_failed("reopen_transcriptions"))
         .map_err(JobError::retryable)?;
         let reopened_ids: Vec<String> = reopen
             .iter()
@@ -103,6 +107,7 @@ impl LyricsReaper {
             .collect();
         let reopened_tiers = star_priority::of_tracks(&mut *transaction, &reopened_ids)
             .await
+            .inspect_err(statement_failed("track_tiers"))
             .map_err(JobError::retryable)?;
         for candidate in reopen {
             let tier = reopened_tiers
@@ -250,6 +255,17 @@ async fn enqueue_transcription(
         .enqueue_in_if_absent(transaction, &job)
         .await
         .map_err(queue_error)
+}
+
+fn statement_failed(statement: &'static str) -> impl Fn(&sqlx::Error) {
+    move |error: &sqlx::Error| {
+        let sqlstate = error.as_database_error().and_then(|error| error.code());
+        tracing::warn!(
+            statement,
+            sqlstate = sqlstate.as_deref().unwrap_or("none"),
+            "lyrics reaper statement failed"
+        );
+    }
 }
 
 fn queue_error(error: QueueError) -> JobError {

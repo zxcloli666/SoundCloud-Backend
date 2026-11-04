@@ -188,6 +188,46 @@ async fn transcription_reaper_enqueues_only_current_never_dispatched_work(
 }
 
 #[sqlx::test(migrations = false)]
+async fn the_alignment_room_goes_to_the_oldest_plain_lyrics_uploads(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    for (id, hours) in [("51", 5), ("52", 4), ("53", 3), ("54", 2), ("55", 1)] {
+        seed_stored_track(&pool, id, 1).await?;
+        sqlx::query(
+            "UPDATE storage_event_state SET updated_at = now() - $2 * interval '1 hour'
+             WHERE sc_track_id = $1",
+        )
+        .bind(id)
+        .bind(f64::from(hours))
+        .execute(&pool)
+        .await?;
+    }
+    seed_lyrics(&pool, "51", "plain lyrics of the oldest upload").await?;
+    seed_lyrics(&pool, "53", "plain lyrics of a newer upload").await?;
+    seed_lyrics(&pool, "55", "plain lyrics of the newest upload").await?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, synced_lrc, source, created_at)
+         VALUES ('52', 'plain lyrics', '[00:01.00] synced', 'lrclib',
+                 (now() AT TIME ZONE 'UTC') - interval '1 hour')",
+    )
+    .execute(&pool)
+    .await?;
+
+    reaper(&pool).reap_transcriptions(2).await?;
+
+    let picked: Vec<String> = sqlx::query_scalar(
+        "SELECT dedup_key FROM background_jobs
+         WHERE kind = 'lyrics.dispatch_transcription'
+         ORDER BY dedup_key",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(picked, ["51", "53"]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
 async fn stale_transcription_waits_for_a_reopen_without_redispatch(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -794,6 +834,54 @@ async fn the_liked_embedding_pass_leaves_wave_picks_to_the_rest(
     let picked = super::tiered::embeddings(&mut transaction, 1, Turn::led_by(Tier::Liked)).await?;
 
     assert_eq!(picked, vec![("42".to_owned(), Tier::Liked)]);
+    Ok(())
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_liked_embedding_window_ends_at_its_last_row_with_every_tie(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    install_schema(&pool).await?;
+    sqlx::raw_sql(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, created_at, embedded_at)
+         SELECT id,
+                'lyrics long enough to require a durable embedding job',
+                'genius',
+                (now() AT TIME ZONE 'UTC') - age,
+                embedded
+         FROM (VALUES
+             ('61', interval '4 hours', NULL::timestamptz),
+             ('62', interval '3 hours', now()),
+             ('63', interval '2 hours', NULL),
+             ('64', interval '2 hours', NULL),
+             ('65', interval '1 hour', NULL),
+             ('66', interval '1 minute', NULL)
+         ) AS seeded (id, age, embedded)",
+    )
+    .execute(&pool)
+    .await?;
+
+    let mut windows = Vec::new();
+    for window in [0_i64, 1, 3, 4, 100] {
+        let mut picked =
+            sqlx::query_file_scalar!("queries/lyrics/reap_embeddings_liked_window.sql", window)
+                .fetch_all(&pool)
+                .await?;
+        picked.sort();
+        windows.push(picked);
+    }
+
+    let ids = |list: &[&str]| list.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        windows,
+        vec![
+            ids(&["61"]),
+            ids(&["61", "63", "64"]),
+            ids(&["61", "63", "64", "65"]),
+            ids(&["61", "63", "64", "65"]),
+            ids(&["61", "63", "64", "65"]),
+        ]
+    );
     Ok(())
 }
 

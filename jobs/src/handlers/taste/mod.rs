@@ -3,6 +3,7 @@ mod dataset;
 mod history;
 mod metrics;
 mod pooling;
+mod recent;
 mod refresh_order;
 mod result;
 mod vectors;
@@ -28,7 +29,10 @@ use crate::qdrant::{QdrantProvisioner, TRACKS_TASTE};
 use crate::queue::{JobError, JobResult};
 
 use self::dataset::Export;
-use self::metrics::{ExportSkip, record_export_skipped, record_exported, record_user_vectors};
+use self::metrics::{
+    ExportSkip, record_export_skipped, record_exported, record_full_history_reads,
+    record_user_vectors,
+};
 use self::pooling::Pooling;
 
 pub(crate) use result::TasteResult;
@@ -257,20 +261,25 @@ impl TasteHandler {
         let mut round = Round::new("taste");
         round.record("star", 0, None);
         round.record("regular", 0, None);
+        let source = vectors::Collection {
+            qdrant: &self.qdrant,
+            name: &active.collection,
+        };
         let mut refreshed = 0usize;
+        let mut full_reads = 0usize;
         for batch in batches {
             let pooled = vectors::pool_users(
                 &self.analytics,
-                &self.qdrant,
+                &source,
                 self.config.history_days,
                 &pooling,
-                &active.collection,
                 &batch.users,
                 now_unix,
             )
             .await?;
-            vectors::store(&self.pool, &active.version, &pooled).await?;
-            refreshed += pooled.len();
+            vectors::store(&self.pool, &active.version, &pooled.vectors).await?;
+            refreshed += pooled.vectors.len();
+            full_reads += pooled.full_reads;
             record_batch(&mut round, &batch, from);
         }
         round.report();
@@ -278,11 +287,12 @@ impl TasteHandler {
             .execute(&self.pool)
             .await
             .map_err(JobError::retryable)?;
+        record_full_history_reads(full_reads);
         if refreshed > 0 {
             record_user_vectors(refreshed);
             info!(
                 version = active.version,
-                users, refreshed, "taste user vectors refreshed"
+                users, refreshed, full_reads, "taste user vectors refreshed"
             );
         }
         Ok(())
