@@ -8,13 +8,14 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::support::{Device, call, count, flushed, seed, state, state_until};
+use super::support::{Device, admin, call, count, flushed, seed, state, state_until};
 use crate::modules::chat::rt_keys;
 
 const SEED_DB: u8 = 5;
 const SECOND_DB: u8 = 6;
 const FLAG_DB: u8 = 7;
 const UNTIL_DB: u8 = 9;
+const LATE_PURGE_DB: u8 = 4;
 
 fn devices(seeded: &Value) -> Vec<Device> {
     seeded["devices"]
@@ -265,5 +266,53 @@ async fn a_synthetic_session_stops_resolving_at_the_until_time_cache_included(
     let closed = call(&chat, device, "POST", "/chat/sync", Some(sync)).await;
     assert_eq!(closed.status, 401, "{}", closed.body);
     assert_eq!(closed.body["error"], "chat_relogin_required");
+    Ok(())
+}
+
+static LATE_CLOCK_SECS: AtomicI64 = AtomicI64::new(0);
+
+fn late_clock() -> DateTime<Utc> {
+    Utc.timestamp_opt(LATE_CLOCK_SECS.load(Ordering::SeqCst), 0)
+        .single()
+        .expect("a valid time")
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires a local Redis"]
+async fn purge_still_cleans_up_after_the_until_time_while_seed_and_sessions_stay_closed(
+    pg: PgPool,
+) -> anyhow::Result<()> {
+    let redis = flushed(LATE_PURGE_DB).await;
+    let until = Utc.timestamp_opt(1_000, 0).single().expect("a valid time");
+    LATE_CLOCK_SECS.store(999, Ordering::SeqCst);
+    let chat = state_until(pg.clone(), redis, until, late_clock);
+    let seeded = seed(&chat, 4, 1, 1).await;
+    let device = &devices(&seeded)[0];
+
+    LATE_CLOCK_SECS.store(1_001, Ordering::SeqCst);
+    let sync = call(
+        &chat,
+        device,
+        "POST",
+        "/chat/sync",
+        Some(json!({"max_bytes": 4096})),
+    )
+    .await;
+    assert_eq!(sync.status, 401, "{}", sync.body);
+    let body = json!({"users": 2, "devices_per_user": 1, "groups": 1});
+    let (status, _) = admin(&chat, "/chat-admin/loadtest/seed", Some(body)).await;
+    assert_eq!(status, 404);
+
+    let (status, purged) = admin(&chat, "/chat-admin/loadtest/purge", None).await;
+    assert_eq!(status, 200, "{purged}");
+    assert_eq!(purged["users"], 4);
+    assert_eq!(
+        count(
+            &pg,
+            "SELECT count(*) FROM chat.users WHERE user_id LIKE 'lt:%'"
+        )
+        .await,
+        0
+    );
     Ok(())
 }

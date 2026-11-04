@@ -58,7 +58,7 @@ pub async fn purge(
     admin: ChatAdmin,
     State(chat): State<Arc<ChatState>>,
 ) -> ChatResult<Json<Purged>> {
-    if !chat.config.loadtest_open() {
+    if !chat.config.loadtest {
         return Err(ChatError::NotFound);
     }
     let purged = purge::run(&chat).await?;

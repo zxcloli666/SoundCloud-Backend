@@ -207,13 +207,21 @@ async fn the_load_test_stops_at_the_until_time_even_with_the_flag_left_on() {
     assert!(!chat.config.opens_for("lt:1"));
     let found = session(&chat, Uuid::now_v7()).await;
     assert!(matches!(found, Ok(None)), "{found:?}");
-    for path in ["/chat-admin/loadtest/seed", "/chat-admin/loadtest/purge"] {
-        let (status, answer) = admin(&chat, path, Some(body.clone())).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
-        assert_eq!(answer, json!({"error": "chat_not_found"}), "{path}");
-    }
+    let (status, answer) = admin(&chat, "/chat-admin/loadtest/seed", Some(body)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(answer, json!({"error": "chat_not_found"}));
 
     CLOCK_SECS.store(999, Ordering::SeqCst);
     assert!(chat.config.loadtest_open());
     assert!(chat.config.opens_for("lt:1"));
+}
+
+#[tokio::test]
+async fn purge_stays_closed_while_the_flag_is_off() {
+    let chat = state(lazy_pg(), offline_redis(), false);
+
+    let (status, answer) = admin(&chat, "/chat-admin/loadtest/purge", None).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(answer, json!({"error": "chat_not_found"}));
 }
