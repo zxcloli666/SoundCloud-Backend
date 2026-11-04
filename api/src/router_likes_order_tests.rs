@@ -82,7 +82,7 @@ pub(super) fn expected(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|id| (*id).to_owned()).collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_owner_order_survives_moves_new_likes_relikes_and_reset(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -163,7 +163,7 @@ async fn the_owner_order_survives_moves_new_likes_relikes_and_reset(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn exhausted_gaps_are_renumbered_without_changing_the_order(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -188,7 +188,7 @@ async fn exhausted_gaps_are_renumbered_without_changing_the_order(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_live_likes_of_the_owner_can_be_moved(pool: PgPool) -> anyhow::Result<()> {
     like_oldest_first(&pool, &["1", "2"]).await?;
     seed_tracks(&pool, &["3"]).await?;
@@ -231,7 +231,7 @@ async fn only_live_likes_of_the_owner_can_be_moved(pool: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn other_listeners_still_see_the_likes_by_date(pool: PgPool) -> anyhow::Result<()> {
     like_oldest_first(&pool, &["1", "2", "3"]).await?;
     let app = app(&pool, NO_REDIS).await?;

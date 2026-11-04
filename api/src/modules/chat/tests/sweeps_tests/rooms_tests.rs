@@ -21,7 +21,7 @@ async fn lapse(pg: &PgPool, conversation: uuid::Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_nobody_polled_for_ten_minutes_ends_with_its_chat(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), 12);
@@ -60,7 +60,7 @@ async fn a_room_nobody_polled_for_ten_minutes_ends_with_its_chat(pg: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_with_a_recent_poll_stays(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), 13);
@@ -85,7 +85,7 @@ async fn a_room_with_a_recent_poll_stays(pg: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_lapsed_room_chat_ends_its_quiet_room(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), 14);
@@ -110,7 +110,7 @@ async fn a_lapsed_room_chat_ends_its_quiet_room(pg: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_chat_whose_room_vanished_is_shredded(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), 15);
@@ -138,7 +138,7 @@ async fn a_room_chat_whose_room_vanished_is_shredded(pg: PgPool) -> anyhow::Resu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_stale_alive_entry_without_a_room_is_dropped(pg: PgPool) -> anyhow::Result<()> {
     let chat = state_on(pg.clone(), 9);

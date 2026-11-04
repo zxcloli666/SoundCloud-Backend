@@ -100,7 +100,7 @@ async fn empty_lookup_proxy_response(headers: HeaderMap) -> (StatusCode, String)
     (StatusCode::OK, body.to_owned())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn new_track_creates_due_lookup_state(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Track").await?;
 
@@ -114,7 +114,7 @@ async fn new_track_creates_due_lookup_state(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn input_change_reopens_once_and_unrelated_change_does_not(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -146,7 +146,7 @@ async fn input_change_reopens_once_and_unrelated_change_does_not(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn external_cache_prevents_lookup_state(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO lyrics_cache (sc_track_id, plain_text, source)
@@ -164,7 +164,7 @@ async fn external_cache_prevents_lookup_state(pool: PgPool) -> anyhow::Result<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn keyset_backfill_is_bounded_and_restart_safe(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "41", "First").await?;
     insert_track(&pool, "42", "Second").await?;
@@ -192,7 +192,7 @@ async fn keyset_backfill_is_bounded_and_restart_safe(pool: PgPool) -> anyhow::Re
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_finished_backfill_is_not_read_again(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "41", "First").await?;
     let handler = offline_handler(&pool)?;
@@ -214,7 +214,7 @@ async fn a_finished_backfill_is_not_read_again(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn clean_source_empty_persists_negative_without_worker_jobs(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -290,7 +290,7 @@ async fn clean_source_empty_persists_negative_without_worker_jobs(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn source_outage_persists_retry_without_worker_jobs(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Lose Yourself").await?;
     let queue = JobRepository::new(pool.clone(), "lyrics-outage".to_owned());
@@ -437,7 +437,7 @@ async fn sync_provenance(pool: &PgPool) -> anyhow::Result<(Option<String>, Optio
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -484,7 +484,7 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_external_sync_is_labelled_with_its_source(pool: PgPool) -> anyhow::Result<()> {
     lookup_through_proxy(&pool, LRCLIB_SYNCED).await?;
 
@@ -500,7 +500,7 @@ async fn an_external_sync_is_labelled_with_its_source(pool: PgPool) -> anyhow::R
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Track").await?;
     let queue = JobRepository::new(pool.clone(), "lookup-test".to_owned());
@@ -527,7 +527,7 @@ async fn immediate_wake_uses_state_message_identity(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -565,7 +565,7 @@ async fn due_wakes_become_one_lookup_job_each_and_a_claimed_track_is_left_alone(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_notify_on_the_wake_channel_makes_the_lookup_job_within_a_second(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -683,7 +683,7 @@ async fn wake_from_an_api_node_reaches_core_through_the_apply_worker() -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_sweep_claims_star_likes_likes_star_tracks_the_old_order_and_the_oldest_share(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -764,7 +764,7 @@ async fn sweep_job(pool: &PgPool) -> anyhow::Result<crate::queue::LeasedJob> {
         .ok_or_else(|| anyhow::anyhow!("sweep job was not claimed"))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn wake_many_leaves_the_same_jobs_and_marks_as_one_wake_per_track(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -961,7 +961,7 @@ async fn cached_text(pool: &PgPool) -> anyhow::Result<(Option<String>, Option<St
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn plain_text_found_while_lrclib_failed_keeps_the_lookup_for_a_day(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -988,7 +988,7 @@ async fn plain_text_found_while_lrclib_failed_keeps_the_lookup_for_a_day(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
@@ -1008,7 +1008,7 @@ async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_later_lookup_with_synced_text_fills_the_plain_only_row(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1038,7 +1038,7 @@ async fn a_later_lookup_with_synced_text_fills_the_plain_only_row(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_recheck_stops_after_a_week_and_repeats_change_nothing(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1105,7 +1105,7 @@ LIMIT 5000
 ON CONFLICT (track_id) DO NOTHING;
 ";
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_outage_backfill_reschedules_only_plain_only_rows_without_a_state(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1276,7 +1276,7 @@ async fn settle_found_in(
     .map(|row| row.settled))
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_claim_writes_only_the_queue_and_each_settle_writes_the_state_once(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1341,7 +1341,7 @@ async fn a_claim_writes_only_the_queue_and_each_settle_writes_the_state_once(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_found_synced_result_deletes_the_state_and_the_queue_row_in_one_statement(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1372,7 +1372,7 @@ async fn a_found_synced_result_deletes_the_state_and_the_queue_row_in_one_statem
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_stale_claim_is_released_without_a_state_write(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Lose Yourself").await?;
     let handler = offline_handler(&pool)?;
@@ -1419,7 +1419,7 @@ async fn a_stale_claim_is_released_without_a_state_write(pool: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_input_change_during_a_claim_clears_it_and_fences_out_its_settle(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1453,7 +1453,7 @@ async fn an_input_change_during_a_claim_clears_it_and_fences_out_its_settle(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_wake_during_a_claim_reopens_the_lookup_and_fences_out_the_old_settle(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1509,7 +1509,7 @@ async fn a_wake_during_a_claim_reopens_the_lookup_and_fences_out_the_old_settle(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_expired_claim_is_released_on_the_queue_only(pool: PgPool) -> anyhow::Result<()> {
     insert_track(&pool, "42", "Lose Yourself").await?;
     let job = lookup_job(&pool).await?;
@@ -1547,7 +1547,7 @@ async fn observe_and_bump(pool: &PgPool, priority: i16) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_recheck_row_survives_an_observe_and_a_priority_bump_and_ends_with_synced_lyrics(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1628,7 +1628,7 @@ async fn a_recheck_row_survives_an_observe_and_a_priority_bump_and_ends_with_syn
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_recheck_row_survives_observes_and_ends_after_seven_tries(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1674,7 +1674,7 @@ async fn a_recheck_row_survives_observes_and_ends_after_seven_tries(
     Ok(())
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn external_synced_lyrics_end_a_recheck_row_on_the_next_track_update(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -1738,7 +1738,7 @@ async fn wake_outcome(pool: &PgPool, prefix: &str) -> anyhow::Result<Vec<WakeOut
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_batched_wake_leaves_the_rows_of_one_wake_per_track(pool: PgPool) -> anyhow::Result<()> {
     let queue = JobRepository::new(pool.clone(), "wake-batch".to_owned());
     for prefix in ["a", "b", "c"] {

@@ -64,7 +64,7 @@ async fn queued_likes(pool: &PgPool) -> anyhow::Result<Vec<String>> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn without_star_the_eleventh_superlike_waits_for_a_free_slot(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -98,7 +98,7 @@ async fn without_star_the_eleventh_superlike_waits_for_a_free_slot(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_full_quota_refuses_an_unliked_track_without_liking_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -121,7 +121,7 @@ async fn a_full_quota_refuses_an_unliked_track_without_liking_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn star_has_no_limit_and_a_lapsed_star_keeps_what_it_made(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -145,7 +145,7 @@ async fn star_has_no_limit_and_a_lapsed_star_keeps_what_it_made(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_superlike_lives_only_as_long_as_its_like(pool: PgPool) -> anyhow::Result<()> {
     like(&pool, &["5", "6"]).await?;
     superlike_track(&pool, "5", false).await?;
@@ -165,7 +165,7 @@ async fn a_superlike_lives_only_as_long_as_its_like(pool: PgPool) -> anyhow::Res
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_taken_down_track_frees_its_slot(pool: PgPool) -> anyhow::Result<()> {
     like(&pool, &["5", "6"]).await?;
     superlike_track(&pool, "5", false).await?;
@@ -179,7 +179,7 @@ async fn a_taken_down_track_frees_its_slot(pool: PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn track_payloads_carry_the_super_heart_only_for_live_superlikes(
     pool: PgPool,
 ) -> anyhow::Result<()> {

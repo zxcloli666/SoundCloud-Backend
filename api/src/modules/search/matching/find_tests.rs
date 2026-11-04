@@ -18,7 +18,7 @@ fn urn(id: i64) -> Option<String> {
     Some(format!("soundcloud:tracks:{id}"))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_close_duration_picks_the_right_copy(pool: PgPool) -> anyhow::Result<()> {
     seed(
         &pool,
@@ -34,7 +34,7 @@ async fn a_close_duration_picks_the_right_copy(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_hit_with_another_title_is_a_miss(pool: PgPool) -> anyhow::Result<()> {
     seed(
         &pool,
@@ -52,7 +52,7 @@ async fn a_hit_with_another_title_is_a_miss(pool: PgPool) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_artists_own_upload_beats_a_more_popular_reupload(pool: PgPool) -> anyhow::Result<()> {
     seed(
         &pool,
@@ -68,7 +68,7 @@ async fn the_artists_own_upload_beats_a_more_popular_reupload(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_title_search_finds_the_artists_upload_the_combined_one_missed(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -83,7 +83,7 @@ async fn the_title_search_finds_the_artists_upload_the_combined_one_missed(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_empty_title_or_unknown_song_is_a_miss(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool, &[song(1, "Umbrella", "Rihanna", 1_000)]).await?;
     let search = service(&pool)?;

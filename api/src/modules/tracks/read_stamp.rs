@@ -79,7 +79,7 @@ mod tests {
         )
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_stamp_written_now_matches_what_the_sql_guard_would_do(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -103,7 +103,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_touch_the_sql_guard_skipped_is_remembered_and_the_next_one_stays_off_the_database(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -136,7 +136,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_failed_update_is_not_remembered(pool: PgPool) -> anyhow::Result<()> {
         seed(&pool).await?;
         let stamps = ReadStamps::new();

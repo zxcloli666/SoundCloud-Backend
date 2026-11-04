@@ -50,7 +50,7 @@ async fn uncached(pool: &PgPool, q: &str, shape: Shape) -> anyhow::Result<Vec<Te
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn concurrent_identical_searches_make_one_lexicon_call(small: PgPool) -> anyhow::Result<()> {
     let pool = wide(&small).await?;
     seed(&pool).await?;
@@ -84,7 +84,7 @@ async fn concurrent_identical_searches_make_one_lexicon_call(small: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn without_the_cache_every_search_calls_the_lexicon(small: PgPool) -> anyhow::Result<()> {
     let pool = wide(&small).await?;
     seed(&pool).await?;
@@ -109,7 +109,7 @@ async fn without_the_cache_every_search_calls_the_lexicon(small: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn cached_terms_equal_uncached_terms_for_every_shape(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let cache = TermsCache::new();

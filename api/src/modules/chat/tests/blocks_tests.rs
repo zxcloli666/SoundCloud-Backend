@@ -8,7 +8,7 @@ use crate::modules::chat::body::ChatPath;
 use crate::modules::chat::moderation::testing::state;
 use crate::modules::chat::test_support::caller;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_block_works_both_ways_and_is_undone(pool: PgPool) {
     let chat = state(pool, None);
     assert_eq!(
@@ -32,7 +32,7 @@ async fn a_block_works_both_ways_and_is_undone(pool: PgPool) {
     assert!(!blocked_between(&chat, "101", "202").await.expect("read"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_music_block_of_a_user_also_closes_chat(pool: PgPool) {
     let chat = state(pool.clone(), None);
     sqlx::query(
@@ -47,7 +47,7 @@ async fn a_music_block_of_a_user_also_closes_chat(pool: PgPool) {
     assert!(!blocked_between(&chat, "505", "606").await.expect("read"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn odd_targets_and_a_full_list_are_refused(pool: PgPool) {
     let chat = state(pool.clone(), None);
     assert_eq!(
@@ -79,7 +79,7 @@ async fn odd_targets_and_a_full_list_are_refused(pool: PgPool) {
         .expect("an existing block is still fine");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn one_query_finds_every_blocked_user_of_a_group(pool: PgPool) {
     let chat = state(pool.clone(), None);
     sqlx::query(

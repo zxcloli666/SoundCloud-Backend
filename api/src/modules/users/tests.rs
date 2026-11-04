@@ -1,7 +1,7 @@
 use super::UserRepository;
 use sqlx::PgPool;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn numeric_user_id_reads_and_touches_the_canonical_local_profile(
     pool: PgPool,
 ) -> anyhow::Result<()> {

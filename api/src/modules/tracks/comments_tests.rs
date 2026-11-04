@@ -34,7 +34,7 @@ fn a_submitted_comment_is_bounded_and_keeps_its_position() {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_pending_comment_is_readable_before_soundcloud_confirms_it(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -62,7 +62,7 @@ async fn a_pending_comment_is_readable_before_soundcloud_confirms_it(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn confirmed_comments_come_first_and_authors_outside_the_catalog_are_skipped(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -90,7 +90,7 @@ async fn confirmed_comments_come_first_and_authors_outside_the_catalog_are_skipp
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_private_track_serves_no_comments_and_keeps_none(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     sqlx::raw_sql(

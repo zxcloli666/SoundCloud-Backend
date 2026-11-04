@@ -13,6 +13,9 @@ use crate::config::{AppConfig, DatabaseCfg};
 
 mod retry;
 
+#[cfg(test)]
+pub(crate) static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 pub use retry::retry_conflicts;
 
 const REQUIRED_CORE_SCHEMA_VERSION: i64 = 282;
@@ -410,7 +413,7 @@ mod tests {
         verify_schema(&pool).await
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn api_starts_on_a_core_with_every_migration(pool: PgPool) -> anyhow::Result<()> {
         verify_schema(&pool).await
     }

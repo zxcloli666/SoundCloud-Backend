@@ -29,7 +29,7 @@ fn key(name: &str) -> String {
     format!("stampede:{name}:{}", std::process::id())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn sixteen_identical_misses_do_the_expensive_work_once(pg: PgPool) -> anyhow::Result<()> {
     let vibe = vibe(pg).await?;
@@ -71,7 +71,7 @@ async fn sixteen_identical_misses_do_the_expensive_work_once(pg: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn a_failed_vibe_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
     let vibe = vibe(pg).await?;
@@ -109,7 +109,7 @@ async fn a_failed_vibe_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn two_different_keys_are_not_made_to_wait_for_each_other(pg: PgPool) -> anyhow::Result<()> {
     let vibe = vibe(pg).await?;
@@ -159,7 +159,7 @@ async fn catalog_search(pg: PgPool) -> anyhow::Result<Arc<super::SearchService>>
     Ok(super::SearchService::new(pg, CacheService::new(redis)))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> anyhow::Result<()> {
     let search = catalog_search(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
@@ -200,7 +200,7 @@ async fn sixteen_identical_catalog_misses_search_postgres_once(pg: PgPool) -> an
 
 const STAMPEDE: usize = 8;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_timed_out_catalog_search_answers_every_waiter_at_once(pg: PgPool) -> anyhow::Result<()> {
     let search = catalog_search(pg).await?;
     let runs = Arc::new(AtomicUsize::new(0));
@@ -244,7 +244,7 @@ async fn a_timed_out_catalog_search_answers_every_waiter_at_once(pg: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn two_different_catalog_phrases_do_not_queue_behind_each_other(
     pg: PgPool,
 ) -> anyhow::Result<()> {

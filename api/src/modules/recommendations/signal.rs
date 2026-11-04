@@ -443,7 +443,7 @@ mod tests {
             .map_or(0.0, |w| w.weight)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_superliked_like_weighs_three_likes_in_events_and_in_the_mirror(
         pool: PgPool,
     ) -> anyhow::Result<()> {

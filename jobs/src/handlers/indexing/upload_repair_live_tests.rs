@@ -251,7 +251,7 @@ async fn connect(config: &NatsConfig, name: &str) -> anyhow::Result<Bus> {
     Box::pin(Bus::connect(config, name)).await
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 #[ignore = "requires the T12 lab (core sourcing STORAGE_EVENTS from leaf domain main); debug builds need RUST_MIN_STACK=8388608"]
 async fn an_upload_without_a_storage_event_is_announced_once(pool: PgPool) -> anyhow::Result<()> {
     tls_common::init_crypto();

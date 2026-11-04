@@ -36,7 +36,7 @@ fn kinds(change: &Change) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_kick_rekeys_and_tells_everyone(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -58,7 +58,7 @@ async fn a_kick_rekeys_and_tells_everyone(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn admins_cannot_remove_admins_or_the_owner(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -91,7 +91,7 @@ async fn admins_cannot_remove_admins_or_the_owner(pool: PgPool) -> ChatResult<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_ban_keeps_the_user_out_of_later_adds(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     let owner = access_of(&pool, id, "101").await;
@@ -108,7 +108,7 @@ async fn a_ban_keeps_the_user_out_of_later_adds(pool: PgPool) -> ChatResult<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_owner_leaving_hands_the_group_over(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -130,7 +130,7 @@ async fn the_owner_leaving_hands_the_group_over(pool: PgPool) -> ChatResult<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_last_member_out_deletes_the_group_and_its_keys(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Invited)]).await;
     sqlx::query(
@@ -160,7 +160,7 @@ async fn the_last_member_out_deletes_the_group_and_its_keys(pool: PgPool) -> Cha
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_dm_cannot_be_left_like_a_group(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     assert_eq!(
@@ -170,7 +170,7 @@ async fn a_dm_cannot_be_left_like_a_group(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_invite_is_accepted_or_declined_once(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -201,7 +201,7 @@ async fn an_invite_is_accepted_or_declined_once(pool: PgPool) -> ChatResult<()> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_dm_request_is_accepted_without_a_system_row(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Invited).await;
     let accepted = accept(&pool, &access_of(&pool, id, "202").await).await?;
@@ -212,7 +212,7 @@ async fn a_dm_request_is_accepted_without_a_system_row(pool: PgPool) -> ChatResu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn adding_respects_the_200_cap_and_hidden_history(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[]).await;
     exec(
@@ -254,7 +254,7 @@ async fn adding_respects_the_200_cap_and_hidden_history(pool: PgPool) -> ChatRes
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_the_owner_changes_roles_and_can_hand_over(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,
@@ -278,7 +278,7 @@ async fn only_the_owner_changes_roles_and_can_hand_over(pool: PgPool) -> ChatRes
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_add_joins_at_the_seq_of_its_own_commit(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[]).await;
     exec(
@@ -305,7 +305,7 @@ async fn an_add_joins_at_the_seq_of_its_own_commit(pool: PgPool) -> ChatResult<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn racing_adds_never_pass_the_cap(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[]).await;
     let owner = access_of(&pool, id, "101").await;
@@ -330,7 +330,7 @@ async fn racing_adds_never_pass_the_cap(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn two_handovers_at_once_leave_one_owner(pool: PgPool) -> ChatResult<()> {
     let id = group(
         &pool,

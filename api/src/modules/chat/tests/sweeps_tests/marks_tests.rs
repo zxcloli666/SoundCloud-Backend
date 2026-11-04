@@ -28,7 +28,7 @@ async fn set_read(pg: &PgPool, conversation: Uuid, user: &str, seq: i64) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn read_marks_reach_members_and_never_move_back(pg: PgPool) -> anyhow::Result<()> {
     let chat = state(pg.clone());

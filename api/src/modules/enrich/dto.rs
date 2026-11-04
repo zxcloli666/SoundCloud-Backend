@@ -353,7 +353,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn participants_are_served_from_the_cache_until_it_expires(
         pool: PgPool,
     ) -> anyhow::Result<()> {

@@ -222,7 +222,7 @@ mod tests {
         serde_json::json!({ "urn": URN, "playback_count": playback })
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn an_unchanged_sync_never_waits_on_a_writer_row_lock(
         pool: PgPool,
     ) -> anyhow::Result<()> {
@@ -246,7 +246,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_changed_counter_is_still_persisted(pool: PgPool) -> anyhow::Result<()> {
         let mut seed = vec![projection(7)];
         sync(&pool, &mut seed).await?;
@@ -263,7 +263,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn stored_counters_fill_fields_the_projection_lacks(pool: PgPool) -> anyhow::Result<()> {
         let mut seed = vec![serde_json::json!({
             "urn": URN,

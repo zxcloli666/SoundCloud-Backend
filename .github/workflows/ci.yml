@@ -143,6 +143,13 @@ jobs:
       - name: Toolchain
         run: sh scripts/ci-toolchain.sh
 
+      - name: Shared test migrator
+        run: |
+          if git grep -n 'sqlx::test(migrations = "' -- '*.rs'; then
+            echo '::error::sqlx::test(migrations = "<dir>") inlines every migration into each test; use migrator = "crate::db::TEST_MIGRATOR" (api) or "crate::db::migrations::TEST_CORE" (jobs)'
+            exit 1
+          fi
+
       - name: Format
         run: |
           cargo fmt --manifest-path api/Cargo.toml --check

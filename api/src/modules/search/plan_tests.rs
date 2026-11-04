@@ -89,7 +89,7 @@ macro_rules! explain {
     }};
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let mut tx = configured(&pool).await?;
@@ -216,7 +216,7 @@ async fn every_catalog_query_stays_on_its_indexes(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn short_unknown_tokens_skip_the_fuzzy_arm(pool: PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(
         "INSERT INTO tracks (sc_track_id, urn, title, title_normalized, metadata_artist, uploader_username,

@@ -256,7 +256,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn only_a_vector_of_the_serving_version_is_used(pg: PgPool) -> anyhow::Result<()> {
         version(&pg, RETIRED, false).await?;
         version(&pg, ACTIVE, true).await?;
@@ -284,7 +284,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn a_broken_vector_table_is_counted_not_hidden(pg: PgPool) -> anyhow::Result<()> {
         crate::metrics::init();
         sqlx::query("DROP TABLE user_taste_vectors")
@@ -300,7 +300,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn the_listeners_own_tracks_are_found_among_the_candidates(
         pg: PgPool,
     ) -> anyhow::Result<()> {
@@ -335,7 +335,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn without_any_trained_model_nobody_has_a_taste_vector(pg: PgPool) -> anyhow::Result<()> {
         assert_eq!(load_user_taste(&pg, "42").await, None);
         Ok(())

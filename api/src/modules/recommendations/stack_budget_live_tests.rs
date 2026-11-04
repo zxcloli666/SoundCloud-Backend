@@ -63,7 +63,7 @@ fn shelves(page: &str) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Qdrant, Redis and NATS"]
 async fn the_home_page_of_a_listener_with_history_fits_in_half_a_tokio_worker_stack(
     pg: PgPool,
