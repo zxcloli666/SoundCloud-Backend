@@ -64,7 +64,7 @@ async fn setup(pool: &PgPool) -> anyhow::Result<SyncQueueRepository> {
     ))
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn newer_track_intent_fences_old_ack_and_confirmation_is_durable(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -124,7 +124,7 @@ async fn newer_track_intent_fences_old_ack_and_confirmation_is_durable(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn failed_confirmation_enqueue_preserves_the_stored_remote_result(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -162,7 +162,7 @@ async fn failed_confirmation_enqueue_preserves_the_stored_remote_result(
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_like_of_a_missing_track_is_closed_and_heal_leaves_it_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -232,7 +232,7 @@ pub(super) async fn heal(pool: &PgPool, table: &str) -> anyhow::Result<()> {
         .map_err(|error| anyhow::anyhow!("{error:?}"))
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_push_carries_every_merged_field_and_a_later_core_edit_is_healed_into_a_new_push(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -303,7 +303,7 @@ async fn a_push_carries_every_merged_field_and_a_later_core_edit_is_healed_into_
     Ok(())
 }
 
-#[sqlx::test(migrations = false)]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn an_edit_whose_desired_state_was_already_observed_is_dropped_unsent(
     pool: PgPool,
 ) -> anyhow::Result<()> {

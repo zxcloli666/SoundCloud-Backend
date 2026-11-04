@@ -90,7 +90,7 @@ async fn untouched(pool: &PgPool) -> anyhow::Result<bool> {
     .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn core_down_gives_a_temporary_error_and_writes_nothing(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, APP, true).await?;
     connect(&pool, Some(APP), -60, None).await?;
@@ -118,7 +118,7 @@ async fn core_down_gives_a_temporary_error_and_writes_nothing(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_refresh_running_on_core_is_not_mistaken_for_a_logout(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -134,7 +134,7 @@ async fn a_refresh_running_on_core_is_not_mistaken_for_a_logout(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_inactive_app_asks_for_a_new_login_instead_of_retrying(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -167,7 +167,7 @@ async fn an_inactive_app_asks_for_a_new_login_instead_of_retrying(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_connection_without_an_app_asks_for_a_new_login(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, SPARE_APP, true).await?;
     connect(&pool, None, -60, None).await?;
@@ -181,7 +181,7 @@ async fn a_connection_without_an_app_asks_for_a_new_login(pool: PgPool) -> anyho
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn without_any_active_app_a_new_login_cannot_help(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, APP, false).await?;
     connect(&pool, Some(APP), -60, None).await?;
@@ -205,7 +205,7 @@ async fn without_any_active_app_a_new_login_cannot_help(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_fresh_token_stays_usable_while_its_app_is_inactive(pool: PgPool) -> anyhow::Result<()> {
     add_app(&pool, APP, false).await?;
     add_app(&pool, SPARE_APP, true).await?;
@@ -222,7 +222,7 @@ async fn a_fresh_token_stays_usable_while_its_app_is_inactive(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_keeps_a_token_about_to_expire_while_core_is_down(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -236,7 +236,7 @@ async fn an_upload_keeps_a_token_about_to_expire_while_core_is_down(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_asks_for_a_new_login_when_a_token_about_to_expire_has_no_app(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -256,7 +256,7 @@ async fn an_upload_asks_for_a_new_login_when_a_token_about_to_expire_has_no_app(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn without_any_active_app_an_upload_keeps_a_token_about_to_expire(
     pool: PgPool,
 ) -> anyhow::Result<()> {

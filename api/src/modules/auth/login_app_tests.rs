@@ -66,7 +66,7 @@ async fn login_app(pool: &PgPool, auth: &AuthService) -> anyhow::Result<Uuid> {
     Ok(app.parse()?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn login_prefers_an_app_that_can_write(pool: PgPool) -> anyhow::Result<()> {
     let (auth, _) = auth(&pool)?;
     let refused = oauth_app(&pool).await?;
@@ -79,7 +79,7 @@ async fn login_prefers_an_app_that_can_write(pool: PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn login_hands_out_the_only_app_while_it_is_in_cooldown(pool: PgPool) -> anyhow::Result<()> {
     let (auth, health) = auth(&pool)?;
     let refused = oauth_app(&pool).await?;
@@ -91,7 +91,7 @@ async fn login_hands_out_the_only_app_while_it_is_in_cooldown(pool: PgPool) -> a
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn login_picks_the_app_whose_cooldown_ends_first(pool: PgPool) -> anyhow::Result<()> {
     let (auth, health) = auth(&pool)?;
     let long = oauth_app(&pool).await?;
@@ -105,7 +105,7 @@ async fn login_picks_the_app_whose_cooldown_ends_first(pool: PgPool) -> anyhow::
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn login_prefers_an_app_without_cooldown(pool: PgPool) -> anyhow::Result<()> {
     let (auth, health) = auth(&pool)?;
     let penalized = oauth_app(&pool).await?;
@@ -118,7 +118,7 @@ async fn login_prefers_an_app_without_cooldown(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn login_falls_back_to_all_apps_when_every_app_is_refused(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -208,7 +208,7 @@ async fn login_state(pool: &PgPool, request: Uuid) -> anyhow::Result<(String, St
     )
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_callback_exchanges_the_code_while_the_app_is_in_cooldown(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -235,7 +235,7 @@ async fn a_callback_exchanges_the_code_while_the_app_is_in_cooldown(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_rejected_exchange_in_cooldown_penalizes_once_from_soundcloud(
     pool: PgPool,
 ) -> anyhow::Result<()> {

@@ -84,7 +84,7 @@ fn actions(rows: &[(String, String, Value)]) -> Vec<&str> {
     rows.iter().map(|(_, action, _)| action.as_str()).collect()
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn with_the_flag_off_reports_go_through_rules_only(pool: PgPool) {
     let dm = dm(&pool, None).await;
     let seq = post(
@@ -115,7 +115,7 @@ async fn with_the_flag_off_reports_go_through_rules_only(pool: PgPool) {
     assert_eq!(run_once(&dm.chat, &dm.keys).await.expect("a pass"), 0);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_genuine_spam_verdict_deletes_the_quoted_messages_and_leaves_an_audit_trail(
     pool: PgPool,
 ) {
@@ -174,7 +174,7 @@ async fn a_genuine_spam_verdict_deletes_the_quoted_messages_and_leaves_an_audit_
     assert!(!prompt.contains(REPORTER) && !prompt.contains(TARGET));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_repeat_within_thirty_days_bans_for_seven_days(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -204,7 +204,7 @@ async fn a_repeat_within_thirty_days_bans_for_seven_days(pool: PgPool) {
     assert_eq!(rows[0].2["permanent"], false);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_same_message_reported_by_two_people_is_one_offence(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let keys = TestKeys::default();
@@ -244,7 +244,7 @@ async fn the_same_message_reported_by_two_people_is_one_offence(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn illegal_content_bans_for_good(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -268,7 +268,7 @@ async fn illegal_content_bans_for_good(pool: PgPool) {
     assert!(body_of(&pool, dm.conversation, seq).await.is_none());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_model_that_bans_everyone_stops_at_the_hourly_ban_cap(pool: PgPool) {
     let ai = fake_ai(FakeModel::BansEveryone).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -303,7 +303,7 @@ async fn a_model_that_bans_everyone_stops_at_the_hourly_ban_cap(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn false_reports_are_rejected_and_two_of_them_silence_the_reporter(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -330,7 +330,7 @@ async fn false_reports_are_rejected_and_two_of_them_silence_the_reporter(pool: P
     assert!(body_of(&pool, dm.conversation, seq).await.is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_injection_in_the_reported_text_cannot_clear_the_target(pool: PgPool) {
     let ai = fake_ai(FakeModel::Obedient).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -375,7 +375,7 @@ async fn an_injection_in_the_reported_text_cannot_clear_the_target(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_injection_in_the_comment_cannot_ban_anyone(pool: PgPool) {
     let ai = fake_ai(FakeModel::Obedient).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -403,7 +403,7 @@ async fn an_injection_in_the_comment_cannot_ban_anyone(pool: PgPool) {
     assert!(body_of(&pool, dm.conversation, seq).await.is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_spammer_who_plants_an_injection_still_loses_the_spam(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -434,7 +434,7 @@ async fn a_spammer_who_plants_an_injection_still_loses_the_spam(pool: PgPool) {
     assert_eq!(verdict.2["injection_outside_target"], false);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_injection_the_reporter_plants_in_the_chat_cannot_act_on_the_target(pool: PgPool) {
     let ai = fake_ai(FakeModel::Obedient).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -467,7 +467,7 @@ async fn an_injection_the_reporter_plants_in_the_chat_cannot_act_on_the_target(p
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_injection_that_breaks_the_answer_format_is_no_verdict(pool: PgPool) {
     let ai = fake_ai(FakeModel::Obedient).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -494,7 +494,7 @@ async fn an_injection_that_breaks_the_answer_format_is_no_verdict(pool: PgPool) 
     assert!(body_of(&pool, dm.conversation, seq).await.is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_oversized_model_answer_is_dropped_unread(pool: PgPool) {
     let ai = fake_ai(FakeModel::Huge).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -514,7 +514,7 @@ async fn an_oversized_model_answer_is_dropped_unread(pool: PgPool) {
     assert_eq!(verdict.2["outcome"], "refused");
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn quotes_outside_the_reported_range_void_the_verdict(pool: PgPool) {
     let ai = fake_ai(FakeModel::Sloppy).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -530,7 +530,7 @@ async fn quotes_outside_the_reported_range_void_the_verdict(pool: PgPool) {
     assert!(body_of(&pool, dm.conversation, seq).await.is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_failed_model_hands_the_report_to_the_next_one(pool: PgPool) {
     for failing in [
         FakeModel::AlwaysDown,
@@ -572,7 +572,7 @@ async fn a_failed_model_hands_the_report_to_the_next_one(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_first_model_that_answers_ends_the_list(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let mut dm = dm(&pool, Some(&ai)).await;
@@ -596,7 +596,7 @@ async fn the_first_model_that_answers_ends_the_list(pool: PgPool) {
     assert_eq!(verdict.2["attempts"], 1);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn every_model_call_names_a_user_agent(pool: PgPool) {
     let ai = fake_ai(FakeModel::AlwaysDown).await;
     let mut dm = dm(&pool, Some(&ai)).await;
@@ -615,7 +615,7 @@ async fn every_model_call_names_a_user_agent(pool: PgPool) {
     assert!(USER_AGENT.starts_with("Mozilla/5.0 "));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_dead_or_slow_model_is_asked_again_later_then_leaves_the_report_to_rules_and_the_queue(
     pool: PgPool,
 ) {
@@ -677,7 +677,7 @@ async fn a_dead_or_slow_model_is_asked_again_later_then_leaves_the_report_to_rul
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_report_waiting_for_its_retry_lets_newer_reports_through(pool: PgPool) {
     let ai = fake_ai(FakeModel::AlwaysDown).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -701,7 +701,7 @@ async fn a_report_waiting_for_its_retry_lets_newer_reports_through(pool: PgPool)
     assert_eq!(ai.calls.load(Ordering::SeqCst), 2);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn no_more_than_four_model_calls_run_at_once(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;
     let dm = dm(&pool, Some(&ai)).await;
@@ -746,7 +746,7 @@ impl<'a> MakeWriter<'a> for Captured {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_model_key_travels_only_in_the_authorization_header(pool: PgPool) {
     let captured = Captured::default();
     let subscriber = tracing_subscriber::fmt()
@@ -778,7 +778,7 @@ async fn the_model_key_travels_only_in_the_authorization_header(pool: PgPool) {
     assert!(!logs.contains("BUY CHEAP"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_removed_message_is_announced_to_every_member_as_gone(pool: PgPool) {
     let ai = fake_ai(FakeModel::Honest).await;

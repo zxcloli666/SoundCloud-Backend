@@ -37,7 +37,7 @@ async fn every_search_failure_is_a_quiet_coded_503() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_statement_timeout_becomes_search_timeout(pool: PgPool) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL statement_timeout = 1")
@@ -66,7 +66,7 @@ fn a_pool_wait_is_busy_and_other_errors_pass_through() {
     ));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn no_free_permit_answers_search_busy(pool: PgPool) -> anyhow::Result<()> {
     let redis = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))?;

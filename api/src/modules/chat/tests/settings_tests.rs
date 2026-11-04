@@ -8,7 +8,7 @@ use crate::modules::chat::moderation::testing::{state, state_with};
 use crate::modules::chat::sync::prefs::Prefs;
 use crate::modules::chat::test_support::caller;
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn settings_default_until_saved_and_save_only_what_was_sent(pool: PgPool) {
     let chat = state(pool, None);
     assert_eq!(
@@ -54,7 +54,7 @@ async fn settings_default_until_saved_and_save_only_what_was_sent(pool: PgPool) 
     assert_eq!(load(&chat, "101").await.expect("read"), again);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_settings_page_lists_blocks_and_refuses_an_empty_change(pool: PgPool) {
     let chat = state(pool.clone(), None);
     sqlx::query(
@@ -89,7 +89,7 @@ async fn the_settings_page_lists_blocks_and_refuses_an_empty_change(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_saved_change_reaches_the_sync_prefs_at_once(pool: PgPool) {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());

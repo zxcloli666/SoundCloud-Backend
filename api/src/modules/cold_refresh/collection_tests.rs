@@ -32,7 +32,7 @@ async fn queued(pool: &PgPool) -> anyhow::Result<i64> {
         .await?)
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_cold_read_enqueues_without_a_session_token_or_redis_and_coalesces_by_scope(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -66,7 +66,7 @@ async fn a_cold_read_enqueues_without_a_session_token_or_redis_and_coalesces_by_
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_a_completed_snapshot_can_make_a_collection_fresh(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO catalog_collection_sync (subject_id, collection, scope, job_id, generation, snapshot_id, page_count)
         VALUES ('42', 'followings', 'owner', $1, 1, $2, 12)")
@@ -108,7 +108,7 @@ async fn only_a_completed_snapshot_can_make_a_collection_fresh(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_invalid_collection_identity_cannot_schedule_work(pool: PgPool) -> anyhow::Result<()> {
     assert!(
         ensure(
@@ -128,7 +128,7 @@ async fn an_invalid_collection_identity_cannot_schedule_work(pool: PgPool) -> an
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -145,7 +145,7 @@ async fn a_background_cooldown_survives_reads_and_delays_frontend_polling(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO subscriptions (user_urn, exp_date) VALUES
@@ -178,7 +178,7 @@ async fn a_star_owner_collection_is_read_ahead_of_other_owners(pool: PgPool) -> 
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -208,7 +208,7 @@ async fn an_owner_read_outranks_bulk_work_and_lifts_a_queued_refresh(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_collection_that_failed_for_good_is_held_for_six_hours(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -230,7 +230,7 @@ async fn a_collection_that_failed_for_good_is_held_for_six_hours(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn after_the_hold_the_collection_is_queued_again_and_still_reports_the_error(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -258,7 +258,7 @@ async fn after_the_hold_the_collection_is_queued_again_and_still_reports_the_err
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_successful_pass_clears_the_error(pool: PgPool) -> anyhow::Result<()> {
     fail_for_good(
         &pool,
@@ -301,7 +301,7 @@ async fn sign_out_the_owner(pool: &PgPool) -> anyhow::Result<()> {
     .await
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<()> {
     sign_out_the_owner(&pool).await?;
 
@@ -330,7 +330,7 @@ async fn auth_required_waits_for_a_new_sign_in(pool: PgPool) -> anyhow::Result<(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn signing_in_again_on_the_same_session_lifts_auth_required(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -347,7 +347,7 @@ async fn signing_in_again_on_the_same_session_lifts_auth_required(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_queued_collection_reports_since_when(pool: PgPool) -> anyhow::Result<()> {
     let first = ensure(&pool, CatalogCollection::LikedTracks, "42", true, 600).await?;
     let created_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(

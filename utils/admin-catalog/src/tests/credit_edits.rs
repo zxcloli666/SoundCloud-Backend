@@ -26,7 +26,7 @@ async fn weak_primary(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, CreditRef) {
     (track, artist, reference)
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn accepting_a_weak_credit_makes_it_manual_evidence(pool: PgPool) {
     let (track, artist, reference) = weak_primary(&pool).await;
 
@@ -48,7 +48,7 @@ async fn accepting_a_weak_credit_makes_it_manual_evidence(pool: PgPool) {
     assert_eq!(again.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn rejecting_a_weak_primary_credit_clears_the_primary_artist(pool: PgPool) {
     let (track, _, reference) = weak_primary(&pool).await;
 
@@ -69,7 +69,7 @@ async fn rejecting_a_weak_primary_credit_clears_the_primary_artist(pool: PgPool)
     assert_eq!(again.status, 404);
 }
 
-#[sqlx::test(migrations = "../../api/migrations")]
+#[sqlx::test(migrator = "crate::tests::MIGRATOR")]
 async fn a_credit_with_real_evidence_is_not_a_weak_credit(pool: PgPool) {
     let artist = artist(&pool, "Verified").await;
     let track = track(&pool, None).await;

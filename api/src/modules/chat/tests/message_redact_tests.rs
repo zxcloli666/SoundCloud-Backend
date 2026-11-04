@@ -15,7 +15,7 @@ async fn body_of(pool: &PgPool, conversation: uuid::Uuid, seq: i64) -> Option<Ve
         .expect("a row")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn delete_for_everyone_wipes_the_post_and_its_edits(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let target = post(&pool, id, "101").await;
@@ -57,7 +57,7 @@ async fn delete_for_everyone_wipes_the_post_and_its_edits(pool: PgPool) -> ChatR
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_second_delete_changes_nothing(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let target = post(&pool, id, "101").await;
@@ -67,7 +67,7 @@ async fn a_second_delete_changes_nothing(pool: PgPool) -> ChatResult<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_the_author_or_a_group_admin_deletes(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let target = post(&pool, id, "101").await;
@@ -99,7 +99,7 @@ async fn only_the_author_or_a_group_admin_deletes(pool: PgPool) -> ChatResult<()
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn system_rows_and_missing_rows_are_not_deletable(pool: PgPool) -> ChatResult<()> {
     let id = group(&pool, "101", &[("202", MemberState::Active)]).await;
     let access = access_of(&pool, id, "101").await;
@@ -114,7 +114,7 @@ async fn system_rows_and_missing_rows_are_not_deletable(pool: PgPool) -> ChatRes
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_trace_of_a_disappearing_post_goes_with_it(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     exec(
@@ -142,7 +142,7 @@ async fn the_trace_of_a_disappearing_post_goes_with_it(pool: PgPool) -> ChatResu
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn hidden_history_cannot_be_deleted_for_everyone(pool: PgPool) -> ChatResult<()> {
     let id = dm(&pool, "101", "202", MemberState::Active).await;
     let old = post(&pool, id, "101").await;

@@ -54,7 +54,7 @@ async fn revoke_behind_the_cache(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_cached_session_survives_a_revoke_on_another_node_until_the_ttl(
     pool: PgPool,
 ) -> anyhow::Result<()> {
@@ -70,7 +70,7 @@ async fn a_cached_session_survives_a_revoke_on_another_node_until_the_ttl(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn logout_on_this_node_takes_effect_at_once(pool: PgPool) -> anyhow::Result<()> {
     seed(&pool).await?;
     let auth = auth(&pool)?;
@@ -81,7 +81,7 @@ async fn logout_on_this_node_takes_effect_at_once(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_unknown_session_is_never_cached(pool: PgPool) -> anyhow::Result<()> {
     let auth = auth(&pool)?;
     assert!(auth.get_session_cached(SESSION).await?.is_none());

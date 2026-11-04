@@ -407,7 +407,7 @@ async fn stored_aliases(pool: &PgPool) -> anyhow::Result<Vec<(String, String)>> 
     .await?)
 }
 
-#[sqlx::test(migrations = "../api/migrations")]
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn the_alias_backfill_repairs_damaged_rows_and_leaves_correct_ones_alone(
     pool: PgPool,
 ) -> anyhow::Result<()> {

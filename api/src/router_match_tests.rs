@@ -20,7 +20,7 @@ async fn post(
     Ok((status, body))
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn results_keep_the_order_and_length_of_the_items(pool: PgPool) -> anyhow::Result<()> {
     seed(
         &pool,
@@ -56,7 +56,7 @@ async fn results_keep_the_order_and_length_of_the_items(pool: PgPool) -> anyhow:
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_hundred_items_pass_and_a_hundred_and_one_do_not(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session(&pool).await?;
@@ -69,7 +69,7 @@ async fn a_hundred_items_pass_and_a_hundred_and_one_do_not(pool: PgPool) -> anyh
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn malformed_or_empty_requests_are_rejected(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let session = session(&pool).await?;
@@ -85,7 +85,7 @@ async fn malformed_or_empty_requests_are_rejected(pool: PgPool) -> anyhow::Resul
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_missing_session_is_unauthorized_like_the_search(pool: PgPool) -> anyhow::Result<()> {
     let app = app(&pool, &redis_url()).await?;
     let (status, _) = post(&app, Uuid::now_v7(), items(&[("a", "b")])).await?;

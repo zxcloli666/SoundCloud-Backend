@@ -47,7 +47,7 @@ fn a_ban_covers_every_scope_and_a_narrow_restriction_only_its_own() {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn restrictions_merge_and_never_shorten(pool: PgPool) {
     let chat = state(pool, None);
     let day = Utc::now() + Duration::hours(24);
@@ -82,7 +82,7 @@ async fn restrictions_merge_and_never_shorten(pool: PgPool) {
     assert!(check(&chat, "9", Scope::All).await.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn newcomers_are_users_first_seen_less_than_a_week_ago(pool: PgPool) {
     let chat = state(pool.clone(), None);
     assert!(newcomer(&chat, "5").await.expect("read"));
@@ -92,7 +92,7 @@ async fn newcomers_are_users_first_seen_less_than_a_week_ago(pool: PgPool) {
     assert!(!newcomer(&chat, "5").await.expect("read"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_card_shows_the_profile_and_how_the_viewer_can_write(pool: PgPool) {
     let chat = state(pool.clone(), None);
     sqlx::query(

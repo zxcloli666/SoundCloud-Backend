@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
     async fn rejection_marks_only_the_observed_generation_due(pool: PgPool) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)

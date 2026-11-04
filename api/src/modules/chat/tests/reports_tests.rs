@@ -43,7 +43,7 @@ fn a_report_names_a_known_reason_and_a_short_range() {
     assert_eq!(validate(&long), Err(ChatError::Invalid));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_report_seals_the_range_and_ten_messages_of_context(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -99,7 +99,7 @@ async fn a_report_seals_the_range_and_ten_messages_of_context(pool: PgPool) {
     assert_eq!((again.id, again.duplicate), (filed.id, true));
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn only_members_report_and_only_what_one_other_person_sent(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -157,7 +157,7 @@ async fn only_members_report_and_only_what_one_other_person_sent(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_reporter_weighs_by_age_and_loses_weight_after_false_reports(pool: PgPool) {
     let chat = state(pool.clone(), None);
     assert_eq!(reporter_weight(&chat, "51").await.expect("a weight"), 0.25);
@@ -180,7 +180,7 @@ async fn a_reporter_weighs_by_age_and_loses_weight_after_false_reports(pool: PgP
     assert_eq!(reporter_weight(&chat, "51").await.expect("a weight"), 0.0);
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn the_recipient_of_a_message_request_reports_it_before_accepting(pool: PgPool) {
     let keys = TestKeys::default();
     let chat = state(pool.clone(), None);
@@ -212,7 +212,7 @@ async fn the_recipient_of_a_message_request_reports_it_before_accepting(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn evidence_seals_and_opens_with_the_real_kek_ring(pool: PgPool) {
     let chat = state(pool.clone(), None);
     let dm = conversation(&pool, "direct", &[("91", true), ("92", true)]).await;
@@ -246,7 +246,7 @@ async fn evidence_seals_and_opens_with_the_real_kek_ring(pool: PgPool) {
     assert!(evidence::open(&TestKeys::default(), version, &sealed).is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_guest_reports_only_what_was_said_after_joining(pool: PgPool) {
     let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());

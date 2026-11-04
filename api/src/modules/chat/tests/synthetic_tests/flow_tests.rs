@@ -43,7 +43,7 @@ fn conversation_of(seeded: &Value, user: &str) -> Uuid {
         .expect("a conversation of the user")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_seed_builds_users_devices_and_chats_that_work_through_the_sealed_channel(
     pg: PgPool,
@@ -175,7 +175,7 @@ async fn a_seed_builds_users_devices_and_chats_that_work_through_the_sealed_chan
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_second_seed_continues_the_numbering_and_both_are_audited(
     pg: PgPool,
@@ -202,7 +202,7 @@ async fn a_second_seed_continues_the_numbering_and_both_are_audited(
     Ok(())
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_synthetic_session_is_never_resolved_once_the_flag_is_off(
     pg: PgPool,
@@ -244,7 +244,7 @@ fn clock() -> DateTime<Utc> {
         .expect("a valid time")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_synthetic_session_stops_resolving_at_the_until_time_cache_included(
     pg: PgPool,
@@ -277,7 +277,7 @@ fn late_clock() -> DateTime<Utc> {
         .expect("a valid time")
 }
 
-#[sqlx::test(migrations = "./migrations")]
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn purge_still_cleans_up_after_the_until_time_while_seed_and_sessions_stay_closed(
     pg: PgPool,
