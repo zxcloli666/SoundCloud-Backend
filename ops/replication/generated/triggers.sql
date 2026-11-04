@@ -3762,9 +3762,12 @@ BEGIN
             NEW.created_at := OLD.created_at;
             NEW.external_id := OLD.external_id;
             NEW.last_used_at := OLD.last_used_at;
+            NEW.prev_refresh_hash := OLD.prev_refresh_hash;
             NEW.provider := OLD.provider;
             NEW.refresh_expires_at := OLD.refresh_expires_at;
             NEW.refresh_hash := OLD.refresh_hash;
+            NEW.rotated_at := OLD.rotated_at;
+            NEW.rotation_seed := OLD.rotation_seed;
             NEW.sc_user_id := OLD.sc_user_id;
             NEW.row_v := OLD.row_v;
         END IF;
@@ -3785,9 +3788,12 @@ BEGIN
                     created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
                     external_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.external_id ELSE o.external_id END,
                     last_used_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_used_at ELSE o.last_used_at END,
+                    prev_refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.prev_refresh_hash ELSE o.prev_refresh_hash END,
                     provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
                     refresh_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_expires_at ELSE o.refresh_expires_at END,
                     refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_hash ELSE o.refresh_hash END,
+                    rotated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotated_at ELSE o.rotated_at END,
+                    rotation_seed = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotation_seed ELSE o.rotation_seed END,
                     sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
                     row_v = greatest(o.row_v, NEW.row_v)
                 WHERE t.id = o.id;
@@ -3804,8 +3810,8 @@ BEGIN
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, provider, refresh_expires_at, refresh_hash, row_v, sc_user_id)
-        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.row_v, NEW.sc_user_id)
+        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, prev_refresh_hash, provider, refresh_expires_at, refresh_hash, rotated_at, rotation_seed, row_v, sc_user_id)
+        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.row_v, NEW.sc_user_id)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -3867,7 +3873,7 @@ BEGIN
         NEW.row_v := public.scd_hlc(NEW.row_v);
         RETURN NEW;
     END IF;
-    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.sc_user_id) THEN
+    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.prev_refresh_hash, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.rotated_at, OLD.rotation_seed, OLD.sc_user_id) THEN
         NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
     ELSE
         NEW.row_v := greatest(OLD.row_v, NEW.row_v);

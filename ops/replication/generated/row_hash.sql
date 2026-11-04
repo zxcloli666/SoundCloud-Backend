@@ -763,7 +763,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.provider, t.refresh_expires_at, t.refresh_hash, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
+SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.prev_refresh_hash, t.provider, t.refresh_expires_at, t.refresh_hash, t.rotated_at, t.rotation_seed, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_link_codes(k jsonb)

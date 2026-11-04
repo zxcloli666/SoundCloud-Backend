@@ -1682,9 +1682,12 @@
     {"default": null, "generated": false, "name": "external_id", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
     {"default": null, "generated": false, "name": "last_used_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "prev_refresh_hash", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "provider", "notnull": true, "type": "text"},
     {"default": null, "generated": false, "name": "refresh_expires_at", "notnull": false, "type": "timestamp with time zone"},
     {"default": null, "generated": false, "name": "refresh_hash", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "rotated_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "rotation_seed", "notnull": false, "type": "text"},
     {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
     {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
    ],
