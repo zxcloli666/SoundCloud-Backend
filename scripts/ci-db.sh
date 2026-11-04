@@ -19,7 +19,7 @@ start() {
 }
 
 schema() {
-    timeout 120 sh -c 'until docker exec postgres pg_isready -U scd -q; do sleep 1; done'
+    timeout 120 sh -c 'until docker exec postgres pg_isready -h 127.0.0.1 -U scd -q; do sleep 1; done'
     docker exec postgres mkdir -p /schema
     docker cp api/migrations postgres:/schema/core
     docker cp api/migrations-ops postgres:/schema/ops
@@ -41,10 +41,14 @@ up() {
 log=$RUNNER_TEMP/services.log
 
 case ${1:-} in
+run)
+    shift
+    up "$@"
+    ;;
 up)
     shift
     rm -f "$RUNNER_TEMP/services.done" "$RUNNER_TEMP/services.failed"
-    (if up "$@" > "$log" 2>&1; then touch "$RUNNER_TEMP/services.done"; else touch "$RUNNER_TEMP/services.failed"; fi) < /dev/null > /dev/null 2>&1 &
+    (if sh "$0" run "$@" > "$log" 2>&1; then touch "$RUNNER_TEMP/services.done"; else touch "$RUNNER_TEMP/services.failed"; fi) < /dev/null > /dev/null 2>&1 &
     ;;
 wait)
     until [ -e "$RUNNER_TEMP/services.done" ]; do
