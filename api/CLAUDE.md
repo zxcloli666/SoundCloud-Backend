@@ -232,6 +232,8 @@ Nothing to commit, nothing to keep in sync.
 правилу отвечает `chat_session_not_replicated`, а не relogin. Окно держится только потому, что
 сессию удаляет один путь, logout, и в split он всегда пишет tombstone. Новый путь удаления сессий
 обязан делать так же. В split-режиме стоящая или выключенная подписка даёт 503 на любой промах.
+Стоящая — это и воркер, который с запуска ещё ничего не получил (`received_lsn` пуст): PG 17 ставит
+`last_msg_receipt_time` в момент запуска, до подключения к издателю.
 Счётчик `api_session_miss_total{outcome}` (только HTTP, без чата): `dead`, `in_flight`,
 `found_after_wait`, `stalled`; `in_flight` вычитается в ApiServerErrors и ApiHostUnavailable.
 
