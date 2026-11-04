@@ -3,7 +3,7 @@ groups:
     interval: 30s
     rules:
       - alert: ApiScrapeMissing
-        expr: absent(api_http_requests_total)
+        expr: absent(api_http_requests_total{job="api"})
         for: 10m
         labels:
           severity: critical
@@ -13,7 +13,7 @@ groups:
           description: "No api_* series for 10 minutes. The exporter emits every lane at zero rather than omitting it, so an absent series means a dead process or a broken scrape, never an idle one."
 
       - alert: ApiLatencyDegraded
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 0.25
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[5m]))) > 0.25
         for: 10m
         labels:
           severity: warning
@@ -23,7 +23,7 @@ groups:
           description: "Measured release-build p99 on the stand is 15-22ms across read routes, auth burst and mixed load. 250ms is more than ten times that, so this is a regression rather than noise. Semantic search is excluded on purpose: a cold query waits for the encoder."
 
       - alert: ApiLatencyCritical
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route!~"/search/(vibe|lyrics)"}[5m]))) > 1
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[5m]))) > 1
         for: 5m
         labels:
           severity: critical
@@ -32,8 +32,18 @@ groups:
           summary: "p99 on {{ $labels.route }} is above one second"
           description: "The route timeout layer cuts at 60s and the SoundCloud read budget at 20s, so a second of p99 means the local path itself is stalling."
 
+      - alert: ApiRelayLuaStuck
+        expr: sum by (host) (increase(api_sc_tier_calls_total{job="api",tier="relay_lua",outcome="error"}[5m])) > 0 unless sum by (host) (increase(api_sc_tier_calls_total{job="api",tier="relay_lua",outcome="ok"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "api on {{ $labels.host }}: every relay_lua call fails"
+          description: "On 2026-11-03 after the 04:00 UTC relay reboot, api on main failed every relay_lua call for 18 minutes and SoundCloud search was down there, while star reconnected by itself. Until the relay client fix: restart api on that host (docker compose restart api)."
+
       - alert: ApiSemanticSearchStuck
-        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~"/search/(vibe|lyrics)"}[5m]))) > 11
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[5m]))) > 11
         for: 10m
         labels:
           severity: warning
@@ -43,7 +53,7 @@ groups:
           description: "A cold query waits for the encoder for at most 20 polls of 500ms, so ten seconds is the designed ceiling and a warm query is milliseconds. Above eleven seconds the wait is no longer the encoder but something behind it."
 
       - alert: ApiSemanticSearchAlwaysCold
-        expr: histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{route=~"/search/(vibe|lyrics)"}[15m]))) > 5
+        expr: histogram_quantile(0.5, sum by (le, route) (rate(api_http_request_duration_seconds_bucket{job="api",route=~"/search/(vibe|lyrics)"}[15m]))) > 5
         for: 30m
         labels:
           severity: warning
@@ -53,7 +63,7 @@ groups:
           description: "The vector cache and the query-vector collection should make repeat queries instant. A median above five seconds means the encoder is not answering or the cache is not being written."
 
       - alert: ApiServerErrors
-        expr: sum(rate(api_http_requests_total{status=~"5.."}[5m])) / sum(rate(api_http_requests_total[5m])) > 0.02
+        expr: sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.02
         for: 10m
         labels:
           severity: warning
@@ -63,7 +73,7 @@ groups:
           description: "Smoke and load suites finish with zero errors, so any sustained 5xx share is new."
 
       - alert: ApiServerErrorsCritical
-        expr: sum(rate(api_http_requests_total{status=~"5.."}[5m])) / sum(rate(api_http_requests_total[5m])) > 0.1
+        expr: sum(rate(api_http_requests_total{job="api",status=~"5.."}[5m])) / sum(rate(api_http_requests_total{job="api"}[5m])) > 0.1
         for: 5m
         labels:
           severity: critical
@@ -72,7 +82,7 @@ groups:
           summary: "More than 10% of answers are 5xx"
 
       - alert: ApiPoolWaitGrowing
-        expr: api_pg_pool_wait_last_seconds > 0.05
+        expr: api_pg_pool_wait_last_seconds{job="api"} > 0.05
         for: 10m
         labels:
           severity: warning
@@ -82,7 +92,7 @@ groups:
           description: "The stand shows no measurable wait up to concurrency 16; above that the pool itself becomes the ceiling. A sustained 50ms wait means the pool is the bottleneck, not the queries."
 
       - alert: ApiPoolProbeFailing
-        expr: sum(rate(api_pg_pool_wait_seconds_count{outcome!="ok"}[5m])) > 0
+        expr: sum(rate(api_pg_pool_wait_seconds_count{job="api",outcome!="ok"}[5m])) > 0
         for: 5m
         labels:
           severity: critical
@@ -92,7 +102,7 @@ groups:
           description: "Outcome error or timeout on the probe taken at every scrape. The probe pays exactly what a request would pay."
 
       - alert: ApiPoolExhausted
-        expr: max by (instance) (max_over_time(api_pg_pool_wait_last_seconds[1m])) > 0.5
+        expr: max by (instance) (max_over_time(api_pg_pool_wait_last_seconds{job="api"}[1m])) > 0.5
         for: 30s
         labels:
           severity: critical
@@ -102,7 +112,7 @@ groups:
           description: "The scrape probe waits like a request does. Normal max is 0.033s (2h before 2026-10-31 08:40). At 08:41 a cold api on main waited 2.6s and 1.2s, the core pool was 18 of 18 busy and requests got PoolTimedOut. Look at host CPU and what restarted, see backend-ops.md."
 
       - alert: ApiHostUnavailable
-        expr: sum by (instance) (rate(api_http_requests_total{status="503"}[2m])) / sum by (instance) (rate(api_http_requests_total[2m])) > 0.05
+        expr: sum by (instance) (rate(api_http_requests_total{job="api",status="503"}[2m])) / sum by (instance) (rate(api_http_requests_total{job="api"}[2m])) > 0.05
         for: 30s
         labels:
           severity: critical
@@ -112,17 +122,17 @@ groups:
           description: "PoolTimedOut answers 503 (api/src/error.rs), so do search_busy and *_refresh_pending. Normal is under 2% per host (2h before 2026-10-31 08:40). At 08:42 main reached 13.6% after a cold restart. ApiServerErrors is global over 10m and missed it."
 
       - alert: ApiSoundCloudBreakerOpen
-        expr: api_sc_relay_breaker_open == 1
+        expr: max by (host, channel) (api_sc_relay_breaker_open{job="api"}) == 1
         for: 5m
         labels:
           severity: warning
           service: api
         annotations:
-          summary: "The relay breaker is open for serving reads"
+          summary: "The relay breaker for {{ $labels.channel }} is open on {{ $labels.host }}"
           description: "Public reads are on the backup tier. The breaker holds for 60s at a time, so five minutes means the relay keeps failing. State is shared with jobs through sc_egress_health, so check whether jobs opened it."
 
       - alert: ApiSoundCloudTierFailing
-        expr: sum(rate(api_sc_tier_calls_total{outcome=~"error|timeout"}[10m])) / sum(rate(api_sc_tier_calls_total[10m])) > 0.5
+        expr: sum(rate(api_sc_tier_calls_total{job="api",outcome=~"error|timeout"}[10m])) / sum(rate(api_sc_tier_calls_total{job="api"}[10m])) > 0.5
         for: 15m
         labels:
           severity: warning
@@ -132,7 +142,7 @@ groups:
           description: "A miss is counted separately from an error, so this covers unreachability and bans, not absent entities."
 
       - alert: ApiSoundCloudBanned
-        expr: increase(api_sc_failures_total{class="ban"}[15m]) > 0
+        expr: increase(api_sc_failures_total{job="api",class="ban"}[15m]) > 0
         for: 1m
         labels:
           severity: critical
@@ -142,7 +152,7 @@ groups:
           description: "A ban page is recognised by its body, not by the status alone, and it used to reach clients as our own 500. Any occurrence means an egress channel or an OAuth app is blocked; the breaker and the app cooldown react on their own, but somebody has to know."
 
       - alert: ApiSoundCloudCredentialsRejected
-        expr: increase(api_sc_failures_total{class="credentials"}[15m]) > 0
+        expr: increase(api_sc_failures_total{job="api",class="credentials"}[15m]) > 0
         for: 1m
         labels:
           severity: critical
@@ -152,7 +162,7 @@ groups:
           description: "invalid_client or unauthorized_client: the app is disabled or its secret is wrong. The app is put on a half-hour cooldown, so the pool silently shrinks."
 
       - alert: ApiSoundCloudRetryAfterLong
-        expr: histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket[30m]))) > 300
+        expr: histogram_quantile(0.9, sum by (le) (rate(api_sc_retry_after_seconds_bucket{job="api"}[30m]))) > 300
         for: 30m
         labels:
           severity: warning
@@ -162,7 +172,7 @@ groups:
           description: "The value SoundCloud sends is obeyed and clamped at an hour. A p90 above five minutes means the throttle is no longer incidental."
 
       - alert: ApiDeadlocks
-        expr: increase(api_pg_deadlocks_total[15m]) > 0
+        expr: increase(api_pg_deadlocks_total{job="api"}[15m]) > 0
         for: 1m
         labels:
           severity: warning
@@ -172,7 +182,7 @@ groups:
           description: "Deadlocks are expected to be zero. Two have happened in production before, both from unordered updates."
 
       - alert: ApiUnroutedRequestStorm
-        expr: sum(rate(api_http_requests_total{route="unmatched"}[5m])) > 20
+        expr: sum(rate(api_http_requests_total{job="api",route="unmatched"}[5m])) > 20
         for: 10m
         labels:
           severity: warning
@@ -304,16 +314,6 @@ groups:
           summary: "Jobs are being cut off by statement_timeout"
           description: "A separate outcome from an ordinary retry: the bulk statement was cancelled by PostgreSQL."
 
-      - alert: JobsStorageRepairPaused
-        expr: max by (reason) (jobs_storage_repair_paused_seconds) > 3600
-        for: 10m
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "Repairs of uploads without a storage event have been paused for {{ $value }}s ({{ $labels.reason }})"
-          description: "The sweep in IndexingRequeueStuck waits while a leaf in JOBS_NATS_STORAGE_EVENT_SOURCES is behind or uploads are undelivered. leaf_source_behind for an hour means a leaf link is down or the leaf is gone for good: fix the link or drop the domain from the list."
-
   - name: scd-worker
     interval: 30s
     rules:
@@ -428,89 +428,6 @@ groups:
         annotations:
           summary: "jobs recreated the worker consumer of lane {{ $labels.lane }}"
           description: "NATS refused to update a field in place, so the durable was deleted and created again. Tasks in the work queue survive; somebody changed the consumer by hand or an old owner is still around."
-
-  - name: scd-replication
-    interval: 30s
-    rules:
-      - alert: ReplDeadCommand
-        expr: sum by (kind) (scd_cmd_dead) > 0
-        for: 15m
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "Dead commands of kind {{ $labels.kind }} wait on core"
-          description: "Core ran an api command and the kind failed with an error that retrying cannot fix. The api already got core's row back (reassert or purge). Read cmd_dead, fix the cause, then replay with the repl.replay_dead job. Dead letters are deleted after 7 days."
-
-      - alert: ReplDeadCommandAged
-        expr: max by (kind) (scd_cmd_dead_oldest_seconds) > 5 * 24 * 3600
-        for: 10m
-        labels:
-          severity: critical
-          service: jobs
-        annotations:
-          summary: "A dead command of kind {{ $labels.kind }} is older than 5 days"
-          description: "Retention deletes dead letters after 7 days, and a deleted letter can no longer be replayed."
-
-      - alert: ReplSubscriptionDown
-        expr: scd_cmd_sub_up == 0
-        for: 5m
-        labels:
-          severity: critical
-          service: jobs
-        annotations:
-          summary: "Core does not apply the stream of {{ $labels.sub }}"
-          description: "The subscription is disabled or its apply worker is gone. Commands of that api node wait in its outbox and retention keeps every tombstone and receipt."
-
-      - alert: ReplApplyStuck
-        expr: scd_cmd_age_seconds > 120 and scd_cmd_backlog > 0
-        for: 5m
-        labels:
-          severity: critical
-          service: jobs
-        annotations:
-          summary: "The apply worker of {{ $labels.sub }} has not moved for {{ $value | humanizeDuration }}"
-          description: "Data is received but not applied. Usual causes are a row lock held by a long job on a replicated table, or a poison transaction the worker retries every 5 seconds."
-
-      - alert: ReplApplyBacklog
-        expr: scd_cmd_backlog > 256 * 1024 * 1024
-        for: 10m
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "{{ $labels.sub }} holds {{ $value | humanize1024 }}B received and not applied"
-          description: "Apply does not keep up with the api node. Command latency for its users grows with this."
-
-      - alert: ReplRetentionHeld
-        expr: max by (instance, table, reason) (scd_repl_retention_held) == 1
-        for: 6h
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "Retention of {{ $labels.table }} on {{ $labels.instance }} is held back for 6 hours ({{ $labels.reason }})"
-          description: "A slot or subscription is inactive or behind, a node still has pending resends, or (reason pending) api commands got no answer from core for 2 days and keep their rows. The held tables only grow meanwhile. Detail: the jobs log line 'replication retention held back' for core tables, the api log line 'scd node retention held back' for cmd_outbox and oauth_app_tokens_local."
-
-      - alert: ReplResendQueueStuck
-        expr: min_over_time(scd_repl_resend_queued[30m]) > 0
-        for: 1m
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "A node has kept resend keys queued for 30 minutes"
-          description: "The sweeper ships pending resends within seconds. Retention of tombstones and receipts waits for every queue to be empty."
-
-      - alert: ReplVerifyUnresolved
-        expr: increase(scd_repl_verify_unresolved_total[1h]) > 0
-        for: 1m
-        labels:
-          severity: warning
-          service: jobs
-        annotations:
-          summary: "Verify cannot repair {{ $labels.tbl }} on {{ $labels.peer }}"
-          description: "A key still differs after three repair attempts, for example two ids for one natural key."
 
   - name: scd-pg
     rules:
