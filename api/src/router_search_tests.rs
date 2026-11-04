@@ -191,8 +191,6 @@ pub(super) async fn state(
     );
     let cold_refresh =
         crate::modules::cold_refresh::ColdRefreshService::new(pg.clone(), config.cold.clone());
-    let me =
-        crate::modules::me::MeService::new(pg.clone(), sync_queue.clone(), cold_refresh.clone());
     let s3 = crate::modules::recommendations::S3VerifierService::new(
         wreq::Client::new(),
         String::new(),
@@ -225,6 +223,13 @@ pub(super) async fn state(
         indexing.clone(),
         admission.clone(),
     );
+    let public_users = crate::modules::users::PublicUsers::new(pg.clone(), miss.clone());
+    let me = crate::modules::me::MeService::new(
+        pg.clone(),
+        sync_queue.clone(),
+        cold_refresh.clone(),
+        public_users.clone(),
+    );
     let tracks = crate::modules::tracks::TracksService::new(
         crate::modules::tracks::TracksServiceDependencies {
             sc: sc.clone(),
@@ -246,7 +251,12 @@ pub(super) async fn state(
             miss: miss.clone(),
         },
     );
-    let users = crate::modules::users::UsersService::new(pg.clone(), cold_refresh, miss.clone());
+    let users = crate::modules::users::UsersService::new(
+        pg.clone(),
+        cold_refresh,
+        miss.clone(),
+        public_users,
+    );
     let dislikes = crate::modules::dislikes::DislikesService::new(pg.clone(), events.clone());
     let likes =
         crate::modules::likes::LikesService::new(pg.clone(), sync_queue.clone(), events.clone());

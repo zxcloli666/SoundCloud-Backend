@@ -3,6 +3,7 @@ use std::sync::Arc;
 use backend_contracts::{CatalogCollection, CatalogCollectionPayload, JobKind};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::background_jobs::queue;
 use crate::error::AppResult;
@@ -10,10 +11,12 @@ use crate::modules::cold_refresh::{ColdRefreshService, FOLLOWINGS};
 use crate::modules::subscriptions::service::PremiumStatus;
 use crate::modules::sync_queue::SyncQueueService;
 use crate::modules::sync_queue::mirror::FOLLOWINGS as FOLLOWINGS_MIRROR;
+use crate::modules::users::{PublicUsers, UserRepository};
 pub struct MeService {
     pg: PgPool,
     sync_queue: Arc<SyncQueueService>,
     cold_refresh: Arc<ColdRefreshService>,
+    public: Arc<PublicUsers>,
 }
 
 impl MeService {
@@ -21,15 +24,23 @@ impl MeService {
         pg: PgPool,
         sync_queue: Arc<SyncQueueService>,
         cold_refresh: Arc<ColdRefreshService>,
+        public: Arc<PublicUsers>,
     ) -> Arc<Self> {
         Arc::new(Self {
             pg,
             sync_queue,
             cold_refresh,
+            public,
         })
     }
 
-    pub async fn get_profile(&self, sc_user_id: &str) -> AppResult<Value> {
+    pub async fn get_profile(&self, session: Uuid, sc_user_id: &str) -> AppResult<Value> {
+        if let Some(user) = UserRepository::new(self.pg.clone())
+            .find_by_urn(sc_user_id)
+            .await?
+        {
+            self.public.refresh(session, sc_user_id, &user).await;
+        }
         super::profile::read(&self.pg, sc_user_id).await
     }
 

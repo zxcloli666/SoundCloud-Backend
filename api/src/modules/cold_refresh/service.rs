@@ -154,10 +154,6 @@ impl ColdRefreshService {
         is_stale(synced_at, self.cfg.track_ttl_sec)
     }
 
-    pub fn is_user_stale(&self, synced_at: Option<DateTime<Utc>>) -> bool {
-        is_stale(synced_at, self.cfg.user_ttl_sec)
-    }
-
     pub fn is_playlist_stale(&self, synced_at: Option<DateTime<Utc>>) -> bool {
         is_stale(synced_at, self.cfg.playlist_ttl_sec)
     }

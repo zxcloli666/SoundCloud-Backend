@@ -81,7 +81,16 @@ impl CatalogRefreshHandler {
     async fn fetch(&self, payload: &CatalogRefreshPayload) -> JobResult<Value> {
         let path = payload.entity.path(&payload.sc_id);
         if payload.entity == CatalogEntity::WebProfiles {
-            return self.remote.public_get(&path).await.map_err(settle_absent);
+            return match self.public.get_json(&path).await {
+                Ok(value) => Ok(value),
+                Err(error @ sc_transport::ScError::Api { status: 404, .. }) => {
+                    Err(JobError::settled(CollectionFailure::NotFound, error))
+                }
+                Err(error) => {
+                    tracing::debug!(%error, path, "apiv2 web profiles unavailable, trying apiv1");
+                    self.remote.public_get(&path).await.map_err(settle_absent)
+                }
+            };
         }
         match payload.owner_id.as_deref() {
             Some(owner) => match self.public_by_secret(payload, &path).await? {

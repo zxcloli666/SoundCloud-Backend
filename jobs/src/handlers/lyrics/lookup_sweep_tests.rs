@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use crate::config::LyricsConfig;
 use crate::handlers::star_priority::{Tier, Turn};
 use crate::queue::{
-    ClaimOrder, JobRepository, JobResult, LeasedJob, LookupLane, NewJob, WriteGovernor,
+    ClaimOrder, JobRepository, JobResult, LeasedJob, LookupLane, LookupSlot, NewJob, WriteGovernor,
 };
 
 const TRACKS: usize = 24;
@@ -194,7 +194,35 @@ async fn start_targeted(
     handler: &Arc<super::LyricsLookupHandler>,
     running: &mut JoinSet<JobResult>,
 ) -> anyhow::Result<usize> {
-    let slots = lane.targeted_slots();
+    start_in(lane.targeted_slots(), lane, pool, handler, running).await
+}
+
+async fn freed_targeted_slots(
+    lane: &Arc<LookupLane>,
+    slots: usize,
+) -> anyhow::Result<Vec<LookupSlot>> {
+    let freed = async {
+        loop {
+            let free = lane.targeted_slots();
+            if free.len() >= slots {
+                return free;
+            }
+            drop(free);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), freed)
+        .await
+        .map_err(|_| anyhow::anyhow!("the lane should free {slots} targeted slots"))
+}
+
+async fn start_in(
+    slots: Vec<LookupSlot>,
+    lane: &Arc<LookupLane>,
+    pool: &PgPool,
+    handler: &Arc<super::LyricsLookupHandler>,
+    running: &mut JoinSet<JobResult>,
+) -> anyhow::Result<usize> {
     if slots.is_empty() {
         return Ok(0);
     }
@@ -316,7 +344,8 @@ async fn waiting_targeted_lookups_cut_the_sweep_to_a_quarter_and_the_bulk_lane_k
 
             gate.release(5);
             gate.holds(3).await?;
-            anyhow::ensure!(start_targeted(&lane, &pool, &handler, &mut running).await? == 5);
+            let freed = freed_targeted_slots(&lane, 5).await?;
+            anyhow::ensure!(start_in(freed, &lane, &pool, &handler, &mut running).await? == 5);
             gate.holds(8).await?;
 
             let bulk = JobRepository::new(pool.clone(), "core-bulk".to_owned())

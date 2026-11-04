@@ -65,6 +65,7 @@ jobs:
         | test(~modules::chat::admin::tests) | (test(~modules::chat::sync::tests) & !test(~soak_tests))
         | test(~modules::chat::synthetic::tests) | test(~modules::chat::devices::tests) | test(~modules::chat::keys::tests)
         | test(~modules::chat::invites::tests) | test(~modules::chat::settings::tests) | test(~qdrant_io::live_tests)
+        | test(~modules::users::public::tests) | test(~modules::resolve::miss_tests)
     steps:
       - uses: actions/checkout@v7
 
