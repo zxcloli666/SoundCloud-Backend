@@ -151,6 +151,190 @@ async fn the_alignment_scan_picks_the_oldest_uploads_and_reads_tracks_only_for_t
     Ok(())
 }
 
+const STALE: i64 = 5_000;
+const FRESH: i64 = 3_000;
+
+async fn seed_requests(pool: &PgPool, stale: i64, fresh: i64) -> anyhow::Result<i64> {
+    let window = super::result_window(&backend_contracts::worker_contract::LYRICS_LANE)?;
+    sqlx::query(
+        "INSERT INTO lyrics_cache (sc_track_id, plain_text, source, created_at, embedding_state)
+         SELECT 's' || n, 'plain lyrics long enough to be embedded', 'genius',
+                (now() AT TIME ZONE 'UTC') - interval '3 days', 'pending'
+         FROM generate_series(1, $1::bigint) AS n",
+    )
+    .bind(stale)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO lyrics_embedding_wire_state (
+             sc_track_id, status, lyrics_created_at, lyrics_content_generation,
+             request_version, request_text, request_sha256, request_message_id,
+             first_publish_attempt_at, publish_retry_until
+         )
+         SELECT request.sc_track_id, 'pending', (now() AT TIME ZONE 'UTC') - interval '3 days', 1,
+                1, 'plain lyrics', sha256(request.sc_track_id::bytea), 'lyr:' || request.sc_track_id,
+                request.at, request.at + interval '1 day'
+         FROM (
+             SELECT 's' || n AS sc_track_id,
+                    now() - ($1::bigint + 3600 + n) * interval '1 second' AS at
+             FROM generate_series(1, $2::bigint) AS n
+             UNION ALL
+             SELECT 'f' || n, now() - n * interval '1 second'
+             FROM generate_series(1, $3::bigint) AS n
+         ) AS request",
+    )
+    .bind(window)
+    .bind(stale)
+    .bind(fresh)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE lyrics_embedding_wire_state AS wire
+         SET lyrics_created_at = cache.created_at
+         FROM lyrics_cache AS cache
+         WHERE cache.sc_track_id = wire.sc_track_id",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("VACUUM ANALYZE lyrics_cache, lyrics_embedding_wire_state")
+        .execute(pool)
+        .await?;
+    Ok(window)
+}
+
+async fn add_orphan(pool: &PgPool, id: &str, waited: i64) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO lyrics_embedding_wire_state (
+             sc_track_id, status, lyrics_created_at, lyrics_content_generation,
+             request_version, request_text, request_sha256, request_message_id,
+             first_publish_attempt_at, publish_retry_until
+         )
+         VALUES ($1, 'pending', now() AT TIME ZONE 'UTC', 1, 1, 'plain lyrics',
+                 sha256($1::bytea), 'lyr:' || $1,
+                 now() - $2::bigint * interval '1 second',
+                 now() - $2::bigint * interval '1 second' + interval '1 day')",
+    )
+    .bind(id)
+    .bind(waited)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn wire_status(pool: &PgPool, id: &str) -> anyhow::Result<String> {
+    Ok(
+        sqlx::query_scalar("SELECT status FROM lyrics_embedding_wire_state WHERE sc_track_id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+fn index_rows(plan: &Value, index: &str) -> i64 {
+    let mut all = Vec::new();
+    nodes(plan, &mut all);
+    all.into_iter()
+        .filter(|node| node["Index Name"] == index)
+        .map(|node| {
+            node["Actual Rows"].as_i64().unwrap_or(i64::MAX)
+                * node["Actual Loops"].as_i64().unwrap_or(i64::MAX)
+        })
+        .sum()
+}
+
+fn reads_whole(plan: &Value, relation: &str) -> bool {
+    relation_scans(plan, relation)
+        .into_iter()
+        .any(|node| node["Node Type"] == "Seq Scan")
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_orphan_scan_reads_only_a_window_of_the_oldest_timed_out_requests(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let window = seed_requests(&pool, STALE, FRESH).await?;
+    add_orphan(&pool, "orphan-oldest", window + 3600 + STALE + 60).await?;
+    add_orphan(&pool, "orphan-newest", window + 60).await?;
+    let sql = include_str!("../../../queries/lyrics/quarantine_orphaned_embedding_requests.sql");
+
+    let quarantined = sqlx::query_file_scalar!(
+        "queries/lyrics/quarantine_orphaned_embedding_requests.sql",
+        super::QUARANTINE_BATCH,
+        window,
+        super::ORPHAN_SCAN_WINDOW
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(quarantined, 1);
+    assert_eq!(wire_status(&pool, "orphan-oldest").await?, "quarantined");
+    assert_eq!(wire_status(&pool, "orphan-newest").await?, "pending");
+    let mut transaction = pool.begin().await?;
+    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
+        .bind(super::QUARANTINE_BATCH)
+        .bind(window)
+        .bind(super::ORPHAN_SCAN_WINDOW)
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.rollback().await?;
+    assert!(
+        !reads_whole(&plan, "lyrics_embedding_wire_state"),
+        "requests are read end to end: {plan}"
+    );
+    assert!(
+        index_rows(&plan, "lyrics_embedding_pending_idx") <= super::ORPHAN_SCAN_WINDOW,
+        "the scan walks past its window of the oldest requests: {plan}"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn the_stale_scan_takes_its_batch_and_stops_at_the_result_window(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let stale = super::STALE_EMBEDDING_BATCH + 100;
+    let window = seed_requests(&pool, stale, FRESH).await?;
+    let sql = include_str!("../../../queries/lyrics/quarantine_stale_embeddings.sql");
+
+    let mut timed_out = Vec::new();
+    for _ in 0..2 {
+        let round = sqlx::query_file!(
+            "queries/lyrics/quarantine_stale_embeddings.sql",
+            super::STALE_EMBEDDING_BATCH,
+            window,
+            super::REPEATED_RESULT_TIMEOUTS
+        )
+        .fetch_one(&pool)
+        .await?;
+        timed_out.push(round.timed_out);
+    }
+
+    assert_eq!(timed_out, vec![super::STALE_EMBEDDING_BATCH, 100]);
+    let released: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM lyrics_cache WHERE embedding_state IS NULL AND sc_track_id LIKE 's%'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(released, stale);
+    let mut transaction = pool.begin().await?;
+    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
+        .bind(super::STALE_EMBEDDING_BATCH)
+        .bind(window)
+        .bind(super::REPEATED_RESULT_TIMEOUTS)
+        .fetch_one(&mut *transaction)
+        .await?;
+    transaction.rollback().await?;
+    assert!(
+        !reads_whole(&plan, "lyrics_embedding_wire_state"),
+        "requests are read end to end: {plan}"
+    );
+    assert!(
+        index_rows(&plan, "lyrics_embedding_pending_idx") <= stale,
+        "requests inside the result window are walked: {plan}"
+    );
+    Ok(())
+}
+
 #[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
 async fn a_capped_walk_ends_at_its_window_and_the_next_one_starts_after_it(
     pool: PgPool,

@@ -8,6 +8,7 @@ WITH candidates AS MATERIALIZED (
     JOIN lyrics_cache AS lyrics
       ON lyrics.sc_track_id = wire.sc_track_id
     WHERE wire.status = 'pending'
+      AND wire.first_publish_attempt_at < now() - $2::bigint * interval '1 second'
       AND CASE
           WHEN wire.result_consumer IS NULL
               THEN wire.first_publish_attempt_at
