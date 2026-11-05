@@ -77,3 +77,40 @@ fn the_view_is_not_the_stored_room() {
         json!({"userId": "2", "name": "User 2", "avatarUrl": null, "joinedAt": 10, "readyUrn": null})
     );
 }
+
+#[test]
+fn the_room_view_carries_perks_cover_and_a_resolved_image_policy() {
+    let value = seen_by("1");
+    assert_eq!(
+        value["perks"],
+        json!({"starHost": false, "capacity": 10, "modsMax": 3})
+    );
+    assert_eq!(value["cover"], Value::Null);
+    assert_eq!(value["roomImages"], json!("mods"));
+}
+
+#[test]
+fn a_preview_reads_capacity_star_host_and_cover_from_the_perks() {
+    use crate::modules::rooms::model::{Cover, Perks};
+    use crate::modules::rooms::service::RoomPreview;
+    let mut star = room();
+    star.perks = Perks {
+        star_host: true,
+        capacity: 25,
+        mods_max: 8,
+    };
+    star.cover = Some(Cover {
+        url: "https://i1.sndcdn.com/a.jpg".to_owned(),
+        accent: 4,
+    });
+    let value = serde_json::to_value(RoomPreview::of(&star, &[]).unwrap()).unwrap();
+    assert_eq!(value["capacity"], json!(25));
+    assert_eq!(value["star_host"], json!(true));
+    assert_eq!(
+        value["cover"],
+        json!({"url": "https://i1.sndcdn.com/a.jpg", "accent": 4})
+    );
+    let free = serde_json::to_value(RoomPreview::of(&room(), &[]).unwrap()).unwrap();
+    assert_eq!(free["capacity"], json!(10));
+    assert_eq!(free["star_host"], json!(false));
+}

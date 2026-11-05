@@ -1,6 +1,9 @@
-use super::{Cause, RoomView, RoomsService, now_ms};
+use uuid::Uuid;
+
+use super::{Cause, RoomsService, now_ms};
 use crate::error::AppResult;
-use crate::modules::rooms::model::SettingsPatch;
+use crate::modules::rooms::model::{Room, SettingsPatch};
+use crate::modules::rooms::store::Guard;
 
 impl RoomsService {
     pub async fn kick(&self, code: &str, actor: &str, target: &str, ban: bool) -> AppResult<()> {
@@ -45,24 +48,39 @@ impl RoomsService {
         Ok(())
     }
 
-    pub async fn configure(
+    pub async fn reconfigure(
         &self,
         code: &str,
         actor: &str,
         patch: &SettingsPatch,
-    ) -> AppResult<RoomView> {
+    ) -> AppResult<Room> {
+        let (after, _) = self
+            .reconfigure_guarded(code, actor, patch, None, None)
+            .await?;
+        Ok(after)
+    }
+
+    pub async fn reconfigure_guarded(
+        &self,
+        code: &str,
+        actor: &str,
+        patch: &SettingsPatch,
+        cooldown: Option<i64>,
+        guard: Option<&Guard<'_>>,
+    ) -> AppResult<(Room, Option<Uuid>)> {
         let cause = Cause::Moderation {
             by: actor,
             ban: false,
         };
-        let (after, _) = self
-            .apply(code, cause, |room| room.apply_settings(actor, patch))
+        let (after, replaced) = self
+            .apply_guarded(code, cause, guard, |room| {
+                let before = room.image_backdrop();
+                room.apply_settings(actor, patch, cooldown)?;
+                Ok(before.filter(|_| room.image_backdrop() != before))
+            })
             .await?;
-        self.previews.invalidate(&after.code);
-        if after.public {
-            *self.listing.lock().await = None;
-        }
-        self.view(code, actor).await
+        self.refresh_cards(&after).await;
+        Ok((after, replaced))
     }
 
     pub async fn unlist(&self, code: &str) -> AppResult<bool> {

@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use sc_chat_wire::msg::{Class, MessageAad};
+use sc_chat_wire::proto::Envelope;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -69,6 +70,7 @@ pub struct Line {
 pub struct Capture {
     pub sealed: Vec<u8>,
     pub version: u16,
+    pub bundle: Bundle,
 }
 
 pub async fn capture(
@@ -109,6 +111,7 @@ pub async fn capture(
     Ok(Capture {
         sealed: keys.seal_evidence(&plain)?,
         version: keys.reports_current(),
+        bundle,
     })
 }
 
@@ -136,11 +139,7 @@ pub fn open(keys: &dyn ChatKeys, version: u16, sealed: &[u8]) -> ChatResult<Bund
 }
 
 pub fn lines(bundle: &Bundle) -> Vec<Line> {
-    let keys: HashMap<i32, [u8; 32]> = bundle
-        .keys
-        .iter()
-        .filter_map(|key| Some((key.epoch, key.ck.as_slice().try_into().ok()?)))
-        .collect();
+    let keys = bundle_keys(bundle);
     bundle
         .messages
         .iter()
@@ -155,19 +154,31 @@ pub fn lines(bundle: &Bundle) -> Vec<Line> {
         .collect()
 }
 
+pub fn bundle_keys(bundle: &Bundle) -> HashMap<i32, [u8; 32]> {
+    bundle
+        .keys
+        .iter()
+        .filter_map(|key| Some((key.epoch, key.ck.as_slice().try_into().ok()?)))
+        .collect()
+}
+
 fn readable(conversation: Uuid, message: &SealedMessage, keys: &HashMap<i32, [u8; 32]>) -> String {
-    let Some(class) = Class::parse(&message.class) else {
-        return UNREADABLE.to_owned();
-    };
-    if class == Class::System {
+    if message.class == Class::System.as_str() {
         return text::system(&message.body);
     }
-    let Some(ck) = keys.get(&message.epoch) else {
-        return UNREADABLE.to_owned();
-    };
-    let Ok(epoch) = u32::try_from(message.epoch) else {
-        return UNREADABLE.to_owned();
-    };
+    envelope(conversation, message, keys)
+        .map(|envelope| text::render(&envelope))
+        .unwrap_or_else(|| UNREADABLE.to_owned())
+}
+
+pub fn envelope(
+    conversation: Uuid,
+    message: &SealedMessage,
+    keys: &HashMap<i32, [u8; 32]>,
+) -> Option<Envelope> {
+    let class = Class::parse(&message.class).filter(|class| *class != Class::System)?;
+    let ck = keys.get(&message.epoch)?;
+    let epoch = u32::try_from(message.epoch).ok()?;
     let (sender_device, client_id) = match class {
         Class::Meta => (Uuid::nil(), Uuid::nil()),
         _ => (message.sender_device.unwrap_or_default(), message.client_id),
@@ -179,7 +190,5 @@ fn readable(conversation: Uuid, message: &SealedMessage, keys: &HashMap<i32, [u8
         client_id: client_id.into_bytes(),
         class,
     };
-    sc_chat_wire::msg::open(ck, &aad, &message.body)
-        .map(|envelope| text::render(&envelope))
-        .unwrap_or_else(|_| UNREADABLE.to_owned())
+    sc_chat_wire::msg::open(ck, &aad, &message.body).ok()
 }

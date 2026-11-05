@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::modules::chat::sweeps::budget::Budget;
 use crate::modules::chat::sweeps::purge;
 use crate::modules::chat::synthetic::{USER_PREFIX, sessions};
-use crate::modules::chat::{ChatResult, ChatState, rt_keys};
+use crate::modules::chat::{ChatResult, ChatState, media, rt_keys};
 
 pub const BATCH_ROWS: i64 = 5_000;
 pub const CONVERSATIONS_PER_PAGE: i64 = 256;
@@ -30,8 +30,11 @@ pub struct Purged {
 
 pub async fn run(chat: &ChatState) -> ChatResult<Purged> {
     let deadline = Instant::now() + PURGE_WINDOW;
-    let mut purged = Purged::default();
-    (purged.devices, purged.sessions) = drop_devices(chat).await?;
+    let mut purged = Purged {
+        devices: drop_devices(chat).await?,
+        sessions: sessions::drop_all(chat).await?,
+        ..Purged::default()
+    };
     purged.marked = sqlx::query_file!("queries/chat/synthetic/mark_conversations.sql")
         .execute(&chat.pg)
         .await?
@@ -52,35 +55,31 @@ pub async fn run(chat: &ChatState) -> ChatResult<Purged> {
     Ok(purged)
 }
 
-async fn drop_devices(chat: &ChatState) -> ChatResult<(u64, u64)> {
+async fn drop_devices(chat: &ChatState) -> ChatResult<u64> {
     let mut devices = 0;
-    let mut sessions = 0;
     loop {
         let rows = sqlx::query_file!("queries/chat/synthetic/drop_devices.sql", BATCH_ROWS)
             .fetch_all(&chat.pg)
             .await?;
         let count = rows.len();
         let mut by_user: BTreeMap<String, Vec<Uuid>> = BTreeMap::new();
-        let mut ids = Vec::with_capacity(count);
         for row in rows {
             by_user.entry(row.user_id).or_default().push(row.id);
-            ids.push(row.session_id);
         }
         for (user_id, devices) in &by_user {
             chat.devices.forget(user_id, devices);
         }
         devices += count as u64;
-        sessions += sessions::drop_all(chat, &ids).await?;
         if count == 0 {
-            return Ok((devices, sessions));
+            return Ok(devices);
         }
     }
 }
 
 async fn purge_marked(chat: &ChatState, deadline: Instant) -> ChatResult<u64> {
     let mut purged = 0;
-    let mut budget = Budget::new(u32::MAX);
-    while Instant::now() < deadline {
+    let mut budget = Budget::until(u32::MAX, deadline);
+    while budget.left(chat) {
         let page = sqlx::query_file_scalar!(
             "queries/chat/synthetic/marked_conversations.sql",
             CONVERSATIONS_PER_PAGE
@@ -91,7 +90,7 @@ async fn purge_marked(chat: &ChatState, deadline: Instant) -> ChatResult<u64> {
             break;
         }
         for conversation in page {
-            if Instant::now() >= deadline || !budget.left(chat) {
+            if !budget.left(chat) {
                 return Ok(purged);
             }
             if purge::conversation(chat, conversation, &mut budget).await? {
@@ -103,15 +102,20 @@ async fn purge_marked(chat: &ChatState, deadline: Instant) -> ChatResult<u64> {
 }
 
 async fn drop_memberships(chat: &ChatState) -> ChatResult<u64> {
+    let mut tx = chat.pg.begin().await?;
     let touched: Vec<Uuid> =
         sqlx::query_file_scalar!("queries/chat/synthetic/drop_memberships.sql")
-            .fetch_all(&chat.pg)
+            .fetch_all(&mut *tx)
             .await?;
     let conversations: BTreeSet<Uuid> = touched.iter().copied().collect();
     for conversation in &conversations {
         sqlx::query_file_scalar!("queries/chat/conversations/recount.sql", conversation)
-            .fetch_optional(&chat.pg)
+            .fetch_optional(&mut *tx)
             .await?;
+        media::hooks::queue_trim(&mut tx, *conversation).await?;
+    }
+    tx.commit().await?;
+    for conversation in &conversations {
         chat.hot.forget(*conversation);
     }
     Ok(touched.len() as u64)

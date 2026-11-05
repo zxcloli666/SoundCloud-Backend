@@ -103,23 +103,8 @@ pub struct LoginRequest {
     pub oauth_app_id: Option<String>,
     pub target_session_id: Option<Uuid>,
     pub status: String,
-    pub step: Option<String>,
     pub username: Option<String>,
-    pub result_session_id: Option<Uuid>,
     pub error: Option<String>,
     pub retry_count: i32,
-    pub redirect_url: Option<String>,
-    pub profile_ok: Option<bool>,
-    pub expires_at: NaiveDateTime,
-}
-
-#[derive(Debug, Clone, FromRow)]
-pub struct LinkRequestRow {
-    pub id: Uuid,
-    pub mode: String,
-    pub source_session_id: Option<Uuid>,
-    pub target_session_id: Option<Uuid>,
-    pub status: String,
-    pub error: Option<String>,
     pub expires_at: NaiveDateTime,
 }

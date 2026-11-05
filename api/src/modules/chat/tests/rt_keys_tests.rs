@@ -34,6 +34,11 @@ fn every_key_keeps_the_layout_the_plan_fixed() {
         "chat:lt:sess:00000000-0000-0000-0000-000000000001"
     );
     assert_eq!(
+        loadtest_session_id(&loadtest_session(session)),
+        Some(session)
+    );
+    assert_eq!(loadtest_session_id("chat:lt:sess:nope"), None);
+    assert_eq!(
         (ROOMS_ALIVE, SEEN, LEAD),
         ("rooms:alive", "chat:seen", "chat:lead")
     );

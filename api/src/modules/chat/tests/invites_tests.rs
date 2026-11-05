@@ -317,6 +317,38 @@ async fn a_link_into_a_hidden_history_group_starts_a_new_epoch(pool: PgPool) {
     assert_eq!((joined_epoch, rekey), (4, true));
 }
 
+async fn trim_queued(pool: &PgPool, conversation: Uuid) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat.media_trim WHERE conversation_id = $1)")
+        .bind(conversation)
+        .fetch_one(pool)
+        .await
+        .expect("the trim queue")
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_link_join_moves_the_floor_of_a_hidden_history_group_and_queues_a_trim(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    let visible = conversation(&pool, "group", &[("101", true)]).await;
+    let hidden = conversation(&pool, "group", &[("101", true), ("5", false)]).await;
+    sqlx::query(
+        "UPDATE chat.conversations SET last_seq = 7, settings = '{\"history_visible\": false}' WHERE id = $1",
+    )
+    .bind(hidden)
+    .execute(&pool)
+    .await
+    .expect("hidden history");
+    for group in [visible, hidden] {
+        let link = create_with(&chat, "101", group, &CreateInvite::default())
+            .await
+            .expect("a link");
+        join_with(&chat, "5", &link.token).await.expect("joined");
+    }
+    assert!(!trim_queued(&pool, visible).await);
+    assert!(trim_queued(&pool, hidden).await);
+    let joined = member(&pool, hidden, "5").await.expect("a member");
+    assert_eq!(joined, ("active".to_owned(), true, 7));
+}
+
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_link_join_reaches_every_member_and_the_joiner_requests(pool: PgPool) {

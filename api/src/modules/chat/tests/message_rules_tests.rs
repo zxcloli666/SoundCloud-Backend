@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 
 use super::*;
 use crate::modules::chat::members::access::GroupSettings;
-use crate::modules::chat::model::MemberRole;
+use crate::modules::chat::model::{ConversationKind, MemberRole};
 
 fn input(class: &str, target_seq: Option<i64>, body: usize) -> SendMessage {
     SendMessage {
@@ -11,6 +11,7 @@ fn input(class: &str, target_seq: Option<i64>, body: usize) -> SendMessage {
         epoch: 0,
         target_seq,
         body: vec![7; body],
+        media: Vec::new(),
     }
 }
 
@@ -117,7 +118,7 @@ fn room_moderators_pin_and_guests_read_from_their_seat() {
     let moderator = access(ConversationKind::Room, MemberRole::Admin);
     assert_eq!(may_post(&guest, Class::Pin), Err(ChatError::NotMember));
     assert_eq!(may_post(&moderator, Class::Pin), Ok(()));
-    assert_eq!(may_post(&guest, Class::Meta), Err(ChatError::Invalid));
+    assert_eq!(may_post(&guest, Class::Meta), Err(ChatError::NotMember));
     assert_eq!(guest.history_floor(), 7);
     assert!(moderator.moderates() && !guest.moderates());
 }
@@ -215,4 +216,38 @@ fn only_posts_take_the_chat_timer() {
     assert_eq!(expiry(Class::React, Some(3_600), inherited, at), inherited);
     assert_eq!(expiry(Class::React, Some(3_600), None, at), None);
     assert_eq!(expiry(Class::Meta, Some(3_600), None, at), None);
+}
+
+#[test]
+fn media_ids_ride_posts_up_to_ten_and_meta_up_to_one() {
+    let with = |class: &str, count: u128| SendMessage {
+        media: (1..=count).map(Uuid::from_u128).collect(),
+        ..input(class, if class == "edit" { Some(1) } else { None }, 64)
+    };
+    assert!(outgoing(with("post", 0)).is_ok());
+    assert_eq!(outgoing(with("post", 10)).unwrap().media.len(), 10);
+    assert_eq!(outgoing(with("post", 11)), Err(ChatError::Invalid));
+    assert_eq!(outgoing(with("meta", 1)).unwrap().media.len(), 1);
+    assert_eq!(outgoing(with("meta", 2)), Err(ChatError::Invalid));
+    assert_eq!(outgoing(with("edit", 1)), Err(ChatError::Invalid));
+    assert_eq!(outgoing(with("react", 1)), Err(ChatError::Invalid));
+}
+
+#[test]
+fn a_repeated_media_id_is_invalid() {
+    let twice = SendMessage {
+        media: vec![Uuid::from_u128(1), Uuid::from_u128(1)],
+        ..input("post", None, 64)
+    };
+    assert_eq!(outgoing(twice), Err(ChatError::Invalid));
+}
+
+#[test]
+fn a_send_body_without_media_still_parses_for_phase_one_clients() {
+    let parsed: SendMessage = serde_json::from_value(serde_json::json!({
+        "client_id": Uuid::from_u128(9), "class": "post", "epoch": 0,
+        "target_seq": null, "body": "AAAA"
+    }))
+    .unwrap();
+    assert!(parsed.media.is_empty());
 }

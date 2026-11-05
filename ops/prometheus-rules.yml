@@ -335,6 +335,26 @@ groups:
           summary: "Repairs of uploads without a storage event have been paused for {{ $value }}s ({{ $labels.reason }})"
           description: "The sweep in IndexingRequeueStuck waits while a leaf in JOBS_NATS_STORAGE_EVENT_SOURCES is behind or uploads are undelivered. leaf_source_behind for an hour means a leaf link is down or the leaf is gone for good: fix the link or drop the domain from the list."
 
+      - alert: AuthCleanupStalled
+        expr: time() - max by (table) (auth_cleanup_last_progress_timestamp_seconds) > 1800
+        for: 1m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Cleanup of {{ $labels.table }} has not run a delete for {{ $value | humanizeDuration }}"
+          description: "The job runs every minute and skips while an active replication slot is more than 16 MB behind. rate(auth_cleanup_skipped_total[30m]) by why names the cause: replication_lag means a lagging subscriber, batch_cap alone does not stall it. Expired rows only grow meanwhile."
+
+      - alert: AuthCleanupNotReporting
+        expr: absent(auth_cleanup_last_progress_timestamp_seconds{table="login_requests"}) or absent(auth_cleanup_last_progress_timestamp_seconds{table="link_requests"})
+        for: 30m
+        labels:
+          severity: warning
+          service: jobs
+        annotations:
+          summary: "Cleanup of {{ $labels.table }} has reported no delete since the jobs start"
+          description: "The gauge appears after the first delete of a run. Absent for 30 minutes means every run since the restart was skipped or failed, or the job does not run on core."
+
   - name: scd-worker
     interval: 30s
     rules:

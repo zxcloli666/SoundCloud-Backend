@@ -21,3 +21,9 @@ mod soak_tests;
 
 #[path = "sync_tests/sealed_tests.rs"]
 mod sealed_tests;
+
+#[path = "sync_tests/hold_tests.rs"]
+mod hold_tests;
+
+#[path = "sync_tests/wake_tests.rs"]
+mod wake_tests;
