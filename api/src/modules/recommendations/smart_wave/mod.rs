@@ -5,8 +5,13 @@ pub mod graph;
 pub mod rank;
 #[cfg(test)]
 mod ranked_tests;
+pub mod reach;
+#[cfg(test)]
+mod reach_tests;
 pub mod session;
 pub mod signals;
+#[cfg(test)]
+mod tops_plan_tests;
 pub mod track_arm;
 
 use std::collections::HashMap;
@@ -31,6 +36,7 @@ use crate::qdrant::collections;
 use cursor::{SeedKind, WaveCursor};
 use graph::GraphSeed;
 use rank::TrackMeta;
+use reach::Reach;
 use session::SessionFeedback;
 use signals::{Signal, UserSignals};
 
@@ -42,7 +48,7 @@ const CONTENT_FLOOR: f32 = 0.55;
 const SEED_MOOD_WEIGHT: f32 = 0.7;
 const GRAPH_ARTISTS: usize = 160;
 const GRAPH_PER_ARTIST: i64 = 6;
-const GRAPH_TRACKS_TOTAL: i64 = 800;
+const GRAPH_TRACKS_TOTAL: usize = 800;
 const SEED_LIKES_USER: usize = 14;
 const SEED_SUPERLIKES_USER: usize = FREE_LIMIT as usize;
 const TASTE_LIKES: usize = 80;
@@ -155,36 +161,47 @@ pub async fn build(
     let sunk_artists =
         session.steer_artists(&session_meta, seed_artist, &mut affinity, &mut disliked_set);
 
-    let top_artists = top_affinity_artists(&affinity, GRAPH_ARTISTS);
-    let graph_tracks = svc
-        .artist_tracks
-        .collect(
-            &svc.pg,
-            &top_artists,
-            &exclude,
-            GRAPH_PER_ARTIST,
-            GRAPH_TRACKS_TOTAL,
-        )
-        .await;
+    let ranked = top_affinity_artists(&affinity, GRAPH_ARTISTS);
+    let reach = Reach {
+        affinity: &affinity,
+        disliked_artists: &disliked_set,
+        cursor: &wave_cursor,
+        picks: req.limit * 2,
+        artist_cap: ARTIST_CAP_IN_WINDOW,
+        graph_floor: graph_floor(wave_cursor.neg_rate()),
+        content_floor: CONTENT_FLOOR,
+    };
+    let (head, rest) = reach.split(&ranked);
+    let mut graph_tracks = reach::read(
+        &svc.artist_tracks,
+        &svc.pg,
+        head,
+        &ranked,
+        &exclude,
+        GRAPH_PER_ARTIST,
+        GRAPH_TRACKS_TOTAL,
+    )
+    .await;
 
     let pool_ids: Vec<u64> = mert.iter().map(|c| c.sc_track_id).collect();
     let meta = load_track_meta(&svc.pg, &pool_ids).await;
 
-    let mut artist_of: HashMap<u64, Option<Uuid>> = HashMap::new();
-    for (tid, aid) in &graph_tracks {
-        artist_of.entry(*tid).or_insert(Some(*aid));
-    }
+    let mut mert_artists: HashMap<u64, Option<Uuid>> = HashMap::new();
     for c in &mert {
         if let Some(m) = meta.get(&c.sc_track_id)
             && m.storage_ok
         {
-            artist_of.entry(c.sc_track_id).or_insert(m.primary_artist);
+            mert_artists
+                .entry(c.sc_track_id)
+                .or_insert(m.primary_artist);
         }
     }
+    let settled: HashSet<u64> = graph_tracks.iter().map(|(track, _)| *track).collect();
+    let mut artist_of = reach::attribution(&graph_tracks, &mert_artists);
 
+    let variants = user_id_variants(req.sc_user_id);
     let pooled: Vec<u64> = artist_of.keys().copied().collect();
-    let blocked =
-        blocked::blocked_uploads(&svc.pg, &user_id_variants(req.sc_user_id), &pooled).await;
+    let blocked = blocked::blocked_uploads(&svc.pg, &variants, &pooled).await;
     artist_of.retain(|tid, _| !blocked.contains(tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
     let liked_ids = taste_ids(&signals);
@@ -199,29 +216,42 @@ pub async fn build(
         .copied()
         .collect();
     let centroids_fut = mood_centroids(svc, req.sc_user_id, &mood_seed_ids, &liked_ids, &boosted);
-    let cands_vecs_fut = async {
-        tokio::join!(
-            svc.retrieve_vectors(collections::TRACKS_MERT, &vector_ids),
-            svc.retrieve_vectors(collections::TRACKS_CLAP, &vector_ids),
-            svc.retrieve_vectors(collections::TRACKS_LYRICS, &vector_ids),
-        )
-    };
-    let (taste, (cm, cc, cl)) = tokio::join!(centroids_fut, cands_vecs_fut);
+    let (taste, [cm, cc, cl]) = tokio::join!(centroids_fut, track_vectors(svc, &vector_ids));
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
-    let cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
-    let cand_count = cands.len();
+    let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
 
-    let picked = rank::rank_and_pick(
-        &cands,
-        &affinity,
-        &disliked_set,
-        &wave_cursor,
-        req.limit * 2,
-        ARTIST_CAP_IN_WINDOW,
-        graph_floor(wave_cursor.neg_rate()),
-        CONTENT_FLOOR,
-    );
+    let tail = reach.tail(rest, &cands, &settled);
+    if !tail.is_empty() {
+        let more = reach::read(
+            &svc.artist_tracks,
+            &svc.pg,
+            &tail,
+            &ranked,
+            &exclude,
+            GRAPH_PER_ARTIST,
+            GRAPH_TRACKS_TOTAL.saturating_sub(graph_tracks.len()),
+        )
+        .await;
+        graph_tracks.extend(more);
+        let mut fresh = reach::reclaim(&mut cands, &graph_tracks, &mert_artists);
+        let fresh_ids: Vec<u64> = fresh.keys().copied().collect();
+        let (blocked, [fm, fc, fl]) = tokio::join!(
+            blocked::blocked_uploads(&svc.pg, &variants, &fresh_ids),
+            track_vectors(svc, &fresh_ids),
+        );
+        fresh.retain(|tid, _| !blocked.contains(tid));
+        cands.extend(score_candidates(
+            fresh,
+            &taste,
+            &skipped,
+            &sunk_artists,
+            [&fm, &fc, &fl],
+        ));
+    }
+    let picked = reach.pick(&cands);
+    let cand_count = cands.len();
+    let graph_artists = head.len() + tail.len();
 
     let ids_after: Vec<String> = picked.iter().map(|p| p.sc_track_id.to_string()).collect();
     let lang_allowed = svc
@@ -263,6 +293,7 @@ pub async fn build(
         skipped_now = session.negatives.len(),
         neg_rate = wave_cursor.neg_rate(),
         graph = affinity.len(),
+        graph_artists,
         graph_tracks = graph_tracks.len(),
         mert_pool = mert.len(),
         taste = !taste.m.is_empty(),
@@ -771,6 +802,18 @@ fn mean_centroid(vecs: &HashMap<String, Vec<f32>>, boosted: &HashSet<u64>) -> Op
         *a /= total;
     }
     Some(acc)
+}
+
+async fn track_vectors(
+    svc: &RecommendationsService,
+    ids: &[u64],
+) -> [HashMap<String, Vec<f32>>; 3] {
+    let (mert, clap, lyrics) = tokio::join!(
+        svc.retrieve_vectors(collections::TRACKS_MERT, ids),
+        svc.retrieve_vectors(collections::TRACKS_CLAP, ids),
+        svc.retrieve_vectors(collections::TRACKS_LYRICS, ids),
+    );
+    [mert, clap, lyrics]
 }
 
 fn top_affinity_artists(aff: &graph::Affinity, n: usize) -> Vec<Uuid> {
