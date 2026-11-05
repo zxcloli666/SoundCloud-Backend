@@ -120,7 +120,7 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
         fills: Fills::default(),
         link: LinkService::new(pg.clone(), auth.clone()),
         auth,
-        rooms: RoomsService::new(redis.clone(), RoomHub::new(None)),
+        rooms: RoomsService::new(redis.clone(), RoomHub::new()),
         shutdown: CancellationToken::new(),
         pg,
         redis,

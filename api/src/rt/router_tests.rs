@@ -18,7 +18,7 @@ use crate::modules::chat::test_support::{
 use crate::rt::test_support::{self, call, expired_session_for, session_for};
 
 fn app(chat: Arc<ChatState>, redis_url: &str) -> axum::Router {
-    test_support::app(chat, redis_url, None)
+    test_support::app(chat, redis_url)
 }
 
 fn offline_app(chat_enabled: bool) -> axum::Router {

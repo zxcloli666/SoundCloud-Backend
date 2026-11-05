@@ -11,7 +11,6 @@ use uuid::Uuid;
 use crate::common::admission::PublicAdmission;
 use crate::config::{AdmissionCfg, AdmissionLimitCfg};
 use crate::modules::chat::ChatState;
-use crate::rt::rooms::Proxy;
 use crate::rt::router::build;
 use crate::rt::state::RtState;
 
@@ -53,17 +52,14 @@ fn admission(redis_url: &str) -> Arc<PublicAdmission> {
     )
 }
 
-pub fn app(chat: Arc<ChatState>, redis_url: &str, rooms_proxy: Option<Arc<Proxy>>) -> axum::Router {
-    build(
-        RtState {
-            pg: chat.pg.clone(),
-            auth: chat.auth.clone(),
-            admission: admission(redis_url),
-            rooms: chat.rooms.clone(),
-            chat,
-        },
-        rooms_proxy,
-    )
+pub fn app(chat: Arc<ChatState>, redis_url: &str) -> axum::Router {
+    build(RtState {
+        pg: chat.pg.clone(),
+        auth: chat.auth.clone(),
+        admission: admission(redis_url),
+        rooms: chat.rooms.clone(),
+        chat,
+    })
 }
 
 pub async fn session_for(pool: &PgPool, user: &str) -> anyhow::Result<Uuid> {

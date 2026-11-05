@@ -68,7 +68,7 @@ impl RoomsService {
     }
 
     async fn settle(&self, before: &Room, after: &Room, cause: Cause<'_>) {
-        self.hub.announce(&before.code).await;
+        self.hub.announce(&before.code);
         if let Some(chat) = self.chat() {
             bridge::after_change(&chat, before, after, cause).await;
         }

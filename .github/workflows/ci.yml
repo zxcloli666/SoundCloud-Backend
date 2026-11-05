@@ -59,7 +59,7 @@ jobs:
       TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock scripts/ci-sqlx-template.patch
       IGNORED: >-
         test(~common::admission::tests) | test(~modules::chat::channel::tests) | test(~modules::rooms::) | test(~modules::chat::rooms::)
-        | test(~router_rooms_tests) | test(~rt::router::tests) | test(~rt::rooms::handoff_tests) | test(~modules::chat::sweeps::tests)
+        | test(~router_rooms_tests) | test(~rt::router::tests) | test(~modules::chat::sweeps::tests)
         | test(~modules::chat::messages::fanout::tests) | test(~modules::chat::conversations::route_tests::wired)
         | test(~modules::chat::limits::tests) | test(~modules::chat::moderation::tests) | test(~modules::chat::reports::tests)
         | test(~modules::chat::admin::tests) | (test(~modules::chat::sync::tests) & !test(~soak_tests))

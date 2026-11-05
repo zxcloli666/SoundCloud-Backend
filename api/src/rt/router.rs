@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -13,17 +12,12 @@ use tower_http::trace::TraceLayer;
 use crate::common::http_metrics::{method_label, route_label};
 use crate::modules::{chat, rooms};
 use crate::rt::health;
-use crate::rt::rooms::Proxy;
 use crate::rt::state::RtState;
 
-pub fn build(state: RtState, rooms_proxy: Option<Arc<Proxy>>) -> Router {
-    let rooms = match rooms_proxy {
-        Some(proxy) => crate::rt::rooms::router(proxy),
-        None => rooms::router(),
-    };
+pub fn build(state: RtState) -> Router {
     Router::new()
         .merge(health::router())
-        .merge(rooms)
+        .merge(rooms::router())
         .merge(chat::routes::public(state.chat.clone()))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
@@ -57,3 +51,7 @@ async fn private(mut response: Response) -> Response {
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "router_rooms_tests.rs"]
+mod router_rooms_tests;

@@ -14,8 +14,8 @@ groups:
 
       - alert: ApiLatencyDegraded
         expr: |
-          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="2.5",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) > 0.05
-            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[15m])) > 0.1
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[15m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="2.5",route!~"/search/(vibe|lyrics)"}[15m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[15m])) > 0.05
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[15m])) > 0.1
         for: 15m
         labels:
           severity: warning
@@ -26,8 +26,8 @@ groups:
 
       - alert: ApiLatencyCritical
         expr: |
-          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="5",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) > 0.02
-            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)|/rooms/[{]code[}]"}[10m])) > 0.2
+          (sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[10m])) - sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="5",route!~"/search/(vibe|lyrics)"}[10m]))) / sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[10m])) > 0.02
+            and sum by (route) (rate(api_http_request_duration_seconds_bucket{job="api",le="+Inf",route!~"/search/(vibe|lyrics)"}[10m])) > 0.2
         for: 10m
         labels:
           severity: critical
