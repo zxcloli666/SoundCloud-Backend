@@ -1,8 +1,10 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
 const FILLER: i64 = 10_000;
 const ROOM: i64 = 10;
+const WINDOW: i64 = 10_000;
 
 async fn seed(pool: &PgPool) -> anyhow::Result<()> {
     sqlx::raw_sql(&format!(
@@ -93,7 +95,10 @@ async fn the_alignment_scan_picks_the_oldest_uploads_and_reads_tracks_only_for_t
     let picked = sqlx::query_file!(
         "queries/lyrics/reap_transcriptions_align.sql",
         ROOM,
-        &Vec::<String>::new()
+        &Vec::<String>::new(),
+        None::<DateTime<Utc>>,
+        None::<&str>,
+        WINDOW
     )
     .fetch_all(&pool)
     .await?
@@ -115,6 +120,9 @@ async fn the_alignment_scan_picks_the_oldest_uploads_and_reads_tracks_only_for_t
     let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
         .bind(ROOM)
         .bind(Vec::<String>::new())
+        .bind(None::<DateTime<Utc>>)
+        .bind(None::<String>)
+        .bind(WINDOW)
         .fetch_one(&mut *transaction)
         .await?;
     for table in ["tracks", "storage_event_state", "lyrics_cache"] {
@@ -123,6 +131,15 @@ async fn the_alignment_scan_picks_the_oldest_uploads_and_reads_tracks_only_for_t
             .any(|node| node["Node Type"] == "Seq Scan");
         assert!(!seq, "{table} is read end to end: {plan}");
     }
+    let walked: i64 = relation_scans(&plan, "storage_event_state")
+        .iter()
+        .filter(|node| node["Index Name"] == "storage_event_transcription_reap_idx")
+        .map(|node| node["Actual Rows"].as_i64().unwrap_or(i64::MAX))
+        .sum();
+    assert!(
+        walked <= 20 * ROOM,
+        "the walk must stop once the room is filled: {plan}"
+    );
     let track_probes: i64 = relation_scans(&plan, "tracks")
         .iter()
         .map(|node| node["Actual Loops"].as_i64().unwrap_or(i64::MAX))
@@ -130,6 +147,65 @@ async fn the_alignment_scan_picks_the_oldest_uploads_and_reads_tracks_only_for_t
     assert!(
         track_probes <= 4 * ROOM,
         "tracks must be probed for the picked rows only, not for every candidate: {plan}"
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_capped_walk_ends_at_its_window_and_the_next_one_starts_after_it(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed(&pool).await?;
+    let window = 1_000_i64;
+
+    let first = sqlx::query_file!(
+        "queries/lyrics/reap_transcriptions_align.sql",
+        FILLER,
+        &Vec::<String>::new(),
+        None::<DateTime<Utc>>,
+        None::<&str>,
+        window
+    )
+    .fetch_all(&pool)
+    .await?;
+    let end = sqlx::query_file!(
+        "queries/lyrics/reap_transcriptions_align_walk_end.sql",
+        None::<DateTime<Utc>>,
+        None::<&str>,
+        window - 1
+    )
+    .fetch_one(&pool)
+    .await?;
+    let second = sqlx::query_file!(
+        "queries/lyrics/reap_transcriptions_align.sql",
+        FILLER,
+        &Vec::<String>::new(),
+        Some(end.updated_at),
+        Some(end.sc_track_id.as_str()),
+        window
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    let walked_by_second: Vec<_> = second
+        .iter()
+        .filter(|row| row.sc_track_id != "reupload")
+        .collect();
+    assert!(first.len() > 100 && first.len() < 400);
+    assert!(first.iter().all(|row| row.waiting_since <= end.updated_at));
+    assert!(!walked_by_second.is_empty());
+    assert!(
+        walked_by_second
+            .iter()
+            .all(|row| row.waiting_since > end.updated_at)
+    );
+    assert!(
+        first
+            .iter()
+            .filter(|row| row.sc_track_id != "reupload")
+            .all(|row| walked_by_second
+                .iter()
+                .all(|other| other.sc_track_id != row.sc_track_id))
     );
     Ok(())
 }

@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
 
 use super::TranscriptionCandidate;
+use super::walk::{AlignWalk, REST_WALK_WINDOW};
 use crate::handlers::star_priority::{
     LIKED_PRIORITY, Pass, Round, STAR_SCAN_WINDOW, Tier, Turn, of_tracks, split_next, with_next,
 };
@@ -56,6 +57,7 @@ pub(super) async fn alignments(
     transaction: &mut Transaction<'_, Postgres>,
     room: i64,
     turn: Turn,
+    walk: &mut AlignWalk,
 ) -> Result<Vec<(TranscriptionCandidate, Tier)>, sqlx::Error> {
     if room <= 0 {
         return Ok(Vec::new());
@@ -69,7 +71,7 @@ pub(super) async fn alignments(
             .iter()
             .map(|candidate| candidate.sc_track_id.clone())
             .collect();
-        let found = align_pass(transaction, tier.pass(), left, &taken).await?;
+        let found = align_pass(transaction, tier.pass(), left, &taken, walk).await?;
         let (found, next) = split_next(found, left);
         round.record(
             tier.label(),
@@ -166,6 +168,7 @@ async fn align_pass(
     pass: Pass,
     left: usize,
     taken: &[String],
+    walk: &mut AlignWalk,
 ) -> Result<Vec<AlignCandidate>, sqlx::Error> {
     let limit = with_next(left);
     match pass {
@@ -191,14 +194,26 @@ async fn align_pass(
         .fetch_all(&mut **transaction)
         .await
         .inspect_err(super::statement_failed("reap_transcriptions_align_liked")),
-        Pass::Rest => sqlx::query_file_as!(
-            AlignCandidate,
-            "queries/lyrics/reap_transcriptions_align.sql",
-            limit,
-            taken
-        )
-        .fetch_all(&mut **transaction)
-        .await
-        .inspect_err(super::statement_failed("reap_transcriptions_align")),
+        Pass::Rest => {
+            let found = sqlx::query_file_as!(
+                AlignCandidate,
+                "queries/lyrics/reap_transcriptions_align.sql",
+                limit,
+                taken,
+                walk.after_at(),
+                walk.after_id(),
+                REST_WALK_WINDOW
+            )
+            .fetch_all(&mut **transaction)
+            .await
+            .inspect_err(super::statement_failed("reap_transcriptions_align"))?;
+            let filled = i64::try_from(found.len()).is_ok_and(|count| count >= limit);
+            walk.moved_on(transaction, filled)
+                .await
+                .inspect_err(super::statement_failed(
+                    "reap_transcriptions_align_walk_end",
+                ))?;
+            Ok(found)
+        }
     }
 }
