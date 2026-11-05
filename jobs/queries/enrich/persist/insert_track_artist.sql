@@ -5,3 +5,5 @@ UPDATE
     source = EXCLUDED.source,
     confidence = EXCLUDED.confidence,
     evidence = EXCLUDED.evidence
+WHERE (track_artists.position, track_artists.source, track_artists.confidence, track_artists.evidence)
+          IS DISTINCT FROM (EXCLUDED.position, EXCLUDED.source, EXCLUDED.confidence, EXCLUDED.evidence)
