@@ -18,14 +18,12 @@ pub mod seed;
 mod tests;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use deadpool_redis::Pool;
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
 
 use crate::modules::auth::sealed::config::SealedCfg;
 use crate::modules::auth::sealed::gate::Gates;
@@ -34,7 +32,6 @@ use crate::modules::auth::{AuthService, LinkService};
 use crate::modules::chat::channel::ock::OckRing;
 
 pub const WORK_PERMITS: usize = 2_048;
-pub const TICK: Duration = Duration::from_secs(10);
 
 pub struct Sealed {
     cfg: SealedCfg,
@@ -74,19 +71,6 @@ impl Sealed {
             ocks,
             redis,
         })
-    }
-
-    pub fn spawn_ticks(self: &Arc<Self>, shutdown: CancellationToken) {
-        let sealed = self.clone();
-        tokio::spawn(async move {
-            let mut ticks = tokio::time::interval(TICK);
-            loop {
-                tokio::select! {
-                    _ = ticks.tick() => sealed.gates.tick(),
-                    () = shutdown.cancelled() => return,
-                }
-            }
-        });
     }
 }
 

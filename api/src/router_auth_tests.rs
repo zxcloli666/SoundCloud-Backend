@@ -27,6 +27,7 @@ const OPEN_ROUTES: &[&str] = &[
     "/diag/bundles",
     "/diag/events",
     "/chat/x",
+    "/auth/x",
 ];
 
 const METRICS_ROUTE: &str = "/admin/metrics";

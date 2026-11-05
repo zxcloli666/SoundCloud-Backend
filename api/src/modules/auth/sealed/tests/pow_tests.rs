@@ -150,6 +150,8 @@ async fn an_effort_below_the_required_one_is_asked_again(pool: PgPool) -> anyhow
     let node = sealed(cfg(), &pool)?;
     let router = app(&node);
     let device = Device::new();
+    let low = solve(&current(&node), 1, &device.auth_pub(), LOGIN);
+    let enough = solve(&current(&node), 2, &device.auth_pub(), LOGIN);
     let effort = &node.gates.login.effort;
     for _ in 0..600 {
         effort.note();
@@ -157,8 +159,8 @@ async fn an_effort_below_the_required_one_is_asked_again(pool: PgPool) -> anyhow
     effort.tick();
     effort.tick();
     assert_eq!((effort.current(), effort.minimum()), (4, 2));
+    *node.gates.login.ticked.lock().expect("a clock") = std::time::Instant::now();
 
-    let low = solve(&current(&node), 1, &device.auth_pub(), LOGIN);
     let (status, body) = outcome(&router, &device, low).await;
     assert_eq!(
         (status, body["error"].as_str()),
@@ -166,7 +168,6 @@ async fn an_effort_below_the_required_one_is_asked_again(pool: PgPool) -> anyhow
     );
     assert_eq!(body["effort"], 4);
 
-    let enough = solve(&current(&node), 2, &device.auth_pub(), LOGIN);
     assert_eq!(outcome(&router, &device, enough).await.0, 200);
     Ok(())
 }

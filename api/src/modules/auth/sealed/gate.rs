@@ -1,5 +1,6 @@
 use std::net::IpAddr;
-use std::time::Instant;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::common::admission::{client_identity, subnet_identity};
 use crate::common::windows::{AUTH_WINDOW, Clients, Window};
@@ -16,6 +17,8 @@ pub const NETWORK_V6_PER_MIN: u32 = 60;
 pub const LOGIN_POLLS_PER_CLIENT: u32 = 120;
 pub const LINK_POLLS_PER_CLIENT: u32 = 120;
 pub const LINK_CLAIMS_PER_CLIENT: u32 = 30;
+pub const TICK: Duration = Duration::from_secs(10);
+pub const TICKS_CAUGHT_UP: u32 = 6;
 
 pub enum Refused {
     Lane(u64),
@@ -31,6 +34,7 @@ pub struct StartGate {
     v4: Clients,
     v6: Clients,
     pub effort: Effort,
+    pub ticked: Mutex<Instant>,
 }
 
 impl StartGate {
@@ -44,6 +48,7 @@ impl StartGate {
             v4: Clients::new(NETWORK_V4_PER_MIN, AUTH_WINDOW),
             v6: Clients::new(NETWORK_V6_PER_MIN, AUTH_WINDOW),
             effort: Effort::new(cfg.pow_floor, cfg.pow_cap, cfg.pow_per_min),
+            ticked: Mutex::new(Instant::now()),
         }
     }
 
@@ -64,7 +69,20 @@ impl StartGate {
         self.admit_network(client, now)
     }
 
-    pub fn tick(&self, now: Instant) {
+    pub fn catch_up(&self, now: Instant) {
+        let mut ticked = self.ticked.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut caught_up = 0;
+        while now.saturating_duration_since(*ticked) >= TICK && caught_up < TICKS_CAUGHT_UP {
+            *ticked += TICK;
+            caught_up += 1;
+            self.tick(now);
+        }
+        if now.saturating_duration_since(*ticked) >= TICK {
+            *ticked = now;
+        }
+    }
+
+    fn tick(&self, now: Instant) {
         self.effort.tick();
         metrics::gauge!("auth_pow_effort", "path" => self.path).set(f64::from(self.required(now)));
     }
@@ -104,11 +122,5 @@ impl Gates {
             link_status: Clients::new(LINK_POLLS_PER_CLIENT, AUTH_WINDOW),
             link_claim: Clients::new(LINK_CLAIMS_PER_CLIENT, AUTH_WINDOW),
         }
-    }
-
-    pub fn tick(&self) {
-        let now = Instant::now();
-        self.login.tick(now);
-        self.link.tick(now);
     }
 }

@@ -23,6 +23,7 @@ pub async fn start(
     auth_pub: &[u8],
     client: IpAddr,
 ) -> Result<(), Refusal> {
+    gate.catch_up(Instant::now());
     let pow = pow.filter(|_| sealed.cfg.pow);
     let (lane, result) = match pow {
         Some(pow) if !pow.solution.is_empty() => (

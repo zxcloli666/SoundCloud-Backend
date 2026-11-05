@@ -215,3 +215,19 @@ fn a_seed_lasts_two_epochs_and_belongs_to_one_node() {
     assert!(!seeds.accepts(&other_key.seed(epoch), epoch));
     assert!(!seeds.accepts(&seeds.seed(epoch)[..31], epoch));
 }
+
+#[test]
+fn the_effort_ticks_every_ten_seconds_of_traffic() {
+    let mut config = cfg();
+    config.pow_floor = 100;
+    config.pow_cap = 6000;
+    let gate = StartGate::new(LOGIN, &config, 15);
+    for _ in 0..600 {
+        gate.effort.note();
+    }
+    let now = Instant::now();
+    gate.catch_up(now + Duration::from_secs(5));
+    assert_eq!(gate.effort.current(), 100);
+    gate.catch_up(now + Duration::from_secs(25));
+    assert_eq!(gate.effort.current(), 400);
+}

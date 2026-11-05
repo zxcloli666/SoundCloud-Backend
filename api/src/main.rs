@@ -205,15 +205,15 @@ async fn main() {
     );
     let link = LinkService::new(pg.clone(), auth.clone());
     let sealed = if sealed_cfg.enabled {
-        let sealed = crate::modules::auth::sealed::Sealed::load(
-            sealed_cfg,
-            redis_pool.clone(),
-            auth.clone(),
-            link.clone(),
+        Some(
+            crate::modules::auth::sealed::Sealed::load(
+                sealed_cfg,
+                redis_pool.clone(),
+                auth.clone(),
+                link.clone(),
+            )
+            .expect("AUTH_KEYS_DIR must hold the current OCK"),
         )
-        .expect("AUTH_KEYS_DIR must hold the current OCK");
-        sealed.spawn_ticks(shutdown.clone());
-        Some(sealed)
     } else {
         None
     };
