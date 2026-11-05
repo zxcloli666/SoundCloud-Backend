@@ -1,4 +1,4 @@
-use sqlx::{Connection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool};
 
 const CHUNK_ROWS: i64 = 50_000;
 
@@ -9,7 +9,16 @@ pub(crate) async fn refresh(pool: &PgPool) -> anyhow::Result<()> {
         .fetch_one(&mut *connection)
         .await?;
     anyhow::ensure!(acquired, "another search terms refresh holds the lock");
+    let refreshed = refresh_under_lock(&mut connection).await;
+    let unlocked = sqlx::query_file_scalar!("../jobs/queries/search/unlock_terms.sql")
+        .fetch_one(&mut *connection)
+        .await;
+    refreshed?;
+    unlocked?;
+    Ok(())
+}
 
+async fn refresh_under_lock(connection: &mut PgConnection) -> anyhow::Result<()> {
     let mut transaction = connection.begin().await?;
     let changed = sqlx::query_file!("../jobs/queries/search/build_terms_delta.sql", CHUNK_ROWS)
         .execute(&mut *transaction)
