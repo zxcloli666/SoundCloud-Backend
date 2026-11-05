@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -224,12 +225,12 @@ async fn a_flip_that_fails_in_postgres_drops_its_copies(pool: PgPool) {
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn an_upload_key_the_store_will_not_delete_is_counted_and_logged(pool: PgPool) {
-    crate::metrics::init();
+    let recorder = counting();
+    let _counting = metrics::set_default_local_recorder(&recorder);
     let fake = FakeStore::start(Duration::ZERO).await;
     let chat = on_fake(&pool, &fake);
     let owner = user();
     let (image, uploads) = uploaded(&pool, &fake, &owner).await;
-    let before = left_for_reconcile();
     fake.fail_deletes(true);
 
     let commit = call(
@@ -241,17 +242,29 @@ async fn an_upload_key_the_store_will_not_delete_is_counted_and_logged(pool: PgP
     )
     .await;
     assert_eq!(commit.0, 200, "{commit:?}");
-    assert!(left_for_reconcile() - before >= 2.0);
+    assert_eq!(left_for_reconcile(&recorder), 2.0);
     let mut kept = keys_of(&pool, image).await;
     kept.extend(uploads);
     assert_eq!(fake.keys(), sorted(kept));
 }
 
-pub(super) fn left_for_reconcile() -> f64 {
-    crate::metrics::render_for_tests()
-        .unwrap_or_default()
+pub(super) fn counting() -> PrometheusRecorder {
+    PrometheusBuilder::new().build_recorder()
+}
+
+pub(super) fn left_for_reconcile(recorder: &PrometheusRecorder) -> f64 {
+    recorder
+        .handle()
+        .render()
         .lines()
         .filter(|line| line.starts_with(LEFT_FOR_RECONCILE))
         .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
         .sum()
+}
+
+pub(super) fn copies_beside(fake: &FakeStore, uploads: &[String]) -> Vec<String> {
+    fake.keys()
+        .into_iter()
+        .filter(|key| !uploads.contains(key))
+        .collect()
 }

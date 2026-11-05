@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use sqlx::PgPool;
 use sqlx::postgres::{PgPoolOptions, PgSslMode};
@@ -8,11 +10,14 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
+pub const PATIENCE: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cut {
     BeforeCommit,
     AfterCommit,
     HoldCommit,
+    HoldCommitUnreachable,
     HoldReply,
 }
 
@@ -20,6 +25,7 @@ pub enum Cut {
 struct Gate {
     landed: Notify,
     release: Notify,
+    unreachable: AtomicBool,
 }
 
 pub struct PgCut {
@@ -43,6 +49,9 @@ impl PgCut {
         let (plan, gates) = (armed.clone(), gate.clone());
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
+                if gates.unreachable.load(Ordering::SeqCst) {
+                    continue;
+                }
                 tokio::spawn(relay(client, target.clone(), plan.clone(), gates.clone()));
             }
         });
@@ -66,12 +75,24 @@ impl PgCut {
     }
 
     pub async fn landed(&self) {
-        self.gate.landed.notified().await;
+        within(self.gate.landed.notified()).await;
     }
 
     pub fn release(&self) {
         self.gate.release.notify_one();
     }
+}
+
+pub async fn within<T>(waiting: impl Future<Output = T>) -> T {
+    tokio::time::timeout(PATIENCE, waiting)
+        .await
+        .expect("the cut proxy moves on within 30 s")
+}
+
+async fn patiently(waiting: impl Future<Output = ()>) -> std::io::Result<()> {
+    tokio::time::timeout(PATIENCE, waiting)
+        .await
+        .map_err(|_| std::io::Error::other("the cut proxy waited 30 s"))
 }
 
 async fn relay(
@@ -102,6 +123,9 @@ async fn relay(
         let length = from_client.read_i32().await?;
         let mut body = vec![0; frame(length)];
         from_client.read_exact(&mut body).await?;
+        if gate.unreachable.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let commit = kind == b'Q' && body.starts_with(b"COMMIT");
         let cut = if commit {
             armed.lock().expect("the plan").take()
@@ -116,16 +140,20 @@ async fn relay(
             return Ok(());
         }
         muted.store(true, Ordering::SeqCst);
-        if cut == Cut::HoldCommit {
+        if matches!(cut, Cut::HoldCommit | Cut::HoldCommitUnreachable) {
+            let unreachable = cut == Cut::HoldCommitUnreachable;
+            gate.unreachable.store(unreachable, Ordering::SeqCst);
             to_client.lock().await.take();
             drop(from_client);
-            gate.release.notified().await;
+            let released = patiently(gate.release.notified()).await;
+            gate.unreachable.store(false, Ordering::SeqCst);
+            released?;
         }
         forward(&mut to_server, kind, length, &body).await?;
-        replied.notified().await;
+        patiently(replied.notified()).await?;
         gate.landed.notify_one();
         if cut == Cut::HoldReply {
-            gate.release.notified().await;
+            patiently(gate.release.notified()).await?;
         }
         return Ok(());
     }

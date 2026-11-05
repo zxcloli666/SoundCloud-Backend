@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::reconcile_tests::group;
 use super::{bench, bucket, days_later, listing, put_objects, store};
-use crate::modules::chat::media::pg_cut::{Cut, PgCut};
+use crate::modules::chat::media::pg_cut::{Cut, PgCut, within};
 use crate::modules::chat::media::support::{call, error};
 use crate::modules::chat::sweeps::budget::Budget;
 use crate::modules::chat::sweeps::media::fixtures::{Upload, Usage, ok, reserve, statuses, usage};
@@ -41,7 +41,7 @@ async fn copies_of_a_commit_that_never_landed_go_and_the_upload_stays(
     let uri = format!("/chat/media/{}/commit", pending.id);
 
     cut.arm(Cut::BeforeCommit);
-    let failed = call(&b.chat, owner, "POST", &uri, None).await;
+    let failed = within(call(&b.chat, owner, "POST", &uri, None)).await;
     assert!(cut.fired());
     assert_eq!(error(&failed), (503, "chat_busy"), "{failed:?}");
     assert_eq!(keys_of(&pg, pending.id).await?, uploads);
@@ -75,7 +75,7 @@ async fn copies_a_late_commit_lands_on_stay_and_the_uploads_go(pg: PgPool) -> an
     let uri = format!("/chat/media/{}/commit", pending.id);
 
     cut.arm(Cut::HoldCommit);
-    let failed = call(&b.chat, owner, "POST", &uri, None).await;
+    let failed = within(call(&b.chat, owner, "POST", &uri, None)).await;
     assert!(cut.fired());
     assert_eq!(error(&failed), (503, "chat_busy"), "{failed:?}");
     cut.release();

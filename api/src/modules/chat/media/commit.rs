@@ -108,27 +108,27 @@ async fn settle(
             discard(chat, store, &made).await;
             return Err(ChatError::NotFound);
         }
-        Err(error) => return Err(kept_for_reconcile(id, &made, &error.to_string())),
+        Err(error) => return Err(left_for_reconcile(id, &made, &error.to_string())),
     };
-    if !matches!(row.status.as_str(), "uploaded" | "attached") {
-        return Err(kept_for_reconcile(id, &made, &row.status));
-    }
     let referenced = [Some(row.object_key.as_str()), row.thumb_key.as_deref()];
     let unreferenced: Vec<Object> = made
         .into_iter()
         .filter(|object| !referenced.contains(&Some(object.key.as_str())))
         .collect();
+    if !matches!(row.status.as_str(), "uploaded" | "attached") {
+        return Err(left_for_reconcile(id, &unreferenced, &row.status));
+    }
     discard(chat, store, &unreferenced).await;
     answer(chat, user, id, total).await
 }
 
-fn kept_for_reconcile(id: Uuid, made: &[Object], reason: &str) -> ChatError {
-    metrics::counter!(LEFT_FOR_RECONCILE).increment(made.len() as u64);
+fn left_for_reconcile(id: Uuid, left: &[Object], reason: &str) -> ChatError {
+    metrics::counter!(LEFT_FOR_RECONCILE).increment(left.len() as u64);
     tracing::warn!(
         %id,
         reason,
-        objects = made.len(),
-        "a chat media commit keeps its copies for the nightly reconcile"
+        objects = left.len(),
+        "a chat media commit leaves objects for the nightly reconcile"
     );
     ChatError::busy(BusySource::MediaCommit)
 }
@@ -241,3 +241,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/media_commit_fault_tests.rs"]
 mod fault_tests;
+
+#[cfg(test)]
+#[path = "../tests/media_commit_held_tests.rs"]
+mod held_tests;
