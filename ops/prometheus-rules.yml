@@ -200,7 +200,7 @@ groups:
           description: "Every unrouted request lands on the single unmatched label, so this cannot explode cardinality. Threshold is not derived from a production baseline yet, tune it on the first week of real traffic."
 
       - alert: AuthPowRaised
-        expr: max by (host, path) (auth_pow_effort) > 0
+        expr: max by (host, path) (auth_pow_effort) > 0 and on (host, path) sum by (host, path) (increase(auth_x_total{outcome="chat_pow_required"}[5m])) > 0
         for: 10m
         labels:
           severity: warning
