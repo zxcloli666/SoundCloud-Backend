@@ -96,3 +96,21 @@ async fn an_older_public_user_leaves_the_owner_snapshot_alone(pool: PgPool) -> a
     assert_eq!(profile["username"], "old name");
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_banner_comes_from_the_public_user_even_behind_a_newer_snapshot(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    seed_both(&pool, "1 minute", "1 hour").await?;
+    sqlx::query("UPDATE users SET banner_url = 'https://i1.sndcdn.com/visuals-000000000017-LpaCgv-original.jpg'")
+        .execute(&pool)
+        .await?;
+    let profile = read(&pool, "17").await?;
+    assert_eq!(
+        profile["banner_url"],
+        "https://i1.sndcdn.com/visuals-000000000017-LpaCgv-original.jpg"
+    );
+    assert_eq!(profile["username"], "old name");
+    assert_eq!(profile["plan"], "Pro");
+    Ok(())
+}

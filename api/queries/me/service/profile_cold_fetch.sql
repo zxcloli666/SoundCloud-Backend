@@ -1,4 +1,6 @@
-SELECT p.profile_json || CASE
+SELECT p.profile_json
+       || jsonb_strip_nulls(jsonb_build_object('banner_url', u.banner_url))
+       || CASE
            WHEN u.sc_synced_at > p.synced_at THEN jsonb_strip_nulls(jsonb_build_object(
                'username', u.username,
                'full_name', u.full_name,

@@ -8,6 +8,7 @@ pub mod diag_report;
 mod job;
 pub mod pipeline;
 pub mod reasons;
+pub mod remote;
 mod taste;
 mod telemetry;
 mod transport;

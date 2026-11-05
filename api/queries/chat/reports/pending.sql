@@ -1,6 +1,7 @@
 SELECT id
 FROM chat.reports
 WHERE state = 'open'
+  AND kind = 'messages'
   AND handled_by IS NULL
   AND id <> ALL($2::uuid[])
 ORDER BY created_at

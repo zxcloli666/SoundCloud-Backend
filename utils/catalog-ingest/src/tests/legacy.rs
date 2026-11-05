@@ -324,6 +324,7 @@ pub(super) async fn upsert_user(
         .bind(fields.sc_last_modified)
         .bind(observation.sequence())
         .bind(payload)
+        .bind(fields.banner_url.as_deref())
         .fetch_optional(&mut *connection)
         .await?;
     Ok(was_new.unwrap_or(false))

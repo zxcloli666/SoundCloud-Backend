@@ -1,6 +1,1 @@
-SELECT EXISTS (
-    SELECT 1
-    FROM repl_tombstones
-    WHERE tbl = 'sessions'
-      AND pk = jsonb_build_object('id', $1::uuid)
-) AS "logged_out!"
+SELECT public.auth_session_logged_out($1) AS "logged_out!"

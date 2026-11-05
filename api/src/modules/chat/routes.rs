@@ -6,8 +6,8 @@ use axum::routing::{delete, get, post, put};
 
 use crate::modules::chat::channel::{self, Channel};
 use crate::modules::chat::{
-    ChatState, admin, auth_bind, blocks, conversations, devices, invites, keys, members, messages,
-    reports, requests, rooms, route_metrics, settings, sync, typing, users,
+    ChatState, admin, auth_bind, blocks, conversations, devices, invites, keys, media, members,
+    messages, reports, requests, rooms, route_metrics, settings, sync, typing, users,
 };
 
 pub fn inner() -> Router<Arc<ChatState>> {
@@ -65,6 +65,13 @@ pub fn inner() -> Router<Arc<ChatState>> {
             "/chat/blocks/{user}",
             put(blocks::block).delete(blocks::unblock),
         )
+        .route("/chat/media/reserve", post(media::reserve_media))
+        .route("/chat/media/{id}/commit", post(media::commit_media))
+        .route("/chat/media/urls", post(media::media_urls))
+        .route("/chat/media/usage", get(media::media_usage))
+        .route("/chat/media/mine", get(media::media_mine))
+        .route("/chat/media/delete", post(media::delete_media))
+        .route("/chat/media/restore", post(media::restore_media))
         .route("/chat/reports", post(reports::file))
         .route("/chat/users/{id}/card", get(users::card))
         .route("/chat/rooms/{code}/chat", get(rooms::chat))

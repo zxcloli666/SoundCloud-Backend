@@ -11,7 +11,7 @@ pub async fn devices(
     current: Uuid,
 ) -> ChatResult<Vec<DeviceView>> {
     let now = Utc::now();
-    let rows = devices::live_of(chat, user_id).await?;
+    let rows = devices::gated_live_of(chat, user_id).await?;
     Ok(rows
         .iter()
         .map(|row| devices::view(row, Some(current), now))

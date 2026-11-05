@@ -1,25 +1,34 @@
+mod artwork;
+mod backdrop;
+mod code;
 mod handoff;
+mod member;
 mod moderation;
+mod perks;
 mod playback;
+mod settings;
 mod title;
 
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-pub use moderation::{Mute, SettingsPatch};
+pub use artwork::artwork_url;
+#[cfg(test)]
+pub use backdrop::PRESETS;
+pub use backdrop::{Backdrop, IMAGE_COOLDOWN_MS};
+pub use code::{new_code, normalize_code};
+pub use moderation::Mute;
+pub use perks::{Cover, FREE_CAPACITY, Perks, RoomImages};
+#[cfg(test)]
+pub use perks::{FREE_MODS_MAX, STAR_CAPACITY, STAR_MODS_MAX};
+pub use settings::{BACKDROP_COOLDOWN, SettingsPatch};
 pub use title::clean_title;
 
-pub const MAX_MEMBERS: usize = 10;
-pub const CODE_LEN: usize = 6;
 pub const MAX_TRACK_BYTES: usize = 24 * 1024;
 pub const MAX_START_LEAD_MS: i64 = 3_000;
-const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const MAX_NAME_CHARS: usize = 64;
-const MAX_AVATAR_CHARS: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +115,16 @@ pub struct Room {
     pub links: bool,
     #[serde(default)]
     pub unlisted: bool,
+    #[serde(default)]
+    pub perks: Perks,
+    #[serde(default)]
+    pub cover: Option<Cover>,
+    #[serde(default)]
+    pub room_images: Option<RoomImages>,
+    #[serde(default)]
+    pub backdrop: Option<Backdrop>,
+    #[serde(default = "Uuid::now_v7")]
+    pub id: Uuid,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,60 +154,6 @@ pub struct PlaybackUpdate {
     pub rate: Option<f64>,
     #[serde(default)]
     pub crossfade_sec: Option<u32>,
-}
-
-pub fn new_code() -> String {
-    let mut rng = rand::thread_rng();
-    (0..CODE_LEN)
-        .map(|_| CODE_ALPHABET[rng.gen_range(0..CODE_ALPHABET.len())] as char)
-        .collect()
-}
-
-pub fn normalize_code(input: &str) -> Option<String> {
-    let code: String = input
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    let valid = code.len() == CODE_LEN && code.bytes().all(|b| CODE_ALPHABET.contains(&b));
-    valid.then_some(code)
-}
-
-impl Member {
-    pub fn new(user_id: &str, profile: &Profile, now: i64) -> Self {
-        Self {
-            user_id: user_id.to_owned(),
-            name: clean_name(&profile.name, user_id),
-            avatar_url: clean_avatar(profile.avatar_url.as_deref()),
-            joined_at: now,
-            ready_urn: None,
-            chat_from_seq: 0,
-        }
-    }
-
-    pub fn reading_from(mut self, seq: i64) -> Self {
-        self.chat_from_seq = seq.max(0);
-        self
-    }
-}
-
-fn clean_name(name: &str, fallback: &str) -> String {
-    let name: String = name
-        .trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_NAME_CHARS)
-        .collect();
-    if name.is_empty() {
-        fallback.to_owned()
-    } else {
-        name
-    }
-}
-
-fn clean_avatar(url: Option<&str>) -> Option<String> {
-    let url = url?.trim();
-    (url.starts_with("https://") && url.len() <= MAX_AVATAR_CHARS).then(|| url.to_owned())
 }
 
 pub fn not_member() -> AppError {
@@ -226,6 +191,11 @@ impl Room {
             chat_enabled: true,
             links: true,
             unlisted: false,
+            perks: Perks::free(),
+            cover: None,
+            room_images: None,
+            backdrop: None,
+            id: Uuid::now_v7(),
         }
     }
 
@@ -243,10 +213,6 @@ impl Room {
 
     pub fn is_banned(&self, user_id: &str) -> bool {
         self.banned.iter().any(|id| id == user_id)
-    }
-
-    pub fn is_full(&self) -> bool {
-        self.members.len() >= MAX_MEMBERS
     }
 
     pub fn set_public(&mut self, user_id: &str, public: bool) -> AppResult<()> {

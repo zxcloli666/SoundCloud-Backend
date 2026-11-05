@@ -44,7 +44,10 @@ fn new_avatar() -> Arc<SearchRelay> {
                 "ok": true,
                 "user": {"id": 17, "urn": "soundcloud:users:17", "kind": "user", "username": "Owner",
                          "permalink": "owner", "avatar_url": "https://i1.sndcdn.com/new.jpg",
-                         "last_modified": "2026-11-04T16:02:47Z"},
+                         "last_modified": "2026-11-04T16:02:47Z",
+                         "visuals": {"urn": "soundcloud:users:17", "enabled": true, "tracking": null,
+                                     "visuals": [{"urn": "soundcloud:visuals:278279490", "entry_time": 0,
+                                                  "visual_url": "https://i1.sndcdn.com/visuals-000000000017-LpaCgv-original.jpg"}]}},
             }))
         }),
         500,
@@ -100,9 +103,14 @@ async fn a_stale_user_is_read_through_apiv2_at_once(pool: PgPool) -> anyhow::Res
 
     assert!(public.refresh(Uuid::now_v7(), "42", &row).await);
     assert_eq!(relay.lua_calls(), 1);
+    let stored = load(&pool).await?;
     assert_eq!(
-        load(&pool).await?.avatar_url.as_deref(),
+        stored.avatar_url.as_deref(),
         Some("https://i1.sndcdn.com/new.jpg")
+    );
+    assert_eq!(
+        stored.banner_url.as_deref(),
+        Some("https://i1.sndcdn.com/visuals-000000000017-LpaCgv-original.jpg")
     );
     assert!(jobs(&pool).await?.is_empty());
     Ok(())

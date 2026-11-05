@@ -783,5 +783,9 @@ mod tests {
 mod integration_tests;
 
 #[cfg(test)]
+#[path = "claim_due_scale_tests.rs"]
+mod claim_due_scale_tests;
+
+#[cfg(test)]
 #[path = "lock_order_tests.rs"]
 mod lock_order_tests;

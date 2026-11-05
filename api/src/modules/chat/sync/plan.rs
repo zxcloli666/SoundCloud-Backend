@@ -6,6 +6,8 @@ use crate::modules::chat::sync::wire::{
 };
 use crate::modules::chat::{ChatCaller, ChatConfig};
 
+pub const HOLD_JITTER: f64 = 0.1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
     pub hold: Duration,
@@ -30,4 +32,8 @@ impl Plan {
             budget: budget as usize,
         }
     }
+}
+
+pub fn jittered_hold(hold: Duration) -> Duration {
+    hold.mul_f64(1.0 - HOLD_JITTER * rand::random::<f64>())
 }

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
+use crate::modules::chat::media::ledger;
 use crate::modules::chat::sweeps::budget::Budget;
 use crate::modules::chat::sweeps::gauges;
 use crate::modules::chat::{ChatResult, ChatState, sync};
@@ -46,9 +47,16 @@ pub fn by_conversation(rows: Vec<(Uuid, i64)>) -> BTreeMap<Uuid, Vec<i64>> {
 }
 
 async fn delete_batch(chat: &ChatState) -> ChatResult<Vec<(Uuid, i64)>> {
+    let mut tx = chat.pg.begin().await?;
     let rows = sqlx::query_file!("queries/chat/sweeps/expired_delete.sql", BATCH_ROWS)
-        .fetch_all(&chat.pg)
+        .fetch_all(&mut *tx)
         .await?;
+    let roots: Vec<Uuid> = rows
+        .iter()
+        .flat_map(|row| row.media.iter().flatten().copied())
+        .collect();
+    ledger::settle(&mut tx, &roots).await?;
+    tx.commit().await?;
     Ok(rows
         .into_iter()
         .map(|row| (row.conversation_id, row.seq))

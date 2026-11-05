@@ -8,7 +8,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use super::auth::token_matches;
-use super::reports::{AdminDecision, Resolve, apply, detail};
+use super::reports::detail;
+use super::resolve::{AdminDecision, Resolve, apply};
 use super::restore::restore_with;
 use super::rewrap::rewrap_with;
 use super::router;
@@ -82,6 +83,10 @@ async fn every_admin_route_refuses_a_missing_or_wrong_token() {
         ("GET", "/chat-admin/reports".to_owned()),
         ("GET", format!("/chat-admin/reports/{conversation}")),
         ("POST", format!("/chat-admin/reports/{conversation}")),
+        (
+            "GET",
+            format!("/chat-admin/reports/{conversation}/media/{conversation}"),
+        ),
         ("GET", "/chat-admin/restrictions".to_owned()),
         ("POST", "/chat-admin/restrictions".to_owned()),
         ("DELETE", format!("/chat-admin/messages/{conversation}/5")),
@@ -174,6 +179,7 @@ fn resolve(decision: AdminDecision) -> Resolve {
         ban_days: None,
         ban_permanent: false,
         lift_restriction: false,
+        clear_backdrop: false,
     }
 }
 
@@ -195,13 +201,13 @@ async fn the_admin_view_decrypts_only_the_report_and_writes_an_audit_row(pool: P
     let texts: Vec<(&str, bool)> = shown
         .lines
         .iter()
-        .map(|line| (line.text.as_str(), line.reported))
+        .map(|line| (line.line.text.as_str(), line.line.reported))
         .collect();
     assert_eq!(
         texts,
         vec![("hi", false), ("leaked address 5 Main st", true)]
     );
-    assert_eq!(shown.lines[1].seq, seq);
+    assert_eq!(shown.lines[1].line.seq, seq);
     let rows = audit_actions(&pool, &audit::report(id)).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -220,7 +226,9 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     let mut uphold = resolve(AdminDecision::Uphold);
     uphold.delete_seqs = vec![seq];
     uphold.ban_days = Some(3);
-    let upheld = apply(&chat, "owner", id, &uphold).await.expect("upheld");
+    let upheld = apply(&chat, &keys, "owner", id, &uphold)
+        .await
+        .expect("upheld");
     assert_eq!(upheld.state, "actioned");
     assert_eq!(upheld.handled_by.as_deref(), Some("owner"));
     assert!(body_of(&pool, dm, seq).await.is_none());
@@ -234,7 +242,7 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     let mut reject = resolve(AdminDecision::Reject);
     reject.lift_restriction = true;
     assert_eq!(
-        apply(&chat, "owner", id, &reject)
+        apply(&chat, &keys, "owner", id, &reject)
             .await
             .expect("rejected")
             .state,
@@ -248,7 +256,7 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
     );
 
     assert_eq!(
-        apply(&chat, "owner", id, &resolve(AdminDecision::Reopen))
+        apply(&chat, &keys, "owner", id, &resolve(AdminDecision::Reopen))
             .await
             .expect("reopened")
             .state,
@@ -270,14 +278,14 @@ async fn the_owner_overrides_a_report_and_every_step_is_audited(pool: PgPool) {
 
     let mut outside = resolve(AdminDecision::Uphold);
     outside.delete_seqs = vec![seq + 5];
-    assert!(apply(&chat, "owner", id, &outside).await.is_err());
+    assert!(apply(&chat, &keys, "owner", id, &outside).await.is_err());
     let mut mixed = resolve(AdminDecision::Reject);
     mixed.ban_permanent = true;
-    assert!(apply(&chat, "owner", id, &mixed).await.is_err());
+    assert!(apply(&chat, &keys, "owner", id, &mixed).await.is_err());
     let mut undone = resolve(AdminDecision::Uphold);
     undone.ban_days = Some(1);
     undone.lift_restriction = true;
-    assert!(apply(&chat, "owner", id, &undone).await.is_err());
+    assert!(apply(&chat, &keys, "owner", id, &undone).await.is_err());
 
     let reopened_until: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT purge_after FROM chat.reports WHERE id = $1")
@@ -450,7 +458,9 @@ async fn a_restore_puts_back_only_removed_target_messages_in_the_report(pool: Pg
     let original = body_of(&pool, dm, seq).await.expect("a body");
     let mut uphold = resolve(AdminDecision::Uphold);
     uphold.delete_seqs = vec![seq];
-    apply(&chat, "owner", id, &uphold).await.expect("upheld");
+    apply(&chat, &keys, "owner", id, &uphold)
+        .await
+        .expect("upheld");
     assert!(body_of(&pool, dm, seq).await.is_none());
 
     assert_eq!(
@@ -518,7 +528,9 @@ async fn the_report_trail_shows_linked_rows_without_a_decrypt(pool: PgPool) {
     let mut uphold = resolve(AdminDecision::Uphold);
     uphold.delete_seqs = vec![seq];
     uphold.ban_days = Some(2);
-    apply(&chat, "owner", id, &uphold).await.expect("upheld");
+    apply(&chat, &keys, "owner", id, &uphold)
+        .await
+        .expect("upheld");
 
     let (status, trail, _) = call(
         &chat,
