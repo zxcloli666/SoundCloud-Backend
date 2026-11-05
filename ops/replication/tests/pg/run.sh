@@ -43,6 +43,7 @@ sql -At -d scd_b1_exercise -f - < "$here/exercise.sql" > "$tmp/exercise.log" 2>&
 sed -n 's/.*NOTICE:  \(ok .*\)/\1/p' "$tmp/exercise.log"
 
 . "$here/lookups.sh"
+. "$here/verify_hash.sh"
 . "$here/pressure.sh"
 
 say "three nodes on real logical replication"
