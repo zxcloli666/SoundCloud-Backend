@@ -247,7 +247,7 @@ async fn an_upload_key_the_store_will_not_delete_is_counted_and_logged(pool: PgP
     assert_eq!(fake.keys(), sorted(kept));
 }
 
-fn left_for_reconcile() -> f64 {
+pub(super) fn left_for_reconcile() -> f64 {
     crate::metrics::render_for_tests()
         .unwrap_or_default()
         .lines()

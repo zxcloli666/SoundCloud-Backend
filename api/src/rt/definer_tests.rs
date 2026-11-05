@@ -772,6 +772,10 @@ async fn adding_the_bind_checks_keeps_session_readers_moving(owner: PgPool) -> a
         (0, 3),
         "slowest session read {slowest:?}"
     );
+    assert!(
+        slowest < Duration::from_millis(500),
+        "slowest session read {slowest:?}"
+    );
     Ok(())
 }
 

@@ -104,23 +104,33 @@ async fn settle(
         .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return Err(ChatError::NotFound),
-        Err(error) => {
-            metrics::counter!(LEFT_FOR_RECONCILE).increment(made.len() as u64);
-            tracing::warn!(%error, %id, "a chat media commit keeps its copies for the nightly reconcile");
-            return Err(ChatError::busy(BusySource::MediaCommit));
+        Ok(None) => {
+            discard(chat, store, &made).await;
+            return Err(ChatError::NotFound);
         }
+        Err(error) => return Err(kept_for_reconcile(id, &made, &error.to_string())),
     };
+    if !matches!(row.status.as_str(), "uploaded" | "attached") {
+        return Err(kept_for_reconcile(id, &made, &row.status));
+    }
     let referenced = [Some(row.object_key.as_str()), row.thumb_key.as_deref()];
     let unreferenced: Vec<Object> = made
         .into_iter()
         .filter(|object| !referenced.contains(&Some(object.key.as_str())))
         .collect();
     discard(chat, store, &unreferenced).await;
-    match row.status.as_str() {
-        "uploaded" | "attached" => answer(chat, user, id, total).await,
-        _ => Err(ChatError::busy(BusySource::MediaCommit)),
-    }
+    answer(chat, user, id, total).await
+}
+
+fn kept_for_reconcile(id: Uuid, made: &[Object], reason: &str) -> ChatError {
+    metrics::counter!(LEFT_FOR_RECONCILE).increment(made.len() as u64);
+    tracing::warn!(
+        %id,
+        reason,
+        objects = made.len(),
+        "a chat media commit keeps its copies for the nightly reconcile"
+    );
+    ChatError::busy(BusySource::MediaCommit)
 }
 
 async fn missing(chat: &ChatState, store: u16, objects: &[Object]) -> ChatResult<Vec<Uuid>> {
