@@ -280,9 +280,10 @@ fn trusted_proxies() -> Vec<ipnet::IpNet> {
 }
 
 fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimitCfg {
+    let global = admission_u32(&format!("{prefix}_GLOBAL"), global);
     let limit = AdmissionLimitCfg {
-        per_client: admission_u32(&format!("{prefix}_PER_CLIENT"), per_client),
-        global: admission_u32(&format!("{prefix}_GLOBAL"), global),
+        per_client: admission_u32(&format!("{prefix}_PER_CLIENT"), per_client.min(global)),
+        global,
     };
     assert!(
         limit.per_client <= limit.global,
@@ -560,6 +561,12 @@ mod tests {
         assert_eq!(opts.get_port(), 5433);
         assert_eq!(opts.get_username(), "us er");
         assert_eq!(opts.get_database(), Some("sc-ops"));
+    }
+
+    #[test]
+    fn a_lower_global_caps_the_default_per_client() {
+        let limit = admission_limit("ADMISSION_TEST_UNSET", 15, 10);
+        assert_eq!((limit.per_client, limit.global), (10, 10));
     }
 
     #[test]
