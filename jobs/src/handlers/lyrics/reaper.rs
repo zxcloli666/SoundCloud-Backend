@@ -6,6 +6,8 @@ mod plan_tests;
 mod tests;
 #[path = "reaper_tiered.rs"]
 mod tiered;
+#[path = "reaper_walk.rs"]
+mod walk;
 
 use backend_contracts::worker_contract::{
     LYRICS_LANE, TRANSCRIBE_LANE, WorkerLane, WorkerLaneSpec,
@@ -35,6 +37,7 @@ pub struct LyricsReaper {
     dispatch: WorkerDispatchConfig,
     embedding_turns: Turns,
     alignment_turns: Turns,
+    align_walk: walk::SharedWalk,
 }
 
 struct TranscriptionCandidate {
@@ -50,6 +53,7 @@ impl LyricsReaper {
             dispatch,
             embedding_turns: Turns::default(),
             alignment_turns: Turns::default(),
+            align_walk: walk::SharedWalk::default(),
         }
     }
 
@@ -120,13 +124,16 @@ impl LyricsReaper {
             enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             reopened += 1;
         }
+        let mut align_walk = self.align_walk.take();
         let align = tiered::alignments(
             &mut transaction,
             room.saturating_sub(reopened),
             self.alignment_turns.next(),
+            &mut align_walk,
         )
         .await
         .map_err(JobError::retryable)?;
+        self.align_walk.put(align_walk);
         for (candidate, tier) in align {
             enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             enqueued += 1;
