@@ -10,8 +10,12 @@ use super::test_support::{
     rekey_pending, session, state,
 };
 use super::{lookup, touch};
+use crate::common::session::session_hash;
 use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::{ChatState, rt_keys};
+
+#[path = "device_touch_tests.rs"]
+mod touch_tests;
 
 async fn status_of(pool: &PgPool, device: Uuid) -> String {
     sqlx::query_scalar("SELECT status FROM chat.devices WHERE id = $1")
@@ -164,7 +168,7 @@ async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
         .await
         .expect("a lookup")
         .expect("a device");
-    assert_eq!(moved.session_id, relogin);
+    assert_eq!(moved.session_hash, session_hash(relogin));
     assert_eq!(moved.created_at, first.row.created_at);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM chat.devices")
         .fetch_one(&pool)
@@ -592,7 +596,7 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
     assert_eq!(cached.last_seen_at, device.row.last_seen_at);
 
     sqlx::query(
-        "UPDATE chat.devices SET last_seen_at = now() - interval '11 minutes' WHERE id = $1",
+        "UPDATE chat.devices SET last_seen_at = now() - interval '16 minutes' WHERE id = $1",
     )
     .bind(device.keys.id)
     .execute(&pool)
@@ -604,12 +608,18 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
         .expect("a lookup")
         .expect("a device");
     touch(&chat, &idle).await.expect("a touch");
-    assert!(chat.devices.row(device.keys.id).is_none());
-    let seen = lookup(&chat, device.keys.id)
-        .await
-        .expect("a lookup")
-        .expect("a device");
-    assert!(seen.last_seen_at > idle.last_seen_at);
+    let kept = chat
+        .devices
+        .row(device.keys.id)
+        .expect("a touch keeps the row it wrote");
+    assert!(kept.last_seen_at > idle.last_seen_at);
+    let seen: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT last_seen_at FROM chat.devices WHERE id = $1")
+            .bind(device.keys.id)
+            .fetch_one(&pool)
+            .await
+            .expect("a device");
+    assert_eq!(kept.last_seen_at, seen);
 }
 
 async fn devices_delta(chat: &ChatState, user: &str) -> Option<f64> {

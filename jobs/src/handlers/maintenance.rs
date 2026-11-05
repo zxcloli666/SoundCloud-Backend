@@ -6,6 +6,11 @@ use sqlx::PgPool;
 use crate::queue::{JobError, JobResult};
 
 const CLEANUP_BATCH: i64 = 1_000;
+const AUTH_CLEANUP_BATCH: i64 = 500;
+const AUTH_CLEANUP_ROUNDS: usize = 12;
+const AUTH_CLEANUP_PAUSE: Duration = Duration::from_secs(5);
+const REPLICATION_BACKLOG_BOUND: i64 = 16 * 1024 * 1024;
+const REPLICATION_BACKLOG: &str = include_str!("../../queries/maintenance/replication_backlog.sql");
 const RECEIPT_BATCH: u64 = 10_000;
 const RECEIPT_SWEEP_BATCHES: usize = 100;
 const RECEIPTS_FULL_SWEEP_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -15,6 +20,7 @@ const PURGE_ROUNDS: usize = 20;
 pub struct MaintenanceHandler {
     pool: PgPool,
     receipts_swept_at: Mutex<Option<Instant>>,
+    auth_cleanup_pause: Duration,
 }
 
 impl MaintenanceHandler {
@@ -22,18 +28,41 @@ impl MaintenanceHandler {
         Self {
             pool,
             receipts_swept_at: Mutex::new(None),
+            auth_cleanup_pause: AUTH_CLEANUP_PAUSE,
         }
     }
 
     pub async fn cleanup_login_requests(&self) -> JobResult {
-        sqlx::query_file!(
-            "queries/maintenance/cleanup_login_requests.sql",
-            CLEANUP_BATCH
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        for round in 1..=AUTH_CLEANUP_ROUNDS {
+            if self.replicas_behind().await? {
+                crate::metrics::record_auth_cleanup_skipped("login_requests", "replication_lag");
+                return Ok(());
+            }
+            let removed = sqlx::query_file!(
+                "queries/maintenance/cleanup_login_requests.sql",
+                AUTH_CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            crate::metrics::record_auth_cleanup_progress("login_requests");
+            if removed.rows_affected() < AUTH_CLEANUP_BATCH.unsigned_abs() {
+                return Ok(());
+            }
+            if round < AUTH_CLEANUP_ROUNDS {
+                tokio::time::sleep(self.auth_cleanup_pause).await;
+            }
+        }
+        crate::metrics::record_auth_cleanup_skipped("login_requests", "batch_cap");
         Ok(())
+    }
+
+    async fn replicas_behind(&self) -> Result<bool, JobError> {
+        let backlog: i64 = sqlx::query_scalar(REPLICATION_BACKLOG)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+        Ok(backlog > REPLICATION_BACKLOG_BOUND)
     }
 
     pub async fn cleanup_diag(&self) -> JobResult {
@@ -75,13 +104,27 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_link_requests(&self) -> JobResult {
-        sqlx::query_file!(
-            "queries/maintenance/cleanup_link_requests.sql",
-            CLEANUP_BATCH
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
+        for round in 1..=AUTH_CLEANUP_ROUNDS {
+            if self.replicas_behind().await? {
+                crate::metrics::record_auth_cleanup_skipped("link_requests", "replication_lag");
+                return Ok(());
+            }
+            let removed = sqlx::query_file!(
+                "queries/maintenance/cleanup_link_requests.sql",
+                AUTH_CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            crate::metrics::record_auth_cleanup_progress("link_requests");
+            if removed.rows_affected() < AUTH_CLEANUP_BATCH.unsigned_abs() {
+                return Ok(());
+            }
+            if round < AUTH_CLEANUP_ROUNDS {
+                tokio::time::sleep(self.auth_cleanup_pause).await;
+            }
+        }
+        crate::metrics::record_auth_cleanup_skipped("link_requests", "batch_cap");
         Ok(())
     }
 
@@ -254,3 +297,7 @@ mod diag_tests;
 #[cfg(test)]
 #[path = "maintenance_remote_tests.rs"]
 mod remote_tests;
+
+#[cfg(test)]
+#[path = "maintenance_auth_tests.rs"]
+mod auth_tests;

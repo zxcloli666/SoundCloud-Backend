@@ -1,7 +1,7 @@
-INSERT INTO chat.devices (id, user_id, session_id, auth_pub, box_pub, platform, name, app_version, tier, history_unlocked_at)
+INSERT INTO chat.devices (id, user_id, session_hash, auth_pub, box_pub, platform, name, app_version, tier, history_unlocked_at)
 SELECT device.id,
        device.user_id,
-       device.session_id,
+       device.session_hash,
        device.auth_pub,
        device.box_pub,
        'loadtest',
@@ -9,5 +9,5 @@ SELECT device.id,
        '0.0.0',
        'direct',
        now()
-FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::bytea[], $5::bytea[]) AS device(id, user_id, session_id, auth_pub, box_pub)
+FROM unnest($1::uuid[], $2::text[], $3::bytea[], $4::bytea[], $5::bytea[]) AS device(id, user_id, session_hash, auth_pub, box_pub)
 ON CONFLICT (id) DO NOTHING

@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::modules::chat::epochs::{self, EPOCH_DAYS_MAX, EPOCH_MESSAGES_MAX};
+use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::rules::{self, Outgoing, Target};
 use crate::modules::chat::model::MessageRow;
@@ -113,6 +114,7 @@ pub async fn store(
             .await?
             .ok_or(ChatError::Internal);
     }
+    media::refs::attach(&mut tx, access, &row, &out.media).await?;
     if !access.accepted && out.class == sc_chat_wire::msg::Class::Post {
         sqlx::query_file!(
             "queries/chat/members/mark_accepted.sql",

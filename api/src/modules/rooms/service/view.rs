@@ -1,7 +1,7 @@
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::modules::rooms::model::{Member, Playback, Room};
+use crate::modules::rooms::model::{Backdrop, Cover, Member, Perks, Playback, Room, RoomImages};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +37,11 @@ pub struct RoomView {
     pub muted: Vec<MuteView>,
     pub slow_mode_s: u32,
     pub links: bool,
+    pub perks: Perks,
+    pub cover: Option<Cover>,
+    pub room_images: RoomImages,
+    pub backdrop: Option<Backdrop>,
+    pub backdrop_cooldown_until: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banned: Option<Vec<String>>,
     pub online: Vec<String>,
@@ -58,6 +63,9 @@ impl From<Member> for MemberView {
 impl RoomView {
     pub fn for_viewer(room: Room, viewer: &str, online: Vec<String>, now: i64) -> Self {
         let slow_mode_s = room.slow_mode();
+        let room_images = room.images_policy();
+        let cover = room.cover_shown();
+        let backdrop = room.backdrop_shown();
         let banned = room.can_moderate(viewer).then(|| room.banned.clone());
         let muted = room
             .muted
@@ -83,9 +91,21 @@ impl RoomView {
             muted,
             slow_mode_s,
             links: room.links,
+            perks: room.perks,
+            cover,
+            room_images,
+            backdrop,
+            backdrop_cooldown_until: None,
             banned,
             online,
             server_now: now,
+        }
+    }
+
+    pub fn cooling_until(self, until: Option<i64>) -> Self {
+        Self {
+            backdrop_cooldown_until: until,
+            ..self
         }
     }
 }

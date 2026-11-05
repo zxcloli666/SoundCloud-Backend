@@ -68,6 +68,7 @@ const READ_THROUGH_A_PREFIX: &[&str] = &[
     "CHAT_STORE_1_BUCKET",
     "CHAT_STORE_1_ACCESS_KEY",
     "CHAT_STORE_1_CAP_GB",
+    "CHAT_MEDIA_MOVE",
 ];
 
 const READ_BY_A_LIBRARY: &[&str] = &[

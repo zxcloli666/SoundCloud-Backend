@@ -527,3 +527,45 @@ tests:
     alert_rule_test:
       - eval_time: 80m
         alertname: ApiSemanticSearchAlwaysCold
+
+  - interval: 1m
+    input_series:
+      - series: 'auth_cleanup_last_progress_timestamp_seconds{table="login_requests"}'
+        values: '0+60x60'
+      - series: 'auth_cleanup_last_progress_timestamp_seconds{table="link_requests"}'
+        values: '0+60x10 600+0x50'
+    alert_rule_test:
+      - eval_time: 39m
+        alertname: AuthCleanupStalled
+      - eval_time: 45m
+        alertname: AuthCleanupStalled
+        exp_alerts:
+          - exp_labels:
+              table: link_requests
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Cleanup of link_requests has not run a delete for 35m 0s"
+              description: "The job runs every minute and skips while an active replication slot is more than 16 MB behind. rate(auth_cleanup_skipped_total[30m]) by why names the cause: replication_lag means a lagging subscriber, batch_cap alone does not stall it. Expired rows only grow meanwhile."
+      - eval_time: 45m
+        alertname: AuthCleanupNotReporting
+
+  - interval: 1m
+    input_series:
+      - series: 'auth_cleanup_last_progress_timestamp_seconds{table="login_requests"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: AuthCleanupNotReporting
+      - eval_time: 31m
+        alertname: AuthCleanupNotReporting
+        exp_alerts:
+          - exp_labels:
+              table: link_requests
+              severity: warning
+              service: jobs
+            exp_annotations:
+              summary: "Cleanup of link_requests has reported no delete since the jobs start"
+              description: "The gauge appears after the first delete of a run. Absent for 30 minutes means every run since the restart was skipped or failed, or the job does not run on core."
+      - eval_time: 31m
+        alertname: AuthCleanupStalled

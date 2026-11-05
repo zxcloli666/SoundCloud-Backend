@@ -1673,8 +1673,8 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sc-chat-wire"
-version = "0.1.1"
-source = "git+https://github.com/zxcloli666/SoundCloud-Core?tag=sc-chat-wire-v0.1.1#cac73b4fcbafb03b8549338395d3f532f24980f6"
+version = "0.1.2"
+source = "git+https://github.com/zxcloli666/SoundCloud-Core?tag=sc-chat-wire-v0.1.2#f94b34e325e0540255afa2cd2cb340a64039487d"
 dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",

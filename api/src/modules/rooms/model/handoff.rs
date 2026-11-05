@@ -19,6 +19,7 @@ impl Room {
         self.host_id = next.clone();
         self.moderators.retain(|id| id != &next);
         self.muted.retain(|m| m.user_id != next);
+        self.drop_image_backdrop();
         Some(next)
     }
 }

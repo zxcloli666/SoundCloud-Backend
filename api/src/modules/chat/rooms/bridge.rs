@@ -2,14 +2,11 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::modules::chat::rooms::diff::{departed, rows};
+use crate::modules::chat::rooms::now_ms;
 use crate::modules::chat::rooms::system;
 use crate::modules::chat::{ChatResult, ChatState, sync};
 use crate::modules::rooms::model::Room;
 use crate::modules::rooms::service::{Cause, OpenedChat};
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
 
 pub async fn after_change(chat: &ChatState, before: &Room, after: &Room, cause: Cause<'_>) {
     let Some(conversation) = after.chat_id.or(before.chat_id) else {

@@ -564,7 +564,7 @@ pub(crate) fn resolve_busy(retry_after_seconds: u64) -> AppError {
     .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))
 }
 
-fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
+pub(crate) fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
     let is_trusted = |address: IpAddr| trusted.iter().any(|net| net.contains(&address));
     let peer = peer.to_canonical();
     if !is_trusted(peer) {
@@ -588,7 +588,7 @@ fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAdd
     peer
 }
 
-fn client_identity(address: IpAddr) -> String {
+pub(crate) fn client_identity(address: IpAddr) -> String {
     let mut hash = Sha256::new();
     match address {
         IpAddr::V4(address) => {
