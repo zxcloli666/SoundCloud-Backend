@@ -79,6 +79,10 @@ impl RoomsService {
         let _ = self.chat.set(Arc::downgrade(chat));
     }
 
+    pub fn close(&self) {
+        self.hub.close();
+    }
+
     fn chat(&self) -> Option<Arc<ChatState>> {
         self.chat.get()?.upgrade()
     }
@@ -188,7 +192,7 @@ impl RoomsService {
             let deadline = Instant::now() + hold;
             loop {
                 let now = Instant::now();
-                if version != since || now >= deadline {
+                if version != since || now >= deadline || self.hub.is_closed() {
                     break;
                 }
                 let left = deadline - now;
@@ -199,6 +203,7 @@ impl RoomsService {
                 };
                 tokio::select! {
                     () = changes.changed(code) => {}
+                    () = self.hub.closed() => {}
                     () = tokio::time::sleep(pause) => {}
                 }
                 version = self

@@ -21,6 +21,7 @@ pub enum ChatError {
     SlowMode { retry_ms: u64 },
     Unavailable,
     RequestLimit,
+    DeviceCap,
     SendLimited,
     ReadLimited,
     Busy { retry_ms: u64, source: BusySource },
@@ -118,6 +119,7 @@ impl ChatError {
             ChatError::SlowMode { .. } => "chat_slow_mode",
             ChatError::Unavailable => "chat_unavailable",
             ChatError::RequestLimit => "chat_request_limit",
+            ChatError::DeviceCap => "chat_device_cap",
             ChatError::SendLimited => "chat_send_limited",
             ChatError::ReadLimited => "chat_read_limited",
             ChatError::Busy { .. } => "chat_busy",
@@ -150,6 +152,7 @@ impl ChatError {
             | ChatError::Unavailable
             | ChatError::TooYoung
             | ChatError::QuotaExceeded { .. }
+            | ChatError::DeviceCap
             | ChatError::MediaStarRequired
             | ChatError::RoomStarRequired
             | ChatError::BackdropCooldown { .. } => StatusCode::FORBIDDEN,

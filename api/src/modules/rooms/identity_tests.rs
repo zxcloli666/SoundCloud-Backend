@@ -19,7 +19,7 @@ async fn the_stored_account_wins_over_what_the_client_claims(pool: PgPool) -> an
     );
 
     sqlx::query(
-        "INSERT INTO users (sc_user_id, urn, username, username_normalized, avatar_url)
+        "INSERT INTO public.users (sc_user_id, urn, username, username_normalized, avatar_url)
          VALUES ('42', 'soundcloud:users:42', 'Real Name', 'real name',
                  'https://i1.sndcdn.com/real.jpg')",
     )

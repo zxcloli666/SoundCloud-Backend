@@ -168,6 +168,59 @@ async fn a_member_poll_keeps_the_room_and_its_chat_alive(pg: PgPool) -> anyhow::
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
+async fn a_closing_hub_answers_held_polls_with_the_room_as_it_is(pg: PgPool) -> anyhow::Result<()> {
+    let bench = Bench::new(pg)?;
+    let host = someone();
+    let room = bench
+        .rooms()
+        .create(&host, &profile("Host"), false, None)
+        .await?;
+    let seen = format!("rooms:{}:seen", room.code);
+    let mut conn = bench.redis.get().await?;
+    let _: i64 = conn.zadd(&seen, &host, 0).await?;
+    let held = tokio::spawn({
+        let rooms = bench.chat.rooms.clone();
+        let (code, host, since) = (room.code.clone(), host.clone(), room.version);
+        async move {
+            rooms
+                .wait(&code, &host, Some(since), Duration::from_secs(60), false)
+                .await
+        }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let score: Option<f64> = conn.zscore(&seen, &host).await?;
+        if score.is_some_and(|score| score > 0.0) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the poll never touched the room"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert!(!held.is_finished());
+
+    bench.rooms().close();
+    let view = tokio::time::timeout(Duration::from_secs(5), held).await???;
+    assert_eq!(view.code, room.code);
+    assert_eq!(view.version, room.version);
+
+    let late = bench.rooms().wait(
+        &room.code,
+        &host,
+        Some(room.version),
+        Duration::from_secs(60),
+        false,
+    );
+    let view = tokio::time::timeout(Duration::from_secs(5), late).await??;
+    assert_eq!(view.version, room.version);
+    bench.rooms().leave(&room.code, &host).await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
 async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
     let host = someone();

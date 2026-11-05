@@ -43,6 +43,17 @@ return 0
 
 static ADMIT: LazyLock<Script> = LazyLock::new(|| Script::new(SCRIPT));
 
+static REFUND: LazyLock<Script> = LazyLock::new(|| {
+    Script::new(
+        r"
+if tonumber(redis.call('GET', KEYS[1]) or '0') > 0 then
+    redis.call('DECR', KEYS[1])
+end
+return 0
+",
+    )
+});
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bucket {
     Send,
@@ -191,6 +202,25 @@ pub async fn admit(chat: &ChatState, bucket: Bucket, user_id: &str) -> ChatResul
         .map(|window| Charge::of(bucket.name(), window, user_id, 1))
         .collect();
     charge(chat, bucket.name(), charges, bucket.rejection()).await
+}
+
+pub async fn refund(chat: &ChatState, bucket: Bucket, user_id: &str) {
+    for window in bucket.windows() {
+        let key = Charge::of(bucket.name(), window, user_id, 1).key;
+        if let Err(error) = refund_key(chat, &key).await {
+            tracing::warn!(
+                code = error.code(),
+                bucket = bucket.name(),
+                "a refused charge kept its cost"
+            );
+        }
+    }
+}
+
+async fn refund_key(chat: &ChatState, key: &str) -> ChatResult<()> {
+    let mut connection = chat.redis.get().await?;
+    REFUND.key(key).invoke_async::<i64>(&mut connection).await?;
+    Ok(())
 }
 
 pub async fn admit_send(chat: &ChatState, user_id: &str, conversation: Uuid) -> ChatResult<()> {
