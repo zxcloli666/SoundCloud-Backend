@@ -2,6 +2,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::modules::chat::conversations::remove;
 use crate::modules::chat::epochs;
+use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::members::store::{self as members, Joining};
@@ -63,6 +64,7 @@ pub async fn leave(pg: &PgPool, access: &Access) -> ChatResult<Change> {
         change.rows.extend(hand_over(&mut tx, access).await?);
     }
     epochs::mark_rekey_in(&mut tx, access.conversation).await?;
+    media::hooks::queue_trim(&mut tx, access.conversation).await?;
     let event = SystemEvent::Left {
         actor: me.to_owned(),
     };
@@ -147,6 +149,7 @@ pub async fn remove(pg: &PgPool, access: &Access, target: &str, ban: bool) -> Ch
         .rows
         .push(system::insert(&mut tx, actor.conversation, &event, None).await?);
     members::recount(&mut tx, actor.conversation).await?;
+    media::hooks::queue_trim(&mut tx, actor.conversation).await?;
     tx.commit().await?;
     Ok(change)
 }
@@ -228,22 +231,30 @@ pub async fn accept(pg: &PgPool, access: &Access) -> ChatResult<Change> {
 
 pub async fn decline(pg: &PgPool, access: &Access) -> ChatResult<Change> {
     let me = access.user_id.as_str();
-    let mut conn = pg.acquire().await?;
+    let change = Change {
+        requests: vec![me.to_owned()],
+        ..Change::to(vec![me.to_owned()])
+    };
+    let mut tx = pg.begin().await?;
+    lock_chat(&mut tx, access).await?;
     let declined = members::set_state(
-        &mut conn,
+        &mut tx,
         access.conversation,
         me,
         MemberState::Left,
         &[MemberState::Invited],
     )
     .await?;
-    if declined.is_none() && access.state != MemberState::Left {
-        return Err(ChatError::NotMember);
+    if declined.is_none() {
+        tx.rollback().await?;
+        return match access.state {
+            MemberState::Left => Ok(change),
+            _ => Err(ChatError::NotMember),
+        };
     }
-    Ok(Change {
-        requests: vec![me.to_owned()],
-        ..Change::to(vec![me.to_owned()])
-    })
+    media::hooks::queue_trim(&mut tx, access.conversation).await?;
+    tx.commit().await?;
+    Ok(change)
 }
 
 pub async fn add(

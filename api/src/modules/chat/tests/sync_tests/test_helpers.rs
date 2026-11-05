@@ -205,8 +205,8 @@ pub async fn messages(
 pub async fn device(pool: &PgPool, user_id: &str, status: &str) -> Uuid {
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO chat.devices (id, user_id, session_id, status, auth_pub, box_pub, platform, name, app_version, tier)
-         VALUES ($1, $2, $3, $4, '\\x01', '\\x02', 'macos', 'Mac', '9.0.0', 'direct')",
+        "INSERT INTO chat.devices (id, user_id, session_hash, status, auth_pub, box_pub, platform, name, app_version, tier)
+         VALUES ($1, $2, sha256(uuid_send($3)), $4, '\\x01', '\\x02', 'macos', 'Mac', '9.0.0', 'direct')",
     )
     .bind(id)
     .bind(user_id)

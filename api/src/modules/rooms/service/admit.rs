@@ -68,7 +68,7 @@ impl RoomsService {
                         "The room changed too quickly, try again",
                     ));
                 }
-                if room.is_full() {
+                if room.members.len() == room.capacity() {
                     room.drop_absent(&online, recent);
                 }
             }

@@ -1,8 +1,13 @@
 pub mod audit;
 pub mod auth;
+pub mod cipher;
+pub mod evidence;
+pub mod filed;
+pub mod media;
 pub mod messages;
 pub mod process;
 pub mod reports;
+pub mod resolve;
 pub mod restore;
 pub mod restrictions;
 pub mod rewrap;
@@ -21,9 +26,13 @@ pub fn router<S>(chat: Arc<ChatState>) -> Router<S> {
         .route("/chat-admin/reports", get(reports::list))
         .route(
             "/chat-admin/reports/{id}",
-            get(reports::show).post(reports::resolve),
+            get(reports::show).post(resolve::resolve),
         )
         .route("/chat-admin/reports/{id}/audit", get(reports::trail))
+        .route(
+            "/chat-admin/reports/{id}/media/{media_id}",
+            get(media::view).head(media::head),
+        )
         .route("/chat-admin/reports/{id}/restore", post(restore::restore))
         .route(
             "/chat-admin/restrictions",
@@ -45,3 +54,39 @@ pub fn router<S>(chat: Arc<ChatState>) -> Router<S> {
 #[cfg(test)]
 #[path = "../tests/admin_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/admin_media_support.rs"]
+pub mod media_support;
+
+#[cfg(test)]
+#[path = "../tests/admin_media_fixtures.rs"]
+pub mod media_fixtures;
+
+#[cfg(test)]
+#[path = "../tests/admin_media_tests.rs"]
+mod media_tests;
+
+#[cfg(test)]
+#[path = "../tests/admin_backdrop_tests.rs"]
+mod backdrop_tests;
+
+#[cfg(test)]
+#[path = "../tests/admin_restore_media_tests.rs"]
+mod restore_media_tests;
+
+#[cfg(test)]
+#[path = "../tests/admin_s3_live_tests.rs"]
+mod s3_live;
+
+#[cfg(test)]
+#[path = "../tests/admin_hold_tests.rs"]
+mod hold_tests;
+
+#[cfg(test)]
+#[path = "../tests/admin_resolve_s3_live_tests.rs"]
+mod resolve_s3_live;
+
+#[cfg(test)]
+#[path = "../tests/admin_audit_tests.rs"]
+mod audit_tests;

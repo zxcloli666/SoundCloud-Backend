@@ -26,14 +26,18 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_login_requests(&self) -> JobResult {
-        sqlx::query_file!(
-            "queries/maintenance/cleanup_login_requests.sql",
-            CLEANUP_BATCH
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
-        Ok(())
+        loop {
+            let removed = sqlx::query_file!(
+                "queries/maintenance/cleanup_login_requests.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            if removed.rows_affected() < CLEANUP_BATCH.unsigned_abs() {
+                return Ok(());
+            }
+        }
     }
 
     pub async fn cleanup_diag(&self) -> JobResult {
@@ -75,14 +79,18 @@ impl MaintenanceHandler {
     }
 
     pub async fn cleanup_link_requests(&self) -> JobResult {
-        sqlx::query_file!(
-            "queries/maintenance/cleanup_link_requests.sql",
-            CLEANUP_BATCH
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(JobError::retryable)?;
-        Ok(())
+        loop {
+            let removed = sqlx::query_file!(
+                "queries/maintenance/cleanup_link_requests.sql",
+                CLEANUP_BATCH
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(JobError::retryable)?;
+            if removed.rows_affected() < CLEANUP_BATCH.unsigned_abs() {
+                return Ok(());
+            }
+        }
     }
 
     pub async fn cleanup_job_receipts(&self) -> JobResult {
@@ -232,3 +240,7 @@ mod tests {
 #[cfg(test)]
 #[path = "maintenance_diag_tests.rs"]
 mod diag_tests;
+
+#[cfg(test)]
+#[path = "maintenance_auth_tests.rs"]
+mod auth_tests;

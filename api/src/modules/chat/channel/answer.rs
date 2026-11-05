@@ -7,7 +7,7 @@ use sc_chat_wire::proto::{Header, InnerResponse};
 use sc_chat_wire::seal::OpenedRequest;
 
 use crate::modules::chat::ChatError;
-use crate::modules::chat::errors::BUSY_TOTAL;
+use crate::modules::chat::errors::BusySource;
 
 const BUSY_RETRY_AFTER_S: &str = "1";
 
@@ -52,7 +52,7 @@ pub fn too_large() -> Response {
 }
 
 pub fn busy() -> Response {
-    metrics::counter!(BUSY_TOTAL).increment(1);
+    BusySource::Channel.count();
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [(RETRY_AFTER, BUSY_RETRY_AFTER_S)],

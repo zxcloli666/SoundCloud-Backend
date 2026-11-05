@@ -1,11 +1,11 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::modules::rooms::model::{MAX_MEMBERS, PlaybackStatus, Room};
+use crate::modules::rooms::model::{
+    Backdrop, Cover, FREE_CAPACITY, PlaybackStatus, Room, artwork_url,
+};
 
 const MAX_TEXT_CHARS: usize = 120;
-const MAX_IMAGE_CHARS: usize = 512;
-const IMAGE_HOST: &str = "sndcdn.com";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +27,9 @@ pub struct PublicRoom {
     pub listeners: usize,
     pub capacity: usize,
     pub full: bool,
+    pub star_host: bool,
+    pub cover: Option<Cover>,
+    pub backdrop: Option<Backdrop>,
     pub created_at: i64,
     #[serde(skip)]
     pub banned: Vec<String>,
@@ -43,24 +46,11 @@ pub fn text(value: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-pub fn image(raw: &str) -> Option<String> {
-    if raw.len() > MAX_IMAGE_CHARS {
-        return None;
-    }
-    let url = url::Url::parse(raw).ok()?;
-    let host = url.host_str()?;
-    let trusted = host == IMAGE_HOST
-        || host
-            .strip_suffix(IMAGE_HOST)
-            .is_some_and(|rest| rest.ends_with('.'));
-    (url.scheme() == "https" && trusted).then(|| url.to_string())
-}
-
 impl PublicTrack {
     pub fn of(track: &Value) -> Option<Self> {
         let artwork = [&track["artwork_url"], &track["user"]["avatar_url"]]
             .into_iter()
-            .find_map(|value| image(value.as_str()?));
+            .find_map(|value| artwork_url(value.as_str()?));
         Some(Self {
             title: text(&track["title"])?,
             artist: text(&track["user"]["username"]),
@@ -84,23 +74,30 @@ impl PublicRoom {
             host_id: host.user_id.clone(),
             title: room.title.clone(),
             host_name: host.name.clone(),
-            host_avatar_url: host.avatar_url.as_deref().and_then(image),
+            host_avatar_url: host.avatar_url.as_deref().and_then(artwork_url),
             status: room.playback.status,
             track: room.playback.track.as_ref().and_then(PublicTrack::of),
             listeners,
-            capacity: MAX_MEMBERS,
-            full: listeners >= MAX_MEMBERS,
+            capacity: room.capacity(),
+            full: listeners >= room.capacity(),
+            star_host: room.perks.star_host,
+            cover: room.cover_shown(),
+            backdrop: room.backdrop_in_public(),
             created_at: room.created_at,
             banned: room.banned.clone(),
         })
     }
 }
 
+fn ranked_listeners(room: &PublicRoom) -> usize {
+    room.listeners.min(FREE_CAPACITY)
+}
+
 pub fn rank(rooms: &mut [PublicRoom]) {
     rooms.sort_by(|a, b| {
         a.full
             .cmp(&b.full)
-            .then(b.listeners.cmp(&a.listeners))
+            .then(ranked_listeners(b).cmp(&ranked_listeners(a)))
             .then(a.created_at.cmp(&b.created_at))
             .then(a.host_id.cmp(&b.host_id))
     });

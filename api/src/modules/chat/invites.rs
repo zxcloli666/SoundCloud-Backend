@@ -18,7 +18,7 @@ use crate::modules::chat::members::changes::{self, Change};
 use crate::modules::chat::messages::system::{self, SystemEvent};
 use crate::modules::chat::model::{GROUP_MEMBERS_MAX, MessageRow};
 use crate::modules::chat::users::{self, Scope};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, epochs};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, epochs, media};
 
 pub const DEFAULT_TTL_SECS: i64 = 7 * 86_400;
 pub const MIN_TTL_SECS: i64 = 300;
@@ -228,6 +228,7 @@ async fn admit_member(chat: &ChatState, hash: &[u8; 32], user_id: &str) -> ChatR
     .ok_or(ChatError::Unavailable)?;
     if hidden {
         epochs::mark_rekey_in(&mut tx, used.conversation_id).await?;
+        media::hooks::queue_trim(&mut tx, used.conversation_id).await?;
     }
     let event = SystemEvent::Joined {
         actor: user_id.to_owned(),

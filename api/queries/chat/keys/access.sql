@@ -4,6 +4,8 @@ SELECT conversation.kind,
        member.state AS "member_state?",
        member.joined_epoch AS "joined_epoch?",
        (conversation.settings ->> 'history_visible') IS DISTINCT FROM 'false' AS "history_visible!",
+       conversation.meta_epoch,
+       conversation.meta_ct IS NOT NULL AS "has_meta!",
        EXISTS (
            SELECT 1
            FROM chat.conversation_keys AS stored

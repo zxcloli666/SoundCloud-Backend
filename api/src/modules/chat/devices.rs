@@ -4,6 +4,7 @@ mod register;
 mod rules;
 mod store;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use axum::Json;
@@ -14,7 +15,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::modules::chat::body::{ChatJson, ChatPath};
-use crate::modules::chat::caller::CallerDevice;
+use crate::modules::chat::caller::{COLD_WAIT, CallerDevice, Cold, REFRESH_WAIT};
+use crate::modules::chat::held::Held;
 use crate::modules::chat::history_gate::is_unlocked;
 use crate::modules::chat::model::{DeviceRow, DeviceStatus, DeviceView};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, sync};
@@ -22,6 +24,7 @@ use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, sync};
 pub use cache::DeviceCache;
 
 const TOUCH_EVERY_MINUTES: i64 = 10;
+const TOUCH_SPREAD_SECONDS: u128 = 300;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegisterDevice {
@@ -68,7 +71,7 @@ pub async fn remove(
         return Err(ChatError::TooYoung);
     }
     revoke(&chat, &target).await?;
-    sign_out(&chat, &target).await?;
+    sign_out(&chat, caller.session_id, &target).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -117,7 +120,7 @@ pub async fn not_me(
         return Err(ChatError::TooYoung);
     }
     revoke(&chat, &target).await?;
-    sign_out(&chat, &target).await?;
+    sign_out(&chat, caller.session_id, &target).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -143,9 +146,43 @@ pub async fn live_of(chat: &ChatState, user_id: &str) -> ChatResult<Arc<Vec<Devi
     Ok(rows)
 }
 
+pub async fn gated_row(chat: &ChatState, id: Uuid) -> ChatResult<Option<DeviceRow>> {
+    let held = chat.devices.held_row(id).map(|held| held.map(Some));
+    gated(chat, held, lookup(chat, id)).await
+}
+
+pub async fn gated_live_of(chat: &ChatState, user_id: &str) -> ChatResult<Arc<Vec<DeviceRow>>> {
+    gated(
+        chat,
+        chat.devices.held_user(user_id),
+        live_of(chat, user_id),
+    )
+    .await
+}
+
+async fn gated<T>(
+    chat: &ChatState,
+    held: Option<Held<T>>,
+    looked: impl Future<Output = ChatResult<T>>,
+) -> ChatResult<T> {
+    let Some(held) = held else {
+        return chat.callers.cold(Cold::Device, COLD_WAIT, looked).await;
+    };
+    if held.fresh() {
+        return Ok(held.value);
+    }
+    match chat.callers.cold(Cold::Device, REFRESH_WAIT, looked).await {
+        Err(error) if error.is_busy() => {
+            Cold::Device.count_stale();
+            Ok(held.value)
+        }
+        looked => looked,
+    }
+}
+
 pub async fn require(chat: &ChatState, caller: &ChatCaller) -> ChatResult<DeviceRow> {
     let device = caller.device.as_ref().ok_or(ChatError::DeviceRevoked)?;
-    let row = lookup(chat, device.id)
+    let row = gated_row(chat, device.id)
         .await?
         .ok_or(ChatError::DeviceRevoked)?;
     if row.user_id != caller.user_id || row.status != "active" {
@@ -166,12 +203,20 @@ pub async fn revoke(chat: &ChatState, row: &DeviceRow) -> ChatResult<bool> {
 }
 
 pub async fn touch(chat: &ChatState, row: &DeviceRow) -> ChatResult<()> {
-    if Utc::now() - row.last_seen_at < Duration::minutes(TOUCH_EVERY_MINUTES) {
+    if Utc::now() - row.last_seen_at < touch_after(row.id) {
         return Ok(());
     }
-    store::touch(&chat.pg, row.id).await?;
-    chat.devices.forget(&row.user_id, &[row.id]);
+    let stamp = chat.devices.stamp();
+    match store::touch(&chat.pg, row.id).await? {
+        Some(seen) => chat.devices.seen(stamp, seen),
+        None => chat.devices.forget(&row.user_id, &[row.id]),
+    }
     Ok(())
+}
+
+pub fn touch_after(id: Uuid) -> Duration {
+    let offset = i64::try_from(id.as_u128() % TOUCH_SPREAD_SECONDS).unwrap_or_default();
+    Duration::minutes(TOUCH_EVERY_MINUTES) + Duration::seconds(offset)
 }
 
 pub fn view(row: &DeviceRow, current: Option<Uuid>, now: DateTime<Utc>) -> DeviceView {
@@ -210,14 +255,22 @@ async fn owned(chat: &ChatState, user_id: &str, id: Uuid) -> ChatResult<DeviceRo
         .ok_or(ChatError::NotFound)
 }
 
-async fn sign_out(chat: &ChatState, target: &DeviceRow) -> ChatResult<()> {
-    if store::session_held(&chat.pg, target.session_id).await? {
+async fn sign_out(chat: &ChatState, caller_session_id: Uuid, target: &DeviceRow) -> ChatResult<()> {
+    if store::session_held(&chat.pg, &target.session_hash).await? {
         return Ok(());
     }
-    chat.auth.logout(target.session_id).await.map_err(|error| {
-        tracing::error!(%error, "chat could not end the session of a removed device");
-        ChatError::Internal
-    })
+    let ended = chat
+        .auth
+        .end_session(caller_session_id, &target.session_hash)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "chat could not end the session of a removed device");
+            ChatError::Internal
+        })?;
+    if ended {
+        chat.callers.forget_session_hash(&target.session_hash);
+    }
+    Ok(())
 }
 
 async fn changed(chat: &ChatState, user_id: &str, ids: &[Uuid]) -> ChatResult<()> {

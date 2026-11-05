@@ -1,8 +1,10 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use chrono::Utc;
@@ -18,12 +20,20 @@ use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::auth_gate::{AuthGate, LOGINS_PER_WINDOW};
+use super::auth_gate::{AuthGate, CLIENTS_TRACKED, LINKS_PER_WINDOW, LOGINS_PER_WINDOW};
 use super::{Channel, router};
+use crate::common::session::session_hash;
 use crate::modules::chat::caller::CallerBind;
+use crate::modules::chat::config::StartLimits;
+use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::model::DeviceRow;
-use crate::modules::chat::test_support::{chat_state, offline_chat_state, vector_ock};
-use crate::modules::chat::{ChatError, ChatState, devices, routes};
+use crate::modules::chat::test_support::{chat_state, config, offline_chat_state, vector_ock};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, devices, routes};
+
+const PEER: [u8; 4] = [198, 51, 100, 7];
+
+#[path = "channel_herd_tests.rs"]
+mod herd;
 
 struct Device {
     id: Uuid,
@@ -52,7 +62,7 @@ impl Device {
         DeviceRow {
             id: self.id,
             user_id: user.to_owned(),
-            session_id: session,
+            session_hash: session_hash(session),
             status: status.to_owned(),
             auth_pub: public_key(&self.seed).to_vec(),
             box_pub: self.box_pub.to_vec(),
@@ -108,24 +118,47 @@ fn seal(mut inner: Inner, signer: &[u8; 32]) -> SealedRequest {
 }
 
 async fn post(app: &Router, envelope: Vec<u8>) -> Response {
+    post_from(app, envelope, SocketAddr::from((PEER, 40_000)), None).await
+}
+
+async fn post_from(
+    app: &Router,
+    envelope: Vec<u8>,
+    peer: SocketAddr,
+    forwarded: Option<&str>,
+) -> Response {
+    let mut request = Request::post("/chat/x")
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .extension(ConnectInfo(peer));
+    if let Some(forwarded) = forwarded {
+        request = request.header("x-forwarded-for", forwarded);
+    }
     app.clone()
-        .oneshot(
-            Request::post("/chat/x")
-                .header(header::CONTENT_TYPE, "application/octet-stream")
-                .body(Body::from(envelope))
-                .expect("a request"),
-        )
+        .oneshot(request.body(Body::from(envelope)).expect("a request"))
         .await
         .expect("an answer")
 }
 
 async fn sealed_body(app: &Router, request: &SealedRequest) -> Vec<u8> {
-    let response = post(app, request.envelope.clone()).await;
+    body_of(post(app, request.envelope.clone()).await).await
+}
+
+async fn body_of(response: Response) -> Vec<u8> {
     assert_eq!(response.status(), StatusCode::OK);
     to_bytes(response.into_body(), 1024 * 1024)
         .await
         .expect("a body")
         .to_vec()
+}
+
+async fn exchange_from(
+    app: &Router,
+    request: &SealedRequest,
+    peer: SocketAddr,
+    forwarded: Option<&str>,
+) -> (u32, Value) {
+    let response = post_from(app, request.envelope.clone(), peer, forwarded).await;
+    opened(request, &body_of(response).await)
 }
 
 fn opened(request: &SealedRequest, body: &[u8]) -> (u32, Value) {
@@ -346,18 +379,94 @@ async fn a_full_channel_answers_an_outer_busy_with_retry_after() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+fn starts() -> StartLimits {
+    config(true).starts
+}
+
+fn address(n: u32) -> Option<IpAddr> {
+    Some(IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + n)))
+}
+
+fn held(result: ChatResult<()>) -> bool {
+    matches!(
+        result,
+        Err(ChatError::Busy { retry_ms, source: BusySource::AuthGate }) if retry_ms > 0
+    )
+}
+
 #[test]
-fn the_auth_gate_holds_sealed_logins_and_links_to_their_window() {
-    let gate = AuthGate::new();
-    for _ in 0..LOGINS_PER_WINDOW {
-        assert_eq!(gate.admit("/auth/login"), Ok(()));
+fn a_client_at_its_start_limit_leaves_other_clients_their_own() {
+    let starts = starts();
+    let gate = AuthGate::new(&starts);
+    for _ in 0..starts.logins_per_client {
+        assert_eq!(gate.admit("/auth/login", address(1)), Ok(()));
     }
-    assert!(matches!(
-        gate.admit("/auth/login"),
-        Err(ChatError::Busy { retry_ms }) if retry_ms > 0
+    assert!(held(gate.admit("/auth/login", address(1))));
+    assert_eq!(gate.admit("/auth/login", address(2)), Ok(()));
+
+    for _ in 0..starts.links_per_client {
+        assert_eq!(gate.admit("/auth/link/create", address(1)), Ok(()));
+    }
+    assert!(held(gate.admit("/auth/link/create", address(1))));
+    assert_eq!(gate.admit("/auth/link/create", address(2)), Ok(()));
+    assert_eq!(gate.admit("/auth/login/status", address(1)), Ok(()));
+}
+
+#[test]
+fn the_start_gate_reads_forwarded_for_only_from_a_trusted_proxy() {
+    let request = |connected: bool| {
+        let request = Request::post("/chat/x").header("x-forwarded-for", "203.0.113.9");
+        let request = if connected {
+            request.extension(ConnectInfo(SocketAddr::from((PEER, 40_000))))
+        } else {
+            request
+        };
+        request.body(Body::empty()).expect("a request")
+    };
+    let mut starts = starts();
+    let direct = AuthGate::new(&starts);
+    starts.trusted_proxies = vec!["198.51.100.0/24".parse().expect("a net")];
+    let proxied = AuthGate::new(&starts);
+
+    assert_eq!(direct.client(&request(true)), Some(IpAddr::from(PEER)));
+    assert_eq!(
+        proxied.client(&request(true)),
+        Some("203.0.113.9".parse().expect("an address"))
+    );
+    assert_eq!(proxied.client(&request(false)), None);
+    assert_eq!(
+        direct.admit("/auth/login", None),
+        Err(ChatError::Unavailable)
+    );
+    assert_eq!(direct.admit("/auth/login/status", None), Ok(()));
+}
+
+#[test]
+fn a_spray_of_unique_addresses_keeps_the_start_map_at_its_cap() {
+    let gate = AuthGate::new(&starts());
+    let spray = u32::try_from(10 * CLIENTS_TRACKED).expect("a count");
+    for n in 0..spray {
+        let _ = gate.admit("/auth/login", address(n));
+    }
+    let (clients, queued) = gate.tracked("/auth/login");
+    assert_eq!(clients, CLIENTS_TRACKED);
+    assert!(queued <= 2 * CLIENTS_TRACKED, "{queued}");
+    assert_eq!(gate.tracked("/auth/link/create"), (0, 0));
+}
+
+#[test]
+fn the_process_wide_start_cap_holds_across_clients() {
+    let gate = AuthGate::new(&starts());
+    for n in 0..LOGINS_PER_WINDOW {
+        assert_eq!(gate.admit("/auth/login", address(n)), Ok(()));
+    }
+    assert!(held(gate.admit("/auth/login", address(LOGINS_PER_WINDOW))));
+    for n in 0..LINKS_PER_WINDOW {
+        assert_eq!(gate.admit("/auth/link/create", address(n)), Ok(()));
+    }
+    assert!(held(
+        gate.admit("/auth/link/create", address(LINKS_PER_WINDOW))
     ));
-    assert_eq!(gate.admit("/auth/link/create"), Ok(()));
-    assert_eq!(gate.admit("/auth/login/status"), Ok(()));
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -580,12 +689,12 @@ async fn a_relogin_with_new_keys_is_read_again_instead_of_refused(
 async fn registered(pool: &PgPool, row: &DeviceRow) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO chat.devices
-            (id, user_id, session_id, auth_pub, box_pub, platform, name, app_version, tier)
+            (id, user_id, session_hash, auth_pub, box_pub, platform, name, app_version, tier)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(row.id)
     .bind(&row.user_id)
-    .bind(row.session_id)
+    .bind(&row.session_hash)
     .bind(&row.auth_pub)
     .bind(&row.box_pub)
     .bind(&row.platform)
@@ -668,6 +777,38 @@ async fn a_sealed_login_records_the_bind_of_the_signing_device(pool: PgPool) -> 
         Some(device.keys())
     );
     assert_eq!(target, None);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn a_sealed_login_is_limited_per_client_whatever_forwarded_for_says(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    oauth_app(&pool).await?;
+    let chat = chat_state(pool, redis()?, false);
+    let per_client = chat.config.starts.logins_per_client;
+    let app: Router = routes::public(chat);
+    let device = Device::new();
+    let login = || {
+        seal(
+            with_bind(call("GET", "/auth/login", ""), &device),
+            &device.seed,
+        )
+    };
+    let sprayer = SocketAddr::from((PEER, 40_000));
+
+    for n in 0..per_client {
+        let forwarded = format!("203.0.113.{n}");
+        let (status, body) = exchange_from(&app, &login(), sprayer, Some(&forwarded)).await;
+        assert_eq!(status, 200, "{body}");
+    }
+    let (_, refused) = exchange_from(&app, &login(), sprayer, Some("203.0.113.250")).await;
+    assert_eq!(refused["error"], "chat_busy");
+
+    let neighbour = SocketAddr::from(([198, 51, 100, 8], 40_000));
+    let (status, body) = exchange_from(&app, &login(), neighbour, None).await;
+    assert_eq!(status, 200, "{body}");
     Ok(())
 }
 

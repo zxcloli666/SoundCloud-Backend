@@ -5,13 +5,15 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::modules::auth::health::oauth_app_key;
+use crate::modules::auth::health::{AppHealth, oauth_app_key};
 use crate::modules::auth::model::LoginRequest;
 use crate::modules::oauth_apps::model::OAuthApp;
 use crate::sc::OAuthCredentials;
 
 use super::AuthService;
 use super::login::{LOGIN_REQUEST_TTL_SECS, MAX_AUTH_RETRIES, base64_url, random_bytes};
+
+const UNHEALTHY_APPS_MAX: usize = 100;
 
 impl AuthService {
     pub(super) async fn pick_credentials(
@@ -65,13 +67,14 @@ impl AuthService {
 
     pub(super) fn build_authorize_url(
         &self,
-        credentials: &OAuthCredentials,
+        client_id: &str,
+        redirect_uri: &str,
         state: &str,
         code_challenge: &str,
     ) -> AppResult<String> {
         let query = serde_urlencoded::to_string([
-            ("client_id", credentials.client_id.as_str()),
-            ("redirect_uri", credentials.redirect_uri.as_str()),
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
             ("response_type", "code"),
             ("code_challenge", code_challenge),
             ("code_challenge_method", "S256"),
@@ -119,7 +122,12 @@ impl AuthService {
         let code_verifier = base64_url(&random_bytes(32));
         let code_challenge = base64_url(sha2::Sha256::digest(code_verifier.as_bytes()).as_slice());
         let state = hex::encode(random_bytes(16));
-        let url = self.build_authorize_url(&credentials, &state, &code_challenge)?;
+        let url = self.build_authorize_url(
+            &credentials.client_id,
+            &credentials.redirect_uri,
+            &state,
+            &code_challenge,
+        )?;
         let expires_at =
             (Utc::now() + chrono::Duration::seconds(LOGIN_REQUEST_TTL_SECS)).naive_utc();
         let app_id = app_id.to_string();
@@ -216,6 +224,24 @@ impl AuthService {
 
         let ids = available.iter().map(|app| app.id).collect::<Vec<_>>();
         self.oauth_apps.pick_lru_from(&ids).await
+    }
+
+    pub(super) async fn unhealthy_login_apps(&self) -> AppResult<Vec<Uuid>> {
+        let apps = sqlx::query_file!("queries/auth/service/login_apps.sql")
+            .fetch_all(&self.pool)
+            .await?;
+        let keys = apps
+            .iter()
+            .map(|app| oauth_app_key(&app.client_id))
+            .collect::<Vec<_>>();
+        let health = self.health.app_healths_fail_open(&keys).await;
+        Ok(apps
+            .iter()
+            .zip(&keys)
+            .filter(|(_, key)| health.get(*key).is_some_and(AppHealth::unhealthy))
+            .map(|(app, _)| app.oauth_app_id)
+            .take(UNHEALTHY_APPS_MAX)
+            .collect())
     }
 }
 

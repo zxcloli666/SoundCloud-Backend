@@ -11,7 +11,7 @@ use crate::modules::chat::rooms::bridge;
 use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::test_support::chat_state;
-use crate::modules::rooms::model::{MAX_MEMBERS, SettingsPatch};
+use crate::modules::rooms::model::{FREE_CAPACITY, SettingsPatch};
 
 struct Bench {
     chat: Arc<ChatState>,
@@ -176,7 +176,7 @@ async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow:
         .create(&host, &profile("Host"), false, None)
         .await?;
     let code = room.code.clone();
-    let guests: Vec<String> = (0..MAX_MEMBERS - 1).map(|_| someone()).collect();
+    let guests: Vec<String> = (0..FREE_CAPACITY - 1).map(|_| someone()).collect();
     for guest in &guests {
         bench
             .rooms()
@@ -518,7 +518,7 @@ async fn a_preview_touches_nothing_and_is_cached(pg: PgPool) -> anyhow::Result<(
         title: Some("Encore".to_owned()),
         ..SettingsPatch::default()
     };
-    bench.rooms().configure(&code, &host, &renamed).await?;
+    bench.rooms().reconfigure(&code, &host, &renamed).await?;
     let fresh = bench.rooms().preview(&code).await?.expect("a live room");
     assert_eq!(fresh.title.as_deref(), Some("Encore"));
     assert!(fresh.track.is_none());
