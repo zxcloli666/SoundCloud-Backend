@@ -27,11 +27,18 @@ pub async fn register(
 ) -> ChatResult<DeviceRow> {
     let request = validated(request)?;
     let bound = session_device(chat, caller).await?;
-    if lookup(chat, bound.id).await?.is_none() {
+    let fresh = lookup(chat, bound.id).await?.is_none();
+    if fresh {
         limits::admit(chat, Bucket::Device, &caller.user_id).await?;
     }
     users::touch(chat, &caller.user_id).await?;
-    let enrolled = enroll(chat, caller, &bound, &request).await?;
+    let enrolled = match enroll(chat, caller, &bound, &request).await {
+        Err(ChatError::DeviceCap) if fresh => {
+            limits::refund(chat, Bucket::Device, &caller.user_id).await;
+            return Err(ChatError::DeviceCap);
+        }
+        enrolled => enrolled?,
+    };
     let mut touched = enrolled.evicted;
     touched.push(enrolled.row.id);
     changed(chat, &caller.user_id, &touched).await?;
@@ -117,7 +124,7 @@ async fn first_login(
 ) -> ChatResult<DeviceRow> {
     let live = store::count_live(&mut **tx, &caller.user_id).await?;
     if usize::try_from(live).unwrap_or(usize::MAX) >= DEVICES_MAX {
-        return Err(ChatError::RequestLimit);
+        return Err(ChatError::DeviceCap);
     }
     let device = NewDevice {
         id: bound.id,

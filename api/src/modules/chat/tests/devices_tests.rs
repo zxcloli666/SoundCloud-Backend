@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use sc_chat_wire::bind::make_bind;
 use sc_chat_wire::prost::Message;
@@ -36,6 +38,23 @@ async fn session_exists(pool: &PgPool, session: Uuid) -> bool {
 
 fn error(answer: &Value) -> &str {
     answer["error"].as_str().unwrap_or_default()
+}
+
+async fn sign_in(
+    chat: &Arc<ChatState>,
+    pool: &PgPool,
+    user: &str,
+    keys: &DeviceKeys,
+) -> (StatusCode, Value) {
+    let session = session(pool, user, Some(keys.bind())).await;
+    call(
+        chat,
+        caller(user, session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -280,23 +299,43 @@ async fn a_rebound_session_replaces_its_device_at_the_limit(pool: PgPool) {
 async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
     let user = fresh_user();
     let chat = state(&pool);
-    for _ in 0..10 {
+    for _ in 0..DEVICES_MAX {
         enroll(&chat, &pool, &user).await;
     }
-    let extra = DeviceKeys::new();
-    let extra_session = session(&pool, &user, Some(extra.bind())).await;
-    let (status, answer) = call(
-        &chat,
-        caller(&user, extra_session, None),
-        "POST",
-        "/chat/devices",
-        Some(desktop()),
-    )
-    .await;
+    let (status, answer) = sign_in(&chat, &pool, &user, &DeviceKeys::new()).await;
     assert_eq!(
         (status, error(&answer)),
-        (StatusCode::TOO_MANY_REQUESTS, "chat_request_limit")
+        (StatusCode::FORBIDDEN, "chat_device_cap")
     );
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn a_device_refused_at_the_cap_keeps_the_daily_budget(pool: PgPool) {
+    let user = fresh_user();
+    let chat = state(&pool);
+    let first = enroll(&chat, &pool, &user).await;
+    for _ in 1..DEVICES_MAX {
+        enroll(&chat, &pool, &user).await;
+    }
+    fresh_device_budget(&chat, &user).await;
+    let waiting = DeviceKeys::new();
+    for _ in 0..6 {
+        let (status, answer) = sign_in(&chat, &pool, &user, &waiting).await;
+        assert_eq!(
+            (status, error(&answer)),
+            (StatusCode::FORBIDDEN, "chat_device_cap")
+        );
+    }
+
+    sqlx::query("UPDATE chat.devices SET status = 'revoked' WHERE id = $1")
+        .bind(first.keys.id)
+        .execute(&pool)
+        .await
+        .expect("a removal");
+    let (status, answer) = sign_in(&chat, &pool, &user, &waiting).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(status_of(&pool, waiting.id).await, "active");
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
