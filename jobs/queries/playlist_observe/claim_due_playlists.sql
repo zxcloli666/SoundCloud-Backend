@@ -27,6 +27,13 @@ owners AS (
             ORDER BY state.owner_sc_user_id
             LIMIT 1
         ) AS first
+        WHERE (
+            SELECT due.next_reconcile_at
+            FROM playlist_membership_state AS due
+            WHERE due.sync_status <> 'clean'
+            ORDER BY due.next_reconcile_at, due.playlist_urn
+            LIMIT 1
+        ) <= now()
     )
     UNION ALL
     SELECT next.owner_sc_user_id, owners.depth + 1
