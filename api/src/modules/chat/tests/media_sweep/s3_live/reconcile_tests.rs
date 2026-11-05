@@ -11,7 +11,7 @@ use crate::modules::chat::sweeps::media::fixtures::{
 };
 use crate::modules::chat::sweeps::media::reconcile::{self, Stage, cursor};
 
-async fn group(pg: &PgPool) -> anyhow::Result<Uuid> {
+pub(super) async fn group(pg: &PgPool) -> anyhow::Result<Uuid> {
     let id = Uuid::now_v7();
     sqlx::query("INSERT INTO chat.conversations (id, kind, created_by) VALUES ($1, 'group', 'x')")
         .bind(id)
