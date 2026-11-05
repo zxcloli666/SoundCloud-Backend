@@ -45,8 +45,12 @@ pub fn poll(clients: &Clients, path: &'static str, client: IpAddr) -> Result<(),
 }
 
 fn free(sealed: &Sealed, gate: &StartGate, capable: bool, client: IpAddr) -> Result<(), Refusal> {
-    match gate.admit_free(client, Instant::now()) {
-        Ok(()) => Ok(()),
+    let now = Instant::now();
+    match gate.admit_free(client, now) {
+        Ok(()) => {
+            gate.show(gate.required(now));
+            Ok(())
+        }
         Err(Refused::Lane(_)) if capable => Err(required(sealed, gate)),
         Err(Refused::Lane(retry_ms) | Refused::Capped(retry_ms)) => Err(busy(retry_ms)),
     }
@@ -77,9 +81,11 @@ async fn solved(
 }
 
 fn required(sealed: &Sealed, gate: &StartGate) -> Refusal {
+    let effort = gate.effort.current();
+    gate.show(effort);
     Refusal::Required {
         seed: sealed.seeds.seed(epoch_now()),
-        effort: gate.effort.current(),
+        effort,
     }
 }
 
