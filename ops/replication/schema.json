@@ -2767,6 +2767,7 @@
   "users": {
    "columns": [
     {"default": null, "generated": false, "name": "avatar_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "banner_url", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "city", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "comments_count", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "country", "notnull": false, "type": "character varying(64)"},
