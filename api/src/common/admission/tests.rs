@@ -29,6 +29,23 @@ fn client_identity_groups_ipv6_by_network_and_normalizes_mapped_ipv4() {
 }
 
 #[test]
+fn subnets_group_ipv4_by_slash_24_and_ipv6_by_slash_48() {
+    let host = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+    let neighbour = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 200));
+    let other = IpAddr::V4(Ipv4Addr::new(192, 0, 3, 7));
+    let mapped = IpAddr::V6(Ipv4Addr::new(192, 0, 2, 9).to_ipv6_mapped());
+    let first = IpAddr::V6("2001:db8:1234:5678::1".parse::<Ipv6Addr>().unwrap());
+    let same_48 = IpAddr::V6("2001:db8:1234:ffff::9".parse::<Ipv6Addr>().unwrap());
+
+    assert_eq!(subnet_identity(host), subnet_identity(neighbour));
+    assert_eq!(subnet_identity(host), subnet_identity(mapped));
+    assert_ne!(subnet_identity(host), subnet_identity(other));
+    assert_ne!(subnet_identity(host), client_identity(host));
+    assert_eq!(subnet_identity(first), subnet_identity(same_48));
+    assert_eq!(subnet_identity(first), network_identity(first));
+}
+
+#[test]
 fn voice_pages_group_ipv6_by_slash_48() {
     let first = IpAddr::V6("2001:db8:1234:5678::1".parse::<Ipv6Addr>().unwrap());
     let same_48 = IpAddr::V6("2001:db8:1234:ffff:1::9".parse::<Ipv6Addr>().unwrap());

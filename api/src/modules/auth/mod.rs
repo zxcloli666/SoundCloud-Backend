@@ -10,6 +10,7 @@ pub mod link_service;
 #[cfg(test)]
 mod login_app_tests;
 pub mod model;
+pub mod sealed;
 pub mod service;
 #[cfg(test)]
 mod session_cache_tests;
