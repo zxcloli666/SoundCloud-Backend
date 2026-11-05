@@ -53,6 +53,10 @@ async fn an_error_carries_its_code_and_the_fields_the_client_needs() {
         wire(ChatError::MediaGone).await,
         (StatusCode::GONE, json!({"error": "chat_media_gone"}))
     );
+    assert_eq!(
+        wire(ChatError::DeviceCap).await,
+        (StatusCode::FORBIDDEN, json!({"error": "chat_device_cap"}))
+    );
 }
 
 #[tokio::test]
@@ -104,6 +108,7 @@ fn every_code_is_prefixed_and_unique() {
         ChatError::SlowMode { retry_ms: 0 },
         ChatError::Unavailable,
         ChatError::RequestLimit,
+        ChatError::DeviceCap,
         ChatError::SendLimited,
         ChatError::ReadLimited,
         ChatError::Busy {

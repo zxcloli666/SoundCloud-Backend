@@ -117,7 +117,7 @@ async fn first_login(
 ) -> ChatResult<DeviceRow> {
     let live = store::count_live(&mut **tx, &caller.user_id).await?;
     if usize::try_from(live).unwrap_or(usize::MAX) >= DEVICES_MAX {
-        return Err(ChatError::RequestLimit);
+        return Err(ChatError::DeviceCap);
     }
     let device = NewDevice {
         id: bound.id,
