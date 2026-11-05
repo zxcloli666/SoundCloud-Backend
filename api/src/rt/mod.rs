@@ -38,9 +38,12 @@ pub async fn run() -> anyhow::Result<()> {
     tokio::spawn(chat::moderation::task::run(state.chat.clone()));
     let shutdown = state.chat.shutdown.clone();
     let draining = shutdown.clone();
+    let rooms = state.rooms.clone();
     tokio::spawn(async move {
         tls_common::shutdown_signal().await;
+        info!("chat-api drains: held polls answer now, requests in flight finish");
         shutdown.cancel();
+        rooms.close();
     });
     let app = router::build(state, rooms_proxy);
 

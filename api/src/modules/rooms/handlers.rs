@@ -21,7 +21,7 @@ use crate::modules::rooms::model::{PlaybackUpdate, Profile, normalize_code};
 use crate::modules::rooms::public::blocked_hosts;
 use crate::modules::rooms::service::RoomView;
 
-const LONG_POLL_HOLD: Duration = Duration::from_secs(20);
+pub const LONG_POLL_HOLD: Duration = Duration::from_secs(20);
 
 pub fn router<S>() -> Router<S>
 where
