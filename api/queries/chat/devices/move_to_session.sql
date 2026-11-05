@@ -1,5 +1,5 @@
 UPDATE chat.devices
-SET session_id = $2,
+SET session_hash = $2,
     platform = $3,
     name = $4,
     app_version = $5,
@@ -9,7 +9,7 @@ WHERE id = $1
   AND status = 'active'
 RETURNING id,
           user_id,
-          session_id,
+          session_hash,
           status,
           auth_pub,
           box_pub,

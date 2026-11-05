@@ -113,6 +113,16 @@ async fn purge_removes_every_synthetic_row_and_key_and_keeps_real_chats(
     assert_eq!(purged["memberships"], 1);
     assert_eq!(purged["users"], 8);
     assert_eq!(purged["pending"], 0);
+    let trim_queued: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM chat.media_trim WHERE conversation_id = $1)",
+    )
+    .bind(real)
+    .fetch_one(&pg)
+    .await?;
+    assert!(
+        trim_queued,
+        "a dropped synthetic member moves the floor of a real chat"
+    );
 
     for sql in SYNTHETIC_ROWS {
         assert_eq!(count(&pg, sql).await, 0, "{sql}");
@@ -165,5 +175,48 @@ async fn purge_removes_every_synthetic_row_and_key_and_keeps_real_chats(
         .await,
         2
     );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn seed_and_purge_never_run_at_once(pg: PgPool) -> anyhow::Result<()> {
+    let redis = super::support::redis(0);
+    let chat = state(pg, redis.clone(), true);
+    let mut conn = redis.get().await?;
+    let _: () = redis::cmd("SET")
+        .arg("chat:lt:busy")
+        .arg("other")
+        .arg("PX")
+        .arg(60_000)
+        .query_async(&mut conn)
+        .await?;
+
+    let body = json!({"users": 2, "devices_per_user": 1, "groups": 1});
+    let (seeding, _) = admin(&chat, "/chat-admin/loadtest/seed", Some(body)).await;
+    let (purging, _) = admin(&chat, "/chat-admin/loadtest/purge", None).await;
+    assert_eq!(seeding, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(purging, StatusCode::SERVICE_UNAVAILABLE);
+    let held: Option<String> = redis::cmd("GET")
+        .arg("chat:lt:busy")
+        .query_async(&mut conn)
+        .await?;
+    assert_eq!(
+        held.as_deref(),
+        Some("other"),
+        "a refused call leaves the lease alone"
+    );
+
+    let _: () = redis::cmd("DEL")
+        .arg("chat:lt:busy")
+        .query_async(&mut conn)
+        .await?;
+    let (purging, _) = admin(&chat, "/chat-admin/loadtest/purge", None).await;
+    assert_eq!(purging, StatusCode::OK);
+    let left: Option<String> = redis::cmd("GET")
+        .arg("chat:lt:busy")
+        .query_async(&mut conn)
+        .await?;
+    assert_eq!(left, None, "the purge hands its lease back");
     Ok(())
 }

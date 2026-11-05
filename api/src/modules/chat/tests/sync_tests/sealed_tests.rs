@@ -65,8 +65,8 @@ async fn enrolled(pool: &PgPool, user_id: &str) -> Device {
     .expect("a session");
     sqlx::query(
         "INSERT INTO chat.devices
-            (id, user_id, session_id, auth_pub, box_pub, platform, name, app_version, tier)
-         VALUES ($1, $2, $3, $4, $5, 'linux', 'test', '0.0.0', 'direct')",
+            (id, user_id, session_hash, auth_pub, box_pub, platform, name, app_version, tier)
+         VALUES ($1, $2, sha256(uuid_send($3)), $4, $5, 'linux', 'test', '0.0.0', 'direct')",
     )
     .bind(device.id)
     .bind(user_id)

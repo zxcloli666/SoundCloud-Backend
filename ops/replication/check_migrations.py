@@ -16,6 +16,8 @@ NAME = r'(?:"?public"?\.)?"?(\w+)"?'
 ALTER_RE = re.compile(r"^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?" + NAME + r"\s+(.*)$", re.S)
 UNPUBLISH_RE = re.compile(r"scd_unpublish_column\s*\(\s*'(\w+)'\s*,\s*'(\w+)'")
 FK_ACTION_RE = re.compile(r"\bon\s+(?:delete|update)\s+cascade\b")
+ROUTINE_RE = re.compile(r"(create|alter)\s+(or\s+replace\s+)?(function|procedure|routine)\b")
+SEARCH_PATH_RE = re.compile(r'\bset\s+search_path\s*(?:=|to)\s*([\w"$]+(?:\s*,\s*[\w"$]+)*)')
 NOT_COLUMN = {"constraint", "default", "not", "identity", "expression"}
 
 
@@ -43,7 +45,14 @@ def do_body(stmt):
 def statement_problems(m, stmt, gated, unpublished):
     out = []
     clean = re.sub(r"\s+", " ", blank_literals(stmt).lower()).strip()
-    if re.match(r"(create|alter|drop)\s+(or\s+replace\s+)?(function|procedure|trigger)\b", clean):
+    if ROUTINE_RE.match(clean):
+        for m in SEARCH_PATH_RE.finditer(clean):
+            if m.group(1).replace('"', "").split(",")[-1].strip() != "pg_temp":
+                out.append(("search-path-pg-temp", clean[:80]))
+                break
+    if re.match(r"(create|alter|drop)\s+(or\s+replace\s+)?(function|procedure|routine|trigger)\b", clean):
+        return out
+    if re.match(r"(grant|revoke)\b", clean):
         return out
     a = analyze(stmt)
     if not gated and (a["writes"] or (a["kinds"] and a["kinds"][0] in DML)):

@@ -84,7 +84,7 @@ async fn create(
     Json(body): Json<CreateBody>,
 ) -> AppResult<(StatusCode, Json<RoomView>)> {
     admit(&admission, &ctx, Endpoint::RoomCreate).await?;
-    let profile = account_profile(&pg, &ctx.sc_user_id, body.profile).await?;
+    let profile = account_profile(&pg, &ctx.sc_user_id, ctx.session_id, body.profile).await?;
     let room = rooms
         .create(
             &ctx.sc_user_id,
@@ -120,7 +120,7 @@ async fn join(
 ) -> AppResult<Json<RoomView>> {
     let code = code_of(&code)?;
     admit(&admission, &ctx, Endpoint::RoomJoin).await?;
-    let profile = account_profile(&pg, &ctx.sc_user_id, profile).await?;
+    let profile = account_profile(&pg, &ctx.sc_user_id, ctx.session_id, profile).await?;
     Ok(Json(
         rooms.join(&code, &ctx.sc_user_id, &profile, &pg).await?,
     ))
@@ -188,7 +188,7 @@ async fn join_public(
     Json(profile): Json<Profile>,
 ) -> AppResult<Json<RoomView>> {
     admit(&admission, &ctx, Endpoint::RoomJoin).await?;
-    let profile = account_profile(&pg, &ctx.sc_user_id, profile).await?;
+    let profile = account_profile(&pg, &ctx.sc_user_id, ctx.session_id, profile).await?;
     Ok(Json(
         rooms
             .join_public(&host_id, &ctx.sc_user_id, &profile, &pg)

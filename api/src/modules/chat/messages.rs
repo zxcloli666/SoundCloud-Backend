@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
 use crate::modules::chat::conversations::DeleteScope;
 use crate::modules::chat::limits::{self, Bucket};
+use crate::modules::chat::media;
 use crate::modules::chat::members::access;
 use crate::modules::chat::model::{MessageRow, MessageView};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
@@ -36,6 +37,8 @@ pub struct SendMessage {
     pub target_seq: Option<i64>,
     #[serde(with = "crate::modules::chat::b64")]
     pub body: Vec<u8>,
+    #[serde(default)]
+    pub media: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +108,11 @@ async fn deliver(
     limits::admit_send(chat, &caller.user_id, conversation).await?;
     let access = access::load_in(chat, conversation, &caller.user_id).await?;
     rules::may_post(&access, outgoing.class)?;
+    if let Err(refused) = media::refs::admit_send(chat, &access, &outgoing).await {
+        let sent =
+            store::existing(&chat.pg, conversation, outgoing.client_id, &caller.user_id).await?;
+        return sent.map(|row| SendAnswer::from(&row)).ok_or(refused);
+    }
     gate::sender_free(chat, &access).await?;
     if access.is_room()
         && let Some(row) = gate::room(chat, &access, &outgoing).await?

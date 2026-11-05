@@ -4,10 +4,15 @@ use std::pin::Pin;
 use bytes::Bytes;
 use futures::Stream;
 
+use crate::byte_range::{ByteRange, Slice};
+
 pub mod gdrive;
 pub mod local;
 pub mod s3;
 mod s3_trace;
+
+#[cfg(test)]
+mod range_tests;
 
 pub use gdrive::GdriveBackend;
 pub use local::LocalBackend;
@@ -28,6 +33,21 @@ pub enum BackendError {
     Io(#[from] std::io::Error),
     #[error("backend: {0}")]
     Other(String),
+}
+
+pub enum Ranged {
+    Part {
+        slice: Slice,
+        content_type: Option<String>,
+        stream: ByteStream,
+    },
+    Whole {
+        info: ObjectInfo,
+        stream: ByteStream,
+    },
+    Unsatisfiable {
+        total: u64,
+    },
 }
 
 pub enum Backend {
@@ -77,6 +97,14 @@ impl Backend {
             Backend::Local(b) => b.stream(key).await,
             Backend::S3(b) => b.stream(key).await,
             Backend::Gdrive(b) => b.stream(key).await,
+        }
+    }
+
+    pub async fn read_range(&self, key: &str, range: &ByteRange) -> Result<Ranged, BackendError> {
+        match self {
+            Backend::Local(b) => b.read_range(key, range).await,
+            Backend::S3(b) => b.read_range(key, range).await,
+            Backend::Gdrive(b) => b.read_range(key, range).await,
         }
     }
 }

@@ -3,13 +3,14 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use wreq::{Client, StatusCode as HttpStatus};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::info;
+use wreq::{Client, StatusCode as HttpStatus};
 
-use super::{BackendError, ByteStream, ObjectInfo};
+use super::{BackendError, ByteStream, ObjectInfo, Ranged};
+use crate::byte_range::ByteRange;
 use crate::config::{GdriveAuth, GdriveConfig};
 
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
@@ -211,6 +212,53 @@ impl GdriveBackend {
             .bytes_stream()
             .map(|r| r.map_err(std::io::Error::other));
         Ok((info, Box::pin(stream)))
+    }
+
+    pub async fn read_range(&self, key: &str, range: &ByteRange) -> Result<Ranged, BackendError> {
+        let Some(file) = self.find_in_folder(&self.cfg.root_folder_id, key).await? else {
+            return Err(BackendError::NotFound);
+        };
+        let total = parse_size(file.size.as_deref());
+        let content_type = file
+            .mime_type
+            .clone()
+            .or_else(|| Some(super::content_type_for(key).to_string()));
+        let Some(slice) = range.slice(total) else {
+            return Ok(Ranged::Unsatisfiable { total });
+        };
+        let token = self.access_token().await?;
+        let resp = self
+            .http
+            .get(format!(
+                "{DRIVE_API}/files/{}?alt=media&supportsAllDrives=true",
+                file.id
+            ))
+            .bearer_auth(&token)
+            .header("Range", format!("bytes={}-{}", slice.start, slice.end))
+            .send()
+            .await
+            .map_err(http_err)?;
+        match ranged_answer(resp.status().as_u16()) {
+            RangedAnswer::Part => Ok(Ranged::Part {
+                slice,
+                content_type,
+                stream: body_stream(resp),
+            }),
+            RangedAnswer::Whole => Ok(Ranged::Whole {
+                info: ObjectInfo {
+                    size: total,
+                    content_type,
+                },
+                stream: body_stream(resp),
+            }),
+            RangedAnswer::Unsatisfiable => Ok(Ranged::Unsatisfiable { total }),
+            RangedAnswer::Missing => Err(BackendError::NotFound),
+            RangedAnswer::Failed => {
+                let s = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                Err(BackendError::Other(format!("download {key}: {s}: {body}")))
+            }
+        }
     }
 
     /// Granted "anyone with link can read" on the file (idempotent within process)
@@ -475,6 +523,32 @@ impl GdriveBackend {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RangedAnswer {
+    Part,
+    Whole,
+    Unsatisfiable,
+    Missing,
+    Failed,
+}
+
+fn body_stream(resp: wreq::Response) -> ByteStream {
+    Box::pin(
+        resp.bytes_stream()
+            .map(|r| r.map_err(std::io::Error::other)),
+    )
+}
+
+fn ranged_answer(status: u16) -> RangedAnswer {
+    match status {
+        206 => RangedAnswer::Part,
+        200 => RangedAnswer::Whole,
+        416 => RangedAnswer::Unsatisfiable,
+        404 => RangedAnswer::Missing,
+        _ => RangedAnswer::Failed,
+    }
+}
+
 fn parse_size(s: Option<&str>) -> u64 {
     s.and_then(|s| s.parse().ok()).unwrap_or(0)
 }
@@ -486,6 +560,16 @@ fn http_err(e: wreq::Error) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ranged_download_that_ignores_the_range_falls_back_to_the_whole_file() {
+        assert_eq!(ranged_answer(206), RangedAnswer::Part);
+        assert_eq!(ranged_answer(200), RangedAnswer::Whole);
+        assert_eq!(ranged_answer(416), RangedAnswer::Unsatisfiable);
+        assert_eq!(ranged_answer(404), RangedAnswer::Missing);
+        assert_eq!(ranged_answer(500), RangedAnswer::Failed);
+        assert_eq!(ranged_answer(403), RangedAnswer::Failed);
+    }
 
     #[test]
     fn jwt_signing_has_a_crypto_backend() {

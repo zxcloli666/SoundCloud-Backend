@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
 use crate::common::admission::PublicAdmission;
-use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService, definers};
 use crate::modules::chat::ChatState;
 use crate::modules::chat::caller::Callers;
 use crate::modules::chat::channel::ock::OckRing;
@@ -13,11 +13,15 @@ use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
+use crate::modules::chat::media::star::Stars;
 use crate::modules::chat::moderation::Moderator;
 use crate::modules::chat::moderation::client::AiClient;
 use crate::modules::chat::route_metrics;
+use crate::modules::chat::s3::S3;
+use crate::modules::chat::stores::{self, Fills};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::modules::rooms::{RoomHub, RoomsService};
+use crate::modules::subscriptions::SubscriptionsService;
 use crate::rt::config::RtConfig;
 use crate::sc::ScClient;
 use crate::{db, redis};
@@ -38,6 +42,12 @@ pub async fn build(config: &RtConfig) -> RtState {
     db::verify_schema(&pg)
         .await
         .expect("PostgreSQL schema is incompatible; run jobs-migrate core before chat-api");
+    db::verify_chat_schema(&pg)
+        .await
+        .expect("chat schema is outdated; run jobs-migrate core before chat-api");
+    definers::verify(&pg)
+        .await
+        .expect("auth functions are not ready; run jobs-migrate core and the chat role grants before chat-api");
     let chat_pg = db::connect_counted_pool(
         &config.database,
         config.chat.pg_pool_max,
@@ -90,6 +100,12 @@ pub async fn build(config: &RtConfig) -> RtState {
             AiClient::load(&config.chat.moderation, keys_dir)
                 .expect("chat moderation config is incomplete"),
         ),
+        stars: Stars::new(SubscriptionsService::new(
+            pg.clone(),
+            config.subscriptions_always_premium,
+        )),
+        s3: S3::new(&config.chat.media),
+        fills: Fills::default(),
         auth: auth.clone(),
         link,
         rooms: rooms.clone(),
@@ -98,6 +114,9 @@ pub async fn build(config: &RtConfig) -> RtState {
         pg: chat_pg,
         redis: redis_rt,
     });
+    stores::verify_rows(&chat.pg, &config.chat.media)
+        .await
+        .expect("chat.media names a store that CHAT_STORES does not list");
     rooms.install_chat(&chat);
 
     RtState {

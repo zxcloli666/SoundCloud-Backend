@@ -4,12 +4,15 @@ use std::time::Duration;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Region;
+use aws_sdk_s3::config::http::HttpResponse;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream as AwsByteStream;
 use tokio_util::io::ReaderStream;
 use tracing::warn;
 
-use super::{BackendError, ByteStream, ObjectInfo};
+use super::{BackendError, ByteStream, ObjectInfo, Ranged};
+use crate::byte_range::{ByteRange, Slice};
 use crate::config::S3Config;
 
 pub struct S3Backend {
@@ -181,6 +184,69 @@ impl S3Backend {
         .await
     }
 
+    pub async fn read_range(&self, key: &str, range: &ByteRange) -> Result<Ranged, BackendError> {
+        if range.never_satisfiable() {
+            return self.unsatisfiable(key).await;
+        }
+        let sent = super::s3_trace::s3("get_range", async {
+            match self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .range(range.header())
+                .send()
+                .await
+            {
+                Ok(out) => Ok(Some(out)),
+                Err(err) if refused_range(&err) => Ok(None),
+                Err(err) => {
+                    let service_err = err.into_service_error();
+                    if service_err.is_no_such_key() {
+                        Err(BackendError::NotFound)
+                    } else {
+                        Err(BackendError::Other(format!(
+                            "get_object {key}: {service_err}"
+                        )))
+                    }
+                }
+            }
+        })
+        .await?;
+        let Some(out) = sent else {
+            return self.unsatisfiable(key).await;
+        };
+        let length = out.content_length().unwrap_or(0) as u64;
+        super::s3_trace::bytes(length);
+        let content_type = out
+            .content_type()
+            .map(|s| s.to_string())
+            .or_else(|| Some(super::content_type_for(key).to_string()));
+        let slice = out.content_range().and_then(Slice::parse);
+        let stream: ByteStream = Box::pin(ReaderStream::new(out.body.into_async_read()));
+        Ok(match slice {
+            Some(slice) => Ranged::Part {
+                slice,
+                content_type,
+                stream,
+            },
+            None => Ranged::Whole {
+                info: ObjectInfo {
+                    size: length,
+                    content_type,
+                },
+                stream,
+            },
+        })
+    }
+
+    async fn unsatisfiable(&self, key: &str) -> Result<Ranged, BackendError> {
+        match self.head(key).await? {
+            Some(info) => Ok(Ranged::Unsatisfiable { total: info.size }),
+            None => Err(BackendError::NotFound),
+        }
+    }
+
     pub async fn presign_get(&self, key: &str, expires: Duration) -> Result<String, BackendError> {
         let cfg = PresigningConfig::expires_in(expires)
             .map_err(|e| BackendError::Other(format!("presign config: {e}")))?;
@@ -193,5 +259,33 @@ impl S3Backend {
             .await
             .map_err(|e| BackendError::Other(format!("presign get_object {key}: {e}")))?;
         Ok(req.uri().to_string())
+    }
+}
+
+fn refused_range<E: ProvideErrorMetadata>(err: &SdkError<E, HttpResponse>) -> bool {
+    let status = err.raw_response().map(|raw| raw.status().as_u16());
+    let code = match err {
+        SdkError::ServiceError(service) => service.err().code(),
+        _ => None,
+    };
+    is_refused_range(status, code)
+}
+
+fn is_refused_range(status: Option<u16>, code: Option<&str>) -> bool {
+    status == Some(416) || code == Some("InvalidRange")
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::is_refused_range;
+
+    #[test]
+    fn only_a_416_or_invalid_range_means_unsatisfiable() {
+        assert!(is_refused_range(Some(416), None));
+        assert!(is_refused_range(None, Some("InvalidRange")));
+        assert!(is_refused_range(Some(416), Some("InvalidRange")));
+        assert!(!is_refused_range(Some(404), Some("NoSuchKey")));
+        assert!(!is_refused_range(Some(500), None));
+        assert!(!is_refused_range(None, None));
     }
 }

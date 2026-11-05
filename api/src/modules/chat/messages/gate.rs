@@ -75,6 +75,9 @@ async fn room_open(chat: &ChatState, access: &Access, out: &Outgoing) -> ChatRes
         out.class.as_str(),
     )
     .await?;
+    if out.class == Class::Meta {
+        return limits::admit_room_meta(chat, access.conversation).await;
+    }
     let seated_ms = chrono::Utc::now().timestamp_millis() - seat.joined_at;
     let post = RoomPost {
         conversation: access.conversation,

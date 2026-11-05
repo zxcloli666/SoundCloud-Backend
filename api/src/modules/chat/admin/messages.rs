@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::admin::auth::ChatAdmin;
 use crate::modules::chat::body::ChatPath;
+use crate::modules::chat::media;
 use crate::modules::chat::moderation::actions;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
@@ -16,13 +17,16 @@ pub async fn delete(
     State(chat): State<Arc<ChatState>>,
     ChatPath((conversation, seq)): ChatPath<(Uuid, i64)>,
 ) -> ChatResult<StatusCode> {
+    let mut tx = chat.pg.begin().await?;
     let removed =
         sqlx::query_file_scalar!("queries/chat/admin/delete_message.sql", conversation, seq)
-            .fetch_all(&chat.pg)
+            .fetch_all(&mut *tx)
             .await?;
     if removed.is_empty() {
         return Err(ChatError::NotFound);
     }
+    media::hooks::drop_for_messages(&mut tx, conversation, &removed).await?;
+    tx.commit().await?;
     chat.hot.forget(conversation);
     audit::record(
         &chat,
