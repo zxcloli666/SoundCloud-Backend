@@ -5,7 +5,7 @@ DROP FUNCTION IF EXISTS public.scd_verify_chunk(text, jsonb, jsonb, text[]);
 CREATE OR REPLACE FUNCTION public.scd_verify_cols(rel text, shown text[])
 RETURNS text
 LANGUAGE sql STABLE
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 SELECT string_agg(
            CASE WHEN NOT coalesce(co.collisdeterministic, true) THEN format('t.%I::text', c.col)
@@ -23,7 +23,7 @@ $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_verify_chunk(rel text, lo jsonb, hi jsonb, shown text[] DEFAULT NULL, keyed boolean DEFAULT true, OUT n bigint, OUT h text, OUT keys jsonb)
 LANGUAGE plpgsql STABLE
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 SET timezone TO 'UTC'
 SET extra_float_digits TO 1
 SET datestyle TO 'ISO, YMD'
@@ -49,7 +49,7 @@ END
 $f$;
 CREATE OR REPLACE FUNCTION public.scd_verify_probe(budget integer DEFAULT 10, size integer DEFAULT 500, OUT state text, OUT probes integer, OUT rel text, OUT wrapped boolean)
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     cursor_at jsonb;
@@ -106,7 +106,7 @@ $f$;
 CREATE OR REPLACE FUNCTION public.scd_verify_answer(probe uuid, rel text, k jsonb, op jsonb)
 RETURNS boolean
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     c record;
@@ -161,7 +161,7 @@ $f$;
 CREATE OR REPLACE FUNCTION public.scd_verify_settle(peer text, rel text, body jsonb, dry boolean)
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     cls text := public.scd_table_class(rel);
