@@ -199,6 +199,16 @@ groups:
           summary: "Sustained traffic to paths nobody routes"
           description: "Every unrouted request lands on the single unmatched label, so this cannot explode cardinality. Threshold is not derived from a production baseline yet, tune it on the first week of real traffic."
 
+      - alert: AuthPowRaised
+        expr: max by (host, path) (auth_pow_effort) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Login proof of work is raised on {{ $labels.host }} for {{ $labels.path }}"
+          description: "Sealed auth asks clients to solve a puzzle because starts exceed the free lane. Effort is {{ $value }}. Check for a login flood in auth_x_total."
+
   - name: scd-jobs
     interval: 30s
     rules:
