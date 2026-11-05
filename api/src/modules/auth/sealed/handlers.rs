@@ -7,10 +7,10 @@ use axum::{Json, Router};
 use crate::modules::auth::sealed::dto::{
     AuthResult, LinkClaimBody, LinkClaimed, LinkCreateBody, LinkCreated, LinkPoll, RequestId,
 };
+use crate::modules::auth::sealed::signed::SealedAuth;
 use crate::modules::auth::service::login::{LoginInitResult, LoginStatusResult};
 use crate::modules::auth::{AuthService, LinkService};
 use crate::modules::chat::body::{ChatJson, ChatQuery};
-use crate::modules::chat::channel::sealed_auth::SealedAuth;
 
 #[derive(Clone)]
 struct Services {

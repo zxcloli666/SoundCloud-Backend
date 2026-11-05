@@ -124,7 +124,7 @@ async fn a_caller_cannot_steer_replication_from_inside_a_definer_function(
     owner: PgPool,
 ) -> anyhow::Result<()> {
     node(&owner, "split", "api", "main").await?;
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let session = connected(&owner, "steer", None).await?;
     let connection = connection_of(&owner, session).await?;
 
@@ -214,7 +214,7 @@ async fn core_purges_the_orphaned_connection_of_an_ended_session(
     owner: PgPool,
 ) -> anyhow::Result<()> {
     node(&owner, "split", "core", "core").await?;
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let session = connected(&owner, "core", None).await?;
     let connection = connection_of(&owner, session).await?;
     let kept = connected(&owner, "core-kept", None).await?;
@@ -257,7 +257,7 @@ async fn core_purges_the_orphaned_connection_of_an_ended_session(
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_legacy_node_drops_the_orphaned_connection_in_place(owner: PgPool) -> anyhow::Result<()> {
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let session = connected(&owner, "legacy", None).await?;
     let connection = connection_of(&owner, session).await?;
 
@@ -289,7 +289,7 @@ async fn a_legacy_node_drops_the_orphaned_connection_in_place(owner: PgPool) -> 
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_node_setting_on_the_role_stops_the_writers(owner: PgPool) -> anyhow::Result<()> {
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let mut codes = Vec::new();
     for (name, value) in [("scd.mode", "split"), ("scd.guard", "log")] {
         sqlx::raw_sql(&format!(
@@ -367,7 +367,7 @@ async fn definer_writes_run_with_no_writer_and_the_guard_of_the_database(
     )
     .execute(&owner)
     .await?;
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let source = connected(&owner, "writer-source", None).await?;
     let ended = connected(&owner, "writer-ended", None).await?;
     watch_writes(&owner).await?;

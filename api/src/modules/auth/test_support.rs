@@ -4,6 +4,15 @@ use uuid::Uuid;
 
 use crate::modules::auth::definers::CHAT_FUNCTIONS;
 
+pub const SEALED_FUNCTIONS: [&str; 6] = [
+    "public.auth_login_apps()",
+    "public.auth_login_create(uuid, bytea, uuid[])",
+    "public.auth_login_status(uuid)",
+    "public.auth_link_create(text, uuid, bytea)",
+    "public.auth_link_claim(text, uuid, bytea, bytea)",
+    "public.auth_link_status(uuid)",
+];
+
 pub struct Restricted {
     pub role: String,
     pub pool: PgPool,
@@ -43,6 +52,18 @@ impl Restricted {
             .connect_with(options)
             .await?;
         Ok(Self { role, pool })
+    }
+
+    pub async fn sealed(owner: &PgPool) -> anyhow::Result<Self> {
+        let restricted = Self::new(owner).await?;
+        sqlx::raw_sql(&format!(
+            "GRANT EXECUTE ON FUNCTION {} TO {}",
+            SEALED_FUNCTIONS.join(", "),
+            restricted.role
+        ))
+        .execute(owner)
+        .await?;
+        Ok(restricted)
     }
 
     pub async fn remove(self, owner: &PgPool) -> anyhow::Result<()> {

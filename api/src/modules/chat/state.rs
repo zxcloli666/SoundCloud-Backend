@@ -4,7 +4,7 @@ use deadpool_redis::Pool;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
-use crate::modules::auth::{AuthService, LinkService};
+use crate::modules::auth::AuthService;
 use crate::modules::chat::ChatConfig;
 use crate::modules::chat::caller::Callers;
 use crate::modules::chat::channel::ock::OckRing;
@@ -33,7 +33,6 @@ pub struct ChatState {
     pub s3: S3,
     pub fills: Fills,
     pub auth: Arc<AuthService>,
-    pub link: Arc<LinkService>,
     pub rooms: Arc<RoomsService>,
     pub shutdown: CancellationToken,
 }

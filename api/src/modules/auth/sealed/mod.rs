@@ -13,6 +13,7 @@ mod metrics;
 mod prepare;
 mod refusal;
 pub mod seed;
+pub mod signed;
 
 #[cfg(test)]
 mod tests;

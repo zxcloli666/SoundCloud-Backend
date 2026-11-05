@@ -11,11 +11,6 @@ const CONV: &str = "0192e5c5-1a2b-7c3d-8e4f-5a6b7c8d9e0f";
 fn inner_routes() -> Vec<(&'static str, String)> {
     vec![
         ("GET", "/chat/config".into()),
-        ("GET", "/auth/login".into()),
-        ("GET", "/auth/login/status".into()),
-        ("POST", "/auth/link/create".into()),
-        ("POST", "/auth/link/claim".into()),
-        ("GET", "/auth/link/status".into()),
         ("POST", "/chat/devices".into()),
         ("GET", "/chat/devices".into()),
         ("DELETE", "/chat/devices/me".into()),

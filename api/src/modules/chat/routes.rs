@@ -6,18 +6,13 @@ use axum::routing::{delete, get, post, put};
 
 use crate::modules::chat::channel::{self, Channel};
 use crate::modules::chat::{
-    ChatState, admin, auth_bind, blocks, conversations, devices, invites, keys, media, members,
-    messages, reports, requests, rooms, route_metrics, settings, sync, typing, users,
+    ChatState, admin, blocks, conversations, devices, invites, keys, media, members, messages,
+    reports, requests, rooms, route_metrics, settings, sync, typing, users,
 };
 
 pub fn inner() -> Router<Arc<ChatState>> {
     Router::new()
         .route("/chat/config", get(channel::config_route::chat_config))
-        .route("/auth/login", get(auth_bind::login))
-        .route("/auth/login/status", get(auth_bind::login_status))
-        .route("/auth/link/create", post(auth_bind::link_create))
-        .route("/auth/link/claim", post(auth_bind::link_claim))
-        .route("/auth/link/status", get(auth_bind::link_status))
         .route("/chat/devices", get(devices::list).post(devices::register))
         .route("/chat/devices/me", delete(devices::remove_me))
         .route("/chat/devices/{id}", delete(devices::remove))

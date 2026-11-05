@@ -12,10 +12,10 @@ use crate::modules::auth::sealed::decide::{poll, start};
 use crate::modules::auth::sealed::kind::Kind;
 use crate::modules::auth::sealed::metrics::note;
 use crate::modules::auth::sealed::refusal::Refusal;
+use crate::modules::auth::sealed::signed::SealedAuth;
 use crate::modules::chat::ChatError;
 use crate::modules::chat::channel::clock;
 use crate::modules::chat::channel::dispatch::{dispatch, inner_request};
-use crate::modules::chat::channel::sealed_auth::SealedAuth;
 
 pub async fn answer(
     sealed: &Sealed,

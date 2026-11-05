@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,15 +20,11 @@ use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::auth_gate::{AuthGate, CLIENTS_TRACKED, LINKS_PER_WINDOW, LOGINS_PER_WINDOW};
 use super::{Channel, router};
 use crate::common::session::session_hash;
-use crate::modules::chat::caller::CallerBind;
-use crate::modules::chat::config::StartLimits;
-use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::model::DeviceRow;
-use crate::modules::chat::test_support::{chat_state, config, offline_chat_state, vector_ock};
-use crate::modules::chat::{ChatError, ChatResult, ChatState, devices, routes};
+use crate::modules::chat::test_support::{chat_state, offline_chat_state, vector_ock};
+use crate::modules::chat::{ChatError, ChatState, devices, routes};
 
 const PEER: [u8; 4] = [198, 51, 100, 7];
 
@@ -55,10 +51,6 @@ impl Device {
 
     fn bind(&self) -> Bind {
         make_bind(&self.id.to_string(), &self.seed, &self.box_pub, now_ms())
-    }
-
-    fn keys(&self) -> CallerBind {
-        CallerBind::from_bind(&self.bind()).expect("bind keys")
     }
 
     fn row(&self, user: &str, session: Uuid, status: &str) -> DeviceRow {
@@ -121,21 +113,9 @@ fn seal(mut inner: Inner, signer: &[u8; 32]) -> SealedRequest {
 }
 
 async fn post(app: &Router, envelope: Vec<u8>) -> Response {
-    post_from(app, envelope, SocketAddr::from((PEER, 40_000)), None).await
-}
-
-async fn post_from(
-    app: &Router,
-    envelope: Vec<u8>,
-    peer: SocketAddr,
-    forwarded: Option<&str>,
-) -> Response {
-    let mut request = Request::post("/chat/x")
+    let request = Request::post("/chat/x")
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .extension(ConnectInfo(peer));
-    if let Some(forwarded) = forwarded {
-        request = request.header("x-forwarded-for", forwarded);
-    }
+        .extension(ConnectInfo(SocketAddr::from((PEER, 40_000))));
     app.clone()
         .oneshot(request.body(Body::from(envelope)).expect("a request"))
         .await
@@ -152,16 +132,6 @@ async fn body_of(response: Response) -> Vec<u8> {
         .await
         .expect("a body")
         .to_vec()
-}
-
-async fn exchange_from(
-    app: &Router,
-    request: &SealedRequest,
-    peer: SocketAddr,
-    forwarded: Option<&str>,
-) -> (u32, Value) {
-    let response = post_from(app, request.envelope.clone(), peer, forwarded).await;
-    opened(request, &body_of(response).await)
 }
 
 fn opened(request: &SealedRequest, body: &[u8]) -> (u32, Value) {
@@ -299,31 +269,24 @@ async fn a_forged_or_modified_answer_does_not_open_in_the_client() {
 }
 
 #[tokio::test]
-async fn sealed_auth_needs_a_bind_that_signs_the_request() {
+async fn the_chat_channel_does_not_route_sealed_auth_paths() {
     let app = offline_app();
     let device = Device::new();
-    let stranger = Device::new();
 
-    let unbound = seal(call("GET", "/auth/login", ""), &device.seed);
-    assert_eq!(exchange(&app, &unbound).await, error(ChatError::Invalid));
-
-    let signed_by_other = seal(
-        with_bind(call("GET", "/auth/login", ""), &device),
-        &stranger.seed,
-    );
-    assert_eq!(
-        exchange(&app, &signed_by_other).await,
-        error(ChatError::Invalid)
-    );
-
-    let mut broken = with_bind(call("GET", "/auth/login", ""), &device);
-    if let Some(bind) = broken.bind.as_mut() {
-        bind.box_pub = stranger.box_pub.to_vec();
+    for (method, path) in [
+        ("GET", "/auth/login"),
+        ("GET", "/auth/login/status"),
+        ("POST", "/auth/link/create"),
+        ("POST", "/auth/link/claim"),
+        ("GET", "/auth/link/status"),
+    ] {
+        let request = seal(with_bind(call(method, path, ""), &device), &device.seed);
+        assert_eq!(
+            exchange(&app, &request).await,
+            error(ChatError::NotFound),
+            "{method} {path}"
+        );
     }
-    assert_eq!(
-        exchange(&app, &seal(broken, &device.seed)).await,
-        error(ChatError::Invalid)
-    );
 }
 
 #[tokio::test]
@@ -382,114 +345,19 @@ async fn a_full_channel_answers_an_outer_busy_with_retry_after() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-fn starts() -> StartLimits {
-    config(true).starts
-}
-
-fn address(n: u32) -> Option<IpAddr> {
-    Some(IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + n)))
-}
-
-fn held(result: ChatResult<()>) -> bool {
-    matches!(
-        result,
-        Err(ChatError::Busy { retry_ms, source: BusySource::AuthGate }) if retry_ms > 0
-    )
-}
-
-#[test]
-fn a_client_at_its_start_limit_leaves_other_clients_their_own() {
-    let starts = starts();
-    let gate = AuthGate::new(&starts);
-    for _ in 0..starts.logins_per_client {
-        assert_eq!(gate.admit("/auth/login", address(1)), Ok(()));
-    }
-    assert!(held(gate.admit("/auth/login", address(1))));
-    assert_eq!(gate.admit("/auth/login", address(2)), Ok(()));
-
-    for _ in 0..starts.links_per_client {
-        assert_eq!(gate.admit("/auth/link/create", address(1)), Ok(()));
-    }
-    assert!(held(gate.admit("/auth/link/create", address(1))));
-    assert_eq!(gate.admit("/auth/link/create", address(2)), Ok(()));
-    assert_eq!(gate.admit("/auth/login/status", address(1)), Ok(()));
-}
-
-#[test]
-fn the_start_gate_reads_forwarded_for_only_from_a_trusted_proxy() {
-    let request = |connected: bool| {
-        let request = Request::post("/chat/x").header("x-forwarded-for", "203.0.113.9");
-        let request = if connected {
-            request.extension(ConnectInfo(SocketAddr::from((PEER, 40_000))))
-        } else {
-            request
-        };
-        request.body(Body::empty()).expect("a request")
-    };
-    let mut starts = starts();
-    let direct = AuthGate::new(&starts);
-    starts.trusted_proxies = vec!["198.51.100.0/24".parse().expect("a net")];
-    let proxied = AuthGate::new(&starts);
-
-    assert_eq!(direct.client(&request(true)), Some(IpAddr::from(PEER)));
-    assert_eq!(
-        proxied.client(&request(true)),
-        Some("203.0.113.9".parse().expect("an address"))
-    );
-    assert_eq!(proxied.client(&request(false)), None);
-    assert_eq!(
-        direct.admit("/auth/login", None),
-        Err(ChatError::Unavailable)
-    );
-    assert_eq!(direct.admit("/auth/login/status", None), Ok(()));
-}
-
-#[test]
-fn a_spray_of_unique_addresses_keeps_the_start_map_at_its_cap() {
-    let gate = AuthGate::new(&starts());
-    let spray = u32::try_from(10 * CLIENTS_TRACKED).expect("a count");
-    for n in 0..spray {
-        let _ = gate.admit("/auth/login", address(n));
-    }
-    let (clients, queued) = gate.tracked("/auth/login");
-    assert_eq!(clients, CLIENTS_TRACKED);
-    assert!(queued <= 2 * CLIENTS_TRACKED, "{queued}");
-    assert_eq!(gate.tracked("/auth/link/create"), (0, 0));
-}
-
-#[test]
-fn the_process_wide_start_cap_holds_across_clients() {
-    let gate = AuthGate::new(&starts());
-    for n in 0..LOGINS_PER_WINDOW {
-        assert_eq!(gate.admit("/auth/login", address(n)), Ok(()));
-    }
-    assert!(held(gate.admit("/auth/login", address(LOGINS_PER_WINDOW))));
-    for n in 0..LINKS_PER_WINDOW {
-        assert_eq!(gate.admit("/auth/link/create", address(n)), Ok(()));
-    }
-    assert!(held(
-        gate.admit("/auth/link/create", address(LINKS_PER_WINDOW))
-    ));
-}
-
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_same_envelope_is_refused_the_second_time(pool: PgPool) -> anyhow::Result<()> {
-    let app: Router = routes::public(chat_state(pool, redis()?, true));
     let device = Device::new();
-    let status = with_bind(
-        call(
-            "GET",
-            "/auth/login/status",
-            &format!("id={}", Uuid::new_v4()),
-        ),
-        &device,
+    let session = session_for(&pool, "4101", Some(&device)).await?;
+    let app: Router = routes::public(chat_state(pool, redis()?, true));
+    let request = seal(
+        from_device(call("GET", "/chat/config", ""), session, &device),
+        &device.seed,
     );
-    let request = seal(status, &device.seed);
 
     let (first, body) = exchange(&app, &request).await;
     assert_eq!(first, 200, "{body}");
-    assert_eq!(body["status"], "expired");
     assert_eq!(exchange(&app, &request).await, error(ChatError::Replay));
     Ok(())
 }
@@ -732,230 +600,6 @@ async fn a_revoked_device_is_refused_on_its_next_request(pool: PgPool) -> anyhow
         exchange(&app, &idle()).await,
         error(ChatError::DeviceRevoked)
     );
-    Ok(())
-}
-
-async fn oauth_app(pool: &PgPool) -> anyhow::Result<()> {
-    let app = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO oauth_apps (id, name, client_id, client_secret, redirect_uri)
-         VALUES ($1, 'test', $2, 'secret', 'https://app.test/')",
-    )
-    .bind(app)
-    .bind(app.to_string())
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_login_records_the_bind_of_the_signing_device(pool: PgPool) -> anyhow::Result<()> {
-    oauth_app(&pool).await?;
-    let app: Router = routes::public(chat_state(pool.clone(), redis()?, false));
-    let device = Device::new();
-    let login = seal(
-        with_bind(call("GET", "/auth/login", ""), &device),
-        &device.seed,
-    );
-
-    let (status, started) = exchange(&app, &login).await;
-    assert_eq!(status, 200, "{started}");
-    assert!(
-        started["url"]
-            .as_str()
-            .is_some_and(|url| url.starts_with("https://"))
-    );
-    let id: Uuid = started["loginRequestId"]
-        .as_str()
-        .unwrap_or_default()
-        .parse()?;
-    let (stored, target): (Option<Vec<u8>>, Option<Uuid>) =
-        sqlx::query_as("SELECT chat_bind, target_session_id FROM login_requests WHERE id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(
-        stored.as_deref().and_then(CallerBind::decode),
-        Some(device.keys())
-    );
-    assert_eq!(target, None);
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_login_is_limited_per_client_whatever_forwarded_for_says(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    oauth_app(&pool).await?;
-    let chat = chat_state(pool, redis()?, false);
-    let per_client = chat.config.starts.logins_per_client;
-    let app: Router = routes::public(chat);
-    let device = Device::new();
-    let login = || {
-        seal(
-            with_bind(call("GET", "/auth/login", ""), &device),
-            &device.seed,
-        )
-    };
-    let sprayer = SocketAddr::from((PEER, 40_000));
-
-    for n in 0..per_client {
-        let forwarded = format!("203.0.113.{n}");
-        let (status, body) = exchange_from(&app, &login(), sprayer, Some(&forwarded)).await;
-        assert_eq!(status, 200, "{body}");
-    }
-    let (_, refused) = exchange_from(&app, &login(), sprayer, Some("203.0.113.250")).await;
-    assert_eq!(refused["error"], "chat_busy");
-
-    let neighbour = SocketAddr::from(([198, 51, 100, 8], 40_000));
-    let (status, body) = exchange_from(&app, &login(), neighbour, None).await;
-    assert_eq!(status, 200, "{body}");
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_relogin_targets_the_current_session(pool: PgPool) -> anyhow::Result<()> {
-    oauth_app(&pool).await?;
-    let current = session_for(&pool, "4106", None).await?;
-    let app: Router = routes::public(chat_state(pool.clone(), redis()?, true));
-    let device = Device::new();
-    let mut relogin = with_bind(call("GET", "/auth/login", ""), &device);
-    relogin.session_id = Some(current.to_string());
-
-    let (status, started) = exchange(&app, &seal(relogin, &device.seed)).await;
-    assert_eq!(status, 200, "{started}");
-    let id: Uuid = started["loginRequestId"]
-        .as_str()
-        .unwrap_or_default()
-        .parse()?;
-    let target: Option<Uuid> =
-        sqlx::query_scalar("SELECT target_session_id FROM login_requests WHERE id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await?;
-    assert_eq!(target, Some(current));
-    Ok(())
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_pull_link_records_the_bind_and_shows_the_session_only_to_it(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let holder = Device::new();
-    let source = session_for(&pool, "4107", Some(&holder)).await?;
-    let app: Router = routes::public(chat_state(pool.clone(), redis()?, true));
-    let fresh = Device::new();
-    let mut create = with_bind(call("POST", "/auth/link/create", ""), &fresh);
-    create.body = br#"{"mode":"pull"}"#.to_vec();
-
-    let (status, created) = exchange(&app, &seal(create, &fresh.seed)).await;
-    assert_eq!(status, 200, "{created}");
-    assert_eq!(created["mode"], "pull");
-    assert!(
-        created["expiresAt"]
-            .as_i64()
-            .is_some_and(|at| at > Utc::now().timestamp_millis())
-    );
-    let id: Uuid = created["linkRequestId"]
-        .as_str()
-        .unwrap_or_default()
-        .parse()?;
-    let token = created["claimToken"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
-
-    let mut claim = from_session(
-        with_bind(call("POST", "/auth/link/claim", ""), &holder),
-        source,
-    );
-    claim.body = json!({"claimToken": token}).to_string().into_bytes();
-    let (status, claimed) = exchange(&app, &seal(claim, &holder.seed)).await;
-    assert_eq!(status, 200, "{claimed}");
-    let target: Uuid = claimed["sessionId"].as_str().unwrap_or_default().parse()?;
-    assert_eq!(bound_keys(&pool, target).await?, Some(fresh.keys()));
-
-    let poll = |device: &Device| {
-        seal(
-            with_bind(
-                call("GET", "/auth/link/status", &format!("id={id}")),
-                device,
-            ),
-            &device.seed,
-        )
-    };
-    let (status, mine) = exchange(&app, &poll(&fresh)).await;
-    assert_eq!(status, 200, "{mine}");
-    assert_eq!(mine["status"], "claimed");
-    assert_eq!(mine["sessionId"], target.to_string());
-
-    let (_, theirs) = exchange(&app, &poll(&Device::new())).await;
-    assert_eq!(theirs["status"], "claimed");
-    assert!(theirs.get("sessionId").is_none(), "{theirs}");
-    Ok(())
-}
-
-fn from_session(mut inner: Inner, session: Uuid) -> Inner {
-    inner.session_id = Some(session.to_string());
-    inner
-}
-
-async fn bound_keys(pool: &PgPool, session: Uuid) -> anyhow::Result<Option<CallerBind>> {
-    let bound: Option<Vec<u8>> = sqlx::query_scalar("SELECT chat_bind FROM sessions WHERE id = $1")
-        .bind(session)
-        .fetch_one(pool)
-        .await?;
-    Ok(bound.as_deref().and_then(CallerBind::decode))
-}
-
-async fn push_claimed(app: &Router, token: &str, fresh: &Device) -> anyhow::Result<Uuid> {
-    let mut claim = with_bind(call("POST", "/auth/link/claim", ""), fresh);
-    claim.body = json!({"claimToken": token}).to_string().into_bytes();
-    let (status, claimed) = exchange(app, &seal(claim, &fresh.seed)).await;
-    assert_eq!(status, 200, "{claimed}");
-    assert_eq!(claimed["mode"], "push");
-    Ok(claimed["sessionId"].as_str().unwrap_or_default().parse()?)
-}
-
-#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-#[ignore = "requires a local Redis"]
-async fn a_sealed_push_link_binds_the_new_session_only_when_the_bound_source_made_it(
-    pool: PgPool,
-) -> anyhow::Result<()> {
-    let holder = Device::new();
-    let source = session_for(&pool, "4108", Some(&holder)).await?;
-    let chat = chat_state(pool.clone(), redis()?, true);
-    let app: Router = routes::public(chat.clone());
-    let push_from = |signer: &Device| {
-        let mut create = from_session(
-            with_bind(call("POST", "/auth/link/create", ""), signer),
-            source,
-        );
-        create.body = br#"{"mode":"push"}"#.to_vec();
-        seal(create, &signer.seed)
-    };
-
-    let (status, created) = exchange(&app, &push_from(&holder)).await;
-    assert_eq!(status, 200, "{created}");
-    let token = created["claimToken"].as_str().unwrap_or_default();
-    let fresh = Device::new();
-    let target = push_claimed(&app, token, &fresh).await?;
-    assert_eq!(bound_keys(&pool, target).await?, Some(fresh.keys()));
-
-    let thief = Device::new();
-    let (status, stolen) = exchange(&app, &push_from(&thief)).await;
-    assert_eq!(status, 200, "{stolen}");
-    let token = stolen["claimToken"].as_str().unwrap_or_default();
-    let target = push_claimed(&app, token, &thief).await?;
-    assert_eq!(bound_keys(&pool, target).await?, None);
-
-    let plain = chat.link.create("push", Some(source)).await?;
-    let target = push_claimed(&app, &plain.claim_token, &thief).await?;
-    assert_eq!(bound_keys(&pool, target).await?, None);
     Ok(())
 }
 
