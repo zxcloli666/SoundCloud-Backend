@@ -23,6 +23,7 @@ struct Shelf {
     refused: Mutex<HashSet<String>>,
     asked: Mutex<Vec<(Method, String)>>,
     copies_fail: AtomicBool,
+    deletes_fail: AtomicBool,
     delay: Duration,
 }
 
@@ -81,6 +82,10 @@ impl FakeStore {
 
     pub fn fail_copies(&self, failing: bool) {
         self.shelf.copies_fail.store(failing, Ordering::SeqCst);
+    }
+
+    pub fn fail_deletes(&self, failing: bool) {
+        self.shelf.deletes_fail.store(failing, Ordering::SeqCst);
     }
 
     pub fn refuse(&self, key: &str) {
@@ -178,6 +183,9 @@ async fn answer(
             };
             objects.insert(key, bytes);
             (StatusCode::OK, [(header::ETAG, "\"fake\"")]).into_response()
+        }
+        Method::DELETE if shelf.deletes_fail.load(Ordering::SeqCst) => {
+            refusal(StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
         }
         Method::DELETE => {
             objects.remove(&key);

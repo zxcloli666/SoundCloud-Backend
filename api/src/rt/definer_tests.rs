@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::header::RETRY_AFTER;
@@ -710,6 +711,66 @@ async fn the_auth_functions_cap_the_arrays_they_take(owner: PgPool) -> anyhow::R
             None,
             Some("54000".to_owned())
         ]
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn adding_the_bind_checks_keeps_session_readers_moving(owner: PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "ALTER TABLE sessions DROP CONSTRAINT sessions_chat_bind_size;
+         ALTER TABLE login_requests DROP CONSTRAINT login_requests_chat_bind_size;
+         ALTER TABLE link_requests DROP CONSTRAINT link_requests_chat_bind_size;",
+    )
+    .execute(&owner)
+    .await?;
+    let mut blocker = owner.begin().await?;
+    sqlx::query("SELECT count(*) FROM sessions")
+        .execute(&mut *blocker)
+        .await?;
+    let migration = tokio::spawn({
+        let owner = owner.clone();
+        async move {
+            sqlx::raw_sql(include_str!(
+                "../../migrations/0319_chat_bind_size_checks.sql"
+            ))
+            .execute(&owner)
+            .await
+            .map(|_| ())
+        }
+    });
+    let mut reader = owner.acquire().await?;
+    sqlx::raw_sql("SET lock_timeout = '100ms'")
+        .execute(&mut *reader)
+        .await?;
+
+    let watched = Instant::now();
+    let mut slowest = Duration::ZERO;
+    let mut timeouts = 0;
+    while watched.elapsed() < Duration::from_millis(2_500) {
+        let read = Instant::now();
+        if let Err(error) = sqlx::query("SELECT 1 FROM sessions LIMIT 1")
+            .execute(&mut *reader)
+            .await
+        {
+            let code = error.as_database_error().and_then(|error| error.code());
+            anyhow::ensure!(code.as_deref() == Some("55P03"), "{error}");
+            timeouts += 1;
+        }
+        slowest = slowest.max(read.elapsed());
+    }
+    blocker.commit().await?;
+    migration.await??;
+    let added: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_catalog.pg_constraint WHERE conname LIKE '%\\_chat\\_bind\\_size'",
+    )
+    .fetch_one(&owner)
+    .await?;
+
+    assert_eq!(
+        (timeouts, added, slowest < Duration::from_millis(100)),
+        (0, 3, true),
+        "slowest session read {slowest:?}"
     );
     Ok(())
 }

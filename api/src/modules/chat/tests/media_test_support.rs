@@ -264,3 +264,34 @@ pub async fn until_blocked(pool: &PgPool) {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
+
+pub async fn cancel_a_lock_wait(
+    pg: &PgPool,
+    after: Option<chrono::DateTime<chrono::Utc>>,
+) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: Option<(i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            "SELECT pid, query_start FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'
+               AND ($1::timestamptz IS NULL OR query_start > $1)
+             ORDER BY query_start
+             LIMIT 1",
+        )
+        .bind(after)
+        .fetch_optional(pg)
+        .await?;
+        if let Some((pid, started)) = waiting {
+            let _: bool = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
+                .bind(pid)
+                .fetch_one(pg)
+                .await?;
+            return Ok(started);
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "nothing waited on a lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}

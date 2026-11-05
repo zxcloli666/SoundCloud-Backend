@@ -215,3 +215,37 @@ async fn a_mass_reset_against_a_full_cold_gate_reads_no_device_list_and_answers_
     }
     Ok(())
 }
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn a_device_row_past_the_stale_bound_is_busy_while_the_gate_is_full(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    let Ok(mut state) = Arc::try_unwrap(with_postgres(&pool)) else {
+        anyhow::bail!("a fresh chat state has one owner");
+    };
+    state.devices = DeviceCache::with_ages(Duration::ZERO, Duration::ZERO);
+    let chat = Arc::new(state);
+    let owner = user();
+    let id = device(&pool, &owner, "active").await;
+    let known = devices::lookup(&chat, id)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    assert!(known.is_some());
+
+    let release = CancellationToken::new();
+    let mut holders = fill_the_gate(&chat, &release).await?;
+    let looked = devices::gated_row(&chat, id).await;
+    release.cancel();
+    while holders.join_next().await.is_some() {}
+
+    assert!(
+        matches!(looked, Err(ref error) if error.is_busy()),
+        "{looked:?}"
+    );
+    let fresh = devices::gated_row(&chat, id)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    assert_eq!(fresh.map(|row| row.id), Some(id));
+    Ok(())
+}

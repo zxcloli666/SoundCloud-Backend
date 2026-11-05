@@ -7,10 +7,11 @@ use uuid::Uuid;
 use crate::modules::chat::ChatState;
 use crate::modules::chat::conversations::fixtures::group;
 use crate::modules::chat::fake_store::{FakeStore, media_on};
+use crate::modules::chat::media::commit::LEFT_FOR_RECONCILE;
 use crate::modules::chat::media::limits::QUOTA_BYTES;
 use crate::modules::chat::media::rows::{Seed, seed, usage};
 use crate::modules::chat::media::support::{
-    IMAGE, THUMB, bench, call, error, redis, user, with_media,
+    IMAGE, THUMB, bench, call, cancel_a_lock_wait, error, redis, user, with_media,
 };
 use crate::modules::chat::test_support::chat_state;
 
@@ -182,4 +183,75 @@ async fn a_failed_copy_keeps_the_upload_key_and_a_repeat_commit_finishes(pool: P
     assert!(kept.iter().all(|key| !uploads.contains(key)), "{kept:?}");
     assert_eq!(fake.keys(), sorted(kept));
     assert_eq!(usage(&pool, &owner).await, (TOTAL, 0, 1));
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_flip_that_fails_in_postgres_drops_its_copies(pool: PgPool) {
+    let fake = FakeStore::start(Duration::ZERO).await;
+    let chat = on_fake(&pool, &fake);
+    let owner = user();
+    let (image, uploads) = uploaded(&pool, &fake, &owner).await;
+    let mut blocker = pool.begin().await.expect("a tx");
+    sqlx::query("SELECT id FROM chat.media WHERE id = $1 FOR UPDATE")
+        .bind(image)
+        .execute(&mut *blocker)
+        .await
+        .expect("a held row");
+    let committing = {
+        let (chat, owner) = (chat.clone(), owner.clone());
+        tokio::spawn(async move {
+            call(
+                &chat,
+                &owner,
+                "POST",
+                &format!("/chat/media/{image}/commit"),
+                None,
+            )
+            .await
+        })
+    };
+    cancel_a_lock_wait(&pool, None)
+        .await
+        .expect("a cancelled flip");
+    let failed = committing.await.expect("a commit");
+    blocker.rollback().await.expect("a rollback");
+
+    assert!(failed.0 >= 500, "{failed:?}");
+    assert_eq!(keys_of(&pool, image).await, uploads);
+    assert_eq!(fake.keys(), sorted(uploads));
+    assert_eq!(usage(&pool, &owner).await, (0, TOTAL, 0));
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn an_upload_key_the_store_will_not_delete_is_counted_and_logged(pool: PgPool) {
+    crate::metrics::init();
+    let fake = FakeStore::start(Duration::ZERO).await;
+    let chat = on_fake(&pool, &fake);
+    let owner = user();
+    let (image, uploads) = uploaded(&pool, &fake, &owner).await;
+    let before = left_for_reconcile();
+    fake.fail_deletes(true);
+
+    let commit = call(
+        &chat,
+        &owner,
+        "POST",
+        &format!("/chat/media/{image}/commit"),
+        None,
+    )
+    .await;
+    assert_eq!(commit.0, 200, "{commit:?}");
+    assert!(left_for_reconcile() - before >= 2.0);
+    let mut kept = keys_of(&pool, image).await;
+    kept.extend(uploads);
+    assert_eq!(fake.keys(), sorted(kept));
+}
+
+fn left_for_reconcile() -> f64 {
+    crate::metrics::render_for_tests()
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with(LEFT_FOR_RECONCILE))
+        .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
+        .sum()
 }

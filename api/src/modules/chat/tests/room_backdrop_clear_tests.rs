@@ -1,7 +1,4 @@
-use std::time::{Duration, Instant};
-
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -9,7 +6,7 @@ use uuid::Uuid;
 use super::backdrop_support::{BLOCK, Bench, lock_runs_out, preset, put, someone, steal};
 use super::report_support::{file, report, stage};
 use crate::modules::chat::media::backdrop::{self, lock::Held};
-use crate::modules::chat::media::support::until_blocked;
+use crate::modules::chat::media::support::{cancel_a_lock_wait, until_blocked};
 
 async fn signed(
     bench: &Bench,
@@ -30,34 +27,6 @@ async fn signed(
         .as_str()
         .unwrap_or_default()
         .to_owned())
-}
-
-async fn cancel_a_lock_wait(
-    pg: &PgPool,
-    after: Option<DateTime<Utc>>,
-) -> anyhow::Result<DateTime<Utc>> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let waiting: Option<(i32, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT pid, query_start FROM pg_stat_activity
-             WHERE datname = current_database() AND wait_event_type = 'Lock'
-               AND ($1::timestamptz IS NULL OR query_start > $1)
-             ORDER BY query_start
-             LIMIT 1",
-        )
-        .bind(after)
-        .fetch_optional(pg)
-        .await?;
-        if let Some((pid, started)) = waiting {
-            let _: bool = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
-                .bind(pid)
-                .fetch_one(pg)
-                .await?;
-            return Ok(started);
-        }
-        anyhow::ensure!(Instant::now() < deadline, "no tidy waited on the row");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
