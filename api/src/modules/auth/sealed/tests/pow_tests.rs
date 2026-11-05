@@ -115,16 +115,21 @@ async fn the_previous_epoch_passes_and_two_epochs_old_is_asked_again(
     let node = sealed(cfg(), &pool)?;
     let router = app(&node);
     let device = Device::new();
-    let epoch = epoch_now();
+    let (epoch, old, previous) = loop {
+        let epoch = epoch_now();
+        let old = solve(&node.seeds.seed(epoch - 2), 1, &device.auth_pub(), LOGIN);
+        let previous = solve(&node.seeds.seed(epoch - 1), 1, &device.auth_pub(), LOGIN);
+        if epoch_now() == epoch {
+            break (epoch, old, previous);
+        }
+    };
+    assert_eq!(epoch, epoch_now());
 
-    let old = solve(&node.seeds.seed(epoch - 2), 1, &device.auth_pub(), LOGIN);
     let (status, body) = outcome(&router, &device, old).await;
     assert_eq!(
         (status, body["error"].as_str()),
         (429, Some("chat_pow_required"))
     );
-
-    let previous = solve(&node.seeds.seed(epoch - 1), 1, &device.auth_pub(), LOGIN);
     assert_eq!(outcome(&router, &device, previous).await.0, 200);
     Ok(())
 }
