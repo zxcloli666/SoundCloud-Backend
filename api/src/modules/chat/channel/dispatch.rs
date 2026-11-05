@@ -1,3 +1,4 @@
+use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{Extensions, HeaderMap, HeaderName, Method, Request, StatusCode, Uri};
@@ -5,7 +6,6 @@ use axum::response::Response;
 use sc_chat_wire::proto::{Header, Inner, InnerResponse};
 use tower::ServiceExt;
 
-use crate::modules::chat::channel::Channel;
 use crate::modules::chat::channel::answer::error_answer;
 use crate::modules::chat::sync::wire::RETRY_AFTER_MS;
 use crate::modules::chat::{ChatError, ChatResult};
@@ -30,9 +30,8 @@ pub fn inner_request(inner: Inner, extensions: Extensions) -> ChatResult<Request
     Ok(request)
 }
 
-pub async fn dispatch(channel: &Channel, request: Request<Body>) -> InnerResponse {
-    let response = channel
-        .inner
+pub async fn dispatch(inner: &Router, request: Request<Body>) -> InnerResponse {
+    let response = inner
         .clone()
         .oneshot(request)
         .await

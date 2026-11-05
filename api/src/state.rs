@@ -9,6 +9,7 @@ use crate::common::admission::PublicAdmission;
 use crate::common::http_metrics::HttpMetrics;
 use crate::config::AppConfig;
 use crate::modules::auras::AurasService;
+use crate::modules::auth::sealed::Sealed;
 use crate::modules::auth::{AuthService, CoreRpc, LinkService};
 use crate::modules::collab::CollabVectorService;
 use crate::modules::discover::DiscoverService;
@@ -45,6 +46,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub admission: Arc<PublicAdmission>,
     pub link: Arc<LinkService>,
+    pub sealed: Option<Arc<Sealed>>,
     pub oauth_apps: Arc<OAuthAppsService>,
     pub events: Arc<EventsService>,
     pub dislikes: Arc<DislikesService>,

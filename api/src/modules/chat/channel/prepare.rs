@@ -21,7 +21,7 @@ pub async fn answer(
     client: Option<IpAddr>,
 ) -> InnerResponse {
     match prepare(channel, opened, client).await {
-        Ok(request) => dispatch(channel, request).await,
+        Ok(request) => dispatch(&channel.inner, request).await,
         Err(error) => error_answer(error),
     }
 }

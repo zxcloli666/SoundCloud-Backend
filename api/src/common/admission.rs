@@ -620,6 +620,18 @@ fn network_identity(address: IpAddr) -> String {
     }
 }
 
+pub(crate) fn subnet_identity(address: IpAddr) -> String {
+    match address.to_canonical() {
+        IpAddr::V4(v4) => {
+            let mut hash = Sha256::new();
+            hash.update([24]);
+            hash.update(&v4.octets()[..3]);
+            hex::encode(hash.finalize())
+        }
+        other => network_identity(other),
+    }
+}
+
 fn key_identity(key: &str) -> String {
     hex::encode(Sha256::digest(key.as_bytes()))
 }

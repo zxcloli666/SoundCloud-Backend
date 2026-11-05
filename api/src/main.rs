@@ -133,6 +133,9 @@ async fn main() {
         .expect("Failed to connect to PostgreSQL for recommendations");
     info!("PostgreSQL connected");
 
+    let sealed_cfg = crate::modules::auth::sealed::config::SealedCfg::from_env(
+        config.admission.trusted_proxies.clone(),
+    );
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
     let admission = PublicAdmission::new(
         redis::connect_admission(&config).expect("Failed to create admission Redis pool"),
@@ -201,6 +204,19 @@ async fn main() {
         core.clone(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
+    let sealed = if sealed_cfg.enabled {
+        Some(
+            crate::modules::auth::sealed::Sealed::load(
+                sealed_cfg,
+                redis_pool.clone(),
+                auth.clone(),
+                link.clone(),
+            )
+            .expect("AUTH_KEYS_DIR must hold the current OCK"),
+        )
+    } else {
+        None
+    };
 
     let oauth_app_tokens = OAuthAppTokenService::with_fallback(
         pg.clone(),
@@ -327,6 +343,7 @@ async fn main() {
         auth,
         admission,
         link,
+        sealed,
         oauth_apps,
         events,
         dislikes,
