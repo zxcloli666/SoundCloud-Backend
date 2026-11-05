@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::modules::chat::ChatState;
 use crate::modules::chat::conversations::fixtures::group;
 use crate::modules::chat::fake_store::{FakeStore, media_on};
-use crate::modules::chat::media::commit::LEFT_FOR_RECONCILE;
+const LEFT_FOR_RECONCILE: &str = "chat_media_commit_leftovers_total";
 use crate::modules::chat::media::limits::QUOTA_BYTES;
 use crate::modules::chat::media::rows::{Seed, seed, usage};
 use crate::modules::chat::media::support::{

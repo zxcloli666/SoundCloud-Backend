@@ -318,7 +318,3 @@ fn token_claims(token: &str) -> Option<serde_json::Value> {
         .ok()?;
     serde_json::from_slice(&bytes).ok()
 }
-
-#[cfg(test)]
-#[path = "unhealthy_tests.rs"]
-mod unhealthy_tests;

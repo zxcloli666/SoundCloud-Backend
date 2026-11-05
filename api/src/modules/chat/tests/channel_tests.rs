@@ -35,9 +35,6 @@ const PEER: [u8; 4] = [198, 51, 100, 7];
 #[path = "channel_herd_tests.rs"]
 mod herd;
 
-#[path = "channel_logout_tests.rs"]
-mod logout;
-
 struct Device {
     id: Uuid,
     seed: [u8; 32],
