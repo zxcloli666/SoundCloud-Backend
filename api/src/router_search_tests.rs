@@ -342,6 +342,7 @@ pub(super) async fn state_with(
         auth,
         admission,
         link,
+        sealed: None,
         oauth_apps,
         events,
         dislikes,
