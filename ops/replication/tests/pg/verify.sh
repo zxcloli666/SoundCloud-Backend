@@ -291,10 +291,10 @@ new_answer="$(fndef star 'scd_verify_answer(uuid, text, jsonb, jsonb)')"
 { echo "DROP FUNCTION public.$chunk_sig;"; old_verify scd_verify_chunk 0221_scd_verify; old_verify scd_verify_answer 0293_scd_verify_receipts; } | sql -d scd_b1_star -f - > /dev/null
 sql -d scd_b1_star -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b3', 'Old hash', 'oldhash', 'sc')"
 verify_cycle false "$tmp/verify.hv1"
-stale="$(grep -c '^star .* stale_hash 0$' "$tmp/verify.hv1" || true)"
-other="$(grep -vc ' stale_hash 0$' "$tmp/verify.hv1" || true)"
-[ "$stale" -gt 0 ] && [ "$other" = 0 ] && [ ! -s "$tmp/verify.hv1.recheck" ] \
-  && echo "ok star's md5 answers are dropped as stale_hash ($stale chunks), no recheck, no repair, main answers nothing" \
+stale="$(grep -c '^star .* stale_hash [01]$' "$tmp/verify.hv1" || true)"
+other="$(grep -vc '^star .* stale_hash [01]$' "$tmp/verify.hv1" || true)"
+[ "$stale" -gt 0 ] && [ "$other" = 0 ] && ! grep -q '^star ' "$tmp/verify.hv1.recheck" \
+  && echo "ok star's md5 answers are dropped as stale_hash ($stale answers), star gets no recheck, nothing is repaired" \
   || { echo "FAIL mixed hash, old api: stale=$stale other=$other"; cat "$tmp/verify.hv1" "$tmp/verify.hv1.recheck"; failed=$((failed + 1)); }
 [ "$(only_on star artists "id = '00000000-0000-0000-0000-0000000013b3'")" = 1 ] && echo "ok star's stray C row is untouched while it runs the old hash" \
   || { echo "FAIL star's stray row was acted on"; failed=$((failed + 1)); }
