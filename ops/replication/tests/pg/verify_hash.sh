@@ -162,6 +162,22 @@ caught="$(grep -c '^true 1 true ' "$tmp/vh.detect" || true)"
   && echo "ok 12 single-value changes of one tracks row (nested jsonb, jsonb {} to [], array nesting and element, 1 us, NULL to '' and 0, swapped columns) change the chunk hash and exactly that key" \
   || { echo "FAIL detection:"; cat "$tmp/vh.detect"; exit 1; }
 
-got="$(val scd_b1_exercise "SELECT count(*) FILTER (WHERE c.n > 0) || ' ' || count(*) || ' ' || sum(c.n) FROM public.scd_verify_tables() v CROSS JOIN LATERAL public.scd_verify_chunk(v, NULL, NULL, NULL, false) c")"
-echo "ok the walk hashes every verified table of the exercised schema (tables with rows, tables, rows: $got)"
+sql -d "$vh_db" -f - > /dev/null <<'SQL'
+DO $f$
+DECLARE
+    v text;
+    q text;
+BEGIN
+    FOR v IN SELECT * FROM public.scd_verify_tables() LOOP
+        SELECT format('SELECT pg_catalog.hash_record_extended(ROW(%s), 1) FROM (SELECT %s) t', public.scd_verify_cols(v, public.scd_verify_shown(v)),
+                      string_agg(format('NULL::%s AS %I', format_type(a.atttypid, a.atttypmod), a.attname), ', '))
+        INTO q
+        FROM pg_attribute a WHERE a.attrelid = ('public.' || quote_ident(v))::regclass AND a.attnum > 0 AND NOT a.attisdropped;
+        EXECUTE q;
+    END LOOP;
+END
+$f$;
+SQL
+got="$(val "$vh_db" "SELECT count(*) || ' tables, ' || sum(cardinality(public.scd_verify_shown(v))) || ' columns' FROM public.scd_verify_tables() v")"
+echo "ok the hash expression of every verified table hashes a row of its column types, so no type lacks a hash ($got)"
 sql -d postgres -c "DROP DATABASE $vh_db WITH (FORCE)" > /dev/null

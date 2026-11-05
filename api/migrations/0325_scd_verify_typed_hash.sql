@@ -2,6 +2,25 @@ SET LOCAL lock_timeout = '5s';
 
 DROP FUNCTION IF EXISTS public.scd_verify_chunk(text, jsonb, jsonb, text[]);
 
+CREATE OR REPLACE FUNCTION public.scd_verify_cols(rel text, shown text[])
+RETURNS text
+LANGUAGE sql STABLE
+SET search_path = public, pg_catalog
+AS $f$
+SELECT string_agg(
+           CASE WHEN NOT coalesce(co.collisdeterministic, true) THEN format('t.%I::text', c.col)
+                WHEN a.atttypid = ANY (typed.oids) THEN format('t.%I', c.col)
+                WHEN a.atttypid = 'jsonb'::regtype THEN format('t.%I, pg_catalog.jsonb_typeof(t.%I)', c.col, c.col)
+                WHEN ty.typcategory = 'A' AND ty.typelem = ANY (typed.oids) THEN format('t.%I, pg_catalog.array_dims(t.%I)', c.col, c.col)
+                ELSE format('t.%I::text', c.col) END, ', ' ORDER BY c.n)
+FROM unnest(shown) WITH ORDINALITY AS c (col, n)
+CROSS JOIN (SELECT ARRAY['text', 'character varying', 'smallint', 'integer', 'bigint', 'boolean', 'uuid', 'timestamp with time zone',
+                         'timestamp without time zone', 'date', 'bytea', 'real', 'double precision']::regtype[]::oid[] AS oids) typed
+JOIN pg_attribute a ON a.attrelid = ('public.' || quote_ident(rel))::regclass AND a.attname = c.col AND a.attnum > 0 AND NOT a.attisdropped
+JOIN pg_type ty ON ty.oid = a.atttypid
+LEFT JOIN pg_collation co ON co.oid = a.attcollation
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_verify_chunk(rel text, lo jsonb, hi jsonb, shown text[] DEFAULT NULL, keyed boolean DEFAULT true, OUT n bigint, OUT h text, OUT keys jsonb)
 LANGUAGE plpgsql STABLE
 SET search_path = public, pg_catalog
@@ -12,29 +31,16 @@ SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
 DECLARE
-    typed oid[] := ARRAY['text', 'character varying', 'smallint', 'integer', 'bigint', 'boolean', 'uuid', 'timestamp with time zone',
-                         'timestamp without time zone', 'date', 'bytea', 'real', 'double precision']::regtype[]::oid[];
     p record;
-    cols text;
 BEGIN
     shown := coalesce(shown, public.scd_verify_shown(rel));
     SELECT * INTO p FROM public.scd_verify_parts(rel, shown);
-    SELECT string_agg(
-               CASE WHEN NOT coalesce(co.collisdeterministic, true) THEN format('t.%I::text', c.col)
-                    WHEN a.atttypid = ANY (typed) THEN format('t.%I', c.col)
-                    WHEN a.atttypid = 'jsonb'::regtype THEN format('t.%I, pg_catalog.jsonb_typeof(t.%I)', c.col, c.col)
-                    WHEN ty.typcategory = 'A' AND ty.typelem = ANY (typed) THEN format('t.%I, pg_catalog.array_dims(t.%I)', c.col, c.col)
-                    ELSE format('t.%I::text', c.col) END, ', ' ORDER BY c.n) INTO cols
-    FROM unnest(shown) WITH ORDINALITY AS c (col, n)
-    JOIN pg_attribute a ON a.attrelid = ('public.' || quote_ident(rel))::regclass AND a.attname = c.col AND a.attnum > 0 AND NOT a.attisdropped
-    JOIN pg_type ty ON ty.oid = a.atttypid
-    LEFT JOIN pg_collation co ON co.oid = a.attcollation;
     EXECUTE format(
         'SELECT count(*), coalesce(md5(string_agg(x.h::text, %L ORDER BY %s)), %L), %s
          FROM public.%I t CROSS JOIN LATERAL (SELECT pg_catalog.hash_record_extended(ROW(%s), 1) AS h) x
          WHERE %s AND %s',
         ',', p.keycols, '', CASE WHEN keyed THEN format('coalesce(jsonb_object_agg(%s::text, x.h::text), %L)', p.keyobj, '{}') ELSE 'NULL::jsonb' END,
-        rel, cols,
+        rel, public.scd_verify_cols(rel, shown),
         CASE WHEN lo IS NULL THEN 'true' ELSE p.above END,
         CASE WHEN hi IS NULL THEN 'true' ELSE p.upto END)
     INTO n, h, keys
