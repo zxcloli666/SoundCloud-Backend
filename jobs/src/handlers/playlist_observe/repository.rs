@@ -125,7 +125,7 @@ impl PlaylistObserveRepository {
         owner_share: i64,
         claim_seconds: i64,
     ) -> Result<Vec<String>, RepositoryError> {
-        let owners = batch.div_euclid(owner_share.max(1)).max(1);
+        let owners = i32::try_from(batch.div_euclid(owner_share.max(1)).max(1)).unwrap_or(i32::MAX);
         let urns = sqlx::query_file_scalar!(
             "queries/playlist_observe/claim_due_playlists.sql",
             owners,
