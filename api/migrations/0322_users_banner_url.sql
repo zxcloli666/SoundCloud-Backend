@@ -6,7 +6,7 @@ ALTER TABLE public.users
 CREATE OR REPLACE FUNCTION public.scd_cmd_observe_users(args jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog
+SET search_path = public, pg_catalog, pg_temp
 AS $f$
 DECLARE
     stamp timestamptz := (args ->> 'observed_at')::timestamptz;
