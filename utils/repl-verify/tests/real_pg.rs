@@ -171,10 +171,32 @@ async fn core_probes_and_settles_an_answer() {
     .unwrap();
     let rows = repair_once(&pool, false, 50).await.unwrap();
     assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].stale_hash() && rows[0].attempt == 0,
+        "an answer without hv comes from a node on the md5 hash: {rows:?}"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM public.repl_checksums WHERE node = 'star'"
+        )
+        .await,
+        0
+    );
+    sqlx::query(
+        "INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
+        VALUES ('star', 'artists', gen_random_uuid()::text,
+                jsonb_build_object('hv', 2, 'lo', NULL, 'hi', NULL, 'attempt', 0, 'n', 1, 'keys', NULL)::text, now())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let rows = repair_once(&pool, false, 50).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].recheck() && rows[0].attempt == 0, "{rows:?}");
     let answer ="INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
         VALUES ('main', 'artists', gen_random_uuid()::text,
-                jsonb_build_object('lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 1,
+                jsonb_build_object('hv', 2, 'lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 1,
                     'keys', jsonb_build_object('{\"id\": \"00000000-0000-0000-0000-0000000000e1\"}', 'x'))::text, now())";
     sqlx::query(answer).execute(&pool).await.unwrap();
     let rows = repair_once(&pool, true, 50).await.unwrap();
@@ -378,7 +400,7 @@ async fn core_sends_its_receipts_before_the_image_when_the_api_holds_others() {
              ('rv', 't1', true, 0), ('rv', 't2', true, 0), ('rv', 't3', true, 32);
          INSERT INTO public.repl_checksums (node, tbl, range, hash, at)
          VALUES ('main', 'user_likes_tracks', gen_random_uuid()::text,
-                 jsonb_build_object('lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 0,
+                 jsonb_build_object('hv', 2, 'lo', NULL, 'hi', NULL, 'attempt', 1, 'n', 0,
                      'keys', jsonb_build_object(
                          '{\"user_id\": \"rv\", \"sc_track_id\": \"t1\"}', NULL,
                          '{\"user_id\": \"rv\", \"sc_track_id\": \"t2\"}', NULL,
