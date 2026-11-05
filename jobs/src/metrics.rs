@@ -8,6 +8,8 @@ use backend_contracts::{CollectionFailure, JobKind, JobLane};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
+const AUTH_CLEANUP_SKIPPED: &str = "auth_cleanup_skipped_total";
+const AUTH_CLEANUP_PROGRESS: &str = "auth_cleanup_last_progress_timestamp_seconds";
 const JOB_DURATION: &str = "jobs_execution_duration_seconds";
 const JOB_TOTAL: &str = "jobs_executions_total";
 const QUEUE_DEPTH: &str = "jobs_queue_depth";
@@ -251,6 +253,17 @@ impl Outcome {
             Self::Settled(failure) => failure.as_str(),
         }
     }
+}
+
+pub fn record_auth_cleanup_skipped(table: &'static str, why: &'static str) {
+    metrics::counter!(AUTH_CLEANUP_SKIPPED, "table" => table, "why" => why).increment(1);
+}
+
+pub fn record_auth_cleanup_progress(table: &'static str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    metrics::gauge!(AUTH_CLEANUP_PROGRESS, "table" => table).set(now.as_secs_f64());
 }
 
 pub fn record_catalog_refresh_held() {

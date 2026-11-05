@@ -58,7 +58,7 @@ pub const DEVICES_MAX: usize = 10;
 pub struct DeviceRow {
     pub id: Uuid,
     pub user_id: String,
-    pub session_id: Uuid,
+    pub session_hash: Vec<u8>,
     pub status: String,
     pub auth_pub: Vec<u8>,
     pub box_pub: Vec<u8>,

@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::session_entry;
 use crate::modules::chat::ChatError;
+use crate::modules::chat::caller::COLD_WAIT;
 use crate::modules::chat::test_support::chat_state;
 
 const SUBSCRIPTION: &str = "chat_resolve_stalled_feed";
@@ -41,12 +42,12 @@ async fn a_session_miss_during_a_replication_stall_asks_for_a_retry_not_a_login(
     let chat = chat_state(pool.clone(), redis, true);
     let missing = Uuid::now_v7();
 
-    let local = session_entry(&chat, missing).await;
+    let local = session_entry(&chat, missing, COLD_WAIT).await;
     assert!(matches!(local, Ok(None)), "{local:?}");
 
     stall_the_feed(&pool).await?;
     let missing = Uuid::now_v7();
-    let stalled = session_entry(&chat, missing).await;
+    let stalled = session_entry(&chat, missing, COLD_WAIT).await;
     heal_the_feed(&pool).await?;
 
     let error = stalled.expect_err("a stalled feed must not answer a session");
@@ -66,10 +67,10 @@ async fn a_young_session_a_split_node_has_not_received_yet_asks_for_a_retry_not_
     let chat = chat_state(split.clone(), redis, true);
     let young = Uuid::now_v7();
 
-    let missed = session_entry(&chat, young).await;
+    let missed = session_entry(&chat, young, COLD_WAIT).await;
     let unknown = chat.callers.is_unknown(young);
     land_session(&split, young, "4444").await?;
-    let found = session_entry(&chat, young).await;
+    let found = session_entry(&chat, young, COLD_WAIT).await;
     split.close().await;
 
     assert!(
@@ -156,9 +157,13 @@ async fn a_flood_of_random_session_ids_does_not_starve_a_real_user_and_unknown_i
     let mut flood = tokio::task::JoinSet::new();
     for _ in 0..48 {
         let chat = chat.clone();
-        flood.spawn(async move { session_entry(&chat, Uuid::now_v7()).await });
+        flood.spawn(async move { session_entry(&chat, Uuid::now_v7(), COLD_WAIT).await });
     }
-    let found = tokio::time::timeout(Duration::from_secs(5), session_entry(&chat, real)).await?;
+    let found = tokio::time::timeout(
+        Duration::from_secs(5),
+        session_entry(&chat, real, COLD_WAIT),
+    )
+    .await?;
     assert_eq!(
         found.expect("a stored session").map(|entry| entry.user_id),
         Some("4242".to_owned())
@@ -168,7 +173,10 @@ async fn a_flood_of_random_session_ids_does_not_starve_a_real_user_and_unknown_i
     }
 
     let again = Uuid::now_v7();
-    assert!(matches!(session_entry(&chat, again).await, Ok(None)));
+    assert!(matches!(
+        session_entry(&chat, again, COLD_WAIT).await,
+        Ok(None)
+    ));
     assert!(chat.callers.is_unknown(again));
     assert!(!chat.callers.is_unknown(real));
     Ok(())
@@ -189,10 +197,10 @@ async fn a_stalled_feed_answers_a_flood_without_waiting_and_remembers_nothing(
         let chat = chat.clone();
         flood.spawn(async move {
             let id = Uuid::now_v7();
-            (id, session_entry(&chat, id).await)
+            (id, session_entry(&chat, id, COLD_WAIT).await)
         });
     }
-    let found = session_entry(&chat, real).await;
+    let found = session_entry(&chat, real, COLD_WAIT).await;
     let mut answers = Vec::new();
     while let Some(done) = flood.join_next().await {
         answers.push(done?);

@@ -113,6 +113,19 @@ impl NatsService {
             .map_err(|error| NatsRequestError::Decode(subject.to_owned(), error.to_string()))
     }
 
+    pub fn jetstream(&self) -> &async_nats::jetstream::Context {
+        &self.js
+    }
+
+    pub fn connected(&self) -> bool {
+        self.js.client().connection_state() == async_nats::connection::State::Connected
+    }
+
+    pub async fn wait_connected(&self, budget: Duration) -> bool {
+        let flushed = tokio::time::timeout(budget, self.js.client().flush()).await;
+        flushed.is_ok_and(|flushed| flushed.is_ok()) && self.connected()
+    }
+
     pub async fn subscribe(&self, subject: &str) -> AppResult<async_nats::Subscriber> {
         self.js
             .client()

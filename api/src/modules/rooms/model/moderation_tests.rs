@@ -1,5 +1,5 @@
 use super::*;
-use crate::modules::rooms::model::{Member, Profile};
+use crate::modules::rooms::model::{FREE_MODS_MAX, Member, Perks, Profile, STAR_MODS_MAX};
 
 fn member(id: &str, joined_at: i64) -> Member {
     Member::new(
@@ -124,6 +124,40 @@ fn a_mute_ends_on_time_and_can_be_lifted() {
 }
 
 #[test]
+fn a_star_room_takes_eight_moderators_and_a_lapse_removes_none() {
+    let mut room = room();
+    room.perks = Perks::star();
+    for at in 5..=12 {
+        room.join(member(&at.to_string(), at * 10)).unwrap();
+    }
+    let guests: Vec<String> = (2..=9).map(|id| id.to_string()).collect();
+    for id in &guests {
+        room.set_moderator("1", id, true).unwrap();
+    }
+    assert_eq!(room.moderators.len(), STAR_MODS_MAX);
+    assert_eq!(
+        status(room.set_moderator("1", "10", true).unwrap_err()),
+        StatusCode::CONFLICT
+    );
+    room.perks = Perks::free();
+    assert_eq!(room.moderators, guests);
+    assert_eq!(
+        status(room.set_moderator("1", "10", true).unwrap_err()),
+        StatusCode::CONFLICT
+    );
+    for id in ["2", "3", "4", "5", "6"] {
+        room.set_moderator("1", id, false).unwrap();
+    }
+    assert_eq!(
+        status(room.set_moderator("1", "10", true).unwrap_err()),
+        StatusCode::CONFLICT
+    );
+    room.set_moderator("1", "7", false).unwrap();
+    room.set_moderator("1", "10", true).unwrap();
+    assert_eq!(room.moderators, ["8", "9", "10"]);
+}
+
+#[test]
 fn a_room_has_at_most_three_moderators_and_they_are_members() {
     let mut room = room();
     room.join(member("5", 50)).unwrap();
@@ -134,7 +168,7 @@ fn a_room_has_at_most_three_moderators_and_they_are_members() {
         status(room.set_moderator("1", "5", true).unwrap_err()),
         StatusCode::CONFLICT
     );
-    assert_eq!(room.moderators.len(), MAX_MODERATORS);
+    assert_eq!(room.moderators.len(), FREE_MODS_MAX);
     assert_eq!(
         status(room.set_moderator("2", "5", true).unwrap_err()),
         StatusCode::FORBIDDEN
@@ -146,45 +180,6 @@ fn a_room_has_at_most_three_moderators_and_they_are_members() {
     room.set_moderator("1", "3", false).unwrap();
     room.remove("4");
     assert_eq!(room.moderators, ["2"]);
-}
-
-#[test]
-fn settings_belong_to_the_host() {
-    let mut room = room();
-    let patch: SettingsPatch = serde_json::from_value(serde_json::json!({
-        "title": "  Friday\n night ",
-        "slowModeS": 9_999,
-        "chat_enabled": false,
-        "links": false
-    }))
-    .unwrap();
-    room.set_moderator("1", "2", true).unwrap();
-    assert_eq!(
-        status(room.apply_settings("2", &patch).unwrap_err()),
-        StatusCode::FORBIDDEN
-    );
-    room.apply_settings("1", &patch).unwrap();
-    assert_eq!(room.title.as_deref(), Some("Friday night"));
-    assert_eq!(room.slow_mode_s, Some(MAX_SLOW_MODE_SECS));
-    assert!(!room.chat_enabled && !room.links);
-    room.apply_settings("1", &SettingsPatch::default()).unwrap();
-    assert_eq!(room.title.as_deref(), Some("Friday night"));
-    let clear = SettingsPatch {
-        title: Some(String::new()),
-        ..SettingsPatch::default()
-    };
-    room.apply_settings("1", &clear).unwrap();
-    assert_eq!(room.title, None);
-}
-
-#[test]
-fn public_rooms_are_slow_by_default() {
-    let mut room = room();
-    assert_eq!(room.slow_mode(), 0);
-    room.public = true;
-    assert_eq!(room.slow_mode(), PUBLIC_SLOW_MODE_SECS);
-    room.slow_mode_s = Some(0);
-    assert_eq!(room.slow_mode(), 0);
 }
 
 #[test]

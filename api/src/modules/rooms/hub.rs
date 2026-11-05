@@ -4,6 +4,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::bus::nats::NatsService;
@@ -15,16 +16,33 @@ const PUBLISH_BUDGET: Duration = Duration::from_millis(250);
 pub struct RoomHub {
     tx: broadcast::Sender<String>,
     nats: Option<Arc<NatsService>>,
+    closing: CancellationToken,
 }
 
 impl RoomHub {
     pub fn new(nats: Option<Arc<NatsService>>) -> Arc<Self> {
         let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        Arc::new(Self { tx, nats })
+        Arc::new(Self {
+            tx,
+            nats,
+            closing: CancellationToken::new(),
+        })
     }
 
     pub fn is_shared(&self) -> bool {
         self.nats.is_some()
+    }
+
+    pub fn close(&self) {
+        self.closing.cancel();
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closing.is_cancelled()
+    }
+
+    pub async fn closed(&self) {
+        self.closing.cancelled().await;
     }
 
     pub async fn listen(&self) -> RoomChanges {

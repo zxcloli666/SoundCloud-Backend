@@ -7,7 +7,7 @@ use crate::modules::chat::sync::answer::{self, Ask};
 use crate::modules::chat::sync::bucket::OVER_BUDGET_WAIT;
 use crate::modules::chat::sync::changes::{self, Changes, Versions};
 use crate::modules::chat::sync::incarnation;
-use crate::modules::chat::sync::plan::Plan;
+use crate::modules::chat::sync::plan::{Plan, jittered_hold};
 use crate::modules::chat::sync::reply::SyncReply;
 use crate::modules::chat::sync::wire::SyncRequest;
 use crate::modules::chat::{ChatCaller, ChatResult, ChatState, devices};
@@ -110,7 +110,7 @@ impl Poll<'_> {
 
     async fn hold(&self, parked: &mut Parked<'_>) -> ChatResult<SyncReply> {
         let _gauge = ParkedGauge::new(self.caller.tier);
-        let deadline = Instant::now() + self.plan.hold;
+        let deadline = Instant::now() + jittered_hold(self.plan.hold);
         loop {
             let signal = tokio::select! {
                 () = self.chat.shutdown.cancelled() => return Ok(SyncReply::later()),

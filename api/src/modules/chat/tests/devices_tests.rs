@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use sc_chat_wire::bind::make_bind;
 use sc_chat_wire::prost::Message;
@@ -10,8 +12,13 @@ use super::test_support::{
     rekey_pending, session, state,
 };
 use super::{lookup, touch};
+use crate::common::session::session_hash;
+use crate::modules::chat::model::DEVICES_MAX;
 use crate::modules::chat::sync::changes::Change;
 use crate::modules::chat::{ChatState, rt_keys};
+
+#[path = "device_touch_tests.rs"]
+mod touch_tests;
 
 async fn status_of(pool: &PgPool, device: Uuid) -> String {
     sqlx::query_scalar("SELECT status FROM chat.devices WHERE id = $1")
@@ -31,6 +38,23 @@ async fn session_exists(pool: &PgPool, session: Uuid) -> bool {
 
 fn error(answer: &Value) -> &str {
     answer["error"].as_str().unwrap_or_default()
+}
+
+async fn sign_in(
+    chat: &Arc<ChatState>,
+    pool: &PgPool,
+    user: &str,
+    keys: &DeviceKeys,
+) -> (StatusCode, Value) {
+    let session = session(pool, user, Some(keys.bind())).await;
+    call(
+        chat,
+        caller(user, session, None),
+        "POST",
+        "/chat/devices",
+        Some(desktop()),
+    )
+    .await
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -164,7 +188,7 @@ async fn a_relogin_with_the_same_keys_moves_the_device(pool: PgPool) {
         .await
         .expect("a lookup")
         .expect("a device");
-    assert_eq!(moved.session_id, relogin);
+    assert_eq!(moved.session_hash, session_hash(relogin));
     assert_eq!(moved.created_at, first.row.created_at);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM chat.devices")
         .fetch_one(&pool)
@@ -232,26 +256,86 @@ async fn a_session_keeps_one_device(pool: PgPool) {
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
-async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
+async fn a_rebound_session_replaces_its_device_at_the_limit(pool: PgPool) {
     let user = fresh_user();
     let chat = state(&pool);
-    for _ in 0..10 {
+    let first = enroll(&chat, &pool, &user).await;
+    for _ in 1..DEVICES_MAX {
         enroll(&chat, &pool, &user).await;
     }
-    let extra = DeviceKeys::new();
-    let extra_session = session(&pool, &user, Some(extra.bind())).await;
+    let reset = DeviceKeys::new();
+    sqlx::query("UPDATE sessions SET chat_bind = $2 WHERE id = $1")
+        .bind(first.session)
+        .bind(reset.bind())
+        .execute(&pool)
+        .await
+        .expect("a rebind");
+    fresh_device_budget(&chat, &user).await;
+
     let (status, answer) = call(
         &chat,
-        caller(&user, extra_session, None),
+        caller(&user, first.session, None),
         "POST",
         "/chat/devices",
         Some(desktop()),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["id"], json!(reset.id));
+    assert_eq!(status_of(&pool, first.keys.id).await, "revoked");
+    assert_eq!(status_of(&pool, reset.id).await, "active");
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat.devices WHERE user_id = $1 AND status = 'active'",
+    )
+    .bind(&user)
+    .fetch_one(&pool)
+    .await
+    .expect("a count");
+    assert_eq!(usize::try_from(live).ok(), Some(DEVICES_MAX));
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn a_user_keeps_at_most_ten_devices(pool: PgPool) {
+    let user = fresh_user();
+    let chat = state(&pool);
+    for _ in 0..DEVICES_MAX {
+        enroll(&chat, &pool, &user).await;
+    }
+    let (status, answer) = sign_in(&chat, &pool, &user, &DeviceKeys::new()).await;
     assert_eq!(
         (status, error(&answer)),
-        (StatusCode::TOO_MANY_REQUESTS, "chat_request_limit")
+        (StatusCode::FORBIDDEN, "chat_device_cap")
     );
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
+async fn a_device_refused_at_the_cap_keeps_the_daily_budget(pool: PgPool) {
+    let user = fresh_user();
+    let chat = state(&pool);
+    let first = enroll(&chat, &pool, &user).await;
+    for _ in 1..DEVICES_MAX {
+        enroll(&chat, &pool, &user).await;
+    }
+    fresh_device_budget(&chat, &user).await;
+    let waiting = DeviceKeys::new();
+    for _ in 0..6 {
+        let (status, answer) = sign_in(&chat, &pool, &user, &waiting).await;
+        assert_eq!(
+            (status, error(&answer)),
+            (StatusCode::FORBIDDEN, "chat_device_cap")
+        );
+    }
+
+    sqlx::query("UPDATE chat.devices SET status = 'revoked' WHERE id = $1")
+        .bind(first.keys.id)
+        .execute(&pool)
+        .await
+        .expect("a removal");
+    let (status, answer) = sign_in(&chat, &pool, &user, &waiting).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(status_of(&pool, waiting.id).await, "active");
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
@@ -592,7 +676,7 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
     assert_eq!(cached.last_seen_at, device.row.last_seen_at);
 
     sqlx::query(
-        "UPDATE chat.devices SET last_seen_at = now() - interval '11 minutes' WHERE id = $1",
+        "UPDATE chat.devices SET last_seen_at = now() - interval '16 minutes' WHERE id = $1",
     )
     .bind(device.keys.id)
     .execute(&pool)
@@ -604,12 +688,18 @@ async fn touch_writes_last_seen_at_most_every_ten_minutes(pool: PgPool) {
         .expect("a lookup")
         .expect("a device");
     touch(&chat, &idle).await.expect("a touch");
-    assert!(chat.devices.row(device.keys.id).is_none());
-    let seen = lookup(&chat, device.keys.id)
-        .await
-        .expect("a lookup")
-        .expect("a device");
-    assert!(seen.last_seen_at > idle.last_seen_at);
+    let kept = chat
+        .devices
+        .row(device.keys.id)
+        .expect("a touch keeps the row it wrote");
+    assert!(kept.last_seen_at > idle.last_seen_at);
+    let seen: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT last_seen_at FROM chat.devices WHERE id = $1")
+            .bind(device.keys.id)
+            .fetch_one(&pool)
+            .await
+            .expect("a device");
+    assert_eq!(kept.last_seen_at, seen);
 }
 
 async fn devices_delta(chat: &ChatState, user: &str) -> Option<f64> {

@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use axum::body::Body;
 use axum::http::{Extensions, Request};
 use sc_chat_wire::prost::Message;
@@ -13,14 +15,22 @@ use crate::modules::chat::channel::{
 };
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
-pub async fn answer(channel: &Channel, opened: &OpenedRequest) -> InnerResponse {
-    match prepare(channel, opened).await {
+pub async fn answer(
+    channel: &Channel,
+    opened: &OpenedRequest,
+    client: Option<IpAddr>,
+) -> InnerResponse {
+    match prepare(channel, opened, client).await {
         Ok(request) => dispatch(channel, request).await,
         Err(error) => error_answer(error),
     }
 }
 
-async fn prepare(channel: &Channel, opened: &OpenedRequest) -> ChatResult<Request<Body>> {
+async fn prepare(
+    channel: &Channel,
+    opened: &OpenedRequest,
+    client: Option<IpAddr>,
+) -> ChatResult<Request<Body>> {
     let inner = Inner::decode(opened.inner.as_slice()).map_err(|_| ChatError::Invalid)?;
     let chat = &channel.chat;
     let sealed_auth = is_sealed_auth(&inner.path);
@@ -31,7 +41,7 @@ async fn prepare(channel: &Channel, opened: &OpenedRequest) -> ChatResult<Reques
     let mut extensions = Extensions::new();
     if sealed_auth {
         let auth = SealedAuth::verify(&inner, &opened.enc)?;
-        channel.gate.admit(&inner.path)?;
+        channel.gate.admit(&inner.path, client)?;
         replay::claim(chat, &opened.enc).await?;
         extensions.insert(auth);
     } else {

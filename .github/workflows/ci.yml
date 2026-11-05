@@ -66,11 +66,12 @@ jobs:
         | test(~modules::chat::synthetic::tests) | test(~modules::chat::devices::tests) | test(~modules::chat::keys::tests)
         | test(~modules::chat::invites::tests) | test(~modules::chat::settings::tests) | test(~qdrant_io::live_tests)
         | test(~modules::users::public::tests) | test(~modules::resolve::miss_tests)
+        | test(~modules::remote::) | test(~router_voice_tests)
     steps:
       - uses: actions/checkout@v7
 
       - name: Services
-        run: sh scripts/ci-db.sh up postgres redis qdrant
+        run: sh scripts/ci-db.sh up postgres redis qdrant nats
 
       - name: Toolchain
         run: sh scripts/ci-toolchain.sh

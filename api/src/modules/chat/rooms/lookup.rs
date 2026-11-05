@@ -1,6 +1,8 @@
 use redis::AsyncCommands;
+use sc_chat_wire::msg::Class;
 use uuid::Uuid;
 
+use crate::modules::chat::rooms::now_ms;
 use crate::modules::chat::rooms::refusal;
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
@@ -15,10 +17,6 @@ pub struct RoomChatMember {
     pub host: bool,
     pub moderator: bool,
     pub muted_until: Option<i64>,
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }
 
 impl RoomChatMember {
@@ -63,6 +61,13 @@ pub async fn gate_send(
         .await?
         .ok_or(ChatError::NotMember)?;
     let member = RoomChatMember::of(&room, user_id, now_ms()).ok_or(ChatError::NotMember)?;
+    if class == Class::Meta.as_str() {
+        return if member.host {
+            Ok(member)
+        } else {
+            Err(ChatError::NotMember)
+        };
+    }
     if !room.chat_enabled {
         return Err(ChatError::Unavailable);
     }

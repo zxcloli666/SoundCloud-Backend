@@ -59,6 +59,7 @@ pub fn outgoing(class: Class, epoch: i32, target_seq: Option<i64>) -> Outgoing {
         epoch,
         target_seq,
         body: vec![0x5a; 256],
+        media: Vec::new(),
     }
 }
 

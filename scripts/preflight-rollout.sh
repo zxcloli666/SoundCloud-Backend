@@ -18,10 +18,9 @@ fail() { printf 'FAIL %s\n' "$*"; failures=$((failures + 1)); }
 pass() { printf 'ok   %s\n' "$*"; }
 skip() { printf 'skip %s\n' "$*"; }
 
-required_version=$(grep -oE 'REQUIRED_CORE_SCHEMA_VERSION: i64 = [0-9]+' "$REQUIRED_FROM" \
-  | grep -oE '[0-9]+$')
+required_version=$(awk '/const REQUIRED_CORE_SCHEMA: Required/ { found = 1 } found && /version:/ { gsub(/[^0-9]/, ""); print; exit }' "$REQUIRED_FROM")
 if [ -z "$required_version" ]; then
-  fail "could not read REQUIRED_CORE_SCHEMA_VERSION from $REQUIRED_FROM"
+  fail "could not read REQUIRED_CORE_SCHEMA version from $REQUIRED_FROM"
   exit 2
 fi
 note "api refuses to serve below core migration $required_version"

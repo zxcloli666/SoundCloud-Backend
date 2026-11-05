@@ -11,7 +11,7 @@ use crate::modules::chat::rooms::bridge;
 use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::test_support::chat_state;
-use crate::modules::rooms::model::{MAX_MEMBERS, SettingsPatch};
+use crate::modules::rooms::model::{FREE_CAPACITY, SettingsPatch};
 
 struct Bench {
     chat: Arc<ChatState>,
@@ -168,6 +168,59 @@ async fn a_member_poll_keeps_the_room_and_its_chat_alive(pg: PgPool) -> anyhow::
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
+async fn a_closing_hub_answers_held_polls_with_the_room_as_it_is(pg: PgPool) -> anyhow::Result<()> {
+    let bench = Bench::new(pg)?;
+    let host = someone();
+    let room = bench
+        .rooms()
+        .create(&host, &profile("Host"), false, None)
+        .await?;
+    let seen = format!("rooms:{}:seen", room.code);
+    let mut conn = bench.redis.get().await?;
+    let _: i64 = conn.zadd(&seen, &host, 0).await?;
+    let held = tokio::spawn({
+        let rooms = bench.chat.rooms.clone();
+        let (code, host, since) = (room.code.clone(), host.clone(), room.version);
+        async move {
+            rooms
+                .wait(&code, &host, Some(since), Duration::from_secs(60), false)
+                .await
+        }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let score: Option<f64> = conn.zscore(&seen, &host).await?;
+        if score.is_some_and(|score| score > 0.0) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the poll never touched the room"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert!(!held.is_finished());
+
+    bench.rooms().close();
+    let view = tokio::time::timeout(Duration::from_secs(5), held).await???;
+    assert_eq!(view.code, room.code);
+    assert_eq!(view.version, room.version);
+
+    let late = bench.rooms().wait(
+        &room.code,
+        &host,
+        Some(room.version),
+        Duration::from_secs(60),
+        false,
+    );
+    let view = tokio::time::timeout(Duration::from_secs(5), late).await??;
+    assert_eq!(view.version, room.version);
+    bench.rooms().leave(&room.code, &host).await?;
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+#[ignore = "requires a local Redis"]
 async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow::Result<()> {
     let bench = Bench::new(pg)?;
     let host = someone();
@@ -176,7 +229,7 @@ async fn seats_of_absent_guests_go_and_their_chat_is_told(pg: PgPool) -> anyhow:
         .create(&host, &profile("Host"), false, None)
         .await?;
     let code = room.code.clone();
-    let guests: Vec<String> = (0..MAX_MEMBERS - 1).map(|_| someone()).collect();
+    let guests: Vec<String> = (0..FREE_CAPACITY - 1).map(|_| someone()).collect();
     for guest in &guests {
         bench
             .rooms()
@@ -518,7 +571,7 @@ async fn a_preview_touches_nothing_and_is_cached(pg: PgPool) -> anyhow::Result<(
         title: Some("Encore".to_owned()),
         ..SettingsPatch::default()
     };
-    bench.rooms().configure(&code, &host, &renamed).await?;
+    bench.rooms().reconfigure(&code, &host, &renamed).await?;
     let fresh = bench.rooms().preview(&code).await?.expect("a live room");
     assert_eq!(fresh.title.as_deref(), Some("Encore"));
     assert!(fresh.track.is_none());

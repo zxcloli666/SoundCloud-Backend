@@ -1,27 +1,39 @@
-WITH RECURSIVE resume AS (
-    SELECT CASE
-        WHEN cursor.last_owner_sc_user_id IS NULL THEN NULL
-        WHEN EXISTS (
+WITH RECURSIVE resume AS MATERIALIZED (
+    SELECT (
+        SELECT cursor.last_owner_sc_user_id
+        FROM playlist_sweep_cursor AS cursor
+        WHERE EXISTS (
             SELECT 1 FROM playlist_membership_state AS state
             WHERE state.sync_status <> 'clean'
               AND state.next_reconcile_at IS NOT NULL
               AND state.next_reconcile_at <= now()
               AND state.owner_sc_user_id > cursor.last_owner_sc_user_id
-        ) THEN cursor.last_owner_sc_user_id
-        ELSE NULL
-    END AS after_owner
-    FROM playlist_sweep_cursor AS cursor
+            LIMIT 1
+        )
+    ) AS after_owner
 ),
 owners AS (
     (
-        SELECT state.owner_sc_user_id, 1 AS depth
-        FROM playlist_membership_state AS state, resume
-        WHERE state.sync_status <> 'clean'
-          AND state.next_reconcile_at IS NOT NULL
-          AND state.next_reconcile_at <= now()
-          AND (resume.after_owner IS NULL OR state.owner_sc_user_id > resume.after_owner)
-        ORDER BY state.owner_sc_user_id
-        LIMIT 1
+        SELECT first.owner_sc_user_id, 1 AS depth
+        FROM resume
+        CROSS JOIN LATERAL (
+            SELECT state.owner_sc_user_id
+            FROM playlist_membership_state AS state
+            WHERE state.sync_status <> 'clean'
+              AND state.next_reconcile_at IS NOT NULL
+              AND state.next_reconcile_at <= now()
+              AND state.owner_sc_user_id >= coalesce(resume.after_owner, '')
+              AND state.owner_sc_user_id IS DISTINCT FROM resume.after_owner
+            ORDER BY state.owner_sc_user_id
+            LIMIT 1
+        ) AS first
+        WHERE (
+            SELECT due.next_reconcile_at
+            FROM playlist_membership_state AS due
+            WHERE due.sync_status <> 'clean'
+            ORDER BY due.next_reconcile_at, due.playlist_urn
+            LIMIT 1
+        ) <= now()
     )
     UNION ALL
     SELECT next.owner_sc_user_id, owners.depth + 1

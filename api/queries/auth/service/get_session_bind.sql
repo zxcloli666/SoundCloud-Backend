@@ -1,6 +1,4 @@
-SELECT connection.soundcloud_user_id,
-       session.chat_bind
-FROM sessions AS session
-JOIN soundcloud_connections AS connection
-    ON connection.id = session.soundcloud_connection_id
-WHERE session.id = $1
+SELECT soundcloud_user_id AS "soundcloud_user_id!",
+       chat_bind
+FROM public.auth_session($1)
+WHERE soundcloud_user_id IS NOT NULL
