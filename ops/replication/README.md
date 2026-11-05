@@ -116,10 +116,14 @@ Code is scanned with `codemap.py` (Rust and SQL). utils crates count as api code
 49. `0311_scd_install`: the generated SQL again, zz_owner function bodies only, every trigger is kept, so no table lock: a replica insert of a new PK tries the insert before any unique-key lookup, and an insert onto a stored row looks up only the keys whose value it changes. Before, every replica insert of a C row ran one lookup per unique key (four on `artists`), also for reasserts and repair images of unchanged rows.
 50. `0322_remote_voice`: `remote_link_codes` and `remote_grants`, class A with tombstone deletes: link codes of the voice assistant skills and the OAuth grants (auth code, access and refresh token hashes with a rotation seed, Salut `sub` bindings).
 51. `0323_scd_install`: the generated SQL again, on top of 0311: the two tables get their triggers and publication lists, every other trigger is kept.
+52. `0324_users_banner_url`: `users.banner_url`, the profile banner from the apiv2 `visuals`. ADD COLUMN IF NOT EXISTS with `lock_timeout` 5 s, metadata only. `scd_cmd_observe_users` writes it when the payload has `visuals` (null clears it), keeps it when the key is absent, and counts a new banner as a change.
+53. `0325_scd_install`: the generated SQL again, on top of 0323: the users publication list, row hash and replica functions name `banner_url`, every trigger is kept.
 
 Order for 0285-0292: core first. Migrate main and star only after they applied core's stream past core's 0285 commit: a change from before it still carries the 7 columns, and the apply on a node without them fails with "missing replicated columns". Keep jobs on core stopped until all three are at 0292: a claim batch reads the table for about 2 s, and a long jobs transaction replays as a long apply on main and star; both hold the table past the 200 ms lock tries of 0291. The B2 binary runs on this schema, so stopping is for the locks only.
 
 Order for 0307-0308: core, main and star first, then jobs on core. `background_job_failures` is C and its `lane` is published in `scd_core_pub`: the first lookup dead letter on core carries `lane = 'lookup'`, and the apply on a node with the old CHECK fails on every retry, which stops the whole core stream on that node. The api goes after jobs; until then an old api still enqueues lookups into `core_bulk`, and the jobs lane realignment moves them.
+
+Order for 0324-0325: main and star first, then core. `users` is C and `banner_url` is published in `scd_core_pub` once core runs 0325: a node without the column fails the apply with "missing replicated columns". The api and jobs with the banner go after the migrations on their node; the old binaries run on the new schema.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
