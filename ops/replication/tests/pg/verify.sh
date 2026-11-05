@@ -281,4 +281,46 @@ has "$tmp/verify.old" 'star artists {"id": "00000000-0000-0000-0000-0000000013b1
 swept
 [ -z "$(drift star)" ] && echo "ok core and star agree again" || { echo "FAIL star drift: $(drift star)"; failed=$((failed + 1)); }
 
+old_verify() { awk "/^CREATE OR REPLACE FUNCTION public.$1\\(/,/^\\\$f\\\$;/" "$root/api/migrations/$2.sql"; }
+fndef() { val "scd_b1_$1" "SELECT pg_get_functiondef('public.$2'::regprocedure)"; }
+chunk_sig='scd_verify_chunk(text, jsonb, jsonb, text[], boolean)'
+
+say "verify hash v2: core drops every answer of an api node still on the md5 hash, nothing is rechecked or repaired"
+new_chunk="$(fndef star "$chunk_sig")"
+new_answer="$(fndef star 'scd_verify_answer(uuid, text, jsonb, jsonb)')"
+{ echo "DROP FUNCTION public.$chunk_sig;"; old_verify scd_verify_chunk 0221_scd_verify; old_verify scd_verify_answer 0293_scd_verify_receipts; } | sql -d scd_b1_star -f - > /dev/null
+sql -d scd_b1_star -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b3', 'Old hash', 'oldhash', 'sc')"
+verify_cycle false "$tmp/verify.hv1"
+stale="$(grep -c '^star .* stale_hash [01]$' "$tmp/verify.hv1" || true)"
+other="$(grep -vc '^star .* stale_hash [01]$' "$tmp/verify.hv1" || true)"
+[ "$stale" -gt 0 ] && [ "$other" = 0 ] && ! grep -q '^star ' "$tmp/verify.hv1.recheck" \
+  && echo "ok star's md5 answers are dropped as stale_hash ($stale answers), star gets no recheck, nothing is repaired" \
+  || { echo "FAIL mixed hash, old api: stale=$stale other=$other"; cat "$tmp/verify.hv1" "$tmp/verify.hv1.recheck"; failed=$((failed + 1)); }
+[ "$(only_on star artists "id = '00000000-0000-0000-0000-0000000013b3'")" = 1 ] && echo "ok star's stray C row is untouched while it runs the old hash" \
+  || { echo "FAIL star's stray row was acted on"; failed=$((failed + 1)); }
+sql -d scd_b1_star -c "DROP FUNCTION public.scd_verify_chunk(text, jsonb, jsonb, text[])" -c "$new_chunk" -c "$new_answer" > /dev/null
+verify_cycle false "$tmp/verify.hv2"
+has "$tmp/verify.hv2" 'star artists {"id": "00000000-0000-0000-0000-0000000013b3"} drop 1' "after star's upgrade the next cycle drops its stray C row"
+[ "$(wc -l < "$tmp/verify.hv2" | tr -d ' ')" = 1 ] && echo "ok nothing else is reported" || { echo "FAIL extra reports after star's upgrade"; cat "$tmp/verify.hv2"; failed=$((failed + 1)); }
+swept
+[ -z "$(drift star)" ] && echo "ok core and star agree again" || { echo "FAIL star drift: $(drift star)"; failed=$((failed + 1)); }
+
+say "verify hash v2: api nodes on the typed hash ignore the probes of a core still on the md5 hash"
+new_chunk="$(fndef core "$chunk_sig")"
+new_probe="$(fndef core 'scd_verify_probe(integer, integer)')"
+new_settle="$(fndef core 'scd_verify_settle(text, text, jsonb, boolean)')"
+{ echo "DROP FUNCTION public.$chunk_sig;"; old_verify scd_verify_chunk 0221_scd_verify; old_verify scd_verify_probe 0221_scd_verify; old_verify scd_verify_settle 0293_scd_verify_receipts; } | sql -d scd_b1_core -f - > /dev/null
+sql -d scd_b1_main -c "INSERT INTO public.artists (id, name, normalized_name, source) VALUES ('00000000-0000-0000-0000-0000000013b4', 'Old core', 'oldcore', 'sc')"
+verify_cycle false "$tmp/verify.hv3"
+[ ! -s "$tmp/verify.hv3" ] && [ ! -s "$tmp/verify.hv3.recheck" ] \
+  && echo "ok main and star answer no probe of the old core: no false diff, no repair" \
+  || { echo "FAIL mixed hash, old core:"; cat "$tmp/verify.hv3" "$tmp/verify.hv3.recheck"; failed=$((failed + 1)); }
+[ "$(only_on main artists "id = '00000000-0000-0000-0000-0000000013b4'")" = 1 ] || { echo "FAIL main's stray row was acted on"; failed=$((failed + 1)); }
+sql -d scd_b1_core -c "DROP FUNCTION public.scd_verify_chunk(text, jsonb, jsonb, text[])" -c "$new_chunk" -c "$new_probe" -c "$new_settle" > /dev/null
+verify_cycle false "$tmp/verify.hv4"
+has "$tmp/verify.hv4" 'main artists {"id": "00000000-0000-0000-0000-0000000013b4"} drop 1' "after core's upgrade the next cycle drops main's stray C row"
+[ "$(wc -l < "$tmp/verify.hv4" | tr -d ' ')" = 1 ] && echo "ok nothing else is reported" || { echo "FAIL extra reports after core's upgrade"; cat "$tmp/verify.hv4"; failed=$((failed + 1)); }
+swept
+[ -z "$(drift main)" ] && echo "ok core and main agree again" || { echo "FAIL main drift: $(drift main)"; failed=$((failed + 1)); }
+
 [ "$failed" = 0 ] || { echo "FAIL $failed B13 checks"; exit 1; }

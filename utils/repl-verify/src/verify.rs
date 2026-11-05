@@ -64,6 +64,10 @@ impl Repair {
     pub fn recheck(&self) -> bool {
         self.action == "recheck"
     }
+
+    pub fn stale_hash(&self) -> bool {
+        self.action == "stale_hash"
+    }
 }
 
 pub async fn probe_once(pool: &PgPool, budget: i32, chunk: i32) -> Result<Probe, sqlx::Error> {
@@ -150,6 +154,12 @@ fn report(repair: &Repair, dry: bool) {
         metrics::counter!("scd_repl_verify_rechecks_total", "peer" => repair.peer.clone(), "tbl" => repair.rel.clone())
             .increment(1);
         debug!(peer = %repair.peer, tbl = %repair.rel, range = key, "scd verify: a chunk differs, comparing it key by key");
+        return;
+    }
+    if repair.stale_hash() {
+        metrics::counter!("scd_repl_verify_stale_hash_total", "peer" => repair.peer.clone(), "tbl" => repair.rel.clone())
+            .increment(1);
+        debug!(peer = %repair.peer, tbl = %repair.rel, range = key, "scd verify: the answer uses another hash version, it is dropped");
         return;
     }
     let action = if repair.failed() {
