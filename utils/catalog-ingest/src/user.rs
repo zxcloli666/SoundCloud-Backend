@@ -6,13 +6,14 @@ use wt::{Mode, ObserveProfile, ObserveUsers};
 use crate::Observation;
 use crate::sc_payload::{parse_dt, string_field, without_nul};
 
-const REPLACED_WHEN_PRESENT: [&str; 12] = [
+const REPLACED_WHEN_PRESENT: [&str; 13] = [
     "full_name",
     "first_name",
     "last_name",
     "permalink",
     "permalink_url",
     "avatar_url",
+    "visuals",
     "country",
     "country_code",
     "city",
@@ -117,6 +118,7 @@ pub(crate) struct ScUserFields {
     pub(crate) permalink: Option<String>,
     pub(crate) permalink_url: Option<String>,
     pub(crate) avatar_url: Option<String>,
+    pub(crate) banner_url: Option<String>,
     pub(crate) country: Option<String>,
     pub(crate) city: Option<String>,
     pub(crate) description: Option<String>,
@@ -149,6 +151,7 @@ impl ScUserFields {
             "permalink": self.permalink,
             "permalink_url": self.permalink_url,
             "avatar_url": self.avatar_url,
+            "banner_url": self.banner_url,
             "country": self.country,
             "city": self.city,
             "description": self.description,
@@ -185,6 +188,7 @@ impl ScUserFields {
         let permalink = string_field(payload, "permalink");
         let permalink_url = string_field(payload, "permalink_url");
         let avatar_url = string_field(payload, "avatar_url");
+        let banner_url = banner_url(payload);
         let country =
             string_field(payload, "country_code").or_else(|| string_field(payload, "country"));
         let city = string_field(payload, "city");
@@ -208,6 +212,7 @@ impl ScUserFields {
             permalink,
             permalink_url,
             avatar_url,
+            banner_url,
             country,
             city,
             description,
@@ -223,4 +228,12 @@ impl ScUserFields {
             sc_last_modified,
         })
     }
+}
+
+fn banner_url(payload: &Value) -> Option<String> {
+    payload
+        .pointer("/visuals/visuals")?
+        .as_array()?
+        .iter()
+        .find_map(|visual| string_field(visual, "visual_url"))
 }

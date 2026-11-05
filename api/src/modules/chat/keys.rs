@@ -50,25 +50,47 @@ pub async fn list(
     }
     let gate = history_gate::first_visible_epoch(&chat, &CallerDevice::from(&device), conversation)
         .await?;
-    let floor = query
-        .from_epoch
-        .unwrap_or(0)
-        .max(access.member_floor)
-        .max(gate);
-    let stored = sqlx::query_file_as!(
-        StoredKey,
-        "queries/chat/keys/list.sql",
-        conversation,
-        floor,
-        i64::from(page_size(caller.max_bytes))
-    )
-    .fetch_all(&chat.pg)
-    .await?;
+    let asked = query.from_epoch.unwrap_or(0);
+    let floor = asked.max(access.member_floor).max(gate);
+    let meta = access
+        .meta_epoch
+        .filter(|epoch| *epoch >= asked && *epoch < floor);
+    let mut stored = match meta {
+        Some(epoch) => meta_key(&chat, conversation, epoch).await?,
+        None => Vec::new(),
+    };
+    let page = i64::from(page_size(caller.max_bytes)) - stored.len() as i64;
+    if page > 0 {
+        stored.extend(
+            sqlx::query_file_as!(
+                StoredKey,
+                "queries/chat/keys/list.sql",
+                conversation,
+                floor,
+                page
+            )
+            .fetch_all(&chat.pg)
+            .await?,
+        );
+    }
     let sealed = stored
         .iter()
         .map(|key| seal_for(&chat, &device, conversation, key))
         .collect::<ChatResult<Vec<_>>>()?;
     Ok(Json(sealed))
+}
+
+async fn meta_key(chat: &ChatState, conversation: Uuid, epoch: i32) -> ChatResult<Vec<StoredKey>> {
+    Ok(sqlx::query_file_as!(
+        StoredKey,
+        "queries/chat/keys/by_epoch.sql",
+        conversation,
+        epoch
+    )
+    .fetch_optional(&chat.pg)
+    .await?
+    .into_iter()
+    .collect())
 }
 
 #[cfg(test)]

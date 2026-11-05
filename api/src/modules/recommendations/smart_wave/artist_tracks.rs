@@ -24,7 +24,6 @@ pub struct Top {
 }
 
 type Tops = Arc<HashMap<Uuid, Arc<Top>>>;
-type Grouped = HashMap<Uuid, (Vec<(u64, i64)>, bool)>;
 
 #[derive(Clone, Copy)]
 enum Rule {
@@ -32,92 +31,38 @@ enum Rule {
     Home,
 }
 
-struct RuleCache {
+pub struct ArtistTopTracks {
+    rule: Rule,
     name: &'static str,
     by_artist: Cache<Uuid, Arc<Top>>,
-}
-
-struct Loaded {
-    wave: HashMap<Uuid, Arc<Top>>,
-    home: HashMap<Uuid, Arc<Top>>,
-}
-
-pub struct ArtistTopTracks {
-    wave: RuleCache,
-    home: RuleCache,
     visibility: Cache<u64, bool>,
     flights: KeyedCoalesce<Tops>,
     loads: AtomicU64,
 }
 
-impl RuleCache {
-    fn new(name: &'static str, ttl: Duration) -> Self {
+impl ArtistTopTracks {
+    pub fn new() -> Self {
+        Self::build(Rule::Wave, "wave_top_tracks", WAVE_TTL)
+    }
+
+    pub fn for_home() -> Self {
+        Self::build(Rule::Home, "home_top_tracks", HOME_TTL)
+    }
+
+    fn build(rule: Rule, name: &'static str, ttl: Duration) -> Self {
         Self {
+            rule,
             name,
             by_artist: Cache::builder()
                 .max_capacity(KEPT)
                 .time_to_live(ttl)
                 .build(),
-        }
-    }
-
-    fn cached(&self, artists: &[Uuid]) -> Option<HashMap<Uuid, Arc<Top>>> {
-        artists
-            .iter()
-            .map(|artist| self.by_artist.get(artist).map(|top| (*artist, top)))
-            .collect()
-    }
-
-    fn keep(&self, grouped: Grouped) -> HashMap<Uuid, Arc<Top>> {
-        let tops: HashMap<Uuid, Arc<Top>> = grouped
-            .into_iter()
-            .map(|(artist, (tracks, truncated))| {
-                let top = Arc::new(Top {
-                    tracks,
-                    complete: !truncated,
-                });
-                (artist, top)
-            })
-            .collect();
-        for (artist, top) in &tops {
-            self.by_artist.insert(*artist, top.clone());
-        }
-        crate::metrics::set_cache_size(
-            self.name,
-            self.by_artist.entry_count(),
-            self.by_artist.weighted_size(),
-        );
-        tops
-    }
-}
-
-impl Loaded {
-    fn of(self, rule: Rule) -> HashMap<Uuid, Arc<Top>> {
-        match rule {
-            Rule::Wave => self.wave,
-            Rule::Home => self.home,
-        }
-    }
-}
-
-impl ArtistTopTracks {
-    pub fn new() -> Self {
-        Self {
-            wave: RuleCache::new("wave_top_tracks", WAVE_TTL),
-            home: RuleCache::new("home_top_tracks", HOME_TTL),
             visibility: Cache::builder()
                 .max_capacity(VISIBILITY_KEPT)
                 .time_to_live(VISIBILITY_TTL)
                 .build(),
             flights: KeyedCoalesce::new(),
             loads: AtomicU64::new(0),
-        }
-    }
-
-    fn cache(&self, rule: Rule) -> &RuleCache {
-        match rule {
-            Rule::Wave => &self.wave,
-            Rule::Home => &self.home,
         }
     }
 
@@ -130,7 +75,7 @@ impl ArtistTopTracks {
         if artists.is_empty() {
             return HashMap::new();
         }
-        let Some(tops) = self.tops(Rule::Home, pg, artists).await else {
+        let Some(tops) = self.tops(pg, artists).await else {
             return HashMap::new();
         };
         tops.into_iter()
@@ -147,8 +92,7 @@ impl ArtistTopTracks {
 
     #[cfg(test)]
     pub fn forget_all(&self) {
-        self.wave.by_artist.invalidate_all();
-        self.home.by_artist.invalidate_all();
+        self.by_artist.invalidate_all();
         self.visibility.invalidate_all();
     }
 
@@ -168,7 +112,7 @@ impl ArtistTopTracks {
         if artists.is_empty() {
             return Vec::new();
         }
-        let Some(tops) = self.tops(Rule::Wave, pg, artists).await else {
+        let Some(tops) = self.tops(pg, artists).await else {
             return Vec::new();
         };
         let excluded: HashSet<u64> = exclude.iter().filter_map(|id| id.parse().ok()).collect();
@@ -231,25 +175,19 @@ impl ArtistTopTracks {
         rows
     }
 
-    async fn tops(
-        &self,
-        rule: Rule,
-        pg: &PgPool,
-        artists: &[Uuid],
-    ) -> Option<HashMap<Uuid, Arc<Top>>> {
-        let cache = self.cache(rule);
+    async fn tops(&self, pg: &PgPool, artists: &[Uuid]) -> Option<HashMap<Uuid, Arc<Top>>> {
         let mut found = HashMap::new();
         let mut missing = Vec::new();
         for artist in artists {
-            match cache.by_artist.get(artist) {
+            match self.by_artist.get(artist) {
                 Some(top) => {
                     crate::metrics::record_artist_tracks_cache(true);
-                    crate::metrics::record_cache(cache.name, true);
+                    crate::metrics::record_cache(self.name, true);
                     found.insert(*artist, top);
                 }
                 None => {
                     crate::metrics::record_artist_tracks_cache(false);
-                    crate::metrics::record_cache(cache.name, false);
+                    crate::metrics::record_cache(self.name, false);
                     missing.push(*artist);
                 }
             }
@@ -264,17 +202,14 @@ impl ArtistTopTracks {
             .map(|artist| artist.simple().to_string())
             .collect::<Vec<_>>()
             .join(":");
-        let flight = format!("{}:{flight}", cache.name);
         let loaded = self
             .flights
             .run(&flight, || async {
-                if let Some(cached) = cache.cached(&missing) {
+                if let Some(cached) = self.cached(&missing) {
                     return Ok(Arc::new(cached));
                 }
                 self.loads.fetch_add(1, Ordering::Relaxed);
-                self.load(pg, &missing)
-                    .await
-                    .map(|loaded| Arc::new(loaded.of(rule)))
+                self.load(pg, &missing).await.map(Arc::new)
             })
             .await
             .ok()?;
@@ -282,40 +217,85 @@ impl ArtistTopTracks {
         Some(found)
     }
 
-    async fn load(&self, pg: &PgPool, artists: &[Uuid]) -> Result<Loaded, sqlx::Error> {
-        let rows = sqlx::query_file!(
-            "queries/recommendations/smart_wave/graph/load_artist_tops.sql",
-            artists,
-            TRACKS_KEPT
-        )
-        .fetch_all(pg)
-        .await?;
-        let empty = || -> Grouped {
-            artists
-                .iter()
-                .map(|artist| (*artist, (Vec::new(), false)))
-                .collect()
+    fn cached(&self, artists: &[Uuid]) -> Option<HashMap<Uuid, Arc<Top>>> {
+        artists
+            .iter()
+            .map(|artist| self.by_artist.get(artist).map(|top| (*artist, top)))
+            .collect()
+    }
+
+    async fn load(
+        &self,
+        pg: &PgPool,
+        artists: &[Uuid],
+    ) -> Result<HashMap<Uuid, Arc<Top>>, sqlx::Error> {
+        let rows: Vec<(Uuid, String, i64, bool)> = match self.rule {
+            Rule::Wave => sqlx::query_file!(
+                "queries/recommendations/smart_wave/graph/load_artist_top_tracks.sql",
+                artists,
+                TRACKS_KEPT
+            )
+            .fetch_all(pg)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.artist_id,
+                    row.sc_track_id,
+                    row.play_count,
+                    row.truncated,
+                )
+            })
+            .collect(),
+            Rule::Home => sqlx::query_file!(
+                "queries/recommendations/home_wave/load_artist_top_tracks.sql",
+                artists,
+                TRACKS_KEPT
+            )
+            .fetch_all(pg)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.artist_id,
+                    row.sc_track_id,
+                    row.play_count,
+                    row.truncated,
+                )
+            })
+            .collect(),
         };
-        let (mut wave, mut home) = (empty(), empty());
-        for row in rows {
-            let Ok(id) = row.sc_track_id.parse::<u64>() else {
+        let mut grouped: HashMap<Uuid, (Vec<(u64, i64)>, bool)> = artists
+            .iter()
+            .map(|artist| (*artist, (Vec::new(), false)))
+            .collect();
+        for (artist_id, sc_track_id, play_count, truncated) in rows {
+            let Ok(id) = sc_track_id.parse::<u64>() else {
                 continue;
             };
-            let entry = wave.entry(row.artist_id).or_default();
-            if row.wave {
-                entry.0.push((id, row.play_count));
-            }
-            entry.1 |= row.wave_truncated;
-            let entry = home.entry(row.artist_id).or_default();
-            if row.home {
-                entry.0.push((id, row.play_count));
-            }
-            entry.1 |= row.home_truncated;
+            let entry = grouped.entry(artist_id).or_default();
+            entry.0.push((id, play_count));
+            entry.1 |= truncated;
         }
-        Ok(Loaded {
-            wave: self.wave.keep(wave),
-            home: self.home.keep(home),
-        })
+        let tops: HashMap<Uuid, Arc<Top>> = grouped
+            .into_iter()
+            .map(|(artist, (tracks, truncated))| {
+                let top = Arc::new(Top {
+                    tracks,
+                    complete: !truncated,
+                });
+                (artist, top)
+            })
+            .collect();
+        for (artist, top) in &tops {
+            self.by_artist.insert(*artist, top.clone());
+        }
+        crate::metrics::set_cache_size(
+            self.name,
+            self.by_artist.entry_count(),
+            self.by_artist.weighted_size(),
+        );
+        Ok(tops)
     }
 
     async fn visible_now(&self, pg: &PgPool, ids: &[u64]) -> Option<HashSet<u64>> {
@@ -499,39 +479,6 @@ mod tests {
             .collect(&pool, &[SMALL, BIG, EMPTY], &[], 6, 800)
             .await;
         assert_eq!(cache.loads(), before);
-        Ok(())
-    }
-
-    #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-    async fn one_read_fills_the_wave_and_the_home_lists(pool: PgPool) -> anyhow::Result<()> {
-        seed(&pool).await?;
-        sqlx::query(
-            "UPDATE tracks SET index_state = 'pending' WHERE sc_track_id IN ('1007', '2071')",
-        )
-        .execute(&pool)
-        .await?;
-        let artists = [SMALL, BIG, EMPTY];
-        let taken = HashSet::new();
-
-        let wave_first = ArtistTopTracks::new();
-        let wave = wave_first.collect(&pool, &artists, &[], 6, 800).await;
-        let home = wave_first.best_track(&pool, &artists, &taken).await;
-        assert_eq!(
-            wave_first.loads(),
-            1,
-            "the home shelf read the artists again"
-        );
-
-        let home_first = ArtistTopTracks::new();
-        assert_eq!(home_first.best_track(&pool, &artists, &taken).await, home);
-        assert_eq!(home_first.collect(&pool, &artists, &[], 6, 800).await, wave);
-        assert_eq!(home_first.loads(), 1, "the wave read the artists again");
-
-        assert_eq!(home.get(&SMALL), Some(&1007));
-        assert_eq!(home.get(&BIG), Some(&2071));
-        assert!(!home.contains_key(&EMPTY));
-        assert!(!wave.is_empty());
-        assert!(wave.iter().all(|(id, _)| *id != 1007 && *id != 2071));
         Ok(())
     }
 

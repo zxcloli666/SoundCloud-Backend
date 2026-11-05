@@ -10,6 +10,8 @@ pub mod reach;
 mod reach_tests;
 pub mod session;
 pub mod signals;
+#[cfg(test)]
+mod tops_plan_tests;
 pub mod track_arm;
 
 use std::collections::HashMap;
@@ -184,18 +186,21 @@ pub async fn build(
     let pool_ids: Vec<u64> = mert.iter().map(|c| c.sc_track_id).collect();
     let meta = load_track_meta(&svc.pg, &pool_ids).await;
 
-    let mut artist_of = reach::attributed(&graph_tracks, &HashSet::new());
+    let mut mert_artists: HashMap<u64, Option<Uuid>> = HashMap::new();
     for c in &mert {
         if let Some(m) = meta.get(&c.sc_track_id)
             && m.storage_ok
         {
-            artist_of.entry(c.sc_track_id).or_insert(m.primary_artist);
+            mert_artists
+                .entry(c.sc_track_id)
+                .or_insert(m.primary_artist);
         }
     }
+    let settled: HashSet<u64> = graph_tracks.iter().map(|(track, _)| *track).collect();
+    let mut artist_of = reach::attribution(&graph_tracks, &mert_artists);
 
     let variants = user_id_variants(req.sc_user_id);
-    let known: HashSet<u64> = artist_of.keys().copied().collect();
-    let pooled: Vec<u64> = known.iter().copied().collect();
+    let pooled: Vec<u64> = artist_of.keys().copied().collect();
     let blocked = blocked::blocked_uploads(&svc.pg, &variants, &pooled).await;
     artist_of.retain(|tid, _| !blocked.contains(tid));
     let cand_ids: Vec<u64> = artist_of.keys().copied().collect();
@@ -215,9 +220,8 @@ pub async fn build(
     let taste = session.pull_taste(taste, [&cm, &cc, &cl], &boosted, session_pull);
     let skipped = session.skipped_vectors([&cm, &cc, &cl]);
     let mut cands = score_candidates(artist_of, &taste, &skipped, &sunk_artists, [&cm, &cc, &cl]);
-    let mut picked = reach.pick(&cands);
 
-    let tail = reach.tail(rest, &picked);
+    let tail = reach.tail(rest, &cands, &settled);
     if !tail.is_empty() {
         let more = reach::read(
             &svc.artist_tracks,
@@ -229,12 +233,14 @@ pub async fn build(
             GRAPH_TRACKS_TOTAL.saturating_sub(graph_tracks.len()),
         )
         .await;
-        let mut fresh = reach::attributed(&more, &known);
+        graph_tracks.extend(more);
+        let mut fresh = reach::reclaim(&mut cands, &graph_tracks, &mert_artists);
         let fresh_ids: Vec<u64> = fresh.keys().copied().collect();
-        let blocked = blocked::blocked_uploads(&svc.pg, &variants, &fresh_ids).await;
+        let (blocked, [fm, fc, fl]) = tokio::join!(
+            blocked::blocked_uploads(&svc.pg, &variants, &fresh_ids),
+            track_vectors(svc, &fresh_ids),
+        );
         fresh.retain(|tid, _| !blocked.contains(tid));
-        let fresh_ids: Vec<u64> = fresh.keys().copied().collect();
-        let [fm, fc, fl] = track_vectors(svc, &fresh_ids).await;
         cands.extend(score_candidates(
             fresh,
             &taste,
@@ -242,9 +248,8 @@ pub async fn build(
             &sunk_artists,
             [&fm, &fc, &fl],
         ));
-        picked = reach.pick(&cands);
-        graph_tracks.extend(more);
     }
+    let picked = reach.pick(&cands);
     let cand_count = cands.len();
     let graph_artists = head.len() + tail.len();
 

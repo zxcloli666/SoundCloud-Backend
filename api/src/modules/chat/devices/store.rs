@@ -11,7 +11,7 @@ pub struct SessionBind {
 pub struct NewDevice<'a> {
     pub id: Uuid,
     pub user_id: &'a str,
-    pub session_id: Uuid,
+    pub session_hash: &'a [u8],
     pub auth_pub: &'a [u8],
     pub box_pub: &'a [u8],
     pub platform: &'a str,
@@ -23,7 +23,7 @@ pub struct NewDevice<'a> {
 
 pub struct SessionMove<'a> {
     pub id: Uuid,
-    pub session_id: Uuid,
+    pub session_hash: &'a [u8],
     pub platform: &'a str,
     pub name: &'a str,
     pub app_version: &'a str,
@@ -83,7 +83,7 @@ pub async fn insert(
         "queries/chat/devices/insert.sql",
         device.id,
         device.user_id,
-        device.session_id,
+        device.session_hash,
         device.auth_pub,
         device.box_pub,
         device.platform,
@@ -104,7 +104,7 @@ pub async fn move_to_session(
         DeviceRow,
         "queries/chat/devices/move_to_session.sql",
         change.id,
-        change.session_id,
+        change.session_hash,
         change.platform,
         change.name,
         change.app_version,
@@ -123,20 +123,20 @@ pub async fn revoke(db: impl PgExecutor<'_>, id: Uuid) -> sqlx::Result<bool> {
 
 pub async fn revoke_session_holders(
     db: impl PgExecutor<'_>,
-    session_id: Uuid,
+    session_hash: &[u8],
     keep: Uuid,
 ) -> sqlx::Result<Vec<Uuid>> {
     sqlx::query_file_scalar!(
         "queries/chat/devices/revoke_session_holders.sql",
-        session_id,
+        session_hash,
         keep
     )
     .fetch_all(db)
     .await
 }
 
-pub async fn session_held(db: impl PgExecutor<'_>, session_id: Uuid) -> sqlx::Result<bool> {
-    sqlx::query_file_scalar!("queries/chat/devices/session_held.sql", session_id)
+pub async fn session_held(db: impl PgExecutor<'_>, session_hash: &[u8]) -> sqlx::Result<bool> {
+    sqlx::query_file_scalar!("queries/chat/devices/session_held.sql", session_hash)
         .fetch_one(db)
         .await
 }
@@ -148,11 +148,10 @@ pub async fn unlock_history(db: impl PgExecutor<'_>, id: Uuid) -> sqlx::Result<(
         .map(|_| ())
 }
 
-pub async fn touch(db: impl PgExecutor<'_>, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query_file!("queries/chat/devices/touch.sql", id)
-        .execute(db)
+pub async fn touch(db: impl PgExecutor<'_>, id: Uuid) -> sqlx::Result<Option<DeviceRow>> {
+    sqlx::query_file_as!(DeviceRow, "queries/chat/devices/touch.sql", id)
+        .fetch_optional(db)
         .await
-        .map(|_| ())
 }
 
 pub async fn rekey_user(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result<u64> {

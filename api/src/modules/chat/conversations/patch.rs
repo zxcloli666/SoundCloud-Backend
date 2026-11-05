@@ -4,7 +4,9 @@ use serde_json::{Map, Value};
 use sqlx::PgPool;
 
 use crate::modules::chat::conversations::create;
+use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
+use crate::modules::chat::members::store as members;
 use crate::modules::chat::messages::system::{self, SystemEvent};
 use crate::modules::chat::model::MessageRow;
 use crate::modules::chat::{ChatError, ChatResult};
@@ -81,6 +83,10 @@ pub async fn apply(
 ) -> ChatResult<Option<MessageRow>> {
     let actor = access.clone().active()?.admin()?;
     let meta = create::meta(patch.meta_ct, patch.meta_epoch)?;
+    let hides_history = patch
+        .settings
+        .as_ref()
+        .is_some_and(|settings| settings.history_visible == Some(false));
     let settings = patch
         .settings
         .map(|settings| settings.merged())
@@ -89,6 +95,12 @@ pub async fn apply(
         return Err(ChatError::Invalid);
     }
     let mut tx = pg.begin().await?;
+    if hides_history {
+        members::lock(&mut tx, actor.conversation)
+            .await?
+            .ok_or(ChatError::NotFound)?;
+        media::hooks::queue_trim(&mut tx, actor.conversation).await?;
+    }
     if !settings.is_empty() {
         sqlx::query_file_scalar!(
             "queries/chat/conversations/merge_settings.sql",

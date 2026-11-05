@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::modules::chat::sweeps::budget::Budget;
 use crate::modules::chat::sweeps::gauges;
+use crate::modules::chat::sweeps::media;
 use crate::modules::chat::{ChatResult, ChatState, rt_keys};
 
 pub const BATCH_ROWS: i64 = 5_000;
@@ -38,6 +39,9 @@ pub async fn run_once(chat: &ChatState) -> ChatResult<u64> {
 
 pub async fn shred(chat: &ChatState, conversation: Uuid) -> ChatResult<bool> {
     let mut tx = chat.pg.begin().await?;
+    sqlx::query_file_scalar!("queries/chat/sweeps/shred_lock.sql", conversation)
+        .fetch_optional(&mut *tx)
+        .await?;
     let shredded = sqlx::query_file!("queries/chat/sweeps/shred_room.sql", conversation)
         .execute(&mut *tx)
         .await?
@@ -47,6 +51,7 @@ pub async fn shred(chat: &ChatState, conversation: Uuid) -> ChatResult<bool> {
         sqlx::query_file!("queries/chat/sweeps/purge_keys.sql", conversation)
             .execute(&mut *tx)
             .await?;
+        media::room_ended(&mut tx, conversation).await?;
     }
     tx.commit().await?;
     chat.hot.forget(conversation);
@@ -61,6 +66,12 @@ pub async fn conversation(
     sqlx::query_file!("queries/chat/sweeps/purge_keys.sql", conversation)
         .execute(&chat.pg)
         .await?;
+    let mut tx = chat.pg.begin().await?;
+    media::room_ended(&mut tx, conversation).await?;
+    tx.commit().await?;
+    if !media::purge_refs(chat, conversation, budget).await? {
+        return Ok(false);
+    }
     loop {
         if !budget.spend(chat) {
             return Ok(false);
@@ -84,11 +95,14 @@ pub async fn conversation(
     sqlx::query_file!("queries/chat/sweeps/purge_members.sql", conversation)
         .execute(&chat.pg)
         .await?;
+    let mut tx = chat.pg.begin().await?;
+    media::room_ended(&mut tx, conversation).await?;
     let gone = sqlx::query_file!("queries/chat/sweeps/purge_conversation.sql", conversation)
-        .execute(&chat.pg)
+        .execute(&mut *tx)
         .await?
         .rows_affected()
         == 1;
+    tx.commit().await?;
     if gone {
         chat.hot.forget(conversation);
         forget_marks(chat, conversation).await?;

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -6,9 +7,10 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgConnection, PgPool};
-use uuid::{NoContext, Timestamp, Uuid};
+use uuid::{NoContext, Timestamp, Uuid, Variant, Version};
 
 use super::{Feed, SESSION_IN_FLIGHT, SESSION_POLL, SESSION_WAIT, in_flight};
+use crate::modules::auth::test_support::Restricted;
 use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::sc::ScClient;
@@ -248,6 +250,76 @@ async fn unheard_worker_started(pool: &PgPool) -> anyhow::Result<()> {
         anyhow::ensure!(Instant::now() < deadline, "the apply worker never started");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_chat_role_reads_a_young_miss_as_a_retry_and_a_logout_as_final(
+    owner: PgPool,
+) -> anyhow::Result<()> {
+    let restricted = Restricted::new(&owner).await?;
+    let auth = auth(&restricted.pool)?;
+    let young = Uuid::now_v7();
+    let logged_out = Uuid::now_v7();
+    tombstone(&owner, logged_out).await?;
+
+    let missed = auth.missed_now::<()>(Feed::Streaming, young).await;
+    let gone = auth.missed_now::<()>(Feed::Streaming, logged_out).await;
+    let feed = auth.feed().await;
+    restricted.remove(&owner).await?;
+
+    let error = match missed {
+        Err(error) => error,
+        Ok(found) => anyhow::bail!("a young session must not ask for a new login: {found:?}"),
+    };
+    assert_eq!(
+        (error.status(), error.public_code()),
+        (StatusCode::SERVICE_UNAVAILABLE, "session_not_replicated")
+    );
+    assert!(gone?.is_none(), "a tombstoned session is signed out");
+    assert_eq!(feed?, Feed::Local);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn ids_the_auth_functions_mint_are_young_v7_ids(pool: PgPool) -> anyhow::Result<()> {
+    let minted: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT public.auth_uuid_v7(), floor(extract(EPOCH FROM clock_timestamp()) * 1000)::bigint
+         FROM generate_series(1, 1000)",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let now = SystemTime::now();
+    let distinct: BTreeSet<Uuid> = minted.iter().map(|(id, _)| *id).collect();
+    assert_eq!(distinct.len(), minted.len());
+    for (id, clock_ms) in minted {
+        assert_eq!(
+            (id.get_version(), id.get_variant()),
+            (Some(Version::SortRand), Variant::RFC4122),
+            "{id}"
+        );
+        let (seconds, nanos) = id.get_timestamp().expect("a v7 timestamp").to_unix();
+        let stamped_ms = i64::try_from(seconds)? * 1000 + i64::from(nanos / 1_000_000);
+        assert!(
+            (0..1_000).contains(&(clock_ms - stamped_ms)),
+            "{id} stamped {stamped_ms}, clock {clock_ms}"
+        );
+        assert!(in_flight(id, now), "{id}");
+    }
+
+    let source = Uuid::now_v7();
+    store(&pool, source).await?;
+    let claim_token: String =
+        sqlx::query_scalar("SELECT claim_token FROM public.auth_link_create('pull', NULL, NULL)")
+            .fetch_one(&pool)
+            .await?;
+    let claimed: Uuid =
+        sqlx::query_scalar("SELECT session_id FROM public.auth_link_claim($1, $2, NULL, NULL)")
+            .bind(claim_token)
+            .bind(source)
+            .fetch_one(&pool)
+            .await?;
+    assert!(in_flight(claimed, SystemTime::now()), "{claimed}");
+    Ok(())
 }
 
 fn minted_at(at: SystemTime) -> Uuid {

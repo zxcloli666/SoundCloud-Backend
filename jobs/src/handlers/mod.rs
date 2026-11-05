@@ -94,6 +94,7 @@ use self::wanted::WantedHandler;
 pub(crate) const CORE_FAST_KINDS: &[JobKind] = &[
     JobKind::AuthCleanupLinkRequests,
     JobKind::AuthCleanupLoginRequests,
+    JobKind::AuthCleanupRemoteLinks,
     JobKind::CleanupJobReceipts,
     JobKind::DiagCleanup,
     JobKind::DispatchAudioIndex,
@@ -472,6 +473,10 @@ impl JobHandlers {
             JobKind::AuthCleanupLoginRequests => {
                 empty_payload(job)?;
                 self.maintenance.cleanup_login_requests().await
+            }
+            JobKind::AuthCleanupRemoteLinks => {
+                empty_payload(job)?;
+                self.maintenance.cleanup_remote_links().await
             }
             JobKind::AdminCatalogRenormalize => {
                 let payload = payload::<AdminMaintenancePayload>(job)?;

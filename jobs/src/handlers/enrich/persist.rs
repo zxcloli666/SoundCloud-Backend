@@ -1,8 +1,13 @@
 mod accounts;
 
 #[cfg(test)]
+#[path = "persist_credits_tests.rs"]
+mod credits_tests;
+#[cfg(test)]
 #[path = "persist_tests.rs"]
 mod tests;
+
+use std::collections::HashSet;
 
 use sqlx::{Acquire, PgConnection, PgPool, Postgres, Transaction};
 use tracing::debug;
@@ -50,52 +55,32 @@ pub async fn apply(
     )
     .await?;
 
-    let prior_count: i64 =
-        sqlx::query_file_scalar!("queries/enrich/persist/count_track_artists.sql", track_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-    sqlx::query_file!("queries/enrich/persist/delete_track_artists.sql", track_id)
-        .execute(&mut *tx)
+    let held = sqlx::query_file!("queries/enrich/persist/lock_track_artists.sql", track_id)
+        .fetch_all(&mut *tx)
         .await?;
 
-    let mut all_artist_ids: Vec<Uuid> = Vec::new();
+    let mut kept: Vec<(Uuid, &'static str)> = Vec::new();
     if !res.is_cover {
-        insert_track_artists(
-            &mut tx,
-            track_id,
-            &primary_ids,
-            "primary",
-            &mut all_artist_ids,
-        )
-        .await?;
-        insert_track_artists(
-            &mut tx,
-            track_id,
-            &featured_ids,
-            "featured",
-            &mut all_artist_ids,
-        )
-        .await?;
-        insert_track_artists(
-            &mut tx,
-            track_id,
-            &producer_ids,
-            "producer",
-            &mut all_artist_ids,
-        )
-        .await?;
-        insert_track_artists(
-            &mut tx,
-            track_id,
-            &remixer_ids,
-            "remixer",
-            &mut all_artist_ids,
-        )
-        .await?;
+        insert_track_artists(&mut tx, track_id, &primary_ids, "primary", &mut kept).await?;
+        insert_track_artists(&mut tx, track_id, &featured_ids, "featured", &mut kept).await?;
+        insert_track_artists(&mut tx, track_id, &producer_ids, "producer", &mut kept).await?;
+        insert_track_artists(&mut tx, track_id, &remixer_ids, "remixer", &mut kept).await?;
     } else {
         let _ = (&featured_ids, &producer_ids, &remixer_ids);
     }
+    let credited_artists: HashSet<Uuid> = kept.iter().map(|(artist, _)| *artist).collect();
+    let (kept_artists, kept_roles): (Vec<Uuid>, Vec<String>) = kept
+        .into_iter()
+        .map(|(artist, role)| (artist, role.to_owned()))
+        .unzip();
+    sqlx::query_file!(
+        "queries/enrich/persist/delete_stale_track_artists.sql",
+        track_id,
+        &kept_artists,
+        &kept_roles
+    )
+    .execute(&mut *tx)
+    .await?;
 
     let leading_primary = primary_ids.first().map(|(id, _)| *id);
     let (primary_artist_id, cover_of_artist_id) = if res.is_cover {
@@ -189,7 +174,7 @@ pub async fn apply(
     Ok(PersistOutcome {
         primary_artist_id,
         album_id,
-        coplay_dirty: prior_count == 0 && all_artist_ids.len() >= 2,
+        coplay_dirty: held.is_empty() && credited_artists.len() >= 2,
     })
 }
 
@@ -502,8 +487,8 @@ async fn insert_track_artists(
     tx: &mut Transaction<'_, Postgres>,
     track_id: Uuid,
     credited: &[(Uuid, Credit)],
-    role: &str,
-    accum: &mut Vec<Uuid>,
+    role: &'static str,
+    kept: &mut Vec<(Uuid, &'static str)>,
 ) -> EnrichResult<()> {
     for (pos, (id, credit)) in credited.iter().enumerate() {
         sqlx::query_file!(
@@ -518,9 +503,7 @@ async fn insert_track_artists(
         )
         .execute(&mut **tx)
         .await?;
-        if !accum.contains(id) {
-            accum.push(*id);
-        }
+        kept.push((*id, role));
     }
     Ok(())
 }

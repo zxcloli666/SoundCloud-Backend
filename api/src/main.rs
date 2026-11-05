@@ -133,6 +133,9 @@ async fn main() {
         .expect("Failed to connect to PostgreSQL for recommendations");
     info!("PostgreSQL connected");
 
+    let sealed_cfg = crate::modules::auth::sealed::config::SealedCfg::from_env(
+        config.admission.trusted_proxies.clone(),
+    );
     let redis_pool = redis::connect(&config).expect("Failed to create Redis pool");
     let admission = PublicAdmission::new(
         redis::connect_admission(&config).expect("Failed to create admission Redis pool"),
@@ -201,6 +204,19 @@ async fn main() {
         core.clone(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
+    let sealed = if sealed_cfg.enabled {
+        Some(
+            crate::modules::auth::sealed::Sealed::load(
+                sealed_cfg,
+                redis_pool.clone(),
+                auth.clone(),
+                link.clone(),
+            )
+            .expect("AUTH_KEYS_DIR must hold the current OCK"),
+        )
+    } else {
+        None
+    };
 
     let oauth_app_tokens = OAuthAppTokenService::with_fallback(
         pg.clone(),
@@ -304,6 +320,16 @@ async fn main() {
     let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
     let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
 
+    let remote = crate::modules::remote::RemoteHub::new(Some(nats.clone()), "remote");
+    if !remote.prepare().await {
+        tracing::warn!("remote store is not ready yet, voice opens it on first use");
+    }
+    let links = crate::modules::remote::LinksService::new(pg.clone());
+    let confirm = std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
+        redis_pool.clone(),
+        "voice",
+    ));
+
     let port = config.port;
     let diag = crate::modules::diag::DiagService::new(pg.clone(), &config.diag);
     let state = AppState {
@@ -317,6 +343,7 @@ async fn main() {
         auth,
         admission,
         link,
+        sealed,
         oauth_apps,
         events,
         dislikes,
@@ -342,6 +369,9 @@ async fn main() {
         discover,
         sync_queue: sync_queue.clone(),
         rooms,
+        remote,
+        links,
+        confirm,
     };
 
     let app = router::build(state);

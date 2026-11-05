@@ -1,8 +1,8 @@
-mod answer;
+pub mod answer;
 mod auth_gate;
-mod clock;
+pub mod clock;
 pub mod config_route;
-mod dispatch;
+pub mod dispatch;
 mod exchange;
 pub mod ock;
 mod prepare;
@@ -41,11 +41,12 @@ pub struct Channel {
 impl Channel {
     pub fn new(chat: Arc<ChatState>, inner: Router) -> Self {
         let permits = chat.config.max_parked.saturating_add(WORK_PERMITS);
+        let gate = AuthGate::new(&chat.config.starts);
         Self {
             chat,
             inner,
             busy: Semaphore::new(permits),
-            gate: AuthGate::new(),
+            gate,
         }
     }
 }

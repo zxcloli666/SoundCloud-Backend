@@ -11,7 +11,7 @@ use catalog_sources::{ExternalFetcher, GeniusCfg, GeniusService, LyricsCandidate
 use chrono::Utc;
 use sqlx::PgPool;
 
-use crate::config::LyricsConfig;
+use crate::config::{LyricsConfig, WorkerDispatchConfig};
 use crate::queue::{ClaimOrder, JobRepository, LeasedJob};
 
 async fn insert_track(pool: &PgPool, id: &str, title: &str) -> anyhow::Result<()> {
@@ -448,7 +448,7 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
         Option<String>,
         String,
         Option<String>,
-        String,
+        Option<String>,
     ) = sqlx::query_as(
         "SELECT synced_lrc, plain_text, source, plain_source, embedding_state
          FROM lyrics_cache WHERE sc_track_id = '42'",
@@ -471,15 +471,9 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     assert!(lyrics.1.is_some());
     assert_eq!(lyrics.2, "lrclib");
     assert_eq!(lyrics.3.as_deref(), Some("lrclib"));
-    assert_eq!(lyrics.4, "queued");
+    assert_eq!(lyrics.4, None);
     assert_eq!(state_count, 0);
-    assert_eq!(
-        downstream,
-        vec![
-            "lyrics.dispatch_transcription".to_owned(),
-            "lyrics.embed".to_owned()
-        ]
-    );
+    assert_eq!(downstream, vec!["lyrics.dispatch_transcription".to_owned()]);
     assert_eq!(sync_provenance(&pool).await?, (None, None));
     Ok(())
 }
@@ -1025,6 +1019,56 @@ async fn plain_text_found_with_lrclib_healthy_ends_the_lookup(pool: PgPool) -> a
 
     assert_eq!(cached_text(&pool).await?.1.as_deref(), Some(PLAIN_BODY));
     assert_eq!(recheck_state(&pool).await?, None);
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::migrations::TEST_CORE")]
+async fn a_blank_plain_text_is_stored_as_null_and_the_synced_text_is_embedded(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    insert_track(&pool, "42", "Lose Yourself").await?;
+    let handler = offline_handler(&pool)?;
+    let job = lookup_job(&pool).await?;
+    let synced = "[00:01.00] A synced line long enough to be embedded later";
+
+    settle(
+        &pool,
+        &handler,
+        &job,
+        candidate("lrclib", Some(synced), " \n\t "),
+        false,
+    )
+    .await?;
+
+    let (stored_synced, plain, _) = cached_text(&pool).await?;
+    assert_eq!(stored_synced.as_deref(), Some(synced));
+    assert_eq!(plain, None);
+    sqlx::query(
+        "UPDATE lyrics_cache SET created_at = created_at - interval '1 hour' WHERE sc_track_id = '42'",
+    )
+    .execute(&pool)
+    .await?;
+    super::super::reaper::LyricsReaper::new(
+        pool.clone(),
+        WorkerDispatchConfig {
+            lyrics_align_rejected_retry_days: 30,
+            audio_backlog: 256,
+            lyrics_backlog: 2_048,
+            transcribe_backlog: 16,
+        },
+    )
+    .reap_embeddings(16)
+    .await?;
+    let state: Option<String> =
+        sqlx::query_scalar("SELECT embedding_state FROM lyrics_cache WHERE sc_track_id = '42'")
+            .fetch_one(&pool)
+            .await?;
+    let jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM background_jobs WHERE kind = 'lyrics.embed' AND dedup_key = '42'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!((state.as_deref(), jobs), (Some("queued"), 1));
     Ok(())
 }
 

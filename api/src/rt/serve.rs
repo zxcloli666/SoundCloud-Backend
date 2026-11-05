@@ -10,8 +10,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::config::env_str;
+use crate::modules::rooms::handlers::LONG_POLL_HOLD;
 
-pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
+pub const SHUTDOWN_GRACE: Duration = LONG_POLL_HOLD.saturating_add(Duration::from_secs(10));
 
 pub async fn plain(addr: SocketAddr, app: Router, shutdown: CancellationToken) -> io::Result<()> {
     if env_str("TLS_PROXY_PROTOCOL", "false") == "true" {

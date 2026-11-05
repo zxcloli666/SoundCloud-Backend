@@ -162,7 +162,7 @@ impl SearchService {
         serde_json::from_str::<T>(&json).map_err(|error| AppError::internal(error.to_string()))
     }
 
-    async fn guarded<T, F, Fut>(&self, compute: F) -> AppResult<T>
+    pub(super) async fn guarded<T, F, Fut>(&self, compute: F) -> AppResult<T>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = AppResult<T>>,

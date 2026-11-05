@@ -1,11 +1,13 @@
 use uuid::Uuid;
 
 use crate::modules::chat::model::ConversationKind;
-use crate::modules::chat::{ChatError, ChatResult, ChatState, history_gate, rooms};
+use crate::modules::chat::rooms::lookup::{RoomChatMember, room_of_chat};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, history_gate};
 
 pub struct Access {
     pub needs_key: bool,
     pub member_floor: i32,
+    pub meta_epoch: Option<i32>,
 }
 
 struct Row {
@@ -15,6 +17,8 @@ struct Row {
     member_state: Option<String>,
     joined_epoch: Option<i32>,
     history_visible: bool,
+    meta_epoch: Option<i32>,
+    has_meta: bool,
     current_key: bool,
 }
 
@@ -24,14 +28,16 @@ pub async fn access(chat: &ChatState, conversation: Uuid, user_id: &str) -> Chat
         .await?
         .filter(|row| !row.deleted)
         .ok_or(ChatError::NotFound)?;
-    let member_floor = if row.kind == ConversationKind::Room.as_str() {
+    let (member_floor, shows_image) = if row.kind == ConversationKind::Room.as_str() {
         room_floor(chat, conversation, user_id).await?
     } else {
-        member_floor(&row)?
+        (member_floor(&row)?, false)
     };
+    let meta_epoch = row.meta_epoch.filter(|_| shows_image && row.has_meta);
     Ok(Access {
         needs_key: row.rekey || !row.current_key,
         member_floor,
+        meta_epoch,
     })
 }
 
@@ -48,9 +54,16 @@ fn member_floor(row: &Row) -> ChatResult<i32> {
     })
 }
 
-async fn room_floor(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatResult<i32> {
-    let from_seq = rooms::member_from_seq(chat, conversation, user_id)
+async fn room_floor(
+    chat: &ChatState,
+    conversation: Uuid,
+    user_id: &str,
+) -> ChatResult<(i32, bool)> {
+    let room = room_of_chat(chat, conversation)
         .await?
         .ok_or(ChatError::NotMember)?;
-    history_gate::room_first_epoch(chat, conversation, from_seq).await
+    let now = chrono::Utc::now().timestamp_millis();
+    let member = RoomChatMember::of(&room, user_id, now).ok_or(ChatError::NotMember)?;
+    let floor = history_gate::room_first_epoch(chat, conversation, member.chat_from_seq).await?;
+    Ok((floor, room.image_shown().is_some()))
 }

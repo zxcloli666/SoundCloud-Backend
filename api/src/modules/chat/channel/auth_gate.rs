@@ -1,62 +1,72 @@
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::net::{IpAddr, SocketAddr};
+use std::time::Instant;
 
+use axum::extract::{ConnectInfo, Request};
+use ipnet::IpNet;
+
+use crate::common::admission::{client_address, client_identity};
+use crate::common::windows::{Clients, Window};
+use crate::modules::chat::config::StartLimits;
+use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::{ChatError, ChatResult};
 
-pub const AUTH_WINDOW: Duration = Duration::from_secs(60);
-pub const LOGINS_PER_WINDOW: u32 = 300;
-pub const LINKS_PER_WINDOW: u32 = 300;
+pub const LOGINS_PER_WINDOW: u32 = 3_000;
+pub const LINKS_PER_WINDOW: u32 = 3_000;
+
+#[cfg(test)]
+pub use crate::common::windows::CLIENTS_TRACKED;
 
 pub struct AuthGate {
+    trusted: Vec<IpNet>,
     logins: Window,
     links: Window,
+    login_clients: Clients,
+    link_clients: Clients,
 }
 
 impl AuthGate {
-    pub fn new() -> Self {
+    pub fn new(limits: &StartLimits) -> Self {
         Self {
+            trusted: limits.trusted_proxies.clone(),
             logins: Window::new(LOGINS_PER_WINDOW),
             links: Window::new(LINKS_PER_WINDOW),
+            login_clients: Clients::new(limits.logins_per_client, limits.window),
+            link_clients: Clients::new(limits.links_per_client, limits.window),
         }
     }
 
-    pub fn admit(&self, path: &str) -> ChatResult<()> {
-        let window = match path {
-            "/auth/login" => &self.logins,
-            "/auth/link/create" => &self.links,
+    pub fn client(&self, request: &Request) -> Option<IpAddr> {
+        let peer = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()?
+            .0
+            .ip();
+        Some(client_address(peer, request.headers(), &self.trusted))
+    }
+
+    pub fn admit(&self, path: &str, client: Option<IpAddr>) -> ChatResult<()> {
+        let (window, clients) = match path {
+            "/auth/login" => (&self.logins, &self.login_clients),
+            "/auth/link/create" => (&self.links, &self.link_clients),
             _ => return Ok(()),
         };
-        window
-            .admit(Instant::now())
-            .map_err(|retry_ms| ChatError::Busy { retry_ms })
-    }
-}
-
-struct Window {
-    limit: u32,
-    opened: Mutex<(Instant, u32)>,
-}
-
-impl Window {
-    fn new(limit: u32) -> Self {
-        Self {
-            limit,
-            opened: Mutex::new((Instant::now(), 0)),
-        }
+        let client = client.ok_or(ChatError::Unavailable)?;
+        let now = Instant::now();
+        clients
+            .admit(&client_identity(client), now)
+            .and_then(|()| window.admit(now))
+            .map_err(|retry_ms| ChatError::Busy {
+                retry_ms,
+                source: BusySource::AuthGate,
+            })
     }
 
-    fn admit(&self, now: Instant) -> Result<(), u64> {
-        let mut opened = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
-        let (started, used) = &mut *opened;
-        if now.saturating_duration_since(*started) >= AUTH_WINDOW {
-            *started = now;
-            *used = 0;
+    #[cfg(test)]
+    pub fn tracked(&self, path: &str) -> (usize, usize) {
+        match path {
+            "/auth/login" => self.login_clients.tracked(),
+            "/auth/link/create" => self.link_clients.tracked(),
+            _ => (0, 0),
         }
-        if *used >= self.limit {
-            let left = AUTH_WINDOW.saturating_sub(now.saturating_duration_since(*started));
-            return Err(u64::try_from(left.as_millis()).unwrap_or(u64::MAX).max(1));
-        }
-        *used += 1;
-        Ok(())
     }
 }

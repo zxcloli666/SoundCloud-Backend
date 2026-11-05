@@ -18,9 +18,16 @@ const OPEN_ROUTES: &[&str] = &[
     "/auth/link/claim",
     "/auth/link/status",
     "/resolve",
+    "/oauth/authorize",
+    "/oauth/authorize/status",
+    "/oauth/token",
+    "/skills/alice",
+    "/skills/salut",
+    "/skills/salut/{token}",
     "/diag/bundles",
     "/diag/events",
     "/chat/x",
+    "/auth/x",
 ];
 
 const METRICS_ROUTE: &str = "/admin/metrics";

@@ -1,9 +1,9 @@
-INSERT INTO chat.devices (id, user_id, session_id, auth_pub, box_pub, platform, name, app_version, caps, tier)
+INSERT INTO chat.devices (id, user_id, session_hash, auth_pub, box_pub, platform, name, app_version, caps, tier)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (id) DO NOTHING
 RETURNING id,
           user_id,
-          session_id,
+          session_hash,
           status,
           auth_pub,
           box_pub,

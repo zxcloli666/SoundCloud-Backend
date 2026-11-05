@@ -59,6 +59,7 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::admin::router())
         .merge(modules::diag::router(state.admission.clone()))
         .merge(modules::auth::router(state.admission.clone()))
+        .merge(modules::auth::sealed::router(state.sealed.clone()))
         .merge(modules::me::router())
         .merge(modules::legacy_clients::router())
         .merge(modules::tracks::router())
@@ -85,7 +86,10 @@ pub fn build(state: AppState) -> Router {
         .merge(modules::discover::router())
         .merge(modules::discover::admin::router())
         .merge(modules::search::router())
-        .merge(modules::rooms::router());
+        .merge(modules::rooms::router())
+        .merge(modules::remote::router())
+        .merge(modules::oauth::router())
+        .merge(modules::skills::router());
 
     #[cfg(feature = "profiling")]
     let router = router.merge(crate::profiling::router());
@@ -144,7 +148,11 @@ fn hands_out_capability(headers: &HeaderMap) -> bool {
 
 fn is_sensitive_path(path: &str) -> bool {
     let path = path.trim_end_matches('/');
-    if path == "/auth" || path.starts_with("/auth/") || path.starts_with("/admin/diag/") {
+    if path == "/auth"
+        || path.starts_with("/auth/")
+        || path.starts_with("/oauth/")
+        || path.starts_with("/admin/diag/")
+    {
         return true;
     }
     path.starts_with("/tracks/") && path.ends_with("/stream")
@@ -220,6 +228,10 @@ mod router_match_tests;
 #[cfg(test)]
 #[path = "router_rooms_tests.rs"]
 mod router_rooms_tests;
+
+#[cfg(test)]
+#[path = "router_voice_tests.rs"]
+mod router_voice_tests;
 
 #[cfg(test)]
 #[path = "router_likes_order_tests.rs"]

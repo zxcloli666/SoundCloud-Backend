@@ -3,6 +3,10 @@ use std::time::Duration;
 use stream_ticket::StreamTicketKey;
 use url::Url;
 
+mod voice;
+
+pub use voice::{OAuthClient, VoiceCfg};
+
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub port: u16,
@@ -18,6 +22,7 @@ pub struct AppConfig {
     pub qdrant: QdrantCfg,
     pub storage: StorageCfg,
     pub subscriptions: SubscriptionsCfg,
+    pub voice: VoiceCfg,
     pub soundwave: SoundwaveCfg,
     pub collab_trigger: CollabTriggerCfg,
     pub cold: ColdCfg,
@@ -152,6 +157,16 @@ pub struct AdmissionCfg {
     pub room_list: AdmissionLimitCfg,
     pub room_create: AdmissionLimitCfg,
     pub room_join: AdmissionLimitCfg,
+    pub voice_link_code: AdmissionLimitCfg,
+    pub voice_remote: AdmissionLimitCfg,
+    pub voice_remote_wait: AdmissionLimitCfg,
+    pub voice_page_ip: AdmissionLimitCfg,
+    pub voice_page_client: AdmissionLimitCfg,
+    pub voice_salut_sub: AdmissionLimitCfg,
+    pub voice_utterance: AdmissionLimitCfg,
+    pub voice_resolve: AdmissionLimitCfg,
+    pub voice_alice_ip: AdmissionLimitCfg,
+    pub voice_salut_ip: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
     pub diag_events: AdmissionLimitCfg,
     pub diag_bytes: AdmissionLimitCfg,
@@ -189,6 +204,16 @@ impl AdmissionCfg {
         let room_list = admission_limit("ROOMS_LIST", 30, 3000);
         let room_create = admission_limit("ROOMS_CREATE", 10, 600);
         let room_join = admission_limit("ROOMS_JOIN", 20, 2400);
+        let voice_link_code = admission_limit("VOICE_LINK_CODE", 10, 600);
+        let voice_remote = admission_limit("VOICE_REMOTE", 120, 12000);
+        let voice_remote_wait = admission_limit("VOICE_REMOTE_WAIT", 30, 120_000);
+        let voice_page_ip = admission_limit("VOICE_PAGE_IP", 10, 30_000);
+        let voice_page_client = admission_limit("VOICE_PAGE_CLIENT", 30_000, 30_000);
+        let voice_salut_sub = admission_limit("VOICE_SALUT_SUB", 10, 1000);
+        let voice_utterance = admission_limit("VOICE_UTTERANCE", 30, 6000);
+        let voice_resolve = admission_limit("VOICE_RESOLVE", 120, 6000);
+        let voice_alice_ip = admission_limit("VOICE_ALICE_IP", 600, 12000);
+        let voice_salut_ip = admission_limit("VOICE_SALUT_IP", 600, 12000);
         let diag_bundle = admission_limit("DIAG_BUNDLE", 10, 20000);
         let diag_events = admission_limit("DIAG_EVENTS", 120, 60000);
         let diag_bytes = admission_limit("DIAG_BYTES", 2 * 1024 * 1024, 200 * 1024 * 1024);
@@ -211,6 +236,16 @@ impl AdmissionCfg {
             room_list,
             room_create,
             room_join,
+            voice_link_code,
+            voice_remote,
+            voice_remote_wait,
+            voice_page_ip,
+            voice_page_client,
+            voice_salut_sub,
+            voice_utterance,
+            voice_resolve,
+            voice_alice_ip,
+            voice_salut_ip,
             diag_bundle,
             diag_events,
             diag_bytes,
@@ -245,9 +280,10 @@ fn trusted_proxies() -> Vec<ipnet::IpNet> {
 }
 
 fn admission_limit(prefix: &str, per_client: u32, global: u32) -> AdmissionLimitCfg {
+    let global = admission_u32(&format!("{prefix}_GLOBAL"), global);
     let limit = AdmissionLimitCfg {
-        per_client: admission_u32(&format!("{prefix}_PER_CLIENT"), per_client),
-        global: admission_u32(&format!("{prefix}_GLOBAL"), global),
+        per_client: admission_u32(&format!("{prefix}_PER_CLIENT"), per_client.min(global)),
+        global,
     };
     assert!(
         limit.per_client <= limit.global,
@@ -419,6 +455,8 @@ impl AppConfig {
                 always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false") == "true",
             },
 
+            voice: VoiceCfg::from_env(),
+
             soundwave: SoundwaveCfg {
                 popularity_boost: env_f64("SOUNDWAVE_POPULARITY_BOOST", 0.0),
                 artist_cap: env_usize("SOUNDWAVE_ARTIST_CAP", 2),
@@ -523,6 +561,12 @@ mod tests {
         assert_eq!(opts.get_port(), 5433);
         assert_eq!(opts.get_username(), "us er");
         assert_eq!(opts.get_database(), Some("sc-ops"));
+    }
+
+    #[test]
+    fn a_lower_global_caps_the_default_per_client() {
+        let limit = admission_limit("ADMISSION_TEST_UNSET", 15, 10);
+        assert_eq!((limit.per_client, limit.global), (10, 10));
     }
 
     #[test]

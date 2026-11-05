@@ -96,7 +96,7 @@ async fn newcomers_are_users_first_seen_less_than_a_week_ago(pool: PgPool) {
 async fn a_card_shows_the_profile_and_how_the_viewer_can_write(pool: PgPool) {
     let chat = state(pool.clone(), None);
     sqlx::query(
-        "INSERT INTO users (sc_user_id, urn, username, username_normalized, avatar_url, verified)
+        "INSERT INTO public.users (sc_user_id, urn, username, username_normalized, avatar_url, verified)
          VALUES ('62', 'soundcloud:users:62', 'Neo', 'neo', 'https://a/x.jpg', true)",
     )
     .execute(&pool)

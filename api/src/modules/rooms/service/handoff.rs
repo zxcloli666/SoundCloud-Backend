@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 
 use super::{Cause, ONLINE_WINDOW_MS, RoomsService, now_ms};
 use crate::error::{AppError, AppResult};
-use crate::modules::rooms::model::Room;
+use crate::modules::rooms::model::{Perks, Room};
 
 const LEAVE_ATTEMPTS: usize = 4;
 const RACED: &str = "room_raced";
@@ -61,27 +61,49 @@ impl RoomsService {
 
     async fn hand_off(&self, room: &Room, host: &str) -> AppResult<()> {
         let candidates = self.host_candidates(room, host).await?;
-        if room.next_host(host, &candidates).is_none() {
+        let Some(expected) = room.next_host(host, &candidates) else {
             self.end(&room.code).await?;
             return Ok(());
-        }
-        let (after, _) = self
+        };
+        let perks = self.star_perks(&expected).await;
+        let (after, surprise) = self
             .apply(&room.code, Cause::Member, |room| {
                 if !room.is_host(host) {
                     room.remove(host);
-                    return Ok(());
+                    return Ok(None);
                 }
-                room.hand_off(host, &candidates).map(drop).ok_or_else(raced)
+                let next = room.hand_off(host, &candidates).ok_or_else(raced)?;
+                if next == expected {
+                    room.perks = perks;
+                    return Ok(None);
+                }
+                room.perks = Perks::free();
+                Ok(Some(next))
             })
             .await?;
+        if let Some(next) = surprise {
+            self.settle_perks(&after.code, &next).await;
+        }
         self.store.forget(&after.code, host).await?;
         self.directory.release_host(host, &after.code).await?;
         self.directory.host_seen(&after, now_ms()).await?;
-        self.previews.invalidate(&after.code);
-        if after.public {
-            *self.listing.lock().await = None;
-        }
+        self.refresh_cards(&after).await;
         Ok(())
+    }
+
+    async fn settle_perks(&self, code: &str, host: &str) {
+        let perks = self.star_perks(host).await;
+        let settled = self
+            .apply(code, Cause::Quiet, |room| {
+                if room.host_id == host {
+                    room.perks = perks;
+                }
+                Ok(())
+            })
+            .await;
+        if let Err(error) = settled {
+            tracing::warn!(code, %error, "the new host's perks wait for the STAR recheck");
+        }
     }
 
     async fn host_candidates(&self, room: &Room, host: &str) -> AppResult<Vec<String>> {
@@ -105,3 +127,7 @@ impl RoomsService {
         Ok(free)
     }
 }
+
+#[cfg(test)]
+#[path = "handoff_tests.rs"]
+mod tests;

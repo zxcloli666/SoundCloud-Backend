@@ -82,6 +82,16 @@ pub enum Endpoint {
     RoomList,
     RoomCreate,
     RoomJoin,
+    VoiceLinkCode,
+    VoiceRemote,
+    VoiceRemoteWait,
+    VoicePageIp,
+    VoicePageClient,
+    VoiceSalutSub,
+    VoiceUtterance,
+    VoiceResolve,
+    VoiceAliceIp,
+    VoiceSalutIp,
     DiagBundle,
     DiagEvents,
     DiagBytes,
@@ -145,6 +155,30 @@ impl PublicAdmission {
             }),
             Decision::Unavailable => Err(AdmissionRejection::Unavailable),
         }
+    }
+
+    pub async fn check_key(
+        &self,
+        endpoint: Endpoint,
+        identity: &str,
+    ) -> Result<(), AdmissionRejection> {
+        match self.check(endpoint, key_identity(identity), 1).await {
+            Decision::Allowed => Ok(()),
+            Decision::Limited {
+                retry_after_seconds,
+            } => Err(AdmissionRejection::Limited {
+                retry_after_seconds,
+            }),
+            Decision::Unavailable => Err(AdmissionRejection::Unavailable),
+        }
+    }
+
+    pub fn network_key(&self, address: SocketAddr, headers: &HeaderMap) -> String {
+        network_identity(client_address(
+            address.ip(),
+            headers,
+            &self.config.trusted_proxies,
+        ))
     }
 
     async fn check(&self, endpoint: Endpoint, identity: String, cost: u32) -> Decision {
@@ -259,6 +293,12 @@ impl PublicAdmission {
             Endpoint::Login
             | Endpoint::LinkCreate
             | Endpoint::Resolve
+            | Endpoint::VoicePageIp
+            | Endpoint::VoicePageClient
+            | Endpoint::VoiceSalutSub
+            | Endpoint::VoiceUtterance
+            | Endpoint::VoiceAliceIp
+            | Endpoint::VoiceSalutIp
             | Endpoint::DiagBundle
             | Endpoint::DiagEvents
             | Endpoint::DiagBytes => &self.in_flight,
@@ -266,7 +306,11 @@ impl PublicAdmission {
             | Endpoint::CatalogMiss
             | Endpoint::RoomList
             | Endpoint::RoomCreate
-            | Endpoint::RoomJoin => &self.session_in_flight,
+            | Endpoint::RoomJoin
+            | Endpoint::VoiceLinkCode
+            | Endpoint::VoiceRemote
+            | Endpoint::VoiceRemoteWait
+            | Endpoint::VoiceResolve => &self.session_in_flight,
         }
     }
 
@@ -287,6 +331,16 @@ impl PublicAdmission {
             Endpoint::RoomList => self.config.room_list,
             Endpoint::RoomCreate => self.config.room_create,
             Endpoint::RoomJoin => self.config.room_join,
+            Endpoint::VoiceLinkCode => self.config.voice_link_code,
+            Endpoint::VoiceRemote => self.config.voice_remote,
+            Endpoint::VoiceRemoteWait => self.config.voice_remote_wait,
+            Endpoint::VoicePageIp => self.config.voice_page_ip,
+            Endpoint::VoicePageClient => self.config.voice_page_client,
+            Endpoint::VoiceSalutSub => self.config.voice_salut_sub,
+            Endpoint::VoiceUtterance => self.config.voice_utterance,
+            Endpoint::VoiceResolve => self.config.voice_resolve,
+            Endpoint::VoiceAliceIp => self.config.voice_alice_ip,
+            Endpoint::VoiceSalutIp => self.config.voice_salut_ip,
             Endpoint::DiagBundle => self.config.diag_bundle,
             Endpoint::DiagEvents => self.config.diag_events,
             Endpoint::DiagBytes => self.config.diag_bytes,
@@ -328,6 +382,16 @@ impl Endpoint {
             Self::RoomList => "rooms-list",
             Self::RoomCreate => "rooms-create",
             Self::RoomJoin => "rooms-join",
+            Self::VoiceLinkCode => "voice-link-code",
+            Self::VoiceRemote => "voice-remote",
+            Self::VoiceRemoteWait => "voice-remote-wait",
+            Self::VoicePageIp => "voice-page-ip",
+            Self::VoicePageClient => "voice-page-client",
+            Self::VoiceSalutSub => "voice-salut-sub",
+            Self::VoiceUtterance => "voice-utterance",
+            Self::VoiceResolve => "voice-resolve",
+            Self::VoiceAliceIp => "voice-alice-ip",
+            Self::VoiceSalutIp => "voice-salut-ip",
             Self::DiagBundle => "diag-bundle",
             Self::DiagEvents => "diag-events",
             Self::DiagBytes => "diag-bytes",
@@ -344,6 +408,16 @@ impl Endpoint {
             Self::RoomList => "/rooms/public",
             Self::RoomCreate => "/rooms",
             Self::RoomJoin => "/rooms/{code}/members",
+            Self::VoiceLinkCode => "/remote/link-code",
+            Self::VoiceRemote => "/remote/reply",
+            Self::VoiceRemoteWait => "/remote/wait",
+            Self::VoicePageIp => "voice link page by address",
+            Self::VoicePageClient => "voice link page by client",
+            Self::VoiceSalutSub => "voice link by salut sub",
+            Self::VoiceUtterance => "voice skill",
+            Self::VoiceResolve => "/search/resolve",
+            Self::VoiceAliceIp => "/skills/alice",
+            Self::VoiceSalutIp => "/skills/salut",
             Self::DiagBundle => "/diag/bundles",
             Self::DiagEvents => "/diag/events",
             Self::DiagBytes => "/diag/*",
@@ -490,7 +564,7 @@ pub(crate) fn resolve_busy(retry_after_seconds: u64) -> AppError {
     .with_retry_after(i64::try_from(retry_after_seconds).unwrap_or(i64::MAX))
 }
 
-fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
+pub(crate) fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
     let is_trusted = |address: IpAddr| trusted.iter().any(|net| net.contains(&address));
     let peer = peer.to_canonical();
     if !is_trusted(peer) {
@@ -514,7 +588,7 @@ fn client_address(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAdd
     peer
 }
 
-fn client_identity(address: IpAddr) -> String {
+pub(crate) fn client_identity(address: IpAddr) -> String {
     let mut hash = Sha256::new();
     match address {
         IpAddr::V4(address) => {
@@ -532,6 +606,34 @@ fn client_identity(address: IpAddr) -> String {
         }
     }
     hex::encode(hash.finalize())
+}
+
+fn network_identity(address: IpAddr) -> String {
+    match address {
+        IpAddr::V6(v6) if v6.to_ipv4_mapped().is_none() => {
+            let mut hash = Sha256::new();
+            hash.update([48]);
+            hash.update(&v6.octets()[..6]);
+            hex::encode(hash.finalize())
+        }
+        other => client_identity(other),
+    }
+}
+
+pub(crate) fn subnet_identity(address: IpAddr) -> String {
+    match address.to_canonical() {
+        IpAddr::V4(v4) => {
+            let mut hash = Sha256::new();
+            hash.update([24]);
+            hash.update(&v4.octets()[..3]);
+            hex::encode(hash.finalize())
+        }
+        other => network_identity(other),
+    }
+}
+
+fn key_identity(key: &str) -> String {
+    hex::encode(Sha256::digest(key.as_bytes()))
 }
 
 fn session_identity(session: Uuid) -> String {

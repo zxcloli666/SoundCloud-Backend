@@ -1,8 +1,13 @@
 #[cfg(test)]
+#[path = "reaper_plan_tests.rs"]
+mod plan_tests;
+#[cfg(test)]
 #[path = "reaper_tests.rs"]
 mod tests;
 #[path = "reaper_tiered.rs"]
 mod tiered;
+#[path = "reaper_walk.rs"]
+mod walk;
 
 use backend_contracts::worker_contract::{
     LYRICS_LANE, TRANSCRIBE_LANE, WorkerLane, WorkerLaneSpec,
@@ -20,6 +25,7 @@ use super::embedding_queue;
 use crate::handlers::worker_backlog::unclaimed_room;
 
 const QUARANTINE_BATCH: i64 = 50;
+const STALE_EMBEDDING_BATCH: i64 = 200;
 const ORPHAN_SCAN_WINDOW: i64 = 2_000;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
@@ -32,6 +38,7 @@ pub struct LyricsReaper {
     dispatch: WorkerDispatchConfig,
     embedding_turns: Turns,
     alignment_turns: Turns,
+    align_walk: walk::SharedWalk,
 }
 
 struct TranscriptionCandidate {
@@ -47,6 +54,7 @@ impl LyricsReaper {
             dispatch,
             embedding_turns: Turns::default(),
             alignment_turns: Turns::default(),
+            align_walk: walk::SharedWalk::default(),
         }
     }
 
@@ -117,13 +125,16 @@ impl LyricsReaper {
             enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             reopened += 1;
         }
+        let mut align_walk = self.align_walk.take();
         let align = tiered::alignments(
             &mut transaction,
             room.saturating_sub(reopened),
             self.alignment_turns.next(),
+            &mut align_walk,
         )
         .await
         .map_err(JobError::retryable)?;
+        self.align_walk.put(align_walk);
         for (candidate, tier) in align {
             enqueue_transcription(&self.queue, &mut transaction, candidate, tier).await?;
             enqueued += 1;
@@ -150,7 +161,7 @@ impl LyricsReaper {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         let stale = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_embeddings.sql",
-            QUARANTINE_BATCH,
+            STALE_EMBEDDING_BATCH,
             result_window,
             REPEATED_RESULT_TIMEOUTS
         )
@@ -160,7 +171,8 @@ impl LyricsReaper {
         let orphaned_requests = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_orphaned_embedding_requests.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            ORPHAN_SCAN_WINDOW
         )
         .fetch_one(&mut *transaction)
         .await

@@ -1,10 +1,12 @@
 mod admit;
 mod alive;
 mod apply;
+mod backdrop;
 mod chat;
 mod end;
 mod handoff;
 mod moderation;
+mod perks;
 mod preview;
 mod transfer;
 mod view;
@@ -77,6 +79,10 @@ impl RoomsService {
         let _ = self.chat.set(Arc::downgrade(chat));
     }
 
+    pub fn close(&self) {
+        self.hub.close();
+    }
+
     fn chat(&self) -> Option<Arc<ChatState>> {
         self.chat.get()?.upgrade()
     }
@@ -91,11 +97,13 @@ impl RoomsService {
         if let Some(previous) = self.directory.hosted_by(user_id).await? {
             self.leave(&previous, user_id).await?;
         }
+        let perks = self.star_perks(user_id).await;
         let now = now_ms();
         for _ in 0..CODE_ATTEMPTS {
             let host = Member::new(user_id, profile, now);
             let mut room = Room::new(new_code(), host, public, now);
             room.title = title.and_then(clean_title);
+            room.perks = perks;
             if self.store.insert(&room).await? {
                 self.store.touch(&room.code, user_id, now).await?;
                 self.keep_alive(&room, now).await?;
@@ -126,19 +134,22 @@ impl RoomsService {
         self.show(room, user_id).await
     }
 
-    async fn show(&self, room: Room, user_id: &str) -> AppResult<RoomView> {
+    pub async fn show(&self, room: Room, user_id: &str) -> AppResult<RoomView> {
         if !room.is_member(user_id) {
             return Err(not_member());
         }
         let now = now_ms();
-        if room.is_host(user_id) {
+        let cooldown = if room.is_host(user_id) {
             self.directory.host_seen(&room, now).await?;
-        }
+            self.store.cooling_until(user_id, now).await?
+        } else {
+            None
+        };
         let online = self
             .store
             .seen_since(&room.code, now - ONLINE_WINDOW_MS)
             .await?;
-        Ok(RoomView::for_viewer(room, user_id, online, now))
+        Ok(RoomView::for_viewer(room, user_id, online, now).cooling_until(cooldown))
     }
 
     pub async fn wait(
@@ -181,7 +192,7 @@ impl RoomsService {
             let deadline = Instant::now() + hold;
             loop {
                 let now = Instant::now();
-                if version != since || now >= deadline {
+                if version != since || now >= deadline || self.hub.is_closed() {
                     break;
                 }
                 let left = deadline - now;
@@ -192,6 +203,7 @@ impl RoomsService {
                 };
                 tokio::select! {
                     () = changes.changed(code) => {}
+                    () = self.hub.closed() => {}
                     () = tokio::time::sleep(pause) => {}
                 }
                 version = self

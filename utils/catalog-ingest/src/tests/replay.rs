@@ -63,6 +63,34 @@ fn user(sc_id: u64, username: &str) -> Value {
     })
 }
 
+fn with_banner(sc_id: u64, username: &str, visuals: Value) -> Value {
+    let mut payload = user(sc_id, username);
+    payload["visuals"] = visuals;
+    payload
+}
+
+fn visuals(sc_id: u64, banner: &str) -> Value {
+    json!({
+        "urn": format!("soundcloud:users:{sc_id}"),
+        "enabled": true,
+        "visuals": [{
+            "urn": "soundcloud:visuals:278279490",
+            "entry_time": 0,
+            "visual_url": banner,
+        }],
+        "tracking": null,
+    })
+}
+
+async fn banner(twin: &Twin, sc_id: u64) -> Option<String> {
+    sqlx::query_scalar(&format!(
+        "SELECT banner_url FROM public.users WHERE sc_user_id = '{sc_id}'"
+    ))
+    .fetch_one(&twin.split)
+    .await
+    .unwrap()
+}
+
 fn track(sc_id: u64, title: &str, last_modified: &str, uploader: Value) -> Value {
     json!({
         "kind": "track",
@@ -266,6 +294,52 @@ async fn users_playlists_and_profiles_follow_the_same_guards_on_both_paths() {
     let report = twin.assert_same().await;
     println!(
         "users, playlists and profiles stream, {} steps:\n{}",
+        twin.steps,
+        report.join("\n")
+    );
+    twin.finish().await;
+}
+
+#[tokio::test]
+async fn a_banner_follows_apiv2_visuals_and_survives_payloads_without_them() {
+    let mut twin = Twin::new(&seed()).await;
+    let o = observations(&twin, 4).await;
+    let first = "https://i1.sndcdn.com/visuals-000204411307-LpaCgv-original.jpg";
+    let second = "https://i1.sndcdn.com/visuals-000204411307-Ou0lHA-original.jpg";
+    let third = "https://i1.sndcdn.com/visuals-000001500301-2dFtTe-original.jpg";
+    let bannered = with_banner(OWNER, "kavinsky-fan", visuals(OWNER, first));
+    let changed = with_banner(OWNER, "kavinsky-fan", visuals(OWNER, second));
+    let apiv1 = user(OWNER, "kavinsky-fan");
+    let removed = with_banner(OWNER, "kavinsky-fan", Value::Null);
+    let absent = [with_banner(
+        THIRD_USER,
+        "third-one",
+        visuals(THIRD_USER, third),
+    )];
+
+    twin.step(Step::User(&bannered, o[0])).await;
+    assert_eq!(banner(&twin, OWNER).await.as_deref(), Some(first));
+    twin.step(Step::User(&changed, o[1])).await;
+    assert_eq!(
+        banner(&twin, OWNER).await.as_deref(),
+        Some(second),
+        "a new banner alone is a change"
+    );
+    twin.step(Step::User(&apiv1, o[2])).await;
+    assert_eq!(
+        banner(&twin, OWNER).await.as_deref(),
+        Some(second),
+        "a payload without visuals keeps the banner"
+    );
+    twin.step(Step::User(&removed, o[3])).await;
+    assert_eq!(banner(&twin, OWNER).await, None, "visuals: null removes it");
+    twin.step(Step::AbsentUsers(&absent, Observation::UNVERIFIED))
+        .await;
+    assert_eq!(banner(&twin, THIRD_USER).await.as_deref(), Some(third));
+
+    let report = twin.assert_same().await;
+    println!(
+        "banner stream, {} steps:\n{}",
         twin.steps,
         report.join("\n")
     );
