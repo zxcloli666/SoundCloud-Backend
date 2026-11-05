@@ -67,7 +67,7 @@ fn joining_twice_refreshes_the_profile_and_the_room_has_a_cap() {
         .unwrap();
     assert_eq!(room.members.len(), 2);
     assert_eq!(room.members[1].name, "Renamed");
-    for id in 3..=MAX_MEMBERS {
+    for id in 3..=FREE_CAPACITY {
         room.join(Member::new(&id.to_string(), &profile("x"), 0))
             .unwrap();
     }
@@ -202,7 +202,7 @@ fn a_room_is_private_until_its_host_opens_it() {
 #[test]
 fn a_full_room_gives_the_seats_of_absent_guests_away() {
     let mut room = room();
-    for id in 2..=MAX_MEMBERS {
+    for id in 2..=FREE_CAPACITY {
         room.join(Member::new(&id.to_string(), &profile("x"), 0))
             .unwrap();
     }
@@ -286,4 +286,72 @@ fn a_member_keeps_the_point_their_chat_history_starts_at() {
         .unwrap();
     assert_eq!(room.member("2").map(|m| m.chat_from_seq), Some(40));
     assert_eq!(room.member("2").map(|m| m.joined_at), Some(11));
+}
+
+#[test]
+fn a_phase_one_room_in_redis_loads_with_free_perks() {
+    let mut old = serde_json::to_value(room()).unwrap();
+    for field in ["perks", "cover", "roomImages"] {
+        old.as_object_mut().unwrap().remove(field);
+    }
+    let loaded: Room = serde_json::from_value(old).unwrap();
+    assert_eq!(loaded.perks, Perks::free());
+    assert_eq!(loaded.cover, None);
+    assert_eq!(loaded.room_images, None);
+}
+
+#[test]
+fn the_perk_fields_use_the_contract_names() {
+    let mut room = room();
+    room.cover = Some(Cover {
+        url: "https://i1.sndcdn.com/a.jpg".to_owned(),
+        accent: 3,
+    });
+    room.room_images = Some(RoomImages::Mods);
+    let value = serde_json::to_value(&room).unwrap();
+    assert_eq!(
+        value["perks"],
+        json!({"starHost": false, "capacity": 10, "modsMax": 3})
+    );
+    assert_eq!(
+        value["cover"],
+        json!({"url": "https://i1.sndcdn.com/a.jpg", "accent": 3})
+    );
+    assert_eq!(value["roomImages"], json!("mods"));
+    assert_eq!(serde_json::from_value::<Room>(value).unwrap(), room);
+}
+
+#[test]
+fn the_image_policy_never_resolves_to_members_in_a_public_room() {
+    use RoomImages::{Members, Mods, Off};
+    assert_eq!(RoomImages::resolve(None, true), Mods);
+    assert_eq!(RoomImages::resolve(None, false), Members);
+    assert_eq!(RoomImages::resolve(Some(Members), true), Mods);
+    assert_eq!(RoomImages::resolve(Some(Members), false), Members);
+    assert_eq!(RoomImages::resolve(Some(Mods), false), Mods);
+    assert_eq!(RoomImages::resolve(Some(Off), true), Off);
+    assert_eq!(RoomImages::resolve(Some(Off), false), Off);
+}
+
+#[test]
+fn a_settings_patch_tells_an_absent_cover_from_a_null_one() {
+    let absent: SettingsPatch = serde_json::from_value(json!({"title": "x"})).unwrap();
+    assert_eq!(absent.cover, None);
+    assert_eq!(absent.room_images, None);
+    let cleared: SettingsPatch = serde_json::from_value(json!({"cover": null})).unwrap();
+    assert_eq!(cleared.cover, Some(None));
+    let set: SettingsPatch = serde_json::from_value(
+        json!({"cover": {"url": "https://i1.sndcdn.com/a.jpg", "accent": 3}, "roomImages": "mods"}),
+    )
+    .unwrap();
+    assert_eq!(
+        set.cover,
+        Some(Some(Cover {
+            url: "https://i1.sndcdn.com/a.jpg".to_owned(),
+            accent: 3
+        }))
+    );
+    assert_eq!(set.room_images, Some(RoomImages::Mods));
+    let snake: SettingsPatch = serde_json::from_value(json!({"room_images": "off"})).unwrap();
+    assert_eq!(snake.room_images, Some(RoomImages::Off));
 }

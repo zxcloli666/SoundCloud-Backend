@@ -6,6 +6,8 @@ use chrono::Utc;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::modules::chat::media::view as media_view;
+use crate::modules::chat::media::wire::MediaConfigView;
 use crate::modules::chat::model::{DEVICES_MAX, DISAPPEARING_TTLS, GROUP_MEMBERS_MAX};
 use crate::modules::chat::sync::incarnation;
 use crate::modules::chat::{ChatCaller, ChatResult, ChatState};
@@ -21,6 +23,7 @@ pub struct ChatConfigView {
     pub incarnation: Uuid,
     pub ock_current: u8,
     pub limits: ChatLimitsView,
+    pub media: MediaConfigView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +63,7 @@ pub async fn chat_config(
         incarnation,
         ock_current: chat.ocks.current(),
         limits: ChatLimitsView::current(),
+        media: media_view::config(&chat, &caller.user_id).await,
         user_id: caller.user_id,
     }))
 }

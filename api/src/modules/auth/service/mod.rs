@@ -10,6 +10,7 @@ use mini_moka::sync::Cache;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::common::session::session_hash;
 use crate::error::AppResult;
 use crate::modules::auth::core_rpc::CoreRpc;
 use crate::modules::auth::health::AuthHealthService;
@@ -29,7 +30,7 @@ pub struct AuthService {
     oauth_apps: Arc<OAuthAppsService>,
     health: Arc<AuthHealthService>,
     core: Arc<CoreRpc>,
-    sessions: Cache<Uuid, Session>,
+    sessions: Cache<Vec<u8>, Session>,
 }
 
 impl AuthService {
@@ -62,20 +63,25 @@ impl AuthService {
     }
 
     pub async fn get_session_cached(&self, session_id: Uuid) -> AppResult<Option<Session>> {
-        if let Some(session) = self.sessions.get(&session_id) {
+        let key = session_hash(session_id);
+        if let Some(session) = self.sessions.get(&key) {
             crate::metrics::record_session_cache("hit");
             return Ok(Some(session));
         }
         crate::metrics::record_session_cache("miss");
         let session = self.get_session(session_id).await?;
         if let Some(session) = &session {
-            self.sessions.insert(session_id, session.clone());
+            self.sessions.insert(key, session.clone());
         }
         Ok(session)
     }
 
     pub fn forget_session(&self, session_id: Uuid) {
-        self.sessions.invalidate(&session_id);
+        self.forget_session_hash(&session_hash(session_id));
+    }
+
+    pub fn forget_session_hash(&self, session_hash: &[u8]) {
+        self.sessions.invalidate(&session_hash.to_vec());
     }
 
     pub async fn get_auth_session(&self, session_id: Uuid) -> AppResult<Option<AuthSession>> {
@@ -118,19 +124,27 @@ impl AuthService {
     }
 
     pub async fn logout(&self, session_id: Uuid) -> AppResult<()> {
-        let mut transaction = self.pool.begin().await?;
-        let deleted = sqlx::query_file!("queries/auth/service/delete_session.sql", session_id)
-            .fetch_optional(&mut *transaction)
+        self.end_session(session_id, &session_hash(session_id))
             .await?;
-        if let Some(connection_id) = deleted.and_then(|row| row.soundcloud_connection_id) {
-            wt::call(
-                &mut transaction,
-                &wt::ConnectionDropOrphan { connection_id },
-            )
-            .await?;
-        }
-        transaction.commit().await?;
         self.forget_session(session_id);
         Ok(())
+    }
+
+    pub async fn end_session(
+        &self,
+        caller_session_id: Uuid,
+        session_hash: &[u8],
+    ) -> AppResult<bool> {
+        let ended = sqlx::query_file_scalar!(
+            "queries/auth/service/end_session.sql",
+            caller_session_id,
+            session_hash
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if ended {
+            self.forget_session_hash(session_hash);
+        }
+        Ok(ended)
     }
 }

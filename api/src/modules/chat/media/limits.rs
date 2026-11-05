@@ -1,0 +1,27 @@
+use std::time::Duration;
+
+pub const BLOCK: u64 = 4096;
+pub const IMAGE_MAX_BYTES: u64 = 614_400;
+pub const THUMB_MAX_BYTES: u64 = 32_768;
+pub const AVATAR_MAX_BYTES: u64 = 65_536;
+pub const BACKDROP_MAX_BYTES: u64 = 614_400;
+pub const ALBUM_MAX: usize = 10;
+pub const ROOM_ALBUM_MAX: usize = 4;
+pub const AVATAR_MEDIA_MAX: usize = 1;
+pub const QUOTA_BYTES: u64 = 1_073_741_824;
+pub const DAY_BYTES_MAX: u64 = 209_715_200;
+pub const PUT_TTL: Duration = Duration::from_secs(600);
+pub const GET_TTL: Duration = Duration::from_secs(900);
+pub const RESERVATION_TTL: Duration = Duration::from_secs(3_600);
+pub const ATTACH_WINDOW: Duration = Duration::from_secs(3_600);
+pub const RESTORE_WINDOW: Duration = Duration::from_secs(15);
+pub const URLS_MAX: usize = 100;
+pub const SELECTION_MAX: usize = 500;
+pub const MINE_LIMIT_DEFAULT: u32 = 100;
+pub const MINE_LIMIT_MAX: u32 = 200;
+pub const USAGE_CONVERSATIONS_MAX: usize = 200;
+pub const STAR_YES_TTL: Duration = Duration::from_secs(60);
+pub const STAR_NO_TTL: Duration = Duration::from_secs(15);
+pub const PUT_CONTENT_TYPE: &str = "application/octet-stream";
+pub const HOLD_DAYS: i32 = 30;
+pub const STORE_FILL_TTL: Duration = Duration::from_secs(30);

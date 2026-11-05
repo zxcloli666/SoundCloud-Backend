@@ -10,6 +10,10 @@ pub mod conversations;
 pub mod devices;
 pub mod epochs;
 pub mod errors;
+#[cfg(test)]
+#[path = "tests/fake_store_test_support.rs"]
+pub mod fake_store;
+pub mod held;
 pub mod history_gate;
 pub mod hot_cache;
 pub mod hub;
@@ -23,14 +27,17 @@ pub mod messages;
 pub mod model;
 pub mod moderation;
 pub mod presence;
+pub mod quota;
 pub mod reports;
 pub mod requests;
 pub mod rooms;
 pub mod route_metrics;
 pub mod routes;
 pub mod rt_keys;
+pub mod s3;
 pub mod settings;
 pub mod state;
+pub mod stores;
 pub mod sweeps;
 pub mod sync;
 pub mod synthetic;

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::modules::chat::rt_keys;
-use crate::modules::chat::sweeps::budget::Budget;
+use crate::modules::chat::sweeps::budget::{Budget, STEP_TIME};
 use crate::modules::chat::sweeps::expired::by_conversation;
 use crate::modules::chat::sweeps::marks::{conversation_of, digest, read_marks_prefix, seqs};
 use crate::modules::chat::sweeps::schedule::Sweep;
@@ -98,6 +98,19 @@ async fn a_budget_runs_out_and_stops_at_shutdown() {
 
     let mut budget = Budget::new(5);
     chat.shutdown.cancel();
+    assert!(!budget.left(&chat));
+    assert!(!budget.spend(&chat));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_budget_runs_out_of_time_with_batches_left() {
+    let chat = offline_chat_state(true);
+    let mut budget = Budget::new(1_000);
+    assert!(budget.spend(&chat));
+    tokio::time::advance(STEP_TIME / 2).await;
+    assert!(budget.in_time(&chat) && budget.spend(&chat));
+    tokio::time::advance(STEP_TIME / 2).await;
+    assert!(!budget.in_time(&chat));
     assert!(!budget.left(&chat));
     assert!(!budget.spend(&chat));
 }

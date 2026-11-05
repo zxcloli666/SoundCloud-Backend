@@ -1,14 +1,11 @@
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use super::{Room, clean_title};
+use super::Room;
 use crate::error::{AppError, AppResult};
 
-pub const MAX_MODERATORS: usize = 3;
 pub const MAX_BANNED: usize = 200;
 pub const MAX_MUTE_SECS: u32 = 24 * 3_600;
-pub const MAX_SLOW_MODE_SECS: u32 = 600;
-pub const PUBLIC_SLOW_MODE_SECS: u32 = 3;
 const MAX_MUTED: usize = 200;
 const MAX_USER_ID_CHARS: usize = 24;
 
@@ -19,18 +16,6 @@ pub struct Mute {
     pub until_ms: i64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct SettingsPatch {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default, alias = "slowModeS")]
-    pub slow_mode_s: Option<u32>,
-    #[serde(default, alias = "chatEnabled")]
-    pub chat_enabled: Option<bool>,
-    #[serde(default)]
-    pub links: Option<bool>,
-}
-
 fn not_allowed() -> AppError {
     AppError::coded(
         StatusCode::FORBIDDEN,
@@ -39,7 +24,7 @@ fn not_allowed() -> AppError {
     )
 }
 
-fn host_only() -> AppError {
+pub(super) fn host_only() -> AppError {
     AppError::coded(
         StatusCode::FORBIDDEN,
         "room_host_only",
@@ -151,43 +136,15 @@ impl Room {
         if self.is_moderator(target) {
             return Ok(());
         }
-        if self.moderators.len() >= MAX_MODERATORS {
+        if self.moderators.len() >= self.perks.mods_max {
             return Err(AppError::coded(
                 StatusCode::CONFLICT,
                 "room_moderators_full",
-                "A room has at most three moderators",
+                "This room has all the moderators it can have",
             ));
         }
         self.moderators.push(target.to_owned());
         Ok(())
-    }
-
-    pub fn apply_settings(&mut self, actor: &str, patch: &SettingsPatch) -> AppResult<()> {
-        if !self.is_host(actor) {
-            return Err(host_only());
-        }
-        if let Some(title) = &patch.title {
-            self.title = clean_title(title);
-        }
-        if let Some(seconds) = patch.slow_mode_s {
-            self.slow_mode_s = Some(seconds.min(MAX_SLOW_MODE_SECS));
-        }
-        if let Some(on) = patch.chat_enabled {
-            self.chat_enabled = on;
-        }
-        if let Some(on) = patch.links {
-            self.links = on;
-        }
-        Ok(())
-    }
-
-    pub fn slow_mode(&self) -> u32 {
-        let default = if self.public {
-            PUBLIC_SLOW_MODE_SECS
-        } else {
-            0
-        };
-        self.slow_mode_s.unwrap_or(default)
     }
 }
 

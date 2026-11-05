@@ -6,14 +6,16 @@ use uuid::Uuid;
 
 use crate::modules::chat::{ChatError, ChatResult, ChatState, rt_keys};
 
+mod rooms;
+
+#[cfg(test)]
+pub use rooms::{ROOM_BYTES_PER_MINUTE, ROOM_NEWCOMER_BODY_MAX};
+pub use rooms::{RoomPost, admit_backdrop, admit_room_meta, admit_room_post, refund_backdrop};
+
 const SECOND: Duration = Duration::from_secs(1);
 const MINUTE: Duration = Duration::from_secs(60);
 const HOUR: Duration = Duration::from_secs(3_600);
 const DAY: Duration = Duration::from_secs(86_400);
-
-pub const ROOM_NEWCOMER_SECS: i64 = 600;
-pub const ROOM_NEWCOMER_BODY_MAX: usize = sc_chat_wire::seal::NONCE_LEN + 16 + 2 * 256;
-pub const ROOM_BYTES_PER_MINUTE: u64 = 24 * 1024;
 
 const SCRIPT: &str = r#"
 for i = 1, #KEYS do
@@ -54,6 +56,12 @@ pub enum Bucket {
     ReadKeys,
     ReadCard,
     Preview,
+    MediaReserve,
+    MediaUrls,
+    MediaUsage,
+    MediaMine,
+    MediaDelete,
+    MediaRestore,
 }
 
 impl Bucket {
@@ -70,6 +78,12 @@ impl Bucket {
             Bucket::ReadKeys => "read_keys",
             Bucket::ReadCard => "read_card",
             Bucket::Preview => "preview",
+            Bucket::MediaReserve => "media_reserve",
+            Bucket::MediaUrls => "media_urls",
+            Bucket::MediaUsage => "media_usage",
+            Bucket::MediaMine => "media_mine",
+            Bucket::MediaDelete => "media_delete",
+            Bucket::MediaRestore => "media_restore",
         }
     }
 
@@ -83,20 +97,31 @@ impl Bucket {
             Bucket::ReadKeys | Bucket::ReadCard => &FIRST_SYNC,
             Bucket::ReadList => &MINUTE_10,
             Bucket::Preview => &MINUTE_30,
+            Bucket::MediaReserve => &MEDIA_RESERVE,
+            Bucket::MediaUrls => &MINUTE_120,
+            Bucket::MediaUsage | Bucket::MediaMine => &MINUTE_60,
+            Bucket::MediaDelete | Bucket::MediaRestore => &MINUTE_30,
         }
     }
 
     fn rejection(self) -> ChatError {
         match self {
-            Bucket::Send => ChatError::SendLimited,
+            Bucket::Send | Bucket::MediaReserve => ChatError::SendLimited,
             Bucket::ReadMessages
             | Bucket::ReadList
             | Bucket::ReadKeys
             | Bucket::ReadCard
-            | Bucket::Preview => ChatError::ReadLimited,
-            Bucket::Create | Bucket::Request | Bucket::Invite | Bucket::Report | Bucket::Device => {
-                ChatError::RequestLimit
-            }
+            | Bucket::Preview
+            | Bucket::MediaUrls
+            | Bucket::MediaUsage
+            | Bucket::MediaMine => ChatError::ReadLimited,
+            Bucket::Create
+            | Bucket::Request
+            | Bucket::Invite
+            | Bucket::Report
+            | Bucket::Device
+            | Bucket::MediaDelete
+            | Bucket::MediaRestore => ChatError::RequestLimit,
         }
     }
 }
@@ -132,6 +157,11 @@ const FIRST_SYNC: [Window; 2] = [
     Window::new("1h", 4_000, HOUR),
 ];
 const MINUTE_30: [Window; 1] = [Window::new("1m", 30, MINUTE)];
+const MINUTE_120: [Window; 1] = [Window::new("1m", 120, MINUTE)];
+const MEDIA_RESERVE: [Window; 2] = [
+    Window::new("10m", 30, Duration::from_secs(600)),
+    Window::new("1d", 300, DAY),
+];
 const MINUTE_10: [Window; 1] = [Window::new("1m", 10, MINUTE)];
 const NEWCOMER_REQUESTS: Window = Window::new("1d:new", 10, DAY);
 const PER_CONVERSATION_SENDS: Window = Window::new("5s", 5, Duration::from_secs(5));
@@ -189,31 +219,6 @@ pub async fn admit_request(chat: &ChatState, user_id: &str, newcomer: bool) -> C
         charges.push(Charge::of(bucket.name(), &NEWCOMER_REQUESTS, user_id, 1));
     }
     charge(chat, bucket.name(), charges, ChatError::RequestLimit).await
-}
-
-pub struct RoomPost {
-    pub conversation: Uuid,
-    pub public: bool,
-    pub member_for_secs: i64,
-    pub body_len: usize,
-}
-
-pub async fn admit_room_post(chat: &ChatState, user_id: &str, post: &RoomPost) -> ChatResult<()> {
-    if !post.public {
-        return Ok(());
-    }
-    if post.member_for_secs < ROOM_NEWCOMER_SECS && post.body_len > ROOM_NEWCOMER_BODY_MAX {
-        metrics::counter!("chat_limit_rejects_total", "bucket" => "room_newcomer").increment(1);
-        return Err(ChatError::SendLimited);
-    }
-    let budget = Window::new("bytes:1m", ROOM_BYTES_PER_MINUTE, MINUTE);
-    let charges = vec![Charge::of(
-        &format!("room:{}", post.conversation),
-        &budget,
-        user_id,
-        post.body_len as u64,
-    )];
-    charge(chat, "room_bytes", charges, ChatError::SendLimited).await
 }
 
 async fn charge(
