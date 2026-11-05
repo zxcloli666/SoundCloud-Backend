@@ -1,10 +1,8 @@
-use std::sync::LazyLock;
 use std::time::Duration;
 
-use deadpool_redis::redis::Script;
 use uuid::Uuid;
 
-use super::{Charge, MINUTE, Window, charge};
+use super::{Charge, MINUTE, Window, charge, refund_key};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 const ROOM_NEWCOMER_SECS: i64 = 600;
@@ -13,17 +11,6 @@ pub const ROOM_BYTES_PER_MINUTE: u64 = 24 * 1024;
 
 const BACKDROP_CHANGES: Window = Window::new("10m", 6, Duration::from_secs(600));
 const ROOM_METAS: Window = Window::new("10m", 12, Duration::from_secs(600));
-
-static REFUND: LazyLock<Script> = LazyLock::new(|| {
-    Script::new(
-        r"
-if tonumber(redis.call('GET', KEYS[1]) or '0') > 0 then
-    redis.call('DECR', KEYS[1])
-end
-return 0
-",
-    )
-});
 
 pub struct RoomPost {
     pub conversation: Uuid,
@@ -57,15 +44,7 @@ pub async fn admit_backdrop(chat: &ChatState, room: &str) -> ChatResult<()> {
 
 pub async fn refund_backdrop(chat: &ChatState, room: &str) {
     let key = Charge::of("backdrop", &BACKDROP_CHANGES, room, 1).key;
-    let refunded = async {
-        let mut connection = chat.redis.get().await?;
-        REFUND
-            .key(&key)
-            .invoke_async::<i64>(&mut connection)
-            .await?;
-        ChatResult::Ok(())
-    };
-    if let Err(error) = refunded.await {
+    if let Err(error) = refund_key(chat, &key).await {
         tracing::warn!(
             code = error.code(),
             "a refused backdrop change kept its charge"
