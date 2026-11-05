@@ -100,7 +100,7 @@ impl RecommendationsService {
             return Vec::new();
         };
         let ids: Vec<Uuid> = artists.iter().map(|artist| artist.artist_id).collect();
-        let best = self.home_tracks.best_track(&self.pg, &ids, exclude).await;
+        let best = self.artist_tracks.best_track(&self.pg, &ids, exclude).await;
         artists
             .into_iter()
             .filter_map(|artist| {

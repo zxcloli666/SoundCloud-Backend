@@ -173,46 +173,39 @@ async fn old_tops(pool: &PgPool, sql: &str, artists: &[Uuid], k: i64) -> anyhow:
         .await?)
 }
 
-async fn new_wave_tops(pool: &PgPool, artists: &[Uuid], k: i64) -> anyhow::Result<Vec<Top>> {
+async fn shared_tops(
+    pool: &PgPool,
+    artists: &[Uuid],
+    k: i64,
+) -> anyhow::Result<(Vec<Top>, Vec<Top>)> {
     let rows = sqlx::query_file!(
-        "queries/recommendations/smart_wave/graph/load_artist_top_tracks.sql",
+        "queries/recommendations/smart_wave/graph/load_artist_tops.sql",
         artists,
         k
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            (
+    let mut wave = Vec::new();
+    let mut home = Vec::new();
+    for row in rows {
+        if row.wave {
+            wave.push((
+                row.artist_id,
+                row.sc_track_id.clone(),
+                row.play_count,
+                row.wave_truncated,
+            ));
+        }
+        if row.home {
+            home.push((
                 row.artist_id,
                 row.sc_track_id,
                 row.play_count,
-                row.truncated,
-            )
-        })
-        .collect())
-}
-
-async fn new_home_tops(pool: &PgPool, artists: &[Uuid], k: i64) -> anyhow::Result<Vec<Top>> {
-    let rows = sqlx::query_file!(
-        "queries/recommendations/home_wave/load_artist_top_tracks.sql",
-        artists,
-        k
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            (
-                row.artist_id,
-                row.sc_track_id,
-                row.play_count,
-                row.truncated,
-            )
-        })
-        .collect())
+                row.home_truncated,
+            ));
+        }
+    }
+    Ok((wave, home))
 }
 
 async fn old_collect(
@@ -260,37 +253,30 @@ fn with_plays(rows: &[(Uuid, String)], plays: &HashMap<String, i64>) -> Vec<(Uui
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn per_artist_top_tracks_return_the_old_rows_for_every_input_and_limit(
+async fn one_read_returns_the_old_wave_and_home_rows_for_every_input_and_limit(
     pool: PgPool,
 ) -> anyhow::Result<()> {
     seed(&pool).await?;
+    let mut rules_differ = 0;
     for artists in inputs() {
         for k in LIMITS {
+            let (wave, home) = shared_tops(&pool, &artists, k).await?;
             let old = old_tops(&pool, OLD_WAVE_TOPS, &artists, k).await?;
-            assert_eq!(
-                new_wave_tops(&pool, &artists, k).await?,
-                old,
-                "wave {artists:?} {k}"
-            );
+            assert_eq!(wave, old, "wave {artists:?} {k}");
             let old = old_tops(&pool, OLD_HOME_TOPS, &artists, k).await?;
-            assert_eq!(
-                new_home_tops(&pool, &artists, k).await?,
-                old,
-                "home {artists:?} {k}"
-            );
+            assert_eq!(home, old, "home {artists:?} {k}");
+            if wave != home {
+                rules_differ += 1;
+            }
         }
     }
-    let edge = new_wave_tops(&pool, &[EDGE], 64).await?;
+    assert!(rules_differ > 10, "the fixture must tell the rules apart");
+    let (edge, _) = shared_tops(&pool, &[EDGE], 64).await?;
     assert_eq!(edge.len(), 64);
     assert!(edge.iter().all(|row| row.3));
-    assert!(
-        new_wave_tops(&pool, &[EDGE], 65)
-            .await?
-            .iter()
-            .all(|row| !row.3)
-    );
-    let hub = new_home_tops(&pool, &[HUB], 500).await?;
-    let wave = new_wave_tops(&pool, &[HUB], 500).await?;
+    let (edge, _) = shared_tops(&pool, &[EDGE], 65).await?;
+    assert!(edge.iter().all(|row| !row.3));
+    let (wave, hub) = shared_tops(&pool, &[HUB], 500).await?;
     assert_ne!(hub.len(), wave.len());
     assert!(wave.windows(2).any(|pair| pair[0].2 == pair[1].2));
     Ok(())
