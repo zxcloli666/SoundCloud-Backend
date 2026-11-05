@@ -38,7 +38,13 @@ impl Reach<'_> {
         ranked.split_at(ranked.len().min(self.picks))
     }
 
-    pub fn tail(&self, rest: &[Uuid], picked: &[RankedTrack]) -> Vec<Uuid> {
+    pub fn tail(&self, rest: &[Uuid], cands: &[Candidate], settled: &HashSet<u64>) -> Vec<Uuid> {
+        let sure: Vec<Candidate> = cands
+            .iter()
+            .filter(|cand| settled.contains(&cand.sc_track_id))
+            .cloned()
+            .collect();
+        let picked = self.pick(&sure);
         let Some(cut) = picked
             .last()
             .filter(|_| picked.len() >= self.picks)
@@ -87,12 +93,33 @@ pub fn in_rank_order(mut rows: Vec<(u64, Uuid)>, ranked: &[Uuid], room: usize) -
     rows
 }
 
-pub fn attributed(rows: &[(u64, Uuid)], known: &HashSet<u64>) -> HashMap<u64, Option<Uuid>> {
+pub fn attribution(
+    graph: &[(u64, Uuid)],
+    mert: &HashMap<u64, Option<Uuid>>,
+) -> HashMap<u64, Option<Uuid>> {
     let mut artist_of = HashMap::new();
-    for (track, artist) in rows {
-        if !known.contains(track) {
-            artist_of.entry(*track).or_insert(Some(*artist));
-        }
+    for (track, artist) in graph {
+        artist_of.entry(*track).or_insert(Some(*artist));
+    }
+    for (track, artist) in mert {
+        artist_of.entry(*track).or_insert(*artist);
     }
     artist_of
+}
+
+pub fn reclaim(
+    cands: &mut Vec<Candidate>,
+    graph: &[(u64, Uuid)],
+    mert: &HashMap<u64, Option<Uuid>>,
+) -> HashMap<u64, Option<Uuid>> {
+    let current: HashMap<u64, Option<Uuid>> = cands
+        .iter()
+        .map(|cand| (cand.sc_track_id, cand.artist))
+        .collect();
+    let changed: HashMap<u64, Option<Uuid>> = attribution(graph, mert)
+        .into_iter()
+        .filter(|(track, artist)| current.get(track) != Some(artist))
+        .collect();
+    cands.retain(|cand| !changed.contains_key(&cand.sc_track_id));
+    changed
 }

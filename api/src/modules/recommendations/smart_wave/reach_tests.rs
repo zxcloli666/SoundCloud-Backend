@@ -82,14 +82,42 @@ fn flat(picked: &[RankedTrack]) -> Vec<(u64, u32, Option<Uuid>)> {
         .collect()
 }
 
-fn with_mert(
-    mut artist_of: HashMap<u64, Option<Uuid>>,
-    mert: &[(u64, Option<Uuid>)],
-) -> HashMap<u64, Option<Uuid>> {
+fn mert_map(mert: &[(u64, Option<Uuid>)]) -> HashMap<u64, Option<Uuid>> {
+    let mut artist_of = HashMap::new();
     for (track, artist) in mert {
         artist_of.entry(*track).or_insert(*artist);
     }
     artist_of
+}
+
+fn main_wave(
+    reach: &Reach<'_>,
+    ranked: &[Uuid],
+    rows: &HashMap<Uuid, Vec<u64>>,
+    mert: &HashMap<u64, Option<Uuid>>,
+    make: Maker,
+) -> Vec<RankedTrack> {
+    let every = reach::in_rank_order(rows_of(rows, ranked), ranked, GRAPH_TRACKS_TOTAL);
+    pick(reach, &scored(reach::attribution(&every, mert), make))
+}
+
+fn reached_wave(
+    reach: &Reach<'_>,
+    ranked: &[Uuid],
+    rows: &HashMap<Uuid, Vec<u64>>,
+    mert: &HashMap<u64, Option<Uuid>>,
+    make: Maker,
+) -> (Vec<RankedTrack>, usize) {
+    let (head, rest) = reach.split(ranked);
+    let mut read = reach::in_rank_order(rows_of(rows, head), ranked, GRAPH_TRACKS_TOTAL);
+    let settled: HashSet<u64> = read.iter().map(|(track, _)| *track).collect();
+    let mut cands = scored(reach::attribution(&read, mert), make);
+    let tail = reach.tail(rest, &cands, &settled);
+    let room = GRAPH_TRACKS_TOTAL.saturating_sub(read.len());
+    read.extend(reach::in_rank_order(rows_of(rows, &tail), ranked, room));
+    let fresh = reach::reclaim(&mut cands, &read, mert);
+    cands.extend(scored(fresh, make));
+    (pick(reach, &cands), head.len() + tail.len())
 }
 
 struct World {
@@ -122,6 +150,9 @@ fn world(round: u64) -> World {
         if count > 0 && mix(first ^ 1).is_multiple_of(5) {
             mert.push((first + mix(first ^ 2) % count, Some(artist)));
         }
+        if count > 1 && mix(first ^ 5).is_multiple_of(4) {
+            mert.push((first + count - 1, None));
+        }
         if mix(first ^ 3).is_multiple_of(11) {
             cursor.mark_served(first, Some(artist));
         }
@@ -151,14 +182,15 @@ fn world(round: u64) -> World {
     }
 }
 
-fn rows_of(world: &World, artists: &[Uuid]) -> Vec<(u64, Uuid)> {
+fn rows_of(rows: &HashMap<Uuid, Vec<u64>>, artists: &[Uuid]) -> Vec<(u64, Uuid)> {
     let mut artists = artists.to_vec();
     artists.sort();
     artists
         .iter()
         .flat_map(|artist| {
-            world.rows[artist]
-                .iter()
+            rows.get(artist)
+                .into_iter()
+                .flatten()
                 .map(move |track| (*track, *artist))
         })
         .collect()
@@ -181,37 +213,87 @@ fn reading_only_the_artists_that_can_reach_the_cut_keeps_every_pick() {
             content_floor: CONTENT_FLOOR,
         };
 
-        let every = rows_of(&world, &ranked);
-        if every.len() > GRAPH_TRACKS_TOTAL {
+        if rows_of(&world.rows, &ranked).len() > GRAPH_TRACKS_TOTAL {
             capped += 1;
         }
-        let every = reach::in_rank_order(every, &ranked, GRAPH_TRACKS_TOTAL);
-        let full = with_mert(reach::attributed(&every, &HashSet::new()), &world.mert);
-        let full = pick(&reach, &scored(full, rough));
-
-        let (head, rest) = reach.split(&ranked);
-        let head_rows = reach::in_rank_order(rows_of(&world, head), &ranked, GRAPH_TRACKS_TOTAL);
-        let first = with_mert(reach::attributed(&head_rows, &HashSet::new()), &world.mert);
-        let known: HashSet<u64> = first.keys().copied().collect();
-        let mut cands = scored(first, rough);
-        let tail = reach.tail(rest, &pick(&reach, &cands));
-        if tail.len() < rest.len() {
+        let mert = mert_map(&world.mert);
+        let full = main_wave(&reach, &ranked, &world.rows, &mert, rough);
+        let (reached, read) = reached_wave(&reach, &ranked, &world.rows, &mert, rough);
+        if read < ranked.len() {
             pruned += 1;
         }
-        let tail_rows = reach::in_rank_order(
-            rows_of(&world, &tail),
-            &ranked,
-            GRAPH_TRACKS_TOTAL - head_rows.len(),
-        );
-        cands.extend(scored(reach::attributed(&tail_rows, &known), rough));
 
-        assert_eq!(flat(&pick(&reach, &cands)), flat(&full), "round {round}");
+        assert_eq!(flat(&reached), flat(&full), "round {round}");
     }
     assert!(
         pruned > ROUNDS / 4,
         "the cut pruned artists in {pruned} rounds"
     );
     assert!(capped > 10, "the row cap bound in {capped} rounds");
+}
+
+#[test]
+fn a_tail_track_that_mert_brought_without_an_artist_is_scored_as_its_tail_artist() {
+    assert_the_tail_artist_claims(None);
+}
+
+#[test]
+fn a_tail_track_that_mert_brought_under_another_artist_is_scored_as_its_tail_artist() {
+    assert_the_tail_artist_claims(Some(Uuid::from_u128(1)));
+}
+
+const LOUD: u64 = 10;
+
+fn even(track: u64, artist: Option<Uuid>) -> Candidate {
+    Candidate {
+        sc_track_id: track,
+        artist,
+        content: if track == LOUD { 1.0 } else { 0.9 },
+        skip_damp: 1.0,
+    }
+}
+
+fn assert_the_tail_artist_claims(mert_artist: Option<Uuid>) {
+    let mut affinity = Affinity::new();
+    for (artist, value) in [(1, 1.0), (2, 0.95), (3, 0.9), (4, 0.05)] {
+        affinity.insert(Uuid::from_u128(artist), value);
+    }
+    let rows: HashMap<Uuid, Vec<u64>> = [
+        (1, vec![1, 2]),
+        (2, vec![3, 4]),
+        (3, vec![LOUD, 11]),
+        (4, vec![12]),
+    ]
+    .into_iter()
+    .map(|(artist, tracks)| (Uuid::from_u128(artist), tracks))
+    .collect();
+    let mert = HashMap::from([(LOUD, mert_artist)]);
+    let ranked = top_affinity_artists(&affinity, GRAPH_ARTISTS);
+    let cursor = WaveCursor::new(SeedKind::User, "claims".to_owned());
+    let disliked = HashSet::new();
+    let reach = Reach {
+        affinity: &affinity,
+        disliked_artists: &disliked,
+        cursor: &cursor,
+        picks: 2,
+        artist_cap: ARTIST_CAP_IN_WINDOW,
+        graph_floor: GRAPH_FLOOR,
+        content_floor: CONTENT_FLOOR,
+    };
+
+    let (reached, read) = reached_wave(&reach, &ranked, &rows, &mert, even);
+
+    assert_eq!(read, 3, "the tail artist is read, the far one is not");
+    assert!(
+        reached
+            .iter()
+            .any(|track| track.sc_track_id == LOUD && track.artist == Some(Uuid::from_u128(3))),
+        "{reached:?}"
+    );
+    assert_eq!(
+        flat(&reached),
+        flat(&main_wave(&reach, &ranked, &rows, &mert, even))
+    );
 }
 
 #[test]
@@ -416,8 +498,11 @@ async fn a_large_library_gets_the_same_wave_from_fewer_artist_reads(
         "the old read must stay under its row cap: {}",
         old_rows.len()
     );
-    let old = with_mert(reach::attributed(&old_rows, &HashSet::new()), &library.mert);
-    let old = pick(&reach, &scored(old, listened));
+    let mert = mert_map(&library.mert);
+    let old = pick(
+        &reach,
+        &scored(reach::attribution(&old_rows, &mert), listened),
+    );
 
     let tops = ArtistTopTracks::new();
     let (head, rest) = reach.split(&ranked);
@@ -431,13 +516,9 @@ async fn a_large_library_gets_the_same_wave_from_fewer_artist_reads(
         GRAPH_TRACKS_TOTAL,
     )
     .await;
-    let first = with_mert(
-        reach::attributed(&head_rows, &HashSet::new()),
-        &library.mert,
-    );
-    let known: HashSet<u64> = first.keys().copied().collect();
-    let mut cands = scored(first, listened);
-    let tail = reach.tail(rest, &pick(&reach, &cands));
+    let settled: HashSet<u64> = head_rows.iter().map(|(track, _)| *track).collect();
+    let mut cands = scored(reach::attribution(&head_rows, &mert), listened);
+    let tail = reach.tail(rest, &cands, &settled);
     let tail_rows = reach::read(
         &tops,
         &pool,
@@ -448,7 +529,9 @@ async fn a_large_library_gets_the_same_wave_from_fewer_artist_reads(
         GRAPH_TRACKS_TOTAL - head_rows.len(),
     )
     .await;
-    cands.extend(scored(reach::attributed(&tail_rows, &known), listened));
+    let read_graph: Vec<(u64, Uuid)> = head_rows.iter().chain(&tail_rows).copied().collect();
+    let fresh = reach::reclaim(&mut cands, &read_graph, &mert);
+    cands.extend(scored(fresh, listened));
     let new = pick(&reach, &cands);
 
     assert_eq!(old.len(), reach.picks);
