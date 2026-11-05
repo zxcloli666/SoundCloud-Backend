@@ -653,7 +653,7 @@ async fn execute(args: Args) -> Result<(), String> {
             )
         })
         .collect();
-    let tops = ArtistTopTracks::new();
+    let tops = ArtistTopTracks::for_home();
 
     let mut stream = futures::stream::iter(candidates)
         .map(|user| {
@@ -811,7 +811,7 @@ mod tests {
     async fn same_rows(pool: &PgPool, shelf: Shelf, user: &str, limit: i64) -> anyhow::Result<()> {
         let variants = vec![user.to_owned()];
         for exclude in [Vec::new(), excluded()] {
-            let tops = ArtistTopTracks::new();
+            let tops = ArtistTopTracks::for_home();
             let old = legacy_shelf(pool, shelf, &variants, limit, &exclude).await?;
             let set: HashSet<String> = exclude.iter().cloned().collect();
             let new = new_shelf(pool, &tops, shelf, &variants, limit, &set).await?;
