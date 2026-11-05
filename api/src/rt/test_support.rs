@@ -35,6 +35,16 @@ fn admission(redis_url: &str) -> Arc<PublicAdmission> {
         diag_bundle: limit,
         diag_events: limit,
         diag_bytes: limit,
+        voice_link_code: limit,
+        voice_remote: limit,
+        voice_remote_wait: limit,
+        voice_page_ip: limit,
+        voice_page_client: limit,
+        voice_salut_sub: limit,
+        voice_utterance: limit,
+        voice_resolve: limit,
+        voice_alice_ip: limit,
+        voice_salut_ip: limit,
         trusted_proxies: Vec::new(),
     };
     PublicAdmission::new(

@@ -128,3 +128,45 @@ fn the_room_long_poll_skips_the_core_limit_and_room_writes_do_not() {
     assert!(!skips_core(&Method::POST, "/rooms/AB12CD/members"));
     assert!(!skips_core(&Method::GET, "/rooms/AB12CD/members"));
 }
+
+#[test]
+fn the_voice_long_polls_skip_the_core_limit_and_the_rest_of_remote_does_not() {
+    assert!(skips_core(&Method::GET, "/remote/wait"));
+    assert!(skips_core(&Method::POST, "/skills/alice"));
+    assert!(skips_core(&Method::POST, "/skills/salut"));
+    assert!(!skips_core(&Method::POST, "/remote/wait"));
+    assert!(!skips_core(&Method::POST, "/remote/reply"));
+    assert!(!skips_core(&Method::POST, "/remote/link-code"));
+    assert!(!skips_core(&Method::GET, "/remote/links"));
+    assert!(!skips_core(&Method::POST, "/oauth/token"));
+}
+
+#[tokio::test]
+async fn a_held_voice_wait_does_not_use_a_slot() {
+    let app = Router::new()
+        .route("/remote/wait", get(slow))
+        .route("/tracks/{id}", get(slow))
+        .layer(from_fn_with_state(
+            Shed::new(1, 1, Duration::from_millis(20)),
+            super::shed,
+        ));
+    let waits: Vec<_> = (0..5)
+        .map(|_| {
+            let app = app.clone();
+            tokio::spawn(async move { app.oneshot(get_request("/remote/wait")).await })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let other = app
+        .clone()
+        .oneshot(get_request("/tracks/1"))
+        .await
+        .expect("answered");
+    assert_eq!(other.status(), StatusCode::OK);
+    for wait in waits {
+        assert_eq!(
+            wait.await.expect("joined").expect("answered").status(),
+            StatusCode::OK
+        );
+    }
+}
