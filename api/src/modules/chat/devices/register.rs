@@ -1,6 +1,7 @@
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::common::session::session_hash;
 use crate::modules::chat::devices::bind::{BoundDevice, bound_device};
 use crate::modules::chat::devices::store::{self, NewDevice, SessionMove};
 use crate::modules::chat::devices::{RegisterDevice, changed, lookup};
@@ -26,11 +27,18 @@ pub async fn register(
 ) -> ChatResult<DeviceRow> {
     let request = validated(request)?;
     let bound = session_device(chat, caller).await?;
-    if lookup(chat, bound.id).await?.is_none() {
+    let fresh = lookup(chat, bound.id).await?.is_none();
+    if fresh {
         limits::admit(chat, Bucket::Device, &caller.user_id).await?;
     }
     users::touch(chat, &caller.user_id).await?;
-    let enrolled = enroll(chat, caller, &bound, &request).await?;
+    let enrolled = match enroll(chat, caller, &bound, &request).await {
+        Err(ChatError::DeviceCap) if fresh => {
+            limits::refund(chat, Bucket::Device, &caller.user_id).await;
+            return Err(ChatError::DeviceCap);
+        }
+        enrolled => enrolled?,
+    };
     let mut touched = enrolled.evicted;
     touched.push(enrolled.row.id);
     changed(chat, &caller.user_id, &touched).await?;
@@ -64,11 +72,12 @@ async fn enroll(
         same_device(row, &caller.user_id, bound)?;
     }
     let fresh = known.is_none();
-    let evicted = store::revoke_session_holders(&mut *tx, caller.session_id, bound.id).await?;
+    let session_hash = session_hash(caller.session_id);
+    let evicted = store::revoke_session_holders(&mut *tx, &session_hash, bound.id).await?;
     let row = if fresh {
-        first_login(&mut tx, caller, bound, request).await?
+        first_login(&mut tx, caller, &session_hash, bound, request).await?
     } else {
-        relogin(&mut tx, caller, bound, request).await?
+        relogin(&mut tx, &session_hash, bound, request).await?
     };
     if fresh || !evicted.is_empty() {
         store::rekey_user(&mut *tx, &caller.user_id).await?;
@@ -89,13 +98,13 @@ fn same_device(row: &DeviceRow, user_id: &str, bound: &BoundDevice) -> ChatResul
 
 async fn relogin(
     tx: &mut Transaction<'_, Postgres>,
-    caller: &ChatCaller,
+    session_hash: &[u8],
     bound: &BoundDevice,
     request: &RegisterDevice,
 ) -> ChatResult<DeviceRow> {
     let change = SessionMove {
         id: bound.id,
-        session_id: caller.session_id,
+        session_hash,
         platform: &request.platform,
         name: &request.name,
         app_version: &request.app_version,
@@ -109,17 +118,18 @@ async fn relogin(
 async fn first_login(
     tx: &mut Transaction<'_, Postgres>,
     caller: &ChatCaller,
+    session_hash: &[u8],
     bound: &BoundDevice,
     request: &RegisterDevice,
 ) -> ChatResult<DeviceRow> {
     let live = store::count_live(&mut **tx, &caller.user_id).await?;
     if usize::try_from(live).unwrap_or(usize::MAX) >= DEVICES_MAX {
-        return Err(ChatError::RequestLimit);
+        return Err(ChatError::DeviceCap);
     }
     let device = NewDevice {
         id: bound.id,
         user_id: &caller.user_id,
-        session_id: caller.session_id,
+        session_hash,
         auth_pub: &bound.auth_pub,
         box_pub: &bound.box_pub,
         platform: &request.platform,

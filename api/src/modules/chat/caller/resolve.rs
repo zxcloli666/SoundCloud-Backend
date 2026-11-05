@@ -1,10 +1,15 @@
+use std::time::Duration;
+
 use sc_chat_wire::proto::Inner;
 use sc_chat_wire::sign::verify_request;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::auth::service::replica::NOT_REPLICATED;
-use crate::modules::chat::caller::{CallerBind, CallerDevice, ChatCaller, SessionEntry};
+use crate::modules::chat::caller::{
+    COLD_WAIT, CallerBind, CallerDevice, ChatCaller, Cold, REFRESH_WAIT, SessionEntry,
+};
+use crate::modules::chat::held::Held;
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::{ChatError, ChatResult, ChatState, devices, synthetic};
 
@@ -40,13 +45,17 @@ pub async fn resolve(chat: &ChatState, inner: &Inner, enc: &[u8; 32]) -> ChatRes
     })
 }
 
-async fn session_entry(chat: &ChatState, id: Uuid) -> ChatResult<Option<SessionEntry>> {
+async fn session_entry(
+    chat: &ChatState,
+    id: Uuid,
+    wait: Duration,
+) -> ChatResult<Option<SessionEntry>> {
     if chat.callers.is_unknown(id) {
         return Ok(None);
     }
     let found = chat
         .callers
-        .cold(async {
+        .cold(Cold::Session, wait, async {
             if let Some(synthetic) = synthetic::session(chat, id).await? {
                 return Ok(Some(synthetic));
             }
@@ -93,13 +102,18 @@ async fn signed_session(
     inner: &Inner,
     enc: &[u8; 32],
 ) -> ChatResult<(SessionEntry, Option<CallerBind>)> {
-    if let Some(cached) = chat.callers.session(session_id)
-        && (!synthetic::is_synthetic(&cached.user_id) || chat.config.loadtest_open())
-        && let Ok(Some(bind)) = signed_by(&cached, device_id, inner, enc)
-    {
-        return Ok((cached, Some(bind)));
-    }
-    let Some(fresh) = session_entry(chat, session_id).await? else {
+    let looked = match held_signed(chat, session_id, device_id, inner, enc) {
+        Some((held, bind)) if held.fresh() => return Ok((held.value, Some(bind))),
+        Some((held, bind)) => match session_entry(chat, session_id, REFRESH_WAIT).await {
+            Err(error) if error.is_busy() => {
+                Cold::Session.count_stale();
+                return Ok((held.value, Some(bind)));
+            }
+            looked => looked?,
+        },
+        None => session_entry(chat, session_id, COLD_WAIT).await?,
+    };
+    let Some(fresh) = looked else {
         chat.callers.forget_session(session_id);
         return Err(ChatError::ReloginRequired);
     };
@@ -109,6 +123,21 @@ async fn signed_session(
         None => chat.callers.forget_session(session_id),
     }
     Ok((fresh, bind))
+}
+
+fn held_signed(
+    chat: &ChatState,
+    session_id: Uuid,
+    device_id: Uuid,
+    inner: &Inner,
+    enc: &[u8; 32],
+) -> Option<(Held<SessionEntry>, CallerBind)> {
+    let held = chat.callers.session(session_id).filter(Held::servable)?;
+    if synthetic::is_synthetic(&held.value.user_id) && !chat.config.loadtest_open() {
+        return None;
+    }
+    let bind = signed_by(&held.value, device_id, inner, enc).ok()??;
+    Some((held, bind))
 }
 
 fn signed_by(
@@ -133,12 +162,8 @@ async fn device(
     session: &SessionEntry,
     bind: &CallerBind,
 ) -> ChatResult<Option<CallerDevice>> {
-    let row = match chat.devices.row(device_id) {
-        Some(row) => row,
-        None => match chat.callers.cold(devices::lookup(chat, device_id)).await? {
-            Some(row) => row,
-            None => return Ok(None),
-        },
+    let Some(row) = devices::gated_row(chat, device_id).await? else {
+        return Ok(None);
     };
     if row.user_id != session.user_id || row.auth_pub != bind.auth_pub {
         return Err(ChatError::SessionBoundOther);

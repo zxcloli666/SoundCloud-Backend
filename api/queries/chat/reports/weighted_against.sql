@@ -2,6 +2,7 @@ WITH recent AS (
     SELECT reporter, conversation_id, weight
     FROM chat.reports
     WHERE target_user = $1
+      AND kind = 'messages'
       AND state <> 'rejected'
       AND weight > 0
       AND created_at > now() - $2::int * interval '1 hour'

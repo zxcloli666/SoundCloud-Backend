@@ -41,11 +41,12 @@ pub struct Channel {
 impl Channel {
     pub fn new(chat: Arc<ChatState>, inner: Router) -> Self {
         let permits = chat.config.max_parked.saturating_add(WORK_PERMITS);
+        let gate = AuthGate::new(&chat.config.starts);
         Self {
             chat,
             inner,
             busy: Semaphore::new(permits),
-            gate: AuthGate::new(),
+            gate,
         }
     }
 }

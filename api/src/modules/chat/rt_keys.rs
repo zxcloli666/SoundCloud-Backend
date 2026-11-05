@@ -53,8 +53,19 @@ pub fn limit(bucket: &str, user_id: &str) -> String {
     format!("chat:lim:{bucket}:{user_id}")
 }
 
+pub const LOADTEST_SESSIONS: &str = "chat:lt:sess:*";
+pub const LOADTEST_BUSY: &str = "chat:lt:busy";
+
 pub fn loadtest_session(session: Uuid) -> String {
     format!("chat:lt:sess:{session}")
+}
+
+pub fn loadtest_session_id(key: &str) -> Option<Uuid> {
+    Uuid::parse_str(key.strip_prefix("chat:lt:sess:")?).ok()
+}
+
+pub fn backdrop_lock(conversation: Uuid) -> String {
+    format!("chat:bd:lock:{conversation}")
 }
 
 #[cfg(test)]

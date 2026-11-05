@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::modules::chat::admin::audit;
 use crate::modules::chat::admin::auth::ChatAdmin;
 use crate::modules::chat::body::ChatPath;
+use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 use crate::modules::rooms::store::RoomStore;
 
@@ -18,13 +19,13 @@ pub async fn unlist(
     let room = RoomStore::new(chat.redis.clone())
         .load(&code)
         .await
-        .map_err(|_| ChatError::busy())?
+        .map_err(|_| ChatError::busy(BusySource::AdminRooms))?
         .ok_or(ChatError::NotFound)?;
     if !chat
         .rooms
         .unlist(&code)
         .await
-        .map_err(|_| ChatError::busy())?
+        .map_err(|_| ChatError::busy(BusySource::AdminRooms))?
     {
         return Err(ChatError::NotFound);
     }

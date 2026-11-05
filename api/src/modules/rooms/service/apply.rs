@@ -2,6 +2,7 @@ use super::RoomsService;
 use crate::error::AppResult;
 use crate::modules::chat::rooms::bridge;
 use crate::modules::rooms::model::Room;
+use crate::modules::rooms::store::Guard;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cause<'a> {
@@ -11,10 +12,18 @@ pub enum Cause<'a> {
 }
 
 impl RoomsService {
-    pub async fn apply<T, F>(
+    pub async fn apply<T, F>(&self, code: &str, cause: Cause<'_>, change: F) -> AppResult<(Room, T)>
+    where
+        F: FnMut(&mut Room) -> AppResult<T>,
+    {
+        self.apply_guarded(code, cause, None, change).await
+    }
+
+    pub async fn apply_guarded<T, F>(
         &self,
         code: &str,
         cause: Cause<'_>,
+        guard: Option<&Guard<'_>>,
         mut change: F,
     ) -> AppResult<(Room, T)>
     where
@@ -23,7 +32,7 @@ impl RoomsService {
         let mut before = None;
         let (after, outcome) = self
             .store
-            .update(code, |room| {
+            .update(code, guard, |room| {
                 before = Some(room.clone());
                 change(room)
             })

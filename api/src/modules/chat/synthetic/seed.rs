@@ -4,6 +4,7 @@ use sc_chat_wire::prost::Message;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::common::session::session_hash;
 use crate::modules::chat::conversations::keys::dm_key;
 use crate::modules::chat::members::roles::role_name;
 use crate::modules::chat::model::{ConversationKind, MemberRole};
@@ -47,7 +48,6 @@ pub struct SeededConversation {
 }
 
 pub async fn run(chat: &ChatState, seed: &Seed) -> ChatResult<Seeded> {
-    layout::check(seed)?;
     let first = last_index(chat).await? + 1;
     let users: Vec<String> = (first..first + u64::from(seed.users))
         .map(layout::user_id)
@@ -133,7 +133,10 @@ async fn insert_devices(chat: &ChatState, devices: &[SeededDevice]) -> ChatResul
     for batch in devices.chunks(ROWS_PER_INSERT) {
         let ids: Vec<Uuid> = batch.iter().map(|device| device.id).collect();
         let users: Vec<String> = batch.iter().map(|device| device.user.clone()).collect();
-        let sessions: Vec<Uuid> = batch.iter().map(|device| device.session).collect();
+        let sessions: Vec<Vec<u8>> = batch
+            .iter()
+            .map(|device| session_hash(device.session))
+            .collect();
         let auth: Vec<Vec<u8>> = batch.iter().map(|device| device.auth_pub.clone()).collect();
         let boxes: Vec<Vec<u8>> = batch.iter().map(|device| device.box_pub.clone()).collect();
         sqlx::query_file!(

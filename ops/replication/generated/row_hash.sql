@@ -754,6 +754,30 @@ AS $f$
 SELECT md5(ROW(t.examples, t.feature_means, t.feature_scales, t.intercept, t.positives, t.train_accuracy, t.trained_at, t.version, t.weights)::text) FROM public.recommendation_quality_models t WHERE t.version = (k ->> 'version')::bigint
 $f$;
 
+CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_grants(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.prev_refresh_hash, t.provider, t.refresh_expires_at, t.refresh_hash, t.rotated_at, t.rotation_seed, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_link_codes(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.code_hash, t.created_at, t.expires_at, t.id, t.provider, t.row_v, t.sc_user_id)::text) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
 CREATE OR REPLACE FUNCTION public.scd_row_hash_repl_checksums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -1231,7 +1255,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.avatar_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
+SELECT md5(ROW(t.avatar_url, t.banner_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_hash_wanted_track_albums(k jsonb)
@@ -1414,6 +1438,10 @@ BEGIN
             RETURN public.scd_row_hash_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_hash_recommendation_quality_models(k);
+        WHEN 'remote_grants' THEN
+            RETURN public.scd_row_hash_remote_grants(k);
+        WHEN 'remote_link_codes' THEN
+            RETURN public.scd_row_hash_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_hash_repl_checksums(k);
         WHEN 'repl_tombstones' THEN

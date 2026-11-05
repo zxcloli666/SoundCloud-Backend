@@ -3,6 +3,7 @@ pub mod failure;
 pub mod handlers;
 pub mod lyrics;
 pub mod matching;
+pub mod resolve;
 pub mod semantic;
 pub mod terms;
 pub mod vibe;

@@ -1673,6 +1673,66 @@
     {"cols": ["version"], "expr": false, "keys": ["version"], "name": "recommendation_quality_models_pkey", "primary": true, "where": null}
    ]
   },
+  "remote_grants": {
+   "columns": [
+    {"default": null, "generated": false, "name": "access_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "access_hash", "notnull": false, "type": "text"},
+    {"default": "''::text", "generated": false, "name": "client_id", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "code_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "code_hash", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "code_redirect_uri", "notnull": false, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "external_id", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "last_used_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "prev_refresh_hash", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "provider", "notnull": true, "type": "text"},
+    {"default": null, "generated": false, "name": "refresh_expires_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "refresh_hash", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "rotated_at", "notnull": false, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "rotation_seed", "notnull": false, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_merge_remote_grants", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_remote_grants", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_remote_grants", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_remote_grants", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["access_hash"], "expr": false, "keys": ["access_hash"], "name": "remote_grants_access_uq", "primary": false, "where": "(access_hash IS NOT NULL)"},
+    {"cols": ["code_hash"], "expr": false, "keys": ["code_hash"], "name": "remote_grants_code_uq", "primary": false, "where": "(code_hash IS NOT NULL)"},
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "remote_grants_pkey", "primary": true, "where": null},
+    {"cols": ["refresh_hash"], "expr": false, "keys": ["refresh_hash"], "name": "remote_grants_refresh_uq", "primary": false, "where": "(refresh_hash IS NOT NULL)"}
+   ]
+  },
+  "remote_link_codes": {
+   "columns": [
+    {"default": null, "generated": false, "name": "code_hash", "notnull": true, "type": "text"},
+    {"default": "now()", "generated": false, "name": "created_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "expires_at", "notnull": true, "type": "timestamp with time zone"},
+    {"default": null, "generated": false, "name": "id", "notnull": true, "type": "uuid"},
+    {"default": null, "generated": false, "name": "provider", "notnull": true, "type": "text"},
+    {"default": "0", "generated": false, "name": "row_v", "notnull": true, "type": "bigint"},
+    {"default": null, "generated": false, "name": "sc_user_id", "notnull": true, "type": "text"}
+   ],
+   "fks": [
+   ],
+   "triggers": [
+    {"enabled": "R", "function": "scd_merge_remote_link_codes", "gated": false, "name": "zz_merge", "pinned": false},
+    {"enabled": "O", "function": "scd_tomb_remote_link_codes", "gated": false, "name": "zz_tomb", "pinned": false},
+    {"enabled": "R", "function": "scd_tomb_check_remote_link_codes", "gated": false, "name": "zz_tomb_check", "pinned": false},
+    {"enabled": "O", "function": "scd_ver_remote_link_codes", "gated": false, "name": "zz_ver", "pinned": false},
+    {"enabled": "R", "function": "suppress_redundant_updates_trigger", "gated": false, "name": "zzz_suppress", "pinned": false}
+   ],
+   "unique": [
+    {"cols": ["id"], "expr": false, "keys": ["id"], "name": "remote_link_codes_pkey", "primary": true, "where": null}
+   ]
+  },
   "repl_checksums": {
    "columns": [
     {"default": "now()", "generated": false, "name": "at", "notnull": true, "type": "timestamp with time zone"},
@@ -2707,6 +2767,7 @@
   "users": {
    "columns": [
     {"default": null, "generated": false, "name": "avatar_url", "notnull": false, "type": "text"},
+    {"default": null, "generated": false, "name": "banner_url", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "city", "notnull": false, "type": "text"},
     {"default": null, "generated": false, "name": "comments_count", "notnull": false, "type": "bigint"},
     {"default": null, "generated": false, "name": "country", "notnull": false, "type": "character varying(64)"},
