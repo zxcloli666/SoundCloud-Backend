@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::modules::chat::conversations::CreateConversation;
 use crate::modules::chat::conversations::keys::{dm_key, saved_key, valid_user_id};
+use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::members::contacts;
 use crate::modules::chat::members::store::{self as members, Joining};
 use crate::modules::chat::messages::system::{self, SystemEvent};
@@ -169,9 +170,10 @@ pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Cre
     .await?
     {
         tx.rollback().await?;
-        let id = find_dm(pg, &key)
-            .await?
-            .ok_or(ChatError::Busy { retry_ms: 200 })?;
+        let id = find_dm(pg, &key).await?.ok_or(ChatError::Busy {
+            retry_ms: 200,
+            source: BusySource::ConversationCreate,
+        })?;
         return existing_direct(pg, id, user, peer).await;
     }
     let joining = [
@@ -223,9 +225,10 @@ pub async fn saved(pg: &PgPool, user: &str) -> ChatResult<Created> {
     let mut tx = pg.begin().await?;
     if !insert(&mut tx, id, ConversationKind::Saved, Some(&key), user, None).await? {
         tx.rollback().await?;
-        let id = find_dm(pg, &key)
-            .await?
-            .ok_or(ChatError::Busy { retry_ms: 200 })?;
+        let id = find_dm(pg, &key).await?.ok_or(ChatError::Busy {
+            retry_ms: 200,
+            source: BusySource::ConversationCreate,
+        })?;
         return Ok(Created {
             id,
             rows: Vec::new(),

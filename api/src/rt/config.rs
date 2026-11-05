@@ -30,10 +30,12 @@ pub struct RtConfig {
     pub soundcloud: SoundcloudCfg,
     pub chat: ChatConfig,
     pub rooms: RoomsConfig,
+    pub subscriptions_always_premium: bool,
 }
 
 impl RtConfig {
     pub fn from_env() -> Self {
+        let admission = AdmissionCfg::from_env();
         Self {
             port: env_u16("PORT", 3000),
             database: database_from_env("", Some("localhost"))
@@ -41,10 +43,12 @@ impl RtConfig {
             redis_url: env_str("REDIS_URL", "redis://localhost:6379"),
             redis_rt_url: env_str("REDIS_RT_URL", "redis://localhost:6379"),
             redis_rt_pool_max: env_u32("REDIS_RT_POOL_MAX", REDIS_RT_POOL_MAX).max(1) as usize,
-            admission: AdmissionCfg::from_env(),
             soundcloud: SoundcloudCfg::from_env(),
-            chat: ChatConfig::from_env(),
+            chat: ChatConfig::from_env(&admission),
+            admission,
             rooms: RoomsConfig::from_env(),
+            subscriptions_always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false")
+                == "true",
         }
     }
 }

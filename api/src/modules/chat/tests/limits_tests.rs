@@ -10,7 +10,7 @@ use super::{
 use crate::modules::chat::moderation::testing::state_with;
 use crate::modules::chat::{ChatError, ChatState};
 
-const BUCKETS: [Bucket; 11] = [
+const BUCKETS: [Bucket; 17] = [
     Bucket::Send,
     Bucket::Create,
     Bucket::Request,
@@ -22,6 +22,12 @@ const BUCKETS: [Bucket; 11] = [
     Bucket::ReadKeys,
     Bucket::ReadCard,
     Bucket::Preview,
+    Bucket::MediaReserve,
+    Bucket::MediaUrls,
+    Bucket::MediaUsage,
+    Bucket::MediaMine,
+    Bucket::MediaDelete,
+    Bucket::MediaRestore,
 ];
 
 #[test]
@@ -36,6 +42,26 @@ fn every_bucket_has_windows_and_distinct_keys() {
     assert_eq!(Bucket::Send.windows()[1].limit, 30);
     assert_eq!(Bucket::Report.windows()[0].limit, 20);
     assert_eq!(Bucket::ReadList.windows()[0].limit, 10);
+}
+
+#[test]
+fn the_media_buckets_hold_the_contract_rates() {
+    let limit = |bucket: Bucket| -> Vec<(u64, u64)> {
+        bucket
+            .windows()
+            .iter()
+            .map(|window| (window.limit, window.length.as_secs()))
+            .collect()
+    };
+    assert_eq!(limit(Bucket::MediaReserve), [(30, 600), (300, 86_400)]);
+    assert_eq!(limit(Bucket::MediaUrls), [(120, 60)]);
+    assert_eq!(limit(Bucket::MediaUsage), [(60, 60)]);
+    assert_eq!(limit(Bucket::MediaMine), [(60, 60)]);
+    assert_eq!(limit(Bucket::MediaDelete), [(30, 60)]);
+    assert_eq!(limit(Bucket::MediaRestore), [(30, 60)]);
+    assert_eq!(Bucket::MediaReserve.rejection(), ChatError::SendLimited);
+    assert_eq!(Bucket::MediaUrls.rejection(), ChatError::ReadLimited);
+    assert_eq!(Bucket::MediaDelete.rejection(), ChatError::RequestLimit);
 }
 
 #[test]

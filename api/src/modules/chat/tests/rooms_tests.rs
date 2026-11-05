@@ -17,6 +17,7 @@ use super::system::SuggestedTrack;
 use crate::error::AppError;
 use crate::modules::chat::caller::ChatCaller;
 use crate::modules::chat::devices::test_support::{Enrolled, call, caller, enroll};
+use crate::modules::chat::errors::BusySource;
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::test_support::chat_state;
 use crate::modules::chat::{ChatError, ChatState, routes, rt_keys};
@@ -224,7 +225,10 @@ fn room_refusals_become_chat_errors() {
     assert_eq!(refusal(AppError::bad_request("x")), ChatError::Invalid);
     assert_eq!(
         refusal(AppError::conflict("x")),
-        ChatError::Busy { retry_ms: 500 }
+        ChatError::Busy {
+            retry_ms: 500,
+            source: BusySource::Rooms
+        }
     );
     assert_eq!(refusal(AppError::internal("x")), ChatError::Internal);
     let mut room = room();

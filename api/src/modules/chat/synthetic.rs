@@ -1,4 +1,5 @@
 mod layout;
+mod lease;
 mod purge;
 mod seed;
 mod sessions;
@@ -43,7 +44,8 @@ pub async fn seed(
         return Err(ChatError::NotFound);
     }
     let input: Seed = serde_json::from_slice(&body).map_err(|_| ChatError::Invalid)?;
-    let seeded = seed::run(&chat, &input).await?;
+    layout::check(&input)?;
+    let seeded = lease::exclusive(&chat, seed::run(&chat, &input)).await?;
     let detail = json!({
         "first": seeded.first,
         "users": input.users,
@@ -61,7 +63,7 @@ pub async fn purge(
     if !chat.config.loadtest {
         return Err(ChatError::NotFound);
     }
-    let purged = purge::run(&chat).await?;
+    let purged = lease::exclusive(&chat, purge::run(&chat)).await?;
     let detail = serde_json::to_value(&purged).map_err(|_| ChatError::Internal)?;
     audit::record(&chat, &admin.admin, "loadtest_purge", AUDIT_TARGET, detail).await?;
     Ok(Json(purged))

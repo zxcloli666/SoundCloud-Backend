@@ -7,7 +7,8 @@ use crate::modules::chat::rooms::system::{self, Authored, SuggestedTrack, System
 use crate::modules::chat::rooms::{bridge, refusal};
 use crate::modules::chat::rt_keys;
 use crate::modules::chat::{ChatError, ChatResult, ChatState, sync};
-use crate::modules::rooms::listing::{image, text};
+use crate::modules::rooms::listing::text;
+use crate::modules::rooms::model::artwork_url;
 
 pub const MAX_SNAPSHOT_BYTES: usize = 3 * 1024;
 pub const COOLDOWN_SECS: u64 = 10;
@@ -22,7 +23,7 @@ fn first_text(track: &Value, paths: &[&[&str]]) -> Option<String> {
 fn artwork(track: &Value) -> Option<String> {
     ["artworkUrl", "artwork_url"]
         .iter()
-        .find_map(|key| image(track[key].as_str()?))
+        .find_map(|key| artwork_url(track[key].as_str()?))
 }
 
 fn duration(track: &Value) -> Option<i64> {

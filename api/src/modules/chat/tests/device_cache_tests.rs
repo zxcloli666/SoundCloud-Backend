@@ -11,7 +11,7 @@ fn row(user: &str) -> DeviceRow {
     DeviceRow {
         id: Uuid::new_v4(),
         user_id: user.to_owned(),
-        session_id: Uuid::new_v4(),
+        session_hash: vec![3; 32],
         status: "active".to_owned(),
         auth_pub: vec![1; 32],
         box_pub: vec![2; 32],

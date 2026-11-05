@@ -12,17 +12,21 @@ use uuid::Uuid;
 use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService};
 use crate::modules::chat::caller::{Callers, ChatCaller};
 use crate::modules::chat::channel::ock::OckRing;
-use crate::modules::chat::config::{Access, ModerationConfig};
+use crate::modules::chat::config::{Access, ModerationConfig, StartLimits};
 use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
 use crate::modules::chat::hub::ChatHub;
 use crate::modules::chat::kek::KekRing;
+use crate::modules::chat::media::star::Stars;
 use crate::modules::chat::model::Tier;
 use crate::modules::chat::moderation::Moderator;
 use crate::modules::chat::moderation::client::AiClient;
+use crate::modules::chat::s3::S3;
+use crate::modules::chat::stores::Fills;
 use crate::modules::chat::{ChatConfig, ChatState};
 use crate::modules::oauth_apps::OAuthAppsService;
 use crate::modules::rooms::{RoomHub, RoomsService};
+use crate::modules::subscriptions::SubscriptionsService;
 use crate::sc::ScClient;
 
 pub fn request_vector(name: &str) -> Value {
@@ -76,6 +80,12 @@ pub fn config(enabled: bool) -> ChatConfig {
             models: Vec::new(),
         },
         media: Default::default(),
+        starts: StartLimits {
+            window: std::time::Duration::from_secs(60),
+            logins_per_client: 15,
+            links_per_client: 30,
+            trusted_proxies: Vec::new(),
+        },
     }
 }
 
@@ -105,6 +115,9 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
         moderator: Moderator::new(
             AiClient::load(&config.moderation, &config.keys_dir).expect("moderation off"),
         ),
+        stars: Stars::new(SubscriptionsService::new(pg.clone(), false)),
+        s3: S3::new(&config.media),
+        fills: Fills::default(),
         link: LinkService::new(pg.clone(), auth.clone()),
         auth,
         rooms: RoomsService::new(redis.clone(), RoomHub::new(None)),

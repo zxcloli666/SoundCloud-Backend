@@ -1,6 +1,6 @@
 SELECT id,
        user_id,
-       session_id,
+       session_hash,
        status,
        auth_pub,
        box_pub,

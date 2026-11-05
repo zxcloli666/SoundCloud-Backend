@@ -55,6 +55,22 @@ class MigrationRules(unittest.TestCase):
         fn = "CREATE OR REPLACE FUNCTION public.f() RETURNS void LANGUAGE sql AS $f$ DELETE FROM public.sessions $f$;"
         self.assertEqual(self.rules(fn), [])
 
+    def test_search_path_ends_with_pg_temp(self):
+        bare = "CREATE OR REPLACE FUNCTION public.f() RETURNS void LANGUAGE sql SET search_path = public, pg_catalog AS $f$ SELECT 1 $f$;"
+        self.assertEqual(self.rules(bare), ["search-path-pg-temp"])
+        self.assertEqual(self.rules("ALTER FUNCTION public.f() SET search_path TO public;"), ["search-path-pg-temp"])
+        pinned = "CREATE FUNCTION public.f() RETURNS void LANGUAGE sql SET search_path = pg_catalog, public, pg_temp AS $f$ SELECT 1 $f$;"
+        self.assertEqual(self.rules(pinned), [])
+        self.assertEqual(self.rules("ALTER ROUTINE public.f() SET search_path = public, pg_catalog, pg_temp;"), [])
+
+    def test_grants_are_not_dml(self):
+        grants = (
+            "GRANT INSERT (tbl, pk, purged_v) ON public.repl_purges TO chat_auth_release;"
+            "REVOKE DELETE ON public.sessions FROM chat;"
+            "GRANT UPDATE (updated_at) ON public.sessions TO chat_auth;"
+        )
+        self.assertEqual(self.rules(grants), [])
+
     def test_cascade(self):
         self.assertEqual(self.rules("DROP TABLE public.old_thing CASCADE;"), ["cascade"])
         self.assertEqual(self.rules("ALTER TABLE public.tracks DROP COLUMN last_read_at CASCADE;"), ["cascade"])
