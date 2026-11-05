@@ -15,6 +15,9 @@ start() {
     qdrant)
         docker run -d --name qdrant -p 6333:6333 -p 6334:6334 mirror.gcr.io/qdrant/qdrant:v1.19.0
         ;;
+    nats)
+        docker run -d --name nats -p 4222:4222 mirror.gcr.io/library/nats:2.14-alpine -js
+        ;;
     seaweed)
         printf '%s' '{"identities":[{"name":"test","credentials":[{"accessKey":"UPTESTAK","secretKey":"UPTESTSECRET"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > "$RUNNER_TEMP/s3.json"
         docker run -d --name seaweed -p 8333:8333 -v "$RUNNER_TEMP/s3.json:/etc/seaweedfs/s3.json:ro" \

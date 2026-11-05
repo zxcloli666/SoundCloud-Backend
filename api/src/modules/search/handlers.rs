@@ -1,16 +1,19 @@
 use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::cache::ListPageResult;
+use crate::common::admission::Endpoint;
 use crate::common::pagination::PaginationQuery;
 use crate::common::session::SessionCtx;
 use crate::error::AppResult;
 use crate::modules::likes::cold::apply_user_favorite_flag;
+use crate::modules::remote::handlers::{admission_error, require_star};
 use crate::modules::search::catalog::DEFAULT_LIMIT;
 use crate::modules::search::lyrics::LyricsSearchResponse;
+use crate::modules::search::resolve::{DEFAULT_PER_KIND, Kind};
 use crate::modules::search::vibe::VibeResponse;
 use crate::state::AppState;
 
@@ -23,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/search/db/albums", get(albums))
         .route("/search/vibe", get(vibe))
         .route("/search/lyrics", get(lyrics))
+        .route("/search/resolve", post(resolve))
         .merge(super::matching::router())
 }
 
@@ -159,4 +163,36 @@ async fn albums(
             .albums(&q.q.unwrap_or_default(), page, limit)
             .await?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveBody {
+    #[serde(default)]
+    variants: Vec<String>,
+    #[serde(default)]
+    kinds: Vec<Kind>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+async fn resolve(
+    State(st): State<AppState>,
+    ctx: SessionCtx,
+    Json(body): Json<ResolveBody>,
+) -> AppResult<Json<Value>> {
+    st.admission
+        .check_session(Endpoint::VoiceResolve, ctx.session_id)
+        .await
+        .map_err(|rejection| admission_error(rejection, "voice_resolve_limited", "resolve"))?;
+    require_star(&st, &ctx.sc_user_id).await?;
+    let kinds = body.kinds;
+    let found = st
+        .search
+        .resolve(
+            &body.variants,
+            &kinds,
+            body.limit.unwrap_or(DEFAULT_PER_KIND),
+        )
+        .await?;
+    Ok(Json(json!({ "results": found })))
 }

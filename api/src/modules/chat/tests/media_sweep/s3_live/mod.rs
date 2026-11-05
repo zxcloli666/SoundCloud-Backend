@@ -1,3 +1,4 @@
+mod commit_fault_tests;
 mod delete_tests;
 mod fuzz_tests;
 mod mover_tests;

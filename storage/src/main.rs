@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 mod backend;
 mod bus;
+mod byte_range;
 mod config;
 mod pipeline;
 mod quality;

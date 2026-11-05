@@ -271,6 +271,8 @@ SELECT v.cls FROM (VALUES
     ('playlist_track_projection', 'C'),
     ('playlists', 'C'),
     ('recommendation_quality_models', 'P'),
+    ('remote_grants', 'A'),
+    ('remote_link_codes', 'A'),
     ('repl_checksums', 'K'),
     ('repl_purges', 'X'),
     ('repl_repair', 'X'),
@@ -427,6 +429,10 @@ BEGIN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlist_track_projection', jsonb_build_object('playlist_urn', t.playlist_urn, 'position', t."position") FROM public.playlist_track_projection t ON CONFLICT DO NOTHING;
         WHEN 'playlists' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'playlists', jsonb_build_object('urn', t.urn) FROM public.playlists t ON CONFLICT DO NOTHING;
+        WHEN 'remote_grants' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_grants', jsonb_build_object('id', t.id) FROM public.remote_grants t ON CONFLICT DO NOTHING;
+        WHEN 'remote_link_codes' THEN
+            INSERT INTO public.repl_resend (tbl, pk) SELECT 'remote_link_codes', jsonb_build_object('id', t.id) FROM public.remote_link_codes t ON CONFLICT DO NOTHING;
         WHEN 'repl_checksums' THEN
             INSERT INTO public.repl_resend (tbl, pk) SELECT 'repl_checksums', jsonb_build_object('node', t.node, 'tbl', t.tbl, 'range', t.range) FROM public.repl_checksums t ON CONFLICT DO NOTHING;
         WHEN 'repl_tombstones' THEN
@@ -549,6 +555,8 @@ BEGIN
         ('playlist_remote_snapshots', 'C'),
         ('playlist_track_projection', 'C'),
         ('playlists', 'C'),
+        ('remote_grants', 'A'),
+        ('remote_link_codes', 'A'),
         ('repl_checksums', 'K'),
         ('repl_tombstones', 'A'),
         ('sc_egress_health', 'A'),
@@ -610,6 +618,8 @@ VALUES
     ('scd_api_pub', 'api', 'insert, update, delete', 'login_requests', ARRAY['chat_bind', 'code_verifier', 'created_at', 'error', 'expires_at', 'id', 'oauth_app_id', 'profile_ok', 'redirect_url', 'result_session_id', 'retry_count', 'row_v', 'state', 'status', 'step', 'target_session_id', 'username']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_app_request_cooldowns', ARRAY['failure_count', 'oauth_app_id', 'retry_at', 'row_v', 'updated_at']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'oauth_apps', ARRAY['active', 'client_id', 'client_secret', 'created_at', 'id', 'name', 'redirect_uri', 'row_v', 'updated_at']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'prev_refresh_hash', 'provider', 'refresh_expires_at', 'refresh_hash', 'rotated_at', 'rotation_seed', 'row_v', 'sc_user_id']::text[]),
+    ('scd_api_pub', 'api', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_checksums', ARRAY['at', 'hash', 'node', 'range', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_api_pub', 'api', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -671,6 +681,8 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_remote_snapshots', ARRAY['content_fingerprint', 'created_at', 'id', 'playlist_urn', 'track_count']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlist_track_projection', ARRAY['playlist_urn', 'position', 'sc_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'playlists', ARRAY['artwork_url', 'created_at', 'deleted_at', 'description', 'duration_ms', 'genre', 'kind', 'label_name', 'last_read_at', 'likes_count_sc', 'owner_sc_user_id', 'owner_urn', 'owner_username', 'permalink_url', 'playlist_type', 'release_date', 'release_year', 'reposts_count_sc', 'sc_created_at', 'sc_desired', 'sc_last_modified', 'sc_metadata', 'sc_mutation_observation', 'sc_observation', 'sc_playlist_id', 'sc_synced_at', 'sc_write_confirmed', 'sharing', 'tags', 'title', 'title_normalized', 'track_count', 'updated_at', 'urn']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_grants', ARRAY['access_expires_at', 'access_hash', 'client_id', 'code_expires_at', 'code_hash', 'code_redirect_uri', 'created_at', 'external_id', 'id', 'last_used_at', 'prev_refresh_hash', 'provider', 'refresh_expires_at', 'refresh_hash', 'rotated_at', 'rotation_seed', 'row_v', 'sc_user_id']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'remote_link_codes', ARRAY['code_hash', 'created_at', 'expires_at', 'id', 'provider', 'row_v', 'sc_user_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_purges', ARRAY['at', 'pk', 'purged_v', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_repair', ARRAY['at', 'id', 'pk', 'row', 'src_node', 'tbl']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'repl_tombstones', ARRAY['at', 'pk', 'tbl', 'v']::text[]),
@@ -701,7 +713,7 @@ VALUES
     ('scd_core_pub', 'core', 'insert, update, delete', 'user_superlikes', ARRAY['created_at', 'like_created_at', 'row_v', 'sc_track_id', 'user_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'user_taste_vectors', ARRAY['sc_user_id', 'updated_at', 'vec', 'version']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'user_web_profiles', ARRAY['profiles', 'sc_observation', 'sc_user_id', 'synced_at']::text[]),
-    ('scd_core_pub', 'core', 'insert, update, delete', 'users', ARRAY['avatar_url', 'banner_url', 'city', 'comments_count', 'country', 'created_at', 'description', 'first_name', 'followers_count', 'followings_count', 'full_name', 'kind', 'last_name', 'permalink', 'permalink_url', 'playlists_count', 'reposts_count', 'sc_created_at', 'sc_last_modified', 'sc_observation', 'sc_synced_at', 'sc_user_id', 'tracks_count', 'updated_at', 'urn', 'username', 'username_normalized', 'verified']::text[]),
+    ('scd_core_pub', 'core', 'insert, update, delete', 'users', ARRAY['avatar_url', 'city', 'comments_count', 'country', 'created_at', 'description', 'first_name', 'followers_count', 'followings_count', 'full_name', 'kind', 'last_name', 'permalink', 'permalink_url', 'playlists_count', 'reposts_count', 'sc_created_at', 'sc_last_modified', 'sc_observation', 'sc_synced_at', 'sc_user_id', 'tracks_count', 'updated_at', 'urn', 'username', 'username_normalized', 'verified']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'wanted_track_albums', ARRAY['album_id', 'position', 'wanted_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'wanted_track_artists', ARRAY['artist_id', 'position', 'role', 'wanted_track_id']::text[]),
     ('scd_core_pub', 'core', 'insert, update, delete', 'wanted_tracks', ARRAY['discovered_at', 'duration_ms', 'external_id', 'fetched_at', 'id', 'isrc', 'normalized_title', 'primary_artist_id', 'recording_key', 'release_year', 'resolve_attempts', 'resolve_error', 'resolve_locked_at', 'resolve_next_run_at', 'source', 'status', 'title', 'track_id', 'updated_at', 'work_key', 'work_normalizer_version', 'work_reconciled_at']::text[])
@@ -6814,6 +6826,334 @@ COMMIT;
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_grants(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.access_expires_at, t.access_hash, t.client_id, t.code_expires_at, t.code_hash, t.code_redirect_uri, t.created_at, t.external_id, t.id, t.last_used_at, t.prev_refresh_hash, t.provider, t.refresh_expires_at, t.refresh_hash, t.rotated_at, t.rotation_seed, t.row_v, t.sc_user_id)::text) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_remote_grants(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_merge_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.access_expires_at := OLD.access_expires_at;
+            NEW.access_hash := OLD.access_hash;
+            NEW.client_id := OLD.client_id;
+            NEW.code_expires_at := OLD.code_expires_at;
+            NEW.code_hash := OLD.code_hash;
+            NEW.code_redirect_uri := OLD.code_redirect_uri;
+            NEW.created_at := OLD.created_at;
+            NEW.external_id := OLD.external_id;
+            NEW.last_used_at := OLD.last_used_at;
+            NEW.prev_refresh_hash := OLD.prev_refresh_hash;
+            NEW.provider := OLD.provider;
+            NEW.refresh_expires_at := OLD.refresh_expires_at;
+            NEW.refresh_hash := OLD.refresh_hash;
+            NEW.rotated_at := OLD.rotated_at;
+            NEW.rotation_seed := OLD.rotation_seed;
+            NEW.sc_user_id := OLD.sc_user_id;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.remote_grants t WHERE t.id = NEW.id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.remote_grants t SET
+                    access_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_expires_at ELSE o.access_expires_at END,
+                    access_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.access_hash ELSE o.access_hash END,
+                    client_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.client_id ELSE o.client_id END,
+                    code_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_expires_at ELSE o.code_expires_at END,
+                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
+                    code_redirect_uri = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_redirect_uri ELSE o.code_redirect_uri END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    external_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.external_id ELSE o.external_id END,
+                    last_used_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.last_used_at ELSE o.last_used_at END,
+                    prev_refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.prev_refresh_hash ELSE o.prev_refresh_hash END,
+                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
+                    refresh_expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_expires_at ELSE o.refresh_expires_at END,
+                    refresh_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.refresh_hash ELSE o.refresh_hash END,
+                    rotated_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotated_at ELSE o.rotated_at END,
+                    rotation_seed = CASE WHEN NEW.row_v > o.row_v THEN NEW.rotation_seed ELSE o.rotation_seed END,
+                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.id = o.id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.remote_grants (access_expires_at, access_hash, client_id, code_expires_at, code_hash, code_redirect_uri, created_at, external_id, id, last_used_at, prev_refresh_hash, provider, refresh_expires_at, refresh_hash, rotated_at, rotation_seed, row_v, sc_user_id)
+        VALUES (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.row_v, NEW.sc_user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.remote_grants still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_grants();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('remote_grants', jsonb_build_object('id', OLD.id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_grants();
+CREATE OR REPLACE FUNCTION public.scd_erase_remote_grants(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_grants' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_grants();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_remote_grants()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF (NEW.access_expires_at, NEW.access_hash, NEW.client_id, NEW.code_expires_at, NEW.code_hash, NEW.code_redirect_uri, NEW.created_at, NEW.external_id, NEW.last_used_at, NEW.prev_refresh_hash, NEW.provider, NEW.refresh_expires_at, NEW.refresh_hash, NEW.rotated_at, NEW.rotation_seed, NEW.sc_user_id) IS DISTINCT FROM (OLD.access_expires_at, OLD.access_hash, OLD.client_id, OLD.code_expires_at, OLD.code_hash, OLD.code_redirect_uri, OLD.created_at, OLD.external_id, OLD.last_used_at, OLD.prev_refresh_hash, OLD.provider, OLD.refresh_expires_at, OLD.refresh_hash, OLD.rotated_at, OLD.rotation_seed, OLD.sc_user_id) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_grants FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_grants();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_grants FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.remote_grants ENABLE REPLICA TRIGGER zzz_suppress;
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION public.scd_row_hash_remote_link_codes(k jsonb)
+RETURNS text
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT md5(ROW(t.code_hash, t.created_at, t.expires_at, t.id, t.provider, t.row_v, t.sc_user_id)::text) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_row_json_remote_link_codes(k jsonb)
+RETURNS jsonb
+LANGUAGE sql STABLE
+SET timezone TO 'UTC'
+SET extra_float_digits TO 1
+SET datestyle TO 'ISO, YMD'
+SET intervalstyle TO 'postgres'
+SET bytea_output TO 'hex'
+AS $f$
+SELECT pg_catalog.to_jsonb(t) FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_merge_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    o record;
+    core boolean := public.scd_role() = 'core';
+    n bigint;
+    tv bigint;
+BEGIN
+    IF current_setting('scd.merging', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.row_v < OLD.row_v OR (core AND NEW.row_v = OLD.row_v) THEN
+            NEW.code_hash := OLD.code_hash;
+            NEW.created_at := OLD.created_at;
+            NEW.expires_at := OLD.expires_at;
+            NEW.provider := OLD.provider;
+            NEW.sc_user_id := OLD.sc_user_id;
+            NEW.row_v := OLD.row_v;
+        END IF;
+        RETURN NEW;
+    END IF;
+    FOR attempt IN 1..3 LOOP
+        SELECT t.* INTO o FROM public.remote_link_codes t WHERE t.id = NEW.id;
+        IF FOUND THEN
+            IF NEW.row_v > o.row_v OR (((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) AND NEW.created_at < o.created_at) THEN
+                PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+                UPDATE public.remote_link_codes t SET
+                    code_hash = CASE WHEN NEW.row_v > o.row_v THEN NEW.code_hash ELSE o.code_hash END,
+                    created_at = CASE WHEN ((NEW.row_v & 15) <> public.scd_node_ord() OR NEW.row_v = o.row_v) THEN least(o.created_at, NEW.created_at) WHEN NEW.row_v > o.row_v THEN NEW.created_at ELSE o.created_at END,
+                    expires_at = CASE WHEN NEW.row_v > o.row_v THEN NEW.expires_at ELSE o.expires_at END,
+                    provider = CASE WHEN NEW.row_v > o.row_v THEN NEW.provider ELSE o.provider END,
+                    sc_user_id = CASE WHEN NEW.row_v > o.row_v THEN NEW.sc_user_id ELSE o.sc_user_id END,
+                    row_v = greatest(o.row_v, NEW.row_v)
+                WHERE t.id = o.id;
+                GET DIAGNOSTICS n = ROW_COUNT;
+                PERFORM pg_catalog.set_config('scd.merging', '', true);
+                IF n = 0 THEN
+                    CONTINUE;
+                END IF;
+            END IF;
+            RETURN NULL;
+        END IF;
+        tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
+        IF tv IS NOT NULL THEN
+            RETURN NULL;
+        END IF;
+        PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+        INSERT INTO public.remote_link_codes (code_hash, created_at, expires_at, id, provider, row_v, sc_user_id)
+        VALUES (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.id, NEW.provider, NEW.row_v, NEW.sc_user_id)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS n = ROW_COUNT;
+        PERFORM pg_catalog.set_config('scd.merging', '', true);
+        IF n > 0 THEN
+            RETURN NULL;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'scd: insert into public.remote_link_codes still conflicts after 3 attempts' USING ERRCODE = 'unique_violation';
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_merge BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_merge_remote_link_codes();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_merge;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    INSERT INTO public.repl_tombstones (tbl, pk, v, at)
+    VALUES ('remote_link_codes', jsonb_build_object('id', OLD.id), OLD.row_v, now());
+    RETURN OLD;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb BEFORE DELETE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_remote_link_codes();
+CREATE OR REPLACE FUNCTION public.scd_erase_remote_link_codes(k jsonb, upto bigint)
+RETURNS void
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    PERFORM pg_catalog.set_config('scd.merging', 'on', true);
+    DELETE FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid;
+    PERFORM pg_catalog.set_config('scd.merging', '', true);
+END
+$f$;
+
+CREATE OR REPLACE FUNCTION public.scd_tomb_check_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+DECLARE
+    tv bigint;
+BEGIN
+    tv := (SELECT max(x.v) FROM public.repl_tombstones x WHERE x.tbl = 'remote_link_codes' AND x.pk = jsonb_build_object('id', NEW.id));
+    IF tv IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_tomb_check BEFORE INSERT ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION public.scd_tomb_check_remote_link_codes();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zz_tomb_check;
+
+CREATE OR REPLACE FUNCTION public.scd_ver_remote_link_codes()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $f$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.row_v := public.scd_hlc(NEW.row_v);
+        RETURN NEW;
+    END IF;
+    IF (NEW.code_hash, NEW.created_at, NEW.expires_at, NEW.provider, NEW.sc_user_id) IS DISTINCT FROM (OLD.code_hash, OLD.created_at, OLD.expires_at, OLD.provider, OLD.sc_user_id) THEN
+        NEW.row_v := public.scd_hlc(greatest(OLD.row_v, NEW.row_v));
+    ELSE
+        NEW.row_v := greatest(OLD.row_v, NEW.row_v);
+    END IF;
+    RETURN NEW;
+END
+$f$;
+CREATE OR REPLACE TRIGGER zz_ver BEFORE INSERT OR UPDATE ON public.remote_link_codes FOR EACH ROW EXECUTE FUNCTION public.scd_ver_remote_link_codes();
+
+CREATE OR REPLACE TRIGGER zzz_suppress BEFORE UPDATE ON public.remote_link_codes FOR EACH ROW WHEN (public.scd_mode() = 'split') EXECUTE FUNCTION pg_catalog.suppress_redundant_updates_trigger();
+ALTER TABLE public.remote_link_codes ENABLE REPLICA TRIGGER zzz_suppress;
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 CREATE OR REPLACE FUNCTION public.scd_row_hash_repl_checksums(k jsonb)
 RETURNS text
 LANGUAGE sql STABLE
@@ -6925,6 +7265,10 @@ BEGIN
             PERFORM 1 FROM public.listening_history t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'login_requests' THEN
             PERFORM 1 FROM public.login_requests t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'remote_grants' THEN
+            PERFORM 1 FROM public.remote_grants t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
+        WHEN 'remote_link_codes' THEN
+            PERFORM 1 FROM public.remote_link_codes t WHERE t.id = (k ->> 'id')::uuid FOR UPDATE;
         WHEN 'sc_egress_health' THEN
             PERFORM 1 FROM public.sc_egress_health t WHERE t.channel = (k ->> 'channel')::text FOR UPDATE;
         WHEN 'sessions' THEN
@@ -6964,6 +7308,10 @@ BEGIN
             PERFORM public.scd_erase_listening_history(k, upto);
         WHEN 'login_requests' THEN
             PERFORM public.scd_erase_login_requests(k, upto);
+        WHEN 'remote_grants' THEN
+            PERFORM public.scd_erase_remote_grants(k, upto);
+        WHEN 'remote_link_codes' THEN
+            PERFORM public.scd_erase_remote_link_codes(k, upto);
         WHEN 'sc_egress_health' THEN
             PERFORM public.scd_erase_sc_egress_health(k, upto);
         WHEN 'sessions' THEN
@@ -11447,7 +11795,7 @@ SET datestyle TO 'ISO, YMD'
 SET intervalstyle TO 'postgres'
 SET bytea_output TO 'hex'
 AS $f$
-SELECT md5(ROW(t.avatar_url, t.banner_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
+SELECT md5(ROW(t.avatar_url, t.city, t.comments_count, t.country, t.created_at, t.description, t.first_name, t.followers_count, t.followings_count, t.full_name, t.kind, t.last_name, t.permalink, t.permalink_url, t.playlists_count, t.reposts_count, t.sc_created_at, t.sc_last_modified, t.sc_observation, t.sc_synced_at, t.sc_user_id, t.tracks_count, t.updated_at, t.urn, t.username, t.username_normalized, t.verified)::text) FROM public.users t WHERE t.sc_user_id = (k ->> 'sc_user_id')::text
 $f$;
 
 CREATE OR REPLACE FUNCTION public.scd_row_json_users(k jsonb)
@@ -11505,7 +11853,7 @@ BEGIN
         IF NEW.sc_user_id IS DISTINCT FROM OLD.sc_user_id THEN
             IF EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', OLD.sc_user_id)) THEN
                 IF NOT EXISTS (SELECT 1 FROM public.cmd_pending p WHERE p.tbl = 'users' AND p.pk = jsonb_build_object('sc_user_id', NEW.sc_user_id)) THEN
-                    INSERT INTO public.users (avatar_url, banner_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified) VALUES (NEW.avatar_url, NEW.banner_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified);
+                    INSERT INTO public.users (avatar_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified) VALUES (NEW.avatar_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified);
                 END IF;
                 RETURN NULL;
             END IF;
@@ -11534,8 +11882,8 @@ BEGIN
         END IF;
         IF NOT held THEN
             PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-            INSERT INTO public.users (avatar_url, banner_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified)
-            VALUES (NEW.avatar_url, NEW.banner_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified)
+            INSERT INTO public.users (avatar_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified)
+            VALUES (NEW.avatar_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified)
             ON CONFLICT DO NOTHING;
             GET DIAGNOSTICS n = ROW_COUNT;
             PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -11549,12 +11897,12 @@ BEGIN
             END LOOP;
         END IF;
         IF held THEN
-            UPDATE public.users t SET avatar_url = NEW.avatar_url, banner_url = NEW.banner_url, city = NEW.city, comments_count = NEW.comments_count, country = NEW.country, created_at = NEW.created_at, description = NEW.description, first_name = NEW.first_name, followers_count = NEW.followers_count, followings_count = NEW.followings_count, full_name = NEW.full_name, kind = NEW.kind, last_name = NEW.last_name, permalink = NEW.permalink, permalink_url = NEW.permalink_url, playlists_count = NEW.playlists_count, reposts_count = NEW.reposts_count, sc_created_at = NEW.sc_created_at, sc_last_modified = NEW.sc_last_modified, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, tracks_count = NEW.tracks_count, updated_at = NEW.updated_at, urn = NEW.urn, username = NEW.username, username_normalized = NEW.username_normalized, verified = NEW.verified WHERE t.sc_user_id = NEW.sc_user_id;
+            UPDATE public.users t SET avatar_url = NEW.avatar_url, city = NEW.city, comments_count = NEW.comments_count, country = NEW.country, created_at = NEW.created_at, description = NEW.description, first_name = NEW.first_name, followers_count = NEW.followers_count, followings_count = NEW.followings_count, full_name = NEW.full_name, kind = NEW.kind, last_name = NEW.last_name, permalink = NEW.permalink, permalink_url = NEW.permalink_url, playlists_count = NEW.playlists_count, reposts_count = NEW.reposts_count, sc_created_at = NEW.sc_created_at, sc_last_modified = NEW.sc_last_modified, sc_observation = NEW.sc_observation, sc_synced_at = NEW.sc_synced_at, tracks_count = NEW.tracks_count, updated_at = NEW.updated_at, urn = NEW.urn, username = NEW.username, username_normalized = NEW.username_normalized, verified = NEW.verified WHERE t.sc_user_id = NEW.sc_user_id;
             RETURN NULL;
         END IF;
         PERFORM pg_catalog.set_config('scd.merging', 'on', true);
-        INSERT INTO public.users (avatar_url, banner_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified)
-        VALUES (NEW.avatar_url, NEW.banner_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified)
+        INSERT INTO public.users (avatar_url, city, comments_count, country, created_at, description, first_name, followers_count, followings_count, full_name, kind, last_name, last_read_at, permalink, permalink_url, playlists_count, reposts_count, sc_created_at, sc_last_modified, sc_observation, sc_synced_at, sc_user_id, tracks_count, updated_at, urn, username, username_normalized, verified)
+        VALUES (NEW.avatar_url, NEW.city, NEW.comments_count, NEW.country, NEW.created_at, NEW.description, NEW.first_name, NEW.followers_count, NEW.followings_count, NEW.full_name, NEW.kind, NEW.last_name, NEW.last_read_at, NEW.permalink, NEW.permalink_url, NEW.playlists_count, NEW.reposts_count, NEW.sc_created_at, NEW.sc_last_modified, NEW.sc_observation, NEW.sc_synced_at, NEW.sc_user_id, NEW.tracks_count, NEW.updated_at, NEW.urn, NEW.username, NEW.username_normalized, NEW.verified)
         ON CONFLICT DO NOTHING;
         GET DIAGNOSTICS n = ROW_COUNT;
         PERFORM pg_catalog.set_config('scd.merging', '', true);
@@ -12120,6 +12468,10 @@ BEGIN
             RETURN public.scd_row_hash_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_hash_recommendation_quality_models(k);
+        WHEN 'remote_grants' THEN
+            RETURN public.scd_row_hash_remote_grants(k);
+        WHEN 'remote_link_codes' THEN
+            RETURN public.scd_row_hash_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_hash_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -12346,6 +12698,10 @@ BEGIN
             RETURN public.scd_row_json_playlists(k);
         WHEN 'recommendation_quality_models' THEN
             RETURN public.scd_row_json_recommendation_quality_models(k);
+        WHEN 'remote_grants' THEN
+            RETURN public.scd_row_json_remote_grants(k);
+        WHEN 'remote_link_codes' THEN
+            RETURN public.scd_row_json_remote_link_codes(k);
         WHEN 'repl_checksums' THEN
             RETURN public.scd_row_json_repl_checksums(k);
         WHEN 'repl_tombstones' THEN
@@ -12916,6 +13272,16 @@ BEGIN
             ('playlists', 'zz_owner'),
             ('playlists', 'zzz_suppress'),
             ('recommendation_quality_models', 'zz_guard'),
+            ('remote_grants', 'zz_merge'),
+            ('remote_grants', 'zz_tomb'),
+            ('remote_grants', 'zz_tomb_check'),
+            ('remote_grants', 'zz_ver'),
+            ('remote_grants', 'zzz_suppress'),
+            ('remote_link_codes', 'zz_merge'),
+            ('remote_link_codes', 'zz_tomb'),
+            ('remote_link_codes', 'zz_tomb_check'),
+            ('remote_link_codes', 'zz_ver'),
+            ('remote_link_codes', 'zzz_suppress'),
             ('repl_checksums', 'zz_max'),
             ('repl_checksums', 'zzz_suppress'),
             ('repl_tombstones', 'zz_erase'),

@@ -3,9 +3,11 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use super::tests::{TOTAL, keys_of, on_fake, sorted, uploaded};
+use super::tests::{
+    TOTAL, copies_beside, counting, keys_of, left_for_reconcile, on_fake, sorted, uploaded,
+};
 use crate::modules::chat::fake_store::FakeStore;
-use crate::modules::chat::media::pg_cut::{Cut, PgCut};
+use crate::modules::chat::media::pg_cut::{Cut, PgCut, within};
 use crate::modules::chat::media::rows::usage;
 use crate::modules::chat::media::support::{call, cancel_a_lock_wait, error, user};
 
@@ -101,7 +103,7 @@ async fn a_commit_whose_reply_is_lost_keeps_the_copies_the_row_points_at(pool: P
     let uri = format!("/chat/media/{image}/commit");
 
     cut.arm(Cut::AfterCommit);
-    let first = call(&chat, &owner, "POST", &uri, None).await;
+    let first = within(call(&chat, &owner, "POST", &uri, None)).await;
     assert!(cut.fired());
     assert_eq!(first.0, 200, "{first:?}");
     let kept = keys_of(&pool, image).await;
@@ -115,7 +117,9 @@ async fn a_commit_whose_reply_is_lost_keeps_the_copies_the_row_points_at(pool: P
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn a_connection_lost_before_commit_keeps_the_upload_and_a_retry_finishes(pool: PgPool) {
+async fn a_connection_lost_before_commit_keeps_every_copy_and_a_retry_finishes(pool: PgPool) {
+    let recorder = counting();
+    let _counting = metrics::set_default_local_recorder(&recorder);
     let fake = FakeStore::start(Duration::ZERO).await;
     let cut = PgCut::start(&pool).await;
     let chat = on_fake(&cut.pool, &fake);
@@ -124,17 +128,32 @@ async fn a_connection_lost_before_commit_keeps_the_upload_and_a_retry_finishes(p
     let uri = format!("/chat/media/{image}/commit");
 
     cut.arm(Cut::BeforeCommit);
-    let failed = call(&chat, &owner, "POST", &uri, None).await;
+    let failed = within(call(&chat, &owner, "POST", &uri, None)).await;
     assert!(cut.fired());
     assert_eq!(error(&failed), (503, "chat_busy"), "{failed:?}");
     assert_eq!(keys_of(&pool, image).await, uploads);
-    assert_eq!(fake.keys(), sorted(uploads.clone()));
+    let stale = copies_beside(&fake, &uploads);
+    assert_eq!(stale.len(), 2, "{:?}", fake.keys());
+    assert_eq!(
+        fake.keys(),
+        sorted([uploads.clone(), stale.clone()].concat())
+    );
+    assert_eq!(
+        left_for_reconcile(&recorder),
+        2.0,
+        "the copies, not the uploads"
+    );
     assert_eq!(usage(&pool, &owner).await, (0, TOTAL, 0));
 
     let retried = call(&chat, &owner, "POST", &uri, None).await;
     assert_eq!(retried.0, 200, "{retried:?}");
     let kept = keys_of(&pool, image).await;
-    assert!(kept.iter().all(|key| !uploads.contains(key)), "{kept:?}");
-    assert_eq!(fake.keys(), sorted(kept));
+    assert!(
+        kept.iter()
+            .all(|key| !uploads.contains(key) && !stale.contains(key)),
+        "{kept:?}"
+    );
+    assert_eq!(fake.keys(), sorted([kept, stale].concat()));
     assert_eq!(usage(&pool, &owner).await, (TOTAL, 0, 1));
+    assert_eq!(left_for_reconcile(&recorder), 2.0);
 }
