@@ -21,8 +21,10 @@ BEGIN
                 BEGIN
                     EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE NOWAIT', v_table);
                 EXCEPTION WHEN lock_not_available THEN
-                    PERFORM pg_catalog.set_config('lock_timeout', '30ms', true);
-                    EXECUTE format('LOCK TABLE %s IN ACCESS EXCLUSIVE MODE', v_table);
+                    RAISE EXCEPTION 'experiment: 0319 NOWAIT contended on %, blockers %', v_table,
+                        (SELECT string_agg(activity.pid || ' ' || coalesce(activity.backend_type, '') || ' ' || coalesce(left(activity.query, 60), ''), '; ')
+                         FROM pg_catalog.pg_locks AS held JOIN pg_catalog.pg_stat_activity AS activity ON activity.pid = held.pid
+                         WHERE held.relation = v_table AND held.granted AND held.pid <> pg_backend_pid());
                 END;
             END LOOP;
             EXIT;

@@ -12,7 +12,7 @@ BEGIN
             EXIT;
         EXCEPTION WHEN lock_not_available THEN
             v_tries := v_tries + 1;
-            IF v_tries = 120 THEN
+            IF v_tries = 1 THEN
                 RAISE;
             END IF;
             PERFORM pg_catalog.pg_sleep(1);

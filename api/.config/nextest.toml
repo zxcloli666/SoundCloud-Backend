@@ -1,7 +1,7 @@
 [profile.ci]
 fail-fast = false
 test-threads = 8
-status-level = "slow"
+status-level = "pass"
 final-status-level = "slow"
 slow-timeout = { period = "15s", terminate-after = 40 }
 
