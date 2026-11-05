@@ -1,5 +1,4 @@
 pub mod admin;
-pub mod auth_bind;
 pub mod b64;
 pub mod blocks;
 pub mod body;

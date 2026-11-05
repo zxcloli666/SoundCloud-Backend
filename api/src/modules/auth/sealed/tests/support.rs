@@ -21,6 +21,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use crate::modules::auth::LinkService;
 use crate::modules::auth::sealed::config::SealedCfg;
 use crate::modules::auth::sealed::{Sealed, router};
 use crate::modules::chat::channel::ock::OckRing;
@@ -91,7 +92,7 @@ pub fn sealed(cfg: SealedCfg, pool: &PgPool) -> anyhow::Result<Arc<Sealed>> {
         SEED_KEY,
         redis,
         chat.auth.clone(),
-        chat.link.clone(),
+        LinkService::new(pool.clone(), chat.auth.clone()),
     ))
 }
 

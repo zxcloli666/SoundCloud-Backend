@@ -17,7 +17,6 @@ pub async fn exchange(State(channel): State<Arc<Channel>>, request: Request) -> 
     let Ok(_permit) = channel.busy.try_acquire() else {
         return busy();
     };
-    let client = channel.gate.client(&request);
     let Ok(body) = to_bytes(request.into_body(), MAX_ENVELOPE).await else {
         return unsealed("too_large", too_large());
     };
@@ -31,7 +30,7 @@ pub async fn exchange(State(channel): State<Arc<Channel>>, request: Request) -> 
         return unsealed("open", bad_envelope());
     };
     drop(body);
-    let inner_answer = answer(&channel, &opened, client).await;
+    let inner_answer = answer(&channel, &opened).await;
     sealed(&opened, inner_answer)
 }
 

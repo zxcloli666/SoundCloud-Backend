@@ -9,10 +9,10 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc, LinkService};
+use crate::modules::auth::{AuthHealthService, AuthService, CoreRpc};
 use crate::modules::chat::caller::{Callers, ChatCaller};
 use crate::modules::chat::channel::ock::OckRing;
-use crate::modules::chat::config::{Access, ModerationConfig, StartLimits};
+use crate::modules::chat::config::{Access, ModerationConfig};
 use crate::modules::chat::devices::DeviceCache;
 use crate::modules::chat::hot_cache::{HOT_CACHE_BYTES, HotCache};
 use crate::modules::chat::hub::ChatHub;
@@ -80,12 +80,6 @@ pub fn config(enabled: bool) -> ChatConfig {
             models: Vec::new(),
         },
         media: Default::default(),
-        starts: StartLimits {
-            window: std::time::Duration::from_secs(60),
-            logins_per_client: 15,
-            links_per_client: 30,
-            trusted_proxies: Vec::new(),
-        },
     }
 }
 
@@ -118,7 +112,6 @@ pub fn chat_state(pg: PgPool, redis: deadpool_redis::Pool, enabled: bool) -> Arc
         stars: Stars::new(SubscriptionsService::new(pg.clone(), false)),
         s3: S3::new(&config.media),
         fills: Fills::default(),
-        link: LinkService::new(pg.clone(), auth.clone()),
         auth,
         rooms: RoomsService::new(redis.clone(), RoomHub::new(None)),
         shutdown: CancellationToken::new(),

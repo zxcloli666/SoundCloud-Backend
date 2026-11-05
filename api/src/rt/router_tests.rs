@@ -112,15 +112,8 @@ async fn a_vector_envelope_gets_a_sealed_chat_disabled_while_chat_is_off() {
 }
 
 #[tokio::test]
-async fn sealed_login_is_not_switched_off_with_chat() {
-    let (inner, body) = sealed_answer(&offline_app(false), &request_vector("login")).await;
-    assert_eq!(inner.status, 401);
-    assert_eq!(body["error"], "chat_clock");
-}
-
-#[tokio::test]
 async fn with_chat_on_a_recorded_vector_is_too_old_and_gets_a_sealed_chat_clock() {
-    for name in ["sync", "history", "login"] {
+    for name in ["sync", "history"] {
         let (inner, body) = sealed_answer(&offline_app(true), &request_vector(name)).await;
         assert_eq!(inner.status, 401, "{name}");
         assert_eq!(body["error"], "chat_clock", "{name}");

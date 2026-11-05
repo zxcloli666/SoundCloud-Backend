@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::definer::denied;
 use crate::modules::auth::definers::{self, CHAT_FUNCTIONS, OWNER, RELEASE, RELEASE_OWNER};
-use crate::modules::auth::test_support::Restricted;
+use crate::modules::auth::test_support::{Restricted, SEALED_FUNCTIONS};
 
 const HELPERS: [&str; 4] = [
     "public.auth_pin_scd()",
@@ -232,7 +232,7 @@ async fn every_auth_function_runs_as_a_bare_nologin_owner(owner: PgPool) -> anyh
     bare(&owner, OWNER).await?;
     bare(&owner, RELEASE_OWNER).await?;
 
-    for function in CHAT_FUNCTIONS {
+    for function in CHAT_FUNCTIONS.into_iter().chain(SEALED_FUNCTIONS) {
         let (owned_by, definer, config) = routine(&owner, function).await?;
         assert_eq!(owned_by, OWNER, "{function}");
         assert!(definer, "{function} is SECURITY DEFINER");
@@ -418,7 +418,13 @@ async fn the_chat_functions_return_only_what_their_callers_hold(
     owner: PgPool,
 ) -> anyhow::Result<()> {
     let listed: BTreeSet<&str> = RESULTS.iter().map(|(signature, _)| *signature).collect();
-    assert_eq!(listed, CHAT_FUNCTIONS.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        listed,
+        CHAT_FUNCTIONS
+            .into_iter()
+            .chain(SEALED_FUNCTIONS)
+            .collect::<BTreeSet<_>>()
+    );
     for (signature, result) in RESULTS {
         let actual: String =
             sqlx::query_scalar("SELECT pg_catalog.pg_get_function_result($1::text::regprocedure)")
@@ -493,7 +499,7 @@ async fn rejected_as_too_long(pool: &PgPool, sql: &str) {
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_bind_over_512_bytes_never_reaches_a_table(owner: PgPool) -> anyhow::Result<()> {
-    let restricted = Restricted::new(&owner).await?;
+    let restricted = Restricted::sealed(&owner).await?;
     let big = "decode(repeat('ab', 513), 'hex')";
     rejected_as_too_long(
         &restricted.pool,

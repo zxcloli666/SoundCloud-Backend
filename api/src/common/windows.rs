@@ -85,12 +85,6 @@ impl Clients {
         tracked.compact();
         Ok(())
     }
-
-    #[cfg(test)]
-    pub fn tracked(&self) -> (usize, usize) {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        (state.windows.len(), state.opened.len())
-    }
 }
 
 impl Tracked {

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::config::{AdmissionCfg, env_opt, env_str, env_u16, env_u32, env_u64};
+use crate::config::{env_opt, env_str, env_u16, env_u32, env_u64};
 use crate::modules::chat::media::MediaConfig;
 use crate::modules::chat::synthetic::is_synthetic;
 
@@ -41,26 +41,6 @@ pub struct ChatConfig {
     pub clock: fn() -> DateTime<Utc>,
     pub moderation: ModerationConfig,
     pub media: MediaConfig,
-    pub starts: StartLimits,
-}
-
-#[derive(Clone, Debug)]
-pub struct StartLimits {
-    pub window: Duration,
-    pub logins_per_client: u32,
-    pub links_per_client: u32,
-    pub trusted_proxies: Vec<ipnet::IpNet>,
-}
-
-impl StartLimits {
-    pub fn from_admission(admission: &AdmissionCfg) -> Self {
-        Self {
-            window: admission.window,
-            logins_per_client: admission.login.per_client,
-            links_per_client: admission.link_create.per_client,
-            trusted_proxies: admission.trusted_proxies.clone(),
-        }
-    }
 }
 
 pub const MODEL_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);
@@ -79,7 +59,7 @@ pub struct ModelChoice {
 }
 
 impl ChatConfig {
-    pub fn from_env(admission: &AdmissionCfg) -> Self {
+    pub fn from_env() -> Self {
         let keys_dir = PathBuf::from(env_str("CHAT_KEYS_DIR", "/run/secrets/chat"));
         Self {
             enabled: env_str("CHAT_ENABLED", "true") == "true",
@@ -107,7 +87,6 @@ impl ChatConfig {
                 ),
             },
             media: MediaConfig::from_env(&keys_dir).unwrap_or_else(|error| panic!("{error}")),
-            starts: StartLimits::from_admission(admission),
         }
     }
 
