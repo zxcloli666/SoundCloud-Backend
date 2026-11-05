@@ -8,7 +8,6 @@ mod handoff;
 mod moderation;
 mod perks;
 mod preview;
-mod transfer;
 mod view;
 
 use std::sync::{Arc, OnceLock, Weak};
@@ -35,7 +34,6 @@ pub use preview::RoomPreview;
 pub use view::RoomView;
 
 pub const ONLINE_WINDOW_MS: i64 = 45_000;
-const RECHECK_EVERY: Duration = Duration::from_secs(2);
 const CODE_ATTEMPTS: usize = 6;
 const ALIVE_EVERY: Duration = Duration::from_secs(60);
 const PREVIEW_FRESH_FOR: Duration = Duration::from_secs(10);
@@ -179,7 +177,7 @@ impl RoomsService {
         since: Option<u64>,
         hold: Duration,
     ) -> AppResult<RoomView> {
-        let mut changes = self.hub.listen().await;
+        let mut changes = self.hub.listen();
         let room = self.room(code).await?;
         if !room.is_member(user_id) {
             return Err(not_member());
@@ -195,16 +193,10 @@ impl RoomsService {
                 if version != since || now >= deadline || self.hub.is_closed() {
                     break;
                 }
-                let left = deadline - now;
-                let pause = if self.hub.is_shared() {
-                    RECHECK_EVERY.min(left)
-                } else {
-                    left
-                };
                 tokio::select! {
                     () = changes.changed(code) => {}
                     () = self.hub.closed() => {}
-                    () = tokio::time::sleep(pause) => {}
+                    () = tokio::time::sleep(deadline - now) => {}
                 }
                 version = self
                     .store

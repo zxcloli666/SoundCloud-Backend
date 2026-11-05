@@ -1,5 +1,4 @@
 mod cas;
-mod transfer;
 
 use deadpool_redis::Pool;
 use redis::{AsyncCommands, Script};
@@ -20,7 +19,6 @@ return 1
 ";
 
 pub use cas::Guard;
-pub use transfer::{Moved, PAGE_MAX, Page};
 
 pub struct RoomStore {
     redis: Pool,

@@ -1,55 +1,22 @@
 use std::time::{Duration, Instant};
 
-use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tower::ServiceExt;
 use uuid::Uuid;
 
-use super::router_search_tests::{app, redis_url};
+use crate::modules::chat::test_support::chat_state;
+use crate::rt::test_support::{self, call, session_for};
 
-async fn session_for(pool: &PgPool, user: &str) -> anyhow::Result<Uuid> {
-    let connection = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO soundcloud_connections
-            (id, soundcloud_user_id, username, access_token, refresh_token, expires_at, scope)
-         VALUES ($1, $2, $2, 'access', 'refresh', now() + interval '1 hour', '')",
-    )
-    .bind(connection)
-    .bind(user)
-    .execute(pool)
-    .await?;
-    let session = Uuid::now_v7();
-    sqlx::query("INSERT INTO sessions (id, soundcloud_connection_id) VALUES ($1, $2)")
-        .bind(session)
-        .bind(connection)
-        .execute(pool)
-        .await?;
-    Ok(session)
+fn redis_url() -> String {
+    std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned())
 }
 
-async fn call(
-    app: &axum::Router,
-    session: Uuid,
-    method: &str,
-    uri: &str,
-    body: Option<Value>,
-) -> anyhow::Result<(StatusCode, Value)> {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("x-session-id", session.to_string());
-    if body.is_some() {
-        request = request.header(header::CONTENT_TYPE, "application/json");
-    }
-    let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
-    let response = app.clone().oneshot(request.body(body)?).await?;
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await?;
-    Ok((
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+fn app(pool: &PgPool, redis_url: &str) -> anyhow::Result<axum::Router> {
+    let redis = crate::redis::connect_url(redis_url)?;
+    Ok(test_support::app(
+        chat_state(pool.clone(), redis, true),
+        redis_url,
     ))
 }
 
@@ -66,7 +33,7 @@ fn playing(urn: &str) -> Value {
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_host_and_a_guest_share_one_room(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host = session_for(&pool, "101").await?;
     let guest = session_for(&pool, "202").await?;
 
@@ -168,7 +135,7 @@ async fn a_host_and_a_guest_share_one_room(pool: PgPool) -> anyhow::Result<()> {
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_waiting_guest_wakes_up_on_the_next_change(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host = session_for(&pool, "303").await?;
     let guest = session_for(&pool, "404").await?;
     let (_, room) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;
@@ -209,7 +176,7 @@ async fn a_waiting_guest_wakes_up_on_the_next_change(pool: PgPool) -> anyhow::Re
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn malformed_codes_are_unknown_rooms(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, "redis://127.0.0.1:1").await?;
+    let app = app(&pool, "redis://127.0.0.1:1")?;
     let guest = session_for(&pool, "505").await?;
     for uri in ["/rooms/ABC", "/rooms/ABC23O", "/rooms/%20"] {
         let (status, _) = call(&app, guest, "GET", uri, None).await?;
@@ -233,7 +200,7 @@ fn hosts(list: &Value) -> Vec<String> {
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host_id = format!("6{}", Uuid::now_v7().as_u128() % 1_000_000_000);
     let host = session_for(&pool, &host_id).await?;
     let guest = session_for(&pool, "707").await?;
@@ -309,7 +276,7 @@ async fn a_public_room_is_listed_and_joined_without_its_code(pool: PgPool) -> an
 async fn a_room_born_public_changes_its_code_when_it_goes_private(
     pool: PgPool,
 ) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host_id = format!("7{}", Uuid::now_v7().as_u128() % 1_000_000_000);
     let host = session_for(&pool, &host_id).await?;
     let guest = session_for(&pool, "717").await?;
@@ -396,7 +363,7 @@ async fn a_room_born_public_changes_its_code_when_it_goes_private(
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn a_room_named_by_its_host_is_listed_by_that_name(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host_id = format!("5{}", Uuid::now_v7().as_u128() % 1_000_000_000);
     let host = session_for(&pool, &host_id).await?;
     let guest = session_for(&pool, "515").await?;
@@ -446,7 +413,7 @@ async fn a_room_named_by_its_host_is_listed_by_that_name(pool: PgPool) -> anyhow
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 #[ignore = "requires a local Redis"]
 async fn the_host_leaving_hands_the_room_to_the_guest(pool: PgPool) -> anyhow::Result<()> {
-    let app = app(&pool, &redis_url()).await?;
+    let app = app(&pool, &redis_url())?;
     let host = session_for(&pool, "616").await?;
     let guest = session_for(&pool, "626").await?;
     let (_, room) = call(&app, host, "POST", "/rooms", Some(json!({"name": "Host"}))).await?;

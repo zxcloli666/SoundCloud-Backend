@@ -4,7 +4,6 @@ use crate::config::{
 
 pub const REDIS_RT_POOL_MAX: u32 = 256;
 use crate::modules::chat::ChatConfig;
-use crate::rt::rooms::RoomsConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -29,7 +28,6 @@ pub struct RtConfig {
     pub admission: AdmissionCfg,
     pub soundcloud: SoundcloudCfg,
     pub chat: ChatConfig,
-    pub rooms: RoomsConfig,
     pub subscriptions_always_premium: bool,
 }
 
@@ -46,7 +44,6 @@ impl RtConfig {
             soundcloud: SoundcloudCfg::from_env(),
             chat: ChatConfig::from_env(&admission),
             admission,
-            rooms: RoomsConfig::from_env(),
             subscriptions_always_premium: env_str("SUBSCRIPTIONS_ALWAYS_PREMIUM", "false")
                 == "true",
         }

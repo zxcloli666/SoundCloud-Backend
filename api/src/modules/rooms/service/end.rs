@@ -14,7 +14,7 @@ impl RoomsService {
         if room.public {
             *self.listing.lock().await = None;
         }
-        self.hub.announce(code).await;
+        self.hub.announce(code);
         if let Some(chat) = self.chat() {
             shred::end_chat(&chat, &room).await;
         }

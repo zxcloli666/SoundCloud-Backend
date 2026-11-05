@@ -83,7 +83,6 @@ pub(super) fn config(redis: &str) -> AppConfig {
             token: String::new().into(),
             metrics_token: String::new().into(),
             diag_token: String::new().into(),
-            handoff_token: String::new().into(),
         },
         diag: DiagCfg {
             host: "test".to_owned(),
@@ -241,10 +240,6 @@ pub(super) async fn state_with(
     let auras = crate::modules::auras::AurasService::new(pg.clone(), subscriptions.clone());
     let sync_queue =
         crate::modules::sync_queue::SyncQueueService::new(pg.clone(), redis_pool.clone());
-    let rooms = crate::modules::rooms::RoomsService::new(
-        redis_pool.clone(),
-        crate::modules::rooms::RoomHub::new(None),
-    );
     let cold_refresh =
         crate::modules::cold_refresh::ColdRefreshService::new(pg.clone(), config.cold.clone());
     let s3 = crate::modules::recommendations::S3VerifierService::new(
@@ -359,7 +354,6 @@ pub(super) async fn state_with(
         indexing,
         recommendations,
         sync_queue,
-        rooms,
         remote: remote_hub(&remote_prefix()).await?,
         links: crate::modules::remote::LinksService::new(pg.clone()),
         confirm: std::sync::Arc::new(crate::modules::remote::LinkConfirm::new(
@@ -459,20 +453,6 @@ pub(super) async fn app_without_star(pool: &PgPool, redis: &str) -> anyhow::Resu
     st.subscriptions =
         crate::modules::subscriptions::SubscriptionsService::new(pool.clone(), false);
     Ok(crate::router::build(st))
-}
-
-pub(crate) async fn app_with_handoff(
-    pool: &PgPool,
-    redis: &str,
-    admin: &str,
-    handoff: &str,
-) -> anyhow::Result<axum::Router> {
-    let mut state = state(pool, soundcloud_hits(), redis).await?;
-    let mut config = (*state.config).clone();
-    config.admin.token = admin.to_owned().into();
-    config.admin.handoff_token = handoff.to_owned().into();
-    state.config = Arc::new(config);
-    Ok(crate::router::build(state))
 }
 
 pub(super) async fn seed_tracks(pool: &PgPool, ids: &[&str]) -> anyhow::Result<()> {

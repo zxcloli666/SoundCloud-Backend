@@ -80,7 +80,7 @@ pub async fn build(config: &RtConfig) -> RtState {
         CoreRpc::unreachable(),
     );
     let link = LinkService::new(pg.clone(), auth.clone());
-    let rooms = RoomsService::new(redis_rt.clone(), RoomHub::new(None));
+    let rooms = RoomsService::new(redis_rt.clone(), RoomHub::new());
 
     let keys_dir = &config.chat.keys_dir;
     let chat = Arc::new(ChatState {

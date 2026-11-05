@@ -301,9 +301,6 @@ async fn main() {
 
     events.install_dislikes(dislikes.clone());
 
-    let room_hub = crate::modules::rooms::RoomHub::new(Some(nats.clone()));
-    let rooms = crate::modules::rooms::RoomsService::new(redis_pool.clone(), room_hub);
-
     let remote = crate::modules::remote::RemoteHub::new(Some(nats.clone()), "remote");
     if !remote.prepare().await {
         tracing::warn!("remote store is not ready yet, voice opens it on first use");
@@ -351,7 +348,6 @@ async fn main() {
         recommendations,
         discover,
         sync_queue: sync_queue.clone(),
-        rooms,
         remote,
         links,
         confirm,

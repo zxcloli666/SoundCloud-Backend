@@ -119,17 +119,6 @@ fn only_cheap_routes_skip_the_core_limit() {
 }
 
 #[test]
-fn the_room_long_poll_skips_the_core_limit_and_room_writes_do_not() {
-    assert!(skips_core(&Method::GET, "/rooms/AB12CD"));
-    assert!(!skips_core(&Method::GET, "/rooms/public"));
-    assert!(!skips_core(&Method::GET, "/rooms/"));
-    assert!(!skips_core(&Method::POST, "/rooms"));
-    assert!(!skips_core(&Method::PUT, "/rooms/AB12CD/playback"));
-    assert!(!skips_core(&Method::POST, "/rooms/AB12CD/members"));
-    assert!(!skips_core(&Method::GET, "/rooms/AB12CD/members"));
-}
-
-#[test]
 fn the_voice_long_polls_skip_the_core_limit_and_the_rest_of_remote_does_not() {
     assert!(skips_core(&Method::GET, "/remote/wait"));
     assert!(skips_core(&Method::POST, "/skills/alice"));
