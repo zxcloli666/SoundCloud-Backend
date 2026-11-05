@@ -1,6 +1,13 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use metrics::{
+    Counter, Gauge, GaugeFn, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
+};
+use sc_chat_wire::pow::POW_V;
+use sc_chat_wire::proto::Pow;
 use sqlx::PgPool;
 
 use super::support::{Device, cfg, sealed, solve};
@@ -230,4 +237,70 @@ fn the_effort_ticks_every_ten_seconds_of_traffic() {
     assert_eq!(gate.effort.current(), 100);
     gate.catch_up(now + Duration::from_secs(25));
     assert_eq!(gate.effort.current(), 400);
+}
+
+struct Level(AtomicU64);
+
+impl GaugeFn for Level {
+    fn increment(&self, _: f64) {}
+    fn decrement(&self, _: f64) {}
+    fn set(&self, value: f64) {
+        self.0.store(value.to_bits(), Ordering::SeqCst);
+    }
+}
+
+struct Probe(Arc<Level>);
+
+impl Recorder for Probe {
+    fn describe_counter(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn describe_gauge(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+    fn register_counter(&self, _: &Key, _: &Metadata<'_>) -> Counter {
+        Counter::noop()
+    }
+    fn register_gauge(&self, key: &Key, _: &Metadata<'_>) -> Gauge {
+        match key.name() {
+            "auth_pow_effort" => Gauge::from_arc(self.0.clone()),
+            _ => Gauge::noop(),
+        }
+    }
+    fn register_histogram(&self, _: &Key, _: &Metadata<'_>) -> Histogram {
+        Histogram::noop()
+    }
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn one_start_sets_the_effort_gauge_without_a_tick(pool: PgPool) -> anyhow::Result<()> {
+    let mut config = cfg();
+    config.free_per_min = 2;
+    config.pow_floor = 100;
+    let node = sealed(config, &pool)?;
+    let gate = &node.gates.login;
+    let level = Arc::new(Level(AtomicU64::new(f64::to_bits(7.0))));
+    let probe = Probe(level.clone());
+    let _guard = metrics::set_default_local_recorder(&probe);
+    let shown = || f64::from_bits(level.0.load(Ordering::SeqCst));
+
+    let admitted = start(&node, gate, LOGIN, None, &[], v4(10, 0, 0, 1)).await;
+    assert!(admitted.is_ok());
+    assert_eq!(shown(), 0.0);
+
+    assert!(
+        start(&node, gate, LOGIN, None, &[], v4(10, 0, 0, 3))
+            .await
+            .is_ok()
+    );
+    level.0.store(f64::to_bits(7.0), Ordering::SeqCst);
+
+    let marker = Pow {
+        v: POW_V,
+        ..Pow::default()
+    };
+    let refused = start(&node, gate, LOGIN, Some(&marker), &[], v4(10, 0, 0, 2)).await;
+    assert!(matches!(
+        refused,
+        Err(Refusal::Required { effort: 100, .. })
+    ));
+    assert_eq!(shown(), 100.0);
+    Ok(())
 }

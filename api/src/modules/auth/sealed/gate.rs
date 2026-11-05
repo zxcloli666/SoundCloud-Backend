@@ -84,7 +84,11 @@ impl StartGate {
 
     fn tick(&self, now: Instant) {
         self.effort.tick();
-        metrics::gauge!("auth_pow_effort", "path" => self.path).set(f64::from(self.required(now)));
+        self.show(self.required(now));
+    }
+
+    pub fn show(&self, effort: u32) {
+        metrics::gauge!("auth_pow_effort", "path" => self.path).set(f64::from(effort));
     }
 
     pub fn required(&self, now: Instant) -> u32 {
