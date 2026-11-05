@@ -23,6 +23,7 @@ use super::embedding_queue;
 use crate::handlers::worker_backlog::unclaimed_room;
 
 const QUARANTINE_BATCH: i64 = 50;
+const STALE_EMBEDDING_BATCH: i64 = 200;
 const ORPHAN_SCAN_WINDOW: i64 = 2_000;
 const MAX_ATTEMPTS: i16 = 8;
 const REOPEN_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
@@ -153,7 +154,7 @@ impl LyricsReaper {
         let mut transaction = self.pool.begin().await.map_err(JobError::retryable)?;
         let stale = sqlx::query_file!(
             "queries/lyrics/quarantine_stale_embeddings.sql",
-            QUARANTINE_BATCH,
+            STALE_EMBEDDING_BATCH,
             result_window,
             REPEATED_RESULT_TIMEOUTS
         )
@@ -163,7 +164,8 @@ impl LyricsReaper {
         let orphaned_requests = sqlx::query_file_scalar!(
             "queries/lyrics/quarantine_orphaned_embedding_requests.sql",
             QUARANTINE_BATCH,
-            result_window
+            result_window,
+            ORPHAN_SCAN_WINDOW
         )
         .fetch_one(&mut *transaction)
         .await

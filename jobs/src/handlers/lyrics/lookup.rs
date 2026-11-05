@@ -27,9 +27,6 @@ use crate::queue::{
     JobError, JobRepository, JobResult, LeasedJob, LookupLane, LookupSlot, NewJob, QueueError,
 };
 
-use super::embedding_queue;
-use super::text::lyrics_text;
-
 const MAX_ATTEMPTS: i16 = 8;
 const EXPIRED_RELEASE_BATCH: i64 = 256;
 const DUE_WAKE_BATCH: i64 = 256;
@@ -289,17 +286,6 @@ impl LyricsLookupHandler {
         let tier = star_priority::of_track(&mut *transaction, &settled.sc_track_id)
             .await
             .map_err(JobError::retryable)?;
-        if lyrics_text(settled.plain_text.as_deref(), settled.synced_lrc.as_deref())
-            .is_some_and(|text| text.chars().count() > 30)
-        {
-            embedding_queue::enqueue_if_new(
-                &self.queue,
-                &mut transaction,
-                &settled.sc_track_id,
-                tier,
-            )
-            .await?;
-        }
         self.enqueue_align_if_ready(&mut transaction, &settled.sc_track_id, tier)
             .await?;
         transaction.commit().await.map_err(JobError::retryable)?;

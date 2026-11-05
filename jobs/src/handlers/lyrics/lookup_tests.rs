@@ -448,7 +448,7 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
         Option<String>,
         String,
         Option<String>,
-        String,
+        Option<String>,
     ) = sqlx::query_as(
         "SELECT synced_lrc, plain_text, source, plain_source, embedding_state
          FROM lyrics_cache WHERE sc_track_id = '42'",
@@ -471,15 +471,9 @@ async fn proxy_fallback_persists_lyrics_and_enqueues_only_align(
     assert!(lyrics.1.is_some());
     assert_eq!(lyrics.2, "lrclib");
     assert_eq!(lyrics.3.as_deref(), Some("lrclib"));
-    assert_eq!(lyrics.4, "queued");
+    assert_eq!(lyrics.4, None);
     assert_eq!(state_count, 0);
-    assert_eq!(
-        downstream,
-        vec![
-            "lyrics.dispatch_transcription".to_owned(),
-            "lyrics.embed".to_owned()
-        ]
-    );
+    assert_eq!(downstream, vec!["lyrics.dispatch_transcription".to_owned()]);
     assert_eq!(sync_provenance(&pool).await?, (None, None));
     Ok(())
 }

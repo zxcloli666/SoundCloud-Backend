@@ -1,6 +1,16 @@
-WITH candidates AS MATERIALIZED (
-    SELECT wire.sc_track_id
+WITH oldest AS MATERIALIZED (
+    SELECT wire.sc_track_id,
+           wire.first_publish_attempt_at
     FROM lyrics_embedding_wire_state AS wire
+    WHERE wire.status = 'pending'
+      AND wire.first_publish_attempt_at < now() - $2::bigint * interval '1 second'
+    ORDER BY wire.first_publish_attempt_at, wire.sc_track_id
+    LIMIT $3
+), candidates AS MATERIALIZED (
+    SELECT wire.sc_track_id
+    FROM oldest
+    JOIN lyrics_embedding_wire_state AS wire
+      ON wire.sc_track_id = oldest.sc_track_id
     WHERE wire.status = 'pending'
       AND CASE
           WHEN wire.result_consumer IS NULL
@@ -14,9 +24,9 @@ WITH candidates AS MATERIALIZED (
       AND NOT EXISTS (
           SELECT 1
           FROM lyrics_cache AS lyrics
-          WHERE lyrics.sc_track_id = wire.sc_track_id
+          WHERE lyrics.sc_track_id = oldest.sc_track_id
       )
-    ORDER BY wire.first_publish_attempt_at, wire.sc_track_id
+    ORDER BY oldest.first_publish_attempt_at, oldest.sc_track_id
     FOR UPDATE OF wire SKIP LOCKED
     LIMIT $1
 ), quarantined AS (
