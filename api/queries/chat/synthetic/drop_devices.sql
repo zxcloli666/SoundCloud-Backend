@@ -5,4 +5,4 @@ WHERE id IN (
     WHERE candidate.user_id LIKE 'lt:%'
     LIMIT $1
 )
-RETURNING id, user_id, session_id
+RETURNING id, user_id

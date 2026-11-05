@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::common::uuid::parse_uuid;
@@ -108,4 +109,8 @@ fn extract_session_id(parts: &Parts) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+pub fn session_hash(session_id: Uuid) -> Vec<u8> {
+    Sha256::digest(session_id.as_bytes()).to_vec()
 }

@@ -1,3 +1,4 @@
+mod cas;
 mod transfer;
 
 use deadpool_redis::Pool;
@@ -6,11 +7,10 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::chat::rt_keys::ROOMS_ALIVE;
-use crate::modules::rooms::model::{Room, new_code};
+use crate::modules::rooms::model::Room;
 
 pub const ROOM_TTL_SECS: i64 = 6 * 60 * 60;
 const MOVED_TTL_SECS: i64 = 10 * 60;
-const CAS_ATTEMPTS: usize = 8;
 
 const CREATE_SCRIPT: &str = r"
 if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
@@ -19,28 +19,7 @@ redis.call('EXPIRE', KEYS[1], ARGV[3])
 return 1
 ";
 
-const SWAP_SCRIPT: &str = r"
-if redis.call('HGET', KEYS[1], 'v') ~= ARGV[1] then return 0 end
-redis.call('HSET', KEYS[1], 'v', ARGV[2], 'body', ARGV[3])
-redis.call('EXPIRE', KEYS[1], ARGV[4])
-redis.call('EXPIRE', KEYS[2], ARGV[4])
-return 1
-";
-
-const MOVE_SCRIPT: &str = r"
-if redis.call('HGET', KEYS[1], 'v') ~= ARGV[1] then return 0 end
-if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
-redis.call('HSET', KEYS[2], 'v', ARGV[2], 'body', ARGV[3])
-redis.call('EXPIRE', KEYS[2], ARGV[4])
-if redis.call('EXISTS', KEYS[3]) == 1 then
-  redis.call('RENAME', KEYS[3], KEYS[4])
-  redis.call('EXPIRE', KEYS[4], ARGV[4])
-end
-redis.call('DEL', KEYS[1])
-redis.call('SET', KEYS[5], ARGV[5], 'EX', ARGV[6])
-return 1
-";
-
+pub use cas::Guard;
 pub use transfer::{Moved, PAGE_MAX, Page};
 
 pub struct RoomStore {
@@ -61,6 +40,10 @@ fn moved_key(code: &str) -> String {
 
 fn chat_key(chat_id: Uuid) -> String {
     format!("rooms:chat:{chat_id}")
+}
+
+fn cooldown_key(host: &str) -> String {
+    format!("rooms:host:{host}:backdrop_cooldown")
 }
 
 fn encode(room: &Room) -> AppResult<String> {
@@ -94,6 +77,27 @@ impl RoomStore {
         .transpose()
     }
 
+    pub async fn load_many(&self, codes: &[String]) -> AppResult<Vec<Room>> {
+        if codes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut bodies = redis::pipe();
+        for code in codes {
+            bodies.hget(room_key(code), "body");
+        }
+        let mut conn = self.redis.get().await?;
+        let bodies: Vec<Option<String>> = bodies.query_async(&mut conn).await?;
+        Ok(bodies
+            .into_iter()
+            .filter_map(|body| serde_json::from_str(&body?).ok())
+            .collect())
+    }
+
+    pub async fn alive_since(&self, since: i64) -> AppResult<Vec<String>> {
+        let mut conn = self.redis.get().await?;
+        Ok(conn.zrangebyscore(ROOMS_ALIVE, since, "+inf").await?)
+    }
+
     pub async fn load_with_presence(
         &self,
         codes: &[String],
@@ -121,74 +125,6 @@ impl RoomStore {
     pub async fn version(&self, code: &str) -> AppResult<Option<u64>> {
         let mut conn = self.redis.get().await?;
         Ok(conn.hget(room_key(code), "v").await?)
-    }
-
-    pub async fn update<T, F>(&self, code: &str, mut change: F) -> AppResult<(Room, T)>
-    where
-        F: FnMut(&mut Room) -> AppResult<T>,
-    {
-        for _ in 0..CAS_ATTEMPTS {
-            let mut room = self
-                .load(code)
-                .await?
-                .ok_or_else(|| AppError::not_found("Room not found"))?;
-            let expected = room.version;
-            let outcome = change(&mut room)?;
-            room.version = expected + 1;
-            let mut conn = self.redis.get().await?;
-            let swapped: i64 = Script::new(SWAP_SCRIPT)
-                .key(room_key(code))
-                .key(seen_key(code))
-                .arg(expected)
-                .arg(room.version)
-                .arg(encode(&room)?)
-                .arg(ROOM_TTL_SECS)
-                .invoke_async(&mut conn)
-                .await?;
-            if swapped == 1 {
-                return Ok((room, outcome));
-            }
-        }
-        Err(AppError::conflict(
-            "The room changed too quickly, try again",
-        ))
-    }
-
-    pub async fn relocate<F>(&self, code: &str, mut change: F) -> AppResult<Room>
-    where
-        F: FnMut(&mut Room) -> AppResult<()>,
-    {
-        for _ in 0..CAS_ATTEMPTS {
-            let mut room = self
-                .load(code)
-                .await?
-                .ok_or_else(|| AppError::not_found("Room not found"))?;
-            let expected = room.version;
-            change(&mut room)?;
-            room.code = new_code();
-            room.version = expected + 1;
-            let mut conn = self.redis.get().await?;
-            let moved: i64 = Script::new(MOVE_SCRIPT)
-                .key(room_key(code))
-                .key(room_key(&room.code))
-                .key(seen_key(code))
-                .key(seen_key(&room.code))
-                .key(moved_key(code))
-                .arg(expected)
-                .arg(room.version)
-                .arg(encode(&room)?)
-                .arg(ROOM_TTL_SECS)
-                .arg(&room.code)
-                .arg(MOVED_TTL_SECS)
-                .invoke_async(&mut conn)
-                .await?;
-            if moved == 1 {
-                return Ok(room);
-            }
-        }
-        Err(AppError::conflict(
-            "The room changed too quickly, try again",
-        ))
     }
 
     pub async fn moved_to(&self, code: &str) -> AppResult<Option<String>> {
@@ -270,5 +206,24 @@ impl RoomStore {
     pub async fn seen_since(&self, code: &str, since: i64) -> AppResult<Vec<String>> {
         let mut conn = self.redis.get().await?;
         Ok(conn.zrangebyscore(seen_key(code), since, "+inf").await?)
+    }
+
+    pub async fn cool_down(&self, host: &str, until: i64, now: i64) -> AppResult<()> {
+        let left = u64::try_from(until - now).unwrap_or(0).max(1);
+        let mut conn = self.redis.get().await?;
+        redis::cmd("SET")
+            .arg(cooldown_key(host))
+            .arg(until)
+            .arg("PX")
+            .arg(left)
+            .query_async::<()>(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn cooling_until(&self, host: &str, now: i64) -> AppResult<Option<i64>> {
+        let mut conn = self.redis.get().await?;
+        let until: Option<i64> = conn.get(cooldown_key(host)).await?;
+        Ok(until.filter(|until| *until > now))
     }
 }

@@ -1,11 +1,14 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Duration, Utc};
 use sc_chat_wire::msg::Class;
 use uuid::Uuid;
 
 use crate::modules::chat::conversations::create::META_MAX;
+use crate::modules::chat::media::limits::{ALBUM_MAX, AVATAR_MEDIA_MAX};
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::{EDIT_WINDOW_HOURS, SendMessage};
-use crate::modules::chat::model::{ConversationKind, MemberState};
+use crate::modules::chat::model::MemberState;
 use crate::modules::chat::{ChatError, ChatResult};
 
 pub const BODY_MAX: usize = 48 * 1024;
@@ -17,6 +20,7 @@ pub struct Outgoing {
     pub epoch: i32,
     pub target_seq: Option<i64>,
     pub body: Vec<u8>,
+    pub media: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,13 +48,28 @@ pub fn outgoing(input: SendMessage) -> ChatResult<Outgoing> {
     if needs_target(class) != input.target_seq.is_some() {
         return Err(ChatError::Invalid);
     }
+    admit_media(class, &input.media)?;
     Ok(Outgoing {
         client_id: input.client_id,
         class,
         epoch: input.epoch,
         target_seq: input.target_seq,
         body: input.body,
+        media: input.media,
     })
+}
+
+fn admit_media(class: Class, media: &[Uuid]) -> ChatResult<()> {
+    let max = match class {
+        Class::Post => ALBUM_MAX,
+        Class::Meta => AVATAR_MEDIA_MAX,
+        _ => 0,
+    };
+    let unique: HashSet<&Uuid> = media.iter().collect();
+    if media.len() > max || unique.len() != media.len() {
+        return Err(ChatError::Invalid);
+    }
+    Ok(())
 }
 
 pub fn needs_target(class: Class) -> bool {
@@ -62,7 +81,7 @@ pub fn may_post(access: &Access, class: Class) -> ChatResult<()> {
         return Err(ChatError::NotMember);
     }
     match class {
-        Class::Meta if access.kind != ConversationKind::Group => Err(ChatError::Invalid),
+        Class::Meta if !access.is_group() && !access.is_room() => Err(ChatError::Invalid),
         Class::Meta | Class::Pin
             if (access.is_group() || access.is_room()) && !access.is_admin() =>
         {

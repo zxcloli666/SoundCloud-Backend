@@ -11,7 +11,9 @@ SELECT id,
        created_at,
        handled_by,
        handled_at,
-       (evidence IS NOT NULL) AS "has_evidence!"
+       (evidence IS NOT NULL) AS "has_evidence!",
+       kind,
+       media_id
 FROM chat.reports
 WHERE ($1::text = 'all' OR state = $1)
   AND created_at < $2

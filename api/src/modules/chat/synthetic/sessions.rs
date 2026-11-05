@@ -70,20 +70,32 @@ pub async fn store(chat: &ChatState, sessions: &[NewSession<'_>]) -> ChatResult<
     Ok(())
 }
 
-pub async fn drop_all(chat: &ChatState, ids: &[Uuid]) -> ChatResult<u64> {
+pub async fn drop_all(chat: &ChatState) -> ChatResult<u64> {
     let mut dropped = 0;
-    for batch in ids.chunks(WRITES_PER_CALL) {
-        let keys: Vec<String> = batch
-            .iter()
-            .copied()
-            .map(rt_keys::loadtest_session)
-            .collect();
+    let mut cursor = 0u64;
+    loop {
         let mut conn = chat.redis.get().await?;
-        let removed: u64 = conn.del(keys).await?;
-        dropped += removed;
+        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(rt_keys::LOADTEST_SESSIONS)
+            .arg("COUNT")
+            .arg(WRITES_PER_CALL)
+            .query_async(&mut conn)
+            .await?;
+        if !keys.is_empty() {
+            let removed: u64 = conn.del(&keys).await?;
+            dropped += removed;
+        }
+        for id in keys
+            .iter()
+            .filter_map(|key| rt_keys::loadtest_session_id(key))
+        {
+            chat.callers.forget_session(id);
+        }
+        if next == 0 {
+            return Ok(dropped);
+        }
+        cursor = next;
     }
-    for id in ids {
-        chat.callers.forget_session(*id);
-    }
-    Ok(dropped)
 }

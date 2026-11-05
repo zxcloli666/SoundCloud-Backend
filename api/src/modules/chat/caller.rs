@@ -1,4 +1,4 @@
-mod cache;
+pub mod cache;
 mod resolve;
 
 use axum::extract::FromRequestParts;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::modules::chat::ChatError;
 use crate::modules::chat::model::Tier;
 
-pub use cache::{Callers, SessionEntry};
+pub use cache::{COLD_WAIT, Callers, Cold, REFRESH_WAIT, SessionEntry};
 pub use resolve::{Resolved, resolve};
 
 #[derive(Clone, Debug)]

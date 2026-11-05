@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 
 use crate::error::AppError;
 use crate::modules::chat::ChatError;
+use crate::modules::chat::errors::BusySource;
 
 const RETRY_MS: u64 = 500;
 
@@ -11,6 +12,10 @@ pub fn refusal(error: AppError) -> ChatError {
             code: "room_not_member",
             ..
         } => return ChatError::NotMember,
+        AppError::Coded {
+            code: "room_star_required",
+            ..
+        } => return ChatError::RoomStarRequired,
         AppError::Coded {
             code: "room_moderators_full",
             ..
@@ -22,10 +27,13 @@ pub fn refusal(error: AppError) -> ChatError {
         StatusCode::FORBIDDEN => ChatError::Unavailable,
         StatusCode::BAD_REQUEST => ChatError::Invalid,
         StatusCode::CONFLICT | StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS => {
-            ChatError::Busy { retry_ms: RETRY_MS }
+            ChatError::Busy {
+                retry_ms: RETRY_MS,
+                source: BusySource::Rooms,
+            }
         }
         _ => match error {
-            AppError::Redis(_) | AppError::RedisPool(_) => ChatError::busy(),
+            AppError::Redis(_) | AppError::RedisPool(_) => ChatError::busy(BusySource::Rooms),
             other => {
                 tracing::error!(error = %other, "room request failed");
                 ChatError::Internal
