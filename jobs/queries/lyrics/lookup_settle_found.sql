@@ -46,9 +46,9 @@ WITH owned_state AS MATERIALIZED (
     SELECT claim.sc_track_id,
            claim.track_id,
            NULLIF($7::text, ''),
-           NULLIF($8::text, ''),
+           NULLIF(btrim($8::text), ''),
            $6::varchar(16),
-           CASE WHEN NULLIF($8::text, '') IS NULL THEN NULL ELSE $6::varchar(16) END,
+           CASE WHEN NULLIF(btrim($8::text), '') IS NULL THEN NULL ELSE $6::varchar(16) END,
            CASE WHEN NULLIF($7::text, '') IS NULL THEN NULL ELSE $6::varchar(16) END,
            NULL,
            NULL,
@@ -58,7 +58,7 @@ WITH owned_state AS MATERIALIZED (
            now()
     FROM claim
     WHERE claim.current
-      AND (NULLIF($7::text, '') IS NOT NULL OR NULLIF($8::text, '') IS NOT NULL)
+      AND (NULLIF($7::text, '') IS NOT NULL OR NULLIF(btrim($8::text), '') IS NOT NULL)
     ON CONFLICT (sc_track_id) DO UPDATE
     SET track_id = EXCLUDED.track_id,
         synced_lrc = COALESCE(lyrics_cache.synced_lrc, EXCLUDED.synced_lrc),
