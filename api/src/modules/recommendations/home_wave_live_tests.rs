@@ -320,7 +320,7 @@ async fn no_shelf_offers_a_track_whose_length_we_do_not_trust(pg: PgPool) -> any
     .bind(&ghost)
     .execute(&pg)
     .await?;
-    service.home_tracks.forget_all();
+    service.artist_tracks.forget_all();
 
     let response = home_wave(&service, LISTENER).await?;
     let holding: Vec<&str> = response
