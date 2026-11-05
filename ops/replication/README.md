@@ -125,7 +125,7 @@ Order for 0285-0292: core first. Migrate main and star only after they applied c
 
 Order for 0307-0308: core, main and star first, then jobs on core. `background_job_failures` is C and its `lane` is published in `scd_core_pub`: the first lookup dead letter on core carries `lane = 'lookup'`, and the apply on a node with the old CHECK fails on every retry, which stops the whole core stream on that node. The api goes after jobs; until then an old api still enqueues lookups into `core_bulk`, and the jobs lane realignment moves them.
 
-Order for 0324-0325: main and star first, then core. `users` is C and `banner_url` is published in `scd_core_pub` once core runs 0325: a node without the column fails the apply with "missing replicated columns". The api and jobs with the banner go after the migrations on their node; the old binaries run on the new schema.
+Order for 0324-0325: main and star first, then core, then `scd_sync_publications()` on core, main and star once all three have 0325. `users` is C: after the sync `scd_core_pub` carries `banner_url`, and a node without the column would fail the apply with "missing replicated columns". Until the sync core does not send the column, so the row hash of a users row with a banner differs between core and the api nodes. A column added to a table the subscription already has needs no REFRESH PUBLICATION. The api refuses to start below 0324, so it goes after the migrations on its node; the old binaries run on the new schema.
 
 `jobs-migrate core` calls `scd_configure` and `scd_grant_repl` when `SCD_NODE`, `SCD_ROLE` and `SCD_MODE` are set, and refuses `SCD_MODE=split` while `scd_repl_problems()` returns rows. With the env unset nothing changes and the node stays legacy.
 
