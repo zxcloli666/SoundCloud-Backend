@@ -7,6 +7,7 @@ slow-timeout = { period = "15s", terminate-after = 40 }
 
 [test-groups]
 serial = { max-threads = 1 }
+public_chat = { max-threads = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(/qdrant_io::live_tests/)'
@@ -15,3 +16,7 @@ test-group = "serial"
 [[profile.ci.overrides]]
 filter = 'test(/_stays_fast$/)'
 threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = 'test(/public_chat::/)'
+test-group = "public_chat"

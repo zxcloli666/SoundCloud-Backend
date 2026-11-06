@@ -7,6 +7,7 @@ pub mod leader;
 pub mod marks;
 pub mod media;
 pub mod public_chat;
+pub mod public_trail;
 pub mod purge;
 pub mod redis_info;
 pub mod reports;
@@ -22,6 +23,7 @@ use crate::modules::chat::ChatState;
 pub fn spawn(chat: Arc<ChatState>) {
     tokio::spawn(leader::keep(chat.clone()));
     tokio::spawn(sessions::run(chat.clone()));
+    tokio::spawn(public_trail::run(chat.clone()));
     tokio::spawn(schedule::run(chat));
 }
 

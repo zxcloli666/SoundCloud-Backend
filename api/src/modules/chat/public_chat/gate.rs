@@ -19,7 +19,7 @@ pub async fn send(
     access: &Access,
     out: &Outgoing,
 ) -> ChatResult<Option<MessageRow>> {
-    let Err(refused) = open(chat, access, out).await else {
+    let Err(refused) = check_open(chat, access, out).await else {
         return Ok(None);
     };
     store::existing(
@@ -33,7 +33,7 @@ pub async fn send(
     .ok_or(refused)
 }
 
-async fn open(chat: &ChatState, access: &Access, out: &Outgoing) -> ChatResult<()> {
+async fn check_open(chat: &ChatState, access: &Access, out: &Outgoing) -> ChatResult<()> {
     let standing = sqlx::query_file!("queries/chat/public/standing.sql", ID, access.user_id)
         .fetch_optional(&chat.pg)
         .await?

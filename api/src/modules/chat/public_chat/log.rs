@@ -64,7 +64,7 @@ pub async fn record(
     record_in(&mut conn, by, action, target, detail).await
 }
 
-pub async fn read(
+pub async fn moderation_log(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
     ChatQuery(query): ChatQuery<LogQuery>,

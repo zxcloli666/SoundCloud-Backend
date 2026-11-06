@@ -2,7 +2,6 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use redis::Script;
-use tokio::time::sleep;
 
 use crate::modules::chat::model::MessageRow;
 use crate::modules::chat::public_chat::{ID, watchers};
@@ -12,13 +11,17 @@ use crate::modules::chat::{ChatResult, ChatState, rt_keys};
 static WINDOW: LazyLock<Script> =
     LazyLock::new(|| Script::new(include_str!("../lua/public_window.lua")));
 
+static TRAIL_DUE: LazyLock<Script> =
+    LazyLock::new(|| Script::new(include_str!("../lua/public_trail_due.lua")));
+
 pub const WAKE_EVERY: Duration = Duration::from_secs(2);
 const TRAIL_SLACK: Duration = Duration::from_millis(25);
+const TRAIL_KEEP: Duration = Duration::from_secs(10);
 const WAKES: &str = "chat_public_wakes_total";
 
 enum Window {
     Now,
-    Later(Duration),
+    Later,
     Covered,
 }
 
@@ -35,11 +38,7 @@ pub async fn publish(chat: &Arc<ChatState>, rows: &[MessageRow]) -> ChatResult<(
 pub async fn announce(chat: &Arc<ChatState>, seq: i64) -> ChatResult<()> {
     match window(chat).await? {
         Window::Now => wake(chat, seq).await,
-        Window::Later(after) => {
-            trail(chat.clone(), after);
-            Ok(())
-        }
-        Window::Covered => Ok(()),
+        Window::Later | Window::Covered => Ok(()),
     }
 }
 
@@ -49,25 +48,24 @@ async fn window(chat: &ChatState) -> ChatResult<Window> {
         .key(rt_keys::PUBLIC_GATE)
         .key(rt_keys::PUBLIC_TRAIL)
         .arg(WAKE_EVERY.as_millis() as u64)
+        .arg(TRAIL_SLACK.as_millis() as u64)
+        .arg(TRAIL_KEEP.as_millis() as u64)
         .invoke_async(&mut conn)
         .await?;
     Ok(match code {
         0 => Window::Now,
-        left if left > 0 => Window::Later(Duration::from_millis((left - 1) as u64)),
+        left if left > 0 => Window::Later,
         _ => Window::Covered,
     })
 }
 
-fn trail(chat: Arc<ChatState>, after: Duration) {
-    tokio::spawn(async move {
-        tokio::select! {
-            () = chat.shutdown.cancelled() => return,
-            () = sleep(after + TRAIL_SLACK) => {}
-        }
-        if let Err(error) = flush(&chat).await {
-            tracing::warn!(code = error.code(), "a public chat wake was not sent");
-        }
-    });
+pub async fn trail_due(chat: &ChatState) -> ChatResult<bool> {
+    let mut conn = chat.redis.get().await?;
+    let due: i64 = TRAIL_DUE
+        .key(rt_keys::PUBLIC_TRAIL)
+        .invoke_async(&mut conn)
+        .await?;
+    Ok(due == 1)
 }
 
 pub async fn flush(chat: &ChatState) -> ChatResult<()> {

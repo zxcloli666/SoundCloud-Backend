@@ -21,9 +21,9 @@ use uuid::Uuid;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
 pub use join::open;
-pub use log::read as moderation_log;
+pub use log::moderation_log;
 pub use sanctions::{ban, mute, unban, unmute};
-pub use slow::set as slow_mode;
+pub use slow::slow_mode;
 pub use staff::moderator;
 
 pub const ID: Uuid = Uuid::from_u128(0x00000000_0000_7000_8000_7075626c6963);

@@ -17,7 +17,7 @@ pub struct SlowModeBody {
     pub seconds: u32,
 }
 
-pub async fn set(
+pub async fn slow_mode(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
     ChatJson(body): ChatJson<SlowModeBody>,

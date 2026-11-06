@@ -12,6 +12,7 @@ use crate::modules::chat::public_chat::support::{
     user, version_of, watch,
 };
 use crate::modules::chat::public_chat::{ID, delivery, watchers};
+use crate::modules::chat::sweeps::public_trail;
 use crate::modules::chat::sync::changes::{self, Change};
 use crate::modules::chat::{ChatState, rt_keys};
 
@@ -56,6 +57,7 @@ async fn wakes_are_coalesced_to_one_per_two_seconds_with_a_trailing_one(pool: Pg
     let _serial = serial().await;
     let chat = bench(&pool);
     reset(&chat).await;
+    let ticker = tokio::spawn(public_trail::run(chat.clone()));
     let watcher = user();
     open(&chat, &watcher).await;
     watch(&chat, &watcher).await;
@@ -65,15 +67,16 @@ async fn wakes_are_coalesced_to_one_per_two_seconds_with_a_trailing_one(pool: Pg
     posted(&chat, OWNER).await;
     posted(&chat, OWNER).await;
     assert_eq!(version_of(&chat, &watcher).await, Some(first));
-    tokio::time::sleep(delivery::WAKE_EVERY + Duration::from_millis(400)).await;
+    tokio::time::sleep(delivery::WAKE_EVERY + Duration::from_millis(1_000)).await;
     let trailing = version_of(&chat, &watcher).await.expect("a trailing wake");
     assert!(trailing > first);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(version_of(&chat, &watcher).await, Some(trailing));
     posted(&chat, OWNER).await;
     assert_eq!(version_of(&chat, &watcher).await, Some(trailing));
-    tokio::time::sleep(delivery::WAKE_EVERY + Duration::from_millis(400)).await;
+    tokio::time::sleep(delivery::WAKE_EVERY + Duration::from_millis(1_000)).await;
     assert!(version_of(&chat, &watcher).await > Some(trailing));
+    ticker.abort();
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
