@@ -53,9 +53,12 @@ pub async fn reset(chat: &ChatState) {
 
 pub async fn keys_status(chat: &Arc<ChatState>, pool: &PgPool, user: &str) -> (u16, Value) {
     let device = enroll(chat, pool, user).await;
+    let mut row = device.row.clone();
+    row.caps
+        .push(crate::modules::chat::devices::CAP_PUBLIC_CHAT.to_owned());
     let (status, body) = device_call(
         chat,
-        caller(user, device.session, Some(&device.row)),
+        caller(user, device.session, Some(&row)),
         "GET",
         &format!("/chat/conversations/{ID}/keys"),
         None,
@@ -169,4 +172,59 @@ pub async fn slow_mode(pool: &PgPool, seconds: i32) {
     .execute(pool)
     .await
     .expect("a slow mode");
+}
+
+pub async fn ask_as(
+    chat: &Arc<ChatState>,
+    caller: crate::modules::chat::ChatCaller,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let (status, body) = device_call(chat, caller, method, uri, body).await;
+    (status.as_u16(), body)
+}
+
+pub fn without_cap(user: &str) -> crate::modules::chat::ChatCaller {
+    let mut caller = crate::modules::chat::media::support::who(user);
+    if let Some(device) = caller.device.as_mut() {
+        device.public_chat = false;
+    }
+    caller
+}
+
+pub fn with_cap(user: &str) -> crate::modules::chat::ChatCaller {
+    crate::modules::chat::media::support::who(user)
+}
+
+pub fn pinging(users: &[&str]) -> Value {
+    json!({
+        "client_id": Uuid::now_v7(),
+        "class": "post",
+        "epoch": 0,
+        "body": "AQID",
+        "pings": users
+    })
+}
+
+pub async fn ping_seq(pool: &PgPool, user: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT last_ping_seq FROM chat.members WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(ID)
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .expect("a ping seq")
+}
+
+pub async fn read_seq(pool: &PgPool, user: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT last_read_seq FROM chat.members WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(ID)
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .expect("a read seq")
 }

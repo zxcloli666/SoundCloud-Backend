@@ -11,6 +11,7 @@ use crate::modules::chat::media::ledger;
 use crate::modules::chat::media::limits::{PUT_TTL, QUOTA_BYTES, RESERVATION_TTL};
 use crate::modules::chat::media::wire::{MediaKind, ReserveAnswer, ReserveBody, ReservedThumb};
 use crate::modules::chat::members::access;
+use crate::modules::chat::public_chat;
 use crate::modules::chat::quota::{self, Used, seconds, signed, unsigned};
 use crate::modules::chat::rooms::media_gate;
 use crate::modules::chat::stores::{self, Object};
@@ -48,6 +49,7 @@ pub async fn reserve_media(
     }
     let body: ReserveBody = serde_json::from_slice(&raw).map_err(|_| ChatError::Invalid)?;
     body.validate()?;
+    public_chat::hidden::from(&caller, body.conversation_id)?;
     let user = caller.user_id.as_str();
     let matched = matched(&chat, user, &body).await?;
     if !chat.stars.is_star(user).await? {

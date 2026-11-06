@@ -89,7 +89,7 @@ pub async fn list(
         _ => LIST_BYTES_MAX,
     };
     let mut page = view::fit(rows, &caller.user_id, LIST_ROWS_MAX, cap);
-    if query.cursor.is_none() && chat.config.public {
+    if query.cursor.is_none() && chat.config.public && caller.sees_public() {
         page.items
             .insert(0, public_chat::view::of(&chat, &caller.user_id).await?);
     }

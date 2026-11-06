@@ -5,6 +5,7 @@ use redis::Script;
 use uuid::Uuid;
 
 use crate::modules::chat::model::ConversationKind;
+use crate::modules::chat::public_chat;
 use crate::modules::chat::sync::wire::{PeerMark, SyncRequest};
 use crate::modules::chat::sync::{bump, prefs};
 use crate::modules::chat::{ChatResult, ChatState, rt_keys};
@@ -53,7 +54,12 @@ pub fn wanted(request: &SyncRequest) -> Vec<Wanted> {
         .collect()
 }
 
-pub async fn record(chat: &ChatState, user_id: &str, request: &SyncRequest) -> ChatResult<()> {
+pub async fn record(
+    chat: &ChatState,
+    user_id: &str,
+    public: bool,
+    request: &SyncRequest,
+) -> ChatResult<()> {
     let wanted = wanted(request);
     if wanted.is_empty() {
         return Ok(());
@@ -76,6 +82,24 @@ pub async fn record(chat: &ChatState, user_id: &str, request: &SyncRequest) -> C
                 )
             })
             .collect();
+    let public_read = wanted
+        .iter()
+        .filter(|entry| entry.mark == Mark::Read)
+        .filter(|entry| {
+            targets
+                .get(&entry.conversation)
+                .is_some_and(|target| target.kind == ConversationKind::Public.as_str())
+        })
+        .map(|entry| entry.seq)
+        .max();
+    if let Some(seq) = public_read.filter(|_| public) {
+        let last_seq = targets
+            .get(&public_chat::ID)
+            .map_or(0, |target| target.last_seq);
+        if seq.min(last_seq) > 0 {
+            public_chat::reads::record(chat, user_id, seq.min(last_seq)).await?;
+        }
+    }
     let marks: Vec<Wanted> = wanted
         .into_iter()
         .filter_map(|entry| {

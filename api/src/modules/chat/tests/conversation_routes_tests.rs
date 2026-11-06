@@ -19,6 +19,7 @@ fn with_device() -> ChatCaller {
             id: Uuid::from_u128(0xd0),
             created_at: chrono::Utc::now(),
             history_unlocked: true,
+            public_chat: true,
         }),
         ..caller()
     }

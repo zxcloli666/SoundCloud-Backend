@@ -7,6 +7,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::media::limits::{QUOTA_BYTES, USAGE_CONVERSATIONS_MAX};
 use crate::modules::chat::media::wire::{ConversationUsage, UsageAnswer};
+use crate::modules::chat::public_chat;
 use crate::modules::chat::quota::unsigned;
 use crate::modules::chat::rooms::lookup;
 use crate::modules::chat::{ChatCaller, ChatResult, ChatState};
@@ -33,7 +34,9 @@ async fn usage_rows(chat: &ChatState, caller: &ChatCaller) -> ChatResult<UsageAn
     )
     .fetch_all(&chat.pg)
     .await?;
+    let sees_public = caller.sees_public();
     let conversations = stream::iter(rows)
+        .filter(|row| std::future::ready(sees_public || row.conversation_id != public_chat::ID))
         .map(|row| async move {
             let gone = match (row.live, row.kind.as_deref()) {
                 (false, _) | (_, None) => true,

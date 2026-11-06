@@ -28,6 +28,15 @@ pub struct CallerDevice {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub history_unlocked: bool,
+    pub public_chat: bool,
+}
+
+impl ChatCaller {
+    pub fn sees_public(&self) -> bool {
+        self.device
+            .as_ref()
+            .is_some_and(|device| device.public_chat)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

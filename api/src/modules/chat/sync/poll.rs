@@ -175,6 +175,7 @@ impl Poll<'_> {
                     focus: self.request.focus,
                     include_focus,
                     budget: self.plan.budget,
+                    public: self.caller.sees_public(),
                 };
                 let built = answer::build(self.chat, &ask, &changes, self.incarnation).await?;
                 if let Some(live) = built.focus_live {

@@ -40,6 +40,8 @@ pub struct SendMessage {
     pub body: Vec<u8>,
     #[serde(default)]
     pub media: Vec<Uuid>,
+    #[serde(default)]
+    pub pings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +141,7 @@ async fn deliver(
     let row = store::store(&chat.pg, &access, device, &outgoing, inherited).await?;
     if access.is_public() {
         public_chat::delivery::publish(chat, std::slice::from_ref(&row)).await?;
+        public_chat::pings::deliver(chat, &row, &outgoing.pings, &caller.user_id).await;
     } else {
         fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
     }

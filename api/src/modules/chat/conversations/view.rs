@@ -58,6 +58,8 @@ pub struct ConversationView {
     pub member_count: i32,
     pub ttl_s: Option<i32>,
     pub room_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinged: Option<bool>,
     pub me: MembershipView,
 }
 
@@ -103,6 +105,7 @@ impl ListedRow {
             member_count: self.member_count,
             ttl_s: self.ttl_s,
             room_ref: self.room_ref,
+            pinged: None,
             me: MembershipView {
                 role: self.role,
                 state: self.state,

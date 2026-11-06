@@ -95,6 +95,7 @@ pub fn caller_on(user_id: &str, device: Uuid, tier: Tier) -> ChatCaller {
             id: device,
             created_at: Utc::now(),
             history_unlocked: true,
+            public_chat: true,
         }),
         tier,
         max_bytes: 262_144,

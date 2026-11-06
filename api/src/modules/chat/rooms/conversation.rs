@@ -65,6 +65,7 @@ pub async fn view(
         member_count: i32::try_from(room.members.len()).unwrap_or(row.member_count),
         ttl_s: row.ttl_s,
         room_ref: row.room_ref,
+        pinged: None,
         me: MembershipView {
             role: role(&member).to_owned(),
             state: "active".to_owned(),

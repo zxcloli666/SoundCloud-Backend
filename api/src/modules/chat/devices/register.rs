@@ -11,9 +11,9 @@ use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, users};
 
 const PLATFORM_MAX: usize = 32;
 const NAME_MAX: usize = 64;
-const APP_VERSION_MAX: usize = 32;
-const CAPS_MAX: usize = 16;
-const CAP_MAX: usize = 32;
+pub(super) const APP_VERSION_MAX: usize = 32;
+pub(super) const CAPS_MAX: usize = 16;
+pub(super) const CAP_MAX: usize = 32;
 
 struct Enrolled {
     row: DeviceRow,
@@ -158,7 +158,7 @@ fn validated(request: RegisterDevice) -> ChatResult<RegisterDevice> {
     Ok(RegisterDevice { name, ..request })
 }
 
-fn token(value: &str, max: usize) -> bool {
+pub(super) fn token(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 

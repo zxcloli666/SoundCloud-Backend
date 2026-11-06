@@ -1,8 +1,11 @@
 pub mod delete;
 pub mod delivery;
 pub mod gate;
+pub mod hidden;
 mod join;
 pub mod log;
+pub mod pings;
+pub mod reads;
 pub mod sanctions;
 mod slow;
 pub mod staff;
@@ -89,3 +92,11 @@ mod delivery_tests;
 #[cfg(test)]
 #[path = "tests/public_upkeep_tests.rs"]
 mod upkeep_tests;
+
+#[cfg(test)]
+#[path = "tests/public_ping_tests.rs"]
+mod ping_tests;
+
+#[cfg(test)]
+#[path = "tests/public_cap_tests.rs"]
+mod cap_tests;

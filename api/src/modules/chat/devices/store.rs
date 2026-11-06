@@ -160,3 +160,20 @@ pub async fn rekey_user(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result<
         .await
         .map(|done| done.rows_affected())
 }
+
+pub async fn refresh(
+    db: impl PgExecutor<'_>,
+    id: Uuid,
+    app_version: &str,
+    caps: &[String],
+) -> sqlx::Result<Option<DeviceRow>> {
+    sqlx::query_file_as!(
+        DeviceRow,
+        "queries/chat/devices/refresh.sql",
+        id,
+        app_version,
+        caps
+    )
+    .fetch_optional(db)
+    .await
+}

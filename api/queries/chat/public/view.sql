@@ -10,7 +10,8 @@ SELECT c.id,
        m.last_read_seq AS "last_read_seq?",
        m.muted_until AS "muted_until?",
        m.notify AS "notify?",
-       m.hidden_before_seq AS "hidden_before_seq?"
+       m.hidden_before_seq AS "hidden_before_seq?",
+       m.last_ping_seq AS "last_ping_seq?"
 FROM chat.conversations c
 LEFT JOIN chat.members m ON m.conversation_id = c.id AND m.user_id = $2
 WHERE c.id = $1

@@ -18,6 +18,7 @@ pub struct Ask<'a> {
     pub focus: Option<Uuid>,
     pub include_focus: bool,
     pub budget: usize,
+    pub public: bool,
 }
 
 pub struct Built {
@@ -71,7 +72,26 @@ pub async fn build(
     incarnation: Uuid,
 ) -> ChatResult<Built> {
     let ids = answer_order(ask, &changes.deltas);
-    let states = seats::load(chat, ask.user_id, &ids).await?;
+    let mut states = seats::load(chat, ask.user_id, &ids).await?;
+    let (deltas, focus) = if ask.public {
+        (changes.deltas.clone(), ask.focus)
+    } else {
+        let hidden: HashSet<Uuid> = states
+            .values()
+            .filter(|state| state.is_public())
+            .map(|state| state.id)
+            .collect();
+        states.retain(|id, _| !hidden.contains(id));
+        let deltas = changes
+            .deltas
+            .iter()
+            .filter(
+                |delta| !matches!(&delta.change, Change::Conversation(id) if hidden.contains(id)),
+            )
+            .cloned()
+            .collect();
+        (deltas, ask.focus.filter(|id| !hidden.contains(id)))
+    };
     let known: HashMap<Uuid, i64> = ask.known.iter().copied().collect();
     let wanted: Vec<Fetch> = ids
         .iter()
@@ -81,11 +101,11 @@ pub async fn build(
     let mut assembled = assemble(&Inputs {
         incarnation,
         versions: changes.versions,
-        deltas: &changes.deltas,
+        deltas: &deltas,
         states: &states,
         known: &known,
         rows: &rows,
-        focus: ask.focus,
+        focus,
         include_focus: ask.include_focus,
         budget: ask.budget,
         now: Utc::now(),

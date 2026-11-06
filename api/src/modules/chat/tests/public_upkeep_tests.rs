@@ -53,7 +53,10 @@ async fn the_server_key_is_sealed_to_a_fresh_device_without_a_history_gate(pool:
     let me = fresh_user();
     let device = enroll(&chat, &pool, &me).await;
     open(&chat, &me).await;
-    let who = caller(&me, device.session, Some(&device.row));
+    let mut row = device.row.clone();
+    row.caps
+        .push(crate::modules::chat::devices::CAP_PUBLIC_CHAT.to_owned());
+    let who = caller(&me, device.session, Some(&row));
     let keys = crate::modules::chat::devices::test_support::call(
         &chat,
         who,

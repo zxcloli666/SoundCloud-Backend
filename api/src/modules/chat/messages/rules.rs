@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use sc_chat_wire::msg::Class;
@@ -12,6 +12,7 @@ use crate::modules::chat::model::MemberState;
 use crate::modules::chat::{ChatError, ChatResult};
 
 pub const BODY_MAX: usize = 48 * 1024;
+pub const PINGS_MAX: usize = 5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Outgoing {
@@ -21,6 +22,7 @@ pub struct Outgoing {
     pub target_seq: Option<i64>,
     pub body: Vec<u8>,
     pub media: Vec<Uuid>,
+    pub pings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +51,7 @@ pub fn outgoing(input: SendMessage) -> ChatResult<Outgoing> {
         return Err(ChatError::Invalid);
     }
     admit_media(class, &input.media)?;
+    let pings = admit_pings(class, input.pings)?;
     Ok(Outgoing {
         client_id: input.client_id,
         class,
@@ -56,7 +59,23 @@ pub fn outgoing(input: SendMessage) -> ChatResult<Outgoing> {
         target_seq: input.target_seq,
         body: input.body,
         media: input.media,
+        pings,
     })
+}
+
+fn admit_pings(class: Class, pings: Vec<String>) -> ChatResult<Vec<String>> {
+    if class != Class::Post {
+        return Ok(Vec::new());
+    }
+    let unique: Vec<String> = pings
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if unique.len() > PINGS_MAX {
+        return Err(ChatError::Invalid);
+    }
+    Ok(unique)
 }
 
 fn admit_media(class: Class, media: &[Uuid]) -> ChatResult<()> {

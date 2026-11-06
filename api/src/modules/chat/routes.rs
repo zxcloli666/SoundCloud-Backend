@@ -14,7 +14,10 @@ pub fn inner() -> Router<Arc<ChatState>> {
     Router::new()
         .route("/chat/config", get(channel::config_route::chat_config))
         .route("/chat/devices", get(devices::list).post(devices::register))
-        .route("/chat/devices/me", delete(devices::remove_me))
+        .route(
+            "/chat/devices/me",
+            delete(devices::remove_me).put(devices::refresh_me),
+        )
         .route("/chat/devices/{id}", delete(devices::remove))
         .route("/chat/devices/{id}/confirm", post(devices::confirm))
         .route("/chat/devices/{id}/not-me", post(devices::not_me))
@@ -101,6 +104,7 @@ pub fn inner() -> Router<Arc<ChatState>> {
         )
         .route("/chat/rooms/{code}/settings", put(rooms::settings))
         .route("/chat/rooms/{code}/suggest", post(rooms::suggest))
+        .route_layer(middleware::from_fn(public_chat::hidden::gate))
         .route_layer(middleware::from_fn(route_metrics::track))
 }
 

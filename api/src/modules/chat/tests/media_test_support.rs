@@ -131,6 +131,7 @@ pub fn who(user: &str) -> ChatCaller {
             id: DEVICE,
             created_at: chrono::Utc::now() - chrono::Duration::days(30),
             history_unlocked: true,
+            public_chat: true,
         }),
         tier: Tier::Direct,
         max_bytes: 262_144,

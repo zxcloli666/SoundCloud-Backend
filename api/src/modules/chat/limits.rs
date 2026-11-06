@@ -75,6 +75,8 @@ pub enum Bucket {
     MediaRestore,
     PublicMod,
     PublicWatch,
+    PublicPing,
+    DeviceRefresh,
 }
 
 impl Bucket {
@@ -99,13 +101,15 @@ impl Bucket {
             Bucket::MediaRestore => "media_restore",
             Bucket::PublicMod => "public_mod",
             Bucket::PublicWatch => "public_watch",
+            Bucket::PublicPing => "public_ping",
+            Bucket::DeviceRefresh => "device_refresh",
         }
     }
 
     pub fn windows(self) -> &'static [Window] {
         match self {
             Bucket::Send => &SEND_WINDOWS,
-            Bucket::Create | Bucket::Invite => &HOURLY_30,
+            Bucket::Create | Bucket::Invite | Bucket::DeviceRefresh => &HOURLY_30,
             Bucket::Request | Bucket::Report => &DAILY_20,
             Bucket::Device => &DAILY_5,
             Bucket::ReadMessages => &MINUTE_60,
@@ -117,6 +121,7 @@ impl Bucket {
             Bucket::MediaUsage | Bucket::MediaMine => &MINUTE_60,
             Bucket::MediaDelete | Bucket::MediaRestore | Bucket::PublicWatch => &MINUTE_30,
             Bucket::PublicMod => &MINUTE_120,
+            Bucket::PublicPing => &PING_WINDOWS,
         }
     }
 
@@ -139,7 +144,9 @@ impl Bucket {
             | Bucket::Device
             | Bucket::MediaDelete
             | Bucket::MediaRestore
-            | Bucket::PublicMod => ChatError::RequestLimit,
+            | Bucket::PublicMod
+            | Bucket::PublicPing
+            | Bucket::DeviceRefresh => ChatError::RequestLimit,
         }
     }
 }
@@ -180,6 +187,7 @@ const MEDIA_RESERVE: [Window; 2] = [
     Window::new("10m", 30, Duration::from_secs(600)),
     Window::new("1d", 300, DAY),
 ];
+const PING_WINDOWS: [Window; 1] = [Window::new("10m", 20, Duration::from_secs(600))];
 const MINUTE_10: [Window; 1] = [Window::new("1m", 10, MINUTE)];
 const NEWCOMER_REQUESTS: Window = Window::new("1d:new", 10, DAY);
 const PER_CONVERSATION_SENDS: Window = Window::new("5s", 5, Duration::from_secs(5));

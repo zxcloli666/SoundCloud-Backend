@@ -35,9 +35,10 @@ pub async fn sync(
         .map(|device| device.id)
         .ok_or(ChatError::Invalid)?;
     request.validate()?;
-    marks::record(&chat, &caller.user_id, &request).await?;
+    marks::record(&chat, &caller.user_id, caller.sees_public(), &request).await?;
     presence::touch(&chat, &caller.user_id).await;
     if chat.config.public
+        && caller.sees_public()
         && request.focus == Some(public_chat::ID)
         && let Err(error) = public_chat::watchers::touch(&chat, &caller.user_id).await
     {

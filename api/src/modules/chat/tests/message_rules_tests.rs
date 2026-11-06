@@ -12,6 +12,7 @@ fn input(class: &str, target_seq: Option<i64>, body: usize) -> SendMessage {
         target_seq,
         body: vec![7; body],
         media: Vec::new(),
+        pings: Vec::new(),
     }
 }
 

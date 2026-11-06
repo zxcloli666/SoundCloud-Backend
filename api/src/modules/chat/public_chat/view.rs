@@ -21,6 +21,7 @@ pub struct Row {
     pub muted_until: Option<DateTime<Utc>>,
     pub notify: Option<String>,
     pub hidden_before_seq: Option<i64>,
+    pub last_ping_seq: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -36,6 +37,7 @@ impl Row {
 
     fn into_view(self, online: u32) -> ConversationView {
         let pinned = self.created_at.timestamp_millis();
+        let pinged = self.last_ping_seq.unwrap_or(0) > self.last_read_seq.unwrap_or(0);
         ConversationView {
             id: self.id,
             kind: "public".to_owned(),
@@ -51,6 +53,7 @@ impl Row {
             member_count: i32::try_from(online).unwrap_or(i32::MAX),
             ttl_s: None,
             room_ref: None,
+            pinged: Some(pinged),
             me: MembershipView {
                 role: self.role.unwrap_or_else(|| "member".to_owned()),
                 state: self.state.unwrap_or_else(|| "active".to_owned()),

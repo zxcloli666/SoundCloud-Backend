@@ -1,5 +1,6 @@
 pub mod bind;
 mod cache;
+mod refresh;
 mod register;
 mod rules;
 mod store;
@@ -23,6 +24,7 @@ use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, sync};
 
 pub use cache::DeviceCache;
 
+pub const CAP_PUBLIC_CHAT: &str = "public_chat";
 const TOUCH_EVERY_MINUTES: i64 = 10;
 const TOUCH_SPREAD_SECONDS: u128 = 300;
 
@@ -35,12 +37,28 @@ pub struct RegisterDevice {
     pub caps: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefreshDevice {
+    pub app_version: String,
+    #[serde(default)]
+    pub caps: Vec<String>,
+}
+
 pub async fn register(
     caller: ChatCaller,
     State(chat): State<Arc<ChatState>>,
     ChatJson(request): ChatJson<RegisterDevice>,
 ) -> ChatResult<Json<DeviceView>> {
     let row = register::register(&chat, &caller, request).await?;
+    Ok(Json(view(&row, Some(row.id), Utc::now())))
+}
+
+pub async fn refresh_me(
+    caller: ChatCaller,
+    State(chat): State<Arc<ChatState>>,
+    ChatJson(request): ChatJson<RefreshDevice>,
+) -> ChatResult<Json<DeviceView>> {
+    let row = refresh::refresh(&chat, &caller, request).await?;
     Ok(Json(view(&row, Some(row.id), Utc::now())))
 }
 
@@ -244,6 +262,7 @@ impl From<&DeviceRow> for CallerDevice {
             id: row.id,
             created_at: row.created_at,
             history_unlocked: row.history_unlocked_at.is_some(),
+            public_chat: row.caps.iter().any(|cap| cap == CAP_PUBLIC_CHAT),
         }
     }
 }

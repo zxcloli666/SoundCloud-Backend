@@ -74,6 +74,7 @@ pub async fn file(
     match body.filing()? {
         Filing::Messages(input) => {
             validate(&input)?;
+            public_chat::hidden::from(&caller, input.conversation_id)?;
             limits::admit(&chat, Bucket::Report, &caller.user_id).await?;
             let filed = file_with(&chat, &chat.keks, &caller.user_id, &input).await?;
             if !filed.duplicate {

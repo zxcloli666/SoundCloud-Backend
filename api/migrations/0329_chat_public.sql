@@ -4,6 +4,7 @@ ALTER TABLE chat.conversations DROP CONSTRAINT IF EXISTS conversations_kind_chec
 ALTER TABLE chat.conversations ADD CONSTRAINT conversations_kind_check CHECK (kind IN ('direct', 'group', 'room', 'self', 'public'));
 
 ALTER TABLE chat.members ADD COLUMN IF NOT EXISTS joined_at timestamptz;
+ALTER TABLE chat.members ADD COLUMN IF NOT EXISTS last_ping_seq bigint NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS chat.public_mutes (
     user_id text PRIMARY KEY,

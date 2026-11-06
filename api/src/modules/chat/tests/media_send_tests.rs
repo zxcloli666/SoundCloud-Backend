@@ -121,6 +121,7 @@ async fn bad_rows_are_missing_and_nothing_is_stored(pool: PgPool) {
         target_seq: None,
         body: out.body.clone(),
         media: out.media.clone(),
+        pings: Vec::new(),
     };
     assert_eq!(rules::outgoing(input).err(), Some(ChatError::Invalid));
 }

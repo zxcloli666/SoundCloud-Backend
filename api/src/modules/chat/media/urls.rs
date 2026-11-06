@@ -9,6 +9,7 @@ use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::media::limits::GET_TTL;
 use crate::modules::chat::media::wire::{MediaUrl, UrlsAnswer, UrlsBody};
 use crate::modules::chat::members::access;
+use crate::modules::chat::public_chat;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
 pub async fn media_urls(
@@ -18,6 +19,9 @@ pub async fn media_urls(
 ) -> ChatResult<Json<UrlsAnswer>> {
     limits::admit(&chat, Bucket::MediaUrls, &caller.user_id).await?;
     body.validate()?;
+    if let Some(conversation) = body.conversation_id {
+        public_chat::hidden::from(&caller, conversation)?;
+    }
     sign_rows(&chat, &caller, &body).await.map(Json)
 }
 

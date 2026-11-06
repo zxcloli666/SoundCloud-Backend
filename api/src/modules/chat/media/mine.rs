@@ -13,6 +13,7 @@ use crate::modules::chat::media::limits::{MINE_LIMIT_DEFAULT, MINE_LIMIT_MAX};
 use crate::modules::chat::media::wire::{
     MediaKind, MineItem, MineOrder, MinePage, MineQuery, MineStatus,
 };
+use crate::modules::chat::public_chat;
 use crate::modules::chat::quota::unsigned;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
@@ -80,6 +81,9 @@ pub async fn media_mine(
     ChatQuery(query): ChatQuery<MineQuery>,
 ) -> ChatResult<Json<MinePage>> {
     limits::admit(&chat, Bucket::MediaMine, &caller.user_id).await?;
+    if let Some(conversation) = query.conversation_id {
+        public_chat::hidden::from(&caller, conversation)?;
+    }
     if query
         .limit
         .is_some_and(|limit| limit == 0 || limit > MINE_LIMIT_MAX)
