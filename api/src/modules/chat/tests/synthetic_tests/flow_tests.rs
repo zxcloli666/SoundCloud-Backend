@@ -86,13 +86,17 @@ async fn a_seed_builds_users_devices_and_chats_that_work_through_the_sealed_chan
         24
     );
     assert_eq!(
-        count(&pg, "SELECT count(*) FROM chat.conversations").await,
+        count(
+            &pg,
+            "SELECT count(*) FROM chat.conversations WHERE created_by LIKE 'lt:%'"
+        )
+        .await,
         3
     );
     assert_eq!(
         count(
             &pg,
-            "SELECT count(*) FROM chat.members WHERE state = 'active' AND accepted"
+            "SELECT count(*) FROM chat.members WHERE user_id LIKE 'lt:%' AND state = 'active' AND accepted"
         )
         .await,
         12
