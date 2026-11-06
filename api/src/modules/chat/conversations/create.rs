@@ -26,18 +26,13 @@ pub enum DirectPlan {
     New {
         peer: String,
         peer_state: MemberState,
+        stranger: bool,
     },
 }
 
 impl DirectPlan {
     pub fn is_request(&self) -> bool {
-        matches!(
-            self,
-            DirectPlan::New {
-                peer_state: MemberState::Invited,
-                ..
-            }
-        )
+        matches!(self, DirectPlan::New { stranger: true, .. })
     }
 }
 
@@ -129,14 +124,13 @@ pub async fn plan_direct(pg: &PgPool, user: &str, peer: &str) -> ChatResult<Dire
             peer: peer.to_owned(),
         });
     }
-    let placed = contacts::placements(pg, user, &[peer.to_owned()])
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(ChatError::Unavailable)?;
+    let relation = contacts::relation(pg, user, peer).await?;
+    let policy = contacts::policy(pg, peer).await?;
+    let peer_state = contacts::placement(relation, policy).ok_or(ChatError::Unavailable)?;
     Ok(DirectPlan::New {
-        peer: placed.0,
-        peer_state: placed.1,
+        peer: peer.to_owned(),
+        peer_state,
+        stranger: !relation.known(),
     })
 }
 
@@ -154,7 +148,9 @@ pub async fn reopen(pg: &PgPool, conversation: Uuid, user: &str) -> ChatResult<b
 pub async fn direct(pg: &PgPool, user: &str, plan: DirectPlan) -> ChatResult<Created> {
     let (peer, peer_state) = match plan {
         DirectPlan::Existing { id, peer } => return existing_direct(pg, id, user, peer).await,
-        DirectPlan::New { peer, peer_state } => (peer, peer_state),
+        DirectPlan::New {
+            peer, peer_state, ..
+        } => (peer, peer_state),
     };
     let key = dm_key(user, &peer);
     let id = Uuid::now_v7();

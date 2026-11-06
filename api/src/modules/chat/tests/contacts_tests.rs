@@ -17,30 +17,47 @@ const CONTACT: Relation = Relation {
 fn a_contact_always_gets_in() {
     for policy in [DmPolicy::Everyone, DmPolicy::Following, DmPolicy::Nobody] {
         assert_eq!(placement(CONTACT, policy), Some(MemberState::Active));
+        assert_eq!(group_placement(CONTACT, policy), Some(MemberState::Active));
     }
 }
 
 #[test]
 fn someone_the_recipient_follows_gets_in_unless_they_said_nobody() {
-    assert_eq!(
-        placement(FOLLOWED_BY, DmPolicy::Everyone),
-        Some(MemberState::Active)
-    );
-    assert_eq!(
-        placement(FOLLOWED_BY, DmPolicy::Following),
-        Some(MemberState::Active)
-    );
+    for policy in [DmPolicy::Everyone, DmPolicy::Following] {
+        assert_eq!(placement(FOLLOWED_BY, policy), Some(MemberState::Active));
+        assert_eq!(
+            group_placement(FOLLOWED_BY, policy),
+            Some(MemberState::Active)
+        );
+    }
     assert_eq!(placement(FOLLOWED_BY, DmPolicy::Nobody), None);
+    assert_eq!(group_placement(FOLLOWED_BY, DmPolicy::Nobody), None);
 }
 
 #[test]
-fn a_stranger_lands_in_requests_only_when_everyone_may_write() {
+fn a_stranger_writes_directly_to_everyone_and_asks_the_rest() {
     assert_eq!(
         placement(STRANGER, DmPolicy::Everyone),
+        Some(MemberState::Active)
+    );
+    assert_eq!(
+        placement(STRANGER, DmPolicy::Following),
         Some(MemberState::Invited)
     );
-    assert_eq!(placement(STRANGER, DmPolicy::Following), None);
     assert_eq!(placement(STRANGER, DmPolicy::Nobody), None);
+}
+
+#[test]
+fn a_stranger_never_lands_active_in_a_group() {
+    assert_eq!(
+        group_placement(STRANGER, DmPolicy::Everyone),
+        Some(MemberState::Invited)
+    );
+    assert_eq!(
+        group_placement(STRANGER, DmPolicy::Following),
+        Some(MemberState::Invited)
+    );
+    assert_eq!(group_placement(STRANGER, DmPolicy::Nobody), None);
 }
 
 #[test]
@@ -79,7 +96,7 @@ async fn a_block_either_way_closes_the_dm_and_self_is_always_open(pool: sqlx::Pg
         .expect("open dms");
     assert_eq!(
         landing(&chat, "1", "2", STRANGER).await.expect("read"),
-        Some(MemberState::Invited)
+        Some(MemberState::Active)
     );
     sqlx::query("INSERT INTO chat.blocks (user_id, blocked_user) VALUES ('2', '1')")
         .execute(&pool)

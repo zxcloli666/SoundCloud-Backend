@@ -15,6 +15,7 @@ pub async fn dm(pg: &PgPool, user: &str, peer: &str, peer_state: MemberState) ->
     let plan = DirectPlan::New {
         peer: peer.to_owned(),
         peer_state,
+        stranger: false,
     };
     create::direct(pg, user, plan).await.expect("a dm").id
 }

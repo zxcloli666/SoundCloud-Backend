@@ -14,14 +14,32 @@ pub struct Relation {
     pub contact: bool,
 }
 
+impl Relation {
+    pub fn known(self) -> bool {
+        self.follows || self.contact
+    }
+}
+
 pub fn placement(relation: Relation, policy: DmPolicy) -> Option<MemberState> {
-    let known = relation.follows || relation.contact;
     match policy {
-        DmPolicy::Everyone if known => Some(MemberState::Active),
-        DmPolicy::Everyone => Some(MemberState::Invited),
-        DmPolicy::Following if known => Some(MemberState::Active),
-        DmPolicy::Nobody if relation.contact => Some(MemberState::Active),
-        DmPolicy::Following | DmPolicy::Nobody => None,
+        DmPolicy::Everyone => Some(MemberState::Active),
+        DmPolicy::Following => Some(known_or_invited(relation)),
+        DmPolicy::Nobody => relation.contact.then_some(MemberState::Active),
+    }
+}
+
+pub fn group_placement(relation: Relation, policy: DmPolicy) -> Option<MemberState> {
+    match policy {
+        DmPolicy::Everyone | DmPolicy::Following => Some(known_or_invited(relation)),
+        DmPolicy::Nobody => relation.contact.then_some(MemberState::Active),
+    }
+}
+
+fn known_or_invited(relation: Relation) -> MemberState {
+    if relation.known() {
+        MemberState::Active
+    } else {
+        MemberState::Invited
     }
 }
 
@@ -62,6 +80,13 @@ pub async fn relation(pg: &PgPool, user: &str, other: &str) -> ChatResult<Relati
         .unwrap_or_default())
 }
 
+pub async fn policy(pg: &PgPool, user: &str) -> ChatResult<DmPolicy> {
+    Ok(policies(pg, &[user.to_owned()])
+        .await?
+        .remove(user)
+        .unwrap_or(DmPolicy::Following))
+}
+
 pub async fn landing(
     chat: &ChatState,
     sender: &str,
@@ -74,10 +99,7 @@ pub async fn landing(
     if blocks::blocked_between(chat, sender, recipient).await? {
         return Ok(None);
     }
-    let policy = policies(&chat.pg, &[recipient.to_owned()])
-        .await?
-        .remove(recipient)
-        .unwrap_or(DmPolicy::Following);
+    let policy = policy(&chat.pg, recipient).await?;
     Ok(placement(relation, policy))
 }
 
@@ -96,7 +118,7 @@ pub async fn placements(
                 .get(candidate)
                 .copied()
                 .unwrap_or(DmPolicy::Following);
-            placement(relation, policy).map(|state| (candidate.clone(), state))
+            group_placement(relation, policy).map(|state| (candidate.clone(), state))
         })
         .collect())
 }

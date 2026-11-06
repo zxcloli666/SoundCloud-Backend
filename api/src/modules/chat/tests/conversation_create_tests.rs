@@ -25,7 +25,8 @@ async fn a_dm_is_one_conversation_from_either_side(pool: PgPool) -> ChatResult<(
         first,
         DirectPlan::New {
             peer: "202".to_owned(),
-            peer_state: MemberState::Active
+            peer_state: MemberState::Active,
+            stranger: false
         }
     );
     let created = direct(&pool, "101", first).await?;
@@ -52,6 +53,7 @@ async fn two_racing_creates_of_one_dm_end_in_one_row(pool: PgPool) -> ChatResult
     let plan = DirectPlan::New {
         peer: "202".to_owned(),
         peer_state: MemberState::Active,
+        stranger: false,
     };
     let (left, right) = tokio::join!(
         direct(&pool, "101", plan.clone()),
@@ -62,33 +64,66 @@ async fn two_racing_creates_of_one_dm_end_in_one_row(pool: PgPool) -> ChatResult
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
-async fn the_recipient_policy_decides_where_a_stranger_lands(pool: PgPool) -> ChatResult<()> {
-    assert_eq!(
-        plan_direct(&pool, "101", "202").await,
-        Err(ChatError::Unavailable)
-    );
-    dm_policy(&pool, "202", "everyone").await;
+async fn a_stranger_to_a_following_recipient_lands_in_requests(pool: PgPool) -> ChatResult<()> {
     let plan = plan_direct(&pool, "101", "202").await?;
     assert!(plan.is_request());
     let created = direct(&pool, "101", plan).await?;
     assert_eq!(created.requests, vec!["202".to_owned()]);
-    let id = created.id;
-    let members = members_of(&pool, id).await;
     assert_eq!(
-        members,
+        members_of(&pool, created.id).await,
         vec![
             ("101".into(), "member".into(), "active".into(), true),
             ("202".into(), "member".into(), "invited".into(), false),
         ]
     );
+    let asked = view::one(&pool, created.id, "202").await?;
+    assert_eq!(asked.me.state, "invited");
+    assert_eq!(asked.me.invited_by.as_deref(), Some("101"));
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_known_sender_to_a_following_recipient_lands_directly(pool: PgPool) -> ChatResult<()> {
+    follow(&pool, "202", "101").await;
+    let plan = plan_direct(&pool, "101", "202").await?;
+    assert!(!plan.is_request());
+    let created = direct(&pool, "101", plan).await?;
+    assert!(created.requests.is_empty());
+    assert_eq!(
+        access_of(&pool, created.id, "202").await.state,
+        MemberState::Active
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_stranger_to_an_everyone_recipient_lands_active_but_is_charged_as_a_request(
+    pool: PgPool,
+) -> ChatResult<()> {
+    dm_policy(&pool, "202", "everyone").await;
+    let plan = plan_direct(&pool, "101", "202").await?;
+    assert!(plan.is_request());
+    let created = direct(&pool, "101", plan).await?;
+    assert!(created.requests.is_empty());
+    assert_eq!(
+        access_of(&pool, created.id, "202").await.state,
+        MemberState::Active
+    );
+    Ok(())
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_nobody_recipient_refuses_everyone_but_contacts(pool: PgPool) -> ChatResult<()> {
     dm_policy(&pool, "303", "nobody").await;
+    assert_eq!(
+        plan_direct(&pool, "101", "303").await,
+        Err(ChatError::Unavailable)
+    );
     follow(&pool, "303", "101").await;
     assert_eq!(
         plan_direct(&pool, "101", "303").await,
         Err(ChatError::Unavailable)
     );
-    follow(&pool, "404", "101").await;
-    assert!(!plan_direct(&pool, "101", "404").await?.is_request());
     Ok(())
 }
 
@@ -105,7 +140,8 @@ async fn sharing_an_accepted_group_makes_a_contact(pool: PgPool) -> ChatResult<(
         plan_direct(&pool, "202", "101").await,
         Ok(DirectPlan::New {
             peer: "101".to_owned(),
-            peer_state: MemberState::Active
+            peer_state: MemberState::Active,
+            stranger: false
         })
     );
     Ok(())
