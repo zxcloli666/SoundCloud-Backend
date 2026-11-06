@@ -6,6 +6,7 @@ pub fn kind(raw: &str) -> ChatResult<ConversationKind> {
         "direct" => Ok(ConversationKind::Direct),
         "group" => Ok(ConversationKind::Group),
         "room" => Ok(ConversationKind::Room),
+        "public" => Ok(ConversationKind::Public),
         "self" => Ok(ConversationKind::Saved),
         _ => Err(ChatError::Internal),
     }
@@ -66,7 +67,9 @@ pub fn may_set_ttl(kind: ConversationKind, role: MemberRole) -> ChatResult<()> {
         ConversationKind::Direct => Ok(()),
         ConversationKind::Group if is_admin(role) => Ok(()),
         ConversationKind::Group => Err(ChatError::NotMember),
-        ConversationKind::Room | ConversationKind::Saved => Err(ChatError::Invalid),
+        ConversationKind::Room | ConversationKind::Public | ConversationKind::Saved => {
+            Err(ChatError::Invalid)
+        }
     }
 }
 
@@ -75,7 +78,7 @@ pub fn may_delete_for_everyone(kind: ConversationKind, role: MemberRole) -> Chat
         ConversationKind::Direct | ConversationKind::Saved => Ok(()),
         ConversationKind::Group if role == MemberRole::Owner => Ok(()),
         ConversationKind::Group => Err(ChatError::NotMember),
-        ConversationKind::Room => Err(ChatError::Invalid),
+        ConversationKind::Room | ConversationKind::Public => Err(ChatError::Invalid),
     }
 }
 

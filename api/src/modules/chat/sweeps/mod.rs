@@ -6,6 +6,7 @@ pub mod hooks;
 pub mod leader;
 pub mod marks;
 pub mod media;
+pub mod public_chat;
 pub mod purge;
 pub mod redis_info;
 pub mod reports;

@@ -34,8 +34,8 @@ const REQUIRED_CORE_SCHEMA: Required = Required {
     description: "users banner url",
 };
 const REQUIRED_CHAT_SCHEMA: Required = Required {
-    version: 320,
-    description: "chat devices alive checked at",
+    version: 329,
+    description: "chat public",
 };
 const RECOMMENDATIONS_STATEMENT_TIMEOUT: &str = "15s";
 const RELEASE_PING_TIMEOUT: Duration = Duration::from_secs(5);

@@ -5,7 +5,7 @@ use crate::modules::chat::media;
 use crate::modules::chat::moderation::decide::Ban;
 use crate::modules::chat::reports::EVIDENCE_KEEP_DAYS;
 use crate::modules::chat::users::{self, Restriction, Scope};
-use crate::modules::chat::{ChatResult, ChatState, sync};
+use crate::modules::chat::{ChatResult, ChatState, public_chat, sync};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Closing {
@@ -58,9 +58,13 @@ pub async fn announce_removed(chat: &ChatState, conversation: Uuid, removed: &[i
 }
 
 async fn announce(chat: &ChatState, conversation: Uuid, removed: &[i64]) -> ChatResult<()> {
-    let members = sqlx::query_file_scalar!("queries/chat/reports/live_members.sql", conversation)
-        .fetch_all(&chat.pg)
-        .await?;
+    let members = if conversation == public_chat::ID {
+        public_chat::watchers::current(chat).await?
+    } else {
+        sqlx::query_file_scalar!("queries/chat/reports/live_members.sql", conversation)
+            .fetch_all(&chat.pg)
+            .await?
+    };
     sync::bump::messages_gone(chat, conversation, removed, &members).await
 }
 

@@ -22,7 +22,7 @@ use axum::extract::State;
 use crate::modules::chat::body::ChatJson;
 use crate::modules::chat::sync::reply::SyncReply;
 use crate::modules::chat::sync::wire::SyncRequest;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, presence};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, presence, public_chat};
 
 pub async fn sync(
     caller: ChatCaller,
@@ -37,6 +37,12 @@ pub async fn sync(
     request.validate()?;
     marks::record(&chat, &caller.user_id, &request).await?;
     presence::touch(&chat, &caller.user_id).await;
+    if chat.config.public
+        && request.focus == Some(public_chat::ID)
+        && let Err(error) = public_chat::watchers::touch(&chat, &caller.user_id).await
+    {
+        tracing::debug!(code = error.code(), "a public chat watcher was not kept");
+    }
     poll::run(&chat, &caller, device, &request).await
 }
 

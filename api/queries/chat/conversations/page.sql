@@ -30,5 +30,6 @@ WHERE m.user_id = $1
   AND m.state IN ('active', 'invited')
   AND m.conversation_id > $2
   AND c.deleted_at IS NULL
+  AND c.kind <> 'public'
 ORDER BY m.conversation_id
 LIMIT $3

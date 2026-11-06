@@ -30,7 +30,9 @@ use crate::modules::chat::members::{access, changes, contacts};
 use crate::modules::chat::messages::fanout;
 use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::users::{self, Scope};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks, requests, rooms};
+use crate::modules::chat::{
+    ChatCaller, ChatError, ChatResult, ChatState, blocks, public_chat, requests, rooms,
+};
 
 pub const LIST_ROWS_MAX: usize = 200;
 pub const LIST_BYTES_MAX: usize = 128 * 1024;
@@ -86,7 +88,12 @@ pub async fn list(
         Ok(asked) if asked > 0 => asked.min(LIST_BYTES_MAX),
         _ => LIST_BYTES_MAX,
     };
-    Ok(Json(view::fit(rows, &caller.user_id, LIST_ROWS_MAX, cap)))
+    let mut page = view::fit(rows, &caller.user_id, LIST_ROWS_MAX, cap);
+    if query.cursor.is_none() && chat.config.public {
+        page.items
+            .insert(0, public_chat::view::of(&chat, &caller.user_id).await?);
+    }
+    Ok(Json(page))
 }
 
 pub async fn create(
@@ -152,6 +159,10 @@ pub async fn show(
     State(chat): State<Arc<ChatState>>,
     ChatPath(conversation): ChatPath<Uuid>,
 ) -> ChatResult<Json<ConversationView>> {
+    if conversation == public_chat::ID {
+        public_chat::ensure_on(&chat)?;
+        return Ok(Json(public_chat::view::of(&chat, &caller.user_id).await?));
+    }
     match view::one(&chat.pg, conversation, &caller.user_id).await {
         Err(ChatError::NotMember) => Ok(Json(
             rooms::conversation::view(&chat, conversation, &caller.user_id).await?,
@@ -185,7 +196,7 @@ pub async fn delete(
 ) -> ChatResult<StatusCode> {
     let access = access::load(&chat.pg, conversation, &caller.user_id).await?;
     match (query.scope, access.kind) {
-        (_, ConversationKind::Room) => return Err(ChatError::Invalid),
+        (_, ConversationKind::Room | ConversationKind::Public) => return Err(ChatError::Invalid),
         (DeleteScope::Me, ConversationKind::Group) => {
             let change = changes::leave(&chat.pg, &access).await?;
             if change.deleted {
@@ -218,6 +229,7 @@ pub async fn update_me(
     ChatPath(conversation): ChatPath<Uuid>,
     ChatJson(input): ChatJson<MyPatch>,
 ) -> ChatResult<Json<ConversationView>> {
+    public_chat::guard(&chat, conversation)?;
     let access = access::load(&chat.pg, conversation, &caller.user_id)
         .await?
         .readable()?;
@@ -229,6 +241,9 @@ pub async fn update_me(
         std::slice::from_ref(&caller.user_id),
     )
     .await?;
+    if conversation == public_chat::ID {
+        return Ok(Json(public_chat::view::of(&chat, &caller.user_id).await?));
+    }
     Ok(Json(
         view::one(&chat.pg, conversation, &caller.user_id).await?,
     ))

@@ -1,10 +1,12 @@
 use uuid::Uuid;
 
 use crate::modules::chat::model::ConversationKind;
+use crate::modules::chat::public_chat;
 use crate::modules::chat::rooms::lookup::{RoomChatMember, room_of_chat};
 use crate::modules::chat::{ChatError, ChatResult, ChatState, history_gate};
 
 pub struct Access {
+    pub public: bool,
     pub needs_key: bool,
     pub member_floor: i32,
     pub meta_epoch: Option<i32>,
@@ -23,6 +25,7 @@ struct Row {
 }
 
 pub async fn access(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatResult<Access> {
+    public_chat::guard(chat, conversation)?;
     let row = sqlx::query_file_as!(Row, "queries/chat/keys/access.sql", conversation, user_id)
         .fetch_optional(&chat.pg)
         .await?
@@ -34,7 +37,12 @@ pub async fn access(chat: &ChatState, conversation: Uuid, user_id: &str) -> Chat
         (member_floor(&row)?, false)
     };
     let meta_epoch = row.meta_epoch.filter(|_| shows_image && row.has_meta);
+    let public = row.kind == ConversationKind::Public.as_str();
+    if public {
+        public_chat::gate::read(chat, user_id).await?;
+    }
     Ok(Access {
+        public,
         needs_key: row.rekey || !row.current_key,
         member_floor,
         meta_epoch,

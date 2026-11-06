@@ -15,7 +15,9 @@ use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::media;
 use crate::modules::chat::moderation::evidence::{self, StoredMessage};
 use crate::modules::chat::moderation::keys::ChatKeys;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rooms, users};
+use crate::modules::chat::{
+    ChatCaller, ChatError, ChatResult, ChatState, public_chat, rooms, users,
+};
 
 pub use backdrop::{Filing, ReportBody, ReportKind, file_backdrop};
 
@@ -183,13 +185,14 @@ pub async fn file_with(
 }
 
 async fn visible_from(chat: &ChatState, reporter: &str, conversation: Uuid) -> ChatResult<i64> {
+    public_chat::guard(chat, conversation)?;
     let found = sqlx::query_file!("queries/chat/reports/conversation.sql", conversation)
         .fetch_optional(&chat.pg)
         .await?
         .filter(|row| row.live)
         .ok_or(ChatError::NotFound)?;
     match found.kind.as_str() {
-        "direct" | "group" => {
+        "direct" | "group" | "public" => {
             let member = sqlx::query_file!(
                 "queries/chat/reports/membership.sql",
                 conversation,

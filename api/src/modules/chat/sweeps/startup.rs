@@ -3,15 +3,17 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::modules::chat::rooms::lookup::room_of_chat;
-use crate::modules::chat::{ChatResult, ChatState, rt_keys, sync};
+use crate::modules::chat::{ChatResult, ChatState, public_chat, rt_keys, sync};
 
 pub const REBUMP_CHUNK: usize = 256;
 
 const ROOM: &str = "room";
+const PUBLIC: &str = "public";
 
-const SWEEP_STATEMENTS: [&str; 2] = [
+const SWEEP_STATEMENTS: [&str; 3] = [
     include_str!("../../../../queries/chat/sweeps/purge_messages.sql"),
     include_str!("../../../../queries/chat/sweeps/expired_delete.sql"),
+    include_str!("../../../../queries/chat/public/purge_old.sql"),
 ];
 
 struct Recent {
@@ -91,7 +93,7 @@ async fn recipients(chat: &ChatState, rows: &[&Recent]) -> ChatResult<HashMap<Uu
     let mut found: HashMap<Uuid, Vec<String>> = HashMap::new();
     let members_of: Vec<Uuid> = rows
         .iter()
-        .filter(|row| row.kind != ROOM)
+        .filter(|row| row.kind != ROOM && row.kind != PUBLIC)
         .map(|row| row.id)
         .collect();
     if !members_of.is_empty() {
@@ -104,6 +106,9 @@ async fn recipients(chat: &ChatState, rows: &[&Recent]) -> ChatResult<HashMap<Uu
                 .or_default()
                 .push(row.user_id);
         }
+    }
+    for row in rows.iter().filter(|row| row.kind == PUBLIC) {
+        found.insert(row.id, public_chat::watchers::current(chat).await?);
     }
     for row in rows.iter().filter(|row| row.kind == ROOM) {
         if let Some(room) = room_of_chat(chat, row.id).await? {

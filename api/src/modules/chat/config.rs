@@ -29,6 +29,7 @@ pub struct ChatConfig {
     pub access: Access,
     pub beta_users: HashSet<String>,
     pub send_paused: bool,
+    pub public: bool,
     pub pg_pool_max: u32,
     pub max_parked: usize,
     pub hold_max_ms: u64,
@@ -66,6 +67,7 @@ impl ChatConfig {
             access: access(&env_str("CHAT_ACCESS", "beta")),
             beta_users: beta_users(&env_str("CHAT_BETA_USERS", "")),
             send_paused: env_str("CHAT_SEND_PAUSED", "false") == "true",
+            public: env_str("CHAT_PUBLIC", "off") == "on",
             pg_pool_max: env_u32("CHAT_PG_POOL_MAX", 8).max(1),
             max_parked: usize::try_from(env_u64("CHAT_MAX_PARKED", 30_000))
                 .expect("CHAT_MAX_PARKED is too large"),

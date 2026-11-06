@@ -83,7 +83,8 @@ pub fn may_post(access: &Access, class: Class) -> ChatResult<()> {
     match class {
         Class::Meta if !access.is_group() && !access.is_room() => Err(ChatError::Invalid),
         Class::Meta | Class::Pin
-            if (access.is_group() || access.is_room()) && !access.is_admin() =>
+            if (access.is_group() || access.is_room() || access.is_public())
+                && !access.is_admin() =>
         {
             Err(ChatError::NotMember)
         }

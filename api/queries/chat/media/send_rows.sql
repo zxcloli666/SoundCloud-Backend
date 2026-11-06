@@ -3,7 +3,7 @@ SELECT media.id,
        media.status,
        media.owner_user = $2 AS "own!",
        media.origin_conversation,
-       coalesce(origin.kind = 'room', false) AS "origin_room!",
+       coalesce(origin.kind IN ('room', 'public'), false) AS "origin_isolated!",
        origin.id IS NOT NULL AS "origin_known!",
        EXISTS (
            SELECT 1

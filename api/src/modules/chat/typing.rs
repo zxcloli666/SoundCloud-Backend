@@ -10,7 +10,9 @@ use uuid::Uuid;
 use crate::modules::chat::body::ChatPath;
 use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::sync::shards::Shards;
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, rooms, rt_keys};
+use crate::modules::chat::{
+    ChatCaller, ChatError, ChatResult, ChatState, public_chat, rooms, rt_keys,
+};
 
 pub const TYPING_REPEAT: Duration = Duration::from_secs(2);
 
@@ -78,6 +80,9 @@ pub async fn typing(
     State(chat): State<Arc<ChatState>>,
     ChatPath(conversation): ChatPath<Uuid>,
 ) -> ChatResult<StatusCode> {
+    if conversation == public_chat::ID {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let now = Instant::now();
     if chat.hub.typing.repeated(conversation, &caller.user_id, now) {
         return Ok(StatusCode::NO_CONTENT);

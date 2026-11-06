@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use redis::Script;
 use uuid::Uuid;
 
+use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::sync::wire::{PeerMark, SyncRequest};
 use crate::modules::chat::sync::{bump, prefs};
 use crate::modules::chat::{ChatResult, ChatState, rt_keys};
@@ -24,6 +25,7 @@ pub struct Wanted {
 }
 
 struct Target {
+    kind: String,
     last_seq: i64,
     peer: Option<String>,
 }
@@ -67,6 +69,7 @@ pub async fn record(chat: &ChatState, user_id: &str, request: &SyncRequest) -> C
                 (
                     row.id,
                     Target {
+                        kind: row.kind,
                         last_seq: row.last_seq,
                         peer: row.peer,
                     },
@@ -77,6 +80,9 @@ pub async fn record(chat: &ChatState, user_id: &str, request: &SyncRequest) -> C
         .into_iter()
         .filter_map(|entry| {
             let target = targets.get(&entry.conversation)?;
+            if target.kind == ConversationKind::Public.as_str() {
+                return None;
+            }
             let seq = entry.seq.min(target.last_seq);
             (seq > 0).then_some(Wanted { seq, ..entry })
         })

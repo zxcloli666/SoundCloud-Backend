@@ -7,7 +7,7 @@ use axum::routing::{delete, get, post, put};
 use crate::modules::chat::channel::{self, Channel};
 use crate::modules::chat::{
     ChatState, admin, blocks, conversations, devices, invites, keys, media, members, messages,
-    reports, requests, rooms, route_metrics, settings, sync, typing, users,
+    public_chat, reports, requests, rooms, route_metrics, settings, sync, typing, users,
 };
 
 pub fn inner() -> Router<Arc<ChatState>> {
@@ -69,6 +69,25 @@ pub fn inner() -> Router<Arc<ChatState>> {
         .route("/chat/media/restore", post(media::restore_media))
         .route("/chat/reports", post(reports::file))
         .route("/chat/users/{id}/card", get(users::card))
+        .route("/chat/public/open", post(public_chat::open))
+        .route(
+            "/chat/public/watch",
+            post(public_chat::watch).delete(public_chat::unwatch),
+        )
+        .route("/chat/public/log", get(public_chat::moderation_log))
+        .route("/chat/public/slow-mode", put(public_chat::slow_mode))
+        .route(
+            "/chat/public/moderators/{user}",
+            put(public_chat::moderator),
+        )
+        .route(
+            "/chat/public/mutes/{user}",
+            put(public_chat::mute).delete(public_chat::unmute),
+        )
+        .route(
+            "/chat/public/bans/{user}",
+            put(public_chat::ban).delete(public_chat::unban),
+        )
         .route("/chat/rooms/{code}/chat", get(rooms::chat))
         .route("/chat/rooms/{code}/preview", get(rooms::preview))
         .route(

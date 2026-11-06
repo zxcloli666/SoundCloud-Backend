@@ -28,7 +28,7 @@ struct SendRow {
     status: String,
     own: bool,
     origin_conversation: Uuid,
-    origin_room: bool,
+    origin_isolated: bool,
     origin_known: bool,
     here: bool,
     elsewhere: bool,
@@ -36,7 +36,7 @@ struct SendRow {
 
 impl SendRow {
     fn usable_in(&self, access: &Access) -> bool {
-        let isolated = if self.origin_room || access.is_room() {
+        let isolated = if self.origin_isolated || access.isolates_media() {
             self.origin_conversation == access.conversation
         } else {
             true
@@ -73,7 +73,7 @@ async fn usable(
 }
 
 async fn admit_post(chat: &ChatState, access: &Access, media: &[Uuid]) -> ChatResult<()> {
-    if access.is_room() && media.len() > ROOM_ALBUM_MAX {
+    if access.isolates_media() && media.len() > ROOM_ALBUM_MAX {
         return Err(ChatError::Invalid);
     }
     refuse_missing(media, &usable(&chat.pg, access, media).await?)?;

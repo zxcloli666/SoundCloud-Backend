@@ -6,7 +6,8 @@ use tokio::time::Instant;
 use crate::modules::chat::ChatState;
 use crate::modules::chat::rooms::perks as room_perks;
 use crate::modules::chat::sweeps::{
-    devices, expired, gauges, leader, marks, media, purge, redis_info, reports, rooms, startup,
+    devices, expired, gauges, leader, marks, media, public_chat, purge, redis_info, reports, rooms,
+    startup,
 };
 
 pub const TICK: Duration = Duration::from_secs(1);
@@ -23,10 +24,11 @@ pub enum Sweep {
     RedisInfo,
     Media,
     RoomPerks,
+    PublicChat,
 }
 
 impl Sweep {
-    pub const ALL: [Sweep; 9] = [
+    pub const ALL: [Sweep; 10] = [
         Sweep::Marks,
         Sweep::Expired,
         Sweep::Rooms,
@@ -36,6 +38,7 @@ impl Sweep {
         Sweep::RedisInfo,
         Sweep::Media,
         Sweep::RoomPerks,
+        Sweep::PublicChat,
     ];
 
     pub fn name(self) -> &'static str {
@@ -49,6 +52,7 @@ impl Sweep {
             Sweep::RedisInfo => "redis_info",
             Sweep::Media => "media",
             Sweep::RoomPerks => "room_perks",
+            Sweep::PublicChat => "public",
         }
     }
 
@@ -63,6 +67,7 @@ impl Sweep {
             Sweep::RedisInfo => redis_info::EVERY_SECS,
             Sweep::Media => media::EVERY_SECS,
             Sweep::RoomPerks => room_perks::EVERY_SECS,
+            Sweep::PublicChat => public_chat::EVERY_SECS,
         })
     }
 }
@@ -132,6 +137,7 @@ impl Sweeper {
             Sweep::RedisInfo => redis_info::run_once(chat).await,
             Sweep::Media => media::run_once(chat).await,
             Sweep::RoomPerks => room_perks::run_once(chat).await,
+            Sweep::PublicChat => public_chat::run_once(chat).await,
         };
         match outcome {
             Ok(items) => gauges::done(sweep.name(), items),

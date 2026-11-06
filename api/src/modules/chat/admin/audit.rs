@@ -1,10 +1,22 @@
 use serde_json::Value;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::modules::chat::{ChatResult, ChatState};
 
 pub async fn record(
     chat: &ChatState,
+    admin: &str,
+    action: &str,
+    target: &str,
+    detail: Value,
+) -> ChatResult<()> {
+    let mut conn = chat.pg.acquire().await?;
+    record_in(&mut conn, admin, action, target, detail).await
+}
+
+pub async fn record_in(
+    conn: &mut PgConnection,
     admin: &str,
     action: &str,
     target: &str,
@@ -18,7 +30,7 @@ pub async fn record(
         target,
         detail
     )
-    .execute(&chat.pg)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

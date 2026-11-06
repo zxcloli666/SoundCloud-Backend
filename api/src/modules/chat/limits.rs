@@ -73,6 +73,8 @@ pub enum Bucket {
     MediaMine,
     MediaDelete,
     MediaRestore,
+    PublicMod,
+    PublicWatch,
 }
 
 impl Bucket {
@@ -95,6 +97,8 @@ impl Bucket {
             Bucket::MediaMine => "media_mine",
             Bucket::MediaDelete => "media_delete",
             Bucket::MediaRestore => "media_restore",
+            Bucket::PublicMod => "public_mod",
+            Bucket::PublicWatch => "public_watch",
         }
     }
 
@@ -111,7 +115,8 @@ impl Bucket {
             Bucket::MediaReserve => &MEDIA_RESERVE,
             Bucket::MediaUrls => &MINUTE_120,
             Bucket::MediaUsage | Bucket::MediaMine => &MINUTE_60,
-            Bucket::MediaDelete | Bucket::MediaRestore => &MINUTE_30,
+            Bucket::MediaDelete | Bucket::MediaRestore | Bucket::PublicWatch => &MINUTE_30,
+            Bucket::PublicMod => &MINUTE_120,
         }
     }
 
@@ -125,14 +130,16 @@ impl Bucket {
             | Bucket::Preview
             | Bucket::MediaUrls
             | Bucket::MediaUsage
-            | Bucket::MediaMine => ChatError::ReadLimited,
+            | Bucket::MediaMine
+            | Bucket::PublicWatch => ChatError::ReadLimited,
             Bucket::Create
             | Bucket::Request
             | Bucket::Invite
             | Bucket::Report
             | Bucket::Device
             | Bucket::MediaDelete
-            | Bucket::MediaRestore => ChatError::RequestLimit,
+            | Bucket::MediaRestore
+            | Bucket::PublicMod => ChatError::RequestLimit,
         }
     }
 }

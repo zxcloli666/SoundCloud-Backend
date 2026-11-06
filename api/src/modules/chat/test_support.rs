@@ -64,6 +64,7 @@ pub fn config(enabled: bool) -> ChatConfig {
         access: Access::Beta,
         beta_users: HashSet::new(),
         send_paused: false,
+        public: false,
         pg_pool_max: 2,
         max_parked: 100,
         hold_max_ms: 20_000,

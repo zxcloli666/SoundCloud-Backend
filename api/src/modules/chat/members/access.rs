@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::modules::chat::conversations::keys::peer_of;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::model::{ConversationKind, MemberRole, MemberState};
+use crate::modules::chat::public_chat;
 use crate::modules::chat::rooms::lookup::{RoomChatMember, room_of_chat};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
@@ -15,6 +16,12 @@ pub struct GroupSettings {
     pub admins_only: bool,
     #[serde(default = "visible_by_default")]
     pub history_visible: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub slow_mode_s: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 fn visible_by_default() -> bool {
@@ -26,6 +33,7 @@ impl Default for GroupSettings {
         Self {
             admins_only: false,
             history_visible: true,
+            slow_mode_s: 0,
         }
     }
 }
@@ -89,8 +97,16 @@ impl Access {
         self.kind == ConversationKind::Room
     }
 
+    pub fn is_public(&self) -> bool {
+        self.kind == ConversationKind::Public
+    }
+
     pub fn moderates(&self) -> bool {
-        (self.is_group() || self.is_room()) && self.is_admin()
+        (self.is_group() || self.is_room() || self.is_public()) && self.is_admin()
+    }
+
+    pub fn isolates_media(&self) -> bool {
+        self.is_room() || self.is_public()
     }
 
     pub fn history_floor(&self) -> i64 {
@@ -136,6 +152,7 @@ pub async fn load(pg: &PgPool, conversation: Uuid, user_id: &str) -> ChatResult<
 }
 
 pub async fn load_in(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatResult<Access> {
+    public_chat::guard(chat, conversation)?;
     match load(&chat.pg, conversation, user_id).await {
         Err(ChatError::NotMember) => load_room(chat, conversation, user_id).await,
         found => found,

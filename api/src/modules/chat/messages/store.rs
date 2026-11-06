@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::modules::chat::epochs::{self, EPOCH_DAYS_MAX, EPOCH_MESSAGES_MAX};
+use crate::modules::chat::epochs;
 use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::rules::{self, Outgoing, Target};
@@ -63,6 +63,7 @@ pub async fn store(
     inherited: Option<DateTime<Utc>>,
 ) -> ChatResult<MessageRow> {
     let conversation = access.conversation;
+    let limits = epochs::limits(access.kind);
     let mut tx = pg.begin().await?;
     let advanced = sqlx::query_file!(
         "queries/chat/messages/advance.sql",
@@ -70,8 +71,8 @@ pub async fn store(
         out.epoch,
         out.class.as_str(),
         out.body,
-        EPOCH_MESSAGES_MAX,
-        EPOCH_DAYS_MAX,
+        limits.messages,
+        limits.days,
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -132,7 +133,13 @@ async fn stale(pg: &PgPool, access: &Access, out: &Outgoing) -> ChatResult<Messa
     if let Some(row) = existing(pg, access.conversation, out.client_id, &access.user_id).await? {
         return Ok(row);
     }
-    epochs::rotate_if_due(pg, access.conversation, out.epoch).await?;
+    epochs::rotate_if_due(
+        pg,
+        access.conversation,
+        out.epoch,
+        epochs::limits(access.kind),
+    )
+    .await?;
     Err(ChatError::EpochStale)
 }
 

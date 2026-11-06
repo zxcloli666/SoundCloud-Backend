@@ -56,7 +56,7 @@ pub fn wanted(user: &str, input: CreateConversation, synthetic: bool) -> ChatRes
             members: group_members(user, &input.members, synthetic)?,
             meta: meta(input.meta_ct, input.meta_epoch)?,
         }),
-        ConversationKind::Room => Err(ChatError::Invalid),
+        ConversationKind::Room | ConversationKind::Public => Err(ChatError::Invalid),
     }
 }
 

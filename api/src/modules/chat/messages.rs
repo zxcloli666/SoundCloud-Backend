@@ -22,6 +22,7 @@ use crate::modules::chat::limits::{self, Bucket};
 use crate::modules::chat::media;
 use crate::modules::chat::members::access;
 use crate::modules::chat::model::{MessageRow, MessageView};
+use crate::modules::chat::public_chat;
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, blocks};
 
 pub const PAGE_ROWS_MAX: usize = 200;
@@ -85,17 +86,16 @@ pub async fn send(
 ) -> ChatResult<Json<SendAnswer>> {
     let class = Class::parse(&input.class).map_or("unknown", Class::as_str);
     let sent = deliver(&chat, &caller, conversation, input).await;
-    metrics::counter!(
-        "chat_send_total",
-        "class" => class,
-        "result" => sent.as_ref().map_or_else(ChatError::code, |_| "ok"),
-    )
-    .increment(1);
+    let result = sent.as_ref().map_or_else(ChatError::code, |_| "ok");
+    metrics::counter!("chat_send_total", "class" => class, "result" => result).increment(1);
+    if conversation == public_chat::ID {
+        metrics::counter!("chat_public_posts_total", "result" => result).increment(1);
+    }
     sent.map(Json)
 }
 
 async fn deliver(
-    chat: &ChatState,
+    chat: &Arc<ChatState>,
     caller: &ChatCaller,
     conversation: Uuid,
     input: SendMessage,
@@ -120,6 +120,12 @@ async fn deliver(
         fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
         return Ok(SendAnswer::from(&row));
     }
+    if access.is_public()
+        && let Some(row) = public_chat::gate::send(chat, &access, &outgoing).await?
+    {
+        public_chat::delivery::publish(chat, std::slice::from_ref(&row)).await?;
+        return Ok(SendAnswer::from(&row));
+    }
     gate::peer_open(&access)?;
     if let Some(peer) = access.peer.as_deref()
         && blocks::blocked_between(chat, &caller.user_id, peer).await?
@@ -131,7 +137,11 @@ async fn deliver(
     let inherited =
         rules::inherited_expiry(outgoing.class, &caller.user_id, target.as_ref(), Utc::now())?;
     let row = store::store(&chat.pg, &access, device, &outgoing, inherited).await?;
-    fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
+    if access.is_public() {
+        public_chat::delivery::publish(chat, std::slice::from_ref(&row)).await?;
+    } else {
+        fanout::publish(chat, std::slice::from_ref(&row), &access.recipients).await?;
+    }
     Ok(SendAnswer::from(&row))
 }
 
@@ -145,6 +155,9 @@ pub async fn history(
     let access = access::load_in(&chat, conversation, &caller.user_id)
         .await?
         .readable()?;
+    if access.is_public() {
+        public_chat::gate::read(&chat, &caller.user_id).await?;
+    }
     let cap = page::byte_cap(caller.tier, caller.max_bytes);
     Ok(Json(page::read(&chat.pg, &access, &query, cap).await?))
 }
@@ -160,6 +173,10 @@ pub async fn delete(
     }
     let access = access::load_in(&chat, conversation, &caller.user_id).await?;
     let rows = redact::for_everyone(&chat.pg, &access, seq).await?;
+    if access.is_public() {
+        public_chat::delete::after(&chat, &access, seq, &rows).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     if rows.is_empty() {
         fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?;
     } else {

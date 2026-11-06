@@ -15,6 +15,9 @@ pub const LOADTEST_SESSION_TTL: Duration = Duration::from_secs(2 * 3_600);
 pub const ROOMS_ALIVE: &str = "rooms:alive";
 pub const SEEN: &str = "chat:seen";
 pub const LEAD: &str = "chat:lead";
+pub const PUBLIC_WATCHERS: &str = "chat:pub:w";
+pub const PUBLIC_GATE: &str = "chat:pub:gate";
+pub const PUBLIC_TRAIL: &str = "chat:pub:trail";
 
 pub fn version(user_id: &str) -> String {
     format!("chat:v:{user_id}")

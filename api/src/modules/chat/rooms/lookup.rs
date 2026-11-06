@@ -1,11 +1,9 @@
-use redis::AsyncCommands;
 use sc_chat_wire::msg::Class;
 use uuid::Uuid;
 
 use crate::modules::chat::rooms::now_ms;
 use crate::modules::chat::rooms::refusal;
-use crate::modules::chat::rt_keys;
-use crate::modules::chat::{ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, slow_mode};
 use crate::modules::rooms::model::Room;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,32 +74,7 @@ pub async fn gate_send(
     }
     let slow_mode_s = room.slow_mode();
     if class == "post" && slow_mode_s > 0 && !member.can_moderate() {
-        hold_slow_mode(chat, conversation, user_id, slow_mode_s).await?;
+        slow_mode::hold(chat, conversation, user_id, slow_mode_s).await?;
     }
     Ok(member)
-}
-
-async fn hold_slow_mode(
-    chat: &ChatState,
-    conversation: Uuid,
-    user_id: &str,
-    seconds: u32,
-) -> ChatResult<()> {
-    let key = rt_keys::slow_mode(conversation, user_id);
-    let mut conn = chat.redis.get().await?;
-    let taken: Option<String> = redis::cmd("SET")
-        .arg(&key)
-        .arg(1)
-        .arg("NX")
-        .arg("PX")
-        .arg(u64::from(seconds) * 1_000)
-        .query_async(&mut conn)
-        .await?;
-    if taken.is_some() {
-        return Ok(());
-    }
-    let left: i64 = conn.pttl(&key).await?;
-    Err(ChatError::SlowMode {
-        retry_ms: u64::try_from(left).unwrap_or(0).max(1),
-    })
 }

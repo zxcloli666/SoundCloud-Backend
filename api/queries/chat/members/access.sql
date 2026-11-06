@@ -9,11 +9,13 @@ SELECT c.kind,
        m.accepted,
        m.joined_seq,
        m.hidden_before_seq,
-       ARRAY(SELECT r.user_id
-             FROM chat.members r
-             WHERE r.conversation_id = c.id
-               AND r.state IN ('active', 'invited')
-             ORDER BY r.user_id) AS "recipients!",
+       CASE WHEN c.kind = 'public' THEN ARRAY[]::text[]
+            ELSE ARRAY(SELECT r.user_id
+                       FROM chat.members r
+                       WHERE r.conversation_id = c.id
+                         AND r.state IN ('active', 'invited')
+                       ORDER BY r.user_id)
+       END AS "recipients!",
        (SELECT p.state
         FROM chat.members p
         WHERE p.conversation_id = c.id

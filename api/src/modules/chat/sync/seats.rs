@@ -24,6 +24,10 @@ impl ConversationState {
     pub fn is_direct(&self) -> bool {
         self.kind == ConversationKind::Direct.as_str()
     }
+
+    pub fn is_public(&self) -> bool {
+        self.kind == ConversationKind::Public.as_str()
+    }
 }
 
 struct Row {
@@ -38,6 +42,10 @@ struct Row {
 }
 
 impl Row {
+    fn is_public(&self) -> bool {
+        self.kind == ConversationKind::Public.as_str()
+    }
+
     fn is_room(&self) -> bool {
         self.kind == ConversationKind::Room.as_str()
     }
@@ -88,7 +96,7 @@ pub async fn load(
 }
 
 async fn seat(chat: &ChatState, user_id: &str, row: &Row) -> ChatResult<Seat> {
-    if row.deleted {
+    if row.deleted || (row.is_public() && !chat.config.public) {
         return Ok(Seat::Gone);
     }
     if !row.is_room() {

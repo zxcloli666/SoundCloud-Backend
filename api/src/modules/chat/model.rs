@@ -10,6 +10,7 @@ pub enum ConversationKind {
     Direct,
     Group,
     Room,
+    Public,
     #[serde(rename = "self")]
     Saved,
 }
@@ -20,6 +21,7 @@ impl ConversationKind {
             ConversationKind::Direct => "direct",
             ConversationKind::Group => "group",
             ConversationKind::Room => "room",
+            ConversationKind::Public => "public",
             ConversationKind::Saved => "self",
         }
     }

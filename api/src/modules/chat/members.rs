@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::modules::chat::body::{ChatJson, ChatPath, ChatQuery};
 use crate::modules::chat::conversations::create::group_members;
 use crate::modules::chat::model::{MemberRole, MemberState};
+use crate::modules::chat::public_chat;
 use crate::modules::chat::users::{self, Scope};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
@@ -51,9 +52,13 @@ pub async fn list(
     State(chat): State<Arc<ChatState>>,
     ChatPath(conversation): ChatPath<Uuid>,
 ) -> ChatResult<Json<Vec<MemberView>>> {
+    public_chat::guard(&chat, conversation)?;
     let access = access::load(&chat.pg, conversation, &caller.user_id)
         .await?
         .readable()?;
+    if access.is_public() {
+        return Ok(Json(public_chat::staff::listing(&chat).await?));
+    }
     let admin = access.is_admin();
     let rows = sqlx::query_file!("queries/chat/members/list.sql", conversation)
         .fetch_all(&chat.pg)

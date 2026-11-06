@@ -136,7 +136,9 @@ async fn decorate(
 ) -> ChatResult<()> {
     let (with_marks, own_only): (Vec<Uuid>, Vec<Uuid>) =
         answer.convs.iter().map(|entry| entry.id).partition(|id| {
-            Some(*id) == ask.focus || states.get(id).is_some_and(|s| s.is_direct())
+            let state = states.get(id);
+            state.is_some_and(|s| s.is_direct())
+                || (Some(*id) == ask.focus && !state.is_some_and(|s| s.is_public()))
         });
     let mut marks = marks::read(chat, ask.user_id, &with_marks).await?;
     let mut own = marks::own(chat, ask.user_id, &own_only).await?;

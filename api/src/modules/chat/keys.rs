@@ -48,8 +48,11 @@ pub async fn list(
     if access.needs_key {
         rotate::ensure_current(&chat, conversation).await?;
     }
-    let gate = history_gate::first_visible_epoch(&chat, &CallerDevice::from(&device), conversation)
-        .await?;
+    let gate = if access.public {
+        0
+    } else {
+        history_gate::first_visible_epoch(&chat, &CallerDevice::from(&device), conversation).await?
+    };
     let asked = query.from_epoch.unwrap_or(0);
     let floor = asked.max(access.member_floor).max(gate);
     let meta = access
