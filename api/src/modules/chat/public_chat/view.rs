@@ -1,10 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::modules::chat::backdrops::{self, Chosen};
 use crate::modules::chat::conversations::view::{ConversationView, MembershipView};
+use crate::modules::chat::limits::{ROOM_NEWCOMER_PLAINTEXT_MAX, ROOM_NEWCOMER_SECS};
 use crate::modules::chat::members::access::GroupSettings;
+use crate::modules::chat::members::roles;
 use crate::modules::chat::public_chat::{ID, watchers};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
@@ -25,17 +27,68 @@ pub struct Row {
     pub notify: Option<String>,
     pub hidden_before_seq: Option<i64>,
     pub last_ping_seq: Option<i64>,
+    pub joined_at: Option<DateTime<Utc>>,
+    pub mute_until: Option<DateTime<Utc>>,
+    pub mute_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct PublicView {
     pub conversation: ConversationView,
     pub online: u32,
+    pub mute: Option<Mute>,
+    pub newcomer: Option<Newcomer>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Mute {
+    pub until: i64,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Newcomer {
+    pub until: Option<i64>,
+    pub body_max: usize,
 }
 
 impl Row {
     pub fn joined(&self) -> bool {
         self.state.is_some()
+    }
+
+    fn staff(&self) -> bool {
+        self.role
+            .as_deref()
+            .and_then(|role| roles::role(role).ok())
+            .is_some_and(roles::is_admin)
+    }
+
+    fn mute(&self) -> Option<Mute> {
+        self.mute_until.map(|until| Mute {
+            until: until.timestamp_millis(),
+            reason: self.mute_reason.clone(),
+        })
+    }
+
+    fn newcomer(&self, now: DateTime<Utc>) -> Option<Newcomer> {
+        if self.staff() {
+            return None;
+        }
+        let until = match self.joined_at {
+            Some(at) => {
+                let end = at + Duration::seconds(ROOM_NEWCOMER_SECS);
+                if end <= now {
+                    return None;
+                }
+                Some(end.timestamp_millis())
+            }
+            None => None,
+        };
+        Some(Newcomer {
+            until,
+            body_max: ROOM_NEWCOMER_PLAINTEXT_MAX,
+        })
     }
 
     fn into_view(self, online: u32) -> ConversationView {
@@ -90,10 +143,14 @@ pub async fn of(chat: &ChatState, user_id: &str) -> ChatResult<ConversationView>
 
 pub async fn opened(chat: &ChatState, row: Row) -> ChatResult<PublicView> {
     let online = watchers::count(chat).await?;
+    let mute = row.mute();
+    let newcomer = row.newcomer(Utc::now());
     let mut conversation = row.into_view(online);
     backdrops::view::settle(chat, std::slice::from_mut(&mut conversation)).await;
     Ok(PublicView {
         conversation,
         online,
+        mute,
+        newcomer,
     })
 }

@@ -141,6 +141,22 @@ async fn a_newcomer_posts_short_for_ten_minutes_then_like_everyone(pool: PgPool)
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_fresh_moderator_posts_long_from_the_first_minute(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    slow_mode(&pool, 0).await;
+    let helper = user();
+    moderator(&chat, &helper).await;
+    let long = json!({
+        "client_id": Uuid::now_v7(), "class": "post", "epoch": 0,
+        "body": crate::modules::chat::b64::encode(&[7u8; 700]),
+    });
+    let allowed = send(&chat, &helper, long).await;
+    assert_eq!(allowed.0, 200, "{allowed:?}");
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
 async fn a_banned_member_can_neither_read_nor_post_and_an_unban_restores_them(pool: PgPool) {
     let _serial = serial().await;
     let chat = bench(&pool);

@@ -47,9 +47,10 @@ async fn check_open(chat: &ChatState, access: &Access, out: &Outgoing) -> ChatRe
     if out.class == Class::Post && slow_mode_s > 0 && !access.is_admin() {
         slow_mode::hold(chat, ID, &access.user_id, slow_mode_s).await?;
     }
-    let member_for_secs = standing
-        .joined_at
-        .map_or(i64::MAX, |at| (Utc::now() - at).num_seconds());
+    let member_for_secs = match standing.joined_at {
+        Some(at) if !access.is_admin() => (Utc::now() - at).num_seconds(),
+        _ => i64::MAX,
+    };
     let post = RoomPost {
         conversation: ID,
         public: true,

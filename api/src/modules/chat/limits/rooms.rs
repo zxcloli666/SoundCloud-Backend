@@ -5,8 +5,10 @@ use uuid::Uuid;
 use super::{Charge, MINUTE, Window, charge, refund_key};
 use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
-const ROOM_NEWCOMER_SECS: i64 = 600;
-pub const ROOM_NEWCOMER_BODY_MAX: usize = sc_chat_wire::seal::NONCE_LEN + 16 + 2 * 256;
+const SEAL_OVERHEAD: usize = sc_chat_wire::seal::NONCE_LEN + 16;
+pub const ROOM_NEWCOMER_SECS: i64 = 600;
+pub const ROOM_NEWCOMER_PLAINTEXT_MAX: usize = 2 * 256;
+pub const ROOM_NEWCOMER_BODY_MAX: usize = SEAL_OVERHEAD + ROOM_NEWCOMER_PLAINTEXT_MAX;
 pub const ROOM_BYTES_PER_MINUTE: u64 = 24 * 1024;
 
 const BACKDROP_CHANGES: Window = Window::new("10m", 6, Duration::from_secs(600));

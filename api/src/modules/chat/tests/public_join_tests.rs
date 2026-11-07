@@ -2,10 +2,12 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use crate::modules::chat::devices::test_support::fresh_user;
-use crate::modules::chat::public_chat::ID;
+use crate::modules::chat::limits::ROOM_NEWCOMER_PLAINTEXT_MAX;
 use crate::modules::chat::public_chat::support::{
-    OWNER, ask, bench, closed, error, keys_status, open, post, reset, serial, user,
+    OWNER, age_membership, ask, bench, closed, error, keys_status, moderator, open, post, reset,
+    serial, user,
 };
+use crate::modules::chat::public_chat::{ID, view};
 use crate::modules::chat::users::{self, Scope};
 
 async fn members(pool: &PgPool) -> i64 {
@@ -192,4 +194,147 @@ async fn a_restriction_with_scope_all_stops_opening_reading_and_posting(pool: Pg
     assert_eq!((error(&read).1, read.0), refused);
     let sent = post(&chat, &me).await;
     assert_eq!((error(&sent).1, sent.0), refused);
+}
+
+async fn joined_at_ms(pool: &PgPool, user: &str) -> i64 {
+    let at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "SELECT joined_at FROM chat.members WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(ID)
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .expect("a join time");
+    at.timestamp_millis()
+}
+
+fn keys(value: &Value) -> Vec<&str> {
+    value
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_open_answer_carries_the_mute_and_the_newcomer_window_by_name(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    let me = user();
+    let seen = open(&chat, &me).await;
+    assert_eq!(keys(&seen), ["conversation", "mute", "newcomer", "online"]);
+    assert_eq!(seen["mute"], Value::Null);
+    assert_eq!(keys(&seen["newcomer"]), ["body_max", "until"]);
+    assert_eq!(
+        seen["newcomer"]["until"],
+        joined_at_ms(&pool, &me).await + 600_000
+    );
+    assert_eq!(seen["newcomer"]["body_max"], ROOM_NEWCOMER_PLAINTEXT_MAX);
+    assert_eq!(seen["newcomer"]["body_max"], 512);
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_muted_member_opens_with_the_mute_and_an_unmute_clears_it(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    let me = user();
+    open(&chat, &me).await;
+    let muted = ask(
+        &chat,
+        OWNER,
+        "PUT",
+        &format!("/chat/public/mutes/{me}"),
+        Some(json!({"seconds": 3_600, "reason": "spam"})),
+    )
+    .await;
+    assert_eq!(muted.0, 200, "{muted:?}");
+    let seen = open(&chat, &me).await;
+    assert_eq!(keys(&seen["mute"]), ["reason", "until"]);
+    assert_eq!(seen["mute"]["until"], muted.1["until"]);
+    assert_eq!(seen["mute"]["reason"], "spam");
+    assert_eq!(seen["conversation"]["me"]["muted_until"], Value::Null);
+    let lifted = ask(
+        &chat,
+        OWNER,
+        "DELETE",
+        &format!("/chat/public/mutes/{me}"),
+        None,
+    )
+    .await;
+    assert_eq!(lifted.0, 204, "{lifted:?}");
+    assert_eq!(open(&chat, &me).await["mute"], Value::Null);
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_mute_without_a_reason_and_an_expired_one(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    let me = user();
+    let muted = ask(
+        &chat,
+        OWNER,
+        "PUT",
+        &format!("/chat/public/mutes/{me}"),
+        Some(json!({"seconds": 600})),
+    )
+    .await;
+    assert_eq!(muted.0, 200, "{muted:?}");
+    let seen = open(&chat, &me).await;
+    assert_eq!(seen["mute"]["until"], muted.1["until"]);
+    assert_eq!(seen["mute"]["reason"], Value::Null);
+    sqlx::query(
+        "UPDATE chat.public_mutes SET until = now() - interval '1 second' WHERE user_id = $1",
+    )
+    .bind(&me)
+    .execute(&pool)
+    .await
+    .expect("an expired mute");
+    assert_eq!(open(&chat, &me).await["mute"], Value::Null);
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn the_newcomer_window_has_no_end_before_the_first_join(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    let stranger = user();
+    let row = view::row(&chat, &stranger).await.expect("a row");
+    assert!(!row.joined());
+    let seen = serde_json::to_value(view::opened(&chat, row).await.expect("a view")).unwrap();
+    assert_eq!(seen["newcomer"], json!({"until": null, "body_max": 512}));
+    assert_eq!(seen["mute"], Value::Null);
+    let unstamped = user();
+    open(&chat, &unstamped).await;
+    sqlx::query(
+        "UPDATE chat.members SET joined_at = NULL WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(ID)
+    .bind(&unstamped)
+    .execute(&pool)
+    .await
+    .expect("a member without a join time");
+    assert_eq!(
+        open(&chat, &unstamped).await["newcomer"],
+        json!({"until": null, "body_max": 512})
+    );
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn old_members_and_staff_are_not_newcomers(pool: PgPool) {
+    let _serial = serial().await;
+    let chat = bench(&pool);
+    reset(&chat).await;
+    let (old, helper) = (user(), user());
+    open(&chat, &old).await;
+    age_membership(&pool, &old, 11).await;
+    assert_eq!(open(&chat, &old).await["newcomer"], Value::Null);
+    moderator(&chat, &helper).await;
+    let fresh = open(&chat, &helper).await;
+    assert_eq!(fresh["conversation"]["me"]["role"], "admin");
+    assert_eq!(fresh["newcomer"], Value::Null);
+    assert_eq!(open(&chat, OWNER).await["newcomer"], Value::Null);
 }

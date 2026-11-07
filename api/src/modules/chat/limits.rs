@@ -10,7 +10,10 @@ mod rooms;
 
 #[cfg(test)]
 pub use rooms::{ROOM_BYTES_PER_MINUTE, ROOM_NEWCOMER_BODY_MAX};
-pub use rooms::{RoomPost, admit_backdrop, admit_room_meta, admit_room_post, refund_backdrop};
+pub use rooms::{
+    ROOM_NEWCOMER_PLAINTEXT_MAX, ROOM_NEWCOMER_SECS, RoomPost, admit_backdrop, admit_room_meta,
+    admit_room_post, refund_backdrop,
+};
 
 const SECOND: Duration = Duration::from_secs(1);
 const MINUTE: Duration = Duration::from_secs(60);
