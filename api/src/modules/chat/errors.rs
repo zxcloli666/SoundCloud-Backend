@@ -37,6 +37,7 @@ pub enum ChatError {
     QuotaExceeded { used: u64, quota: u64 },
     MediaStarRequired,
     RoomStarRequired,
+    BackdropStarRequired,
     MediaUploadsPaused,
     MediaMissing { ids: Vec<Uuid> },
     BackdropCooldown { until: u64 },
@@ -135,6 +136,7 @@ impl ChatError {
             ChatError::QuotaExceeded { .. } => "chat_quota_exceeded",
             ChatError::MediaStarRequired => "chat_media_star_required",
             ChatError::RoomStarRequired => "chat_room_star_required",
+            ChatError::BackdropStarRequired => "chat_backdrop_star_required",
             ChatError::MediaUploadsPaused => "chat_media_uploads_paused",
             ChatError::MediaMissing { .. } => "chat_media_missing",
             ChatError::BackdropCooldown { .. } => "chat_backdrop_cooldown",
@@ -155,6 +157,7 @@ impl ChatError {
             | ChatError::DeviceCap
             | ChatError::MediaStarRequired
             | ChatError::RoomStarRequired
+            | ChatError::BackdropStarRequired
             | ChatError::BackdropCooldown { .. } => StatusCode::FORBIDDEN,
             ChatError::MediaGone => StatusCode::GONE,
             ChatError::EpochStale

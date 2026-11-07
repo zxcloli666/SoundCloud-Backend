@@ -97,6 +97,13 @@ async fn the_media_errors_carry_the_fields_the_contract_names() {
             json!({"error": "chat_room_star_required"})
         )
     );
+    assert_eq!(
+        wire(ChatError::BackdropStarRequired).await,
+        (
+            StatusCode::FORBIDDEN,
+            json!({"error": "chat_backdrop_star_required"})
+        )
+    );
 }
 
 #[test]
@@ -127,6 +134,7 @@ fn every_code_is_prefixed_and_unique() {
         ChatError::QuotaExceeded { used: 0, quota: 0 },
         ChatError::MediaStarRequired,
         ChatError::RoomStarRequired,
+        ChatError::BackdropStarRequired,
         ChatError::MediaUploadsPaused,
         ChatError::MediaMissing { ids: Vec::new() },
         ChatError::Invalid,

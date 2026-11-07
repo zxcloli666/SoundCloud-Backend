@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod b64;
+pub mod backdrops;
 pub mod blocks;
 pub mod body;
 pub mod caller;

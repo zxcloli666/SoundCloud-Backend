@@ -6,6 +6,11 @@ use crate::modules::chat::conversations::fixtures::{
 };
 use crate::modules::chat::conversations::view;
 
+fn offline(pool: &PgPool) -> std::sync::Arc<crate::modules::chat::ChatState> {
+    let redis = crate::redis::connect_url("redis://127.0.0.1:1").expect("a lazy redis pool");
+    crate::modules::chat::test_support::chat_state(pool.clone(), redis, true)
+}
+
 async fn members_of(pg: &PgPool, conversation: Uuid) -> Vec<(String, String, String, bool)> {
     sqlx::query_as(
         "SELECT user_id, role, state, accepted FROM chat.members
@@ -76,7 +81,7 @@ async fn a_stranger_to_a_following_recipient_lands_in_requests(pool: PgPool) -> 
             ("202".into(), "member".into(), "invited".into(), false),
         ]
     );
-    let asked = view::one(&pool, created.id, "202").await?;
+    let asked = view::one(&offline(&pool), created.id, "202").await?;
     assert_eq!(asked.me.state, "invited");
     assert_eq!(asked.me.invited_by.as_deref(), Some("101"));
     Ok(())
@@ -172,7 +177,7 @@ async fn saved_messages_are_one_per_user(pool: PgPool) -> ChatResult<()> {
     let first = saved(&pool, "101").await?.id;
     assert_eq!(saved(&pool, "101").await?.id, first);
     assert_ne!(saved(&pool, "202").await?.id, first);
-    let view = view::one(&pool, first, "101").await?;
+    let view = view::one(&offline(&pool), first, "101").await?;
     assert_eq!(view.kind, "self");
     assert_eq!(view.me.role, "owner");
     assert_eq!(view.peer, None);
@@ -194,11 +199,11 @@ async fn a_group_starts_with_its_owner_and_a_created_row(pool: PgPool) -> ChatRe
     assert_eq!(seqs(&pool, created.id).await, vec![1]);
     assert_eq!(created.rows[0].class, "system");
     assert_eq!(created.recipients, vec!["101", "202", "303"]);
-    let view = view::one(&pool, created.id, "101").await?;
+    let view = view::one(&offline(&pool), created.id, "101").await?;
     assert_eq!(view.member_count, 2);
     assert_eq!(view.me.role, "owner");
     assert_eq!(view.meta_ct, Some(vec![1; 64]));
-    let invited = view::one(&pool, created.id, "303").await?;
+    let invited = view::one(&offline(&pool), created.id, "303").await?;
     assert_eq!(invited.me.state, "invited");
     assert_eq!(invited.me.invited_by.as_deref(), Some("101"));
     Ok(())

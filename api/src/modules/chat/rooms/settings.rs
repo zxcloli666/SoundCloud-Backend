@@ -67,7 +67,7 @@ pub async fn configure(
             .map_err(refusal);
     }
     if let Some(media) = patch.wanted_image() {
-        backdrop::check(chat, &room, user_id, media).await?;
+        backdrop::check(chat, room.chat_id, user_id, media).await?;
     }
     let budget = room.id.to_string();
     limits::admit_backdrop(chat, &budget).await?;

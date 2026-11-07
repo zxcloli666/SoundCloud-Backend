@@ -5,7 +5,7 @@ use sc_chat_wire::msg::Class;
 use uuid::Uuid;
 
 use crate::modules::chat::conversations::create::META_MAX;
-use crate::modules::chat::media::limits::{ALBUM_MAX, AVATAR_MEDIA_MAX};
+use crate::modules::chat::media::limits::{ALBUM_MAX, META_MEDIA_MAX};
 use crate::modules::chat::members::access::Access;
 use crate::modules::chat::messages::{EDIT_WINDOW_HOURS, SendMessage};
 use crate::modules::chat::model::MemberState;
@@ -81,7 +81,7 @@ fn admit_pings(class: Class, pings: Vec<String>) -> ChatResult<Vec<String>> {
 fn admit_media(class: Class, media: &[Uuid]) -> ChatResult<()> {
     let max = match class {
         Class::Post => ALBUM_MAX,
-        Class::Meta => AVATAR_MEDIA_MAX,
+        Class::Meta => META_MEDIA_MAX,
         _ => 0,
     };
     let unique: HashSet<&Uuid> = media.iter().collect();
@@ -100,7 +100,6 @@ pub fn may_post(access: &Access, class: Class) -> ChatResult<()> {
         return Err(ChatError::NotMember);
     }
     match class {
-        Class::Meta if !access.is_group() && !access.is_room() => Err(ChatError::Invalid),
         Class::Meta | Class::Pin
             if (access.is_group() || access.is_room() || access.is_public())
                 && !access.is_admin() =>

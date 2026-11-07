@@ -4,12 +4,14 @@ use sqlx::PgExecutor;
 use uuid::Uuid;
 
 use super::{COMMENT_CHARS_MAX, FileReport, FiledReport, REASONS, reason_label, reporter_weight};
+use crate::modules::chat::backdrops::rules;
 use crate::modules::chat::media::{backdrop, hooks};
+use crate::modules::chat::members::access;
 use crate::modules::chat::moderation::evidence::{self, StoredMessage};
 use crate::modules::chat::moderation::keys::ChatKeys;
 use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::{ChatError, ChatResult, ChatState, users};
-use crate::modules::rooms::model::{IMAGE_COOLDOWN_MS, Room};
+use crate::modules::rooms::model::IMAGE_COOLDOWN_MS;
 
 pub const CLEAR_REPORTERS: i64 = 3;
 pub const CLEAR_WINDOW_SECS: i32 = 10 * 60;
@@ -95,6 +97,53 @@ pub fn validate(report: &BackdropReport) -> ChatResult<()> {
     Ok(())
 }
 
+struct Target {
+    setter: String,
+    public: bool,
+    in_room: bool,
+    image: Option<Uuid>,
+}
+
+async fn target(chat: &ChatState, conversation: Uuid, reporter: &str) -> ChatResult<Target> {
+    let found = sqlx::query_file!("queries/chat/reports/conversation.sql", conversation)
+        .fetch_optional(&chat.pg)
+        .await?
+        .filter(|row| row.live)
+        .ok_or(ChatError::NotFound)?;
+    if found.kind == "room" {
+        let room = room_of_chat(chat, conversation)
+            .await?
+            .ok_or(ChatError::NotMember)?;
+        if !room.is_member(reporter) {
+            return Err(ChatError::NotMember);
+        }
+        return Ok(Target {
+            setter: room.host_id.clone(),
+            public: room.public,
+            in_room: true,
+            image: room.image_shown(),
+        });
+    }
+    let access = access::load(&chat.pg, conversation, reporter)
+        .await?
+        .active()?;
+    let chosen = access.backdrop.clone();
+    let image = match &chosen {
+        Some(chosen) if chosen.image().is_some() => {
+            let shown = !rules::needs_star(access.kind, &chosen.backdrop)
+                || chat.stars.is_star(&chosen.by).await?;
+            shown.then(|| chosen.image()).flatten()
+        }
+        _ => None,
+    };
+    Ok(Target {
+        setter: chosen.map(|chosen| chosen.by).unwrap_or_default(),
+        public: access.is_public(),
+        in_room: false,
+        image,
+    })
+}
+
 pub async fn file_backdrop(
     chat: &ChatState,
     keys: &dyn ChatKeys,
@@ -103,30 +152,17 @@ pub async fn file_backdrop(
 ) -> ChatResult<FiledReport> {
     let conversation = input.conversation_id;
     let media = input.media_id;
-    let found = sqlx::query_file!("queries/chat/reports/conversation.sql", conversation)
-        .fetch_optional(&chat.pg)
-        .await?
-        .filter(|row| row.live)
-        .ok_or(ChatError::NotFound)?;
-    if found.kind != "room" {
-        return Err(ChatError::Invalid);
-    }
-    let room = room_of_chat(chat, conversation)
-        .await?
-        .ok_or(ChatError::NotMember)?;
-    if !room.is_member(reporter) {
-        return Err(ChatError::NotMember);
-    }
-    if room.is_host(reporter) {
+    let target = target(chat, conversation, reporter).await?;
+    if target.setter == reporter {
         return Err(ChatError::Invalid);
     }
     if let Some(found) = duplicate(&chat.pg, conversation, media, reporter).await? {
-        return answer_again(chat, &room, input, found).await;
+        return answer_again(chat, &target, input, found).await;
     }
-    if room.image_shown() != Some(media) {
+    if target.image != Some(media) {
         return Err(ChatError::MediaMissing { ids: vec![media] });
     }
-    let meta = meta_of(chat, conversation, &room.host_id).await?;
+    let meta = meta_of(chat, conversation, &target.setter).await?;
     if meta.is_empty() {
         return Err(ChatError::MediaMissing { ids: vec![media] });
     }
@@ -140,13 +176,13 @@ pub async fn file_backdrop(
         .await?;
     if let Some(found) = duplicate(&mut *tx, conversation, media, reporter).await? {
         drop(tx);
-        return answer_again(chat, &room, input, found).await;
+        return answer_again(chat, &target, input, found).await;
     }
     sqlx::query_file!(
         "queries/chat/reports/insert_backdrop.sql",
         id,
         reporter,
-        room.host_id,
+        target.setter,
         conversation,
         input.reason,
         input.comment.as_deref().map(str::trim).unwrap_or_default(),
@@ -154,7 +190,7 @@ pub async fn file_backdrop(
         capture.sealed,
         i16::try_from(capture.version).map_err(|_| ChatError::Internal)?,
         media,
-        room.public
+        target.public
     )
     .execute(&mut *tx)
     .await?;
@@ -164,8 +200,8 @@ pub async fn file_backdrop(
     tx.commit().await?;
     metrics::counter!("chat_backdrop_reports_total", "reason" => reason_label(&input.reason))
         .increment(1);
-    if room.public && weight > 0.0 {
-        crowd_clear(chat, conversation, media).await;
+    if target.public && weight > 0.0 {
+        crowd_clear(chat, &target, conversation, media).await;
     }
     Ok(FiledReport {
         id,
@@ -207,13 +243,13 @@ async fn duplicate(
 
 async fn answer_again(
     chat: &ChatState,
-    room: &Room,
+    target: &Target,
     input: &BackdropReport,
     found: Filed,
 ) -> ChatResult<FiledReport> {
     let media = input.media_id;
-    if room.public && found.weight > 0.0 && room.image_shown() == Some(media) {
-        crowd_clear(chat, input.conversation_id, media).await;
+    if target.public && found.weight > 0.0 && target.image == Some(media) {
+        crowd_clear(chat, target, input.conversation_id, media).await;
     }
     Ok(FiledReport {
         id: found.id,
@@ -246,8 +282,8 @@ async fn meta_of(
     }])
 }
 
-async fn crowd_clear(chat: &ChatState, conversation: Uuid, media: Uuid) {
-    match cleared_by_reports(chat, conversation, media).await {
+async fn crowd_clear(chat: &ChatState, target: &Target, conversation: Uuid, media: Uuid) {
+    match cleared_by_reports(chat, target, conversation, media).await {
         Ok(true) => {
             metrics::counter!("chat_backdrops_cleared_total", "by" => "reports").increment(1);
         }
@@ -263,7 +299,12 @@ async fn crowd_clear(chat: &ChatState, conversation: Uuid, media: Uuid) {
     }
 }
 
-async fn cleared_by_reports(chat: &ChatState, conversation: Uuid, media: Uuid) -> ChatResult<bool> {
+async fn cleared_by_reports(
+    chat: &ChatState,
+    target: &Target,
+    conversation: Uuid,
+    media: Uuid,
+) -> ChatResult<bool> {
     let reporters = sqlx::query_file_scalar!(
         "queries/chat/reports/backdrop_reporters.sql",
         conversation,
@@ -275,6 +316,8 @@ async fn cleared_by_reports(chat: &ChatState, conversation: Uuid, media: Uuid) -
     if reporters < CLEAR_REPORTERS {
         return Ok(false);
     }
-    let until = Utc::now().timestamp_millis() + IMAGE_COOLDOWN_MS;
-    backdrop::clear(chat, conversation, media, Some(until)).await
+    let until = target
+        .in_room
+        .then(|| Utc::now().timestamp_millis() + IMAGE_COOLDOWN_MS);
+    backdrop::clear(chat, conversation, media, until).await
 }

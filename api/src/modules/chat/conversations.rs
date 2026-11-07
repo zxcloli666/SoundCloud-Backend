@@ -31,7 +31,7 @@ use crate::modules::chat::messages::fanout;
 use crate::modules::chat::model::ConversationKind;
 use crate::modules::chat::users::{self, Scope};
 use crate::modules::chat::{
-    ChatCaller, ChatError, ChatResult, ChatState, blocks, public_chat, requests, rooms,
+    ChatCaller, ChatError, ChatResult, ChatState, backdrops, blocks, public_chat, requests, rooms,
 };
 
 pub const LIST_ROWS_MAX: usize = 200;
@@ -89,6 +89,7 @@ pub async fn list(
         _ => LIST_BYTES_MAX,
     };
     let mut page = view::fit(rows, &caller.user_id, LIST_ROWS_MAX, cap);
+    backdrops::view::settle(&chat, &mut page.items).await;
     if query.cursor.is_none() && chat.config.public && caller.sees_public() {
         page.items
             .insert(0, public_chat::view::of(&chat, &caller.user_id).await?);
@@ -123,7 +124,7 @@ pub async fn create(
             create::group(&chat.pg, user, placed, meta).await?
         }
     };
-    let view = view::one(&chat.pg, created.id, user).await?;
+    let view = view::one(&chat, created.id, user).await?;
     if created.rows.is_empty() {
         fanout::bump(&chat, created.id, view.last_seq, &created.recipients).await?;
     } else {
@@ -163,7 +164,7 @@ pub async fn show(
         public_chat::ensure_on(&chat)?;
         return Ok(Json(public_chat::view::of(&chat, &caller.user_id).await?));
     }
-    match view::one(&chat.pg, conversation, &caller.user_id).await {
+    match view::one(&chat, conversation, &caller.user_id).await {
         Err(ChatError::NotMember) => Ok(Json(
             rooms::conversation::view(&chat, conversation, &caller.user_id).await?,
         )),
@@ -183,9 +184,7 @@ pub async fn update(
         Some(row) => fanout::publish(&chat, &[row], &access.recipients).await?,
         None => fanout::bump(&chat, conversation, access.last_seq, &access.recipients).await?,
     }
-    Ok(Json(
-        view::one(&chat.pg, conversation, &caller.user_id).await?,
-    ))
+    Ok(Json(view::one(&chat, conversation, &caller.user_id).await?))
 }
 
 pub async fn delete(
@@ -244,9 +243,7 @@ pub async fn update_me(
     if conversation == public_chat::ID {
         return Ok(Json(public_chat::view::of(&chat, &caller.user_id).await?));
     }
-    Ok(Json(
-        view::one(&chat.pg, conversation, &caller.user_id).await?,
-    ))
+    Ok(Json(view::one(&chat, conversation, &caller.user_id).await?))
 }
 
 pub async fn set_ttl(

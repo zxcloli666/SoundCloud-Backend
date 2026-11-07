@@ -15,7 +15,7 @@ use crate::modules::chat::public_chat;
 use crate::modules::chat::quota::{self, Used, seconds, signed, unsigned};
 use crate::modules::chat::rooms::media_gate;
 use crate::modules::chat::stores::{self, Object};
-use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState, backdrops};
 
 #[derive(Debug, Clone)]
 struct Planned {
@@ -117,7 +117,15 @@ async fn admit_place(chat: &ChatState, user: &str, body: &ReserveBody) -> ChatRe
             access.active()?.admin()?;
             Ok(())
         }
-        MediaKind::Backdrop => media_gate::backdrop_gate(chat, conversation, user).await,
+        MediaKind::Backdrop => {
+            public_chat::guard(chat, conversation)?;
+            match access::load(&chat.pg, conversation, user).await {
+                Err(ChatError::NotMember) => {
+                    media_gate::backdrop_gate(chat, conversation, user).await
+                }
+                found => backdrops::rules::may_set(&found?.active()?),
+            }
+        }
     }
 }
 

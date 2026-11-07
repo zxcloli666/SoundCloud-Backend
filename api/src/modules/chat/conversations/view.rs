@@ -4,9 +4,10 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::modules::chat::backdrops::{self, Chosen};
 use crate::modules::chat::conversations::keys::peer_of;
 use crate::modules::chat::members::access::GroupSettings;
-use crate::modules::chat::{ChatError, ChatResult};
+use crate::modules::chat::{ChatError, ChatResult, ChatState};
 
 const PAGE_FRAME: usize = r#"{"items":[],"next_cursor":""}"#.len() + UUID_TEXT_LEN;
 const UUID_TEXT_LEN: usize = 36;
@@ -58,6 +59,7 @@ pub struct ConversationView {
     pub member_count: i32,
     pub ttl_s: Option<i32>,
     pub room_ref: Option<String>,
+    pub backdrop: Option<Chosen>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinged: Option<bool>,
     pub me: MembershipView,
@@ -102,6 +104,7 @@ impl ListedRow {
             meta_ct: self.meta_ct,
             meta_epoch: self.meta_epoch,
             settings: GroupSettings::of(&self.settings),
+            backdrop: Chosen::of(&self.settings),
             member_count: self.member_count,
             ttl_s: self.ttl_s,
             room_ref: self.room_ref,
@@ -124,17 +127,19 @@ impl ListedRow {
     }
 }
 
-pub async fn one(pg: &PgPool, conversation: Uuid, user: &str) -> ChatResult<ConversationView> {
-    sqlx::query_file_as!(
+pub async fn one(chat: &ChatState, conversation: Uuid, user: &str) -> ChatResult<ConversationView> {
+    let mut view = sqlx::query_file_as!(
         ListedRow,
         "queries/chat/conversations/one.sql",
         conversation,
         user
     )
-    .fetch_optional(pg)
+    .fetch_optional(&chat.pg)
     .await?
     .map(|row| row.view(user))
-    .ok_or(ChatError::NotMember)
+    .ok_or(ChatError::NotMember)?;
+    backdrops::view::settle(chat, std::slice::from_mut(&mut view)).await;
+    Ok(view)
 }
 
 pub async fn rows_after(

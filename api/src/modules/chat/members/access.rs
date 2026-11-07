@@ -3,6 +3,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::modules::chat::backdrops::Chosen;
 use crate::modules::chat::conversations::keys::peer_of;
 use crate::modules::chat::members::roles;
 use crate::modules::chat::model::{ConversationKind, MemberRole, MemberState};
@@ -52,6 +53,7 @@ pub struct Access {
     pub peer: Option<String>,
     pub last_seq: i64,
     pub settings: GroupSettings,
+    pub backdrop: Option<Chosen>,
     pub role: MemberRole,
     pub state: MemberState,
     pub accepted: bool,
@@ -140,6 +142,7 @@ pub async fn load(pg: &PgPool, conversation: Uuid, user_id: &str) -> ChatResult<
         kind,
         last_seq: row.last_seq,
         settings: GroupSettings::of(&row.settings),
+        backdrop: Chosen::of(&row.settings),
         role: roles::role(&row.role)?,
         state: roles::state(&row.state)?,
         accepted: row.accepted,
@@ -176,6 +179,7 @@ async fn load_room(chat: &ChatState, conversation: Uuid, user_id: &str) -> ChatR
         peer: None,
         last_seq: row.last_seq,
         settings: GroupSettings::default(),
+        backdrop: None,
         role: if member.can_moderate() {
             MemberRole::Admin
         } else {

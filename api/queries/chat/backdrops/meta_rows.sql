@@ -1,4 +1,5 @@
-SELECT media.kind,
+SELECT media.id,
+       media.kind,
        media.status,
        media.owner_user = $2 AS "own!",
        media.origin_conversation = $3 AS "origin_here!",
@@ -10,4 +11,4 @@ SELECT media.kind,
              AND ref.seq = 0
        ) AS "current!"
 FROM chat.media AS media
-WHERE media.id = $1
+WHERE media.id = ANY($1::uuid[])

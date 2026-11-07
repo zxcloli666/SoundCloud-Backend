@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::modules::chat::backdrops::{self, Chosen};
 use crate::modules::chat::conversations::view::{ConversationView, MembershipView};
 use crate::modules::chat::members::access::GroupSettings;
 use crate::modules::chat::public_chat::{ID, watchers};
@@ -14,6 +15,8 @@ pub struct Row {
     pub last_seq: i64,
     pub last_at: DateTime<Utc>,
     pub key_epoch: i32,
+    pub meta_ct: Option<Vec<u8>>,
+    pub meta_epoch: Option<i32>,
     pub settings: Value,
     pub role: Option<String>,
     pub state: Option<String>,
@@ -47,9 +50,10 @@ impl Row {
             last_seq: self.last_seq,
             last_at: self.last_at.timestamp_millis(),
             key_epoch: self.key_epoch,
-            meta_ct: None,
-            meta_epoch: None,
+            meta_ct: self.meta_ct,
+            meta_epoch: self.meta_epoch,
             settings: GroupSettings::of(&self.settings),
+            backdrop: Chosen::of(&self.settings),
             member_count: i32::try_from(online).unwrap_or(i32::MAX),
             ttl_s: None,
             room_ref: None,
@@ -81,13 +85,15 @@ pub async fn row(chat: &ChatState, user_id: &str) -> ChatResult<Row> {
 
 pub async fn of(chat: &ChatState, user_id: &str) -> ChatResult<ConversationView> {
     let row = row(chat, user_id).await?;
-    Ok(row.into_view(watchers::count(chat).await?))
+    Ok(opened(chat, row).await?.conversation)
 }
 
 pub async fn opened(chat: &ChatState, row: Row) -> ChatResult<PublicView> {
     let online = watchers::count(chat).await?;
+    let mut conversation = row.into_view(online);
+    backdrops::view::settle(chat, std::slice::from_mut(&mut conversation)).await;
     Ok(PublicView {
-        conversation: row.into_view(online),
+        conversation,
         online,
     })
 }

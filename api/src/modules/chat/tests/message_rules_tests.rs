@@ -24,6 +24,7 @@ fn access(kind: ConversationKind, role: MemberRole) -> Access {
         peer: None,
         last_seq: 0,
         settings: GroupSettings::default(),
+        backdrop: None,
         role,
         state: MemberState::Active,
         accepted: true,
@@ -95,7 +96,7 @@ fn meta_is_for_group_admins_only() {
         Err(ChatError::NotMember)
     );
     assert_eq!(may_post(&group_admin, Class::Meta), Ok(()));
-    assert_eq!(may_post(&dm, Class::Meta), Err(ChatError::Invalid));
+    assert_eq!(may_post(&dm, Class::Meta), Ok(()));
 }
 
 #[test]
@@ -220,7 +221,7 @@ fn only_posts_take_the_chat_timer() {
 }
 
 #[test]
-fn media_ids_ride_posts_up_to_ten_and_meta_up_to_one() {
+fn media_ids_ride_posts_up_to_ten_and_meta_up_to_two() {
     let with = |class: &str, count: u128| SendMessage {
         media: (1..=count).map(Uuid::from_u128).collect(),
         ..input(class, if class == "edit" { Some(1) } else { None }, 64)
@@ -228,8 +229,8 @@ fn media_ids_ride_posts_up_to_ten_and_meta_up_to_one() {
     assert!(outgoing(with("post", 0)).is_ok());
     assert_eq!(outgoing(with("post", 10)).unwrap().media.len(), 10);
     assert_eq!(outgoing(with("post", 11)), Err(ChatError::Invalid));
-    assert_eq!(outgoing(with("meta", 1)).unwrap().media.len(), 1);
-    assert_eq!(outgoing(with("meta", 2)), Err(ChatError::Invalid));
+    assert_eq!(outgoing(with("meta", 2)).unwrap().media.len(), 2);
+    assert_eq!(outgoing(with("meta", 3)), Err(ChatError::Invalid));
     assert_eq!(outgoing(with("edit", 1)), Err(ChatError::Invalid));
     assert_eq!(outgoing(with("react", 1)), Err(ChatError::Invalid));
 }

@@ -1,12 +1,13 @@
 pub mod lock;
 mod tidy;
 
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::modules::chat::media::ledger;
 use crate::modules::chat::rooms::lookup::room_of_chat;
 use crate::modules::chat::rooms::refusal;
-use crate::modules::chat::{ChatError, ChatResult, ChatState};
+use crate::modules::chat::{ChatError, ChatResult, ChatState, backdrops};
 use crate::modules::rooms::model::{Room, SettingsPatch};
 
 use lock::Held;
@@ -23,11 +24,16 @@ struct Upload {
     origin_conversation: Uuid,
 }
 
-pub async fn check(chat: &ChatState, room: &Room, user_id: &str, media: Uuid) -> ChatResult<()> {
+pub async fn check(
+    chat: &ChatState,
+    conversation: Option<Uuid>,
+    user_id: &str,
+    media: Uuid,
+) -> ChatResult<()> {
     let upload = sqlx::query_file_as!(Upload, "queries/chat/backdrop/peek_media.sql", media)
         .fetch_optional(&chat.pg)
         .await?;
-    usable(upload, room.chat_id, user_id, media)
+    usable(upload, conversation, user_id, media)
 }
 
 fn usable(
@@ -135,6 +141,17 @@ pub async fn attach(
     if live.is_none() {
         return Err(ChatError::MediaMissing { ids: vec![media] });
     }
+    let flipped = attach_in(&mut tx, conversation, user_id, media).await?;
+    tx.commit().await?;
+    Ok((fence, Attached { media, flipped }))
+}
+
+pub async fn attach_in(
+    tx: &mut PgConnection,
+    conversation: Uuid,
+    user_id: &str,
+    media: Uuid,
+) -> ChatResult<bool> {
     let upload = sqlx::query_file_as!(Upload, "queries/chat/backdrop/lock_media.sql", media)
         .fetch_optional(&mut *tx)
         .await?;
@@ -147,8 +164,7 @@ pub async fn attach(
         .await?
         .rows_affected()
         > 0;
-    tx.commit().await?;
-    Ok((fence, Attached { media, flipped }))
+    Ok(flipped)
 }
 
 pub async fn clear(
@@ -157,6 +173,9 @@ pub async fn clear(
     media: Uuid,
     cooldown_until: Option<i64>,
 ) -> ChatResult<bool> {
+    if !in_room(chat, conversation).await? {
+        return backdrops::clear_image(chat, conversation, media).await;
+    }
     let held = Held::take(chat, conversation).await?;
     let cleared = clear_held(chat, &held, conversation, media, cooldown_until).await;
     let settle = Settle {
@@ -170,6 +189,15 @@ pub async fn clear(
         held.release(chat).await;
     }
     cleared.map(|(_, cleared)| cleared)
+}
+
+async fn in_room(chat: &ChatState, conversation: Uuid) -> ChatResult<bool> {
+    Ok(
+        sqlx::query_file!("queries/chat/reports/conversation.sql", conversation)
+            .fetch_optional(&chat.pg)
+            .await?
+            .is_some_and(|row| row.kind == "room"),
+    )
 }
 
 async fn clear_held(

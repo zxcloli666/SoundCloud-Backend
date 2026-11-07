@@ -35,7 +35,7 @@ pub async fn publish(chat: &Arc<ChatState>, rows: &[MessageRow]) -> ChatResult<(
     announce(chat, last).await
 }
 
-pub async fn announce(chat: &Arc<ChatState>, seq: i64) -> ChatResult<()> {
+pub async fn announce(chat: &ChatState, seq: i64) -> ChatResult<()> {
     match window(chat).await? {
         Window::Now => wake(chat, seq).await,
         Window::Later | Window::Covered => Ok(()),
