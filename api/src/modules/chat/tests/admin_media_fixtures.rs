@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use super::cipher::Role;
 use super::media_support::{
-    Row, Upload, backdrop_report, conversation_key, hold, image, media_row, meta_envelope,
-    post_envelope, send, single, webp,
+    Row, Upload, backdrop_meta_envelope, backdrop_report, conversation_key, hold, image, media_row,
+    meta_envelope, post_envelope, send, single, webp,
 };
 use super::resolve::{AdminDecision, Resolve};
 use super::router;
@@ -259,4 +259,41 @@ pub async fn room_backdrop(pool: &PgPool, chat: &ChatState) -> (Uuid, Uuid, Uplo
     let report = backdrop_report(chat, room, "61", "62", &meta, backdrop.id).await;
     hold(pool, backdrop.id, report).await;
     (room, report, backdrop)
+}
+
+pub async fn group_backdrop(pool: &PgPool, chat: &ChatState) -> (Uuid, Uuid, Upload, Upload) {
+    let keys = &chat.keks;
+    let group = conversation(pool, "group", &[("71", true), ("72", true)]).await;
+    let ck = conversation_key(pool, keys, group).await;
+    let avatar = Upload::new(Role::Image, &webp("avatar", 900));
+    let backdrop = Upload::new(Role::Image, &webp("backdrop", 20_000));
+    for (upload, kind) in [(&avatar, "avatar"), (&backdrop, "backdrop")] {
+        media_row(
+            pool,
+            Row {
+                upload,
+                owner: "71",
+                origin: group,
+                kind,
+                parent: None,
+                status: "attached",
+            },
+        )
+        .await;
+    }
+    let meta = send(
+        pool,
+        group,
+        &ck,
+        "71",
+        Class::Meta,
+        &backdrop_meta_envelope(
+            Some(single(&avatar, 512, 512)),
+            single(&backdrop, 1920, 1080),
+        ),
+    )
+    .await;
+    let report = backdrop_report(chat, group, "71", "72", &meta, backdrop.id).await;
+    hold(pool, backdrop.id, report).await;
+    (group, report, avatar, backdrop)
 }

@@ -114,17 +114,36 @@ pub fn post_envelope(text: &str, attachments: Vec<Attachment>) -> Envelope {
 }
 
 pub fn meta_envelope(attachment: Option<Attachment>) -> Envelope {
+    let avatar_media_id = attachment
+        .as_ref()
+        .map(|attachment| attachment.media_id.clone())
+        .unwrap_or_default();
     Envelope {
         v: sc_chat_wire::msg::ENVELOPE_VERSION,
         body: Some(Body::Meta(Meta {
             title: "Room meta".to_owned(),
             description: String::new(),
-            avatar_media_id: attachment
+            avatar_media_id,
+            backdrop_media_id: String::new(),
+        })),
+        attachments: attachment.into_iter().collect(),
+        ..Default::default()
+    }
+}
+
+pub fn backdrop_meta_envelope(avatar: Option<Attachment>, backdrop: Attachment) -> Envelope {
+    Envelope {
+        v: sc_chat_wire::msg::ENVELOPE_VERSION,
+        body: Some(Body::Meta(Meta {
+            title: "Group meta".to_owned(),
+            description: String::new(),
+            avatar_media_id: avatar
                 .as_ref()
                 .map(|attachment| attachment.media_id.clone())
                 .unwrap_or_default(),
+            backdrop_media_id: backdrop.media_id.clone(),
         })),
-        attachments: attachment.into_iter().collect(),
+        attachments: avatar.into_iter().chain([backdrop]).collect(),
         ..Default::default()
     }
 }

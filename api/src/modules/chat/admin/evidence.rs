@@ -162,7 +162,7 @@ pub fn carried(class: &str, envelope: &Envelope, meta: MediaKind) -> Vec<SealedM
             .take(ALBUM_MAX)
             .flat_map(posted)
             .collect(),
-        Some(Class::Meta) => meta_image(envelope, meta).into_iter().collect(),
+        Some(Class::Meta) => meta_images(envelope, meta),
         _ => Vec::new(),
     }
 }
@@ -173,16 +173,25 @@ fn posted(attachment: &Attachment) -> Vec<SealedMedia> {
     image.into_iter().chain(thumb).collect()
 }
 
-fn meta_image(envelope: &Envelope, kind: MediaKind) -> Option<SealedMedia> {
+fn meta_images(envelope: &Envelope, kind: MediaKind) -> Vec<SealedMedia> {
     let Some(Body::Meta(meta)) = &envelope.body else {
-        return None;
+        return Vec::new();
     };
+    let avatar = meta_image(envelope, &meta.avatar_media_id, kind);
+    let backdrop = (meta.backdrop_media_id != meta.avatar_media_id)
+        .then(|| meta_image(envelope, &meta.backdrop_media_id, MediaKind::Backdrop))
+        .flatten();
+    avatar.into_iter().chain(backdrop).collect()
+}
+
+fn meta_image(envelope: &Envelope, id: &str, kind: MediaKind) -> Option<SealedMedia> {
+    if id.is_empty() {
+        return None;
+    }
     envelope
         .attachments
         .iter()
-        .find(|attachment| {
-            !meta.avatar_media_id.is_empty() && attachment.media_id == meta.avatar_media_id
-        })
+        .find(|attachment| attachment.media_id == id)
         .filter(|attachment| sealed_ok(attachment, IMAGE_MAX_BYTES) && attachment.thumb.is_none())
         .and_then(|attachment| sealed(attachment, kind))
 }

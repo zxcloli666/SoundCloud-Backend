@@ -4,7 +4,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-use super::media_fixtures::{decision, get, group_report, room_backdrop};
+use super::media_fixtures::{decision, get, group_backdrop, group_report, room_backdrop};
 use super::media_support::status_of;
 use super::resolve::{AdminDecision, apply};
 use super::restore::restore_with;
@@ -33,6 +33,26 @@ async fn a_backdrop_report_shows_its_kind_media_and_one_room_meta_line(pool: PgP
     assert_eq!(listed[0]["media_id"], backdrop.id.to_string());
     let (_, trail) = get(&chat, &format!("/chat-admin/reports/{report}/audit")).await;
     assert_eq!(trail["report"]["kind"], "backdrop");
+}
+
+#[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
+async fn a_group_backdrop_report_finds_the_image_named_in_the_backdrop_slot(pool: PgPool) {
+    let chat = state(pool.clone(), None);
+    let (_, report, avatar, backdrop) = group_backdrop(&pool, &chat).await;
+
+    let (status, body) = get(&chat, &format!("/chat-admin/reports/{report}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["report"]["kind"], "backdrop");
+    assert_eq!(body["report"]["media_id"], backdrop.id.to_string());
+    assert_eq!(body["lines"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["lines"][0]["class"], "meta");
+    assert_eq!(
+        body["lines"][0]["media"],
+        json!([
+            {"id": avatar.id, "kind": "avatar", "w": 512, "h": 512, "size": avatar.bytes()},
+            {"id": backdrop.id, "kind": "backdrop", "w": 1920, "h": 1080, "size": backdrop.bytes()}
+        ])
+    );
 }
 
 #[sqlx::test(migrator = "crate::db::TEST_MIGRATOR")]
