@@ -35,7 +35,8 @@ qdrant `6333/6334`, nats `4222/8222`.
 `sc-chat-wire/vectors/request.json` в Core (pub `dde33290...2d4d`), dev-десктоп должен пинить его как версию 1.
 
 Сквозные тесты чата (1.T): `scripts/chat-it.sh up` поднимает чистую БД в `scd-pg`, `redis-rt`, музыкальный Redis,
-фейковый OpenAI-судью для модерации, nginx-релей и `chat-api` из debug-сборки, печатает переменные для
+фейковый OpenAI-судью для модерации, nginx-релей, SeaweedFS под картинки и `chat-api` из debug-сборки с общим чатом
+(`CHAT_PUBLIC=on`) и загрузкой медиа, печатает переменные для
 `Core/crates/sc-chat/tests/integration`. `scripts/chat-it.sh down` все убирает.
 
 ## Клиентский контракт стриминга (v9)

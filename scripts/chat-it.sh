@@ -14,10 +14,14 @@ REDIS_RT_PORT="${CHAT_IT_REDIS_RT_PORT:-6392}"
 REDIS_PORT="${CHAT_IT_REDIS_PORT:-6393}"
 AI_PORT="${CHAT_IT_AI_PORT:-6394}"
 RELAY_PORT="${CHAT_IT_RELAY_PORT:-6395}"
+S3_PORT="${CHAT_IT_S3_PORT:-6396}"
 REDIS_IMAGE="${CHAT_IT_REDIS_IMAGE:-mirror.gcr.io/library/redis:7-alpine}"
 PYTHON_IMAGE="${CHAT_IT_PYTHON_IMAGE:-docker.io/library/python:3.12-alpine}"
 NGINX_IMAGE="${CHAT_IT_NGINX_IMAGE:-mirror.gcr.io/library/nginx:alpine}"
-CONTAINERS=(chat-it-redis-rt chat-it-redis chat-it-ai chat-it-relay)
+S3_IMAGE="${CHAT_IT_S3_IMAGE:-docker.io/chrislusf/seaweedfs:4.48}"
+S3_BUCKET=chat-it
+S3_ACCESS_KEY=chat-it
+CONTAINERS=(chat-it-redis-rt chat-it-redis chat-it-ai chat-it-relay chat-it-s3)
 TEST_OCK_SECRET=66842626e4763cce2b75991a3e967c29bcc9f02395a3f0115981eb59ab3e4d8e
 TEST_OCK_PUB=dde332903df0f9e9fbc91a814131b5bcea28b46f5728e2a7e28700ed4a6c2d4d
 DATABASE_URL_IT="postgres://$PG_USER:$PG_PASSWORD@127.0.0.1:$PG_PORT/$DB"
@@ -39,7 +43,10 @@ make_keys() {
   head -c 32 /dev/urandom > "$keys/reports-kek-1"
   random_hex 24 > "$keys/chat-admin-token"
   random_hex 24 > "$keys/mod-ai-key"
+  random_hex 24 > "$keys/s3-secret-1"
   chmod 644 "$keys"/*
+  printf '{"identities":[{"name":"chat-it","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
+    "$S3_ACCESS_KEY" "$(cat "$keys/s3-secret-1")" > "$STATE/s3.json"
 }
 
 migrate() {
@@ -68,6 +75,23 @@ start_containers() {
     -e "CHAT_IT_UPSTREAM=host.containers.internal:$PORT" \
     -v "$HERE/relay.conf.template:/etc/nginx/templates/default.conf.template:ro" \
     "$NGINX_IMAGE" > /dev/null
+  podman run -d --name chat-it-s3 -p "127.0.0.1:$S3_PORT:8333" \
+    -v "$STATE/s3.json:/etc/seaweedfs/s3.json:ro" \
+    "$S3_IMAGE" server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -master.volumeSizeLimitMB=64 > /dev/null
+  make_bucket
+}
+
+make_bucket() {
+  local answer
+  for _ in $(seq 1 60); do
+    answer="$(echo "s3.bucket.create -name $S3_BUCKET" | podman exec -i chat-it-s3 weed shell 2>&1 || true)"
+    case "$answer" in
+      *"created bucket $S3_BUCKET"*) return 0 ;;
+    esac
+    sleep 1
+  done
+  podman logs --tail 20 chat-it-s3 >&2
+  return 1
 }
 
 api_binary() {
@@ -82,7 +106,10 @@ start_api() {
   binary="${CHAT_IT_API_BIN:-$(api_binary)}"
   env API_ROLE=rt PORT="$PORT" DATABASE_URL="$DATABASE_URL_IT" PG_POOL_MAX=8 \
     REDIS_URL="redis://127.0.0.1:$REDIS_PORT" REDIS_RT_URL="redis://127.0.0.1:$REDIS_RT_PORT" \
-    CHAT_ENABLED=true CHAT_ACCESS=all CHAT_KEYS_DIR="$STATE/keys" \
+    CHAT_ENABLED=true CHAT_ACCESS=all CHAT_PUBLIC=on CHAT_KEYS_DIR="$STATE/keys" \
+    CHAT_MEDIA_UPLOADS=true CHAT_STORES=1 CHAT_STORE_WRITE=1 CHAT_STORE_1_BUCKET="$S3_BUCKET" \
+    CHAT_STORE_1_ENDPOINT="http://127.0.0.1:$S3_PORT" CHAT_STORE_1_PRESIGN="http://127.0.0.1:$S3_PORT" \
+    CHAT_STORE_1_ACCESS_KEY="$S3_ACCESS_KEY" CHAT_STORE_1_CAP_GB=1 \
     CHAT_MOD_AI_ENABLED=true CHAT_MOD_AI_URL="http://127.0.0.1:$AI_PORT" CHAT_MOD_AI_MODEL=fake-judge \
     RUST_LOG="${CHAT_IT_RUST_LOG:-info,api=debug,sqlx=warn}" \
     "$binary" > "$STATE/chat-api.log" 2>&1 &
