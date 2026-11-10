@@ -10,18 +10,20 @@ PG_PASSWORD="${CHAT_IT_PG_PASSWORD:-dev}"
 PG_PORT="${CHAT_IT_PG_PORT:-5432}"
 DB="${CHAT_IT_DB:-scd_chat_it}"
 PORT="${CHAT_IT_PORT:-3417}"
+FULL_PORT="${CHAT_IT_FULL_PORT:-3418}"
 REDIS_RT_PORT="${CHAT_IT_REDIS_RT_PORT:-6392}"
 REDIS_PORT="${CHAT_IT_REDIS_PORT:-6393}"
 AI_PORT="${CHAT_IT_AI_PORT:-6394}"
 RELAY_PORT="${CHAT_IT_RELAY_PORT:-6395}"
 S3_PORT="${CHAT_IT_S3_PORT:-6396}"
+FRONT_PORT="${CHAT_IT_FRONT_PORT:-6397}"
 REDIS_IMAGE="${CHAT_IT_REDIS_IMAGE:-mirror.gcr.io/library/redis:7-alpine}"
 PYTHON_IMAGE="${CHAT_IT_PYTHON_IMAGE:-docker.io/library/python:3.12-alpine}"
 NGINX_IMAGE="${CHAT_IT_NGINX_IMAGE:-mirror.gcr.io/library/nginx:alpine}"
 S3_IMAGE="${CHAT_IT_S3_IMAGE:-docker.io/chrislusf/seaweedfs:4.48}"
 S3_BUCKET=chat-it
 S3_ACCESS_KEY=chat-it
-CONTAINERS=(chat-it-redis-rt chat-it-redis chat-it-ai chat-it-relay chat-it-s3)
+CONTAINERS=(chat-it-redis-rt chat-it-redis chat-it-ai chat-it-relay chat-it-front chat-it-s3)
 TEST_OCK_SECRET=66842626e4763cce2b75991a3e967c29bcc9f02395a3f0115981eb59ab3e4d8e
 TEST_OCK_PUB=dde332903df0f9e9fbc91a814131b5bcea28b46f5728e2a7e28700ed4a6c2d4d
 DATABASE_URL_IT="postgres://$PG_USER:$PG_PASSWORD@127.0.0.1:$PG_PORT/$DB"
@@ -75,6 +77,11 @@ start_containers() {
     -e "CHAT_IT_UPSTREAM=host.containers.internal:$PORT" \
     -v "$HERE/relay.conf.template:/etc/nginx/templates/default.conf.template:ro" \
     "$NGINX_IMAGE" > /dev/null
+  podman run -d --name chat-it-front -p "127.0.0.1:$FRONT_PORT:8080" \
+    -e "CHAT_IT_CHAT_UPSTREAM=host.containers.internal:$PORT" \
+    -e "CHAT_IT_AUTH_UPSTREAM=host.containers.internal:$FULL_PORT" \
+    -v "$HERE/front.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+    "$NGINX_IMAGE" > /dev/null
   podman run -d --name chat-it-s3 -p "127.0.0.1:$S3_PORT:8333" \
     -v "$STATE/s3.json:/etc/seaweedfs/s3.json:ro" \
     "$S3_IMAGE" server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -master.volumeSizeLimitMB=64 > /dev/null
@@ -104,6 +111,12 @@ api_binary() {
 start_api() {
   local binary
   binary="${CHAT_IT_API_BIN:-$(api_binary)}"
+  start_chat_api "$binary"
+  start_full_api "$binary"
+}
+
+start_chat_api() {
+  local binary="$1"
   env API_ROLE=rt PORT="$PORT" DATABASE_URL="$DATABASE_URL_IT" PG_POOL_MAX=8 \
     REDIS_URL="redis://127.0.0.1:$REDIS_PORT" REDIS_RT_URL="redis://127.0.0.1:$REDIS_RT_PORT" \
     CHAT_ENABLED=true CHAT_ACCESS=all CHAT_PUBLIC=on CHAT_KEYS_DIR="$STATE/keys" \
@@ -114,24 +127,44 @@ start_api() {
     RUST_LOG="${CHAT_IT_RUST_LOG:-info,api=debug,sqlx=warn}" \
     "$binary" > "$STATE/chat-api.log" 2>&1 &
   echo $! > "$STATE/chat-api.pid"
+  wait_healthy "$PORT" chat-api
+}
+
+start_full_api() {
+  local binary="$1"
+  env PORT="$FULL_PORT" DATABASE_URL="$DATABASE_URL_IT" PG_POOL_MAX=8 \
+    REDIS_URL="redis://127.0.0.1:$REDIS_PORT" \
+    STREAM_TICKET_KEY="$(random_hex 32 | xxd -r -p | base64)" \
+    AUTH_X=on AUTH_KEYS_DIR="$STATE/keys" \
+    RUST_LOG="${CHAT_IT_RUST_LOG:-info,api=debug,sqlx=warn}" \
+    "$binary" > "$STATE/full-api.log" 2>&1 &
+  echo $! > "$STATE/full-api.pid"
+  wait_healthy "$FULL_PORT" full-api
+}
+
+wait_healthy() {
+  local port="$1" name="$2"
   for _ in $(seq 1 60); do
-    curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1 && return 0
-    kill -0 "$(cat "$STATE/chat-api.pid")" 2> /dev/null || break
+    curl -fsS "http://127.0.0.1:$port/health" > /dev/null 2>&1 && return 0
+    kill -0 "$(cat "$STATE/$name.pid")" 2> /dev/null || break
     sleep 1
   done
-  tail -20 "$STATE/chat-api.log" >&2
+  tail -20 "$STATE/$name.log" >&2
   return 1
 }
 
 stop_api() {
-  [ -f "$STATE/chat-api.pid" ] || return 0
-  kill "$(cat "$STATE/chat-api.pid")" 2> /dev/null || true
-  rm -f "$STATE/chat-api.pid"
+  local name
+  for name in chat-api full-api; do
+    [ -f "$STATE/$name.pid" ] || continue
+    kill "$(cat "$STATE/$name.pid")" 2> /dev/null || true
+    rm -f "$STATE/$name.pid"
+  done
 }
 
 print_env() {
   cat << EOF
-export CHAT_IT_ORIGIN=http://127.0.0.1:$PORT
+export CHAT_IT_ORIGIN=http://127.0.0.1:$FRONT_PORT
 export CHAT_IT_RELAY=http://127.0.0.1:$RELAY_PORT
 export CHAT_IT_PSQL="podman exec -i $PG_CONTAINER psql -U $PG_USER -d $DB"
 export CHAT_IT_REDIS_RT="podman exec -i chat-it-redis-rt redis-cli"
