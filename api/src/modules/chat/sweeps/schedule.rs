@@ -7,7 +7,7 @@ use crate::modules::chat::ChatState;
 use crate::modules::chat::rooms::perks as room_perks;
 use crate::modules::chat::sweeps::{
     devices, expired, gauges, leader, marks, media, public_chat, purge, redis_info, reports, rooms,
-    startup,
+    startup, stats,
 };
 
 pub const TICK: Duration = Duration::from_secs(1);
@@ -25,10 +25,11 @@ pub enum Sweep {
     Media,
     RoomPerks,
     PublicChat,
+    Stats,
 }
 
 impl Sweep {
-    pub const ALL: [Sweep; 10] = [
+    pub const ALL: [Sweep; 11] = [
         Sweep::Marks,
         Sweep::Expired,
         Sweep::Rooms,
@@ -39,6 +40,7 @@ impl Sweep {
         Sweep::Media,
         Sweep::RoomPerks,
         Sweep::PublicChat,
+        Sweep::Stats,
     ];
 
     pub fn name(self) -> &'static str {
@@ -53,6 +55,7 @@ impl Sweep {
             Sweep::Media => "media",
             Sweep::RoomPerks => "room_perks",
             Sweep::PublicChat => "public",
+            Sweep::Stats => "stats",
         }
     }
 
@@ -68,6 +71,7 @@ impl Sweep {
             Sweep::Media => media::EVERY_SECS,
             Sweep::RoomPerks => room_perks::EVERY_SECS,
             Sweep::PublicChat => public_chat::EVERY_SECS,
+            Sweep::Stats => stats::EVERY_SECS,
         })
     }
 }
@@ -138,6 +142,7 @@ impl Sweeper {
             Sweep::Media => media::run_once(chat).await,
             Sweep::RoomPerks => room_perks::run_once(chat).await,
             Sweep::PublicChat => public_chat::run_once(chat).await,
+            Sweep::Stats => stats::run_once(chat).await,
         };
         match outcome {
             Ok(items) => gauges::done(sweep.name(), items),

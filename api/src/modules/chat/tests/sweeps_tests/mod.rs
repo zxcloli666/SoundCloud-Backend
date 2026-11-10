@@ -15,5 +15,6 @@ mod reports_tests;
 mod rooms_tests;
 mod schedule_tests;
 mod startup_tests;
+mod stats_tests;
 pub(in crate::modules::chat::sweeps) mod support;
 mod unit_tests;

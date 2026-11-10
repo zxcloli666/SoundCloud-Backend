@@ -16,6 +16,14 @@ pub enum ConversationKind {
 }
 
 impl ConversationKind {
+    pub const ALL: [ConversationKind; 5] = [
+        ConversationKind::Direct,
+        ConversationKind::Group,
+        ConversationKind::Room,
+        ConversationKind::Public,
+        ConversationKind::Saved,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ConversationKind::Direct => "direct",

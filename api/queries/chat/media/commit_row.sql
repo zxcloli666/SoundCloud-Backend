@@ -1,4 +1,5 @@
 SELECT root.id,
+       root.kind,
        root.status,
        root.store,
        root.object_key,

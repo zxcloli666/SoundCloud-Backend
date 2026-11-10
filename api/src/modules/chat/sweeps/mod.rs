@@ -15,6 +15,7 @@ pub mod rooms;
 pub mod schedule;
 pub mod sessions;
 pub mod startup;
+pub mod stats;
 
 use std::sync::Arc;
 
