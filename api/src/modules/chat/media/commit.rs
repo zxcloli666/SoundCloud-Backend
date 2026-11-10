@@ -15,6 +15,8 @@ use crate::modules::chat::stores::{self, Object};
 use crate::modules::chat::{ChatCaller, ChatError, ChatResult, ChatState};
 
 pub const LEFT_FOR_RECONCILE: &str = "chat_media_commit_leftovers_total";
+pub const UPLOADS: &str = "chat_media_uploads_total";
+pub const UPLOADED_BYTES: &str = "chat_media_upload_bytes_total";
 
 pub async fn commit_media(
     caller: ChatCaller,
@@ -63,6 +65,8 @@ async fn commit_rows(chat: &ChatState, caller: &ChatCaller, id: Uuid) -> ChatRes
     match ledger::commit(&chat.pg, user, id, &kept).await {
         Ok(Some(used)) => {
             discard(chat, store, &objects).await;
+            metrics::counter!(UPLOADS, "kind" => row.kind.clone()).increment(1);
+            metrics::counter!(UPLOADED_BYTES, "kind" => row.kind).increment(total);
             Ok(CommitAnswer {
                 id,
                 bytes: total,

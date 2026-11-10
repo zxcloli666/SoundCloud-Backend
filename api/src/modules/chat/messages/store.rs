@@ -126,6 +126,12 @@ pub async fn store(
         .await?;
     }
     tx.commit().await?;
+    metrics::counter!(
+        "chat_messages_total",
+        "kind" => access.kind.as_str(),
+        "class" => out.class.as_str(),
+    )
+    .increment(1);
     Ok(row)
 }
 
