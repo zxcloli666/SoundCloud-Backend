@@ -27,3 +27,6 @@ mod hold_tests;
 
 #[path = "sync_tests/wake_tests.rs"]
 mod wake_tests;
+
+#[path = "sync_tests/rev_tests.rs"]
+mod rev_tests;

@@ -280,6 +280,7 @@ impl Assembly<'_> {
             id: state.id,
             last_seq: state.last_seq,
             key_epoch: state.key_epoch,
+            rev: state.rev,
             messages: Vec::new(),
             more: false,
             marks: Vec::new(),

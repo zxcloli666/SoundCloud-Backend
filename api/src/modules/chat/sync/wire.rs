@@ -68,6 +68,7 @@ pub struct SyncConversation {
     pub id: Uuid,
     pub last_seq: i64,
     pub key_epoch: i32,
+    pub rev: i64,
     pub messages: Vec<MessageView>,
     pub more: bool,
     pub marks: Vec<PeerMark>,

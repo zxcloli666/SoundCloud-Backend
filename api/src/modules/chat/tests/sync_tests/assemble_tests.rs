@@ -84,6 +84,7 @@ fn state(id: Uuid, kind: &str, last_seq: i64, member: Option<&str>) -> Conversat
         kind: kind.to_owned(),
         last_seq,
         key_epoch: 2,
+        rev: 7,
         seat,
     }
 }

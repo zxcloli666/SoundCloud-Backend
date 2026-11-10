@@ -17,6 +17,7 @@ pub struct ConversationState {
     pub kind: String,
     pub last_seq: i64,
     pub key_epoch: i32,
+    pub rev: i64,
     pub seat: Seat,
 }
 
@@ -39,6 +40,7 @@ struct Row {
     state: Option<String>,
     joined_seq: Option<i64>,
     hidden_before_seq: Option<i64>,
+    rev: i64,
 }
 
 impl Row {
@@ -88,6 +90,7 @@ pub async fn load(
                 kind: row.kind,
                 last_seq: row.last_seq,
                 key_epoch: row.key_epoch,
+                rev: row.rev,
                 seat,
             },
         );
