@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::modules::chat::epochs;
 use crate::modules::chat::media;
 use crate::modules::chat::members::access::Access;
+use crate::modules::chat::members::store as members;
 use crate::modules::chat::messages::rules::{self, Outgoing, Target};
 use crate::modules::chat::model::MessageRow;
 use crate::modules::chat::{ChatError, ChatResult};
@@ -117,13 +118,7 @@ pub async fn store(
     }
     media::refs::attach(&mut tx, access, &row, &out.media).await?;
     if !access.accepted && out.class == sc_chat_wire::msg::Class::Post {
-        sqlx::query_file!(
-            "queries/chat/members/mark_accepted.sql",
-            conversation,
-            access.user_id
-        )
-        .execute(&mut *tx)
-        .await?;
+        members::mark_accepted(&mut tx, conversation, &access.user_id).await?;
     }
     tx.commit().await?;
     metrics::counter!(
