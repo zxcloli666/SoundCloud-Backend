@@ -405,7 +405,7 @@ async fn a_ladder_that_breaks_after_the_start_ends_the_stream_with_an_error(
     );
 
     let hurried =
-        one_step(&vendor, "stalling-model").replace("deadline_ms = 8000", "deadline_ms = 500");
+        one_step(&vendor, "stalling-model").replace("deadline_ms = 8000", "deadline_ms = 2000");
     let stalling = starred(&pool, &hurried).await?;
     let heard = ask(&stalling, session, &turn()).await?;
     assert_eq!(
