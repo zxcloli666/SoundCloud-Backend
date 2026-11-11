@@ -130,6 +130,7 @@ class Slot:
     def __init__(self, spec: SlotSpec) -> None:
         self.spec = spec
         self.model: ModelSlot | None = None
+        self.kept: ModelSlot | None = None
         self.calls = 0
 
     @property
@@ -195,13 +196,13 @@ class Engine:
         spec = self._placed(slot.spec)
         started = time.perf_counter()
         try:
-            model = load_class(spec.loader)()
+            model = slot.kept or load_class(spec.loader)()
             model.load(spec)
             model.warmup()
         except Exception as error:
             self._log.exception("slot_load_failed", error, slot=name, loader=spec.loader)
             raise LoadFailed(f"{name}: {error_text(error)}") from error
-        slot.model = model
+        slot.model = slot.kept = model
         self._release(collect=True)
         self._log.info(
             "slot_loaded",
