@@ -12,6 +12,7 @@ from worker.domain.metadata import fields
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
 from worker.observability.counters import Counters
+from worker.settings import LocalLlmSettings
 
 METHOD = "complete"
 RPC_MARGIN_S = 0.5
@@ -23,10 +24,16 @@ log = logging.getLogger(__name__)
 
 class Completer:
     def __init__(
-        self, engines: Engines, limits: CompleteLimits, model: str, counters: Counters
+        self,
+        engines: Engines,
+        limits: CompleteLimits,
+        local: LocalLlmSettings,
+        model: str,
+        counters: Counters,
     ) -> None:
         self._engines = engines
         self._limits = limits
+        self._local = local
         self._model = model
         self._counters = counters
         self._in_flight = 0
@@ -34,6 +41,9 @@ class Completer:
     async def complete(
         self, request: Mapping[str, object], deadline: Deadline
     ) -> Mapping[str, object]:
+        if not self._local.enabled:
+            self._counters.inc("complete_unavailable_total", state="off")
+            raise TransientFailure(Reason.INTERNAL_ERROR, "the local model is off on this worker")
         deadline.minus(RPC_MARGIN_S).check(METHOD)
         prompt = Prompt.parse(request, self._limits)
         if self._in_flight >= MAX_IN_FLIGHT:

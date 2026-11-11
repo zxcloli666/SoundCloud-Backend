@@ -140,11 +140,17 @@ transcribe = 2, encode = 16, collab = 1, taste = 1, ai = 16 }'`, затем `tra
 
 | Ключ | По умолчанию | Что задаёт |
 |---|---|---|
+| `llm.local.enabled` | `true` | `false` — движок не стартует, веса не нужны, `complete` сразу отвечает `internal` |
 | `slots.llm-local.model`, `revision` | `unsloth/Qwen3.5-2B-GGUF` | репозиторий и коммит |
 | `llm.local.file`, `sha256` | `Qwen3.5-2B-Q4_K_M.gguf` | файл весов и хэш, по которому его сверяет `fetch-models` |
 | `llm.local.context_tokens` | 4096 | окно модели; промпт вместе с `max_tokens` длиннее окна — `invalid_request` |
 | `llm.local.prompt_states` | 4 | сколько прочитанных префиксов промпта помнит движок |
 | `llm.local.idle_unload_s` | 600 | простой, после которого веса выгружаются; `0` — как `runtime.idle_unload_s` |
+
+Перед стартом воркер сверяет флаги CPU с теми, под которые собран llama.cpp из колеса (x86_64:
+AVX2, FMA, F16C, BMI2; aarch64: NEON). Без них модель выключается, как с `enabled = false`, а в лог
+идёт `local_llm_off` с `why="cpu"` и списком недостающих флагов. Выключенная модель считается в
+`complete_unavailable_total{state="off"}`, `resolve_artist` и `match_track` работают как обычно.
 
 Движок `llm-local` идёт с `nice 0` и `min(4, cpus / 2)` потоками, как поисковый запрос в `encode`.
 Вызовы идут по одному. Пятый одновременный `complete` сразу получает `expired`

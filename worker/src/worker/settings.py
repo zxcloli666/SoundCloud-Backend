@@ -270,6 +270,7 @@ class BreakerSettings:
 
 @dataclass(frozen=True)
 class LocalLlmSettings:
+    enabled: bool
     file: str
     sha256: str
     context_tokens: int
@@ -599,7 +600,7 @@ def validate_slots(settings: Settings) -> list[str]:
         if slot.fallback is not None and slot.fallback not in allowed_fallbacks:
             problems.append(f"slots.{name}.fallback refers to unknown slot {slot.fallback!r}")
     for lane in settings.lanes.enabled:
-        for slot_name in LANE_SLOTS.get(lane, ()):
+        for slot_name in lane_slots(settings, lane):
             needed = settings.slots.get(slot_name)
             if needed is None:
                 problems.append(f"lane {lane} needs slots.{slot_name}")
@@ -661,7 +662,8 @@ def validate_local_llm(settings: Settings) -> list[str]:
     local = settings.llm.local
     problems = []
     slot = settings.slots.get(LOCAL_LLM_SLOT)
-    if "ai" in settings.lanes.enabled and slot is not None and not (slot.model and slot.revision):
+    serves = local.enabled and "ai" in settings.lanes.enabled
+    if serves and slot is not None and not (slot.model and slot.revision):
         problems.append(f"lane ai needs slots.{LOCAL_LLM_SLOT}.model and revision")
     if not local.file.endswith(LOCAL_LLM_FILE_SUFFIX):
         problems.append(f"llm.local.file must be a {LOCAL_LLM_FILE_SUFFIX} file of the model repo")
@@ -753,10 +755,17 @@ def local_llm_ref(settings: Settings) -> str:
     return f"{slot.model}/{settings.llm.local.file}@{slot.revision[:8]}"
 
 
+def lane_slots(settings: Settings, lane: str) -> tuple[str, ...]:
+    slots = LANE_SLOTS.get(lane, ())
+    if settings.llm.local.enabled:
+        return slots
+    return tuple(slot for slot in slots if slot != LOCAL_LLM_SLOT)
+
+
 def slots_for_lanes(settings: Settings, lanes: tuple[str, ...] | None = None) -> tuple[str, ...]:
     wanted: list[str] = []
     for lane in settings.lanes.enabled if lanes is None else lanes:
-        for slot in LANE_SLOTS.get(lane, ()):
+        for slot in lane_slots(settings, lane):
             if slot not in wanted:
                 wanted.append(slot)
     for slot in list(wanted):

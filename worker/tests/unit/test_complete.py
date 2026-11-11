@@ -6,9 +6,11 @@ from dataclasses import replace
 
 import pytest
 
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from tests.contract import samples
 from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
+from worker import settings as settings_module
 from worker.contract import Contract
 from worker.domain.complete import MAX_IN_FLIGHT, Completer
 from worker.domain.deadline import Deadline
@@ -19,6 +21,7 @@ from worker.observability.counters import Counters
 METHOD = "ai.rpc.complete"
 MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
 ANSWER = '{"say": "Готово", "actions": []}'
+LOCAL = settings_module.load(CONFIG_DIR, BASE_ENV).llm.local
 
 
 def request(**overrides: object) -> dict[str, object]:
@@ -30,7 +33,7 @@ def completer(contract: Contract) -> tuple[Completer, FakeEngines, Counters]:
     engines.completion = replace(
         engines.completion, text=ANSWER, input_tokens=41, reused_tokens=30, output_tokens=9
     )
-    return Completer(engines, contract.complete_limits, MODEL, counters), engines, counters
+    return Completer(engines, contract.complete_limits, LOCAL, MODEL, counters), engines, counters
 
 
 def deadline(clock: FakeClock, seconds: float = 30.0) -> Deadline:
@@ -237,7 +240,7 @@ async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(
 ) -> None:
     engines, counters = HeldEngines(), Counters()
     engines.completion = replace(engines.completion, text=ANSWER)
-    subject = Completer(engines, contract.complete_limits, MODEL, counters)
+    subject = Completer(engines, contract.complete_limits, LOCAL, MODEL, counters)
     queued = [
         asyncio.ensure_future(subject.complete(request(), deadline(clock)))
         for _ in range(MAX_IN_FLIGHT)
@@ -255,3 +258,20 @@ async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(
     answers = await asyncio.gather(*queued)
     assert [answer["text"] for answer in answers] == [ANSWER] * MAX_IN_FLIGHT
     assert (await subject.complete(request(), deadline(clock)))["text"] == ANSWER
+
+
+async def test_a_worker_with_the_local_model_off_refuses_at_once(
+    contract: Contract, clock: FakeClock
+) -> None:
+    engines, counters = FakeEngines(), Counters()
+    subject = Completer(
+        engines, contract.complete_limits, replace(LOCAL, enabled=False), MODEL, counters
+    )
+
+    with pytest.raises(TransientFailure) as off:
+        await subject.complete(request(), deadline(clock))
+
+    assert off.value.reason is Reason.INTERNAL_ERROR
+    assert "off" in str(off.value)
+    assert counters.value("complete_unavailable_total", state="off") == 1
+    assert engines.calls == []

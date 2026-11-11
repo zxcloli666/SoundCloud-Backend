@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ from worker.fetch_models import FASTTEXT_HOME_ENV
 from worker.observability.counters import Counters
 from worker.observability.health_file import HealthFile
 from worker.observability.logging import JsonLog
+from worker.runtime import cpu_flags
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import CAUSE_STOP, EngineKilled, SlotUnavailable
 from worker.runtime.protocol import Call, Reply
@@ -287,6 +289,37 @@ def test_runtime_threads_from_the_environment_fix_the_bulk_engines(
 ) -> None:
     blueprint = cpu_blueprint(base_env, contract, tmp_path, WORKER__RUNTIME__THREADS="6")
     assert blueprint.policy.threads == 6
+
+
+def test_a_host_without_the_cpu_flags_runs_the_ai_lane_without_the_local_model(
+    base_env: dict[str, str], contract: Contract, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cpu_flags, "missing_on_this_host", lambda: ["avx2", "fma"])
+    out = io.StringIO()
+    settings = app.local_llm_on_this_cpu(
+        settings_module.load(CONFIG_DIR, base_env), JsonLog(stream=out)
+    )
+
+    assert settings.llm.local.enabled is False
+    assert "ai" in settings.lanes.enabled
+    environ = {**base_env, FASTTEXT_HOME_ENV: str(tmp_path)}
+    plans = Blueprint.of(settings, contract, environ, cpus=8).plans
+    assert all(settings_module.LOCAL_LLM_SLOT not in plan.slot_names for plan in plans)
+    record = json.loads(out.getvalue())
+    assert (record["event"], record["why"], record["missing"]) == (
+        "local_llm_off",
+        "cpu",
+        ["avx2", "fma"],
+    )
+
+
+def test_a_supported_host_keeps_the_local_model(
+    base_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cpu_flags, "missing_on_this_host", list)
+    settings = settings_module.load(CONFIG_DIR, base_env)
+
+    assert app.local_llm_on_this_cpu(settings, JsonLog(stream=io.StringIO())) is settings
 
 
 def test_gpu_profiles_keep_encode_on_the_shared_slots(contract: Contract, tmp_path: Path) -> None:

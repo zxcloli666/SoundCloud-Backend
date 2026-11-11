@@ -64,9 +64,25 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
     assert s.local_llm_ref(settings) == LOCAL_LLM_REF
     assert local.file.endswith(".gguf") and len(local.sha256) == 64
+    assert local.enabled is True
     assert (local.context_tokens, local.prompt_states, local.idle_unload_s) == (4096, 4, 600)
     without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
+
+
+def test_the_local_model_can_be_switched_off_without_dropping_the_ai_lane(
+    base_env: dict[str, str],
+) -> None:
+    env = {
+        **base_env,
+        "WORKER__LLM__LOCAL__ENABLED": "false",
+        "WORKER__SLOTS__LLM_LOCAL__REPLICAS": "0",
+        "WORKER__SLOTS__LLM_LOCAL__MODEL": "",
+    }
+    settings = s.load(CONFIG_DIR, env)
+    assert settings.llm.local.enabled is False
+    assert "ai" in settings.lanes.enabled
+    assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(settings)
 
 
 def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str]) -> None:

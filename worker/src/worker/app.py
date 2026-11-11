@@ -44,6 +44,7 @@ from worker.observability import logging as json_logging
 from worker.observability.counters import Counters
 from worker.observability.health_file import HEALTH_PATH, LANES, SINCE, STATE, HealthFile
 from worker.observability.logging import JsonLog
+from worker.runtime import cpu_flags
 from worker.runtime.batcher import Batcher
 from worker.runtime.engine_client import Launch
 from worker.runtime.protocol import SlotSpec
@@ -102,6 +103,7 @@ PRODUCER_MODELS: Mapping[str, Mapping[str, str]] = {
 }
 SLOW_LANES = frozenset({"audio", "transcribe"})
 ENCODE_LANE = "encode"
+AI_LANE = "ai"
 ENCODE_ENGINE = "encode"
 MULAN = "mulan"
 TEXT_SLOT = "text"
@@ -138,6 +140,7 @@ async def run(
 ) -> int:
     json_log = JsonLog(worker_id=settings.worker.id)
     json_logging.install(json_log, logging.INFO)
+    settings = local_llm_on_this_cpu(settings, json_log)
     try:
         blueprint = Blueprint.of(settings, contract, environ)
     except (SettingsError, StartupError) as error:
@@ -443,6 +446,7 @@ class Node:
                 completer = Completer(
                     engines,
                     self.contract.complete_limits,
+                    settings.llm.local,
                     settings_module.local_llm_ref(settings),
                     self.counters,
                 )
@@ -788,6 +792,20 @@ def check_slow_lanes(settings: Settings) -> None:
     slow = sorted(SLOW_LANES & set(settings.lanes.enabled))
     if runtime.device == "cpu" and slow and not runtime.allow_slow_lanes:
         raise StartupError(f"lanes {slow} on device=cpu need runtime.allow_slow_lanes=true")
+
+
+def local_llm_on_this_cpu(settings: Settings, json_log: JsonLog) -> Settings:
+    local = settings.llm.local
+    if AI_LANE not in settings.lanes.enabled:
+        return settings
+    if not local.enabled:
+        json_log.warning("local_llm_off", why="config")
+        return settings
+    missing = cpu_flags.missing_on_this_host()
+    if not missing:
+        return settings
+    json_log.error("local_llm_off", why="cpu", missing=missing)
+    return replace(settings, llm=replace(settings.llm, local=replace(local, enabled=False)))
 
 
 def local_llm_plan(settings: Settings, plan: EnginePlan) -> EnginePlan:
