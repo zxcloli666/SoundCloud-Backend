@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -50,6 +51,13 @@ class SentAck:
     num_delivered: int
     delay: float | None
     at: float
+
+
+@dataclass
+class OpenPull:
+    subscription: FakePullSubscription
+    left: int
+    expires_at: float
 
 
 @dataclass
@@ -248,7 +256,7 @@ class FakePullSubscription:
     def __init__(self, bus: FakeNats, consumer: FakeConsumer) -> None:
         self._bus = bus
         self._consumer = consumer
-        self._sub = FakePending()
+        self._sub = FakePending(bus)
         self._nc = bus
         self._nms = f"{PULL_PREFIX}{consumer.stream.name}.{consumer.durable}"
         self._deliver = f"_INBOX.fake.{id(self)}"
@@ -298,22 +306,31 @@ class FakePullSubscription:
 
 
 class FakePending:
-    def __init__(self) -> None:
+    def __init__(self, bus: FakeNats) -> None:
+        self._bus = bus
         self._pending_queue: asyncio.Queue[FakeMsg | Msg] = asyncio.Queue()
         self._pending_size = 0
 
     def put(self, message: FakeMsg | Msg) -> None:
         self._pending_queue.put_nowait(message)
         self._pending_size += len(message.data)
+        self._bus.changed.set()
 
     async def next_msg(self, timeout: float | None = 1.0) -> FakeMsg | Msg:
-        await asyncio.sleep(0)
-        if self._pending_queue.empty():
-            raise nats.errors.TimeoutError
-        message = self._pending_queue.get_nowait()
-        self._pending_queue.task_done()
-        self._pending_size -= len(message.data)
-        return message
+        clock = self._bus.clock
+        until = clock.now() + (timeout or 0.0)
+        while True:
+            await asyncio.sleep(0)
+            self._bus.serve_pulls()
+            if not self._pending_queue.empty():
+                message = self._pending_queue.get_nowait()
+                self._pending_queue.task_done()
+                self._pending_size -= len(message.data)
+                return message
+            if clock.now() >= until:
+                raise nats.errors.TimeoutError
+            self._bus.changed.clear()
+            await self._bus.changed_or(min(until, self._bus.next_pull_event_at()) - clock.now())
 
 
 class FakeJetStream:
@@ -408,6 +425,10 @@ class FakeNats:
         self.responders: dict[str, Callable[[bytes], bytes]] = {}
         self.sent: list[SentAck] = []
         self.bound: list[FakePullSubscription] = []
+        self.open_pulls: list[OpenPull] = []
+        self.pull_refusal: tuple[str, str] | None = None
+        self.lost_pulls = 0
+        self.changed = asyncio.Event()
         self.subscriptions: list[FakeCoreSubscription] = []
         self.errors: list[Exception] = []
         self.is_connected = False
@@ -456,6 +477,7 @@ class FakeNats:
     ) -> int:
         data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
         stream = self.stream_for(subject)
+        self.changed.set()
         return stream.store(subject, data, headers or {}, self.clock.now()).seq
 
     def stream_for(self, subject: str) -> FakeStream:
@@ -470,10 +492,50 @@ class FakeNats:
         subscription._sub.put(message)
         return message
 
-    def linger_status(self, subscription: FakePullSubscription, status: str) -> Msg:
-        message = Msg(self, subject=subscription._consumer.durable, headers={"Status": status})
+    def linger_status(
+        self, subscription: FakePullSubscription, status: str, description: str | None = None
+    ) -> Msg:
+        headers = {"Status": status}
+        if description is not None:
+            headers["Description"] = description
+        message = Msg(self, subject=subscription._consumer.durable, headers=headers)
         subscription._sub.put(message)
         return message
+
+    def serve_pulls(self) -> None:
+        now = self.clock.now()
+        self.open_pulls = [pull for pull in self.open_pulls if pull.subscription.active]
+        for pull in list(self.open_pulls):
+            for message in self.deliver_due(pull.subscription._consumer, pull.left):
+                pull.subscription._sub.put(message)
+                pull.left -= 1
+            expired = now >= pull.expires_at
+            if pull.left and expired:
+                self.linger_status(pull.subscription, "408", "Request Timeout")
+            if expired or not pull.left:
+                self.open_pulls.remove(pull)
+
+    def next_pull_event_at(self) -> float:
+        now = self.clock.now()
+        times = [pull.expires_at for pull in self.open_pulls]
+        times += [
+            pending.available_at
+            for pull in self.open_pulls
+            for pending in pull.subscription._consumer.pending.values()
+            if pending.available_at > now
+        ]
+        return min(times, default=math.inf)
+
+    async def changed_or(self, seconds: float) -> None:
+        waits = [asyncio.ensure_future(self.changed.wait())]
+        if math.isfinite(seconds):
+            waits.append(asyncio.ensure_future(self.clock.sleep(seconds)))
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for wait in waits:
+                wait.cancel()
+            await asyncio.gather(*waits, return_exceptions=True)
 
     def deliver_due(self, consumer: FakeConsumer, batch: int) -> list[FakeMsg]:
         now = self.clock.now()
@@ -486,6 +548,7 @@ class FakeNats:
 
     async def disconnect(self) -> None:
         self.is_connected = False
+        self.open_pulls.clear()
         callback = self.connect_options.get("disconnected_cb")
         if callback is not None:
             await callback()
@@ -540,6 +603,7 @@ class FakeNats:
                 consumer.nak(seq, delay, now)
             elif kind == "in_progress":
                 consumer.progress(seq, now)
+            self.changed.set()
 
         return apply
 
@@ -614,14 +678,18 @@ class FakeNats:
         subscription = next(bound for bound in self.bound if bound._deliver == reply)
         request = json.loads(payload)
         batch = int(request["batch"])
-        subscription.fetches.append((batch, int(request["expires"]) / NANOS_PER_S, None))
+        expires_s = int(request["expires"]) / NANOS_PER_S
+        subscription.fetches.append((batch, expires_s, None))
         if not self.is_connected or not subscription.active:
             return
-        messages = self.deliver_due(subscription._consumer, batch)
-        for message in messages:
-            subscription._sub.put(message)
-        if len(messages) < batch:
-            self.linger_status(subscription, "404" if messages else "408")
+        if self.lost_pulls > 0:
+            self.lost_pulls -= 1
+            return
+        if self.pull_refusal is not None:
+            self.linger_status(subscription, *self.pull_refusal)
+            return
+        self.open_pulls.append(OpenPull(subscription, batch, self.clock.now() + expires_s))
+        self.serve_pulls()
 
     async def subscribe(
         self,

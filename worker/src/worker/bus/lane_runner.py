@@ -23,7 +23,7 @@ from worker.bus.outbox import (
     PublishTimedOut,
     encode,
 )
-from worker.bus.pull import pulled
+from worker.bus.pull import PullUnanswered, pulled
 from worker.contract import Contract, ContractError, LaneSpec
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.outcome import (
@@ -181,13 +181,28 @@ class LaneRunner:
         subscription = await self._bound()
         if subscription is None:
             return
+        started = self._clock.now()
+        taken = 0
         try:
             async for msg in pulled(subscription, batch, PULL_EXPIRES_S, self._clock):
+                taken += 1
                 self._spawn(msg)
+        except PullUnanswered as unanswered:
+            self._counters.inc("pull_unanswered_total", lane=self.lane.name)
+            log.warning("pull_unanswered", extra={"lane": self.lane.name, "error": str(unanswered)})
+            await self._retire()
         except (nats.js.errors.Error, nats.errors.Error, ValueError) as error:
             self._counters.inc("fetch_failures_total", lane=self.lane.name)
             log.warning("fetch_failed", extra={"lane": self.lane.name, "error": str(error)})
             await sleep_unless(self._clock, FETCH_ERROR_PAUSE_S, self._stop)
+            return
+        idle_left_s = started + IDLE_POLL_S - self._clock.now()
+        if not taken and idle_left_s > 0:
+            await sleep_unless(self._clock, idle_left_s, self._stop)
+
+    async def _retire(self) -> None:
+        self._take_lingering()
+        await self.unsubscribe()
 
     async def _bound(self) -> JetStreamContext.PullSubscription | None:
         if self._subscription is not None:

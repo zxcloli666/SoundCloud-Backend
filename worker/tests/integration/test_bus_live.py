@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -23,7 +23,7 @@ from tests.integration.provision import consumer_config, provision_like_jobs, re
 from worker.bus.connection import Connection
 from worker.bus.consumers import EX_CONFIG, ConsumerWatch, LaneState
 from worker.bus.inflight import Inflight
-from worker.bus.lane_runner import LaneRunner, QueueHandler
+from worker.bus.lane_runner import IDLE_POLL_S, LaneRunner, QueueHandler
 from worker.bus.lease import Leases
 from worker.bus.outbox import Outbox
 from worker.contract import Contract, LaneSpec
@@ -62,6 +62,9 @@ IDLE_GAPS_S = (
     0.0,
 )
 PICKUP_LIMIT_S = 0.5
+COLLAB_TASKS = 3
+PULLS_WATCHED_S = 3.0
+PULLS_ALLOWED = 2 * int(PULLS_WATCHED_S / IDLE_POLL_S)
 DRIFT_SCRIPT = """
 import asyncio, sys
 from pathlib import Path
@@ -172,6 +175,32 @@ class Worker:
         await self.connection.close()
 
 
+@dataclass
+class Pulls:
+    allowed: int
+    asked: int = 0
+    over: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def count(self, msg: object) -> None:
+        self.asked += 1
+        if self.asked > self.allowed:
+            self.over.set()
+
+
+async def pulls_asked(live: Live, lane: LaneSpec) -> int:
+    pulls = Pulls(PULLS_ALLOWED)
+    requests = await live.admin.subscribe(
+        f"$JS.API.CONSUMER.MSG.NEXT.{lane.stream}.{lane.durable}", cb=pulls.count
+    )
+    try:
+        await asyncio.wait_for(pulls.over.wait(), PULLS_WATCHED_S)
+    except TimeoutError:
+        return pulls.asked
+    finally:
+        await requests.unsubscribe()
+    return pulls.asked
+
+
 async def wait_for(condition: Callable[[], Awaitable[bool]], timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -258,6 +287,60 @@ async def test_a_task_after_an_idle_spell_is_picked_up_at_once(live: Live) -> No
     finally:
         await worker.close()
     assert max(delays) < PICKUP_LIMIT_S, list(zip(IDLE_GAPS_S, delays, strict=True))
+
+
+async def test_idle_workers_of_a_lane_at_max_ack_pending_keep_one_pull_open_each(
+    live: Live,
+) -> None:
+    lane = live.contract.lane("collab")
+    holder = await build_worker(live, "collab", capacity=COLLAB_TASKS + 1)
+    idle = await build_worker(live, "collab", capacity=COLLAB_TASKS + 1)
+    try:
+        assert await holder.watch.verify_at_start() is LaneState.SERVING
+        holder.processor.release.clear()
+        holder.start()
+        for index in range(COLLAB_TASKS):
+            await live.publish_task(lane, {"object": f"sessions/{index}"}, f"collab:{index}")
+        await asyncio.wait_for(holder.processor.started.wait(), 10)
+        assert await idle.watch.verify_at_start() is LaneState.SERVING
+        idle.start()
+        asked = await pulls_asked(live, lane)
+        held = await live.jsm.consumer_info(lane.stream, lane.durable)
+        holder.processor.release.set()
+        await wait_for(partial(_called, COLLAB_TASKS, holder, idle))
+    finally:
+        await holder.close()
+        await idle.close()
+    assert (held.num_ack_pending, held.num_pending) == (1, COLLAB_TASKS - 1)
+    assert asked <= PULLS_ALLOWED
+    assert idle.processor.calls >= 1
+
+
+async def test_a_worker_whose_pull_the_server_refuses_asks_again_after_a_pause(live: Live) -> None:
+    lane = live.contract.lane("lyrics")
+    await live.jsm.delete_consumer(lane.stream, lane.durable)
+    await live.jsm.add_consumer(lane.stream, consumer_config(lane, max_waiting=1))
+    waiting = await build_worker(live, "lyrics", capacity=16)
+    refused = await build_worker(live, "lyrics", capacity=16)
+    try:
+        assert await waiting.watch.verify_at_start() is LaneState.SERVING
+        assert await refused.watch.verify_at_start() is LaneState.SERVING
+        waiting.start()
+        refused.start()
+        asked = await pulls_asked(live, lane)
+        failures = [
+            worker.counters.value("fetch_failures_total", lane="lyrics")
+            for worker in (waiting, refused)
+        ]
+    finally:
+        await waiting.close()
+        await refused.close()
+    assert asked <= PULLS_ALLOWED
+    assert sum(failures) >= 1
+
+
+async def _called(count: int, *workers: Worker) -> bool:
+    return sum(worker.processor.calls for worker in workers) >= count
 
 
 async def _picked(worker: Worker, request_id: str) -> bool:

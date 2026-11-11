@@ -20,11 +20,14 @@ from worker.bus.consumers import LaneState
 from worker.bus.lane_runner import (
     DEGRADED_PROBE_S,
     DRAIN_NAK_DELAY_S,
+    FETCH_ERROR_PAUSE_S,
     IDLE_POLL_S,
     PUBLISH_GIVE_UP_S,
+    PULL_EXPIRES_S,
 )
 from worker.bus.lease import Settled, drop_if_stale
 from worker.bus.outbox import PublishTimedOut
+from worker.bus.pull import REPLY_SLACK_S
 from worker.contract import Contract
 from worker.domain.deadline import Deadline
 from worker.domain.encode_text import EncodeTextLane
@@ -37,6 +40,8 @@ from worker.domain.outcome import (
 )
 from worker.domain.ports import EngineUnavailable
 from worker.settings import Settings
+
+LAST_MOMENT_S = 0.25
 
 
 def transient(reason: Reason = Reason.DOWNLOAD_FAILED):
@@ -587,6 +592,74 @@ async def test_runner_fetches_up_to_free_capacity_and_drains_lingering(
     assert harness.runner.inflight == 0
 
 
+async def test_an_empty_pull_the_server_closes_at_once_is_repeated_only_after_the_idle_poll(
+    harness: Harness,
+) -> None:
+    harness.bus.pull_refusal = ("408", "Requests Pending")
+    await harness.watch.check()
+    harness.start()
+    await harness.settle()
+    [subscription] = harness.bus.bound
+    at_once = len(subscription.fetches)
+    await harness.clock.tick(IDLE_POLL_S - LAST_MOMENT_S)
+    before_the_poll = len(subscription.fetches)
+    await harness.clock.tick(LAST_MOMENT_S)
+
+    assert (at_once, before_the_poll, len(subscription.fetches)) == (1, 1, 2)
+    assert harness.counters.value("fetch_failures_total", lane="audio") == 0
+
+
+async def test_a_pull_the_server_refuses_is_counted_and_repeated_after_the_error_pause(
+    harness: Harness,
+) -> None:
+    harness.bus.pull_refusal = ("409", "Exceeded MaxWaiting")
+    await harness.watch.check()
+    harness.start()
+    await harness.settle()
+    [subscription] = harness.bus.bound
+    at_once = len(subscription.fetches)
+    await harness.clock.tick(FETCH_ERROR_PAUSE_S - LAST_MOMENT_S)
+    before_the_pause_ends = len(subscription.fetches)
+    harness.bus.pull_refusal = None
+    harness.enqueue(AUDIO_TASK)
+    await harness.clock.tick(LAST_MOMENT_S)
+
+    assert (at_once, before_the_pause_ends, len(subscription.fetches)) == (1, 1, 2)
+    assert harness.counters.value("fetch_failures_total", lane="audio") == 1
+    assert len(harness.processor.calls) == 1
+
+
+async def test_a_pull_left_without_a_reply_moves_the_lane_to_a_new_inbox(harness: Harness) -> None:
+    harness.processor.hold()
+    harness.bus.lost_pulls = 1
+    await harness.watch.check()
+    harness.start()
+    await harness.settle()
+    await harness.clock.tick(PULL_EXPIRES_S + REPLY_SLACK_S)
+    first, second = harness.bus.bound
+    harness.bus.linger_status(first, "408", "Request Timeout")
+    harness.enqueue(AUDIO_TASK)
+    await harness.settle()
+
+    assert not first.active
+    assert harness.counters.value("pull_unanswered_total", lane="audio") == 1
+    assert len(harness.processor.calls) == 1
+    assert len(second.fetches) == 1
+
+
+async def test_an_inbox_is_given_up_only_after_the_tasks_in_it_are_taken(harness: Harness) -> None:
+    harness.processor.hold()
+    subscription = await harness.runner._bound()
+    harness.bus.linger(subscription, harness.enqueue(AUDIO_TASK))
+
+    await harness.runner._retire()
+    await harness.settle()
+
+    assert not subscription.active
+    assert len(harness.processor.calls) == 1
+    assert len(harness.leases) == 1
+
+
 async def test_runner_stops_fetching_when_lane_is_not_serving_or_outbox_full(
     harness: Harness,
 ) -> None:
@@ -676,7 +749,7 @@ async def test_drift_during_work_stops_fetch_and_reports_draining(harness: Harne
     await harness.watch.check()
     assert harness.watch.drifted.is_set()
     assert harness.runner.state is LaneState.DRAINING
-    await harness.settle()
+    await harness.clock.tick(PULL_EXPIRES_S)
     [subscription] = harness.bus.bound
     fetches = len(subscription.fetches)
     harness.enqueue(AUDIO_TASK)
@@ -746,7 +819,7 @@ async def test_lingering_message_gets_a_lease_while_the_lane_is_paused(harness: 
     [subscription] = harness.bus.bound
     harness.outbox.pending = harness.outbox._max_results
     assert harness.runner.state is LaneState.PAUSED
-    await harness.clock.tick(IDLE_POLL_S)
+    await harness.clock.tick(PULL_EXPIRES_S)
     harness.bus.linger(subscription, harness.enqueue(AUDIO_TASK))
     await harness.clock.tick(IDLE_POLL_S)
     assert len(harness.processor.calls) == 1
