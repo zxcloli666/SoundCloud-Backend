@@ -21,7 +21,7 @@ emit() {
     shift
     files=all
     if [ -n "$base" ]; then
-        files=$(git diff --name-only --no-renames "$base" HEAD -- $shared "$@" ':!*.md' ':!*.iml' ':!*.example')
+        files=$(git diff --name-only --no-renames "$base" HEAD -- $shared "$@" ':!*.md' ':!*.iml' ':!*.env.example')
     fi
     if [ -n "$files" ]; then echo "$name=true"; else echo "$name=false"; fi
 }
