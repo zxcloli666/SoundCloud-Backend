@@ -16,6 +16,7 @@ pub(super) struct Run {
     pub document: Document,
     pub held: String,
     pub usage: Usage,
+    pub usage_is_final: bool,
     pub received: usize,
     pub accepted: bool,
     pub started: Instant,
@@ -39,6 +40,7 @@ impl Run {
             document: Document::default(),
             held: String::new(),
             usage: Usage::default(),
+            usage_is_final: false,
             received: 0,
             accepted: false,
             started,
@@ -53,7 +55,11 @@ impl Run {
         match event {
             StepEvent::Accepted => {}
             StepEvent::Text(text) => self.read(&text),
-            StepEvent::Usage(usage) => self.usage = usage,
+            StepEvent::UsageSoFar(usage) => self.usage = usage,
+            StepEvent::Usage(usage) => {
+                self.usage = usage;
+                self.usage_is_final = true;
+            }
         }
     }
 

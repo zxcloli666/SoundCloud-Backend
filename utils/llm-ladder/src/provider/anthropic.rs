@@ -116,7 +116,10 @@ impl Events {
         match tokens {
             Some(tokens) => {
                 tokens.add_to(&mut self.usage);
-                Read::Events(vec![StepEvent::Usage(self.usage)])
+                Read::Events(vec![match self.ended {
+                    true => StepEvent::Usage(self.usage),
+                    false => StepEvent::UsageSoFar(self.usage),
+                }])
             }
             None => Read::Events(Vec::new()),
         }
@@ -319,7 +322,7 @@ mod tests {
         assert_eq!(
             events,
             [
-                StepEvent::Usage(Usage {
+                StepEvent::UsageSoFar(Usage {
                     input_tokens: 1000,
                     cache_read_tokens: 5,
                     cache_write_tokens: 10,

@@ -5,7 +5,7 @@ async fn the_first_step_answers_and_the_next_never_starts() {
     let (first, _) = paid(
         "first",
         vec![
-            usage(1_000, 1),
+            usage_so_far(1_000, 1),
             text(900, "{\"say\":"),
             text(50, "\"hi\"}"),
             usage(1_000, 100),
@@ -106,7 +106,7 @@ async fn a_whole_answer_stands_when_its_stream_breaks_afterwards() {
     let (first, _) = paid(
         "first",
         vec![
-            usage(1_000, 1),
+            usage_so_far(1_000, 1),
             text(100, "{\"say\":\"hi\"}"),
             broken(50, Failure::Transport),
         ],
@@ -114,9 +114,18 @@ async fn a_whole_answer_stands_when_its_stream_breaks_afterwards() {
     let bench = uncapped(vec![first]);
 
     let (document, outcome) = answer(&bench.ladder).await;
+    let outcome = outcome.unwrap();
 
     assert_eq!(document, "{\"say\":\"hi\"}");
-    assert_eq!(outcome.unwrap().cost_micro_usd, 2_008);
+    assert_eq!(
+        (outcome.usage.input_tokens, outcome.usage.output_tokens),
+        (1_000, 4),
+        "the last usage never came: twelve bytes of answer count as four tokens"
+    );
+    assert_eq!(
+        (outcome.basis, outcome.cost_micro_usd),
+        (Basis::Estimated, 2_032)
+    );
     assert_eq!(bench.seen.steps(), steps(&[("first", "won")]));
 }
 

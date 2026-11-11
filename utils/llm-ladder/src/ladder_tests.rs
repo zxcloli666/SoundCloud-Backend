@@ -159,6 +159,17 @@ fn usage(input_tokens: u64, output_tokens: u64) -> (u64, Result<StepEvent, Failu
     )
 }
 
+fn usage_so_far(input_tokens: u64, output_tokens: u64) -> (u64, Result<StepEvent, Failure>) {
+    (
+        0,
+        Ok(StepEvent::UsageSoFar(Usage {
+            input_tokens,
+            output_tokens,
+            ..Usage::default()
+        })),
+    )
+}
+
 fn accepted() -> (u64, Result<StepEvent, Failure>) {
     (0, Ok(StepEvent::Accepted))
 }

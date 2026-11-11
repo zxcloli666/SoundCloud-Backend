@@ -120,6 +120,17 @@ impl Usage {
         }
     }
 
+    pub(crate) fn completed_by(self, estimate: Self) -> Self {
+        let prompt = match self.prompt_tokens() {
+            0 => estimate,
+            _ => self,
+        };
+        Self {
+            output_tokens: self.output_tokens.max(estimate.output_tokens),
+            ..prompt
+        }
+    }
+
     pub fn prompt_tokens(&self) -> u64 {
         self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
     }
@@ -185,5 +196,41 @@ mod tests {
             }
         );
         assert!(Usage::estimated(0, 0).is_unknown());
+    }
+
+    #[test]
+    fn an_estimate_fills_only_what_the_provider_did_not_count() {
+        let estimate = Usage::estimated(300, 30);
+        assert_eq!(Usage::default().completed_by(estimate), estimate);
+        let opening = Usage {
+            input_tokens: 40,
+            cache_read_tokens: 3_000,
+            cache_write_tokens: 200,
+            output_tokens: 1,
+        };
+        assert_eq!(
+            opening.completed_by(estimate),
+            Usage {
+                output_tokens: 10,
+                ..opening
+            }
+        );
+        let wordy = Usage {
+            output_tokens: 70,
+            ..opening
+        };
+        assert_eq!(wordy.completed_by(estimate), wordy);
+        let output_only = Usage {
+            output_tokens: 70,
+            ..Usage::default()
+        };
+        assert_eq!(
+            output_only.completed_by(estimate),
+            Usage {
+                input_tokens: 100,
+                output_tokens: 70,
+                ..Usage::default()
+            }
+        );
     }
 }

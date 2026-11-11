@@ -34,7 +34,7 @@ pub(super) fn settle(
         tracing::warn!(
             ladder = %ladder.id,
             provider = %step.provider.id,
-            "a priced provider reported no token usage for its answer, its spend is estimated"
+            "a priced provider did not report the final token usage of its answer, its spend is estimated"
         );
     }
     let cost_micro_usd = step.provider.price.cost(&usage);
@@ -65,8 +65,10 @@ fn billed(step: &Step, run: &Run, result: StepResult, sent_bytes: usize) -> (Usa
             result,
             StepResult::Failed(Failure::Status | Failure::Request | Failure::Transport)
         );
-    if !step.provider.price.is_set() || !run.usage.is_unknown() || refused {
+    let reported = run.usage_is_final && !run.usage.is_unknown();
+    if !step.provider.price.is_set() || reported || refused {
         return (run.usage, Basis::Reported);
     }
-    (Usage::estimated(sent_bytes, run.received), Basis::Estimated)
+    let estimate = Usage::estimated(sent_bytes, run.received);
+    (run.usage.completed_by(estimate), Basis::Estimated)
 }

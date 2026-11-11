@@ -50,7 +50,7 @@ impl Wire for ChatCompletions {
             return vec![Err(fault::of_error(error))];
         }
         let stop = completion.stop().map(Err);
-        let events = completion.events(|choice| choice.message);
+        let events = completion.events(|choice| choice.message, StepEvent::Usage);
         events.into_iter().map(Ok).chain(stop).collect()
     }
 }
@@ -72,7 +72,11 @@ impl Reader for Chunks {
                 None => {
                     self.ended |= completion.finish().is_some();
                     self.stop = self.stop.or(completion.stop());
-                    Read::Events(completion.events(|choice| choice.delta))
+                    let counted = match self.ended {
+                        true => StepEvent::Usage,
+                        false => StepEvent::UsageSoFar,
+                    };
+                    Read::Events(completion.events(|choice| choice.delta, counted))
                 }
             },
             Err(_) => Read::Events(Vec::new()),
@@ -134,8 +138,12 @@ impl Completion {
         choice.finish_reason.as_deref()
     }
 
-    fn events(self, piece: impl Fn(Choice) -> Option<Piece>) -> Vec<StepEvent> {
-        let usage = self.usage.map(|tokens| StepEvent::Usage(tokens.usage()));
+    fn events(
+        self,
+        piece: impl Fn(Choice) -> Option<Piece>,
+        counted: fn(Usage) -> StepEvent,
+    ) -> Vec<StepEvent> {
+        let usage = self.usage.map(|tokens| counted(tokens.usage()));
         let text = self
             .choices
             .and_then(|choices| choices.into_iter().next())
@@ -212,7 +220,9 @@ mod tests {
 
     #[test]
     fn cached_prompt_tokens_are_counted_apart_from_the_rest_of_the_prompt() {
+        let finish = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
         let (events, _, _) = read_all(&[
+            finish,
             r#"{"choices":[],"usage":{"prompt_tokens":3200,"completion_tokens":70,"prompt_tokens_details":{"cached_tokens":3000,"audio_tokens":0}}}"#,
         ]);
         assert_eq!(
@@ -225,6 +235,7 @@ mod tests {
             })]
         );
         let (events, _, _) = read_all(&[
+            finish,
             r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":500}}}"#,
             r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":7,"prompt_tokens_details":null}}"#,
         ]);
@@ -246,6 +257,27 @@ mod tests {
         ]);
         assert_eq!(events, [StepEvent::Text("{}".to_owned())]);
         assert!(failure.is_none() && !ended);
+    }
+
+    #[test]
+    fn usage_that_comes_before_the_finish_reason_is_not_the_last_word() {
+        let (events, _, _) = read_all(&[
+            r#"{"choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}],"usage":{"prompt_tokens":90,"completion_tokens":1}}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":90,"completion_tokens":7}}"#,
+        ]);
+        let counted = |output_tokens| Usage {
+            input_tokens: 90,
+            output_tokens,
+            ..Usage::default()
+        };
+        assert_eq!(
+            events,
+            [
+                StepEvent::UsageSoFar(counted(1)),
+                StepEvent::Text("{}".to_owned()),
+                StepEvent::Usage(counted(7)),
+            ]
+        );
     }
 
     #[test]

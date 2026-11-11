@@ -17,7 +17,7 @@ async fn a_priced_answer_is_charged_to_the_ladder_and_the_user() {
     let (first, _) = paid(
         "first",
         vec![
-            usage(1_000, 1),
+            usage_so_far(1_000, 1),
             text(10, "{\"say\":\"hi\"}"),
             usage(1_000, 100),
         ],
@@ -109,10 +109,10 @@ async fn an_unreadable_budget_skips_priced_steps_and_is_not_asked_again_for_a_wh
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_cancelled_loser_is_charged_for_the_tokens_it_reported() {
+async fn a_cancelled_loser_is_charged_for_the_input_it_reported() {
     let (slow, _) = paid(
         "slow",
-        vec![usage(1_000, 0), text(8_000, "{\"say\":\"late\"}")],
+        vec![usage_so_far(1_000, 0), text(8_000, "{\"say\":\"late\"}")],
     );
     let (quick, _) = free("quick", vec![text(100, "{\"say\":\"quick\"}")]);
     let bench = bench(vec![slow, quick], monthly());
@@ -120,7 +120,61 @@ async fn a_cancelled_loser_is_charged_for_the_tokens_it_reported() {
     assert!(answer(&bench.ladder).await.1.is_ok());
 
     assert_eq!(settled(&bench).await, [2_000]);
-    assert_eq!(bench.seen.reports()[0].basis, "reported");
+    assert_eq!(bench.seen.reports()[0].basis, "estimated");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_cut_before_its_last_usage_is_charged_for_the_output_it_sent() {
+    let heard = format!("{{\"say\":\"{}", "la ".repeat(100));
+    let opening = Usage {
+        input_tokens: 40,
+        cache_read_tokens: 3_000,
+        cache_write_tokens: 200,
+        output_tokens: 1,
+    };
+    let (talker, _) = step(
+        "talker",
+        Price::per_million_tokens(2_000_000, 8_000_000),
+        vec![(0, Ok(StepEvent::UsageSoFar(opening))), text(10, &heard)],
+        true,
+    );
+    let bench = bench(vec![talker], monthly());
+
+    let mut events = bench.ladder.stream(request(), any_text()).await.unwrap();
+    assert!(matches!(events.next().await, Some(Ok(Event::Delta(_)))));
+    drop(events);
+
+    let sent = heard.len().div_ceil(3) as u64;
+    assert_eq!(sent, 103);
+    let report = &bench.seen.reports()[0];
+    assert_eq!((report.result, report.basis), ("cancelled", "estimated"));
+    assert_eq!(
+        report.usage,
+        Usage {
+            output_tokens: sent,
+            ..opening
+        },
+        "what the provider counted is kept, the output is what it sent"
+    );
+    assert_eq!(settled(&bench).await, [3_240 * 2 + sent * 8]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_output_count_above_the_estimate_is_kept() {
+    let (talker, _) = step(
+        "talker",
+        Price::per_million_tokens(2_000_000, 8_000_000),
+        vec![usage_so_far(1_000, 500), text(10, "{\"say\":\"so")],
+        true,
+    );
+    let bench = bench(vec![talker], monthly());
+
+    let mut events = bench.ladder.stream(request(), any_text()).await.unwrap();
+    assert!(matches!(events.next().await, Some(Ok(Event::Delta(_)))));
+    drop(events);
+
+    assert_eq!(settled(&bench).await, [2_000 + 4_000]);
+    assert_eq!(bench.seen.reports()[0].basis, "estimated");
 }
 
 #[tokio::test(start_paused = true)]

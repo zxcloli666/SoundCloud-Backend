@@ -4,7 +4,7 @@ use crate::ANSWER;
 use crate::bench::{
     PIECES, answer, answer_to, any_text, bench, http_provider, ladder, request, results, step,
 };
-use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Vendor};
+use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Step, Vendor};
 use futures::StreamExt;
 use llm_ladder::{Event, LadderError, Request};
 use serde_json::json;
@@ -183,7 +183,7 @@ async fn dropping_the_answer_hangs_up_on_the_provider() {
         "anthropic_compatible",
         &vendor.url(MESSAGES),
         "talking-model",
-        "input_usd_per_mtok = 2.0",
+        "input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0",
     ) + &ladder("chat", &["talker"], 500);
     let bench = bench(&config, None);
 
@@ -204,9 +204,14 @@ async fn dropping_the_answer_hangs_up_on_the_provider() {
         vendor.hung_up(1).await,
         "the provider call is closed on the wire"
     );
+    let charged = Step {
+        basis: "estimated",
+        ..step("talker", "cancelled", (1_000, 3), 2_024)
+    };
     assert_eq!(
         bench.seen.steps(),
-        [step("talker", "cancelled", (1_000, 1), 2_000)]
+        [charged],
+        "the seven bytes it sent count as three tokens, not the one of its first event"
     );
 }
 

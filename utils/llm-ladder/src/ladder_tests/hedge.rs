@@ -4,7 +4,7 @@ use super::*;
 async fn a_silent_step_is_hedged_and_the_first_output_wins() {
     let (slow, slow_probe) = paid(
         "slow",
-        vec![usage(400, 1), text(8_000, "{\"say\":\"late\"}")],
+        vec![usage_so_far(400, 1), text(8_000, "{\"say\":\"late\"}")],
     );
     let (quick, _) = free("quick", vec![text(500, "{\"say\":\"quick\"}")]);
     let (spare, spare_probe) = free("spare", vec![text(1, "{\"say\":\"spare\"}")]);

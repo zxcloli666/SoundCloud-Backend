@@ -30,6 +30,7 @@ pub(crate) type StepStream = BoxStream<'static, Result<StepEvent, Failure>>;
 pub(crate) enum StepEvent {
     Accepted,
     Text(String),
+    UsageSoFar(Usage),
     Usage(Usage),
 }
 
