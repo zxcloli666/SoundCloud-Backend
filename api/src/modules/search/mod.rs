@@ -24,6 +24,9 @@ mod lyrics_tests;
 mod plan_tests;
 
 #[cfg(test)]
+mod resolve_tests;
+
+#[cfg(test)]
 mod stampede_tests;
 
 #[cfg(test)]

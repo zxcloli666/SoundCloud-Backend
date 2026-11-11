@@ -883,9 +883,9 @@ async fn the_remote_endpoints_need_a_session(pool: PgPool) -> anyhow::Result<()>
 #[ignore = "requires a local Redis and NATS"]
 async fn resolve_merges_variants_and_matches_case_forms(pool: PgPool) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary, monthly_listeners)
-         VALUES ('00000000-0000-0000-0000-0000000000a1', 'Земфира', 'земфира', 'test', 40, 900000),
-                ('00000000-0000-0000-0000-0000000000a2', 'Земфирка Мэш', 'земфирка мэш', 'test', 3, 10)",
+        "INSERT INTO artists (id, name, normalized_name, source, track_count_primary, popularity_score)
+         VALUES ('00000000-0000-0000-0000-0000000000a1', 'Земфира', 'земфира', 'test', 40, 0.9),
+                ('00000000-0000-0000-0000-0000000000a2', 'Земфирка Мэш', 'земфирка мэш', 'test', 3, 0.1)",
     )
     .execute(&pool)
     .await?;
