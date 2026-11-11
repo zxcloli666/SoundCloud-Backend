@@ -125,9 +125,12 @@ fn earlier_reply(turn: &Turn, said: &str) -> String {
     }
 }
 
+pub(super) fn seal(text: &str) -> String {
+    text.replace('<', "\\u003c").replace('>', "\\u003e")
+}
+
 fn data(tag: &str, json: &str) -> String {
-    let sealed = json.replace('<', "\\u003c").replace('>', "\\u003e");
-    format!("<{tag}>\n{sealed}\n</{tag}>")
+    format!("<{tag}>\n{}\n</{tag}>", seal(json))
 }
 
 #[cfg(test)]
