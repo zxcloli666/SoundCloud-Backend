@@ -4,7 +4,7 @@ use tokio::time::Instant;
 
 use crate::breaker::Pass;
 use crate::document::Document;
-use crate::provider::StepStream;
+use crate::provider::{StepEvent, StepStream};
 use crate::request::Usage;
 
 const USAGE_WAIT: Duration = Duration::from_secs(1);
@@ -17,7 +17,7 @@ pub(super) struct Run {
     pub held: String,
     pub usage: Usage,
     pub received: usize,
-    pub heard: bool,
+    pub accepted: bool,
     pub started: Instant,
     pub expires: Instant,
     pub first_output: Option<Duration>,
@@ -40,7 +40,7 @@ impl Run {
             held: String::new(),
             usage: Usage::default(),
             received: 0,
-            heard: false,
+            accepted: false,
             started,
             expires,
             first_output: None,
@@ -48,8 +48,16 @@ impl Run {
         }
     }
 
-    pub fn read(&mut self, text: &str) {
-        self.heard = true;
+    pub fn take(&mut self, event: StepEvent) {
+        self.accepted = true;
+        match event {
+            StepEvent::Accepted => {}
+            StepEvent::Text(text) => self.read(&text),
+            StepEvent::Usage(usage) => self.usage = usage,
+        }
+    }
+
+    fn read(&mut self, text: &str) {
         self.received += text.len();
         let visible = self.document.push(text);
         if !visible.is_empty() {
@@ -60,11 +68,6 @@ impl Run {
         if self.document.is_complete() {
             self.answered_at.get_or_insert_with(Instant::now);
         }
-    }
-
-    pub fn count(&mut self, usage: Usage) {
-        self.heard = true;
-        self.usage = usage;
     }
 
     pub fn wake_at(&self, deadline: Instant) -> Instant {

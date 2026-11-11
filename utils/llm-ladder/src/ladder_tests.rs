@@ -159,6 +159,10 @@ fn usage(input_tokens: u64, output_tokens: u64) -> (u64, Result<StepEvent, Failu
     )
 }
 
+fn accepted() -> (u64, Result<StepEvent, Failure>) {
+    (0, Ok(StepEvent::Accepted))
+}
+
 fn broken(delay: u64, failure: Failure) -> (u64, Result<StepEvent, Failure>) {
     (delay, Err(failure))
 }

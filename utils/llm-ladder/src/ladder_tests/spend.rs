@@ -212,6 +212,21 @@ async fn a_step_refused_before_it_answered_costs_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_failure_after_the_provider_took_the_request_is_charged_an_estimate() {
+    let (broke, _) = paid("broke", vec![accepted(), broken(10, Failure::Transport)]);
+    let bench = bench(vec![broke], monthly());
+
+    assert_eq!(answer(&bench.ladder).await.1, Err(LadderError::Exhausted));
+
+    assert_eq!(settled(&bench).await, [estimate(0)]);
+    let report = &bench.seen.reports()[0];
+    assert_eq!(
+        (report.result, report.basis),
+        ("failed_transport", "estimated")
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_free_step_without_usage_stays_free() {
     let (gratis, _) = free("gratis", vec![text(10, "{\"say\":\"free\"}")]);
     let bench = bench(vec![gratis], monthly());

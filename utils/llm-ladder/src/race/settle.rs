@@ -60,12 +60,12 @@ pub(super) fn settle(
 }
 
 fn billed(step: &Step, run: &Run, result: StepResult, sent_bytes: usize) -> (Usage, Basis) {
-    let refused_before_answering = !run.heard
+    let refused = !run.accepted
         && matches!(
             result,
             StepResult::Failed(Failure::Status | Failure::Request | Failure::Transport)
         );
-    if !step.provider.price.is_set() || !run.usage.is_unknown() || refused_before_answering {
+    if !step.provider.price.is_set() || !run.usage.is_unknown() || refused {
         return (run.usage, Basis::Reported);
     }
     (Usage::estimated(sent_bytes, run.received), Basis::Estimated)

@@ -103,11 +103,7 @@ impl Race {
             _ = sleep_until(wake) => Signal::Timer,
         };
         match signal {
-            Signal::Step(index, Some(Ok(StepEvent::Text(text)))) => self.hear(index, &text),
-            Signal::Step(index, Some(Ok(StepEvent::Usage(usage)))) => {
-                self.running[index].count(usage);
-                None
-            }
+            Signal::Step(index, Some(Ok(event))) => self.hear(index, event),
             Signal::Step(index, Some(Err(failure))) => {
                 self.drop_out(index, failure);
                 None
@@ -130,17 +126,13 @@ impl Race {
             _ = sleep_until(wake) => None,
         };
         match event {
-            Some(Some(Ok(StepEvent::Text(text)))) => {
-                winner.read(&text);
+            Some(Some(Ok(event))) => {
+                winner.take(event);
                 let visible = std::mem::take(&mut winner.held);
                 match visible.is_empty() {
                     true => None,
                     false => self.deliver(visible),
                 }
-            }
-            Some(Some(Ok(StepEvent::Usage(usage)))) => {
-                winner.count(usage);
-                None
             }
             Some(None) => self.conclude().await,
             Some(Some(Err(_))) | None if answered => self.conclude().await,
@@ -150,10 +142,11 @@ impl Race {
         }
     }
 
-    fn hear(&mut self, index: usize, text: &str) -> Option<Item> {
+    fn hear(&mut self, index: usize, event: StepEvent) -> Option<Item> {
         let run = &mut self.running[index];
-        run.read(text);
-        if run.held.is_empty() {
+        let held = run.held.len();
+        run.take(event);
+        if run.held.len() == held {
             return None;
         }
         self.hedge_at = None;

@@ -232,7 +232,7 @@ mod tests {
             .iter()
             .map(|event| match event {
                 StepEvent::Usage(usage) => usage.prompt_tokens(),
-                StepEvent::Text(_) => 0,
+                _ => 0,
             })
             .collect();
         assert_eq!(prompts, [90, 90]);

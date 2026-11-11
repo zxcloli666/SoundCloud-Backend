@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::FutureExt;
-use futures::future::Either;
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -97,15 +96,12 @@ impl<W: Wire> Backend for Http<W> {
     fn start(&self, request: Arc<Request>, _time_left: Duration) -> StepStream {
         let shared = self.shared.clone();
         async move {
-            let response = match shared.open::<W>(&request).await {
-                Ok(response) => response,
-                Err(failure) => return Either::Right(stream::iter(vec![Err(failure)])),
-            };
-            if shared.call.stream {
-                let provider = shared.provider.clone();
-                return Either::Left(sse::events(provider, response, W::Reader::default()));
+            match shared.open::<W>(&request).await {
+                Ok(response) => stream::iter([Ok(StepEvent::Accepted)])
+                    .chain(shared.answer::<W>(response))
+                    .boxed(),
+                Err(failure) => stream::iter([Err(failure)]).boxed(),
             }
-            Either::Right(stream::iter(shared.whole::<W>(response).await))
         }
         .flatten_stream()
         .boxed()
@@ -164,6 +160,16 @@ impl Shared {
             "llm provider refused the request"
         );
         Err(fault::of_status(status.as_u16()))
+    }
+
+    fn answer<W: Wire>(self: Arc<Self>, response: wreq::Response) -> StepStream {
+        if self.call.stream {
+            let provider = self.provider.clone();
+            return sse::events(provider, response, W::Reader::default()).boxed();
+        }
+        stream::once(async move { self.whole::<W>(response).await })
+            .flat_map(stream::iter)
+            .boxed()
     }
 
     async fn whole<W: Wire>(&self, response: wreq::Response) -> Vec<Result<StepEvent, Failure>> {

@@ -1,3 +1,4 @@
+use std::iter::once;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -75,7 +76,9 @@ impl Backend for Worker {
                 return vec![Err(Failure::Request)];
             };
             match transport.call(&subject, payload.into(), time_left).await {
-                Ok(data) => answered(&provider, data),
+                Ok(data) => once(Ok(StepEvent::Accepted))
+                    .chain(answered(&provider, data))
+                    .collect(),
                 Err(error) => {
                     tracing::warn!(provider = %provider, ?error, "llm worker did not answer");
                     vec![Err(Failure::from(error))]

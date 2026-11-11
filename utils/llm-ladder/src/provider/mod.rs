@@ -28,6 +28,7 @@ pub(crate) type StepStream = BoxStream<'static, Result<StepEvent, Failure>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum StepEvent {
+    Accepted,
     Text(String),
     Usage(Usage),
 }
