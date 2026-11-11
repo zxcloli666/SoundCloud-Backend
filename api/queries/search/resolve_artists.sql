@@ -30,7 +30,7 @@ hits AS (
 SELECT a.id::text AS "id!",
        a.name AS "name!",
        ''::text AS "artist!",
-       least(1, ln(1 + a.monthly_listeners) / 18)::float8 AS "popularity!",
+       least(1, a.popularity_score)::float8 AS "popularity!",
        (least(2, similarity(search_latin($3), search_latin(a.normalized_name)) + word_similarity(search_latin($3), search_latin(a.normalized_name))) / 2
          + CASE WHEN a.normalized_name = $3 THEN 0.5 ELSE 0 END)::float8 AS "match_score!",
        hits.tier AS "tier!"
@@ -40,6 +40,6 @@ WHERE a.track_count_primary > 0 OR a.track_count_featured > 0
 ORDER BY hits.tier,
          (least(2, similarity(search_latin($3), search_latin(a.normalized_name)) + word_similarity(search_latin($3), search_latin(a.normalized_name))) / 2
            + CASE WHEN a.normalized_name = $3 THEN 0.5 ELSE 0 END
-           + 0.3 * least(1, ln(1 + a.monthly_listeners) / 18)) DESC,
+           + 0.3 * least(1, a.popularity_score)) DESC,
          a.id DESC
 LIMIT $5
