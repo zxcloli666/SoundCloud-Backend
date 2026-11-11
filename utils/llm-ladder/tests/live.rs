@@ -108,13 +108,14 @@ fn request(user: Option<&str>) -> Request {
         schema: schema(),
         budget_user: user.map(str::to_owned),
         deadline: None,
+        plain: None,
     }
 }
 
 async fn measure(ladder: &Arc<Ladder>, user: Option<&str>) -> Measured {
     let started = Instant::now();
     let mut events = ladder
-        .stream(request(user), Arc::new(|_| true))
+        .stream(request(user), Arc::new(|_, _| true))
         .await
         .expect("a step is open");
     let mut document = String::new();

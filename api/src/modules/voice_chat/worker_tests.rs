@@ -6,7 +6,7 @@ use backend_contracts::pipeline::{
     MAX_COMPLETE_SCHEMA_BYTES, MAX_COMPLETE_SYSTEM_BYTES, MAX_COMPLETE_SYSTEM_MARKS,
     MAX_COMPLETE_TOKENS,
 };
-use llm_ladder::{Hosting, Observer, StepReport, WORKER_LIMITS, WorkerLimits};
+use llm_ladder::{Hosting, Observer, Section, StepReport, WORKER_LIMITS, WorkerLimits};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -14,16 +14,25 @@ use super::*;
 use crate::config::LlmCfg;
 use crate::modules::voice_chat::VoiceChat;
 use crate::modules::voice_chat::request::ChatBody;
-use crate::modules::voice_chat::testing::{CHAT_SECTION, hear, lane, tools};
+use crate::modules::voice_chat::testing::{CHAT_SECTION, Heard, hear, lane, tools};
 
 const NOTE: &str = "зови меня Саша";
+const SPEECH: &str = "{\"actions\":[],\"say\":\"Привет.\"}";
+const LOUDER: &str = "{\"actions\":[{\"name\":\"volume_set\",\"args\":[{\"name\":\"level\",\"value\":90}]}],\"say\":\"Громче.\"}";
+const PLAIN: &str = "plain = true\n";
 
-#[derive(Default)]
 struct Asked {
+    answer: &'static str,
     payloads: Mutex<Vec<Bytes>>,
 }
 
 struct Unwatched;
+
+struct Talk {
+    heard: Heard,
+    sections: Vec<Section>,
+    sent: Value,
+}
 
 impl WorkerTransport for Asked {
     fn call<'a>(
@@ -33,7 +42,7 @@ impl WorkerTransport for Asked {
         _: Duration,
     ) -> BoxFuture<'a, Result<Value, WorkerError>> {
         self.payloads.lock().unwrap().push(payload);
-        let data = json!({"text": "{\"actions\":[],\"say\":\"Привет.\"}", "input_tokens": 40, "output_tokens": 9});
+        let data = json!({"text": self.answer, "input_tokens": 40, "output_tokens": 9});
         Box::pin(async move { Ok(data) })
     }
 }
@@ -42,26 +51,17 @@ impl Observer for Unwatched {
     fn step(&self, _: &StepReport<'_>) {}
 }
 
-fn local_only() -> LlmCfg {
-    let ladder = format!(
-        "[providers.local]\nkind = \"worker\"\nsubject = \"{AI_COMPLETE}\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n\n[ladders.chat]\nsteps = [\"local\"]\nhedge_after_ms = 2000\ndeadline_ms = 6000\nbreaker = {{ failures = 3, window_s = 30, open_s = 90 }}\n"
-    );
-    LlmCfg::parse(&format!("{ladder}{CHAT_SECTION}")).expect("a valid config")
-}
-
-fn sized(limit: u32) -> usize {
-    usize::try_from(limit).expect("a limit that fits the platform")
-}
-
-#[tokio::test]
-async fn a_chat_turn_reaches_the_worker_as_the_request_of_the_contract() {
-    let asked = Arc::new(Asked::default());
+async fn talk(answer: &'static str, provider_keys: &str) -> Talk {
+    let asked = Arc::new(Asked {
+        answer,
+        payloads: Mutex::default(),
+    });
     let hosting = Hosting {
         jetstream: None,
         worker: Some(asked.clone()),
         observer: Arc::new(Unwatched),
     };
-    let chat = VoiceChat::hosted(&local_only(), hosting).expect("the chat ladder");
+    let chat = VoiceChat::hosted(&local_only(provider_keys), hosting).expect("the chat ladder");
     let live = chat.live().expect("a live chat");
     let body: ChatBody = serde_json::from_value(json!({
         "text": "привет",
@@ -77,30 +77,96 @@ async fn a_chat_turn_reaches_the_worker_as_the_request_of_the_contract() {
         .request(&turn, "contract")
         .expect("a prompt within the cap");
     let sections = request.system.sections.clone();
-
     let response = live
         .answer(request, turn.tools)
         .await
         .expect("an open step");
     let heard = hear(response).await.expect("a stream");
-
-    assert_eq!(
-        heard.named(),
-        [("say", &json!({"text": "Привет."})), ("done", &json!({}))]
-    );
     let payloads = asked.payloads.lock().unwrap();
-    let sent: Value = serde_json::from_slice(&payloads[0]).expect("a JSON request");
+    Talk {
+        heard,
+        sections,
+        sent: serde_json::from_slice(&payloads[0]).expect("a JSON request"),
+    }
+}
+
+fn local_only(provider_keys: &str) -> LlmCfg {
+    let ladder = format!(
+        "[providers.local]\nkind = \"worker\"\nsubject = \"{AI_COMPLETE}\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n{provider_keys}\n[ladders.chat]\nsteps = [\"local\"]\nhedge_after_ms = 2000\ndeadline_ms = 6000\nbreaker = {{ failures = 3, window_s = 30, open_s = 90 }}\n"
+    );
+    LlmCfg::parse(&format!("{ladder}{CHAT_SECTION}")).expect("a valid config")
+}
+
+fn of_the_contract(sent: &Value) -> CompleteRequest {
     let read: CompleteRequest =
         serde_json::from_value(sent.clone()).expect("the request of the contract");
-    assert_eq!(serde_json::to_value(&read).expect("a JSON request"), sent);
-    let rules = sections[0].text.len();
-    let character = rules + "\n\n".len() + sections[1].text.len();
+    assert_eq!(serde_json::to_value(&read).expect("a JSON request"), *sent);
+    read
+}
+
+fn events(heard: &Heard) -> Vec<&str> {
+    heard.named().into_iter().map(|(event, _)| event).collect()
+}
+
+fn sized(limit: u32) -> usize {
+    usize::try_from(limit).expect("a limit that fits the platform")
+}
+
+#[tokio::test]
+async fn a_chat_turn_reaches_the_worker_as_the_request_of_the_contract() {
+    let talk = talk(SPEECH, "").await;
+
+    assert_eq!(
+        talk.heard.named(),
+        [("say", &json!({"text": "Привет."})), ("done", &json!({}))]
+    );
+    let read = of_the_contract(&talk.sent);
+    let rules = talk.sections[0].text.len();
+    let character = rules + "\n\n".len() + talk.sections[1].text.len();
     let marks: Vec<usize> = read.system_marks.iter().copied().map(sized).collect();
     assert_eq!(marks, [rules, character]);
-    assert_eq!(read.system[..rules], sections[0].text);
-    assert!(read.system[..character].ends_with(&sections[1].text));
+    assert_eq!(read.system[..rules], talk.sections[0].text);
+    assert!(read.system[..character].ends_with(&talk.sections[1].text));
     assert!(!read.system[..character].contains(NOTE));
     assert!(read.system[character..].contains(NOTE));
+    assert!(read.system.contains("volume_set"));
+    assert_eq!(talk.sent["schema"]["required"], json!(["actions", "say"]));
+}
+
+#[tokio::test]
+async fn a_plain_worker_is_asked_the_turn_without_tools() {
+    let talk = talk(SPEECH, PLAIN).await;
+
+    assert_eq!(
+        talk.heard.named(),
+        [("say", &json!({"text": "Привет."})), ("done", &json!({}))]
+    );
+    let read = of_the_contract(&talk.sent);
+    assert_eq!(read.system_marks.len(), 2);
+    assert!(read.system.contains("No tools are available"));
+    assert!(!read.system.contains("Tools:"));
+    assert!(!read.system.contains("volume_set"));
+    assert!(read.system.contains("A cheerful voice named Loli."));
+    assert!(read.system.contains(NOTE));
+    assert_eq!(talk.sent["schema"]["required"], json!(["say"]));
+    assert_eq!(
+        talk.sent["schema"]["properties"]
+            .as_object()
+            .map(|keys| keys.len()),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn an_action_is_run_for_a_trusted_worker_and_refused_from_a_plain_one() {
+    let trusted = talk(LOUDER, "").await;
+    assert_eq!(events(&trusted.heard), ["action", "say", "done"]);
+
+    let plain = talk(LOUDER, PLAIN).await;
+    assert_eq!(
+        plain.heard.named(),
+        [("error", &json!({"code": "provider_failed"}))]
+    );
 }
 
 #[test]

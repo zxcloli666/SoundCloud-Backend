@@ -3,14 +3,15 @@ use std::time::Instant;
 
 use axum::response::Response;
 use llm_ladder::{
-    ConfigError, Hosting, Ladder, LadderError, Ladders, Observer, Request, StepReport,
+    ConfigError, Hosting, Ladder, LadderError, Ladders, Observer, Plain, Request, StepReport,
     WorkerTransport,
 };
 
+use super::prompt;
+use super::reply::{self, Offered};
 use super::request::Turn;
 use super::tools::Tools;
 use super::worker::WorkerRpc;
-use super::{prompt, reply};
 use crate::bus::nats::NatsService;
 use crate::config::{LlmCfg, VoiceChatCfg};
 
@@ -77,17 +78,26 @@ impl Live {
             schema: turn.tools.answer_schema(),
             budget_user: Some(user.to_owned()),
             deadline: None,
+            plain: self.plain(turn),
         })
     }
 
     pub async fn answer(&self, request: Request, tools: Tools) -> Result<Response, LadderError> {
         let started = Instant::now();
-        let tools = Arc::new(tools);
+        let offered = Offered::new(tools);
         let answer = self
             .ladder
-            .stream(request, reply::commit(tools.clone()))
+            .stream(request, reply::commit(offered.clone()))
             .await?;
-        Ok(reply::respond(answer, tools, started))
+        Ok(reply::respond(answer, offered, started))
+    }
+
+    fn plain(&self, turn: &Turn) -> Option<Plain> {
+        (!turn.tools.is_empty()).then(|| Plain {
+            system: prompt::plain_system(&self.limits, turn),
+            messages: prompt::plain_messages(turn),
+            schema: Tools::default().answer_schema(),
+        })
     }
 }
 

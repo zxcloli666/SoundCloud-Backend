@@ -267,11 +267,12 @@ fn request() -> Request {
         schema: Schema::object([("say", Schema::String)]),
         budget_user: Some("42".to_owned()),
         deadline: None,
+        plain: None,
     }
 }
 
 fn any_text() -> Commit {
-    Arc::new(|_| true)
+    Arc::new(|_, _| true)
 }
 
 async fn answer(ladder: &Arc<Ladder>) -> (String, Result<Outcome, LadderError>) {

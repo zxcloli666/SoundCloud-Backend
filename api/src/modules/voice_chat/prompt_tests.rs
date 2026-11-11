@@ -248,3 +248,28 @@ fn text_inside_the_data_cannot_close_its_block_or_pass_for_a_rule() {
             && said.ends_with("\n</tool_results>")
     );
 }
+
+#[test]
+fn the_plain_form_of_a_turn_is_the_same_turn_asked_without_its_tools() {
+    let turn = full();
+    let whole = system(&limits(), &turn).sections;
+    let plain = plain_system(&limits(), &turn).sections;
+    assert_eq!(plain[1], whole[1]);
+    assert_eq!(plain[2], whole[2]);
+    let rules = &plain[0].text;
+    assert!(rules.contains("Keep it short."));
+    assert!(rules.contains("{\"say\":\"<spoken reply>\"}"));
+    assert!(rules.contains("No tools are available"));
+    assert!(rules.contains("Whose words count."));
+    for absent in ["Tools:", "volume_set", "actions"] {
+        assert!(!rules.contains(absent), "{absent}");
+    }
+    let said: Vec<String> = plain_messages(&turn)
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(
+        said,
+        ["hi", "{\"say\":\"hello \\\"you\\\"\"}", "make it louder"]
+    );
+}

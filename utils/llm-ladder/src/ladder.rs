@@ -17,9 +17,9 @@ use crate::observer::{Basis, Observer, Skip, StepReport, StepResult};
 use crate::provider::worker::WorkerTransport;
 use crate::provider::{self, Provider};
 use crate::race::{Item, Race, Rule};
-use crate::request::{Request, Usage};
+use crate::request::{Form, Request, Usage};
 
-pub type Commit = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+pub type Commit = Arc<dyn Fn(Form, &str) -> bool + Send + Sync>;
 
 pub struct Ladders {
     ladders: HashMap<String, Arc<Ladder>>,
@@ -138,7 +138,7 @@ impl Ladder {
         request: Request,
     ) -> Result<Completion<T>, LadderError> {
         let rule = Rule {
-            commit: Arc::new(|_| true),
+            commit: Arc::new(|_, _| true),
             accept: Some(parses::<T>),
         };
         let mut race = self.enter(request, rule).await?;

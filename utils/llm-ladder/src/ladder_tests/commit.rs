@@ -3,7 +3,7 @@ use super::*;
 const SAY: &str = "\"say\":\"";
 
 fn speaks() -> Commit {
-    Arc::new(|document: &str| {
+    Arc::new(|_, document: &str| {
         document.split_once(SAY).is_some_and(|(_, said)| {
             said.chars()
                 .take_while(|symbol| *symbol != '"')

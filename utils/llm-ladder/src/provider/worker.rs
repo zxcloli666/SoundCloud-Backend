@@ -235,6 +235,7 @@ mod tests {
             schema: Schema::object([("say", Schema::String), ("mood", Schema::Integer)]),
             budget_user: None,
             deadline: None,
+            plain: None,
         }
     }
 

@@ -28,6 +28,7 @@ Spend caps need NATS JetStream: the api opens the KV bucket named in `[budget]` 
 | `body` | optional JSON object merged into the request body, for provider-specific knobs |
 | `headers` | http kinds: static request headers, for example the API version a vendor needs: `{ "anthropic-version" = "..." }`. `authorization`, `x-api-key`, `content-type`, `content-length` and `host` are refused |
 | `hedge` | default `true`. `false`: the step starts only when every earlier step has failed, never because they are silent. Set it on a model that must not get parallel calls, such as a local CPU model |
+| `plain` | default `false`. `true`: the provider is asked the plain form of a request when the caller gives one, and its answer is judged by the rule of that form. Set it on a model that must not be trusted with the full request, such as a small local model. For the voice chat the plain form is the turn without tools |
 | `subject` | `worker` only: NATS subject of the local model |
 
 A `worker` step gets the request cut to the limits of the worker method: the newest 64 messages, the first of them a user message, and the newest 12 000 bytes of a longer message. It fails without a publish only when the system text is over 48 000 bytes or the schema over 64 000 bytes. The call carries `X-Deadline`: the time the ladder has left, at most `total_timeout_ms`. A started worker call runs until it answers or reaches that deadline, even when another step has already won.
@@ -73,6 +74,8 @@ The system text has three sections, the most shared first:
 A provider that caches by prefix reuses sections 1 and 2. With `prefix_cache` set, sections 1 and 2 each end with a cache mark: a turn of a known character reads both from the cache, a new character reads section 1 and writes its own section 2.
 `openai_compatible` and `worker` get the same text joined in the same order.
 A `worker` call also carries `system_marks`: the byte offsets in that text where sections 1 and 2 end, at most the first four shared sections. The worker keeps a model state at each mark and reads only the text after the last mark it already has, so a turn of a known character reads section 3 and the talk, and a new character reads from the end of section 1. A turn with no notes and no app state ends on a mark, so the next question to the same text reads nothing of it again.
+
+A provider with `plain = true` gets the turn without tools: section 1 has the reply format with `say` only and no tool list, earlier replies are shown as `{"say": ...}`, the schema has `say` alone. Sections 2 and 3 are the same as for the other providers. Its answer is accepted only when it speaks and names no action, and an action that comes after the speech is dropped, so text inside the data cannot make a weak model act. A `worker` also holds the model to the schema, so a plain local model cannot produce an action at all. A turn that already has no tools has no plain form: every provider gets it whole.
 A change to `instructions`, a persona prompt or the app's tool list starts a new cache entry, so keep per-user and per-turn text out of them. The last tool round is offered fewer tools and has an entry of its own.
 
 ## Request

@@ -92,6 +92,7 @@ pub fn request(user: &str) -> Request {
         schema: Schema::object([("say", Schema::String)]),
         budget_user: Some(user.to_owned()),
         deadline: None,
+        plain: None,
     }
 }
 

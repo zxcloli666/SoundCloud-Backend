@@ -14,6 +14,20 @@ pub struct Request {
     pub schema: Schema,
     pub budget_user: Option<String>,
     pub deadline: Option<Duration>,
+    pub plain: Option<Plain>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Plain {
+    pub system: System,
+    pub messages: Vec<Message>,
+    pub schema: Schema,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Form {
+    Full,
+    Plain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,6 +131,18 @@ impl Message {
 }
 
 impl Request {
+    pub(crate) fn plainly(&self) -> Option<Self> {
+        let plain = self.plain.clone()?;
+        Some(Self {
+            system: plain.system,
+            messages: plain.messages,
+            schema: plain.schema,
+            budget_user: self.budget_user.clone(),
+            deadline: self.deadline,
+            plain: None,
+        })
+    }
+
     pub(crate) fn size(&self) -> usize {
         let messages: usize = self
             .messages
@@ -224,6 +250,7 @@ mod tests {
             schema: Schema::String,
             budget_user: None,
             deadline: None,
+            plain: None,
         };
         assert_eq!(request.size(), 5 + 5 + 2 + "{\"type\":\"string\"}".len());
         assert_eq!(

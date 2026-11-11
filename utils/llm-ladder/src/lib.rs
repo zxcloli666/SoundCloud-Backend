@@ -19,5 +19,5 @@ pub use error::{ConfigError, LadderError};
 pub use ladder::{AnswerStream, Commit, Completion, Event, Hosting, Ladder, Ladders, Outcome};
 pub use observer::{Basis, Failure, Observer, Skip, StepReport, StepResult};
 pub use provider::worker::{WORKER_LIMITS, WorkerError, WorkerLimits, WorkerTransport};
-pub use request::{Message, Request, Role, Section, System, Usage};
+pub use request::{Form, Message, Plain, Request, Role, Section, System, Usage};
 pub use schema::Schema;
