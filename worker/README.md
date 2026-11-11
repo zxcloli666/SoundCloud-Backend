@@ -322,4 +322,10 @@ NATS_TEST_URL=nats://127.0.0.1:4222 .venv/bin/python -m pytest tests/integration
 | models | `tests/models` | `/dev/nvidia0`; `test_local_llm.py` — GGUF локальной модели в кэше |
 | eval | `tests/eval` | `EVAL_DATA_DIR` |
 
+`tests/smoke/local_llm.py` — не pytest, а проверка собранного образа: CI запускает его в cpu-образе на
+x86. Он сверяет флаги CPU, импортирует `llama_cpp`, проверяет, что колесо не требует флагов сверх тех,
+что спрашивает старт, качает маленькую закреплённую GGUF и делает через `LocalLlmSlot` ответ по
+грамматике и один вызов после дедлайна. Локально: `docker run --rm -e HF_HUB_OFFLINE=0 -e
+HF_HOME=/tmp/hf -v "$PWD/tests/smoke:/smoke:ro" --entrypoint python <образ> /smoke/local_llm.py`.
+
 Правила для кода — в [AGENTS.md](./AGENTS.md).
