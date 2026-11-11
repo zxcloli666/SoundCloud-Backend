@@ -373,6 +373,25 @@ def test_a_call_past_its_deadline_stops_between_chunks_and_keeps_what_it_read(
     assert {"name": "pause", "args": {}} in json.loads(str(resumed["text"]))["actions"]
 
 
+def test_the_warmup_teaches_the_first_call_how_long_a_chunk_takes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worker.models.local_llm.slot import LocalLlmSlot
+
+    fresh = LocalLlmSlot()
+    fresh.load(slot_spec(SETTINGS, SLOT))
+    predicted: list[float] = []
+    try:
+        fresh.warmup()
+        with monkeypatch.context() as patched:
+            patched.setattr(CALL_GUARD, "check", lambda needed_s=0.0: predicted.append(needed_s))
+            ask(fresh, own_rules("a fresh model"), [user("pause the music")])
+    finally:
+        fresh.unload()
+
+    assert predicted[0] > 0
+
+
 async def test_the_engine_answers_expired_before_the_deadline_and_is_not_killed() -> None:
     counters = Counters()
     plans = budget_plans([EnginePlan(SLOT, (slot_spec(SETTINGS, SLOT),), reserved=True)], 8)

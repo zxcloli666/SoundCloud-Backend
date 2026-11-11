@@ -16,7 +16,7 @@ from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, SlotSpec
 from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT
 
 MIB = 1 << 20
-WARMUP_SYSTEM = "You answer with one JSON object."
+WARMUP_SENTENCE = "You answer with one JSON object. "
 WARMUP_MESSAGES = ({"role": "user", "content": "Are you ready?"},)
 WARMUP_SCHEMA: Mapping[str, object] = {
     "type": "object",
@@ -69,7 +69,14 @@ class LocalLlmSlot:
         self._template = chat_template(self._model.template_source())
 
     def warmup(self) -> None:
-        self.complete(WARMUP_SYSTEM, WARMUP_MESSAGES, WARMUP_SCHEMA, WARMUP_TOKENS)
+        if self._model is None or self._source is None:
+            raise RuntimeError(f"{LOCAL_LLM_SLOT} is not loaded")
+        chunk_tokens = self._source[1].chunk_tokens
+        system = WARMUP_SENTENCE
+        while len(self._model.tokenize(system, special=False)) < chunk_tokens:
+            system += WARMUP_SENTENCE
+        forgotten: PromptStates[State] = PromptStates(0, chunk_tokens)
+        self._answer(system, WARMUP_MESSAGES, WARMUP_SCHEMA, WARMUP_TOKENS, forgotten)
 
     def invoke(
         self, method: str, arrays: Arrays, args: Mapping[str, object]
@@ -101,6 +108,16 @@ class LocalLlmSlot:
         schema: Mapping[str, object],
         max_tokens: int,
     ) -> Mapping[str, object]:
+        return self._answer(system, messages, schema, max_tokens, self._states)
+
+    def _answer(
+        self,
+        system: str,
+        messages: Sequence[Mapping[str, str]],
+        schema: Mapping[str, object],
+        max_tokens: int,
+        states: PromptStates[State],
+    ) -> Mapping[str, object]:
         if self._model is None or self._template is None or self._source is None:
             raise RuntimeError(f"{LOCAL_LLM_SLOT} is not loaded")
         model, chunk_tokens = self._model, self._source[1].chunk_tokens
@@ -113,7 +130,7 @@ class LocalLlmSlot:
         grammar = Grammar(model, schema)
         try:
             model.follow_threads(CALL_GUARD.threads)
-            reused = read(model, self._states, prompt, self._reading, chunk_tokens)
+            reused = read(model, states, prompt, self._reading, chunk_tokens)
             answer, finished = write(model, prompt.tokens[-1], grammar, max_tokens, self._writing)
         finally:
             grammar.close()
