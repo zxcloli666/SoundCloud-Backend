@@ -78,3 +78,10 @@ def test_the_stable_part_is_a_long_enough_common_start_inside_the_system() -> No
     assert states.stable_prefix([1, 2, 3, 4, 5, 9, 9, 9, 9], shared=8) == 5
     assert states.stable_prefix([1, 2, 3, 9, 9, 9, 9, 9, 9], shared=8) == 0
     assert states.stable_prefix([1, 2, 3, 4, 5, 6, 7, 8, 9], shared=8) == 0
+
+
+def test_a_read_cut_short_inside_the_system_is_no_stable_part() -> None:
+    states: PromptStates[bytes] = PromptStates(budget_bytes=1000, min_tokens=CHUNK)
+    states.keep([1, 2, 3, 4, 5], bytes(1), anchor=False)
+
+    assert states.stable_prefix([1, 2, 3, 4, 5, 6, 7, 8, 9], shared=8) == 0

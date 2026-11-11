@@ -34,6 +34,7 @@ class PromptStates[S: Sized]:
                 common_length(tokens, prefix)
                 for held in (self._anchors, self._turns)
                 for prefix in held
+                if not starts_with(tokens, prefix)
             ),
             default=0,
         )

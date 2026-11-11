@@ -84,10 +84,11 @@ def test_a_state_that_fails_to_load_gives_way_to_a_shallower_one_or_a_cold_read(
     assert sum(model.evals) == len(asked.tokens) - 1
 
 
-def test_an_expired_read_keeps_what_it_read_for_the_next_try() -> None:
+def test_an_expired_read_keeps_what_it_read_and_the_next_try_anchors_the_whole_system() -> None:
     model, held = FakeModel(), states()
     ask = reader(model, held)
-    asked = prompt(system(1, length=40), [50, 60, 61])
+    own = system(1, length=40)
+    asked = prompt(own, [50, 60, 61])
 
     def expire_after_two_chunks(tokens: Sequence[int]) -> None:
         if len(model.evals) == 1:
@@ -101,3 +102,5 @@ def test_an_expired_read_keeps_what_it_read_for_the_next_try() -> None:
 
     assert held.sizes() == ([], [2 * CHUNK])
     assert ask(asked) == 2 * CHUNK
+    assert held.sizes()[0] == [len(own)]
+    assert ask(prompt(own, [51, 60, 61])) == len(own)
