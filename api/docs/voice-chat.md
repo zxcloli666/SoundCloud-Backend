@@ -21,10 +21,14 @@ Spend caps need NATS JetStream: the api creates the KV bucket named in `[budget]
 | `kind` | `anthropic_compatible`, `openai_compatible` or `worker` |
 | `endpoint`, `model`, `api_key` | http kinds. The key is always `env:NAME`; an unset or empty variable turns the provider off |
 | `stream` | http kinds, default `true`. `false` = one call, the answer arrives as one piece |
-| `max_output_tokens`, `total_timeout_ms` | limits of one call |
+| `max_output_tokens`, `total_timeout_ms` | limits of one call. A `worker` takes at most 1024 tokens |
 | `input_usd_per_mtok`, `output_usd_per_mtok` | optional price. A provider with a price counts against the spend caps |
+| `cache_read_usd_per_mtok`, `cache_write_usd_per_mtok` | optional price of input the provider read from its prefix cache or wrote to it. Missing = `input_usd_per_mtok` |
+| `prefix_cache` | `anthropic_compatible` only: the object sent as `cache_control` on the system blocks that end a shared prefix, for example `{ type = "ephemeral" }`. Missing = the system text goes as one string and nothing is cached |
 | `body` | optional JSON object merged into the request body, for provider-specific knobs |
 | `subject` | `worker` only: NATS subject of the local model |
+
+A `worker` step fails without a publish when the request is over the limits of the worker method: system text 48 000 bytes, 64 messages of 12 000 bytes each, schema 64 000 bytes.
 
 `[ladders.<id>]`
 
@@ -48,6 +52,18 @@ Spend caps need NATS JetStream: the api creates the KV bucket named in `[budget]
 | `max_tool_rounds` | requests one turn may take. A request that may be the last one (it carries at least `max_tool_rounds - 1` results of `returns: true` tools) is offered no such tools, so the model has to answer |
 | `instructions` | system text added for every persona |
 | `[voice_chat.personas.<id>] prompt` | who the character is. `default` is required and serves unknown ids |
+
+## Prompt order and the prefix cache
+
+The system text has three sections, the most shared first:
+
+1. the same for every user of one app version: setting, `instructions`, reply format, tool list in the order the app sent it, the rule about data;
+2. per character: persona prompt, language;
+3. per turn: notes, app state.
+
+A provider that caches by prefix reuses sections 1 and 2. With `prefix_cache` set, sections 1 and 2 each end with a cache mark: a turn of a known character reads both from the cache, a new character reads section 1 and writes its own section 2.
+`openai_compatible` and `worker` get the same text joined in the same order.
+A change to `instructions`, a persona prompt or the app's tool list starts a new cache entry, so keep per-user and per-turn text out of them. The last tool round is offered fewer tools and has an entry of its own.
 
 ## Request
 
@@ -115,5 +131,7 @@ Errors before the stream are JSON, `{"statusCode": 403, "code": "star_required",
 ## Metrics
 
 `api_llm_steps_total`, `api_llm_step_duration_seconds`, `api_llm_first_output_seconds`, `api_llm_tokens_total`, `api_llm_spend_micro_usd_total` (labels `ladder`, `provider`, `result`), `api_voice_chat_turns_total`, `api_voice_chat_turn_duration_seconds`, `api_voice_chat_first_event_seconds`, `api_voice_chat_actions_total`.
+
+`api_llm_tokens_total` has the label `kind`: `input` (full price), `cache_read`, `cache_write`, `output`. The prompt size is `input + cache_read + cache_write`. A working prefix cache shows `cache_read` far above `cache_write`; `cache_write` near the prompt size on every call means the shared sections change between calls.
 
 Logs carry provider ids, statuses and sizes, never the phrase or the answer.

@@ -8,6 +8,9 @@ max_output_tokens = 800
 total_timeout_ms = 12000
 input_usd_per_mtok = 1.0
 output_usd_per_mtok = 2.0
+cache_read_usd_per_mtok = 0.2
+cache_write_usd_per_mtok = 1.5
+prefix_cache = { type = "ephemeral" }
 body = { }
 
 [providers.free]
