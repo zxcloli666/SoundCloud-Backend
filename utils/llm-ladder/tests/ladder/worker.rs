@@ -9,7 +9,7 @@ use crate::bench::{
 use crate::vendor::{self, COMPLETIONS, Reply, Vendor};
 use bytes::Bytes;
 use futures::future::{BoxFuture, pending};
-use llm_ladder::{LadderError, Request, System, Usage, WorkerError, WorkerTransport};
+use llm_ladder::{LadderError, Message, Request, System, Usage, WorkerError, WorkerTransport};
 use serde_json::{Value, json};
 
 struct Thinking;
@@ -99,6 +99,42 @@ async fn a_request_too_large_for_the_worker_is_never_published() {
         results(&[("local", "failed_request")])
     );
     assert!(local.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_request_over_the_message_limits_reaches_the_worker_cut_to_fit() {
+    let local = Arc::new(LocalModel::default());
+    *local.reply.lock().unwrap() = Some(Ok(json!({"text": ANSWER})));
+    let config = worker_provider("local", "") + &ladder("chat", &["local"], 500);
+    let bench = bench(&config, Some(local.clone()));
+    let mut messages: Vec<Message> = (0..70)
+        .map(|index| match index % 2 {
+            0 => Message::user(format!("ask {index}")),
+            _ => Message::assistant(format!("reply {index}")),
+        })
+        .collect();
+    messages.push(Message::user(format!("{}!", "я".repeat(9_000))));
+    let long = Request {
+        messages,
+        ..request()
+    };
+
+    let answer = answer_to(&bench.ladders.get("chat").unwrap(), long).await;
+
+    assert_eq!(answer.outcome.unwrap().provider, "local");
+    let calls = local.calls.lock().unwrap();
+    let sent = calls[0].1["messages"].as_array().unwrap();
+    assert_eq!(
+        sent.len(),
+        63,
+        "the newest 64, less the reply they began with"
+    );
+    assert_eq!(sent[0], json!({"role": "user", "content": "ask 8"}));
+    assert_eq!(
+        sent[62],
+        json!({"role": "user", "content": format!("{}!", "я".repeat(5_999))}),
+        "the newest 12 000 bytes, less the half of a letter they began with"
+    );
 }
 
 #[tokio::test]

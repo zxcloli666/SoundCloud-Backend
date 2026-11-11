@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::{Backend, StepEvent, StepStream};
 use crate::config::ProviderSettings;
 use crate::observer::Failure;
-use crate::request::{Message, Request, Usage};
+use crate::request::{Message, Request, Role, Usage};
 use crate::schema::Schema;
 
 pub(crate) const MAX_TOKENS: u32 = 1024;
@@ -64,7 +64,7 @@ impl Backend for Worker {
         stream::once(async move {
             let payload = Payload {
                 system: request.system.joined(),
-                messages: &request.messages,
+                messages: fitted(&request.messages),
                 schema: &request.schema,
                 max_tokens,
             };
@@ -114,23 +114,56 @@ fn answered(provider: &str, data: Value) -> Vec<Result<StepEvent, Failure>> {
     vec![Ok(StepEvent::Usage(usage)), Ok(StepEvent::Text(reply.text))]
 }
 
+fn fitted(messages: &[Message]) -> Vec<Fitted<'_>> {
+    let older = messages.len().saturating_sub(MAX_MESSAGES);
+    let newest = &messages[older..];
+    let replies = match older {
+        0 => 0,
+        _ => newest
+            .iter()
+            .take_while(|message| message.role == Role::Assistant)
+            .count(),
+    };
+    newest[replies..]
+        .iter()
+        .map(|message| Fitted {
+            role: message.role,
+            content: newest_part(&message.content),
+        })
+        .collect()
+}
+
+fn newest_part(content: &str) -> &str {
+    let start = content.len().saturating_sub(MAX_MESSAGE_BYTES);
+    &content[content.ceil_char_boundary(start)..]
+}
+
 #[derive(Serialize)]
 struct Payload<'a> {
     system: String,
-    messages: &'a [Message],
+    messages: Vec<Fitted<'a>>,
     schema: &'a Schema,
     max_tokens: u32,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct Fitted<'a> {
+    role: Role,
+    content: &'a str,
+}
+
 impl Payload<'_> {
     fn over_limit(&self) -> Option<&'static str> {
-        let fits = |message: &Message| (1..=MAX_MESSAGE_BYTES).contains(&message.content.len());
         let schema = serde_json::to_vec(self.schema).map_or(usize::MAX, |schema| schema.len());
         if self.system.len() > MAX_SYSTEM_BYTES {
             Some("system")
-        } else if !(1..=MAX_MESSAGES).contains(&self.messages.len()) {
+        } else if self.messages.is_empty() {
             Some("messages")
-        } else if !self.messages.iter().all(fits) {
+        } else if self
+            .messages
+            .iter()
+            .any(|message| message.content.is_empty())
+        {
             Some("message")
         } else if schema > MAX_SCHEMA_BYTES {
             Some("schema")
@@ -159,10 +192,19 @@ mod tests {
     fn payload<'a>(system: &str, messages: &'a [Message], schema: &'a Schema) -> Payload<'a> {
         Payload {
             system: system.to_owned(),
-            messages,
+            messages: fitted(messages),
             schema,
             max_tokens: 512,
         }
+    }
+
+    fn talk(messages: usize) -> Vec<Message> {
+        (0..messages)
+            .map(|index| match index % 2 {
+                0 => Message::user(format!("ask {index}")),
+                _ => Message::assistant(format!("reply {index}")),
+            })
+            .collect()
     }
 
     #[test]
@@ -170,9 +212,10 @@ mod tests {
         let system = System {
             sections: vec![Section::shared("rules"), Section::own("state")],
         };
+        let messages = [Message::user("hi"), Message::assistant("{\"say\":\"yo\"}")];
         let payload = Payload {
             system: system.joined(),
-            messages: &[Message::user("hi"), Message::assistant("{\"say\":\"yo\"}")],
+            messages: fitted(&messages),
             schema: &Schema::object([("say", Schema::String), ("mood", Schema::Integer)]),
             max_tokens: 512,
         };
@@ -208,16 +251,11 @@ mod tests {
             payload("rules", &[], &schema).over_limit(),
             Some("messages")
         );
-        let many = vec![Message::user("hi"); 65];
-        assert_eq!(payload("rules", &many[..64], &schema).over_limit(), None);
+        let replies = vec![Message::assistant("hi"); 65];
         assert_eq!(
-            payload("rules", &many, &schema).over_limit(),
-            Some("messages")
-        );
-        let long = [Message::user("я".repeat(6_001))];
-        assert_eq!(
-            payload("rules", &long, &schema).over_limit(),
-            Some("message")
+            payload("rules", &replies, &schema).over_limit(),
+            Some("messages"),
+            "nothing is left of 65 replies with no question"
         );
         let blank = [Message::user("")];
         assert_eq!(
@@ -227,6 +265,57 @@ mod tests {
         let names: Vec<String> = (0..5_000).map(|index| format!("choice-{index}")).collect();
         let wide = Schema::object([("say", Schema::one_of(names.iter().map(String::as_str)))]);
         assert_eq!(payload("rules", &one, &wide).over_limit(), Some("schema"));
+    }
+
+    #[test]
+    fn a_talk_within_the_limits_goes_out_as_it_is() {
+        let whole = [
+            Message::assistant("a reply first"),
+            Message::user("я".repeat(6_000)),
+        ];
+        let sent: Vec<(Role, &str)> = fitted(&whole)
+            .iter()
+            .map(|message| (message.role, message.content))
+            .collect();
+        let given: Vec<(Role, &str)> = whole
+            .iter()
+            .map(|message| (message.role, message.content.as_str()))
+            .collect();
+        assert_eq!(sent, given);
+        assert_eq!(fitted(&talk(64)).len(), 64);
+    }
+
+    #[test]
+    fn a_longer_talk_keeps_its_newest_messages_and_still_begins_with_the_user() {
+        let talk_of_66 = talk(66);
+        let from_a_question = fitted(&talk_of_66);
+        assert_eq!(from_a_question.len(), 64);
+        assert_eq!(
+            from_a_question[0],
+            Fitted {
+                role: Role::User,
+                content: "ask 2"
+            }
+        );
+        assert_eq!(from_a_question[63].content, "reply 65");
+
+        let talk_of_65 = talk(65);
+        let from_a_reply = fitted(&talk_of_65);
+        assert_eq!(from_a_reply.len(), 63);
+        assert_eq!(from_a_reply[0].content, "ask 2");
+        assert_eq!(from_a_reply[62].content, "ask 64");
+    }
+
+    #[test]
+    fn a_longer_message_keeps_its_newest_part_from_a_whole_character() {
+        assert_eq!(newest_part("hi"), "hi");
+        let at_the_limit = "я".repeat(6_000);
+        assert_eq!(newest_part(&at_the_limit), at_the_limit);
+        let over = format!("old {}", "я".repeat(6_000));
+        assert_eq!(newest_part(&over), at_the_limit);
+        let split = format!("{}!", "я".repeat(6_000));
+        assert_eq!(newest_part(&split), format!("{}!", "я".repeat(5_999)));
+        assert_eq!(newest_part(&split).len(), 11_999);
     }
 
     #[test]
