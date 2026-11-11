@@ -221,14 +221,19 @@ impl Race {
     }
 
     fn blame_the_silent(&mut self, now: Instant) {
-        let patience = self.ladder.hedge_after;
-        let (silent, speaking): (Vec<Run>, Vec<Run>) = std::mem::take(&mut self.running)
+        let (silent, rest): (Vec<Run>, Vec<Run>) = std::mem::take(&mut self.running)
             .into_iter()
-            .partition(|run| run.first_output.is_none() && now - run.started > patience);
-        self.running = speaking;
+            .partition(|run| self.kept_silent(run, now));
+        self.running = rest;
         for run in silent {
             self.settle(run, StepResult::Failed(Failure::Timeout));
         }
+    }
+
+    fn kept_silent(&self, run: &Run, now: Instant) -> bool {
+        self.ladder.steps[run.step].provider.streams
+            && run.first_output.is_none()
+            && now - run.started > self.ladder.hedge_after
     }
 
     fn crown(&mut self, index: usize) -> String {

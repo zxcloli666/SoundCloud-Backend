@@ -3,12 +3,27 @@ use std::time::Duration;
 
 use crate::ANSWER;
 use crate::bench::{
-    LocalModel, PIECES, Said, answer, bench, http_provider, ladder, request, results,
+    LocalModel, PIECES, Said, answer, answer_to, bench, http_provider, ladder, request, results,
     worker_provider,
 };
 use crate::vendor::{self, COMPLETIONS, Reply, Vendor};
-use llm_ladder::{LadderError, Request, System, Usage, WorkerError};
-use serde_json::json;
+use bytes::Bytes;
+use futures::future::{BoxFuture, pending};
+use llm_ladder::{LadderError, Request, System, Usage, WorkerError, WorkerTransport};
+use serde_json::{Value, json};
+
+struct Thinking;
+
+impl WorkerTransport for Thinking {
+    fn call<'a>(
+        &'a self,
+        _subject: &'a str,
+        _payload: Bytes,
+        _timeout: Duration,
+    ) -> BoxFuture<'a, Result<Value, WorkerError>> {
+        Box::pin(pending())
+    }
+}
 
 #[tokio::test]
 async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
@@ -155,6 +170,21 @@ async fn a_worker_out_of_the_hedge_starts_after_the_silent_step_and_hears_the_ti
         *time_left <= Duration::from_millis(1_200),
         "the worker started after the silent step and was given what was left of the 2 s: {time_left:?}"
     );
+}
+
+#[tokio::test]
+async fn a_worker_cut_by_the_deadline_is_not_blamed_for_its_silence() {
+    let config = worker_provider("local", "") + &ladder("chat", &["local"], 100);
+    let bench = bench(&config, Some(Arc::new(Thinking)));
+    let short = Request {
+        deadline: Some(Duration::from_millis(600)),
+        ..request()
+    };
+
+    let answer = answer_to(&bench.ladders.get("chat").unwrap(), short).await;
+
+    assert_eq!(answer.outcome, Err(LadderError::Deadline));
+    assert_eq!(bench.seen.results(), results(&[("local", "cancelled")]));
 }
 
 #[tokio::test]

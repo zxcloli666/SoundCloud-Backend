@@ -179,6 +179,11 @@ fn unhedged((mut provider, probe): (Provider, Probe)) -> (Provider, Probe) {
     (provider, probe)
 }
 
+fn one_shot((mut provider, probe): (Provider, Probe)) -> (Provider, Probe) {
+    provider.streams = false;
+    (provider, probe)
+}
+
 fn step(id: &str, price: Price, script: Script, hangs: bool) -> (Provider, Probe) {
     let probe = Probe::default();
     let backend = Scripted {

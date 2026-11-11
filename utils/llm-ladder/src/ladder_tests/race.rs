@@ -199,6 +199,29 @@ async fn a_silent_step_that_runs_into_the_deadline_again_and_again_opens_its_bre
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_step_that_cannot_stream_is_blamed_by_its_own_timeout_and_never_by_the_deadline() {
+    let (whole, probe) = one_shot(hanging("whole", vec![]));
+    let bench = uncapped(vec![whole]);
+    let short = || Request {
+        deadline: Some(HEDGE + Duration::from_secs(1)),
+        ..request()
+    };
+
+    for _ in 0..3 {
+        let mut events = bench.ladder.stream(short(), any_text()).await.unwrap();
+        assert_eq!(events.next().await, Some(Err(LadderError::Deadline)));
+    }
+    assert_eq!(probe.started(), 3, "the deadline never opened its breaker");
+    assert_eq!(bench.seen.steps(), steps(&[("whole", "cancelled"); 3]));
+
+    assert_eq!(answer(&bench.ladder).await.1, Err(LadderError::Exhausted));
+    assert_eq!(
+        bench.seen.steps().last(),
+        Some(&("whole".to_owned(), "failed_timeout"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_request_can_shorten_the_deadline_but_not_extend_it() {
     let (first, _) = hanging("first", vec![]);
     let bench = uncapped(vec![first]);

@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use crate::ANSWER;
 use crate::bench::{
-    PIECES, answer, any_text, bench, http_provider, ladder, request, results, step,
+    PIECES, answer, answer_to, any_text, bench, http_provider, ladder, request, results, step,
 };
 use crate::vendor::{self, COMPLETIONS, MESSAGES, Reply, Vendor};
 use futures::StreamExt;
-use llm_ladder::{Event, LadderError};
+use llm_ladder::{Event, LadderError, Request};
 use serde_json::json;
 
 #[tokio::test]
@@ -144,6 +144,32 @@ async fn a_silent_provider_is_hedged_and_hung_up_on_once_the_other_speaks() {
         vendor.hung_up(1).await,
         "the losing call is closed on the wire"
     );
+}
+
+#[tokio::test]
+async fn a_one_shot_step_cut_by_the_deadline_is_not_blamed_for_its_silence() {
+    let vendor = Vendor::open().await;
+    vendor.model(
+        "whole-model",
+        Reply::GatedWhole(vendor::whole_message(ANSWER, 1, 1)),
+    );
+    let config = http_provider(
+        "whole",
+        "anthropic_compatible",
+        &vendor.url(MESSAGES),
+        "whole-model",
+        "stream = false",
+    ) + &ladder("chat", &["whole"], 100);
+    let bench = bench(&config, None);
+    let short = Request {
+        deadline: Some(Duration::from_millis(600)),
+        ..request()
+    };
+
+    let answer = answer_to(&bench.ladders.get("chat").unwrap(), short).await;
+
+    assert_eq!(answer.outcome, Err(LadderError::Deadline));
+    assert_eq!(bench.seen.results(), results(&[("whole", "cancelled")]));
 }
 
 #[tokio::test]
