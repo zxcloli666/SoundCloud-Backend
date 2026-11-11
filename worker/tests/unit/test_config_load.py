@@ -102,6 +102,10 @@ def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str])
         ({"WORKER__LLM__LOCAL__SHA256": "ABC"}, r"llm\.local\.sha256 must be 64 lowercase hex"),
         ({"WORKER__LLM__LOCAL__CONTEXT_TOKENS": "512"}, r"llm\.local\.context_tokens must be"),
         ({"WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "0"}, r"llm\.local\.eval_chunk_tokens must be"),
+        (
+            {"WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "8193"},
+            r"llm\.local\.eval_chunk_tokens must be within 1\.\.llm\.local\.context_tokens",
+        ),
         ({"WORKER__LLM__LOCAL__STATE_CACHE_MIB": "0"}, r"llm\.local\.state_cache_mib must be"),
         ({"WORKER__LLM__LOCAL__IDLE_UNLOAD_S": "-1"}, r"llm\.local\.idle_unload_s must be >= 0"),
         ({"WORKER__LLM__LOCAL__THREADS": "0"}, r"llm\.local\.threads must be >= 1"),
@@ -114,6 +118,12 @@ def test_local_llm_settings_are_checked_at_start(
 ) -> None:
     with pytest.raises(s.SettingsError, match=problem):
         s.load(CONFIG_DIR, {**base_env, **override})
+
+
+def test_a_chunk_as_long_as_the_context_is_accepted(base_env: dict[str, str]) -> None:
+    whole = s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "8192"})
+
+    assert whole.llm.local.eval_chunk_tokens == whole.llm.local.context_tokens
 
 
 def test_missing_required_env_ref_is_a_start_error(base_env: dict[str, str]) -> None:

@@ -13,9 +13,8 @@ from worker.domain.outcome import NotServedHere, PermanentFailure, Reason
 from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
 from worker.domain.validate import validate
 from worker.observability.counters import Counters
-from worker.settings import LocalLlmSettings
+from worker.settings import LOCAL_LLM_METHOD, LocalLlmSettings
 
-METHOD = "complete"
 RPC_MARGIN_S = 0.5
 CONTINUATION_MASK = 0xC0
 CONTINUATION_BYTE = 0x80
@@ -40,6 +39,7 @@ class Completer:
         self._counters = counters
         self._in_flight = 0
         self._call_s = 0.0
+        self._free_at = 0.0
 
     async def complete(
         self, request: Mapping[str, object], deadline: Deadline
@@ -47,7 +47,7 @@ class Completer:
         if not self._local.enabled:
             self._counters.inc("complete_unavailable_total", state="off")
             raise NotServedHere(Reason.INTERNAL_ERROR, "the local model is off on this worker")
-        deadline.minus(RPC_MARGIN_S).check(METHOD)
+        deadline.minus(RPC_MARGIN_S).check(LOCAL_LLM_METHOD)
         try:
             asked = Request.parse(request, self._limits)
             completion = await self._queued(asked, deadline)
@@ -84,12 +84,14 @@ class Completer:
             log.warning("complete_model_busy", extra={"in_flight": ahead, "call_s": self._call_s})
             raise NotServedHere(Reason.DEADLINE_EXCEEDED, "the local model is busy")
         self._in_flight += 1
-        started = deadline.now()
+        asked_at = deadline.now()
         try:
-            return await self._ask(asked, deadline)
+            completion = await self._ask(asked, deadline)
+            self._call_s = deadline.now() - max(asked_at, self._free_at)
+            return completion
         finally:
             self._in_flight -= 1
-            self._call_s = deadline.now() - started
+            self._free_at = deadline.now()
 
     async def _ask(self, asked: Request, deadline: Deadline) -> Completion:
         try:
@@ -136,6 +138,8 @@ class Request:
         schema = fields.required_mapping(request, "schema")
         if schema_bytes(schema) > limits.schema_bytes:
             raise invalid(f"schema is longer than {limits.schema_bytes} bytes")
+        if schema.get("type", "object") != "object":
+            raise invalid("schema must describe a JSON object")
         max_tokens = fields.required_int(request, "max_tokens")
         if not 1 <= max_tokens <= limits.max_tokens:
             raise invalid(f"max_tokens must be within 1..{limits.max_tokens}")

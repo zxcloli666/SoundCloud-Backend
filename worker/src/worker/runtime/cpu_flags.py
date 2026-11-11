@@ -12,6 +12,14 @@ LLAMA_CPU_FLAGS: Mapping[str, frozenset[str]] = {
 }
 
 
+def missing_on_this_host() -> list[str]:
+    try:
+        cpuinfo = CPUINFO.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return [f"readable {CPUINFO}"]
+    return missing_llama_flags(platform.machine(), cpuinfo)
+
+
 def missing_llama_flags(machine: str, cpuinfo: str) -> list[str]:
     needed = LLAMA_CPU_FLAGS.get(machine)
     if needed is None:
@@ -23,11 +31,3 @@ def missing_llama_flags(machine: str, cpuinfo: str) -> list[str]:
     ]
     present = set.intersection(*cores) if cores else set()
     return sorted(needed - present)
-
-
-def missing_on_this_host() -> list[str]:
-    try:
-        cpuinfo = CPUINFO.read_text(encoding="ascii", errors="replace")
-    except OSError:
-        return [f"readable {CPUINFO}"]
-    return missing_llama_flags(platform.machine(), cpuinfo)

@@ -192,6 +192,21 @@ async def test_a_schema_over_the_exported_byte_limit_is_refused(
     assert len(engines.calls) == 1
 
 
+@pytest.mark.parametrize("root", ["array", "string", ["object", "null"]])
+async def test_a_schema_whose_root_is_not_an_object_never_reaches_the_model(
+    contract: Contract, clock: FakeClock, root: object
+) -> None:
+    subject, engines, counters = completer(contract)
+
+    await subject.complete(request(schema={"required": ["say"]}), deadline(clock))
+    with pytest.raises(PermanentFailure) as refused:
+        await subject.complete(request(schema={"type": root}), deadline(clock))
+
+    assert refused.value.reason is Reason.INVALID_REQUEST
+    assert len(engines.calls) == 1
+    assert counters.value("complete_rejected_total", why="invalid_request") == 1
+
+
 async def test_a_refusal_never_quotes_the_phrase(contract: Contract, clock: FakeClock) -> None:
     subject, _, _ = completer(contract)
     phrase = "секретная фраза пользователя"
@@ -339,6 +354,87 @@ async def test_a_request_that_cannot_wait_out_the_call_ahead_is_turned_away(
     assert busy.value.reason is Reason.DEADLINE_EXCEEDED
     assert counters.value("complete_rejected_total", why="busy") == 1
     assert [answer["text"] for answer in await asyncio.gather(ahead, roomy)] == [ANSWER] * 2
+
+
+class SerialEngines(HeldEngines):
+    def __init__(self, clock: FakeClock, call_s: float) -> None:
+        super().__init__()
+        self._clock = clock
+        self._call_s = call_s
+        self._model = asyncio.Lock()
+
+    async def complete(
+        self,
+        system: str,
+        system_marks: Sequence[int],
+        messages: Sequence[ChatMessage],
+        schema: Mapping[str, object],
+        max_tokens: int,
+        deadline: Deadline,
+    ) -> Completion:
+        async with self._model:
+            completion = await super().complete(
+                system, system_marks, messages, schema, max_tokens, deadline
+            )
+            self._clock.advance(self._call_s)
+            return completion
+
+
+def serial_completer(
+    contract: Contract, clock: FakeClock, call_s: float
+) -> tuple[Completer, SerialEngines, Counters]:
+    engines, counters = SerialEngines(clock, call_s), Counters()
+    engines.completion = replace(engines.completion, text=ANSWER)
+    return Completer(engines, contract.complete_limits, LOCAL, MODEL, counters), engines, counters
+
+
+async def test_the_wait_behind_the_call_ahead_is_not_taken_for_the_time_of_a_call(
+    contract: Contract, clock: FakeClock
+) -> None:
+    subject, engines, counters = serial_completer(contract, clock, call_s=10.0)
+    pair = [
+        asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=60.0)))
+        for _ in range(2)
+    ]
+    await engines.entered.acquire()
+    engines.release.set()
+    await asyncio.gather(*pair)
+    await engines.entered.acquire()
+    engines.release.clear()
+    ahead = asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=60.0)))
+    await engines.entered.acquire()
+
+    behind = asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=25.0)))
+    engines.release.set()
+    answers = await asyncio.gather(ahead, behind, return_exceptions=True)
+
+    assert [isinstance(answer, Mapping) for answer in answers] == [True, True], answers
+    assert counters.value("complete_rejected_total", why="busy") == 0
+
+
+async def test_a_call_that_fails_at_once_does_not_reset_the_time_of_a_call(
+    contract: Contract, clock: FakeClock
+) -> None:
+    subject, engines, counters = serial_completer(contract, clock, call_s=12.0)
+    engines.release.set()
+    await subject.complete(request(), deadline(clock))
+    await engines.entered.acquire()
+    engines.fail("complete", EngineUnavailable("llm-local", "broken"))
+    with pytest.raises(NotServedHere):
+        await subject.complete(request(), deadline(clock))
+    await engines.entered.acquire()
+    del engines.overrides["complete"]
+    engines.release.clear()
+    ahead = asyncio.ensure_future(subject.complete(request(), deadline(clock)))
+    await engines.entered.acquire()
+
+    hurried = asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=20.0)))
+    engines.release.set()
+    answers = await asyncio.gather(ahead, hurried, return_exceptions=True)
+
+    assert isinstance(answers[0], Mapping), answers
+    assert isinstance(answers[1], NotServedHere), answers
+    assert counters.value("complete_rejected_total", why="busy") == 1
 
 
 async def test_a_request_the_model_refuses_is_counted(contract: Contract, clock: FakeClock) -> None:
