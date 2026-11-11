@@ -8,6 +8,7 @@ use llm_ladder::{
 };
 
 use super::request::Turn;
+use super::tools::Tools;
 use super::worker::WorkerRpc;
 use super::{prompt, reply};
 use crate::bus::nats::NatsService;
@@ -58,17 +59,31 @@ impl Live {
         &self.limits
     }
 
-    pub async fn answer(&self, turn: Turn, user: &str) -> Result<Response, LadderError> {
-        let started = Instant::now();
-        let request = Request {
-            system: prompt::system(&self.limits, &turn),
-            messages: prompt::messages(&turn),
+    pub fn request(&self, turn: &Turn, user: &str) -> Result<Request, String> {
+        let system = prompt::system(&self.limits, turn);
+        let most = self.limits.max_system_bytes;
+        if system.joined().len() > most {
+            return Err(format!(
+                "the tools, notes and app state make a prompt larger than {most} bytes"
+            ));
+        }
+        Ok(Request {
+            system,
+            messages: prompt::messages(turn),
             schema: turn.tools.answer_schema(),
             budget_user: Some(user.to_owned()),
             deadline: None,
-        };
-        let answer = self.ladder.stream(request).await?;
-        Ok(reply::respond(answer, turn.tools, started))
+        })
+    }
+
+    pub async fn answer(&self, request: Request, tools: Tools) -> Result<Response, LadderError> {
+        let started = Instant::now();
+        let tools = Arc::new(tools);
+        let answer = self
+            .ladder
+            .stream(request, reply::commit(tools.clone()))
+            .await?;
+        Ok(reply::respond(answer, tools, started))
     }
 }
 

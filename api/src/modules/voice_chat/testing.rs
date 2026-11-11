@@ -23,6 +23,7 @@ max_history = 6
 max_notes = 3
 max_tools = 8
 max_tool_rounds = 3
+max_system_bytes = 16000
 instructions = "Keep it short."
 
 [voice_chat.personas.default]
@@ -53,6 +54,10 @@ pub fn limits() -> VoiceChatCfg {
         .expect("a valid config")
         .voice_chat
         .expect("the chat section")
+}
+
+pub fn body_limit() -> usize {
+    super::request::body_limit(&limits())
 }
 
 pub fn tools() -> Value {
@@ -117,6 +122,33 @@ pub async fn hear(response: Response) -> anyhow::Result<Heard> {
         events,
         body: serde_json::from_slice(&whole).unwrap_or(Value::Null),
     })
+}
+
+pub struct Listening {
+    frames: axum::body::BodyDataStream,
+    pending: Vec<u8>,
+}
+
+impl Listening {
+    pub fn to(response: Response) -> Self {
+        Self {
+            frames: response.into_body().into_data_stream(),
+            pending: Vec::new(),
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<(String, Value)> {
+        loop {
+            if let Some(frame) = next_frame(&mut self.pending) {
+                match event(&frame) {
+                    Some(event) => return Some(event),
+                    None => continue,
+                }
+            }
+            let chunk = self.frames.next().await?.ok()?;
+            self.pending.extend_from_slice(&chunk);
+        }
+    }
 }
 
 pub struct Lane {

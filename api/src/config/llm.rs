@@ -26,6 +26,7 @@ pub struct VoiceChatCfg {
     pub max_notes: usize,
     pub max_tools: usize,
     pub max_tool_rounds: usize,
+    pub max_system_bytes: usize,
     #[serde(default)]
     pub instructions: String,
     pub personas: BTreeMap<String, PersonaCfg>,
@@ -94,10 +95,17 @@ impl VoiceChatCfg {
             ("max_text_chars", self.max_text_chars as u64),
             ("max_tools", self.max_tools as u64),
             ("max_tool_rounds", self.max_tool_rounds as u64),
+            ("max_system_bytes", self.max_system_bytes as u64),
         ];
-        match limits.iter().find(|(_, value)| *value == 0) {
-            Some((name, _)) => Err(format!("{name} must be above zero")),
-            None => Ok(()),
+        if let Some((name, _)) = limits.iter().find(|(_, value)| *value == 0) {
+            return Err(format!("{name} must be above zero"));
+        }
+        match ladders.max_system_bytes(&self.ladder) {
+            Some(most) if self.max_system_bytes > most => Err(format!(
+                "max_system_bytes is above {most}, the most a worker step of ladder {} takes",
+                self.ladder
+            )),
+            _ => Ok(()),
         }
     }
 

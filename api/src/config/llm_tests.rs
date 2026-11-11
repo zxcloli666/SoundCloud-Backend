@@ -23,6 +23,7 @@ max_history = 10
 max_notes = 20
 max_tools = 48
 max_tool_rounds = 2
+max_system_bytes = 24000
 instructions = "Keep it short."
 
 [voice_chat.personas.default]
@@ -49,6 +50,7 @@ fn the_chat_section_is_read_next_to_the_ladders() {
         (400, 10, 20)
     );
     assert_eq!((chat.max_tools, chat.max_tool_rounds), (48, 2));
+    assert_eq!(chat.max_system_bytes, 24_000);
     assert_eq!(chat.instructions, "Keep it short.");
     assert!(config.ladders.ladders.contains_key("chat"));
 }
@@ -92,6 +94,29 @@ fn a_chat_section_that_cannot_work_stops_the_start() {
     assert!(stray.contains("extra"), "{stray}");
     let unknown_section = refused(&format!("{EXAMPLE}\n[speech]\nkey = 1\n"));
     assert!(unknown_section.contains("speech"), "{unknown_section}");
+}
+
+#[test]
+fn the_system_text_cap_must_fit_a_worker_step_of_the_ladder() {
+    let worker = "[providers.local]\nkind = \"worker\"\nsubject = \"ai.rpc.complete\"\n\
+                  max_output_tokens = 400\ntotal_timeout_ms = 9000\n";
+    let with_worker = EXAMPLE.replace("steps = [\"paid\"]", "steps = [\"paid\", \"local\"]");
+    let config = format!("{worker}{with_worker}");
+    let fits = LlmCfg::parse(&config).unwrap().voice_chat.unwrap();
+    assert_eq!(fits.max_system_bytes, 24_000);
+    let at_limit = config.replace("max_system_bytes = 24000", "max_system_bytes = 48000");
+    assert!(LlmCfg::parse(&at_limit).is_ok());
+    let over = refused(&config.replace("max_system_bytes = 24000", "max_system_bytes = 48001"));
+    assert!(over.contains("max_system_bytes is above 48000"), "{over}");
+    let http_only = EXAMPLE.replace("max_system_bytes = 24000", "max_system_bytes = 200000");
+    assert!(LlmCfg::parse(&http_only).is_ok());
+    let zero = refused(&EXAMPLE.replace("max_system_bytes = 24000", "max_system_bytes = 0"));
+    assert!(
+        zero.contains("max_system_bytes must be above zero"),
+        "{zero}"
+    );
+    let missing = refused(&EXAMPLE.replace("max_system_bytes = 24000\n", ""));
+    assert!(missing.contains("max_system_bytes"), "{missing}");
 }
 
 #[test]
