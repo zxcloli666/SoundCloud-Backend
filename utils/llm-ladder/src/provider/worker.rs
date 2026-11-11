@@ -58,7 +58,7 @@ impl Backend for Worker {
         let max_tokens = self.max_output_tokens;
         stream::once(async move {
             let payload = Payload {
-                system: &request.system,
+                system: request.system.joined(),
                 messages: &request.messages,
                 schema: &request.schema,
                 max_tokens,
@@ -97,13 +97,14 @@ fn answered(provider: &str, data: Value) -> Vec<Result<StepEvent, Failure>> {
     let usage = Usage {
         input_tokens: reply.input_tokens,
         output_tokens: reply.output_tokens,
+        ..Usage::default()
     };
     vec![Ok(StepEvent::Usage(usage)), Ok(StepEvent::Text(reply.text))]
 }
 
 #[derive(Serialize)]
 struct Payload<'a> {
-    system: &'a str,
+    system: String,
     messages: &'a [Message],
     schema: &'a Schema,
     max_tokens: u32,
@@ -123,11 +124,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::request::{Section, System};
 
     #[test]
     fn the_request_is_the_contract_payload_with_the_schema_in_order() {
+        let system = System {
+            sections: vec![Section::shared("rules"), Section::own("state")],
+        };
         let payload = Payload {
-            system: "rules",
+            system: system.joined(),
             messages: &[Message::user("hi"), Message::assistant("{\"say\":\"yo\"}")],
             schema: &Schema::object([("say", Schema::String), ("mood", Schema::Integer)]),
             max_tokens: 512,
@@ -135,7 +140,7 @@ mod tests {
         let text = serde_json::to_string(&payload).unwrap();
         assert!(text.find("\"say\":{").unwrap() < text.find("\"mood\":{").unwrap());
         let value: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["system"], "rules");
+        assert_eq!(value["system"], "rules\n\nstate");
         assert_eq!(value["max_tokens"], 512);
         assert_eq!(
             value["messages"],
@@ -158,7 +163,8 @@ mod tests {
             [
                 Ok(StepEvent::Usage(Usage {
                     input_tokens: 40,
-                    output_tokens: 9
+                    output_tokens: 9,
+                    ..Usage::default()
                 })),
                 Ok(StepEvent::Text("{\"say\":\"hi\"}".to_owned())),
             ]

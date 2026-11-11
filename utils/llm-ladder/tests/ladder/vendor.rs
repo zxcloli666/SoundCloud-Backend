@@ -169,11 +169,20 @@ pub fn message_events(
     input_tokens: u64,
     output_tokens: u64,
 ) -> Vec<(u64, String)> {
+    let start = json!({"input_tokens": input_tokens, "output_tokens": 1});
+    message_events_counting(pieces, start, output_tokens)
+}
+
+pub fn message_events_counting(
+    pieces: &[&str],
+    start: Value,
+    output_tokens: u64,
+) -> Vec<(u64, String)> {
     let mut events = vec![
         event(
             0,
             "message_start",
-            json!({"type": "message_start", "message": {"usage": {"input_tokens": input_tokens, "output_tokens": 1}}}),
+            json!({"type": "message_start", "message": {"usage": start}}),
         ),
         event(
             0,

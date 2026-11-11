@@ -149,6 +149,44 @@ fn each_kind_takes_only_its_own_keys() {
 }
 
 #[test]
+fn a_prefix_cache_and_cache_prices_are_read() {
+    let text = EXAMPLE.replace(
+        "stream = true",
+        "prefix_cache = { type = \"ephemeral\", ttl = \"1h\" }\n\
+         cache_read_usd_per_mtok = 0.2\ncache_write_usd_per_mtok = 2.5",
+    );
+    let (settings, _) = parsed(&text).unwrap();
+    let paid = &settings.providers["paid"];
+    assert_eq!(paid.prefix_cache.as_ref().unwrap()["ttl"], "1h");
+    assert_eq!(paid.cache_read_usd_per_mtok, Some(0.2));
+    assert_eq!(paid.cache_write_usd_per_mtok, Some(2.5));
+    let free = &settings.providers["free"];
+    assert!(free.prefix_cache.is_none() && free.cache_read_usd_per_mtok.is_none());
+}
+
+#[test]
+fn a_prefix_cache_is_only_for_the_kind_that_marks_blocks() {
+    let mark = "prefix_cache = { type = \"ephemeral\" }";
+    let on_chat_completions = broken(&EXAMPLE.replace(
+        "max_output_tokens = 900",
+        &format!("max_output_tokens = 900\n{mark}"),
+    ));
+    assert!(
+        on_chat_completions.contains("only as anthropic_compatible"),
+        "{on_chat_completions}"
+    );
+    let on_a_worker = broken(&EXAMPLE.replace(
+        "max_output_tokens = 400",
+        &format!("max_output_tokens = 400\n{mark}"),
+    ));
+    assert!(on_a_worker.contains("is a worker"), "{on_a_worker}");
+    let empty = broken(&EXAMPLE.replace("stream = true", "prefix_cache = {}"));
+    assert!(empty.contains("empty prefix_cache"), "{empty}");
+    let negative = broken(&EXAMPLE.replace("stream = true", "cache_read_usd_per_mtok = -0.1"));
+    assert!(negative.contains("price"), "{negative}");
+}
+
+#[test]
 fn caps_need_a_bucket_and_sane_numbers() {
     let no_bucket = broken(&EXAMPLE.replace("[budget]\nbucket = \"llm_spend\"\n", ""));
     assert!(no_bucket.contains("[budget]"), "{no_bucket}");

@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use axum::response::Response;
 use llm_ladder::{
-    ConfigError, Hosting, Ladder, LadderError, Ladders, Observer, Request, StepReport,
-    WorkerTransport,
+    ConfigError, Hosting, Ladder, LadderError, Ladders, Observer, Request, Section, StepReport,
+    System, WorkerTransport,
 };
 
 use super::request::Turn;
@@ -61,7 +61,9 @@ impl Live {
     pub async fn answer(&self, turn: Turn, user: &str) -> Result<Response, LadderError> {
         let started = Instant::now();
         let request = Request {
-            system: prompt::system(&self.limits, &turn),
+            system: System {
+                sections: vec![Section::own(prompt::system(&self.limits, &turn))],
+            },
             messages: prompt::messages(&turn),
             schema: turn.tools.answer_schema(),
             budget_user: Some(user.to_owned()),

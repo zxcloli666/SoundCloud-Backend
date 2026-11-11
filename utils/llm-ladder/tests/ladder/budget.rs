@@ -7,7 +7,7 @@ use async_nats::jetstream::{self, kv};
 use futures::future::join_all;
 use futures::{StreamExt, TryStreamExt};
 use llm_ladder::{
-    Event, Hosting, Ladder, LadderError, Ladders, Message, Request, Schema, Settings,
+    Event, Hosting, Ladder, LadderError, Ladders, Message, Request, Schema, Settings, System,
 };
 
 const ANSWER_COST: u64 = 2_800;
@@ -82,7 +82,7 @@ async fn host(config: &str) -> Host {
 
 fn request(user: &str) -> Request {
     Request {
-        system: "Answer with one JSON object.".to_owned(),
+        system: System::fixed("Answer with one JSON object."),
         messages: vec![Message::user("hi")],
         schema: Schema::object([("say", Schema::String)]),
         budget_user: Some(user.to_owned()),

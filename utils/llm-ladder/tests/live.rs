@@ -6,7 +6,7 @@ use async_nats::jetstream;
 use futures::StreamExt;
 use llm_ladder::{
     BudgetSettings, CapSettings, Event, Hosting, Kind, Ladder, LadderSettings, Ladders, Message,
-    Observer, Outcome, Request, Schema, Settings, StepReport,
+    Observer, Outcome, Request, Schema, Settings, StepReport, System,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -45,12 +45,14 @@ struct Measured {
 impl Observer for Printed {
     fn step(&self, report: &StepReport<'_>) {
         self.0.lock().unwrap().push(format!(
-            "{}={} first_output_ms={} elapsed_ms={} in={} out={} cost_micro_usd={}",
+            "{}={} first_output_ms={} elapsed_ms={} in={} cache_read={} cache_write={} out={} cost_micro_usd={}",
             report.provider,
             report.result.as_str(),
             report.first_output.map_or(-1, |at| at.as_millis() as i64),
             report.elapsed.as_millis(),
             report.usage.input_tokens,
+            report.usage.cache_read_tokens,
+            report.usage.cache_write_tokens,
             report.usage.output_tokens,
             report.cost_micro_usd,
         ));
@@ -101,7 +103,7 @@ fn schema() -> Schema {
 
 fn request(user: Option<&str>) -> Request {
     Request {
-        system: SYSTEM.to_owned(),
+        system: System::fixed(SYSTEM),
         messages: vec![Message::user(PHRASE)],
         schema: schema(),
         budget_user: user.map(str::to_owned),
@@ -145,12 +147,14 @@ async fn measure(ladder: &Arc<Ladder>, user: Option<&str>) -> Measured {
 
 fn report(label: &str, measured: &Measured) {
     println!(
-        "{label} winner={} first_delta_ms={} total_ms={} deltas={} in={} out={} cost_micro_usd={} actions={:?} say_chars={}",
+        "{label} winner={} first_delta_ms={} total_ms={} deltas={} in={} cache_read={} cache_write={} out={} cost_micro_usd={} actions={:?} say_chars={}",
         measured.outcome.provider,
         measured.first_delta.as_millis(),
         measured.total.as_millis(),
         measured.deltas,
         measured.outcome.usage.input_tokens,
+        measured.outcome.usage.cache_read_tokens,
+        measured.outcome.usage.cache_write_tokens,
         measured.outcome.usage.output_tokens,
         measured.outcome.cost_micro_usd,
         measured

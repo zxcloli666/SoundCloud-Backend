@@ -38,6 +38,7 @@ pub(crate) struct Call {
     pub model: String,
     pub max_output_tokens: u32,
     pub stream: bool,
+    pub prefix_cache: Option<Map<String, Value>>,
 }
 
 pub(crate) struct Http<W> {
@@ -66,6 +67,7 @@ impl<W: Wire> Http<W> {
                     model: settings.model.clone()?,
                     max_output_tokens: settings.max_output_tokens,
                     stream: settings.stream.unwrap_or(true),
+                    prefix_cache: settings.prefix_cache.clone(),
                 },
                 extra: settings.body.clone().unwrap_or_default(),
             }),

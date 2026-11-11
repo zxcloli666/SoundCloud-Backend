@@ -10,7 +10,7 @@ use crate::budget::memory::MemorySpend;
 use crate::config::{BreakerSettings, CapSettings};
 use crate::observer::Failure;
 use crate::provider::{Backend, Price, StepEvent, StepStream};
-use crate::request::Message;
+use crate::request::{Message, System};
 use crate::schema::Schema;
 
 const HEDGE: Duration = Duration::from_secs(2);
@@ -110,6 +110,7 @@ fn usage(input_tokens: u64, output_tokens: u64) -> (u64, Result<StepEvent, Failu
         Ok(StepEvent::Usage(Usage {
             input_tokens,
             output_tokens,
+            ..Usage::default()
         })),
     )
 }
@@ -186,7 +187,7 @@ fn uncapped(providers: Vec<Provider>) -> Bench {
 
 fn request() -> Request {
     Request {
-        system: "rules".to_owned(),
+        system: System::fixed("rules"),
         messages: vec![Message::user("hello")],
         schema: Schema::object([("say", Schema::String)]),
         budget_user: Some("42".to_owned()),
@@ -240,7 +241,8 @@ async fn the_first_step_answers_and_the_next_never_starts() {
         outcome.usage,
         Usage {
             input_tokens: 1_000,
-            output_tokens: 100
+            output_tokens: 100,
+            ..Usage::default()
         }
     );
     assert_eq!(outcome.cost_micro_usd, 2_800);

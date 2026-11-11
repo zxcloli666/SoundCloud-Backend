@@ -45,6 +45,8 @@ pub(crate) struct Provider {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Price {
     input: u64,
+    cache_read: u64,
+    cache_write: u64,
     output: u64,
 }
 
@@ -62,10 +64,7 @@ impl Provider {
         };
         Some(Self {
             id: id.to_owned(),
-            price: Price {
-                input: micro_usd(settings.input_usd_per_mtok),
-                output: micro_usd(settings.output_usd_per_mtok),
-            },
+            price: Price::of(settings),
             total_timeout: Duration::from_millis(settings.total_timeout_ms),
             backend,
         })
@@ -94,23 +93,63 @@ impl Provider {
 impl Price {
     #[cfg(test)]
     pub fn per_million_tokens(input: u64, output: u64) -> Self {
-        Self { input, output }
+        Self {
+            input,
+            cache_read: input,
+            cache_write: input,
+            output,
+        }
     }
 
     pub fn is_set(&self) -> bool {
-        self.input > 0 || self.output > 0
+        self.parts().into_iter().any(|price| price > 0)
     }
 
     pub fn cost(&self, usage: &Usage) -> u64 {
-        let micro = u128::from(usage.input_tokens) * u128::from(self.input)
-            + u128::from(usage.output_tokens) * u128::from(self.output);
+        let counts = [
+            usage.input_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens,
+            usage.output_tokens,
+        ];
+        let micro: u128 = counts
+            .into_iter()
+            .zip(self.parts())
+            .map(|(tokens, price)| u128::from(tokens) * u128::from(price))
+            .sum();
         u64::try_from(micro.div_ceil(TOKENS_PER_PRICE_UNIT)).unwrap_or(u64::MAX)
+    }
+
+    fn of(settings: &ProviderSettings) -> Self {
+        let input = micro_usd(settings.input_usd_per_mtok);
+        Self {
+            input,
+            cache_read: settings.cache_read_usd_per_mtok.map_or(input, micro_usd),
+            cache_write: settings.cache_write_usd_per_mtok.map_or(input, micro_usd),
+            output: micro_usd(settings.output_usd_per_mtok),
+        }
+    }
+
+    fn parts(&self) -> [u64; 4] {
+        [self.input, self.cache_read, self.cache_write, self.output]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Settings;
+
+    fn priced(more: &str) -> Price {
+        let config = format!(
+            "[providers.paid]\nkind = \"anthropic_compatible\"\n\
+             endpoint = \"https://llm.example/v1/messages\"\nmodel = \"example-model\"\n\
+             api_key = \"env:EXAMPLE_KEY\"\nmax_output_tokens = 600\ntotal_timeout_ms = 4000\n\
+             input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0\n{more}\n"
+        );
+        let (settings, _): (Settings, toml::Table) = Settings::parse(&config).unwrap();
+        Price::of(&settings.providers["paid"])
+    }
 
     #[test]
     fn cost_is_tokens_times_price_rounded_up_to_a_micro_dollar() {
@@ -118,17 +157,67 @@ mod tests {
         let usage = Usage {
             input_tokens: 1_000,
             output_tokens: 100,
+            ..Usage::default()
         };
         assert_eq!(price.cost(&usage), 2_800);
         assert_eq!(
             price.cost(&Usage {
                 input_tokens: 1,
-                output_tokens: 0
+                ..Usage::default()
             }),
             2
         );
         assert_eq!(price.cost(&Usage::default()), 0);
         assert!(price.is_set() && !Price::default().is_set());
         assert_eq!(Price::default().cost(&usage), 0);
+    }
+
+    #[test]
+    fn cached_input_is_charged_at_its_own_prices() {
+        let price = priced("cache_read_usd_per_mtok = 0.2\ncache_write_usd_per_mtok = 2.5");
+        let usage = Usage {
+            input_tokens: 40,
+            cache_read_tokens: 3_000,
+            cache_write_tokens: 200,
+            output_tokens: 70,
+        };
+        assert_eq!(price.cost(&usage), 80 + 600 + 500 + 560);
+        let read_only = Usage {
+            cache_read_tokens: 3,
+            ..Usage::default()
+        };
+        assert_eq!(price.cost(&read_only), 1);
+    }
+
+    #[test]
+    fn a_missing_cache_price_is_the_input_price() {
+        let usage = Usage {
+            input_tokens: 40,
+            cache_read_tokens: 3_000,
+            cache_write_tokens: 200,
+            output_tokens: 70,
+        };
+        assert_eq!(priced("").cost(&usage), 80 + 6_000 + 400 + 560);
+        assert_eq!(
+            priced("").cost(&usage),
+            priced("").cost(&Usage {
+                input_tokens: usage.prompt_tokens(),
+                output_tokens: 70,
+                ..Usage::default()
+            })
+        );
+        assert_eq!(
+            priced("cache_read_usd_per_mtok = 0.2").cost(&usage),
+            80 + 600 + 400 + 560
+        );
+        assert_eq!(
+            priced("cache_write_usd_per_mtok = 2.5").cost(&usage),
+            80 + 6_000 + 500 + 560
+        );
+        assert_eq!(
+            priced("cache_read_usd_per_mtok = 0.0").cost(&usage),
+            80 + 400 + 560,
+            "a zero price is a price, not a missing one"
+        );
     }
 }

@@ -8,7 +8,7 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use llm_ladder::{
     Completion, Event, Hosting, Ladder, LadderError, Ladders, Message, Outcome, Request, Schema,
-    Settings, Usage, WorkerError, WorkerTransport,
+    Section, Settings, System, Usage, WorkerError, WorkerTransport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -96,7 +96,13 @@ fn bench(config: &str, worker: Option<Arc<dyn WorkerTransport>>) -> Bench {
 
 fn request() -> Request {
     Request {
-        system: "Answer with one JSON object.".to_owned(),
+        system: System {
+            sections: vec![
+                Section::shared("Answer with one JSON object."),
+                Section::shared("Speak as Loli."),
+                Section::own("The volume is 60."),
+            ],
+        },
         messages: vec![
             Message::user("hi"),
             Message::assistant("hello"),
@@ -147,6 +153,7 @@ fn step(provider: &str, result: &'static str, usage: (u64, u64), cost_micro_usd:
         usage: Usage {
             input_tokens: usage.0,
             output_tokens: usage.1,
+            ..Usage::default()
         },
         cost_micro_usd,
     }
@@ -191,7 +198,8 @@ async fn a_messages_stream_is_asked_in_its_wire_shape_and_read_piece_by_piece() 
         outcome.usage,
         Usage {
             input_tokens: 1_000,
-            output_tokens: 100
+            output_tokens: 100,
+            ..Usage::default()
         }
     );
     assert_eq!(outcome.cost_micro_usd, 2_800);
@@ -214,7 +222,7 @@ async fn a_messages_stream_is_asked_in_its_wire_shape_and_read_piece_by_piece() 
             "model": "stream-model",
             "max_tokens": 300,
             "stream": true,
-            "system": "Answer with one JSON object.",
+            "system": "Answer with one JSON object.\n\nSpeak as Loli.\n\nThe volume is 60.",
             "messages": [
                 {"role": "user", "content": "hi"},
                 {"role": "assistant", "content": "hello"},
@@ -242,6 +250,106 @@ async fn a_messages_stream_is_asked_in_its_wire_shape_and_read_piece_by_piece() 
         "the schema keeps the order the caller gave: {}",
         call.body
     );
+}
+
+#[tokio::test]
+async fn a_prefix_cache_marks_the_shared_blocks_and_cached_input_has_its_own_prices() {
+    let vendor = Vendor::open().await;
+    let start = json!({
+        "input_tokens": 40,
+        "cache_creation_input_tokens": 200,
+        "cache_read_input_tokens": 3_000,
+        "output_tokens": 1,
+    });
+    vendor.model(
+        "stream-model",
+        Reply::Events(vendor::message_events_counting(&PIECES, start, 70)),
+    );
+    let config = http_provider(
+        "paid",
+        "anthropic_compatible",
+        &vendor.url(MESSAGES),
+        "stream-model",
+        "input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0\n\
+         cache_read_usd_per_mtok = 0.2\ncache_write_usd_per_mtok = 2.5\n\
+         prefix_cache = { type = \"ephemeral\", ttl = \"1h\" }",
+    ) + &ladder("chat", &["paid"], 500);
+    let bench = bench(&config, None);
+
+    let answer = answer(&bench.ladders.get("chat").unwrap()).await;
+
+    let outcome = answer.outcome.unwrap();
+    assert_eq!(answer.document, ANSWER);
+    let usage = Usage {
+        input_tokens: 40,
+        cache_read_tokens: 3_000,
+        cache_write_tokens: 200,
+        output_tokens: 70,
+    };
+    assert_eq!(outcome.usage, usage);
+    assert_eq!(outcome.cost_micro_usd, 80 + 600 + 500 + 560);
+    assert_eq!(bench.seen.steps()[0].usage, usage);
+    assert_eq!(bench.seen.steps()[0].cost_micro_usd, 1_740);
+    let body = vendor.calls()[0].json();
+    assert_eq!(
+        body["system"],
+        json!([
+            {
+                "type": "text",
+                "text": "Answer with one JSON object.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+            {
+                "type": "text",
+                "text": "\n\nSpeak as Loli.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+            {"type": "text", "text": "\n\nThe volume is 60."},
+        ])
+    );
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "user", "content": "hi"})
+    );
+}
+
+#[tokio::test]
+async fn cached_prompt_tokens_of_a_chat_completion_are_charged_as_cache_reads() {
+    let vendor = Vendor::open().await;
+    let completion = json!({
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": ANSWER}}],
+        "usage": {
+            "prompt_tokens": 3_200,
+            "completion_tokens": 70,
+            "prompt_tokens_details": {"cached_tokens": 3_000},
+        },
+    });
+    vendor.model("whole-model", Reply::Whole(0, completion));
+    let config = http_provider(
+        "proxy",
+        "openai_compatible",
+        &vendor.url(COMPLETIONS),
+        "whole-model",
+        "stream = false\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 8.0\n\
+         cache_read_usd_per_mtok = 0.2",
+    ) + &ladder("chat", &["proxy"], 500);
+    let bench = bench(&config, None);
+
+    let outcome = answer(&bench.ladders.get("chat").unwrap())
+        .await
+        .outcome
+        .unwrap();
+
+    assert_eq!(
+        outcome.usage,
+        Usage {
+            input_tokens: 200,
+            cache_read_tokens: 3_000,
+            cache_write_tokens: 0,
+            output_tokens: 70,
+        }
+    );
+    assert_eq!(outcome.cost_micro_usd, 400 + 600 + 560);
 }
 
 #[tokio::test]
@@ -294,7 +402,8 @@ async fn a_chat_completions_stream_is_asked_in_its_wire_shape_and_reasoning_is_d
         outcome.usage,
         Usage {
             input_tokens: 90,
-            output_tokens: 120
+            output_tokens: 120,
+            ..Usage::default()
         }
     );
     assert_eq!(
@@ -315,7 +424,7 @@ async fn a_chat_completions_stream_is_asked_in_its_wire_shape_and_reasoning_is_d
     assert_eq!(
         body["messages"],
         json!([
-            {"role": "system", "content": "Answer with one JSON object."},
+            {"role": "system", "content": "Answer with one JSON object.\n\nSpeak as Loli.\n\nThe volume is 60."},
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
             {"role": "user", "content": "how are you"},
@@ -628,7 +737,8 @@ async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
         answer.outcome.unwrap().usage,
         Usage {
             input_tokens: 40,
-            output_tokens: 9
+            output_tokens: 9,
+            ..Usage::default()
         }
     );
     let calls = local.calls.lock().unwrap();
@@ -638,7 +748,7 @@ async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
     assert_eq!(
         *payload,
         json!({
-            "system": "Answer with one JSON object.",
+            "system": "Answer with one JSON object.\n\nSpeak as Loli.\n\nThe volume is 60.",
             "messages": [
                 {"role": "user", "content": "hi"},
                 {"role": "assistant", "content": "hello"},

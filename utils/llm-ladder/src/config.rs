@@ -37,6 +37,9 @@ pub struct ProviderSettings {
     pub input_usd_per_mtok: f64,
     #[serde(default)]
     pub output_usd_per_mtok: f64,
+    pub cache_read_usd_per_mtok: Option<f64>,
+    pub cache_write_usd_per_mtok: Option<f64>,
+    pub prefix_cache: Option<Map<String, Value>>,
     pub body: Option<Map<String, Value>>,
     pub subject: Option<String>,
 }
@@ -141,14 +144,14 @@ impl Settings {
 
 impl ProviderSettings {
     pub fn priced(&self) -> bool {
-        self.input_usd_per_mtok > 0.0 || self.output_usd_per_mtok > 0.0
+        self.prices().into_iter().any(|usd| usd > 0.0)
     }
 
     fn validate(&self) -> Result<(), String> {
         if self.max_output_tokens == 0 || self.total_timeout_ms == 0 {
             return Err("needs max_output_tokens and total_timeout_ms above zero".to_owned());
         }
-        if !price(self.input_usd_per_mtok) || !price(self.output_usd_per_mtok) {
+        if !self.prices().into_iter().all(price) {
             return Err("has a price that is not a positive number".to_owned());
         }
         let http = [
@@ -156,11 +159,12 @@ impl ProviderSettings {
             self.model.is_some(),
             self.api_key.is_some(),
         ];
-        let http_only = self.stream.is_some() || self.body.is_some();
+        let http_only = self.stream.is_some() || self.body.is_some() || self.prefix_cache.is_some();
         match self.kind {
-            Kind::Worker if http.contains(&true) || http_only => {
-                Err("is a worker and takes no endpoint, model, api_key, stream or body".to_owned())
-            }
+            Kind::Worker if http.contains(&true) || http_only => Err(
+                "is a worker and takes no endpoint, model, api_key, stream, body or prefix_cache"
+                    .to_owned(),
+            ),
             Kind::Worker if self.subject.as_deref().is_none_or(str::is_empty) => {
                 Err("is a worker and needs a subject".to_owned())
             }
@@ -170,8 +174,23 @@ impl ProviderSettings {
             _ if !self.endpoint.as_deref().is_some_and(is_http_url) => {
                 Err("has an endpoint that is not an http(s) URL".to_owned())
             }
+            Kind::OpenaiCompatible if self.prefix_cache.is_some() => {
+                Err("takes prefix_cache only as anthropic_compatible".to_owned())
+            }
+            _ if self.prefix_cache.as_ref().is_some_and(Map::is_empty) => {
+                Err("has an empty prefix_cache".to_owned())
+            }
             _ => Ok(()),
         }
+    }
+
+    fn prices(&self) -> [f64; 4] {
+        [
+            self.input_usd_per_mtok,
+            self.output_usd_per_mtok,
+            self.cache_read_usd_per_mtok.unwrap_or(0.0),
+            self.cache_write_usd_per_mtok.unwrap_or(0.0),
+        ]
     }
 }
 

@@ -22,7 +22,7 @@ impl Wire for ChatCompletions {
     const SCHEMA_AT: &'static [&'static str] = &["response_format", "json_schema", "schema"];
 
     fn body(call: &Call, request: &Request) -> Value {
-        let mut messages = vec![json!({"role": "system", "content": request.system})];
+        let mut messages = vec![json!({"role": "system", "content": request.system.joined()})];
         messages.extend(request.messages.iter().map(|message| json!(message)));
         let mut body = json!({
             "model": call.model,
@@ -88,16 +88,17 @@ struct Piece {
 struct Tokens {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
+    prompt_tokens_details: Option<PromptDetails>,
+}
+
+#[derive(Deserialize)]
+struct PromptDetails {
+    cached_tokens: Option<u64>,
 }
 
 impl Completion {
     fn events(self, piece: impl Fn(Choice) -> Option<Piece>) -> Vec<StepEvent> {
-        let usage = self.usage.map(|tokens| {
-            StepEvent::Usage(Usage {
-                input_tokens: tokens.prompt_tokens.unwrap_or(0),
-                output_tokens: tokens.completion_tokens.unwrap_or(0),
-            })
-        });
+        let usage = self.usage.map(|tokens| StepEvent::Usage(tokens.usage()));
         let text = self
             .choices
             .and_then(|choices| choices.into_iter().next())
@@ -108,6 +109,24 @@ impl Completion {
                 _ => None,
             });
         usage.into_iter().chain(text).collect()
+    }
+}
+
+impl Tokens {
+    fn usage(&self) -> Usage {
+        let prompt = self.prompt_tokens.unwrap_or(0);
+        let cached = self
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cached_tokens)
+            .unwrap_or(0)
+            .min(prompt);
+        Usage {
+            input_tokens: prompt - cached,
+            cache_read_tokens: cached,
+            cache_write_tokens: 0,
+            output_tokens: self.completion_tokens.unwrap_or(0),
+        }
     }
 }
 
@@ -146,11 +165,40 @@ mod tests {
                 StepEvent::Text("say\":\"hi\"}".to_owned()),
                 StepEvent::Usage(Usage {
                     input_tokens: 90,
-                    output_tokens: 120
+                    output_tokens: 120,
+                    ..Usage::default()
                 }),
             ]
         );
         assert!(failure.is_none() && ended);
+    }
+
+    #[test]
+    fn cached_prompt_tokens_are_counted_apart_from_the_rest_of_the_prompt() {
+        let (events, _, _) = read_all(&[
+            r#"{"choices":[],"usage":{"prompt_tokens":3200,"completion_tokens":70,"prompt_tokens_details":{"cached_tokens":3000,"audio_tokens":0}}}"#,
+        ]);
+        assert_eq!(
+            events,
+            [StepEvent::Usage(Usage {
+                input_tokens: 200,
+                cache_read_tokens: 3000,
+                cache_write_tokens: 0,
+                output_tokens: 70
+            })]
+        );
+        let (events, _, _) = read_all(&[
+            r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":500}}}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":7,"prompt_tokens_details":null}}"#,
+        ]);
+        let prompts: Vec<u64> = events
+            .iter()
+            .map(|event| match event {
+                StepEvent::Usage(usage) => usage.prompt_tokens(),
+                StepEvent::Text(_) => 0,
+            })
+            .collect();
+        assert_eq!(prompts, [90, 90]);
     }
 
     #[test]
@@ -171,7 +219,8 @@ mod tests {
             Ok(vec![
                 StepEvent::Usage(Usage {
                     input_tokens: 90,
-                    output_tokens: 120
+                    output_tokens: 120,
+                    ..Usage::default()
                 }),
                 StepEvent::Text("```json\n{\"say\":\"hi\"}\n```".to_owned()),
             ])
@@ -187,9 +236,15 @@ mod tests {
             model: "example-model".to_owned(),
             max_output_tokens: 900,
             stream: true,
+            prefix_cache: None,
         };
         let request = Request {
-            system: "rules".to_owned(),
+            system: crate::request::System {
+                sections: vec![
+                    crate::request::Section::shared("rules"),
+                    crate::request::Section::own("state"),
+                ],
+            },
             messages: vec![
                 crate::request::Message::user("hello"),
                 crate::request::Message::assistant("hi"),
@@ -204,7 +259,7 @@ mod tests {
                 "model": "example-model",
                 "max_tokens": 900,
                 "messages": [
-                    {"role": "system", "content": "rules"},
+                    {"role": "system", "content": "rules\n\nstate"},
                     {"role": "user", "content": "hello"},
                     {"role": "assistant", "content": "hi"},
                 ],
