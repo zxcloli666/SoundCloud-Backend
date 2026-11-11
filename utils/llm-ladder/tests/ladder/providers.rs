@@ -769,6 +769,34 @@ async fn the_worker_kind_sends_the_contract_payload_and_reads_the_reply() {
 }
 
 #[tokio::test]
+async fn a_request_too_large_for_the_worker_is_never_published() {
+    let local = Arc::new(LocalModel::default());
+    *local.reply.lock().unwrap() = Some(Ok(json!({"text": ANSWER})));
+    let config = "[providers.local]\nkind = \"worker\"\nsubject = \"ai.rpc.complete\"\nmax_output_tokens = 400\ntotal_timeout_ms = 5000\n"
+        .to_owned()
+        + &ladder("chat", &["local"], 500);
+    let bench = bench(&config, Some(local.clone()));
+    let large = Request {
+        system: System::fixed("rules ".repeat(8_001)),
+        ..request()
+    };
+
+    let refused = bench
+        .ladders
+        .get("chat")
+        .unwrap()
+        .complete::<Said>(large)
+        .await;
+
+    assert_eq!(refused.err(), Some(LadderError::Exhausted));
+    assert_eq!(
+        bench.seen.results(),
+        results(&[("local", "failed_invalid")])
+    );
+    assert!(local.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_worker_that_does_not_answer_gives_way_and_no_transport_turns_the_step_off() {
     let vendor = Vendor::open().await;
     vendor.model(

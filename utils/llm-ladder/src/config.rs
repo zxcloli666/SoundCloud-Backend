@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::error::ConfigError;
+use crate::provider::worker::MAX_TOKENS as WORKER_MAX_TOKENS;
 
 const OWN_SECTIONS: [&str; 3] = ["providers", "ladders", "budget"];
 const SECRET_PREFIX: &str = "env:";
@@ -168,6 +169,9 @@ impl ProviderSettings {
             Kind::Worker if self.subject.as_deref().is_none_or(str::is_empty) => {
                 Err("is a worker and needs a subject".to_owned())
             }
+            Kind::Worker if self.max_output_tokens > WORKER_MAX_TOKENS => Err(format!(
+                "is a worker and takes max_output_tokens up to {WORKER_MAX_TOKENS}"
+            )),
             Kind::Worker => Ok(()),
             _ if http.contains(&false) => Err("needs endpoint, model and api_key".to_owned()),
             _ if self.subject.is_some() => Err("takes a subject only as a worker".to_owned()),

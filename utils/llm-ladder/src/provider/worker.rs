@@ -13,6 +13,12 @@ use crate::observer::Failure;
 use crate::request::{Message, Request, Usage};
 use crate::schema::Schema;
 
+pub(crate) const MAX_TOKENS: u32 = 1024;
+const MAX_SYSTEM_BYTES: usize = 48_000;
+const MAX_MESSAGES: usize = 64;
+const MAX_MESSAGE_BYTES: usize = 12_000;
+const MAX_SCHEMA_BYTES: usize = 64_000;
+
 pub trait WorkerTransport: Send + Sync {
     fn call<'a>(
         &'a self,
@@ -63,6 +69,10 @@ impl Backend for Worker {
                 schema: &request.schema,
                 max_tokens,
             };
+            if let Some(part) = payload.over_limit() {
+                tracing::warn!(provider = %provider, part, "llm worker takes no request this large");
+                return vec![Err(Failure::Invalid)];
+            }
             let Ok(payload) = serde_json::to_vec(&payload) else {
                 return vec![Err(Failure::Invalid)];
             };
@@ -110,6 +120,24 @@ struct Payload<'a> {
     max_tokens: u32,
 }
 
+impl Payload<'_> {
+    fn over_limit(&self) -> Option<&'static str> {
+        let fits = |message: &Message| (1..=MAX_MESSAGE_BYTES).contains(&message.content.len());
+        let schema = serde_json::to_vec(self.schema).map_or(usize::MAX, |schema| schema.len());
+        if self.system.len() > MAX_SYSTEM_BYTES {
+            Some("system")
+        } else if !(1..=MAX_MESSAGES).contains(&self.messages.len()) {
+            Some("messages")
+        } else if !self.messages.iter().all(fits) {
+            Some("message")
+        } else if schema > MAX_SCHEMA_BYTES {
+            Some("schema")
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct Reply {
     text: String,
@@ -125,6 +153,15 @@ mod tests {
 
     use super::*;
     use crate::request::{Section, System};
+
+    fn payload<'a>(system: &str, messages: &'a [Message], schema: &'a Schema) -> Payload<'a> {
+        Payload {
+            system: system.to_owned(),
+            messages,
+            schema,
+            max_tokens: 512,
+        }
+    }
 
     #[test]
     fn the_request_is_the_contract_payload_with_the_schema_in_order() {
@@ -150,6 +187,44 @@ mod tests {
             ])
         );
         assert_eq!(value["schema"]["type"], "object");
+    }
+
+    #[test]
+    fn a_request_is_measured_against_the_limits_of_the_worker_method() {
+        let schema = Schema::object([("say", Schema::String)]);
+        let one = [Message::user("hi")];
+        assert_eq!(payload("rules", &one, &schema).over_limit(), None);
+        assert_eq!(
+            payload(&"я".repeat(24_000), &one, &schema).over_limit(),
+            None
+        );
+        assert_eq!(
+            payload(&"я".repeat(24_001), &one, &schema).over_limit(),
+            Some("system")
+        );
+        assert_eq!(
+            payload("rules", &[], &schema).over_limit(),
+            Some("messages")
+        );
+        let many = vec![Message::user("hi"); 65];
+        assert_eq!(payload("rules", &many[..64], &schema).over_limit(), None);
+        assert_eq!(
+            payload("rules", &many, &schema).over_limit(),
+            Some("messages")
+        );
+        let long = [Message::user("я".repeat(6_001))];
+        assert_eq!(
+            payload("rules", &long, &schema).over_limit(),
+            Some("message")
+        );
+        let blank = [Message::user("")];
+        assert_eq!(
+            payload("rules", &blank, &schema).over_limit(),
+            Some("message")
+        );
+        let names: Vec<String> = (0..5_000).map(|index| format!("choice-{index}")).collect();
+        let wide = Schema::object([("say", Schema::one_of(names.iter().map(String::as_str)))]);
+        assert_eq!(payload("rules", &one, &wide).over_limit(), Some("schema"));
     }
 
     #[test]

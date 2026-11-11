@@ -141,6 +141,12 @@ fn each_kind_takes_only_its_own_keys() {
         "subject = \"ai.rpc.complete\"\nmodel = \"example-model\"",
     ));
     assert!(stray_model.contains("is a worker"), "{stray_model}");
+    let long_answer =
+        broken(&EXAMPLE.replace("max_output_tokens = 400", "max_output_tokens = 1025"));
+    assert!(long_answer.contains("up to 1024"), "{long_answer}");
+    assert!(
+        parsed(&EXAMPLE.replace("max_output_tokens = 400", "max_output_tokens = 1024")).is_ok()
+    );
     let no_endpoint =
         broken(&EXAMPLE.replacen("endpoint = \"https://llm.example/v1/messages\"\n", "", 1));
     assert!(no_endpoint.contains("needs endpoint"), "{no_endpoint}");
