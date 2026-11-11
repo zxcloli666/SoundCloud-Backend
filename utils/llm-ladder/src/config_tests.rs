@@ -27,7 +27,7 @@ total_timeout_ms = 14000
 kind = "worker"
 subject = "ai.rpc.complete"
 max_output_tokens = 400
-total_timeout_ms = 18000
+total_timeout_ms = 15000
 
 [ladders.chat]
 steps = ["paid", "free", "local"]
@@ -72,10 +72,17 @@ fn the_three_kinds_a_ladder_and_the_host_section_are_read() {
     assert_eq!(settings.providers.len(), 3);
     let paid = &settings.providers["paid"];
     assert_eq!(paid.kind, Kind::AnthropicCompatible);
-    assert!(paid.priced());
-    assert_eq!(paid.api_key.as_ref().unwrap().variable(), "EXAMPLE_KEY");
+    assert_eq!(
+        (paid.input_usd_per_mtok, paid.output_usd_per_mtok),
+        (2.0, 8.0)
+    );
+    assert_eq!(
+        paid.api_key,
+        Some(SecretRef::try_from("env:EXAMPLE_KEY".to_owned()).unwrap())
+    );
     assert_eq!(paid.body.as_ref().unwrap()["options"]["effort"], "low");
-    assert!(!settings.providers["free"].priced());
+    assert_eq!(paid.hedge, None);
+    assert_eq!(settings.providers["free"].input_usd_per_mtok, 0.0);
     assert_eq!(settings.providers["free"].stream, None);
     assert_eq!(
         settings.providers["local"].subject.as_deref(),
@@ -200,6 +207,86 @@ fn caps_need_a_bucket_and_sane_numbers() {
     assert!(negative.contains("spend cap"), "{negative}");
     let zero_window = broken(&EXAMPLE.replace("window_s = 30", "window_s = 0"));
     assert!(zero_window.contains("breaker"), "{zero_window}");
+}
+
+#[test]
+fn static_headers_are_read_for_http_kinds_and_checked() {
+    let with = |headers: &str| {
+        EXAMPLE.replacen(
+            "stream = true",
+            &format!("stream = true\nheaders = {headers}"),
+            1,
+        )
+    };
+    let (settings, _) = parsed(&with("{ \"example-version\" = \"2001-01-01\" }")).unwrap();
+    let headers = settings.providers["paid"].headers.as_ref().unwrap();
+    assert_eq!(headers["example-version"], "2001-01-01");
+    assert!(settings.providers["free"].headers.is_none());
+    let bad_name = broken(&with("{ \"bad name\" = \"x\" }"));
+    assert!(bad_name.contains("not a header name"), "{bad_name}");
+    let bad_value = broken(&with("{ \"example-version\" = \"line\\nbreak\" }"));
+    assert!(bad_value.contains("not a header value"), "{bad_value}");
+    for reserved in ["x-api-key", "Authorization", "content-type"] {
+        let reason = broken(&with(&format!("{{ \"{reserved}\" = \"x\" }}")));
+        assert!(reason.contains("sets itself"), "{reason}");
+    }
+    let on_a_worker = broken(&EXAMPLE.replace(
+        "max_output_tokens = 400",
+        "max_output_tokens = 400\nheaders = { \"example-version\" = \"1\" }",
+    ));
+    assert!(on_a_worker.contains("is a worker"), "{on_a_worker}");
+}
+
+#[test]
+fn a_step_can_be_kept_out_of_the_hedge() {
+    let text = EXAMPLE.replace(
+        "max_output_tokens = 400",
+        "max_output_tokens = 400\nhedge = false",
+    );
+    let (settings, _) = parsed(&text).unwrap();
+    assert_eq!(settings.providers["local"].hedge, Some(false));
+}
+
+#[test]
+fn every_wait_has_an_upper_bound_and_a_step_ends_before_its_ladder() {
+    let long_step =
+        broken(&EXAMPLE.replace("total_timeout_ms = 12000", "total_timeout_ms = 600001"));
+    assert!(
+        long_step.contains("total_timeout_ms from 1 to 600000"),
+        "{long_step}"
+    );
+    let long_deadline =
+        broken(&EXAMPLE.replace("deadline_ms = 16000", "deadline_ms = 9223372036854775807"));
+    assert!(
+        long_deadline.contains("deadline_ms from 1"),
+        "{long_deadline}"
+    );
+    let long_hedge = broken(&EXAMPLE.replace("hedge_after_ms = 2000", "hedge_after_ms = 900000"));
+    assert!(long_hedge.contains("hedge_after_ms"), "{long_hedge}");
+    let long_pause = broken(&EXAMPLE.replace("open_s = 90", "open_s = 86401"));
+    assert!(
+        long_pause.contains("open_s from 1 to 86400"),
+        "{long_pause}"
+    );
+    let late_step =
+        broken(&EXAMPLE.replace("total_timeout_ms = 14000", "total_timeout_ms = 16000"));
+    assert!(
+        late_step.contains("total_timeout_ms of free below its deadline_ms"),
+        "{late_step}"
+    );
+    assert!(
+        parsed(&EXAMPLE.replace("total_timeout_ms = 14000", "total_timeout_ms = 15999")).is_ok()
+    );
+}
+
+#[test]
+fn a_ladder_with_a_worker_step_takes_no_longer_system_text_than_the_worker() {
+    let (settings, _) = parsed(EXAMPLE).unwrap();
+    assert_eq!(settings.max_system_bytes("chat"), Some(48_000));
+    let http_only = EXAMPLE.replace("[\"paid\", \"free\", \"local\"]", "[\"paid\", \"free\"]");
+    let (settings, _) = parsed(&http_only).unwrap();
+    assert_eq!(settings.max_system_bytes("chat"), None);
+    assert_eq!(settings.max_system_bytes("ghost"), None);
 }
 
 #[test]
