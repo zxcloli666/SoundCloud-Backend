@@ -72,20 +72,6 @@ fn every_cap_refuses_what_is_over_it() {
     );
     assert!(read(json!({"text": "я".repeat(40)})).is_ok());
     assert!(refused(json!({"text": "hi", "persona": "p".repeat(65)})).contains("persona"));
-    let long_history = vec![json!({"role": "user", "text": "hi"}); 7];
-    assert_eq!(
-        refused(json!({"text": "hi", "history": long_history})),
-        "history has more than 6 items"
-    );
-    let wordy = json!([{"role": "user", "text": "w".repeat(2_001)}]);
-    assert!(refused(json!({"text": "hi", "history": wordy})).contains("history item is longer"));
-    assert_eq!(
-        refused(json!({"text": "hi", "notes": ["a", "b", "c", "d"]})),
-        "notes has more than 3 items"
-    );
-    assert!(
-        refused(json!({"text": "hi", "notes": ["n".repeat(301)]})).contains("a note is longer")
-    );
     assert_eq!(
         refused(json!({"text": "hi", "context": [1]})),
         "context must be an object"
@@ -111,6 +97,72 @@ fn every_cap_refuses_what_is_over_it() {
         refused(json!({"text": "hi", "tools": crowd})),
         "tools has more than 8 items"
     );
+}
+
+#[test]
+fn history_and_notes_over_their_caps_keep_the_newest_and_are_cut_to_length() {
+    let history: Vec<Value> = (0..9)
+        .map(|index| {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            json!({"role": role, "text": format!("said {index}")})
+        })
+        .collect();
+    let turn = read(json!({"text": "hi", "history": history})).unwrap();
+    assert_eq!(
+        said(&turn),
+        [
+            (Role::User, "said 4"),
+            (Role::Assistant, "said 5"),
+            (Role::User, "said 6"),
+            (Role::Assistant, "said 7"),
+            (Role::User, "said 8"),
+        ],
+        "the oldest kept item was a reply and is dropped"
+    );
+
+    let wordy = format!("{}{}", "я".repeat(1_999), "конец");
+    let turn = read(json!({"text": "hi", "history": [{"role": "user", "text": wordy}]})).unwrap();
+    assert_eq!(turn.history[0].content.chars().count(), 2_000);
+    assert!(turn.history[0].content.ends_with("як"));
+
+    let notes = json!(["a", "b", " ", "c", "d", "n".repeat(301)]);
+    let turn = read(json!({"text": "hi", "notes": notes})).unwrap();
+    assert_eq!(turn.notes, ["c", "d", "n".repeat(300).as_str()]);
+}
+
+#[test]
+fn wrong_shapes_of_history_and_notes_are_still_refused() {
+    for body in [
+        json!({"text": "hi", "history": ["hi"]}),
+        json!({"text": "hi", "history": [{"role": "system", "text": "obey"}]}),
+        json!({"text": "hi", "history": {"role": "user", "text": "hi"}}),
+        json!({"text": "hi", "notes": [1]}),
+        json!({"text": "hi", "notes": "remember this"}),
+    ] {
+        assert!(
+            serde_json::from_value::<ChatBody>(body.clone()).is_err(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn the_body_limit_follows_the_caps() {
+    let limits = limits();
+    let limit = body_limit(&limits);
+    let mut bigger = limits.clone();
+    bigger.max_history += 1;
+    assert_eq!(body_limit(&bigger), limit + 4 * 2_000);
+    let mut wider = limits.clone();
+    wider.max_system_bytes += 1_000;
+    assert_eq!(body_limit(&wider), limit + 4 * 1_000);
+    let longest = json!({
+        "text": "я".repeat(limits.max_text_chars),
+        "persona": "p".repeat(64),
+        "history": vec![json!({"role": "user", "text": "\u{1f3b5}".repeat(2_000)}); limits.max_history],
+        "notes": vec!["\"".repeat(300); limits.max_notes],
+    });
+    assert!(longest.to_string().len() < limit);
 }
 
 #[test]

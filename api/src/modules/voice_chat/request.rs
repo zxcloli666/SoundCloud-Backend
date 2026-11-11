@@ -10,6 +10,8 @@ const MAX_HISTORY_ITEM_CHARS: usize = 2_000;
 const MAX_NOTE_CHARS: usize = 300;
 const MAX_BLOCK_BYTES: usize = 8 * 1024;
 const MAX_RESULTS: usize = 16;
+const JSON_BYTES_PER_COUNTED: usize = 4;
+const BODY_ENVELOPE_BYTES: usize = 4 * 1024;
 
 #[derive(Deserialize)]
 pub struct ChatBody {
@@ -94,8 +96,8 @@ impl ChatBody {
             persona: self.persona,
             language: language(&self.language)?,
             context: context(self.context)?,
-            history: history(self.history, limits.max_history)?,
-            notes: notes(self.notes, limits.max_notes)?,
+            history: history(self.history, limits.max_history),
+            notes: notes(self.notes, limits.max_notes),
             tools: if last_round {
                 tools.without_returning()
             } else {
@@ -144,18 +146,11 @@ fn context(context: Value) -> Result<Option<String>, String> {
     }
 }
 
-fn history(items: Vec<Said>, most: usize) -> Result<Vec<Message>, String> {
-    if items.len() > most {
-        return Err(format!("history has more than {most} items"));
-    }
-    let mut history: Vec<Message> = Vec::with_capacity(items.len());
-    for item in items {
-        let text = item.text.trim();
-        if text.chars().count() > MAX_HISTORY_ITEM_CHARS {
-            return Err(format!(
-                "a history item is longer than {MAX_HISTORY_ITEM_CHARS} characters"
-            ));
-        }
+fn history(items: Vec<Said>, most: usize) -> Vec<Message> {
+    let older = items.len().saturating_sub(most);
+    let mut history: Vec<Message> = Vec::with_capacity(items.len() - older);
+    for item in items.into_iter().skip(older) {
+        let text = clipped(item.text.trim(), MAX_HISTORY_ITEM_CHARS);
         let role = Role::from(item.role);
         let opens_with_a_reply = history.is_empty() && role == Role::Assistant;
         if text.is_empty() || opens_with_a_reply {
@@ -172,24 +167,27 @@ fn history(items: Vec<Said>, most: usize) -> Result<Vec<Message>, String> {
             }),
         }
     }
-    Ok(history)
+    history
 }
 
-fn notes(notes: Vec<String>, most: usize) -> Result<Vec<String>, String> {
-    if notes.len() > most {
-        return Err(format!("notes has more than {most} items"));
-    }
+fn notes(notes: Vec<String>, most: usize) -> Vec<String> {
     let notes: Vec<String> = notes
         .iter()
         .map(|note| note.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|note| !note.is_empty())
         .collect();
-    match notes
+    let older = notes.len().saturating_sub(most);
+    notes
         .iter()
-        .any(|note| note.chars().count() > MAX_NOTE_CHARS)
-    {
-        true => Err(format!("a note is longer than {MAX_NOTE_CHARS} characters")),
-        false => Ok(notes),
+        .skip(older)
+        .map(|note| clipped(note, MAX_NOTE_CHARS).to_owned())
+        .collect()
+}
+
+fn clipped(text: &str, most: usize) -> &str {
+    match text.char_indices().nth(most) {
+        Some((end, _)) => text[..end].trim_end(),
+        None => text,
     }
 }
 
@@ -212,6 +210,16 @@ fn block(name: &str, value: &impl Serialize) -> Result<String, String> {
         true => Err(format!("{name} is larger than 8 KiB")),
         false => Ok(text),
     }
+}
+
+pub fn body_limit(limits: &VoiceChatCfg) -> usize {
+    let counted = limits.max_text_chars
+        + MAX_PERSONA_CHARS
+        + limits.max_history * MAX_HISTORY_ITEM_CHARS
+        + limits.max_notes * MAX_NOTE_CHARS
+        + 2 * MAX_BLOCK_BYTES
+        + limits.max_system_bytes;
+    counted * JSON_BYTES_PER_COUNTED + BODY_ENVELOPE_BYTES
 }
 
 #[cfg(test)]
