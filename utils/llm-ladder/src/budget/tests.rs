@@ -1,9 +1,50 @@
-use std::sync::Arc;
+use std::cell::Cell;
+use std::sync::{Arc, Once};
 
 use chrono::TimeZone;
+use tracing::span::{Attributes, Id, Record};
+use tracing::{Event, Level, Metadata, Subscriber};
 
 use super::memory::MemorySpend;
 use super::*;
+
+thread_local! {
+    static WARNINGS: Cell<usize> = const { Cell::new(0) };
+}
+
+struct Warnings;
+
+impl Subscriber for Warnings {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        if *event.metadata().level() == Level::WARN {
+            WARNINGS.set(WARNINGS.get() + 1);
+        }
+    }
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
+
+fn warnings_on_this_thread() -> usize {
+    static LISTENING: Once = Once::new();
+    LISTENING.call_once(|| {
+        tracing::subscriber::set_global_default(Warnings).expect("no other subscriber is set");
+    });
+    WARNINGS.get()
+}
 
 fn moment() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 3, 9, 23, 59, 59).unwrap()
@@ -110,6 +151,32 @@ async fn an_unreachable_store_counts_as_spent() {
     let budget = budget(&store, caps());
     store.go_down();
     assert!(budget.is_spent(None, moment()).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn callers_that_meet_an_outage_together_are_warned_of_it_once_per_pause() {
+    let before = warnings_on_this_thread();
+    let store = Arc::new(MemorySpend::default());
+    let budget = budget(&store, caps());
+    store.stall();
+    let together = || join_all((0..5).map(|_| budget.is_spent(None, moment())));
+
+    assert_eq!(together().await, [true; 5]);
+    assert_eq!(store.reads(), 10, "all five asked before the pause began");
+    assert_eq!(warnings_on_this_thread() - before, 1);
+
+    assert!(budget.is_spent(None, moment()).await);
+    assert_eq!(store.reads(), 10, "nobody asks during the pause");
+    assert_eq!(warnings_on_this_thread() - before, 1);
+
+    tokio::time::advance(OUTAGE_PAUSE).await;
+    assert_eq!(together().await, [true; 5]);
+    assert_eq!(store.reads(), 20);
+    assert_eq!(
+        warnings_on_this_thread() - before,
+        2,
+        "the next pause is announced again"
+    );
 }
 
 #[test]

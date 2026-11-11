@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, pending};
 
 use super::{SpendError, SpendStore};
 
@@ -10,6 +10,7 @@ use super::{SpendError, SpendStore};
 pub(crate) struct MemorySpend {
     counters: Mutex<BTreeMap<String, u64>>,
     down: AtomicBool,
+    stalled: AtomicBool,
     reads: AtomicUsize,
 }
 
@@ -33,6 +34,10 @@ impl MemorySpend {
         self.down.store(false, Ordering::SeqCst);
     }
 
+    pub fn stall(&self) {
+        self.stalled.store(true, Ordering::SeqCst);
+    }
+
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
     }
@@ -49,6 +54,9 @@ impl SpendStore for MemorySpend {
     fn spent(&self, key: String) -> BoxFuture<'_, Result<u64, SpendError>> {
         Box::pin(async move {
             self.reads.fetch_add(1, Ordering::SeqCst);
+            if self.stalled.load(Ordering::SeqCst) {
+                pending::<()>().await;
+            }
             self.reachable()?;
             Ok(self
                 .counters

@@ -99,8 +99,14 @@ impl Budget {
     }
 
     fn begin_outage(&self, reason: &'static str) {
-        *self.outage.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(Instant::now() + OUTAGE_PAUSE);
+        let now = Instant::now();
+        {
+            let mut outage = self.outage.lock().unwrap_or_else(PoisonError::into_inner);
+            if outage.is_some_and(|until| now < until) {
+                return;
+            }
+            *outage = Some(now + OUTAGE_PAUSE);
+        }
         tracing::warn!(
             ladder = %self.ladder,
             reason,
