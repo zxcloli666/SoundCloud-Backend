@@ -55,7 +55,7 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379
       QDRANT_URL: http://127.0.0.1:6334
-      TARGETS: api/target utils/redact/target utils/telemetry/target utils/llm-ladder/target
+      TARGETS: api/target utils/redact/target utils/telemetry/target
       TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock utils/llm-ladder/Cargo.lock scripts/ci-sqlx-template.patch
       IGNORED: >-
         test(~common::admission::tests) | test(~modules::chat::channel::tests) | test(~modules::rooms::) | test(~modules::chat::rooms::)
@@ -111,8 +111,8 @@ jobs:
         run: |
           cargo nextest run --manifest-path utils/redact/Cargo.toml --all-targets --locked
           cargo nextest run --manifest-path utils/telemetry/Cargo.toml --all-targets --locked
-          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --all-targets --locked
-          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --all-targets --locked --run-ignored only -E 'not binary(live)'
+          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --target-dir api/target --all-targets --locked
+          cargo nextest run --manifest-path utils/llm-ladder/Cargo.toml --target-dir api/target --all-targets --locked --run-ignored only -E 'not binary(live)'
 
       - name: Tests
         working-directory: api
@@ -139,7 +139,7 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379
       TARGETS: api/target
-      TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock scripts/ci-sqlx-template.patch
+      TARGET_KEY: api/Cargo.lock utils/redact/Cargo.lock utils/telemetry/Cargo.lock utils/llm-ladder/Cargo.lock scripts/ci-sqlx-template.patch
       CHAT_TEST_S3_ENDPOINT: http://127.0.0.1:8333
       CHAT_TEST_S3_ACCESS_KEY: UPTESTAK
       CHAT_TEST_S3_SECRET_KEY: UPTESTSECRET
@@ -189,7 +189,7 @@ jobs:
       packages: write
     env:
       TARGETS: api/target
-      TARGET_KEY: api/Cargo.lock
+      TARGET_KEY: api/Cargo.lock utils/llm-ladder/Cargo.lock
     steps:
       - uses: actions/checkout@v7
 
@@ -235,6 +235,9 @@ jobs:
       - name: Clippy
         working-directory: api
         run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: LLM ladder clippy
+        run: cargo clippy --manifest-path utils/llm-ladder/Cargo.toml --target-dir api/target --all-targets --locked -- -D warnings
 
       - name: Save targets
         if: env.SAVE_TARGETS == 'true'
