@@ -46,6 +46,7 @@ fn is_open_path(path: &str) -> bool {
         || path.starts_with("/oauth/")
         || path.starts_with("/skills/")
         || path.starts_with("/remote/")
+        || path.starts_with("/voice/")
         || path.starts_with("/.well-known/")
         || path.starts_with("/diag/")
         || path.starts_with("/admin/diag/")
@@ -61,6 +62,7 @@ mod tests {
             "/remote/wait",
             "/remote/links",
             "/remote/links/1",
+            "/voice/chat",
             "/skills/salut/token",
             "/oauth/authorize/status",
         ] {

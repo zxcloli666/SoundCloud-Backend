@@ -1,0 +1,63 @@
+[providers.paid]
+kind = "anthropic_compatible"
+endpoint = "https://llm.example/v1/messages"
+model = "example-model"
+api_key = "env:EXAMPLE_PAID_KEY"
+stream = true
+max_output_tokens = 800
+total_timeout_ms = 12000
+input_usd_per_mtok = 1.0
+output_usd_per_mtok = 2.0
+body = { }
+
+[providers.free]
+kind = "openai_compatible"
+endpoint = "https://llm.example/v1/chat/completions"
+model = "example-model"
+api_key = "env:EXAMPLE_FREE_KEY"
+stream = true
+max_output_tokens = 800
+total_timeout_ms = 14000
+
+[providers.local]
+kind = "worker"
+subject = "ai.rpc.complete"
+max_output_tokens = 400
+total_timeout_ms = 18000
+
+[ladders.chat]
+steps = ["paid", "free", "local"]
+hedge_after_ms = 2000
+deadline_ms = 16000
+breaker = { failures = 3, window_s = 30, open_s = 90 }
+
+[ladders.chat.budget]
+month_usd = 100.0
+day_usd = 10.0
+user_month_usd = 5.0
+user_day_usd = 0.5
+
+[budget]
+bucket = "llm_spend"
+
+[voice_chat]
+ladder = "chat"
+requests_per_minute = 10
+max_text_chars = 500
+max_history = 20
+max_notes = 30
+max_tools = 64
+max_tool_rounds = 3
+instructions = """
+Answer in one or two short sentences.
+"""
+
+[voice_chat.personas.default]
+prompt = """
+You are a friendly voice of a music player.
+"""
+
+[voice_chat.personas.loli]
+prompt = """
+Your name is Loli. You are a cheerful voice of a music player.
+"""

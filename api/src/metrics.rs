@@ -4,6 +4,10 @@ use std::time::Duration;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 
+mod llm;
+
+pub use llm::{record_llm_step, record_voice_chat};
+
 const REQUEST_DURATION: &str = "api_http_request_duration_seconds";
 const REQUESTS_TOTAL: &str = "api_http_requests_total";
 const DEPENDENCY_DURATION: &str = "api_dependency_call_duration_seconds";
@@ -82,7 +86,8 @@ pub fn init() {
                 Matcher::Full(SC_RETRY_AFTER.to_owned()),
                 RETRY_AFTER_BUCKETS,
             )
-        });
+        })
+        .and_then(llm::buckets);
     let builder = match builder {
         Ok(builder) => builder,
         Err(error) => {

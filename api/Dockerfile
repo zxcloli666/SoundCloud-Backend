@@ -19,6 +19,7 @@ COPY utils/catalog-ingest /utils/catalog-ingest
 COPY utils/catalog-normalize /utils/catalog-normalize
 COPY utils/catalog-sources /utils/catalog-sources
 COPY utils/entity-ref /utils/entity-ref
+COPY utils/llm-ladder /utils/llm-ladder
 COPY utils/redact /utils/redact
 COPY utils/repl-verify /utils/repl-verify
 COPY utils/sc-fingerprint /utils/sc-fingerprint

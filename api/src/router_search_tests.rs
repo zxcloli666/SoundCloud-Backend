@@ -116,6 +116,7 @@ pub(super) fn config(redis: &str) -> AppConfig {
             voice_salut_sub: limit,
             voice_utterance: limit,
             voice_resolve: limit,
+            voice_chat: limit,
             voice_alice_ip: limit,
             voice_salut_ip: limit,
             diag_bundle: limit,
@@ -158,6 +159,7 @@ pub(super) fn config(redis: &str) -> AppConfig {
             confirm_per_user_day: 20,
             code_retry: Duration::from_millis(200),
         },
+        llm: crate::config::LlmCfg::default(),
         soundwave: SoundwaveCfg {
             popularity_boost: 0.0,
             artist_cap: 2,
@@ -367,6 +369,7 @@ pub(super) async fn state_with(
             redis_pool.clone(),
             format!("voice-test-{}", Uuid::now_v7()),
         )),
+        voice_chat: crate::modules::voice_chat::VoiceChat::off(),
         pg,
     })
 }

@@ -43,6 +43,7 @@ fn admission(redis_url: &str) -> Arc<PublicAdmission> {
         voice_salut_sub: limit,
         voice_utterance: limit,
         voice_resolve: limit,
+        voice_chat: limit,
         voice_alice_ip: limit,
         voice_salut_ip: limit,
         trusted_proxies: Vec::new(),

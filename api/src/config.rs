@@ -3,8 +3,10 @@ use std::time::Duration;
 use stream_ticket::StreamTicketKey;
 use url::Url;
 
+mod llm;
 mod voice;
 
+pub use llm::{LlmCfg, VoiceChatCfg};
 pub use voice::{OAuthClient, VoiceCfg};
 
 #[derive(Clone, Debug)]
@@ -23,6 +25,7 @@ pub struct AppConfig {
     pub storage: StorageCfg,
     pub subscriptions: SubscriptionsCfg,
     pub voice: VoiceCfg,
+    pub llm: LlmCfg,
     pub soundwave: SoundwaveCfg,
     pub collab_trigger: CollabTriggerCfg,
     pub cold: ColdCfg,
@@ -165,6 +168,7 @@ pub struct AdmissionCfg {
     pub voice_salut_sub: AdmissionLimitCfg,
     pub voice_utterance: AdmissionLimitCfg,
     pub voice_resolve: AdmissionLimitCfg,
+    pub voice_chat: AdmissionLimitCfg,
     pub voice_alice_ip: AdmissionLimitCfg,
     pub voice_salut_ip: AdmissionLimitCfg,
     pub diag_bundle: AdmissionLimitCfg,
@@ -244,12 +248,38 @@ impl AdmissionCfg {
             voice_salut_sub,
             voice_utterance,
             voice_resolve,
+            voice_chat: AdmissionLimitCfg::closed(),
             voice_alice_ip,
             voice_salut_ip,
             diag_bundle,
             diag_events,
             diag_bytes,
             trusted_proxies,
+        }
+    }
+}
+
+impl AdmissionCfg {
+    fn with_voice_chat(mut self, chat: Option<&VoiceChatCfg>) -> Self {
+        if let Some(chat) = chat {
+            self.voice_chat = AdmissionLimitCfg::per_client(chat.requests_per_minute);
+        }
+        self
+    }
+}
+
+impl AdmissionLimitCfg {
+    pub fn per_client(limit: u32) -> Self {
+        Self {
+            per_client: limit,
+            global: u32::MAX,
+        }
+    }
+
+    fn closed() -> Self {
+        Self {
+            per_client: 0,
+            global: 0,
         }
     }
 }
@@ -408,6 +438,7 @@ impl AppConfig {
     pub fn from_env() -> Self {
         let database = database_from_env("", Some("localhost"))
             .expect("core database config: default host is always present");
+        let llm = LlmCfg::from_env();
 
         Self {
             port: env_u16("PORT", 3000),
@@ -434,7 +465,7 @@ impl AppConfig {
                 url: env_str("REDIS_URL", "redis://localhost:6379"),
             },
 
-            admission: AdmissionCfg::from_env(),
+            admission: AdmissionCfg::from_env().with_voice_chat(llm.voice_chat.as_ref()),
 
             nats: NatsCfg {
                 url: env_str("NATS_URL", "nats://localhost:4222"),
@@ -456,6 +487,8 @@ impl AppConfig {
             },
 
             voice: VoiceCfg::from_env(),
+
+            llm,
 
             soundwave: SoundwaveCfg {
                 popularity_boost: env_f64("SOUNDWAVE_POPULARITY_BOOST", 0.0),

@@ -265,6 +265,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
             voice_salut_sub: limits(25, 26),
             voice_utterance: limits(27, 28),
             voice_resolve: limits(29, 30),
+            voice_chat: limits(31, 32),
             voice_alice_ip: limits(29, 30),
             voice_salut_ip: limits(29, 30),
             diag_bundle: limits(17, 18),
@@ -294,6 +295,12 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
     assert_eq!(admission.limits(Endpoint::RoomList).per_client, 11);
     assert_eq!(admission.limits(Endpoint::RoomCreate).per_client, 13);
     assert_eq!(admission.limits(Endpoint::RoomJoin).per_client, 15);
+    assert_eq!(admission.limits(Endpoint::VoiceChat).per_client, 31);
+    assert_eq!(
+        admission.window(Endpoint::VoiceChat),
+        Duration::from_secs(60),
+        "the chat limit is written per minute whatever the shared window is"
+    );
 
     let keys = [
         Endpoint::Login.key(),
@@ -312,6 +319,7 @@ fn each_public_entrance_spends_a_budget_of_its_own() -> anyhow::Result<()> {
         Endpoint::VoiceSalutSub.key(),
         Endpoint::VoiceUtterance.key(),
         Endpoint::VoiceResolve.key(),
+        Endpoint::VoiceChat.key(),
         Endpoint::VoiceAliceIp.key(),
         Endpoint::VoiceSalutIp.key(),
     ];
@@ -540,6 +548,7 @@ fn config(limit: AdmissionLimitCfg, timeout: Duration) -> AdmissionCfg {
         voice_salut_sub: limit,
         voice_utterance: limit,
         voice_resolve: limit,
+        voice_chat: limit,
         voice_alice_ip: limit,
         voice_salut_ip: limit,
         diag_bundle: limit,
