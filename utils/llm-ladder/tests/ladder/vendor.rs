@@ -19,6 +19,7 @@ use tokio::time::sleep;
 
 pub const MESSAGES: &str = "/v1/messages";
 pub const COMPLETIONS: &str = "/v1/chat/completions";
+pub const DONE: &str = "data: [DONE]\n\n";
 
 const FLUSH_BEFORE_BREAK: Duration = Duration::from_millis(200);
 
@@ -246,10 +247,14 @@ pub fn completion_chunks(pieces: &[&str], usage: Option<(u64, u64)>) -> Vec<(u64
             json!({"choices": [{"index": 0, "delta": {"content": piece}}], "usage": null}),
         )
     }));
+    chunks.push(chunk(
+        0,
+        json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": null}),
+    ));
     if let Some((prompt_tokens, completion_tokens)) = usage {
         chunks.push(chunk(0, json!({"choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}})));
     }
-    chunks.push((0, "data: [DONE]\n\n".to_owned()));
+    chunks.push((0, DONE.to_owned()));
     chunks
 }
 

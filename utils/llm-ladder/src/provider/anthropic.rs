@@ -61,6 +61,7 @@ impl Wire for Messages {
 #[derive(Default)]
 pub(crate) struct Events {
     usage: Usage,
+    ended: bool,
     stop: Option<Failure>,
 }
 
@@ -86,6 +87,7 @@ impl Reader for Events {
                     .delta
                     .as_ref()
                     .and_then(|delta| delta.stop_reason.as_deref());
+                self.ended |= reason.is_some();
                 self.stop = stopped(reason);
                 self.counted(event.usage)
             }
@@ -98,6 +100,10 @@ impl Reader for Events {
             ),
             _ => Read::Events(Vec::new()),
         }
+    }
+
+    fn ended(&self) -> bool {
+        self.ended
     }
 
     fn stop(&self) -> Option<Failure> {
@@ -330,6 +336,21 @@ mod tests {
             ]
         );
         assert!(failure.is_none() && ended);
+    }
+
+    #[test]
+    fn a_message_has_ended_once_its_stop_reason_came() {
+        let mut reader = Events::default();
+        reader.read(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":40,"output_tokens":1}}}"#,
+        );
+        reader.read(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{}"}}"#,
+        );
+        reader.read(r#"{"type":"message_delta","delta":{},"usage":{"output_tokens":2}}"#);
+        assert!(!reader.ended());
+        reader.read(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#);
+        assert!(reader.ended() && reader.stop().is_none());
     }
 
     #[test]

@@ -12,6 +12,8 @@ const DATA: &str = "data:";
 pub(crate) trait Reader: Send + 'static {
     fn read(&mut self, data: &str) -> Read;
 
+    fn ended(&self) -> bool;
+
     fn stop(&self) -> Option<Failure>;
 }
 
@@ -82,9 +84,17 @@ impl<R: Reader> Feed<R> {
                 if let Some(data) = self.lines.finish() {
                     self.take(&data);
                 }
-                self.end();
+                self.close();
             }
         }
+    }
+
+    fn close(&mut self) {
+        if self.over || self.reader.ended() {
+            return self.end();
+        }
+        tracing::warn!(provider = %self.provider, "llm provider stream closed before its answer ended");
+        self.ready.push_back(Err(Failure::Transport));
     }
 
     fn take(&mut self, data: &str) {

@@ -38,11 +38,14 @@ fn too_long() -> Reply {
 
 fn cut_completion() -> Reply {
     let mut chunks = vendor::completion_chunks(&["{\"say\":\"once upon a time"], Some((900, 600)));
-    let last_piece = chunks.len() - 3;
-    chunks[last_piece].1 = chunks[last_piece]
-        .1
-        .replace("\"delta\"", "\"finish_reason\":\"length\",\"delta\"");
+    let finish = chunks.len() - 3;
+    chunks[finish].1 = chunks[finish].1.replace("\"stop\"", "\"length\"");
     Reply::Events(chunks)
+}
+
+fn without_its_end(mut events: Vec<(u64, String)>, kept: usize) -> Reply {
+    events.truncate(kept);
+    Reply::Events(events)
 }
 
 async fn asked(bench: &Bench, ladder: &str) -> Result<String, LadderError> {
@@ -108,6 +111,76 @@ async fn refusals_cut_answers_and_requests_the_provider_cannot_take_never_open_t
             .iter()
             .any(|(_, result)| *result == "skipped_breaker")
     );
+}
+
+#[tokio::test]
+async fn a_stream_that_closes_before_its_answer_ends_counts_against_the_provider() {
+    let vendor = Vendor::open().await;
+    let config = http_provider(
+        "asked",
+        "anthropic_compatible",
+        &vendor.url(MESSAGES),
+        "asked-model",
+        "",
+    ) + &http_provider(
+        "chatty",
+        "openai_compatible",
+        &vendor.url(COMPLETIONS),
+        "chatty-model",
+        "",
+    ) + &ladder("chat", &["asked"], 500)
+        + &ladder("talk", &["chatty"], 500);
+    let bench = bench(&config, None);
+    vendor.model(
+        "asked-model",
+        without_its_end(vendor::message_events(&PIECES, 900, 20), 5),
+    );
+    vendor.model(
+        "chatty-model",
+        without_its_end(vendor::completion_chunks(&PIECES, None), 3),
+    );
+
+    for ladder in ["chat", "talk"] {
+        for _ in 0..3 {
+            assert_eq!(
+                asked(&bench, ladder).await,
+                Err(LadderError::ProviderFailed)
+            );
+        }
+        assert_eq!(bench.seen.results().last().unwrap().1, "failed_transport");
+        assert_eq!(asked(&bench, ladder).await, Err(LadderError::Unavailable));
+    }
+    assert_eq!(vendor.calls().len(), 6);
+}
+
+#[tokio::test]
+async fn an_answer_whose_end_was_announced_stands_without_the_last_line_of_its_stream() {
+    let vendor = Vendor::open().await;
+    let config = http_provider(
+        "asked",
+        "anthropic_compatible",
+        &vendor.url(MESSAGES),
+        "asked-model",
+        "",
+    ) + &http_provider(
+        "chatty",
+        "openai_compatible",
+        &vendor.url(COMPLETIONS),
+        "chatty-model",
+        "",
+    ) + &ladder("chat", &["asked"], 500)
+        + &ladder("talk", &["chatty"], 500);
+    let bench = bench(&config, None);
+    let messages = vendor::message_events(&PIECES, 900, 20);
+    let stopped = messages.len() - 1;
+    vendor.model("asked-model", without_its_end(messages, stopped));
+    let chunks = vendor::completion_chunks(&PIECES, None);
+    let finished = chunks.len() - 1;
+    assert_eq!(chunks[finished].1, vendor::DONE);
+    vendor.model("chatty-model", without_its_end(chunks, finished));
+
+    assert_eq!(asked(&bench, "chat").await.as_deref(), Ok("asked"));
+    assert_eq!(asked(&bench, "talk").await.as_deref(), Ok("chatty"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

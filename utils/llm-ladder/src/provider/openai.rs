@@ -57,6 +57,7 @@ impl Wire for ChatCompletions {
 
 #[derive(Default)]
 pub(crate) struct Chunks {
+    ended: bool,
     stop: Option<Failure>,
 }
 
@@ -69,12 +70,17 @@ impl Reader for Chunks {
             Ok(completion) => match &completion.error {
                 Some(error) => Read::Failed(fault::of_error(error)),
                 None => {
+                    self.ended |= completion.finish().is_some();
                     self.stop = self.stop.or(completion.stop());
                     Read::Events(completion.events(|choice| choice.delta))
                 }
             },
             Err(_) => Read::Events(Vec::new()),
         }
+    }
+
+    fn ended(&self) -> bool {
+        self.ended
     }
 
     fn stop(&self) -> Option<Failure> {
@@ -116,12 +122,16 @@ struct PromptDetails {
 
 impl Completion {
     fn stop(&self) -> Option<Failure> {
-        let choice = self.choices.as_ref()?.first()?;
-        match choice.finish_reason.as_deref()? {
+        match self.finish()? {
             CUT => Some(Failure::Length),
             FILTERED => Some(Failure::Refused),
             _ => None,
         }
+    }
+
+    fn finish(&self) -> Option<&str> {
+        let choice = self.choices.as_ref()?.first()?;
+        choice.finish_reason.as_deref()
     }
 
     fn events(self, piece: impl Fn(Choice) -> Option<Piece>) -> Vec<StepEvent> {
@@ -236,6 +246,18 @@ mod tests {
         ]);
         assert_eq!(events, [StepEvent::Text("{}".to_owned())]);
         assert!(failure.is_none() && !ended);
+    }
+
+    #[test]
+    fn an_answer_has_ended_once_its_finish_reason_came() {
+        let mut reader = Chunks::default();
+        reader.read(r#"{"choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":null}]}"#);
+        reader.read(r#"{"choices":[],"usage":null}"#);
+        assert!(!reader.ended());
+        reader.read(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#);
+        assert!(reader.ended());
+        reader.read(r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":7}}"#);
+        assert!(reader.ended() && reader.stop().is_none());
     }
 
     #[test]
