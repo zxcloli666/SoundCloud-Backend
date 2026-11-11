@@ -6,12 +6,19 @@ use uuid::Uuid;
 use super::*;
 use crate::modules::voice_chat::testing::lane;
 
-const SYSTEM_TIME_SLACK_MS: u128 = 2_000;
-
 #[test]
 fn the_deadline_is_the_unix_millisecond_the_call_expires_at() {
     let at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_250);
     assert_eq!(deadline(at, Duration::from_secs(30)), "1700000030250");
+}
+
+#[test]
+fn a_refusal_of_the_request_is_told_apart_from_a_fault_of_the_worker() {
+    assert_eq!(refusal("invalid_request"), WorkerError::Invalid);
+    assert_eq!(refusal("expired"), WorkerError::Timeout);
+    assert_eq!(refusal("internal"), WorkerError::Rejected);
+    assert_eq!(refusal("model not loaded"), WorkerError::Rejected);
+    assert_eq!(refusal(""), WorkerError::Rejected);
 }
 
 #[test]
@@ -41,6 +48,10 @@ async fn a_call_goes_out_with_the_rpc_headers_and_the_data_comes_back() {
         .call(&lane.subject, payload.clone(), Duration::from_secs(5))
         .await
         .expect("the worker answers");
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
 
     assert_eq!(
         data,
@@ -64,8 +75,8 @@ async fn a_call_goes_out_with_the_rpc_headers_and_the_data_comes_back() {
         .parse()
         .unwrap();
     assert!(
-        (before + 5_000..=before + 5_000 + SYSTEM_TIME_SLACK_MS).contains(&expires),
-        "{expires} is five seconds after {before}"
+        (before + 5_000..=after + 5_000).contains(&expires),
+        "{expires} is five seconds after the call, made between {before} and {after}"
     );
     lane.close().await;
 }
@@ -83,6 +94,16 @@ async fn a_refusal_a_silence_and_a_missing_stream_are_told_apart() {
         .await;
     assert_eq!(refused, Err(WorkerError::Rejected));
     refusing.await.unwrap();
+
+    let invalid = lane
+        .worker(Some(json!({"ok": false, "error": "invalid_request"})))
+        .await;
+    let too_large = lane
+        .rpc
+        .call(&lane.subject, Bytes::new(), Duration::from_secs(5))
+        .await;
+    assert_eq!(too_large, Err(WorkerError::Invalid));
+    invalid.await.unwrap();
 
     let silent = lane.worker(None).await;
     let unanswered = lane

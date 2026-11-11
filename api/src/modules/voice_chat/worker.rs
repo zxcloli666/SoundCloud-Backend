@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_nats::HeaderMap;
-use backend_contracts::pipeline::{DEADLINE_HEADER, MSG_ID_HEADER, REPLY_TO_HEADER};
+use backend_contracts::pipeline::{DEADLINE_HEADER, MSG_ID_HEADER, REPLY_TO_HEADER, RpcError};
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -77,9 +77,13 @@ impl WorkerRpc {
         match (reply.ok, reply.data) {
             (true, Some(data)) => Ok(data),
             _ => {
-                let reason = reason(reply.error.as_deref().unwrap_or_default());
-                tracing::warn!(subject, reason, "the worker refused a completion");
-                Err(WorkerError::Rejected)
+                let error = reply.error.unwrap_or_default();
+                tracing::warn!(
+                    subject,
+                    reason = reason(&error),
+                    "the worker refused a completion"
+                );
+                Err(refusal(&error))
             }
         }
     }
@@ -102,6 +106,14 @@ fn deadline(now: SystemTime, timeout: Duration) -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+fn refusal(error: &str) -> WorkerError {
+    match serde_json::from_value(Value::from(error)) {
+        Ok(RpcError::InvalidRequest) => WorkerError::Invalid,
+        Ok(RpcError::Expired) => WorkerError::Timeout,
+        Ok(RpcError::Internal) | Err(_) => WorkerError::Rejected,
+    }
 }
 
 fn reason(error: &str) -> String {
