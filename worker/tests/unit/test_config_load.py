@@ -69,10 +69,9 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
 
 
-def test_local_llm_can_back_the_refiner_without_a_switch(base_env: dict[str, str]) -> None:
-    settings = s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
-    assert settings.llm.fallback == s.LOCAL_PROVIDER
-    assert s.provider_enabled(settings.llm, s.LOCAL_PROVIDER)
+def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str]) -> None:
+    with pytest.raises(s.SettingsError, match=r"llm\.fallback refers to unknown provider 'local'"):
+        s.load(CONFIG_DIR, {**base_env, "WORKER__LLM__FALLBACK": "local"})
 
 
 @pytest.mark.parametrize(

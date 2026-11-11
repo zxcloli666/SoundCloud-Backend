@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import replace
 
 import aiohttp
 import pytest
 
 from tests.conftest import CONFIG_DIR
 from tests.fakes.clock import FakeClock
-from tests.fakes.engines import FakeEngines
 from tests.fakes.llm import FakeProvider, FakeProviderError
 from worker import settings as settings_module
 from worker.domain.deadline import Deadline
@@ -296,7 +294,7 @@ async def test_without_keys_no_refiner_is_built(base_env: dict[str, str], clock:
     settings = settings_module.load(CONFIG_DIR, base_env)
 
     async with aiohttp.ClientSession() as session:
-        refiner = build_refiner(settings.llm, session, FakeEngines(), clock, Counters())
+        refiner = build_refiner(settings.llm, session, clock, Counters())
 
     assert refiner is None
 
@@ -307,31 +305,10 @@ async def test_only_providers_with_keys_are_registered(
     settings = settings_module.load(CONFIG_DIR, {**base_env, "ANTHROPIC_API_KEY": "sk-test"})
 
     async with aiohttp.ClientSession() as session:
-        refiner = build_refiner(settings.llm, session, FakeEngines(), clock, Counters())
+        refiner = build_refiner(settings.llm, session, clock, Counters())
 
     assert refiner is not None
     assert refiner.primary is not None
     assert refiner.primary.name == "anthropic"
     assert (refiner.primary.soft_timeout_s, refiner.primary.hard_timeout_s) == (4, 6)
     assert refiner.fallback is None
-
-
-async def test_local_provider_is_registered_when_a_role_names_it(
-    base_env: dict[str, str], clock: FakeClock
-) -> None:
-    env = {**base_env, "ANTHROPIC_API_KEY": "sk-test", "WORKER__LLM__FALLBACK": "local"}
-    settings = settings_module.load(CONFIG_DIR, env)
-    engines = FakeEngines()
-    engines.completion = replace(engines.completion, text='{"name": "SZA"}')
-
-    async with aiohttp.ClientSession() as session:
-        refiner = build_refiner(settings.llm, session, engines, clock, Counters())
-        assert refiner is not None
-        assert refiner.fallback is not None
-        assert refiner.fallback.name == "local"
-        reply = await refiner.fallback.provider.complete(
-            "who?", SCHEMA, Deadline(clock.now() + 10.0, clock.now)
-        )
-
-    assert reply == {"name": "SZA"}
-    assert engines.calls[0][0] == "complete"

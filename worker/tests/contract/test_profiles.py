@@ -217,8 +217,6 @@ def test_the_local_llm_loads_exactly_where_the_ai_lane_is_served() -> None:
         loads_local = s.LOCAL_LLM_SLOT in s.slots_for_lanes(settings)
         assert loads_local is ("ai" in settings.lanes.enabled) is design.local_llm, name
         assert loads_local is not settings.is_public, name
-        if settings.llm.fallback == s.LOCAL_PROVIDER:
-            assert loads_local, name
 
 
 @pytest.mark.parametrize("name", sorted(name for name in DESIGN if DESIGN[name].local_llm))

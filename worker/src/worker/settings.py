@@ -29,7 +29,6 @@ SYNC_STRATEGIES = ("anchored", "global_ctc")
 RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
 PROVIDER_KINDS = ("anthropic", "openai_compatible")
-LOCAL_PROVIDER = "local"
 LOCAL_LLM_SLOT = "llm-local"
 LOCAL_LLM_DEVICE = "llama-cpu"
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
@@ -639,11 +638,8 @@ def validate_taste(settings: Settings) -> list[str]:
 def validate_llm(settings: Settings) -> list[str]:
     llm = settings.llm
     problems = []
-    if LOCAL_PROVIDER in llm.providers:
-        problems.append(f"llm.providers.{LOCAL_PROVIDER} is reserved for [llm.local]")
-    known = set(llm.providers) | {LOCAL_PROVIDER}
     for role, name in (("primary", llm.primary), ("fallback", llm.fallback)):
-        if name and name not in known:
+        if name and name not in llm.providers:
             problems.append(f"llm.{role} refers to unknown provider {name!r}")
     if llm.primary and llm.primary == llm.fallback:
         problems.append("llm.primary and llm.fallback must differ")
@@ -728,8 +724,6 @@ def llm_gaps(llm: LlmSection) -> list[str]:
 
 
 def provider_enabled(llm: LlmSection, name: str) -> bool:
-    if name == LOCAL_PROVIDER:
-        return True
     provider = llm.providers.get(name)
     return provider is not None and provider.enabled
 

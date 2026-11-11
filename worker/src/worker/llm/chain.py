@@ -14,12 +14,11 @@ import aiohttp
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.ports import Grounding
 from worker.llm.anthropic import AnthropicProvider
-from worker.llm.local import LocalModel, LocalProvider
 from worker.llm.openai_compatible import OpenAiCompatibleProvider
 from worker.llm.provider import Provider
 from worker.llm.validate import validate
 from worker.observability.counters import Counters
-from worker.settings import LOCAL_PROVIDER, BreakerSettings, LlmSection, ProviderSettings
+from worker.settings import BreakerSettings, LlmSection, ProviderSettings
 
 RPC_MARGIN_S = 0.5
 FALLBACK_RESERVE_S = 1.0
@@ -52,12 +51,11 @@ ANSWERED = frozenset({CallOutcome.OK, CallOutcome.UNGROUNDED})
 def build_refiner(
     llm: LlmSection,
     session: aiohttp.ClientSession,
-    local: LocalModel,
     clock: Clock,
     counters: Counters,
 ) -> Chain | None:
-    primary = link_for(llm.primary, llm, session, local)
-    fallback = link_for(llm.fallback, llm, session, local)
+    primary = link_for(llm.primary, llm, session)
+    fallback = link_for(llm.fallback, llm, session)
     log.info(
         "llm providers registered",
         extra={
@@ -77,13 +75,9 @@ def build_refiner(
     )
 
 
-def link_for(
-    name: str, llm: LlmSection, session: aiohttp.ClientSession, local: LocalModel
-) -> Link | None:
+def link_for(name: str, llm: LlmSection, session: aiohttp.ClientSession) -> Link | None:
     if not name:
         return None
-    if name == LOCAL_PROVIDER:
-        return Link(LocalProvider(name, local), math.inf, math.inf)
     settings = llm.providers[name]
     if not settings.enabled:
         return None

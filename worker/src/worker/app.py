@@ -437,9 +437,7 @@ class Node:
                 self.contract.headers.msg_id,
             )
             if lane.rpc:
-                refiner = build_refiner(
-                    settings.llm, llm_session, engines, self.clock, self.counters
-                )
+                refiner = build_refiner(settings.llm, llm_session, self.clock, self.counters)
                 resolver = ArtistResolver(refiner, self.counters)
                 matcher = TrackMatcher(refiner, self.counters)
                 completer = Completer(
