@@ -38,9 +38,12 @@ def test_contract_loads_from_the_shipped_draft(contract: c.Contract) -> None:
         "collab": 128,
         "taste": 128,
     }
-    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10}
+    assert contract.rpc.windows_s == {"resolve_artist": 20, "match_track": 10, "complete": 30}
     assert contract.rpc.reply_header == "X-Reply-To"
     assert contract.max_message_bytes == 900_000
+    assert contract.complete_limits == c.CompleteLimits(
+        system_bytes=48_000, messages=64, message_bytes=12_000, schema_bytes=64_000, max_tokens=1024
+    )
 
 
 def test_wrong_version_is_rejected() -> None:

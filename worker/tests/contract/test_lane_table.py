@@ -13,7 +13,7 @@ transcribe  TRANSCRIBE    transcribe.audio.new  900 120  24  64  60  900  5700  
 encode      ENCODE        encode.text.new        30  30   6 256   5   60   225    - private
 collab      TRAIN_COLLAB  train.collab.new     3600 300  60   1 120 1800 19800    - private
 taste       TRAIN_TASTE   train.taste.new      7200 300  60   1 300 1800 39900    - private
-ai          AI_RPC        ai.rpc.>               20  30   6 128   -    -     -    - private
+ai          AI_RPC        ai.rpc.>               30  30   6 128   -    -     -    - private
 """
 STREAM_TABLE = """
 INDEX_AUDIO     index.audio.>     work_queue   86400  86400
