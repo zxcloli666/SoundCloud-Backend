@@ -60,6 +60,8 @@ pub fn record_llm_step(report: &StepReport<'_>) {
     }
     for (kind, tokens) in [
         ("input", report.usage.input_tokens),
+        ("cache_read", report.usage.cache_read_tokens),
+        ("cache_write", report.usage.cache_write_tokens),
         ("output", report.usage.output_tokens),
     ] {
         metrics::counter!(
