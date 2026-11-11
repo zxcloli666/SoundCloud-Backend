@@ -40,7 +40,7 @@ month_usd = 30.0
 user_day_usd = 0.2
 
 [budget]
-bucket = "llm_spend"
+bucket = "example_spend"
 
 [feature]
 ladder = "chat"
@@ -92,7 +92,7 @@ fn the_three_kinds_a_ladder_and_the_host_section_are_read() {
     assert_eq!(chat.steps, ["paid", "free", "local"]);
     assert_eq!(chat.budget.month_usd, Some(30.0));
     assert_eq!(chat.budget.day_usd, None);
-    assert_eq!(settings.budget.unwrap().bucket, "llm_spend");
+    assert_eq!(settings.budget.unwrap().bucket, "example_spend");
     assert_eq!(host.feature.unwrap().ladder, "chat");
 }
 
@@ -201,7 +201,7 @@ fn a_prefix_cache_is_only_for_the_kind_that_marks_blocks() {
 
 #[test]
 fn caps_need_a_bucket_and_sane_numbers() {
-    let no_bucket = broken(&EXAMPLE.replace("[budget]\nbucket = \"llm_spend\"\n", ""));
+    let no_bucket = broken(&EXAMPLE.replace("[budget]\nbucket = \"example_spend\"\n", ""));
     assert!(no_bucket.contains("[budget]"), "{no_bucket}");
     let negative = broken(&EXAMPLE.replace("month_usd = 30.0", "month_usd = -1.0"));
     assert!(negative.contains("spend cap"), "{negative}");
