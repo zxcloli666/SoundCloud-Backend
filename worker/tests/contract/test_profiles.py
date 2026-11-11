@@ -243,6 +243,7 @@ def test_the_local_llm_runs_on_cpu_threads_in_its_own_reserved_engine(
     assert spec.options == {
         "file": local.file,
         "context_tokens": local.context_tokens,
-        "prompt_states": local.prompt_states,
+        "chunk_tokens": local.eval_chunk_tokens,
+        "state_cache_mib": local.state_cache_mib,
     }
     assert all(other.idle_unload_s == 0 for other in blueprint.plans if other is not plan)

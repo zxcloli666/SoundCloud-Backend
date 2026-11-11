@@ -45,6 +45,7 @@ from worker.runtime.engine_client import (
 )
 from worker.runtime.protocol import Arrays, Call, ErrorKind
 from worker.runtime.supervisor import Supervisor
+from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT
 
 BATCHED_SLOTS = ("muq", "mulan", "text")
 STOP_AT = "stop_at"
@@ -54,7 +55,6 @@ TOTAL_CHUNKS = "total_chunks"
 ELAPSED_S = "elapsed_s"
 SECONDS = "seconds"
 TASTE_SLOT = "train-taste"
-LLM_SLOT = "llm-local"
 TEXT_BYTES_PER_TOKEN = 4
 
 log = logging.getLogger(__name__)
@@ -414,8 +414,8 @@ class RuntimeEngines:
         deadline: Deadline,
     ) -> Completion:
         _, result = await self._slots.direct(
-            LLM_SLOT,
-            "complete",
+            LOCAL_LLM_SLOT,
+            LOCAL_LLM_METHOD,
             {},
             {
                 "system": system,
@@ -432,12 +432,12 @@ class RuntimeEngines:
         text = result.get("text")
         finished = result.get("finished")
         if not isinstance(text, str) or not isinstance(finished, bool):
-            raise invalid(LLM_SLOT, "text is not a string or finished is not a boolean")
+            raise invalid(LOCAL_LLM_SLOT, "text is not a string or finished is not a boolean")
         return Completion(
             text=text,
-            input_tokens=int(number(result, "input_tokens", LLM_SLOT)),
-            reused_tokens=int(number(result, "reused_tokens", LLM_SLOT)),
-            output_tokens=int(number(result, "output_tokens", LLM_SLOT)),
+            input_tokens=int(number(result, "input_tokens", LOCAL_LLM_SLOT)),
+            reused_tokens=int(number(result, "reused_tokens", LOCAL_LLM_SLOT)),
+            output_tokens=int(number(result, "output_tokens", LOCAL_LLM_SLOT)),
             finished=finished,
         )
 

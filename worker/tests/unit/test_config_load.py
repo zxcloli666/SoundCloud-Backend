@@ -65,7 +65,8 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert s.local_llm_ref(settings) == LOCAL_LLM_REF
     assert local.file.endswith(".gguf") and len(local.sha256) == 64
     assert local.enabled is True
-    assert (local.context_tokens, local.prompt_states, local.idle_unload_s) == (4096, 4, 600)
+    assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (4096, 128, 600)
+    assert local.state_cache_mib == 256
     assert (local.threads, local.nice) == (2, 5)
     without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
@@ -100,7 +101,8 @@ def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str])
         ({"WORKER__LLM__LOCAL__FILE": "model.safetensors"}, r"llm\.local\.file must be a \.gguf"),
         ({"WORKER__LLM__LOCAL__SHA256": "ABC"}, r"llm\.local\.sha256 must be 64 lowercase hex"),
         ({"WORKER__LLM__LOCAL__CONTEXT_TOKENS": "512"}, r"llm\.local\.context_tokens must be"),
-        ({"WORKER__LLM__LOCAL__PROMPT_STATES": "0"}, r"llm\.local\.prompt_states must be >= 1"),
+        ({"WORKER__LLM__LOCAL__EVAL_CHUNK_TOKENS": "0"}, r"llm\.local\.eval_chunk_tokens must be"),
+        ({"WORKER__LLM__LOCAL__STATE_CACHE_MIB": "0"}, r"llm\.local\.state_cache_mib must be"),
         ({"WORKER__LLM__LOCAL__IDLE_UNLOAD_S": "-1"}, r"llm\.local\.idle_unload_s must be >= 0"),
         ({"WORKER__LLM__LOCAL__THREADS": "0"}, r"llm\.local\.threads must be >= 1"),
         ({"WORKER__LLM__LOCAL__NICE": "20"}, r"llm\.local\.nice must be within 0\.\.19"),

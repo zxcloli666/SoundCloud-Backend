@@ -30,6 +30,7 @@ RESCUE_STRATEGIES = ("global_ctc", "none")
 CONFIDENCE_MODELS = ("v1", "calibrated")
 PROVIDER_KINDS = ("anthropic", "openai_compatible")
 LOCAL_LLM_SLOT = "llm-local"
+LOCAL_LLM_METHOD = "complete"
 LOCAL_LLM_DEVICE = "llama-cpu"
 LOCAL_LLM_FILE_SUFFIX = ".gguf"
 LOCAL_LLM_MIN_CONTEXT_TOKENS = 1024
@@ -275,7 +276,8 @@ class LocalLlmSettings:
     file: str
     sha256: str
     context_tokens: int
-    prompt_states: int
+    eval_chunk_tokens: int
+    state_cache_mib: int
     idle_unload_s: int
     threads: int
     nice: int
@@ -674,8 +676,10 @@ def validate_local_llm(settings: Settings) -> list[str]:
         problems.append("llm.local.sha256 must be 64 lowercase hex characters")
     if local.context_tokens < LOCAL_LLM_MIN_CONTEXT_TOKENS:
         problems.append(f"llm.local.context_tokens must be >= {LOCAL_LLM_MIN_CONTEXT_TOKENS}")
-    if local.prompt_states < 1:
-        problems.append("llm.local.prompt_states must be >= 1")
+    if local.eval_chunk_tokens < 1:
+        problems.append("llm.local.eval_chunk_tokens must be >= 1")
+    if local.state_cache_mib < 1:
+        problems.append("llm.local.state_cache_mib must be >= 1")
     if local.idle_unload_s < 0:
         problems.append("llm.local.idle_unload_s must be >= 0")
     if local.threads < 1:

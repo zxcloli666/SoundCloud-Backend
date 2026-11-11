@@ -83,7 +83,7 @@ SLOT_LOADERS: Mapping[str, str] = {
     "mms": "worker.models.mms_align:MmsAligner",
     "train-collab": "worker.models.item2vec:Item2VecSlot",
     "train-taste": "worker.models.taste_trainer:TasteTrainerSlot",
-    settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm:LocalLlmSlot",
+    settings_module.LOCAL_LLM_SLOT: "worker.models.local_llm.slot:LocalLlmSlot",
 }
 LANE_GATES: Mapping[str, tuple[str, ...]] = {
     "audio": ("muq", "mulan"),
@@ -836,7 +836,8 @@ def slot_spec(settings: Settings, name: str, mulan_towers: str | None = None) ->
         options.update(
             file=local.file,
             context_tokens=local.context_tokens,
-            prompt_states=local.prompt_states,
+            chunk_tokens=local.eval_chunk_tokens,
+            state_cache_mib=local.state_cache_mib,
         )
     if name == MULAN and mulan_towers is not None:
         options[MULAN_TOWERS] = mulan_towers
