@@ -33,6 +33,7 @@ pub fn record_llm_step(report: &StepReport<'_>) {
     let ladder = report.ladder.to_owned();
     let provider = report.provider.to_owned();
     let result = report.result.as_str();
+    let basis = report.basis.as_str();
     metrics::counter!(
         STEPS,
         "ladder" => ladder.clone(),
@@ -69,11 +70,17 @@ pub fn record_llm_step(report: &StepReport<'_>) {
             "ladder" => ladder.clone(),
             "provider" => provider.clone(),
             "kind" => kind,
+            "basis" => basis,
         )
         .increment(tokens);
     }
-    metrics::counter!(SPEND, "ladder" => ladder, "provider" => provider)
-        .increment(report.cost_micro_usd);
+    metrics::counter!(
+        SPEND,
+        "ladder" => ladder,
+        "provider" => provider,
+        "basis" => basis,
+    )
+    .increment(report.cost_micro_usd);
 }
 
 pub fn record_voice_chat(
