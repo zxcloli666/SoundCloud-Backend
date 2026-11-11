@@ -13,10 +13,10 @@ import aiohttp
 
 from worker.domain.deadline import Clock, Deadline
 from worker.domain.ports import Grounding
+from worker.domain.validate import validate
 from worker.llm.anthropic import AnthropicProvider
 from worker.llm.openai_compatible import OpenAiCompatibleProvider
 from worker.llm.provider import Provider
-from worker.llm.validate import validate
 from worker.observability.counters import Counters
 from worker.settings import BreakerSettings, LlmSection, ProviderSettings
 

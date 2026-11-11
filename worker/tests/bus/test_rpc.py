@@ -9,10 +9,12 @@ from dataclasses import replace
 import pytest
 
 from tests.bus.conftest import BUILD, WORKER_ID, Harness, build_harness
+from tests.conftest import BASE_ENV, CONFIG_DIR
 from tests.contract import samples
 from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from tests.fakes.jetstream import FakeNats
+from worker import settings as settings_module
 from worker.bus.lease import ACK_ATTEMPTS, ACK_RETRY_PAUSE_S, Leases
 from worker.bus.rpc import PROCESS_MARGIN_S, REPLY_MARGIN_S, RpcHandler, RpcMethod
 from worker.contract import Contract
@@ -28,6 +30,8 @@ RESOLVE = {"title": "Artist - Song", "uploader": "chan", "metadata_artist": None
 COMPLETE = samples.RPC_REQUESTS["ai.rpc.complete"]
 LOCAL_MODEL = "org/model-GGUF/model-Q4_K_M.gguf@0123abcd"
 ANSWER = '{"say": "Kendrick Lamar, Luther", "actions": []}'
+LOCAL = settings_module.load(CONFIG_DIR, BASE_ENV).llm.local
+DEEP = 100_000
 
 
 class Rpc:
@@ -153,7 +157,9 @@ async def test_domain_deadline_inside_the_process_margin_replies_expired(
     resolver = ArtistResolver(None, rpc.harness.counters)
     matcher = TrackMatcher(None, rpc.harness.counters)
     engines = FakeEngines()
-    completer = Completer(engines, contract.complete_limits, LOCAL_MODEL, rpc.harness.counters)
+    completer = Completer(
+        engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
+    )
     methods = {
         "resolve_artist": resolver.resolve,
         "match_track": matcher.match,
@@ -170,6 +176,53 @@ async def test_domain_deadline_inside_the_process_margin_replies_expired(
     assert rpc.harness.counters.value("rpc_expired_total") == 1
     assert rpc.harness.counters.total("rpc_internal_total") == 0
     assert rpc.harness.bus.acks()[0].kind == "ack_sync"
+
+
+class GatedEngines(FakeEngines):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.completion = replace(self.completion, text=ANSWER)
+
+    async def complete(
+        self,
+        system: str,
+        messages: Sequence[ChatMessage],
+        schema: Mapping[str, object],
+        max_tokens: int,
+        deadline: Deadline,
+    ) -> Completion:
+        await self.gate.wait()
+        return await super().complete(system, messages, schema, max_tokens, deadline)
+
+
+async def test_resolve_and_match_answer_while_complete_holds_the_local_model(
+    rpc: Rpc, contract: Contract
+) -> None:
+    engines = GatedEngines()
+    completer = Completer(
+        engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
+    )
+    methods = {
+        "resolve_artist": ArtistResolver(None, rpc.harness.counters).resolve,
+        "match_track": TrackMatcher(None, rpc.harness.counters).match,
+        "complete": completer.complete,
+    }
+    rpc.handler = rpc_handler(rpc.harness, contract, methods)
+    handled = []
+    for offset_s, method in enumerate(("complete", "resolve_artist", "match_track")):
+        due = epoch_ms(rpc.harness.clock, 20 + offset_s)
+        rpc.enqueue(samples.RPC_REQUESTS[f"ai.rpc.{method}"], method=method, deadline_ms=due)
+        [msg] = await rpc.harness.fetch()
+        handled.append(asyncio.ensure_future(rpc.handler.handle(msg, asyncio.Event())))
+    await asyncio.wait(handled[1:])
+    early = len(rpc.harness.bus.acks("ack_sync"))
+    engines.gate.set()
+    await asyncio.gather(*handled)
+
+    assert early == 2
+    assert [method for method, _ in engines.calls] == ["complete"]
+    assert rpc.harness.counters.value("rpc_replies_total", method="complete", ok="True") == 1
 
 
 async def test_missing_reply_to_acks_and_counts(rpc: Rpc) -> None:
@@ -196,12 +249,15 @@ async def test_deadline_defaults_to_delivery_time_plus_window(rpc: Rpc, contract
 async def test_invalid_json_and_unknown_method_reply_invalid_request(rpc: Rpc) -> None:
     rpc.enqueue(payload=b"{oops")
     assert await rpc.run_one() == {"ok": False, "error": "invalid_request"}
+    rpc.enqueue(payload=b"[" * DEEP + b"]" * DEEP)
+    assert await rpc.run_one() == {"ok": False, "error": "invalid_request"}
     rpc.enqueue(payload=[1, 2])
     assert await rpc.run_one() == {"ok": False, "error": "invalid_request"}
     rpc.enqueue(method="match_track")
     assert await rpc.run_one() == {"ok": False, "error": "invalid_request"}
     assert rpc.harness.counters.value("rpc_unknown_method_total", method="match_track") == 1
-    assert len(rpc.harness.bus.acks("ack_sync")) == 3
+    assert len(rpc.harness.bus.acks("ack_sync")) == 4
+    assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
 
 
 @pytest.mark.parametrize(
@@ -309,7 +365,9 @@ class TimedEngines(FakeEngines):
 
 def serve_complete(rpc: Rpc, contract: Contract) -> TimedEngines:
     engines = TimedEngines()
-    completer = Completer(engines, contract.complete_limits, LOCAL_MODEL, rpc.harness.counters)
+    completer = Completer(
+        engines, contract.complete_limits, LOCAL, LOCAL_MODEL, rpc.harness.counters
+    )
     rpc.handler = rpc_handler(rpc.harness, contract, {"complete": completer.complete})
     return engines
 
@@ -349,6 +407,53 @@ async def test_complete_follows_the_deadline_the_caller_sent(rpc: Rpc, contract:
 
     assert reply is not None and reply["ok"] is True
     assert engines.remaining == [pytest.approx(12 - PROCESS_MARGIN_S)]
+
+
+@pytest.mark.parametrize("header", [str(10**400), "9" * 30], ids=["overflowing", "far"])
+async def test_a_caller_deadline_past_the_window_is_cut_to_the_window(
+    rpc: Rpc, contract: Contract, header: str
+) -> None:
+    engines = serve_complete(rpc, contract)
+    rpc.enqueue(COMPLETE, method="complete", deadline_ms=epoch_ms(rpc.harness.clock, 300))
+    await rpc.run_one()
+    rpc.enqueue(COMPLETE, method="complete", deadline_ms=0)
+    [odd] = await rpc.harness.fetch()
+    odd.headers["X-Deadline"] = header
+    await rpc.handler.handle(odd, asyncio.Event())
+
+    window_s = contract.rpc.windows_s["complete"]
+    assert engines.remaining == [pytest.approx(window_s - PROCESS_MARGIN_S)] * 2
+
+
+def nested(depth: int) -> dict[str, object]:
+    schema: dict[str, object] = {"type": "object"}
+    for _ in range(depth):
+        schema = {"type": "object", "properties": {"x": schema}}
+    return schema
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema": nested(300)},
+        {"schema": {"type": "integer", "maximum": 2**70}},
+        {"schema": {"const": "\ud800"}},
+        {"system": "rules \udfff"},
+        {"messages": [{"role": "user", "content": "hi \ud800 there"}]},
+    ],
+    ids=["deep_schema", "wide_int", "surrogate_schema", "surrogate_system", "surrogate_message"],
+)
+async def test_hostile_complete_inputs_answer_invalid_request(
+    rpc: Rpc, contract: Contract, change: Mapping[str, object]
+) -> None:
+    engines = serve_complete(rpc, contract)
+    rpc.enqueue({**COMPLETE, **change}, method="complete")
+
+    assert await rpc.run_one() == {"ok": False, "error": "invalid_request"}
+    assert engines.calls == []
+    assert rpc.harness.counters.value("complete_rejected_total", why="invalid_request") == 1
+    assert rpc.harness.bus.acks()[0].kind == "ack_sync"
+    assert rpc.harness.counters.value("lease_unsettled_total", lane="ai") == 0
 
 
 @pytest.mark.parametrize(

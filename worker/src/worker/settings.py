@@ -281,6 +281,7 @@ class LocalLlmSettings:
     idle_unload_s: int
     threads: int
     nice: int
+    max_in_flight: int
 
 
 @dataclass(frozen=True)
@@ -684,6 +685,8 @@ def validate_local_llm(settings: Settings) -> list[str]:
         problems.append("llm.local.idle_unload_s must be >= 0")
     if local.threads < 1:
         problems.append("llm.local.threads must be >= 1")
+    if local.max_in_flight < 1:
+        problems.append("llm.local.max_in_flight must be >= 1")
     if not 0 <= local.nice <= MAX_NICE:
         problems.append(f"llm.local.nice must be within 0..{MAX_NICE}")
     return problems

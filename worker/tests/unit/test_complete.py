@@ -12,7 +12,7 @@ from tests.fakes.clock import FakeClock
 from tests.fakes.engines import FakeEngines
 from worker import settings as settings_module
 from worker.contract import Contract
-from worker.domain.complete import MAX_IN_FLIGHT, Completer
+from worker.domain.complete import Completer
 from worker.domain.deadline import Deadline
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ChatMessage, Completion, EngineUnavailable
@@ -199,6 +199,9 @@ async def test_an_unavailable_model_is_an_internal_error_with_a_counter(
         ('{"say": "Готово"}', False, "cut_at_max_tokens"),
         ('["say"]', True, "not_a_json_object"),
         ("Готово", True, "not_a_json_object"),
+        ('{"say": "Готово"}', True, "off_schema"),
+        ('{"say": 7, "actions": []}', True, "off_schema"),
+        ('{"say": "Готово", "actions": [], "mood": "x"}', True, "off_schema"),
     ],
 )
 async def test_an_answer_that_is_not_one_whole_json_object_is_never_returned(
@@ -243,7 +246,7 @@ async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(
     subject = Completer(engines, contract.complete_limits, LOCAL, MODEL, counters)
     queued = [
         asyncio.ensure_future(subject.complete(request(), deadline(clock)))
-        for _ in range(MAX_IN_FLIGHT)
+        for _ in range(LOCAL.max_in_flight)
     ]
     for _ in queued:
         await engines.entered.acquire()
@@ -256,8 +259,46 @@ async def test_requests_beyond_the_queue_of_one_model_are_turned_away_at_once(
 
     engines.release.set()
     answers = await asyncio.gather(*queued)
-    assert [answer["text"] for answer in answers] == [ANSWER] * MAX_IN_FLIGHT
+    assert [answer["text"] for answer in answers] == [ANSWER] * LOCAL.max_in_flight
     assert (await subject.complete(request(), deadline(clock)))["text"] == ANSWER
+
+
+async def test_a_request_that_cannot_wait_out_the_call_ahead_is_turned_away(
+    contract: Contract, clock: FakeClock
+) -> None:
+    engines, counters = HeldEngines(), Counters()
+    engines.completion = replace(engines.completion, text=ANSWER)
+    subject = Completer(engines, contract.complete_limits, LOCAL, MODEL, counters)
+    slow = asyncio.ensure_future(subject.complete(request(), deadline(clock)))
+    await engines.entered.acquire()
+    clock.advance(12.0)
+    engines.release.set()
+    await slow
+    engines.release.clear()
+    ahead = asyncio.ensure_future(subject.complete(request(), deadline(clock)))
+    await engines.entered.acquire()
+
+    with pytest.raises(TransientFailure) as busy:
+        await subject.complete(request(), deadline(clock, seconds=20.0))
+    roomy = asyncio.ensure_future(subject.complete(request(), deadline(clock, seconds=30.0)))
+    await engines.entered.acquire()
+    engines.release.set()
+
+    assert busy.value.reason is Reason.DEADLINE_EXCEEDED
+    assert counters.value("complete_rejected_total", why="busy") == 1
+    assert [answer["text"] for answer in await asyncio.gather(ahead, roomy)] == [ANSWER] * 2
+
+
+async def test_a_request_the_model_refuses_is_counted(contract: Contract, clock: FakeClock) -> None:
+    subject, engines, counters = completer(contract)
+    engines.fail("complete", PermanentFailure(Reason.INVALID_REQUEST, "does not fit the context"))
+
+    with pytest.raises(PermanentFailure):
+        await subject.complete(request(), deadline(clock))
+    with pytest.raises(PermanentFailure):
+        await subject.complete(request(max_tokens=0), deadline(clock))
+
+    assert counters.value("complete_rejected_total", why="invalid_request") == 2
 
 
 async def test_a_worker_with_the_local_model_off_refuses_at_once(

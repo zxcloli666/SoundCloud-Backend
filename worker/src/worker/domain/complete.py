@@ -11,12 +11,12 @@ from worker.domain.deadline import Deadline
 from worker.domain.metadata import fields
 from worker.domain.outcome import PermanentFailure, Reason, TransientFailure
 from worker.domain.ports import ChatMessage, ChatRole, Completion, Engines, EngineUnavailable
+from worker.domain.validate import validate
 from worker.observability.counters import Counters
 from worker.settings import LocalLlmSettings
 
 METHOD = "complete"
 RPC_MARGIN_S = 0.5
-MAX_IN_FLIGHT = 4
 ROLES: Mapping[str, ChatRole] = {"user": "user", "assistant": "assistant"}
 
 log = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class Completer:
         self._model = model
         self._counters = counters
         self._in_flight = 0
+        self._call_s = 0.0
 
     async def complete(
         self, request: Mapping[str, object], deadline: Deadline
@@ -45,17 +46,14 @@ class Completer:
             self._counters.inc("complete_unavailable_total", state="off")
             raise TransientFailure(Reason.INTERNAL_ERROR, "the local model is off on this worker")
         deadline.minus(RPC_MARGIN_S).check(METHOD)
-        prompt = Prompt.parse(request, self._limits)
-        if self._in_flight >= MAX_IN_FLIGHT:
-            self._counters.inc("complete_rejected_total", why="busy")
-            log.warning("complete_model_busy", extra={"in_flight": self._in_flight})
-            raise TransientFailure(Reason.DEADLINE_EXCEEDED, "the local model is busy")
-        self._in_flight += 1
         try:
-            completion = await self._ask(prompt, deadline)
-        finally:
-            self._in_flight -= 1
-        self._check(completion)
+            asked = Request.parse(request, self._limits)
+            completion = await self._queued(asked, deadline)
+        except PermanentFailure as failure:
+            if failure.reason is Reason.INVALID_REQUEST:
+                self._counters.inc("complete_rejected_total", why="invalid_request")
+            raise
+        self._check(completion, asked.schema)
         self._counters.inc("complete_answers_total")
         self._counters.inc("complete_input_tokens_total", by=completion.input_tokens)
         self._counters.inc("complete_reused_tokens_total", by=completion.reused_tokens)
@@ -75,42 +73,63 @@ class Completer:
             "output_tokens": completion.output_tokens,
         }
 
-    async def _ask(self, prompt: Prompt, deadline: Deadline) -> Completion:
+    async def _queued(self, asked: Request, deadline: Deadline) -> Completion:
+        ahead = self._in_flight
+        if ahead >= self._local.max_in_flight or (
+            ahead and (ahead + 1) * self._call_s > deadline.remaining()
+        ):
+            self._counters.inc("complete_rejected_total", why="busy")
+            log.warning("complete_model_busy", extra={"in_flight": ahead, "call_s": self._call_s})
+            raise TransientFailure(Reason.DEADLINE_EXCEEDED, "the local model is busy")
+        self._in_flight += 1
+        started = deadline.now()
+        try:
+            return await self._ask(asked, deadline)
+        finally:
+            self._in_flight -= 1
+            self._call_s = deadline.now() - started
+
+    async def _ask(self, asked: Request, deadline: Deadline) -> Completion:
         try:
             return await self._engines.complete(
-                prompt.system, prompt.messages, prompt.schema, prompt.max_tokens, deadline
+                asked.system, asked.messages, asked.schema, asked.max_tokens, deadline
             )
         except EngineUnavailable as error:
             self._counters.inc("complete_unavailable_total", state=error.state)
             log.warning("complete_model_unavailable", extra={"state": error.state})
             raise TransientFailure(Reason.INTERNAL_ERROR, str(error)) from error
 
-    def _check(self, completion: Completion) -> None:
+    def _check(self, completion: Completion, schema: Mapping[str, object]) -> None:
         if not completion.finished:
             self._counters.inc("complete_rejected_total", why="cut_at_max_tokens")
             raise PermanentFailure(
                 Reason.MODEL_OUTPUT_INVALID,
                 f"the answer did not end within {completion.output_tokens} tokens",
             )
-        if not is_json_object(completion.text):
+        answer = json_object(completion.text)
+        if answer is None:
             self._counters.inc("complete_rejected_total", why="not_a_json_object")
             raise PermanentFailure(Reason.MODEL_OUTPUT_INVALID, "the answer is not a JSON object")
+        problems = validate(answer, schema)
+        if problems:
+            self._counters.inc("complete_rejected_total", why="off_schema")
+            raise PermanentFailure(Reason.MODEL_OUTPUT_INVALID, "; ".join(problems[:3]))
 
 
 @dataclass(frozen=True)
-class Prompt:
+class Request:
     system: str
     messages: Sequence[ChatMessage]
     schema: Mapping[str, object]
     max_tokens: int
 
     @classmethod
-    def parse(cls, request: Mapping[str, object], limits: CompleteLimits) -> Prompt:
+    def parse(cls, request: Mapping[str, object], limits: CompleteLimits) -> Request:
         system = fields.required_text(request, "system")
-        if utf8_bytes(system) > limits.system_bytes:
+        if utf8_bytes(system, "system") > limits.system_bytes:
             raise invalid(f"system is longer than {limits.system_bytes} bytes")
         schema = fields.required_mapping(request, "schema")
-        if len(orjson.dumps(schema)) > limits.schema_bytes:
+        if schema_bytes(schema) > limits.schema_bytes:
             raise invalid(f"schema is longer than {limits.schema_bytes} bytes")
         max_tokens = fields.required_int(request, "max_tokens")
         if not 1 <= max_tokens <= limits.max_tokens:
@@ -132,20 +151,31 @@ def parse_message(raw: object, limits: CompleteLimits) -> ChatMessage:
     if role is None:
         raise invalid(f"a message role must be one of {sorted(ROLES)}")
     content = fields.required_text(raw, "content")
-    if not content or utf8_bytes(content) > limits.message_bytes:
+    if not content or utf8_bytes(content, "a message content") > limits.message_bytes:
         raise invalid(f"a message content must hold 1..{limits.message_bytes} bytes")
     return ChatMessage(role, content)
 
 
-def utf8_bytes(text: str) -> int:
-    return len(text.encode("utf-8", errors="surrogatepass"))
-
-
-def is_json_object(text: str) -> bool:
+def utf8_bytes(text: str, what: str) -> int:
     try:
-        return isinstance(orjson.loads(text), dict)
+        return len(text.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise invalid(f"{what} is not valid UTF-8") from error
+
+
+def schema_bytes(schema: Mapping[str, object]) -> int:
+    try:
+        return len(orjson.dumps(schema))
+    except orjson.JSONEncodeError as error:
+        raise invalid(f"schema cannot be encoded: {error}") from error
+
+
+def json_object(text: str) -> dict[str, object] | None:
+    try:
+        answer = orjson.loads(text)
     except orjson.JSONDecodeError:
-        return False
+        return None
+    return answer if isinstance(answer, dict) else None
 
 
 def invalid(detail: str) -> PermanentFailure:

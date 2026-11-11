@@ -92,7 +92,7 @@ class RpcHandler:
             return error_reply(ERROR_EXPIRED)
         try:
             request = json.loads(msg.data)
-        except ValueError:
+        except (ValueError, RecursionError):
             return error_reply(ERROR_INVALID)
         if not isinstance(request, dict):
             return error_reply(ERROR_INVALID)
@@ -193,18 +193,21 @@ class RpcHandler:
             return fallback, encode(fallback)
 
     def _deadline(self, msg: Msg, method: str) -> Deadline:
-        header = (msg.headers or {}).get(self._contract.rpc.deadline_header)
-        if header is not None:
-            try:
-                return Deadline.from_epoch_ms(int(header), self._wall, self._clock.now)
-            except ValueError:
-                self._counters.inc("rpc_bad_deadline_total")
-                log.warning("rpc_bad_deadline", extra={"method": method, "header": header})
         window_s = self._contract.rpc.windows_s.get(method, self.lane.deadline_s)
         delivered_at = msg.metadata.timestamp.timestamp()
-        return Deadline.from_epoch_ms(
+        window = Deadline.from_epoch_ms(
             int((delivered_at + window_s) * 1000), self._wall, self._clock.now
         )
+        header = (msg.headers or {}).get(self._contract.rpc.deadline_header)
+        if header is None:
+            return window
+        try:
+            asked = Deadline.from_epoch_ms(int(header), self._wall, self._clock.now)
+        except (ValueError, OverflowError):
+            self._counters.inc("rpc_bad_deadline_total")
+            log.warning("rpc_bad_deadline", extra={"method": method, "header": header})
+            return window
+        return asked if asked.at <= window.at else window
 
 
 def error_reply(error: str) -> dict[str, object]:

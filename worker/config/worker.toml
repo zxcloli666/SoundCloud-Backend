@@ -200,3 +200,4 @@ state_cache_mib = 256
 idle_unload_s = 600
 threads = 2
 nice = 5
+max_in_flight = 2

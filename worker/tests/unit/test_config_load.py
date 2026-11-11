@@ -67,7 +67,7 @@ def test_the_ai_lane_brings_the_local_llm_slot(base_env: dict[str, str]) -> None
     assert local.enabled is True
     assert (local.context_tokens, local.eval_chunk_tokens, local.idle_unload_s) == (4096, 128, 600)
     assert local.state_cache_mib == 256
-    assert (local.threads, local.nice) == (2, 5)
+    assert (local.threads, local.nice, local.max_in_flight) == (2, 5, 2)
     without = s.load(CONFIG_DIR, {**base_env, "WORKER__LANES__ENABLED": '["audio", "lyrics"]'})
     assert s.LOCAL_LLM_SLOT not in s.slots_for_lanes(without)
 
@@ -105,6 +105,7 @@ def test_the_refiner_chain_cannot_name_the_local_model(base_env: dict[str, str])
         ({"WORKER__LLM__LOCAL__STATE_CACHE_MIB": "0"}, r"llm\.local\.state_cache_mib must be"),
         ({"WORKER__LLM__LOCAL__IDLE_UNLOAD_S": "-1"}, r"llm\.local\.idle_unload_s must be >= 0"),
         ({"WORKER__LLM__LOCAL__THREADS": "0"}, r"llm\.local\.threads must be >= 1"),
+        ({"WORKER__LLM__LOCAL__MAX_IN_FLIGHT": "0"}, r"llm\.local\.max_in_flight must be"),
         ({"WORKER__LLM__LOCAL__NICE": "20"}, r"llm\.local\.nice must be within 0\.\.19"),
     ],
 )
