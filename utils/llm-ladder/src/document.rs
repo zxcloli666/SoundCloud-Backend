@@ -87,12 +87,6 @@ impl Document {
     pub fn is_complete(&self) -> bool {
         matches!(self.state, State::Complete)
     }
-
-    pub fn extract(text: &str) -> Option<String> {
-        let mut document = Self::default();
-        let body = document.push(text);
-        document.is_complete().then_some(body)
-    }
 }
 
 impl Default for State {
@@ -207,16 +201,15 @@ mod tests {
         let (body, complete) = streamed(&["{\"say\":\"half"]);
         assert_eq!(body, "{\"say\":\"half");
         assert!(!complete);
-        assert_eq!(Document::extract("{\"say\":\"half"), None);
-        assert_eq!(Document::extract("no object here"), None);
+        assert_eq!(streamed(&["no object here"]), (String::new(), false));
     }
 
     #[test]
     fn prose_before_the_object_is_dropped_and_non_ascii_survives() {
         let text = "Конечно! {\"say\":\"Привет, мир\"} Вот.";
         assert_eq!(
-            Document::extract(text).as_deref(),
-            Some("{\"say\":\"Привет, мир\"}")
+            streamed(&[text]),
+            ("{\"say\":\"Привет, мир\"}".to_owned(), true)
         );
         assert_eq!(
             by_single_characters(text),

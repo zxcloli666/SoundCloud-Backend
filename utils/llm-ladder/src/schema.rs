@@ -9,7 +9,6 @@ pub enum Schema {
     Integer,
     Number,
     Boolean,
-    Null,
     AnyOf(Vec<Schema>),
 }
 
@@ -54,7 +53,6 @@ impl Serialize for Schema {
             Self::Integer => map.serialize_entry("type", "integer")?,
             Self::Number => map.serialize_entry("type", "number")?,
             Self::Boolean => map.serialize_entry("type", "boolean")?,
-            Self::Null => map.serialize_entry("type", "null")?,
             Self::AnyOf(options) => map.serialize_entry("anyOf", options)?,
         }
         map.end()
@@ -146,8 +144,8 @@ mod tests {
             serde_json::json!({"type": "string", "enum": ["a", "b"]})
         );
         assert_eq!(
-            serde_json::to_value(Schema::AnyOf(vec![Schema::Integer, Schema::Null])).unwrap(),
-            serde_json::json!({"anyOf": [{"type": "integer"}, {"type": "null"}]})
+            serde_json::to_value(Schema::AnyOf(vec![Schema::Integer, Schema::Boolean])).unwrap(),
+            serde_json::json!({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})
         );
     }
 }
