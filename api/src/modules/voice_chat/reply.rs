@@ -25,6 +25,7 @@ pub fn respond(answer: AnswerStream, tools: Tools, started: Instant) -> Response
             first_event: None,
             actions: 0,
             dropped: 0,
+            spoke: false,
             outcome: None,
         },
     };
@@ -57,6 +58,7 @@ struct Tally {
     first_event: Option<Duration>,
     actions: u64,
     dropped: u64,
+    spoke: bool,
     outcome: Option<&'static str>,
 }
 
@@ -64,6 +66,9 @@ impl Reply {
     async fn pull(&mut self) {
         match self.answer.next().await {
             Some(Ok(llm_ladder::Event::Delta(delta))) => self.take(&delta),
+            Some(Ok(llm_ladder::Event::Done(_))) if self.tally.empty() => {
+                self.close("empty", "error", json!({"code": "provider_failed"}));
+            }
             Some(Ok(llm_ladder::Event::Done(_))) => self.close("done", "done", json!({})),
             Some(Err(LadderError::Deadline)) => self.fail("deadline"),
             Some(Err(_)) | None => self.fail("provider_failed"),
@@ -73,7 +78,10 @@ impl Reply {
     fn take(&mut self, delta: &str) {
         for piece in self.parser.push(delta) {
             match piece {
-                Piece::Say(text) => self.send("say", json!({"text": text})),
+                Piece::Say(text) => {
+                    self.tally.spoke |= !text.trim().is_empty();
+                    self.send("say", json!({"text": text}));
+                }
                 Piece::Action(raw) => match self.tools.fit(raw) {
                     Some(action) => {
                         self.tally.actions += 1;
@@ -101,6 +109,12 @@ impl Reply {
             .get_or_insert_with(|| self.tally.started.elapsed());
         self.ready
             .push_back(Event::default().event(event).data(data));
+    }
+}
+
+impl Tally {
+    fn empty(&self) -> bool {
+        self.actions == 0 && !self.spoke
     }
 }
 

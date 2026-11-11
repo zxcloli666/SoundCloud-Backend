@@ -364,7 +364,23 @@ async fn a_ladder_that_breaks_after_the_start_ends_the_stream_with_an_error(
             End::Stalls,
         ),
     );
+    let nothing = ["{\"actions\":[{\"name\":\"open_door\",\"args\":[]}],\"say\":\" \"}"];
+    vendor.model(
+        "mute-model",
+        Reply::Stream(vendor::message(&nothing, 0, 1_000, 100), End::Closes),
+    );
     let session = session_for(&pool, &fresh_user()).await?;
+
+    let mute = starred(&pool, &one_step(&vendor, "mute-model")).await?;
+    let heard = ask(&mute, session, &turn()).await?;
+    assert_eq!(
+        heard.named(),
+        [
+            ("say", &json!({"text": " "})),
+            ("error", &json!({"code": "provider_failed"}))
+        ],
+        "an answer with nothing to do and nothing to say is a failure"
+    );
 
     let down = starred(&pool, &one_step(&vendor, "down-model")).await?;
     let heard = ask(&down, session, &turn()).await?;

@@ -96,7 +96,7 @@ cargo test --bin api -- --ignored --nocapture modules::voice_chat::live_tests
 | `action` | `{"name": "volume_set", "args": {"level": 60}}` | once per action, as soon as it is complete. `args` is always an object with the declared types; an optional argument the model did not give is absent. Actions that fit no offered tool are left out |
 | `say` | `{"text": "piece"}` | pieces of the spoken text, in order |
 | `done` | `{}` | the turn is complete |
-| `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started |
+| `error` | `{"code": "provider_failed"}` or `{"code": "deadline"}` | the answer broke after the stream started, or ended with no action and no speech |
 
 Closing the connection cancels the provider calls.
 
