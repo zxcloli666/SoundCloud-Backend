@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use wreq::header::{AUTHORIZATION, HeaderName};
 
 use super::StepEvent;
+use super::fault;
 use super::http::{Call, Wire};
 use super::sse::{Read, Reader};
 use crate::observer::Failure;
@@ -10,6 +11,8 @@ use crate::request::{Request, Usage};
 
 const SCHEMA_NAME: &str = "answer";
 const END: &str = "[DONE]";
+const CUT: &str = "length";
+const FILTERED: &str = "content_filter";
 
 pub(crate) struct ChatCompletions;
 
@@ -18,7 +21,6 @@ impl Wire for ChatCompletions {
 
     const KEY_HEADER: HeaderName = AUTHORIZATION;
     const KEY_PREFIX: &'static str = "Bearer ";
-    const HEADERS: &'static [(&'static str, &'static str)] = &[];
     const SCHEMA_AT: &'static [&'static str] = &["response_format", "json_schema", "schema"];
 
     fn body(call: &Call, request: &Request) -> Value {
@@ -40,17 +42,23 @@ impl Wire for ChatCompletions {
         body
     }
 
-    fn whole(answer: &[u8]) -> Result<Vec<StepEvent>, Failure> {
-        match serde_json::from_slice::<Completion>(answer) {
-            Ok(completion) if completion.error.is_some() => Err(Failure::Status),
-            Ok(completion) => Ok(completion.events(|choice| choice.message)),
-            Err(_) => Err(Failure::Invalid),
+    fn whole(answer: &[u8]) -> Vec<Result<StepEvent, Failure>> {
+        let Ok(completion) = serde_json::from_slice::<Completion>(answer) else {
+            return vec![Err(Failure::Transport)];
+        };
+        if let Some(error) = &completion.error {
+            return vec![Err(fault::of_error(error))];
         }
+        let stop = completion.stop().map(Err);
+        let events = completion.events(|choice| choice.message);
+        events.into_iter().map(Ok).chain(stop).collect()
     }
 }
 
 #[derive(Default)]
-pub(crate) struct Chunks;
+pub(crate) struct Chunks {
+    stop: Option<Failure>,
+}
 
 impl Reader for Chunks {
     fn read(&mut self, data: &str) -> Read {
@@ -58,10 +66,19 @@ impl Reader for Chunks {
             return Read::End;
         }
         match serde_json::from_str::<Completion>(data) {
-            Ok(completion) if completion.error.is_some() => Read::Failed(Failure::Status),
-            Ok(completion) => Read::Events(completion.events(|choice| choice.delta)),
+            Ok(completion) => match &completion.error {
+                Some(error) => Read::Failed(fault::of_error(error)),
+                None => {
+                    self.stop = self.stop.or(completion.stop());
+                    Read::Events(completion.events(|choice| choice.delta))
+                }
+            },
             Err(_) => Read::Events(Vec::new()),
         }
+    }
+
+    fn stop(&self) -> Option<Failure> {
+        self.stop
     }
 }
 
@@ -77,6 +94,7 @@ struct Completion {
 struct Choice {
     delta: Option<Piece>,
     message: Option<Piece>,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +115,15 @@ struct PromptDetails {
 }
 
 impl Completion {
+    fn stop(&self) -> Option<Failure> {
+        let choice = self.choices.as_ref()?.first()?;
+        match choice.finish_reason.as_deref()? {
+            CUT => Some(Failure::Length),
+            FILTERED => Some(Failure::Refused),
+            _ => None,
+        }
+    }
+
     fn events(self, piece: impl Fn(Choice) -> Option<Piece>) -> Vec<StepEvent> {
         let usage = self.usage.map(|tokens| StepEvent::Usage(tokens.usage()));
         let text = self
@@ -135,16 +162,16 @@ mod tests {
     use super::*;
 
     fn read_all(lines: &[&str]) -> (Vec<StepEvent>, Option<Failure>, bool) {
-        let mut reader = Chunks;
+        let mut reader = Chunks::default();
         let mut events = Vec::new();
         for line in lines {
             match reader.read(line) {
                 Read::Events(more) => events.extend(more),
-                Read::End => return (events, None, true),
+                Read::End => return (events, reader.stop(), true),
                 Read::Failed(failure) => return (events, Some(failure), false),
             }
         }
-        (events, None, false)
+        (events, reader.stop(), false)
     }
 
     #[test]
@@ -216,18 +243,24 @@ mod tests {
         let answer = br#"{"choices":[{"index":0,"message":{"role":"assistant","content":"```json\n{\"say\":\"hi\"}\n```","reasoning_content":"hidden"},"finish_reason":"stop"}],"usage":{"prompt_tokens":90,"completion_tokens":120}}"#;
         assert_eq!(
             ChatCompletions::whole(answer),
-            Ok(vec![
-                StepEvent::Usage(Usage {
+            [
+                Ok(StepEvent::Usage(Usage {
                     input_tokens: 90,
                     output_tokens: 120,
                     ..Usage::default()
-                }),
-                StepEvent::Text("```json\n{\"say\":\"hi\"}\n```".to_owned()),
-            ])
+                })),
+                Ok(StepEvent::Text("```json\n{\"say\":\"hi\"}\n```".to_owned())),
+            ]
         );
         let failed = br#"{"error":{"message":"overloaded","code":429}}"#;
-        assert_eq!(ChatCompletions::whole(failed), Err(Failure::Status));
-        assert_eq!(ChatCompletions::whole(b"<html>"), Err(Failure::Invalid));
+        assert_eq!(ChatCompletions::whole(failed), [Err(Failure::Status)]);
+        let too_long = br#"{"error":{"message":"too long","type":"invalid_request_error","code":"context_length_exceeded"}}"#;
+        assert_eq!(ChatCompletions::whole(too_long), [Err(Failure::Request)]);
+        let cut = br#"{"choices":[{"message":{"content":"{\"say\":\"ha"},"finish_reason":"length"}],"usage":{"prompt_tokens":90,"completion_tokens":600}}"#;
+        let events = ChatCompletions::whole(cut);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.last(), Some(&Err(Failure::Length)));
+        assert_eq!(ChatCompletions::whole(b"<html>"), [Err(Failure::Transport)]);
     }
 
     #[test]
@@ -282,5 +315,32 @@ mod tests {
     fn an_error_object_fails_the_step() {
         let (_, failure, _) = read_all(&[r#"{"error":{"message":"overloaded","code":429}}"#]);
         assert_eq!(failure, Some(Failure::Status));
+        let (_, failure, _) = read_all(&[r#"{"error":{"message":"bad","code":400}}"#]);
+        assert_eq!(failure, Some(Failure::Request));
+    }
+
+    #[test]
+    fn a_cut_or_filtered_finish_fails_the_step_after_its_usage() {
+        for (reason, expected) in [
+            ("length", Failure::Length),
+            ("content_filter", Failure::Refused),
+        ] {
+            let finish = format!(
+                r#"{{"choices":[{{"index":0,"delta":{{"content":"{{\"say\":\"ha"}},"finish_reason":"{reason}"}}]}}"#
+            );
+            let (events, failure, ended) = read_all(&[
+                &finish,
+                r#"{"choices":[],"usage":{"prompt_tokens":90,"completion_tokens":600}}"#,
+                "[DONE]",
+            ]);
+            assert_eq!(events.len(), 2);
+            assert!(matches!(events[1], StepEvent::Usage(_)));
+            assert_eq!((failure, ended), (Some(expected), true));
+        }
+        let (_, failure, _) = read_all(&[
+            r#"{"choices":[{"index":0,"delta":{"content":"{}"},"finish_reason":"stop"}]}"#,
+            "[DONE]",
+        ]);
+        assert_eq!(failure, None);
     }
 }

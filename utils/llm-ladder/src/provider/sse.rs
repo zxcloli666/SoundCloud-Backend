@@ -4,13 +4,15 @@ use bytes::Bytes;
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 
 use super::StepEvent;
-use super::http::cause;
+use super::http::{MAX_ANSWER_BYTES, cause};
 use crate::observer::Failure;
 
 const DATA: &str = "data:";
 
 pub(crate) trait Reader: Send + 'static {
     fn read(&mut self, data: &str) -> Read;
+
+    fn stop(&self) -> Option<Failure>;
 }
 
 pub(crate) enum Read {
@@ -61,11 +63,17 @@ struct Feed<R> {
 impl<R: Reader> Feed<R> {
     async fn pull(&mut self) {
         match self.body.next().await {
-            Some(Ok(chunk)) => {
-                for data in self.lines.push(&chunk) {
-                    self.take(&data);
+            Some(Ok(chunk)) => match self.lines.push(&chunk) {
+                Some(lines) => {
+                    for data in lines {
+                        self.take(&data);
+                    }
                 }
-            }
+                None => {
+                    tracing::warn!(provider = %self.provider, limit = MAX_ANSWER_BYTES, "llm provider stream line is too long");
+                    self.ready.push_back(Err(Failure::Transport));
+                }
+            },
             Some(Err(error)) => {
                 tracing::warn!(provider = %self.provider, cause = cause(&error), "llm provider stream broke");
                 self.ready.push_back(Err(Failure::Transport));
@@ -74,7 +82,7 @@ impl<R: Reader> Feed<R> {
                 if let Some(data) = self.lines.finish() {
                     self.take(&data);
                 }
-                self.over = true;
+                self.end();
             }
         }
     }
@@ -85,12 +93,24 @@ impl<R: Reader> Feed<R> {
         }
         match self.reader.read(data) {
             Read::Events(events) => self.ready.extend(events.into_iter().map(Ok)),
-            Read::End => self.over = true,
-            Read::Failed(failure) => {
-                tracing::warn!(provider = %self.provider, ?failure, "llm provider stream reported a failure");
-                self.ready.push_back(Err(failure));
-            }
+            Read::End => self.end(),
+            Read::Failed(failure) => self.fail(failure),
         }
+    }
+
+    fn end(&mut self) {
+        if self.over {
+            return;
+        }
+        match self.reader.stop() {
+            Some(failure) => self.fail(failure),
+            None => self.over = true,
+        }
+    }
+
+    fn fail(&mut self, failure: Failure) {
+        tracing::warn!(provider = %self.provider, ?failure, "llm provider stream reported a failure");
+        self.ready.push_back(Err(failure));
     }
 }
 
@@ -100,14 +120,14 @@ pub(crate) struct Lines {
 }
 
 impl Lines {
-    pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+    pub fn push(&mut self, chunk: &[u8]) -> Option<Vec<String>> {
         self.pending.extend_from_slice(chunk);
         let mut payloads = Vec::new();
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = self.pending.drain(..=end).collect();
             payloads.extend(payload(&line));
         }
-        payloads
+        (self.pending.len() <= MAX_ANSWER_BYTES).then_some(payloads)
     }
 
     pub fn finish(&mut self) -> Option<String> {
@@ -132,14 +152,14 @@ mod tests {
     fn data_lines_come_out_whole_however_the_bytes_are_cut() {
         let wire = "event: message\ndata: {\"a\":\"привет\"}\n\n: keepalive\ndata:{\"b\":2}\r\n\r\ndata: [DONE]";
         let mut whole = Lines::default();
-        let mut payloads = whole.push(wire.as_bytes());
+        let mut payloads = whole.push(wire.as_bytes()).unwrap();
         payloads.extend(whole.finish());
         assert_eq!(payloads, ["{\"a\":\"привет\"}", "{\"b\":2}", "[DONE]"]);
 
         let mut cut = Lines::default();
         let mut payloads = Vec::new();
         for byte in wire.as_bytes() {
-            payloads.extend(cut.push(&[*byte]));
+            payloads.extend(cut.push(&[*byte]).unwrap());
         }
         payloads.extend(cut.finish());
         assert_eq!(payloads, ["{\"a\":\"привет\"}", "{\"b\":2}", "[DONE]"]);
@@ -151,8 +171,22 @@ mod tests {
         assert!(
             lines
                 .push(b"event: ping\nid: 7\nretry: 100\n\ndata:\n")
+                .unwrap()
                 .is_empty()
         );
         assert_eq!(lines.finish(), None);
+    }
+
+    #[test]
+    fn a_line_that_never_ends_is_cut_off_at_the_answer_limit() {
+        let mut lines = Lines::default();
+        let piece = vec![b'x'; MAX_ANSWER_BYTES / 4];
+        for _ in 0..4 {
+            assert_eq!(lines.push(&piece), Some(Vec::new()));
+        }
+        assert_eq!(lines.push(b"x"), None);
+        let mut ended = Lines::default();
+        assert_eq!(ended.push(&piece).map(|lines| lines.len()), Some(0));
+        assert_eq!(ended.push(b"\ndata: {}\n"), Some(vec!["{}".to_owned()]));
     }
 }

@@ -1,5 +1,6 @@
 mod anthropic;
 mod body;
+mod fault;
 mod http;
 mod openai;
 mod sse;
@@ -32,13 +33,14 @@ pub(crate) enum StepEvent {
 }
 
 pub(crate) trait Backend: Send + Sync {
-    fn start(&self, request: Arc<Request>) -> StepStream;
+    fn start(&self, request: Arc<Request>, time_left: Duration) -> StepStream;
 }
 
 pub(crate) struct Provider {
     pub id: String,
     pub price: Price,
     pub total_timeout: Duration,
+    pub hedged: bool,
     backend: Box<dyn Backend>,
 }
 
@@ -66,6 +68,7 @@ impl Provider {
             id: id.to_owned(),
             price: Price::of(settings),
             total_timeout: Duration::from_millis(settings.total_timeout_ms),
+            hedged: settings.hedge.unwrap_or(true),
             backend,
         })
     }
@@ -81,12 +84,14 @@ impl Provider {
             id: id.to_owned(),
             price,
             total_timeout,
+            hedged: true,
             backend,
         }
     }
 
-    pub fn start(&self, request: Arc<Request>) -> StepStream {
-        self.backend.start(request)
+    pub fn start(&self, request: Arc<Request>, time_left: Duration) -> StepStream {
+        self.backend
+            .start(request, time_left.min(self.total_timeout))
     }
 }
 

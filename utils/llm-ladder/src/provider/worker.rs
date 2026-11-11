@@ -14,7 +14,7 @@ use crate::request::{Message, Request, Usage};
 use crate::schema::Schema;
 
 pub(crate) const MAX_TOKENS: u32 = 1024;
-const MAX_SYSTEM_BYTES: usize = 48_000;
+pub(crate) const MAX_SYSTEM_BYTES: usize = 48_000;
 const MAX_MESSAGES: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 12_000;
 const MAX_SCHEMA_BYTES: usize = 64_000;
@@ -33,6 +33,7 @@ pub enum WorkerError {
     Timeout,
     Unreachable,
     Rejected,
+    Invalid,
 }
 
 pub(crate) struct Worker {
@@ -40,7 +41,6 @@ pub(crate) struct Worker {
     transport: Arc<dyn WorkerTransport>,
     subject: Arc<str>,
     max_output_tokens: u32,
-    timeout: Duration,
 }
 
 impl Worker {
@@ -50,17 +50,15 @@ impl Worker {
             transport,
             subject: settings.subject.clone().unwrap_or_default().into(),
             max_output_tokens: settings.max_output_tokens,
-            timeout: Duration::from_millis(settings.total_timeout_ms),
         }
     }
 }
 
 impl Backend for Worker {
-    fn start(&self, request: Arc<Request>) -> StepStream {
+    fn start(&self, request: Arc<Request>, time_left: Duration) -> StepStream {
         let provider = self.provider.clone();
         let transport = self.transport.clone();
         let subject = self.subject.clone();
-        let timeout = self.timeout;
         let max_tokens = self.max_output_tokens;
         stream::once(async move {
             let payload = Payload {
@@ -71,12 +69,12 @@ impl Backend for Worker {
             };
             if let Some(part) = payload.over_limit() {
                 tracing::warn!(provider = %provider, part, "llm worker takes no request this large");
-                return vec![Err(Failure::Invalid)];
+                return vec![Err(Failure::Request)];
             }
             let Ok(payload) = serde_json::to_vec(&payload) else {
-                return vec![Err(Failure::Invalid)];
+                return vec![Err(Failure::Request)];
             };
-            match transport.call(&subject, payload.into(), timeout).await {
+            match transport.call(&subject, payload.into(), time_left).await {
                 Ok(data) => answered(&provider, data),
                 Err(error) => {
                     tracing::warn!(provider = %provider, ?error, "llm worker did not answer");
@@ -95,6 +93,7 @@ impl From<WorkerError> for Failure {
             WorkerError::Timeout => Self::Timeout,
             WorkerError::Unreachable => Self::Transport,
             WorkerError::Rejected => Self::Status,
+            WorkerError::Invalid => Self::Request,
         }
     }
 }
@@ -102,7 +101,7 @@ impl From<WorkerError> for Failure {
 fn answered(provider: &str, data: Value) -> Vec<Result<StepEvent, Failure>> {
     let Ok(reply) = serde_json::from_value::<Reply>(data) else {
         tracing::warn!(provider, "llm worker answer has an unknown shape");
-        return vec![Err(Failure::Invalid)];
+        return vec![Err(Failure::Transport)];
     };
     let usage = Usage {
         input_tokens: reply.input_tokens,
@@ -246,7 +245,19 @@ mod tests {
         );
         assert_eq!(
             answered("local", json!({"model": "x"})),
-            [Err(Failure::Invalid)]
+            [Err(Failure::Transport)]
         );
+    }
+
+    #[test]
+    fn only_faults_of_the_worker_count_against_it() {
+        let blamed = [
+            WorkerError::Timeout,
+            WorkerError::Unreachable,
+            WorkerError::Rejected,
+            WorkerError::Invalid,
+        ]
+        .map(|error| Failure::from(error).blames_provider());
+        assert_eq!(blamed, [true, true, true, false]);
     }
 }

@@ -3,12 +3,14 @@ use serde_json::{Value, json};
 use wreq::header::HeaderName;
 
 use super::StepEvent;
+use super::fault;
 use super::http::{Call, Wire};
 use super::sse::{Read, Reader};
 use crate::observer::Failure;
 use crate::request::{BETWEEN_SECTIONS, Request, System, Usage};
 
 const REFUSAL: &str = "refusal";
+const CUT: &str = "max_tokens";
 const MAX_CACHE_MARKS: usize = 4;
 
 pub(crate) struct Messages;
@@ -18,7 +20,6 @@ impl Wire for Messages {
 
     const KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
     const KEY_PREFIX: &'static str = "";
-    const HEADERS: &'static [(&'static str, &'static str)] = &[("anthropic-version", "2026-10-21")];
     const SCHEMA_AT: &'static [&'static str] = &["output_config", "format", "schema"];
 
     fn body(call: &Call, request: &Request) -> Value {
@@ -35,11 +36,10 @@ impl Wire for Messages {
         body
     }
 
-    fn whole(answer: &[u8]) -> Result<Vec<StepEvent>, Failure> {
-        let message: Message = serde_json::from_slice(answer).map_err(|_| Failure::Invalid)?;
-        if message.stop_reason.as_deref() == Some(REFUSAL) {
-            return Err(Failure::Refused);
-        }
+    fn whole(answer: &[u8]) -> Vec<Result<StepEvent, Failure>> {
+        let Ok(message) = serde_json::from_slice::<Message>(answer) else {
+            return vec![Err(Failure::Transport)];
+        };
         let mut usage = Usage::default();
         if let Some(tokens) = message.usage {
             tokens.add_to(&mut usage);
@@ -50,13 +50,18 @@ impl Wire for Messages {
             .filter(|block| block.kind == "text")
             .filter_map(|block| block.text)
             .collect();
-        Ok(vec![StepEvent::Usage(usage), StepEvent::Text(text)])
+        let stop = stopped(message.stop_reason.as_deref()).map(Err);
+        [Ok(StepEvent::Usage(usage)), Ok(StepEvent::Text(text))]
+            .into_iter()
+            .chain(stop)
+            .collect()
     }
 }
 
 #[derive(Default)]
 pub(crate) struct Events {
     usage: Usage,
+    stop: Option<Failure>,
 }
 
 impl Reader for Events {
@@ -76,14 +81,27 @@ impl Reader for Events {
                     .into_iter()
                     .collect(),
             ),
-            "message_delta" if stopped_by_refusal(event.delta.as_ref()) => {
-                Read::Failed(Failure::Refused)
+            "message_delta" => {
+                let reason = event
+                    .delta
+                    .as_ref()
+                    .and_then(|delta| delta.stop_reason.as_deref());
+                self.stop = stopped(reason);
+                self.counted(event.usage)
             }
-            "message_delta" => self.counted(event.usage),
             "message_stop" => Read::End,
-            "error" => Read::Failed(Failure::Status),
+            "error" => Read::Failed(
+                event
+                    .error
+                    .as_ref()
+                    .map_or(Failure::Status, fault::of_error),
+            ),
             _ => Read::Events(Vec::new()),
         }
+    }
+
+    fn stop(&self) -> Option<Failure> {
+        self.stop
     }
 }
 
@@ -139,8 +157,12 @@ fn blocks(system: &System) -> Vec<SystemBlock> {
     blocks
 }
 
-fn stopped_by_refusal(delta: Option<&Delta>) -> bool {
-    delta.and_then(|delta| delta.stop_reason.as_deref()) == Some(REFUSAL)
+fn stopped(reason: Option<&str>) -> Option<Failure> {
+    match reason? {
+        REFUSAL => Some(Failure::Refused),
+        CUT => Some(Failure::Length),
+        _ => None,
+    }
 }
 
 struct SystemBlock {
@@ -155,6 +177,7 @@ struct Event {
     message: Option<Start>,
     delta: Option<Delta>,
     usage: Option<Tokens>,
+    error: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -223,11 +246,11 @@ mod tests {
         for line in lines {
             match reader.read(line) {
                 Read::Events(more) => events.extend(more),
-                Read::End => return (events, None, true),
+                Read::End => return (events, reader.stop(), true),
                 Read::Failed(failure) => return (events, Some(failure), false),
             }
         }
-        (events, None, false)
+        (events, reader.stop(), false)
     }
 
     fn call(prefix_cache: Option<Value>) -> Call {
@@ -331,19 +354,33 @@ mod tests {
         let answer = br#"{"type":"message","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"{\"say\":"},{"type":"text","text":"\"hi\"}"}],"stop_reason":"end_turn","usage":{"input_tokens":40,"cache_creation_input_tokens":200,"cache_read_input_tokens":3000,"output_tokens":100}}"#;
         assert_eq!(
             Messages::whole(answer),
-            Ok(vec![
-                StepEvent::Usage(Usage {
+            [
+                Ok(StepEvent::Usage(Usage {
                     input_tokens: 40,
                     cache_read_tokens: 3000,
                     cache_write_tokens: 200,
                     output_tokens: 100
-                }),
-                StepEvent::Text("{\"say\":\"hi\"}".to_owned()),
-            ])
+                })),
+                Ok(StepEvent::Text("{\"say\":\"hi\"}".to_owned())),
+            ]
         );
-        let refused = br#"{"type":"message","content":[],"stop_reason":"refusal"}"#;
-        assert_eq!(Messages::whole(refused), Err(Failure::Refused));
-        assert_eq!(Messages::whole(b"<html>"), Err(Failure::Invalid));
+        let refused = br#"{"type":"message","content":[],"stop_reason":"refusal","usage":{"input_tokens":40,"output_tokens":3}}"#;
+        let usage = Usage {
+            input_tokens: 40,
+            output_tokens: 3,
+            ..Usage::default()
+        };
+        assert_eq!(
+            Messages::whole(refused),
+            [
+                Ok(StepEvent::Usage(usage)),
+                Ok(StepEvent::Text(String::new())),
+                Err(Failure::Refused)
+            ]
+        );
+        let cut = br#"{"type":"message","content":[{"type":"text","text":"{\"say\":\"ha"}],"stop_reason":"max_tokens"}"#;
+        assert_eq!(Messages::whole(cut).last(), Some(&Err(Failure::Length)));
+        assert_eq!(Messages::whole(b"<html>"), [Err(Failure::Transport)]);
     }
 
     #[test]
@@ -460,14 +497,45 @@ mod tests {
     }
 
     #[test]
-    fn an_error_event_and_a_refusal_fail_the_step() {
+    fn an_error_event_fails_the_step_and_names_whose_fault_it_is() {
         let (_, failure, _) = read_all(&[
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         ]);
         assert_eq!(failure, Some(Failure::Status));
         let (_, failure, _) = read_all(&[
-            r#"{"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":3}}"#,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}"#,
         ]);
-        assert_eq!(failure, Some(Failure::Refused));
+        assert_eq!(failure, Some(Failure::Request));
+    }
+
+    #[test]
+    fn a_refusal_or_a_cut_is_counted_and_then_fails_the_step_at_the_end() {
+        for (reason, expected) in [
+            ("refusal", Failure::Refused),
+            ("max_tokens", Failure::Length),
+        ] {
+            let delta = format!(
+                r#"{{"type":"message_delta","delta":{{"stop_reason":"{reason}"}},"usage":{{"output_tokens":3}}}}"#
+            );
+            let (events, failure, ended) = read_all(&[
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":40,"output_tokens":1}}}"#,
+                &delta,
+                r#"{"type":"message_stop"}"#,
+            ]);
+            assert_eq!(
+                events.last(),
+                Some(&StepEvent::Usage(Usage {
+                    input_tokens: 40,
+                    output_tokens: 3,
+                    ..Usage::default()
+                }))
+            );
+            assert_eq!((failure, ended), (Some(expected), true));
+        }
+        let (_, failure, ended) = read_all(&[
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]);
+        assert_eq!((failure, ended), (None, true));
     }
 }

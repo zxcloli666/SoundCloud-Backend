@@ -14,6 +14,7 @@ pub struct StepReport<'a> {
     pub first_output: Option<Duration>,
     pub elapsed: Duration,
     pub usage: Usage,
+    pub basis: Basis,
     pub cost_micro_usd: u64,
 }
 
@@ -31,8 +32,10 @@ pub enum Failure {
     Status,
     Transport,
     Timeout,
-    Invalid,
+    Request,
     Refused,
+    Length,
+    Invalid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +44,12 @@ pub enum Skip {
     Budget,
 }
 
-pub struct Silent;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Basis {
+    #[default]
+    Reported,
+    Estimated,
+}
 
 impl StepResult {
     pub fn as_str(self) -> &'static str {
@@ -52,14 +60,27 @@ impl StepResult {
             Self::Failed(Failure::Status) => "failed_status",
             Self::Failed(Failure::Transport) => "failed_transport",
             Self::Failed(Failure::Timeout) => "failed_timeout",
-            Self::Failed(Failure::Invalid) => "failed_invalid",
+            Self::Failed(Failure::Request) => "failed_request",
             Self::Failed(Failure::Refused) => "failed_refused",
+            Self::Failed(Failure::Length) => "failed_length",
+            Self::Failed(Failure::Invalid) => "failed_invalid",
             Self::Skipped(Skip::Breaker) => "skipped_breaker",
             Self::Skipped(Skip::Budget) => "skipped_budget",
         }
     }
 }
 
-impl Observer for Silent {
-    fn step(&self, _report: &StepReport<'_>) {}
+impl Failure {
+    pub fn blames_provider(self) -> bool {
+        matches!(self, Self::Status | Self::Transport | Self::Timeout)
+    }
+}
+
+impl Basis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reported => "reported",
+            Self::Estimated => "estimated",
+        }
+    }
 }
