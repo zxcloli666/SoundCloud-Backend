@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tokio::time::sleep;
 
 use super::*;
+use crate::breaker::Pass;
 use crate::budget::memory::MemorySpend;
 use crate::config::{BreakerSettings, CapSettings};
 use crate::observer::Failure;
@@ -29,6 +30,11 @@ mod spend;
 const HEDGE: Duration = Duration::from_secs(2);
 const DEADLINE: Duration = Duration::from_secs(10);
 const STEP_TIMEOUT: Duration = Duration::from_secs(9);
+const BREAKER: BreakerSettings = BreakerSettings {
+    failures: 2,
+    window_s: 30,
+    open_s: 90,
+};
 
 type Script = Vec<(u64, Result<StepEvent, Failure>)>;
 
@@ -198,14 +204,13 @@ fn step(id: &str, price: Price, script: Script, hangs: bool) -> (Provider, Probe
 }
 
 fn bench(providers: Vec<Provider>, caps: CapSettings) -> Bench {
+    assembled(providers, caps, BREAKER)
+}
+
+fn assembled(providers: Vec<Provider>, caps: CapSettings, breaker: BreakerSettings) -> Bench {
     let seen = Arc::new(Watched::default());
     let spend = Arc::new(MemorySpend::default());
     let caps = Caps::from(caps);
-    let breaker = BreakerSettings {
-        failures: 2,
-        window_s: 30,
-        open_s: 90,
-    };
     let ladder = Ladder {
         id: "chat".to_owned(),
         steps: providers

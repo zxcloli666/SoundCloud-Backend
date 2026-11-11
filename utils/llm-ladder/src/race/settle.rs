@@ -23,11 +23,11 @@ pub(super) fn settle(
 ) -> Settled {
     let step = &ladder.steps[run.step];
     match result {
-        StepResult::Won => step.breaker.succeeded(),
+        StepResult::Won => step.breaker.succeeded(run.pass),
         StepResult::Failed(failure) if failure.blames_provider() => {
-            step.breaker.failed(Instant::now())
+            step.breaker.failed(run.pass, Instant::now())
         }
-        _ => step.breaker.left(),
+        _ => step.breaker.left(run.pass),
     }
     let (usage, basis) = billed(step, &run, result, sent_bytes);
     if result == StepResult::Won && basis == Basis::Estimated {

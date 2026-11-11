@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use crate::breaker::Pass;
 use crate::document::Document;
 use crate::provider::StepStream;
 use crate::request::Usage;
@@ -11,6 +12,7 @@ const USAGE_WAIT: Duration = Duration::from_secs(1);
 pub(super) struct Run {
     pub step: usize,
     pub stream: StepStream,
+    pub pass: Pass,
     pub document: Document,
     pub held: String,
     pub usage: Usage,
@@ -23,10 +25,17 @@ pub(super) struct Run {
 }
 
 impl Run {
-    pub fn new(step: usize, stream: StepStream, started: Instant, expires: Instant) -> Self {
+    pub fn new(
+        step: usize,
+        stream: StepStream,
+        pass: Pass,
+        started: Instant,
+        expires: Instant,
+    ) -> Self {
         Self {
             step,
             stream,
+            pass,
             document: Document::default(),
             held: String::new(),
             usage: Usage::default(),

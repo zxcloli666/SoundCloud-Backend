@@ -176,14 +176,15 @@ impl Race {
             }
             self.waiting.pop_front();
             let now = Instant::now();
-            if !step.breaker.enter(now) {
+            let Some(pass) = step.breaker.enter(now) else {
                 self.ladder.skipped(step, Skip::Breaker);
                 continue;
-            }
+            };
             let time_left = self.deadline.saturating_duration_since(now);
             let stream = step.provider.start(self.request.clone(), time_left);
             let expires = now + step.provider.total_timeout;
-            self.running.push(Run::new(index, stream, now, expires));
+            self.running
+                .push(Run::new(index, stream, pass, now, expires));
             self.hedge_at = self.hedge_after(now);
             return true;
         }
