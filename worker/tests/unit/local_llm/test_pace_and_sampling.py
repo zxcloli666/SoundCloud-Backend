@@ -13,6 +13,7 @@ from worker.models.local_llm.sampling import pick, write
 from worker.runtime.protocol import CALL_GUARD, BadInput, CallExpired
 
 CHUNK = 128
+SAMPLE = 16
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +23,7 @@ def unarmed_guard() -> Iterator[None]:
 
 
 def test_a_short_chunk_does_not_inflate_the_prediction_for_a_full_one() -> None:
-    pace = Pace(CHUNK)
+    pace = Pace(SAMPLE)
     pace.learn(3, 0.3)
     CALL_GUARD.expires_at = time.monotonic() + 2.0
     pace.guard(CHUNK)
@@ -31,6 +32,31 @@ def test_a_short_chunk_does_not_inflate_the_prediction_for_a_full_one() -> None:
     with pytest.raises(CallExpired):
         pace.guard(CHUNK)
     pace.guard(10)
+
+
+def test_a_chunk_shrinks_to_what_the_forecast_leaves_time_for_but_not_below_a_sample() -> None:
+    pace = Pace(SAMPLE)
+    pace.learn(CHUNK, CHUNK * 0.1)
+
+    CALL_GUARD.expires_at = time.monotonic() + 5.0
+    roomy = pace.fitting(CHUNK)
+    CALL_GUARD.expires_at = time.monotonic() + 1.4
+    with pytest.raises(CallExpired):
+        pace.fitting(CHUNK)
+    last_tokens = pace.fitting(8)
+
+    assert SAMPLE <= roomy < 50
+    assert last_tokens == 8
+
+
+def test_a_chunk_is_read_whole_while_no_pace_is_known_or_no_deadline_is_set() -> None:
+    pace = Pace(SAMPLE)
+    CALL_GUARD.expires_at = time.monotonic() + 1.0
+    unknown = pace.fitting(CHUNK)
+    pace.learn(CHUNK, CHUNK * 10.0)
+    CALL_GUARD.expires_at = math.inf
+
+    assert (unknown, pace.fitting(CHUNK)) == (CHUNK, CHUNK)
 
 
 def test_the_answer_ends_at_the_end_token_and_feeds_each_token_back() -> None:

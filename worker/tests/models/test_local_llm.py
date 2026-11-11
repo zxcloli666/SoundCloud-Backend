@@ -89,6 +89,7 @@ ENGINE_SYSTEM_SENTENCES = 380
 CUT_SYSTEM_SENTENCES = 60
 CUT_AFTER_CHUNKS = 2
 CUT_READ_CALLS = 6
+SLOW_CHUNK_S = 120.0
 
 
 @pytest.fixture(scope="module")
@@ -471,6 +472,22 @@ def test_a_model_loaded_again_is_not_warmed_up_again() -> None:
 
     assert read_by_warmup[0] > 0
     assert read_by_warmup[1] == 0
+
+
+def test_one_slow_chunk_does_not_refuse_the_reads_after_it() -> None:
+    from worker.models.local_llm.slot import LocalLlmSlot
+
+    slowed = LocalLlmSlot()
+    slowed.load(slot_spec(SETTINGS, SLOT))
+    try:
+        slowed._reading.learn(SETTINGS.llm.local.eval_chunk_tokens, SLOW_CHUNK_S)
+        CALL_GUARD.expires_at = time.monotonic() + SLOW_CHUNK_S
+        answer = ask(slowed, own_rules("a slow chunk"), [user("pause the music")])
+    finally:
+        CALL_GUARD.expires_at = math.inf
+        slowed.unload()
+
+    assert {"name": "pause", "args": {}} in json.loads(str(answer["text"]))["actions"]
 
 
 def test_the_warmup_teaches_the_first_call_how_long_a_chunk_takes(

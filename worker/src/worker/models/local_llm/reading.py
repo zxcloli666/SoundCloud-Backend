@@ -48,9 +48,9 @@ def restore(model: Model, states: PromptStates[State], tokens: Sequence[int]) ->
 
 
 def evaluate(model: Model, tokens: Sequence[int], stop: int, pace: Pace, chunk_tokens: int) -> None:
-    for start in range(model.read_tokens, stop, chunk_tokens):
-        chunk = tokens[start : min(start + chunk_tokens, stop)]
-        pace.guard(len(chunk))
+    while model.read_tokens < stop:
+        start = model.read_tokens
+        chunk = tokens[start : start + pace.fitting(min(chunk_tokens, stop - start))]
         started = time.monotonic()
         model.eval(chunk)
         pace.learn(len(chunk), time.monotonic() - started)

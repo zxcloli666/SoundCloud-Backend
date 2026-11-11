@@ -16,6 +16,7 @@ from worker.runtime.protocol import CALL_GUARD, Arrays, BadInput, SlotSpec
 from worker.settings import LOCAL_LLM_METHOD, LOCAL_LLM_SLOT
 
 MIB = 1 << 20
+READ_SAMPLE_TOKENS = 16
 WARMUP_SENTENCE = "You answer with one JSON object. "
 WARMUP_MESSAGES = ({"role": "user", "content": "Are you ready?"},)
 WARMUP_SCHEMA: Mapping[str, object] = {
@@ -64,7 +65,7 @@ class LocalLlmSlot:
         if self._source != (path, options):
             self._source = (path, options)
             self._states = PromptStates(options.state_cache_mib * MIB, options.chunk_tokens)
-            self._reading = Pace(options.chunk_tokens)
+            self._reading = Pace(min(options.chunk_tokens, READ_SAMPLE_TOKENS))
         self._model = Model(path, options.context_tokens, options.chunk_tokens, CALL_GUARD.threads)
         self._template = chat_template(self._model.template_source())
 

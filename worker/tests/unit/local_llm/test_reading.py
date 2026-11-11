@@ -173,6 +173,21 @@ def test_a_read_cut_short_after_the_system_is_kept_only_until_the_unload() -> No
     assert held.sizes() == ([len(own)], [])
 
 
+def test_one_slow_chunk_does_not_refuse_every_read_after_it() -> None:
+    chunk, sample = 32, 16
+    model, held = FakeModel(), states()
+    pace = Pace(sample)
+    pace.learn(chunk, chunk * 1.0)
+    asked = prompt(system(1, length=100), [50, 60, 61])
+    CALL_GUARD.expires_at = time.monotonic() + 24.0
+
+    read(model, held, asked, pace, chunk)
+
+    assert sample <= model.evals[0] < chunk
+    assert model.evals[1] == chunk
+    assert sum(model.evals) == len(asked.tokens) - 1
+
+
 def test_a_read_cut_short_after_a_mark_keeps_the_mark_and_what_it_read() -> None:
     model, held = FakeModel(), states()
     ask = reader(model, held)
